@@ -1,0 +1,6 @@
+{
+  "name": "claude-mobile-parser",
+  "version": "0.1.0",
+  "private": true,
+  "main": "parser.js"
+}
