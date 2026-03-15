@@ -3,8 +3,18 @@ package com.destins.claudemobile
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.compose.foundation.layout.*
+import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.launch
+import com.destins.claudemobile.config.ApiKeyStore
 import com.destins.claudemobile.runtime.Bootstrap
+import com.destins.claudemobile.runtime.SessionManager
+import com.destins.claudemobile.ui.ApiKeyScreen
+import com.destins.claudemobile.ui.ChatScreen
 import com.destins.claudemobile.ui.SetupScreen
 import com.destins.claudemobile.ui.theme.ClaudeMobileTheme
 
@@ -19,10 +29,7 @@ class MainActivity : ComponentActivity() {
                 var progress by remember { mutableStateOf<Bootstrap.Progress?>(null) }
                 var apiKeyReady by remember { mutableStateOf(false) }
 
-                if (isReady) {
-                    // Replaced in Task 9, Step 3 with full ChatScreen wiring
-                    androidx.compose.material3.Text("Chat goes here")
-                } else {
+                if (!isReady) {
                     SetupScreen(progress)
                     LaunchedEffect(Unit) {
                         bootstrap.setup { p ->
@@ -30,6 +37,55 @@ class MainActivity : ComponentActivity() {
                             if (p is Bootstrap.Progress.Complete) {
                                 isReady = true
                             }
+                        }
+                    }
+                } else {
+                    val sessionManager = remember { SessionManager(applicationContext) }
+                    val apiKeyStore = remember { ApiKeyStore(applicationContext) }
+                    val sessionState by sessionManager.state.collectAsState()
+                    val coroutineScope = rememberCoroutineScope()
+
+                    DisposableEffect(Unit) {
+                        sessionManager.bind()
+                        onDispose { sessionManager.unbind() }
+                    }
+
+                    when {
+                        !apiKeyStore.hasApiKey && !apiKeyReady -> {
+                            ApiKeyScreen { key ->
+                                apiKeyStore.anthropicApiKey = key
+                                apiKeyReady = true
+                            }
+                        }
+                        sessionState is SessionManager.SessionState.Connected -> {
+                            val bridge = (sessionState as SessionManager.SessionState.Connected).bridge
+                            ChatScreen(bridge)
+                        }
+                        sessionState is SessionManager.SessionState.Error -> {
+                            val error = (sessionState as SessionManager.SessionState.Error).message
+                            Column(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(32.dp),
+                                verticalArrangement = Arrangement.Center,
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Text("Error: $error", color = MaterialTheme.colorScheme.error)
+                                Spacer(modifier = Modifier.height(16.dp))
+                                Button(onClick = {
+                                    coroutineScope.launch {
+                                        sessionManager.startSession(bootstrap, apiKeyStore.anthropicApiKey!!)
+                                    }
+                                }) {
+                                    Text("Retry")
+                                }
+                            }
+                        }
+                        else -> {
+                            LaunchedEffect(Unit) {
+                                sessionManager.startSession(bootstrap, apiKeyStore.anthropicApiKey!!)
+                            }
+                            SetupScreen(Bootstrap.Progress.Installing("Claude Code session"))
                         }
                     }
                 }
