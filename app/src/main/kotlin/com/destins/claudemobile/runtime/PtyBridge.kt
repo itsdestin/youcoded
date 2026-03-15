@@ -1,7 +1,10 @@
 package com.destins.claudemobile.runtime
 
+import android.content.Context
+import com.destins.claudemobile.parser.EventBridge
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
 import java.io.File
@@ -11,6 +14,10 @@ class PtyBridge(
     private val apiKey: String,
 ) {
     private var session: TerminalSession? = null
+    private var parserProcess: Process? = null
+    private var eventBridge: EventBridge? = null
+    val socketPath: String get() = "${bootstrap.homeDir.absolutePath}/.claude-mobile/parser.sock"
+
     private val _outputFlow = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1000)
     val outputFlow: SharedFlow<String> = _outputFlow
     private val _rawBuffer = StringBuilder()
@@ -27,6 +34,7 @@ class PtyBridge(
                 lastTranscriptLength = transcript.length
                 _rawBuffer.append(delta)
                 _outputFlow.tryEmit(delta)
+                eventBridge?.sendPtyOutput(delta)
             }
         }
 
@@ -78,7 +86,42 @@ class PtyBridge(
         writeInput("/btw $message\n")
     }
 
+    fun startParser(scope: CoroutineScope, context: Context) {
+        val parserDir = File(bootstrap.homeDir, ".claude-mobile")
+        parserDir.mkdirs()
+
+        val parserJs = File(parserDir, "parser.js")
+        if (!parserJs.exists()) {
+            for (fileName in listOf("parser.js", "patterns.js", "package.json")) {
+                context.assets.open("parser/$fileName").use { input ->
+                    File(parserDir, fileName).outputStream().use { output -> input.copyTo(output) }
+                }
+            }
+        }
+
+        val env = bootstrap.buildRuntimeEnv().toMutableMap()
+        env["PARSER_SOCKET"] = socketPath
+
+        val nodePath = File(bootstrap.usrDir, "bin/node")
+        parserProcess = ProcessBuilder(
+            nodePath.absolutePath,
+            parserJs.absolutePath
+        )
+            .directory(parserDir)
+            .apply { environment().putAll(env) }
+            .redirectErrorStream(true)
+            .start()
+
+        val bridge = EventBridge(socketPath)
+        bridge.connect(scope)
+        eventBridge = bridge
+    }
+
+    fun getEventBridge(): EventBridge? = eventBridge
+
     fun stop() {
+        eventBridge?.disconnect()
+        parserProcess?.destroyForcibly()
         session?.finishIfRunning()
         session = null
     }

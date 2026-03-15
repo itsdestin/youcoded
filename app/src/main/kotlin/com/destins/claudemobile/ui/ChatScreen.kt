@@ -9,6 +9,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import com.destins.claudemobile.config.defaultChips
+import com.destins.claudemobile.parser.ParsedEvent
 import com.destins.claudemobile.runtime.PtyBridge
 import kotlinx.coroutines.launch
 
@@ -20,9 +21,29 @@ fun ChatScreen(bridge: PtyBridge) {
     var prefillText by remember { mutableStateOf("") }
 
     LaunchedEffect(bridge) {
-        bridge.outputFlow.collect { output ->
-            if (output.isNotBlank()) {
-                chatState.addRawOutput(output)
+        val eventBridge = bridge.getEventBridge()
+        if (eventBridge != null) {
+            eventBridge.events.collect { event ->
+                when (event) {
+                    is ParsedEvent.ApprovalPrompt -> {
+                        chatState.requestApproval(event.summary)
+                    }
+                    is ParsedEvent.ToolCall -> {
+                        chatState.addClaudeText("[${event.tool}] ${event.raw}")
+                    }
+                    is ParsedEvent.Raw -> {
+                        if (event.text.isNotBlank()) {
+                            chatState.addRawOutput(event.text)
+                        }
+                    }
+                }
+            }
+        } else {
+            // Fallback: raw PTY output
+            bridge.outputFlow.collect { output ->
+                if (output.isNotBlank()) {
+                    chatState.addRawOutput(output)
+                }
             }
         }
     }

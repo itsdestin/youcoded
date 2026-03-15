@@ -34,6 +34,11 @@ class SessionService : Service() {
         val bridge = PtyBridge(bootstrap, apiKey)
         bridge.start()
         ptyBridge = bridge
+
+        val parserScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        bridge.startParser(parserScope, applicationContext)
+        this.parserScope = parserScope
+
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
