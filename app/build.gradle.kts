@@ -43,5 +43,8 @@ dependencies {
     // Encrypted SharedPreferences for API key storage
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
+    // Termux terminal emulator (PTY session management)
+    implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
