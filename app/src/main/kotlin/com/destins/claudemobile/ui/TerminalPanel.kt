@@ -205,11 +205,6 @@ fun TerminalPanel(
             }
             .pointerInput(Unit) {
                 detectTapGestures { offset ->
-                    // Tap bottom bar to snap back to live view
-                    if (scrollOffsetRows > 0 && offset.y > size.height - cellHeightPx * 1.5f) {
-                        scrollOffsetRows = 0f
-                        return@detectTapGestures
-                    }
                     val hit = urlRegions.firstOrNull { r ->
                         offset.x in r.left..r.right && offset.y in r.top..r.bottom
                     }
