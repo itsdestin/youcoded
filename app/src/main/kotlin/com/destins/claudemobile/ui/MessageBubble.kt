@@ -181,14 +181,14 @@ fun MessageBubble(
 
             when (val content = message.content) {
                 is MessageContent.Text -> {
-                    Text(
+                    LinkableText(
                         text = content.text,
                         style = MaterialTheme.typography.bodyMedium,
                         color = if (isUser) Color.White else MaterialTheme.colorScheme.onSurface,
                     )
                 }
                 is MessageContent.Response -> {
-                    Text(
+                    LinkableText(
                         text = content.markdown,
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface,
