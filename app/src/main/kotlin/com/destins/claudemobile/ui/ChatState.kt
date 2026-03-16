@@ -4,22 +4,40 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import org.json.JSONObject
 
 enum class MessageRole { USER, CLAUDE, SYSTEM }
 
 sealed class MessageContent {
     data class Text(val text: String) : MessageContent()
-    data class RawTerminal(val text: String) : MessageContent()
-    data class ApprovalRequest(val tool: String, val summary: String) : MessageContent()
-    data class ToolCall(val cardId: String, val tool: String, val args: String, val duration: Long? = null) : MessageContent()
-    data class Diff(val cardId: String, val filename: String, val hunks: List<com.destins.claudemobile.parser.DiffHunk>) : MessageContent()
-    data class Code(val cardId: String, val language: String, val code: String) : MessageContent()
-    data class Error(val cardId: String, val message: String, val details: String) : MessageContent()
-    data class Progress(val message: String) : MessageContent()
-    data class Menu(val options: List<String>, val raw: String) : MessageContent()
-    data class MenuResolved(val selected: String) : MessageContent()
-    data class OAuth(val url: String) : MessageContent()
-    data class Confirm(val question: String) : MessageContent()
+    data class Response(val markdown: String) : MessageContent()
+    data class ToolRunning(
+        val cardId: String,
+        val toolUseId: String,
+        val tool: String,
+        val args: String,
+    ) : MessageContent()
+    data class ToolAwaitingApproval(
+        val cardId: String,
+        val toolUseId: String,
+        val tool: String,
+        val args: String,
+    ) : MessageContent()
+    data class ToolComplete(
+        val cardId: String,
+        val toolUseId: String,
+        val tool: String,
+        val args: String,
+        val result: JSONObject,
+    ) : MessageContent()
+    data class ToolFailed(
+        val cardId: String,
+        val toolUseId: String,
+        val tool: String,
+        val args: String,
+        val error: JSONObject,
+    ) : MessageContent()
+    data class SystemNotice(val text: String) : MessageContent()
 }
 
 data class ChatMessage(
@@ -31,12 +49,13 @@ data class ChatMessage(
 
 class ChatState {
     val messages = mutableStateListOf<ChatMessage>()
-    var isWaitingForApproval by mutableStateOf(false)
-    var approvalSummary by mutableStateOf("")
     var expandedCardId: String? by mutableStateOf(null)
-    private var nextCardId = 0
 
-    fun nextId(): String = "card-${nextCardId++}"
+    /** Current tool being worked on — for activity indicator text */
+    var activeToolName: String? by mutableStateOf(null)
+
+    private var nextCardId = 0
+    private fun nextId(): String = "card-${nextCardId++}"
 
     fun toggleCard(cardId: String) {
         expandedCardId = if (expandedCardId == cardId) null else cardId
@@ -46,79 +65,81 @@ class ChatState {
         messages.add(ChatMessage(MessageRole.USER, MessageContent.Text(text), isBtw = isBtw))
     }
 
-    fun addClaudeText(text: String) {
-        // Deduplicate — don't add if same as last Claude text message
-        val lastText = messages.lastOrNull()?.let {
-            (it.content as? MessageContent.Text)?.text
+    fun addResponse(markdown: String) {
+        if (markdown.isNotBlank()) {
+            messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Response(markdown)))
         }
-        if (lastText == text) return
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Text(text)))
+        activeToolName = null
     }
 
-    fun addRawOutput(text: String) {
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.RawTerminal(text)))
-    }
-
-    fun requestApproval(tool: String, summary: String) {
-        isWaitingForApproval = true
-        approvalSummary = summary
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.ApprovalRequest(tool, summary)))
-    }
-
-    fun resolveApproval() {
-        isWaitingForApproval = false
-        approvalSummary = ""
-    }
-
-    fun addToolStart(tool: String, args: String) {
+    fun addToolRunning(toolUseId: String, tool: String, args: String) {
         val id = nextId()
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.ToolCall(id, tool, args)))
+        activeToolName = tool
+        messages.add(ChatMessage(
+            MessageRole.CLAUDE,
+            MessageContent.ToolRunning(id, toolUseId, tool, args),
+        ))
     }
 
-    fun addDiff(filename: String, hunks: List<com.destins.claudemobile.parser.DiffHunk>) {
-        val id = nextId()
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Diff(id, filename, hunks)))
-    }
-
-    fun addCode(language: String, code: String) {
-        val id = nextId()
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Code(id, language, code)))
-    }
-
-    fun addError(message: String, details: String) {
-        val id = nextId()
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Error(id, message, details)))
-    }
-
-    fun addMenu(options: List<String>, raw: String) {
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Menu(options, raw)))
-    }
-
-    fun resolveMenu(selectedOption: String) {
-        // Replace the last Menu message with a styled resolved widget
-        val idx = messages.indexOfLast { it.content is MessageContent.Menu }
+    fun updateToolToApproval(toolUseId: String) {
+        val idx = messages.indexOfLast {
+            val c = it.content
+            c is MessageContent.ToolRunning && c.toolUseId == toolUseId
+        }
         if (idx >= 0) {
-            messages[idx] = ChatMessage(
-                MessageRole.CLAUDE,
-                MessageContent.MenuResolved(selectedOption),
+            val running = messages[idx].content as MessageContent.ToolRunning
+            messages[idx] = messages[idx].copy(
+                content = MessageContent.ToolAwaitingApproval(
+                    cardId = running.cardId,
+                    toolUseId = running.toolUseId,
+                    tool = running.tool,
+                    args = running.args,
+                )
             )
         }
     }
 
-    fun addOAuth(url: String) {
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.OAuth(url)))
-    }
-
-    fun addConfirm(question: String) {
-        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Confirm(question)))
-    }
-
-    fun addProgress(message: String) {
-        val lastIdx = messages.indexOfLast { it.content is MessageContent.Progress }
-        if (lastIdx >= 0) {
-            messages[lastIdx] = ChatMessage(MessageRole.CLAUDE, MessageContent.Progress(message))
-        } else {
-            messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Progress(message)))
+    fun updateToolToComplete(toolUseId: String, result: JSONObject) {
+        val idx = messages.indexOfLast {
+            val c = it.content
+            (c is MessageContent.ToolRunning && c.toolUseId == toolUseId) ||
+            (c is MessageContent.ToolAwaitingApproval && c.toolUseId == toolUseId)
         }
+        if (idx >= 0) {
+            val existing = messages[idx].content
+            val (cardId, tool, args) = when (existing) {
+                is MessageContent.ToolRunning -> Triple(existing.cardId, existing.tool, existing.args)
+                is MessageContent.ToolAwaitingApproval -> Triple(existing.cardId, existing.tool, existing.args)
+                else -> return
+            }
+            messages[idx] = messages[idx].copy(
+                content = MessageContent.ToolComplete(cardId, toolUseId, tool, args, result),
+            )
+            activeToolName = null
+        }
+    }
+
+    fun updateToolToFailed(toolUseId: String, error: JSONObject) {
+        val idx = messages.indexOfLast {
+            val c = it.content
+            (c is MessageContent.ToolRunning && c.toolUseId == toolUseId) ||
+            (c is MessageContent.ToolAwaitingApproval && c.toolUseId == toolUseId)
+        }
+        if (idx >= 0) {
+            val existing = messages[idx].content
+            val (cardId, tool, args) = when (existing) {
+                is MessageContent.ToolRunning -> Triple(existing.cardId, existing.tool, existing.args)
+                is MessageContent.ToolAwaitingApproval -> Triple(existing.cardId, existing.tool, existing.args)
+                else -> return
+            }
+            messages[idx] = messages[idx].copy(
+                content = MessageContent.ToolFailed(cardId, toolUseId, tool, args, error),
+            )
+            activeToolName = null
+        }
+    }
+
+    fun addSystemNotice(text: String) {
+        messages.add(ChatMessage(MessageRole.SYSTEM, MessageContent.SystemNotice(text)))
     }
 }
