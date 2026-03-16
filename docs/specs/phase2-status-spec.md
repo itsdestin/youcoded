@@ -14,6 +14,7 @@ Claude Mobile Phase 2 adds three interaction modes to the Android app: a **Chat*
 - **Phase 2 plan:** `docs/plans/phase2-plan (03-15-2026).md` (frozen artifact)
 - **Chat rebuild design:** `docs/plans/chat-rebuild-design (03-15-2026).md` (frozen artifact)
 - **Chat rebuild plan:** `docs/plans/chat-rebuild-plan (03-15-2026).md` (frozen artifact)
+- **Native binary research:** `docs/plans/native-binary-research (03-16-2026).md` (active R&D — ELF patching, glibc linker chain, LD_PRELOAD interceptor)
 
 ## User Mandates
 
