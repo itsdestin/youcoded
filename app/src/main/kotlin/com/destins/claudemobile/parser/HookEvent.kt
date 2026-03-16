@@ -78,11 +78,21 @@ sealed class HookEvent {
                         toolResponse = obj.optJSONObject("tool_response") ?: JSONObject(),
                         toolUseId = obj.optString("tool_use_id", ""),
                     )
-                    "Stop" -> Stop(
-                        sessionId = sessionId,
-                        hookEventName = eventName,
-                        lastAssistantMessage = obj.optString("last_assistant_message", ""),
-                    )
+                    "Stop" -> {
+                        // Try multiple field names — Claude Code versions may differ
+                        val assistantMsg = obj.optString("last_assistant_message", "")
+                            .ifBlank { obj.optString("message", "") }
+                            .ifBlank { obj.optString("response", "") }
+                            .ifBlank { obj.optString("assistant_message", "") }
+                        if (assistantMsg.isBlank()) {
+                            android.util.Log.w("HookEvent", "Stop event has no assistant message. Keys: ${obj.keys().asSequence().toList()}")
+                        }
+                        Stop(
+                            sessionId = sessionId,
+                            hookEventName = eventName,
+                            lastAssistantMessage = assistantMsg,
+                        )
+                    }
                     "Notification" -> Notification(
                         sessionId = sessionId,
                         hookEventName = eventName,
