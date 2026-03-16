@@ -63,16 +63,25 @@ fun ChatScreen(bridge: PtyBridge) {
                     is ParsedEvent.Text -> {
                         if (event.text.isNotBlank()) {
                             val text = event.text.trim()
-                            // Detect numbered/bulleted menu options arriving one per event
-                            val isMenuLine = Regex("""^.*\d+\.\s+\S""").containsMatchIn(text) &&
-                                !text.startsWith("╌") && text.length < 100
-                            android.util.Log.d("ChatEvents", "MENU CHECK: isMenu=$isMenuLine text=${text.take(50)}")
-                            if (isMenuLine) {
+
+                            // Filter out terminal noise that doesn't belong in chat:
+                            // - ASCII art (block chars, stars alone, dots)
+                            // - Decoration lines (box drawing, dashes)
+                            // - Very short non-alphabetic lines
+                            val noiseChars = setOf('█', '▓', '░', '▄', '▀', '▌', '▐', '╌', '─', '━',
+                                '═', '┄', '┈', '╍', '…', '·', '╸', '╺', '╴', '╶', '*', '●', '○')
+                            val isNoise = text.length < 3 && text.all { it in noiseChars || it.isWhitespace() } ||
+                                text.all { it in noiseChars || it.isWhitespace() || it == '│' || it == '┃' } ||
+                                text.matches(Regex("""^[*\s░▓█▄▀▌▐\s]+$"""))
+                            if (isNoise) {
+                                // Skip — don't add to chat
+                            }
+                            // Detect numbered menu options
+                            else if (Regex("""^.*\d+\.\s+\S""").containsMatchIn(text) && text.length < 100) {
                                 menuAccumulator.add(text.replace(Regex("""^[❯>\s]*"""), "").trim())
-                                // Cancel previous flush, wait for more options
                                 menuFlushJob?.cancel()
                                 menuFlushJob = coroutineScope.launch {
-                                    kotlinx.coroutines.delay(300) // wait for all options to arrive
+                                    kotlinx.coroutines.delay(300)
                                     if (menuAccumulator.size >= 2) {
                                         chatState.addMenu(menuAccumulator.toList(), menuAccumulator.joinToString("\n"))
                                     } else {
@@ -81,10 +90,8 @@ fun ChatScreen(bridge: PtyBridge) {
                                     menuAccumulator.clear()
                                 }
                             } else {
-                                // Only flush menu accumulator on real content, not decorations
-                                val isDecoration = text.all { it in "╌─━═┄┈╍┅┉╸╺╴╶-–—" || it.isWhitespace() }
-                                if (menuAccumulator.isNotEmpty() && !isDecoration) {
-                                    // Real non-menu content arrived — flush accumulated as menu if enough
+                                // Flush menu accumulator on real content
+                                if (menuAccumulator.isNotEmpty() && !text.all { it in noiseChars || it.isWhitespace() }) {
                                     menuFlushJob?.cancel()
                                     if (menuAccumulator.size >= 2) {
                                         chatState.addMenu(menuAccumulator.toList(), menuAccumulator.joinToString("\n"))
@@ -408,22 +415,7 @@ fun ChatScreen(bridge: PtyBridge) {
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
-                // Quick chips
-                if (!chatState.isWaitingForApproval) {
-                    QuickChips(
-                        chips = defaultChips,
-                        onChipTap = { chip ->
-                            if (chip.needsCompletion) {
-                                chatInputText = chip.prompt
-                            } else {
-                                chatState.addUserMessage(chip.prompt)
-                                bridge.writeInput(chip.prompt + "\n")
-                            }
-                        }
-                    )
-                }
-
-                // Input row — pill-styled to match terminal
+                // Input row — above chips, matching terminal layout
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -496,6 +488,21 @@ fun ChatScreen(bridge: PtyBridge) {
                             modifier = Modifier.size(16.dp),
                         )
                     }
+                }
+
+                // Quick chips — below text input, matching terminal pills position
+                if (!chatState.isWaitingForApproval) {
+                    QuickChips(
+                        chips = defaultChips,
+                        onChipTap = { chip ->
+                            if (chip.needsCompletion) {
+                                chatInputText = chip.prompt
+                            } else {
+                                chatState.addUserMessage(chip.prompt)
+                                bridge.writeInput(chip.prompt + "\n")
+                            }
+                        }
+                    )
                 }
             }
 
