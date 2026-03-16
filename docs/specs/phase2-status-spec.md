@@ -296,7 +296,7 @@ Clickable terminal links (v2.3) partially address this — users can now tap the
 - Custom URI scheme handler (`claudemobile://callback`) for redirect
 - Or accept the tap-to-open + manual paste flow if it works well enough
 
-### Priority 6: Hook Config Merge
+### Priority 5: Hook Config Merge
 
 `Bootstrap.installHooks()` does deduplication but could clobber existing user hooks from desktop Claude Code if they have custom matchers. Needs true additive merge: read existing hooks, append ours, preserve theirs.
 
