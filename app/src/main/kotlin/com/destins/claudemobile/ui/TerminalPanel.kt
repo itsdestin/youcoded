@@ -240,66 +240,75 @@ fun TerminalPanel(
         // Clamp scroll now that we know actual buffer height
         // (we can't write state inside draw, so just use the clamped value for rendering)
 
+        // ── Pass 1: Collect visible rows and build combined text ────────
+        // Each row contributes exactly gridCols characters to combinedText,
+        // so character offset / gridCols = screen row index. This lets URLs
+        // that wrap across terminal lines match as a single regex hit.
         urlRegions.clear()
         val linkPaint = Paint().apply { color = LINK_COLOR.toArgb(); strokeWidth = 1.5f }
+        val visibleRowData = arrayOfNulls<TerminalRow>(gridRows)
+        val combinedText = StringBuilder(gridRows * gridCols)
+        val spaces = " ".repeat(gridCols)
 
         for (rowIndex in 0 until gridRows) {
             val bufferRow = rowIndex + scrollRows
-            if (bufferRow >= totalRows) break
+            if (bufferRow >= totalRows) { combinedText.append(spaces); continue }
 
-            // allocateFullLineIfNecessary is public and returns the existing TerminalRow
-            // (it only allocates if the slot is null). externalToInternalRow maps the
-            // external (scroll-aware) row index to the internal circular-buffer index.
-            //
-            // Guard: after a resize, gridRows may exceed the buffer's mScreenRows
-            // until the terminal processes the size update. Catch the resulting
-            // IndexOutOfBoundsException to avoid crashing during the transient state.
             val internalRow = try {
                 screen.externalToInternalRow(bufferRow)
-            } catch (_: IndexOutOfBoundsException) { continue }
-            val row: TerminalRow = try {
-                screen.allocateFullLineIfNecessary(internalRow) ?: continue
-            } catch (_: IndexOutOfBoundsException) { continue }
+            } catch (_: IndexOutOfBoundsException) { combinedText.append(spaces); continue }
 
-            val yTop = rowIndex * cellH
+            val row: TerminalRow? = try {
+                screen.allocateFullLineIfNecessary(internalRow)
+            } catch (_: IndexOutOfBoundsException) { null }
 
-            // Detect URLs in this row for clickable links + visual styling
-            val rowText = extractRowText(row, gridCols)
-            val urlMatches = URL_PATTERN.findAll(rowText).toList()
-            // Build a set of columns that are part of a URL for link coloring
-            val urlCols = mutableSetOf<Int>()
-            for (match in urlMatches) {
-                for (c in match.range) urlCols.add(c)
-                val url = match.value.trimEnd('.', ',', ';', ':', '!')
+            if (row == null) { combinedText.append(spaces); continue }
+            visibleRowData[rowIndex] = row
+            combinedText.append(extractRowText(row, gridCols))
+        }
+
+        // ── URL detection across wrapped lines ──────────────────────────
+        val urlColsByRow = HashMap<Int, HashSet<Int>>()
+        for (match in URL_PATTERN.findAll(combinedText)) {
+            val url = match.value.trimEnd('.', ',', ';', ':', '!')
+            // Mark columns for link styling
+            for (offset in match.range) {
+                urlColsByRow.getOrPut(offset / gridCols) { HashSet() }.add(offset % gridCols)
+            }
+            // Build tap-target regions (one per row the URL spans)
+            val startRow = match.range.first / gridCols
+            val endRow = match.range.last / gridCols
+            for (r in startRow..endRow) {
+                if (visibleRowData.getOrNull(r) == null) continue
+                val colStart = if (r == startRow) match.range.first % gridCols else 0
+                val colEnd = if (r == endRow) match.range.last % gridCols + 1 else gridCols
                 urlRegions.add(UrlRegion(
                     url = url,
-                    left = match.range.first * cellW + 4f,
-                    top = yTop,
-                    right = (match.range.last + 1) * cellW + 4f,
-                    bottom = yTop + cellH,
+                    left = colStart * cellW + 4f,
+                    top = r * cellH,
+                    right = colEnd * cellW + 4f,
+                    bottom = (r + 1) * cellH,
                 ))
             }
+        }
+
+        // ── Pass 2: Draw characters ─────────────────────────────────────
+        for (rowIndex in 0 until gridRows) {
+            val row = visibleRowData[rowIndex] ?: continue
+            val yTop = rowIndex * cellH
+            val urlCols: Set<Int> = urlColsByRow[rowIndex] ?: emptySet()
 
             var col = 0
             while (col < gridCols) {
-                // findStartOfColumn gives us the char-array index for column `col`
                 val charIndex = row.findStartOfColumn(col)
                 val spaceUsed = row.getSpaceUsed()
 
-                if (charIndex >= spaceUsed) {
-                    col++
-                    continue
-                }
+                if (charIndex >= spaceUsed) { col++; continue }
 
-                val codePoint: Int
                 val ch = row.mText[charIndex]
-                codePoint = if (Character.isHighSurrogate(ch) && charIndex + 1 < spaceUsed) {
+                val codePoint = if (Character.isHighSurrogate(ch) && charIndex + 1 < spaceUsed) {
                     val low = row.mText[charIndex + 1]
-                    if (Character.isLowSurrogate(low)) {
-                        Character.toCodePoint(ch, low)
-                    } else {
-                        ch.code
-                    }
+                    if (Character.isLowSurrogate(low)) Character.toCodePoint(ch, low) else ch.code
                 } else {
                     ch.code
                 }
@@ -321,7 +330,7 @@ fun TerminalPanel(
                 val fgColor = if (inUrl) LINK_COLOR.toArgb() else if (isInverse) rawBg else rawFg
                 val bgColor = if (isInverse) rawFg else rawBg
 
-                val xLeft = col * cellW + 4f // small left margin to avoid edge clipping
+                val xLeft = col * cellW + 4f
 
                 // Draw cell background only if it differs from the terminal background
                 if (bgColor != terminalBg.toArgb()) {
@@ -340,8 +349,6 @@ fun TerminalPanel(
                         charStr, xLeft, yTop + baseline, paint
                     )
 
-                    // Underline: draw a line 1px below the baseline
-                    // URLs are always underlined (bright blue) for visual affordance
                     if (isUnderline || inUrl) {
                         val ulPaint = if (inUrl) linkPaint else Paint().apply {
                             color = fgColor
