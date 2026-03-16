@@ -321,7 +321,7 @@ Config-only change in `ChipConfig.kt` — no new files or complex logic.
 
 Current icon needs rework. Reference image available (B1 Original comparison shot). (from inbox 2026-03-16)
 
-### Priority 11: Voice Assistant OS Integration
+### Priority 10: Voice Assistant OS Integration
 
 Register Claude Mobile as an Android voice assistant so it can be invoked system-wide. (from inbox 2026-03-16)
 
