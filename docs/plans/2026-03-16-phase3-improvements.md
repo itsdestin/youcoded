@@ -159,7 +159,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.destins.claudemobile.ui.cards.CodeCard
 import com.destins.claudemobile.ui.theme.CascadiaMono
-import com.destins.claudemobile.ui.theme.ClaudeMobileTheme
 import org.commonmark.node.*
 import org.commonmark.parser.Parser
 
