@@ -590,7 +590,23 @@ class Bootstrap(private val context: Context) {
                     sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$interpName" "$usrPath/bin/$n" "${'$'}@"; }""")
                 }
             } else {
-                sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$n" "${'$'}@"; }""")
+                // Not ELF and no shebang — check if it's a JS/ESM file (e.g. npm-installed
+                // CLIs like `gemini` that start with `import`/`require`/`"use strict"`).
+                // linker64 can only load ELF binaries; these need node as interpreter.
+                val headerStr = String(header, 0, bytesRead.coerceAtMost(64))
+                val looksLikeJs = headerStr.startsWith("import ") ||
+                    headerStr.startsWith("import{") ||
+                    headerStr.startsWith("require(") ||
+                    headerStr.startsWith("\"use strict\"") ||
+                    headerStr.startsWith("'use strict'") ||
+                    headerStr.startsWith("//") ||
+                    headerStr.startsWith("/*") ||
+                    headerStr.startsWith("module.exports")
+                if (looksLikeJs) {
+                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/node" "$usrPath/bin/$n" "${'$'}@"; }""")
+                } else {
+                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$n" "${'$'}@"; }""")
+                }
             }
             functionNames.add(n)
         }
