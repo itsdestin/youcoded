@@ -42,12 +42,11 @@ class DirectShellBridge(private val bootstrap: Bootstrap) {
     fun start() {
         val env = bootstrap.buildRuntimeEnv().toMutableMap()
 
-        // Reuse the BASH_ENV linker64 wrapper script (deployed by PtyBridge)
-        // so commands like git, node, etc. work in the direct shell
-        val bashEnvPath = File(bootstrap.homeDir, ".claude-mobile/linker64-env.sh")
-        if (bashEnvPath.exists()) {
-            env["BASH_ENV"] = bashEnvPath.absolutePath
-        }
+        // Deploy linker64 wrapper functions — ensures they exist even if
+        // the Shell view is opened before Claude Code has ever launched.
+        // Also sets BASH_ENV for non-interactive subshells.
+        // Interactive login shell sources these via .bash_profile → .bashrc.
+        env["BASH_ENV"] = bootstrap.deployBashEnv()
 
         val envArray = env.map { "${it.key}=${it.value}" }.toTypedArray()
         val bashPath = File(bootstrap.usrDir, "bin/bash").absolutePath

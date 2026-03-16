@@ -103,20 +103,56 @@ class Bootstrap(private val context: Context) {
         onProgress(Progress.Extracting(100))
     }
 
+    /**
+     * Configure apt/dpkg to work with our prefix instead of hardcoded
+     * /data/data/com.termux/ paths. The Termux-compiled apt binary has paths
+     * baked in at compile time, but APT_CONFIG env var + apt.conf can override
+     * all directory settings. dpkg needs --admindir/--instdir at invocation.
+     */
     private fun setupAptSources() {
+        val usr = usrDir.absolutePath
         val etcApt = File(usrDir, "etc/apt")
         etcApt.mkdirs()
-        val sourcesList = File(etcApt, "sources.list")
-        sourcesList.writeText(
+
+        // sources.list — Termux package repos
+        File(etcApt, "sources.list").writeText(
             "deb https://packages.termux.dev/apt/termux-main stable main\n"
         )
+
+        // apt.conf — override ALL hardcoded directory paths
+        File(etcApt, "apt.conf").writeText(
+            """
+            Dir "$usr/";
+            Dir::State "$usr/var/lib/apt/";
+            Dir::State::status "$usr/var/lib/dpkg/status";
+            Dir::Cache "$usr/var/cache/apt/";
+            Dir::Etc "$usr/etc/apt/";
+            Dir::Log "$usr/var/log/apt/";
+            Dpkg::Options { "--admindir=$usr/var/lib/dpkg"; "--instdir=$usr"; };
+            """.trimIndent() + "\n"
+        )
+
+        // Create required state directories
+        File(usrDir, "var/lib/apt/lists/partial").mkdirs()
+        File(usrDir, "var/cache/apt/archives/partial").mkdirs()
+        File(usrDir, "var/lib/dpkg/info").mkdirs()
+        File(usrDir, "var/lib/dpkg/updates").mkdirs()
+        File(usrDir, "var/log/apt").mkdirs()
+
+        // Initialize dpkg database files if missing
+        val statusFile = File(usrDir, "var/lib/dpkg/status")
+        if (!statusFile.exists()) statusFile.writeText("")
+        val availableFile = File(usrDir, "var/lib/dpkg/available")
+        if (!availableFile.exists()) availableFile.writeText("")
     }
 
     private val termuxRepo = "https://packages.termux.dev/apt/termux-main"
 
     /**
      * Download .deb packages directly from Termux repos and extract them.
-     * We can't use apt because it has hardcoded /data/data/com.termux/ paths.
+     * Uses pure Java extraction (no shell) because this runs during initial
+     * setup before the shell environment is fully configured. Runtime package
+     * installation via apt/pkg is available after setup (see setupAptSources).
      */
     private fun installPackages(onProgress: (Progress) -> Unit) {
         // Node.js dependencies first
@@ -459,6 +495,151 @@ class Bootstrap(private val context: Context) {
         if (exitCode != 0) {
             throw IOException("${command[0]} failed (exit $exitCode): $output")
         }
+    }
+
+    /**
+     * Generate and deploy linker64-env.sh — shell functions that route each
+     * binary through /system/bin/linker64 (SELinux exec bypass).
+     *
+     * Detects file type by reading the first bytes:
+     * - ELF binaries → `linker64 binary "$@"`
+     * - Scripts (#!/usr/bin/env node) → `linker64 node script "$@"`
+     *
+     * Called by both PtyBridge (Claude Code) and DirectShellBridge (Shell view)
+     * to ensure functions are available regardless of which view launches first.
+     *
+     * @return the absolute path to the deployed script
+     */
+    fun deployBashEnv(): String {
+        val mobileDir = File(homeDir, ".claude-mobile")
+        mobileDir.mkdirs()
+        val bashEnvPath = File(mobileDir, "linker64-env.sh")
+        bashEnvPath.writeText(buildBashEnvSh(usrDir.absolutePath))
+        return bashEnvPath.absolutePath
+    }
+
+    private fun buildBashEnvSh(usrPath: String): String {
+        val binDir = File(usrPath, "bin")
+        if (!binDir.isDirectory) return "# bin dir not found\n"
+        val skip = setOf("bash", "sh", "sh-wrapper", "env")
+        // Package manager binaries need special handling — they have hardcoded
+        // /data/data/com.termux/ paths that must be overridden via config/flags.
+        val pkgManagerOverrides = setOf("apt", "apt-get", "apt-cache", "apt-key", "dpkg", "dpkg-deb", "pkg")
+        val sb = StringBuilder("# linker64 wrapper functions for embedded binaries\n")
+        val functionNames = mutableListOf<String>()
+
+        binDir.listFiles()?.sorted()?.forEach { file ->
+            if (!file.isFile) return@forEach
+            val n = file.name
+            if (n in skip) return@forEach
+            if (n in pkgManagerOverrides) return@forEach  // handled below
+            if (!n.matches(Regex("[a-zA-Z_][a-zA-Z0-9_.+-]*"))) return@forEach
+
+            // Read first bytes to determine file type
+            val header = ByteArray(512)
+            val bytesRead = try {
+                file.inputStream().use { it.read(header) }
+            } catch (_: Exception) { return@forEach }
+            if (bytesRead < 2) return@forEach
+
+            val isElf = bytesRead >= 4 &&
+                header[0] == 0x7f.toByte() &&
+                header[1] == 'E'.code.toByte() &&
+                header[2] == 'L'.code.toByte() &&
+                header[3] == 'F'.code.toByte()
+
+            val isScript = header[0] == '#'.code.toByte() &&
+                header[1] == '!'.code.toByte()
+
+            if (isElf) {
+                sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$n" "${'$'}@"; }""")
+            } else if (isScript) {
+                val shebangLine = String(header, 0, bytesRead)
+                    .lines().first().removePrefix("#!").trim()
+                val parts = shebangLine.split(Regex("\\s+"))
+                val interpreter = parts[0]
+                val interpArgs = parts.drop(1)
+
+                if (interpreter.endsWith("/env") && interpArgs.isNotEmpty()) {
+                    val prog = interpArgs[0]
+                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$prog" "$usrPath/bin/$n" "${'$'}@"; }""")
+                } else {
+                    val interpName = File(interpreter).name
+                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$interpName" "$usrPath/bin/$n" "${'$'}@"; }""")
+                }
+            } else {
+                sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$n" "${'$'}@"; }""")
+            }
+            functionNames.add(n)
+        }
+
+        // Package manager functions — override hardcoded /data/data/com.termux/ paths.
+        // apt reads APT_CONFIG env var which points to our apt.conf with all Dir overrides.
+        // dpkg needs --admindir and --instdir flags at every invocation.
+        sb.appendLine()
+        sb.appendLine("# Package manager wrappers — redirect hardcoded Termux paths")
+        val aptConf = "$usrPath/etc/apt/apt.conf"
+        val dpkgAdmin = "$usrPath/var/lib/dpkg"
+
+        for (aptCmd in listOf("apt", "apt-get", "apt-cache", "apt-key")) {
+            if (File(binDir, aptCmd).exists()) {
+                sb.appendLine("""$aptCmd() { APT_CONFIG="$aptConf" /system/bin/linker64 "$usrPath/bin/$aptCmd" "${'$'}@"; }""")
+                functionNames.add(aptCmd)
+            }
+        }
+        if (File(binDir, "dpkg").exists()) {
+            sb.appendLine("""dpkg() { /system/bin/linker64 "$usrPath/bin/dpkg" --admindir="$dpkgAdmin" "${'$'}@"; }""")
+            functionNames.add("dpkg")
+        }
+        if (File(binDir, "dpkg-deb").exists()) {
+            sb.appendLine("""dpkg-deb() { /system/bin/linker64 "$usrPath/bin/dpkg-deb" "${'$'}@"; }""")
+            functionNames.add("dpkg-deb")
+        }
+        // pkg is Termux's friendly wrapper — redirect to our configured apt
+        sb.appendLine("""pkg() {
+  case "${'$'}1" in
+    install) shift; apt install -y "${'$'}@" ;;
+    update)  apt update ;;
+    upgrade) shift; apt upgrade -y "${'$'}@" ;;
+    search)  shift; apt search "${'$'}@" ;;
+    list)    shift; apt list "${'$'}@" ;;
+    show)    shift; apt show "${'$'}@" ;;
+    *)       apt "${'$'}@" ;;
+  esac
+}""")
+        functionNames.add("pkg")
+
+        // Android filesystem fixes
+        sb.appendLine()
+        sb.appendLine("# Android has no /tmp — redirect to \$HOME/tmp")
+        sb.appendLine("""cd() {
+  case "${'$'}1" in
+    /tmp)     builtin cd "${'$'}HOME/tmp" ;;
+    /tmp/*)   builtin cd "${'$'}HOME/tmp/${'$'}{1#/tmp/}" ;;
+    /var/tmp) builtin cd "${'$'}HOME/tmp" ;;
+    *)        builtin cd "${'$'}@" ;;
+  esac
+}""")
+        functionNames.add("cd")
+
+        sb.appendLine()
+        sb.appendLine("# Force logical pwd — Android FUSE gives inconsistent inodes")
+        sb.appendLine("# that break physical pwd's directory walk")
+        sb.appendLine("set +P")
+        sb.appendLine("""pwd() { builtin pwd -L "${'$'}@" 2>/dev/null || echo "${'$'}PWD"; }""")
+        functionNames.add("pwd")
+
+        // Ensure PWD is always set (physical fallback can fail on FUSE)
+        sb.appendLine("[ -z \"\$PWD\" ] && PWD=\"\$HOME\" && export PWD")
+
+        if (functionNames.isNotEmpty()) {
+            sb.appendLine()
+            sb.appendLine("# Export functions for subshells")
+            for (n in functionNames) {
+                sb.appendLine("export -f $n 2>/dev/null")
+            }
+        }
+        return sb.toString()
     }
 
     fun buildRuntimeEnv(): Map<String, String> {
