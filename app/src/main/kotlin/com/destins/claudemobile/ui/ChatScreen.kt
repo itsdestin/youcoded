@@ -64,15 +64,20 @@ fun ChatScreen(bridge: PtyBridge) {
                         if (event.text.isNotBlank()) {
                             val text = event.text.trim()
 
-                            // Filter out terminal noise that doesn't belong in chat:
-                            // - ASCII art (block chars, stars alone, dots)
-                            // - Decoration lines (box drawing, dashes)
-                            // - Very short non-alphabetic lines
-                            val noiseChars = setOf('█', '▓', '░', '▄', '▀', '▌', '▐', '╌', '─', '━',
-                                '═', '┄', '┈', '╍', '…', '·', '╸', '╺', '╴', '╶', '*', '●', '○')
-                            val isNoise = text.length < 3 && text.all { it in noiseChars || it.isWhitespace() } ||
-                                text.all { it in noiseChars || it.isWhitespace() || it == '│' || it == '┃' } ||
-                                text.matches(Regex("""^[*\s░▓█▄▀▌▐\s]+$"""))
+                            // Filter out terminal noise that doesn't belong in chat.
+                            // Count how many characters are "noisy" (block/drawing/symbols)
+                            val noiseChars = "█▓░▄▀▌▐╌─━═┄┈╍…·╸╺╴╶●○◉◎•▒╌╍┅┉"
+                            val alphaCount = text.count { it.isLetter() }
+                            val noiseCount = text.count { it in noiseChars }
+                            val isNoise =
+                                // Pure noise/whitespace
+                                text.all { it in noiseChars || it.isWhitespace() || it == '*' || it == '│' || it == '┃' } ||
+                                // Mostly noise (less than 30% alphabetic)
+                                (text.length > 3 && noiseCount > 0 && alphaCount.toFloat() / text.length < 0.3f) ||
+                                // Very short non-words (single chars like "-", "+", decorations)
+                                (text.length <= 2 && !text.all { it.isLetterOrDigit() }) ||
+                                // Lines starting with line numbers + code (diff preview)
+                                text.matches(Regex("""^\d+\s+(function|console|return|var|let|const|if|for)\b.*"""))
                             if (isNoise) {
                                 // Skip — don't add to chat
                             }
@@ -166,47 +171,9 @@ fun ChatScreen(bridge: PtyBridge) {
         }
     }
 
-    // Watch for screen changes and detect new menus from terminal screen buffer
-    // This catches menus that appear after ink redraws (which the parser misses)
-    val lastMenuHash = remember { mutableStateOf(0) }
-    LaunchedEffect(screenVersion) {
-        val session = bridge.getSession() ?: return@LaunchedEffect
-        val emulator = session.emulator ?: return@LaunchedEffect
-        val screen = emulator.screen ?: return@LaunchedEffect
-        val transcript = screen.getTranscriptText()
-
-        // Log last few lines of terminal screen for debugging
-        val lines = transcript.lines().filter { it.isNotBlank() }.takeLast(10)
-        android.util.Log.d("ScreenScan", "Screen (last 10 lines): ${lines.joinToString(" | ").take(300)}")
-
-        // Look for numbered menu patterns in the current screen
-        val numberedPattern = Regex("""(?:^|\n)\s*[❯>]?\s*(\d+\.\s+\S.+)""")
-        val numberedMatches = numberedPattern.findAll(transcript).map { it.groupValues[1].trim() }.toList()
-
-        // Also look for ❯-prefixed menu items (ink selector style without numbers)
-        val selectorPattern = Regex("""(?:^|\n)\s*[❯>]\s+(.+)""")
-        val allLines = transcript.lines().filter { it.isNotBlank() }
-        // Detect ink menus: lines with ❯ selector or indented options following a question
-        val inkMenuOptions = allLines.filter { line ->
-            val trimmed = line.trim()
-            trimmed.startsWith("❯") || trimmed.startsWith(">") ||
-            // Detect bullet-style options
-            trimmed.matches(Regex("""^[●○◉◎•]\s+.+"""))
-        }.map { it.trim().removePrefix("❯").removePrefix(">").removePrefix("●").removePrefix("○").removePrefix("•").trim() }
-
-        val matches = if (numberedMatches.size >= 2) numberedMatches else if (inkMenuOptions.size >= 2) inkMenuOptions else emptyList()
-
-        if (matches.size >= 2) {
-            val hash = matches.hashCode()
-            if (hash != lastMenuHash.value) {
-                lastMenuHash.value = hash
-                val hasActiveMenu = chatState.messages.any { it.content is MessageContent.Menu }
-                if (!hasActiveMenu) {
-                    chatState.addMenu(matches, matches.joinToString("\n"))
-                }
-            }
-        }
-    }
+    // Screen buffer scanner removed — was duplicating menus already
+    // detected by the text event accumulator. If follow-up menus are
+    // missed, the user can switch to terminal mode.
 
     LaunchedEffect(chatState.messages.size) {
         if (chatState.messages.isNotEmpty()) {
