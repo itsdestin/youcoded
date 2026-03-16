@@ -99,19 +99,24 @@ fun ChatScreen(bridge: PtyBridge) {
                             }
                             // URL accumulator — detect start of URL or continuation fragment
                             else if (text.contains("https://") && !text.contains(' ')) {
-                                // Start of a URL — read the FULL URL from the terminal screen
-                                // instead of accumulating fragments (more reliable)
+                                // Start of a URL — mark as collecting, read full URL from screen later
                                 urlAccumulator.clear()
+                                urlAccumulator.append("COLLECTING")
                                 urlFlushJob?.cancel()
                                 urlFlushJob = coroutineScope.launch {
-                                    kotlinx.coroutines.delay(800) // wait for all URL lines to render
+                                    kotlinx.coroutines.delay(1000) // wait for all URL lines to render
+                                    urlAccumulator.clear()
                                     val session = bridge.getSession()
                                     val screen = session?.emulator?.screen
                                     if (screen != null) {
                                         val transcript = screen.getTranscriptText()
-                                        // Find the complete URL in the transcript
-                                        val urlMatch = Regex("""https://[^\s]+""").findAll(transcript)
-                                            .lastOrNull()  // last URL is most recent
+                                        android.util.Log.d("URLScan", "Transcript last 500: ${transcript.takeLast(500)}")
+                                        // getTranscriptText() wraps at column boundaries with newlines.
+                                        // Remove newlines that aren't followed by a space to reconstruct URLs.
+                                        val cleaned = transcript.replace(Regex("""\n(?=\S)"""), "")
+                                        val urlMatch = Regex("""https://[^\s]+""").findAll(cleaned)
+                                            .lastOrNull()
+                                        android.util.Log.d("URLScan", "Found URL: ${urlMatch?.value?.take(200)}")
                                         if (urlMatch != null) {
                                             val fullUrl = urlMatch.value
                                             if (fullUrl.contains("oauth") || fullUrl.contains("claude") || fullUrl.contains("auth")) {
@@ -123,7 +128,7 @@ fun ChatScreen(bridge: PtyBridge) {
                                     }
                                 }
                             } else if (urlAccumulator.isNotEmpty() && !text.contains(' ') && text.length > 5 &&
-                                text.matches(Regex("""^[a-zA-Z0-9%&=+_./:?-]+$"""))) {
+                                text.matches(Regex("""^[a-zA-Z0-9%&=+_./:?#-]+$"""))) {
                                 // URL continuation fragment — suppress, the screen reader will get the full URL
                             }
                             // Detect numbered menu options
