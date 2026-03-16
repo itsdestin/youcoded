@@ -134,7 +134,8 @@ object AppIcons {
     }
 
     /**
-     * Claude mascot — simplified pixel art with >< eyes and legs.
+     * Claude mascot — blocky character with >< eyes, arms, and legs.
+     * Uses EvenOdd fill so eyes are cut out from the body.
      */
     val ClaudeMascot: ImageVector by lazy {
         ImageVector.Builder(
@@ -144,48 +145,63 @@ object AppIcons {
             viewportWidth = 24f,
             viewportHeight = 24f
         ).apply {
-            // Body block with legs
+            // Body + legs + arms as one filled shape, eyes as cutouts
             path(
                 fill = SolidColor(Color.Black),
                 stroke = null,
+                pathFillType = PathFillType.EvenOdd,
             ) {
-                moveTo(4f, 3f)
-                lineTo(20f, 3f)
-                lineTo(20f, 17f)
-                lineTo(18f, 17f)
-                lineTo(18f, 21f)
-                lineTo(15f, 21f)
-                lineTo(15f, 17f)
-                lineTo(9f, 17f)
-                lineTo(9f, 21f)
-                lineTo(6f, 21f)
-                lineTo(6f, 17f)
-                lineTo(4f, 17f)
+                // Main body block
+                moveTo(5f, 2f)
+                lineTo(19f, 2f)
+                lineTo(19f, 15f)
+                // Right arm
+                lineTo(22f, 15f)
+                lineTo(22f, 11f)
+                lineTo(19f, 11f)
+                lineTo(19f, 2f)
+                lineTo(19f, 15f)
+                lineTo(22f, 15f)
+                lineTo(22f, 17f)
+                lineTo(19f, 17f)
+                // Right leg
+                lineTo(17f, 17f)
+                lineTo(17f, 22f)
+                lineTo(14f, 22f)
+                lineTo(14f, 17f)
+                // Left leg
+                lineTo(10f, 17f)
+                lineTo(10f, 22f)
+                lineTo(7f, 22f)
+                lineTo(7f, 17f)
+                // Left arm
+                lineTo(5f, 17f)
+                lineTo(2f, 17f)
+                lineTo(2f, 15f)
+                lineTo(5f, 15f)
+                lineTo(5f, 11f)
+                lineTo(2f, 11f)
+                lineTo(2f, 15f)
+                lineTo(5f, 15f)
                 close()
-            }
-            // Left eye >
-            path(
-                fill = null,
-                stroke = SolidColor(Color(0xFFC96442)),
-                strokeLineWidth = 1.5f,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                moveTo(8f, 8f)
-                lineTo(10f, 10f)
-                lineTo(8f, 12f)
-            }
-            // Right eye <
-            path(
-                fill = null,
-                stroke = SolidColor(Color(0xFFC96442)),
-                strokeLineWidth = 1.5f,
-                strokeLineCap = StrokeCap.Round,
-                strokeLineJoin = StrokeJoin.Round,
-            ) {
-                moveTo(16f, 8f)
-                lineTo(14f, 10f)
-                lineTo(16f, 12f)
+
+                // Left eye > (cutout)
+                moveTo(8f, 7.5f)
+                lineTo(10.5f, 10f)
+                lineTo(8f, 12.5f)
+                lineTo(9f, 12.5f)
+                lineTo(11.5f, 10f)
+                lineTo(9f, 7.5f)
+                close()
+
+                // Right eye < (cutout)
+                moveTo(16f, 7.5f)
+                lineTo(13.5f, 10f)
+                lineTo(16f, 12.5f)
+                lineTo(15f, 12.5f)
+                lineTo(12.5f, 10f)
+                lineTo(15f, 7.5f)
+                close()
             }
         }.build()
     }

@@ -46,6 +46,11 @@ class ChatState {
     }
 
     fun addClaudeText(text: String) {
+        // Deduplicate — don't add if same as last Claude text message
+        val lastText = messages.lastOrNull()?.let {
+            (it.content as? MessageContent.Text)?.text
+        }
+        if (lastText == text) return
         messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Text(text)))
     }
 
