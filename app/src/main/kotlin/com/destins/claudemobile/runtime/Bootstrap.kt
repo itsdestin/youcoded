@@ -549,6 +549,8 @@ class Bootstrap(private val context: Context) {
         val pkgManagerOverrides = setOf("apt", "apt-get", "apt-cache", "apt-key", "dpkg", "dpkg-deb", "pkg")
         val sb = StringBuilder("# linker64 wrapper functions for embedded binaries\n")
         val functionNames = mutableListOf<String>()
+        // Track generated functions to avoid duplicates when scanning multiple dirs
+        val generated = mutableSetOf<String>()
 
         binDir.listFiles()?.sorted()?.forEach { file ->
             if (!file.isFile) return@forEach
