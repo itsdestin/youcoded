@@ -47,8 +47,13 @@ class EventBridge(private val socketName: String) {
             client.use { socket ->
                 val reader = BufferedReader(InputStreamReader(socket.inputStream))
                 val line = reader.readLine() ?: return
-                android.util.Log.d("EventBridge", "Received: ${line.take(200)}")
-                HookEvent.fromJson(line)?.let { _events.emit(it) }
+                android.util.Log.d("EventBridge", "Received: ${line.take(300)}")
+                val event = HookEvent.fromJson(line)
+                if (event != null) {
+                    _events.emit(event)
+                } else {
+                    android.util.Log.w("EventBridge", "Failed to parse hook event: ${line.take(500)}")
+                }
             }
         } catch (e: Exception) {
             android.util.Log.w("EventBridge", "Client error", e)
