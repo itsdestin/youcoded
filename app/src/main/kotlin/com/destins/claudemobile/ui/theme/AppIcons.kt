@@ -26,7 +26,7 @@ object AppIcons {
             // Outer rounded rectangle
             path(
                 fill = null,
-                stroke = SolidColor(Color.White),
+                stroke = SolidColor(Color.Black),
                 strokeLineWidth = 1.8f,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
@@ -45,7 +45,7 @@ object AppIcons {
             // ">" chevron prompt
             path(
                 fill = null,
-                stroke = SolidColor(Color.White),
+                stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
@@ -57,7 +57,7 @@ object AppIcons {
             // "_" cursor underscore
             path(
                 fill = null,
-                stroke = SolidColor(Color.White),
+                stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2f,
                 strokeLineCap = StrokeCap.Round,
             ) {
@@ -82,7 +82,7 @@ object AppIcons {
             // Speech bubble outline with tail
             path(
                 fill = null,
-                stroke = SolidColor(Color.White),
+                stroke = SolidColor(Color.Black),
                 strokeLineWidth = 1.8f,
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
@@ -105,7 +105,7 @@ object AppIcons {
             // Three dots — drawn as short thick lines (more reliable than arcs)
             path(
                 fill = null,
-                stroke = SolidColor(Color.White),
+                stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2.5f,
                 strokeLineCap = StrokeCap.Round,
             ) {
@@ -114,7 +114,7 @@ object AppIcons {
             }
             path(
                 fill = null,
-                stroke = SolidColor(Color.White),
+                stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2.5f,
                 strokeLineCap = StrokeCap.Round,
             ) {
@@ -123,7 +123,7 @@ object AppIcons {
             }
             path(
                 fill = null,
-                stroke = SolidColor(Color.White),
+                stroke = SolidColor(Color.Black),
                 strokeLineWidth = 2.5f,
                 strokeLineCap = StrokeCap.Round,
             ) {
