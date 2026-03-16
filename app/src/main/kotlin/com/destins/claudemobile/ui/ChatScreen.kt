@@ -40,7 +40,8 @@ fun ChatScreen(bridge: PtyBridge) {
     // Menu accumulator — collects numbered options arriving as separate text events
     val menuAccumulator = remember { mutableListOf<String>() }
     var menuFlushJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
-    // var showBtwSheet by remember { mutableStateOf(false) } // /btw deferred
+    val shownMenuHashes = remember { mutableSetOf<Int>() }
+    val pendingMenuScan = remember { mutableStateOf(false) }
 
     // Collect screen version to trigger terminal panel recomposition on PTY output
     val screenVersion by bridge.screenVersion.collectAsState()
@@ -92,7 +93,9 @@ fun ChatScreen(bridge: PtyBridge) {
                                 menuFlushJob = coroutineScope.launch {
                                     kotlinx.coroutines.delay(300)
                                     if (menuAccumulator.size >= 2) {
-                                        chatState.addMenu(menuAccumulator.toList(), menuAccumulator.joinToString("\n"))
+                                        val options = menuAccumulator.toList()
+                                        shownMenuHashes.add(options.hashCode())
+                                        chatState.addMenu(options, options.joinToString("\n"))
                                     } else {
                                         menuAccumulator.forEach { chatState.addClaudeText(it) }
                                     }
@@ -187,8 +190,35 @@ fun ChatScreen(bridge: PtyBridge) {
         }
     }
 
-    // No screen scanner — ink redraws now re-emit transcript via PtyBridge
-    // so the text event accumulator catches follow-up menus naturally.
+    // Follow-up menu detector — polls transcript after menu selection
+    // to find NEW menus that weren't in the previous scan.
+    LaunchedEffect(pendingMenuScan.value) {
+        if (!pendingMenuScan.value) return@LaunchedEffect
+        // Poll a few times with delays to catch ink redraw
+        repeat(5) {
+            kotlinx.coroutines.delay(1000)
+            val session = bridge.getSession() ?: return@LaunchedEffect
+            val screen = session.emulator?.screen ?: return@LaunchedEffect
+            val transcript = screen.getTranscriptText()
+
+            val menuPattern = Regex("""(?:^|\n)\s*[❯>]?\s*(\d+\.\s+\S.+)""")
+            val matches = menuPattern.findAll(transcript).map { it.groupValues[1].trim() }.toList()
+
+            if (matches.size >= 2) {
+                val hash = matches.hashCode()
+                if (hash !in shownMenuHashes) {
+                    shownMenuHashes.add(hash)
+                    val hasActiveMenu = chatState.messages.any { it.content is MessageContent.Menu }
+                    if (!hasActiveMenu) {
+                        chatState.addMenu(matches, matches.joinToString("\n"))
+                        pendingMenuScan.value = false
+                        return@LaunchedEffect
+                    }
+                }
+            }
+        }
+        pendingMenuScan.value = false
+    }
 
     LaunchedEffect(chatState.messages.size) {
         if (chatState.messages.isNotEmpty()) {
@@ -427,13 +457,14 @@ fun ChatScreen(bridge: PtyBridge) {
                             onReject = { bridge.sendApproval(false); chatState.resolveApproval() },
                             onViewTerminal = { isTerminalMode = true },
                             onMenuSelect = { index ->
-                                // Resolve the widget with selected option text
                                 val menuMsg = message.content
                                 if (menuMsg is MessageContent.Menu) {
                                     val selected = menuMsg.options.getOrElse(index) { "" }
+                                    // Track this menu's hash so scanner doesn't re-detect it
+                                    shownMenuHashes.add(menuMsg.options.hashCode())
                                     chatState.resolveMenu(selected)
                                 }
-                                // Send arrow-down × index + enter with delays
+                                // Send arrow-down × index + enter with delays, then scan
                                 coroutineScope.launch {
                                     repeat(index) {
                                         bridge.writeInput("\u001b[B")
@@ -441,6 +472,8 @@ fun ChatScreen(bridge: PtyBridge) {
                                     }
                                     kotlinx.coroutines.delay(100)
                                     bridge.writeInput("\r")
+                                    // Trigger follow-up menu scan
+                                    pendingMenuScan.value = true
                                 }
                             },
                             onConfirmYes = { bridge.writeInput("y\n") },

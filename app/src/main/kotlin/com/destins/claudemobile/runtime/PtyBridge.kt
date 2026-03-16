@@ -58,11 +58,8 @@ class PtyBridge(
                 _outputFlow.tryEmit(delta)
                 onPtyOutput(delta)
             } else if (transcript.length < lastTranscriptLength) {
-                // Transcript shrank (ink redrew the screen). Re-emit the
-                // current screen content so the parser can detect new menus.
+                // Transcript shrank (ink redrew). Reset tracking.
                 lastTranscriptLength = transcript.length
-                _outputFlow.tryEmit(transcript)
-                onPtyOutput(transcript)
             }
         }
 
