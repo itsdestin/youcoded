@@ -263,7 +263,7 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 No known bugs. Previous bugs fixed in v2.2:
 
-- **~~Bug 1: TerminalPanel crash on resize~~** — Fixed. `externalToInternalRow()` and `allocateFullLineIfNecessary()` now wrapped in `IndexOutOfBoundsException` catch. Root cause: race between Compose draw (`gridRows=52`) and `TerminalBuffer` resize (`mScreenRows=51`). The catch skips the transient out-of-bounds row for one frame.
+- **~~Bug 1: TerminalPanel crash on resize~~** — Fixed. `externalToInternalRow()` and `allocateFullLineIfNecessary()` now wrapped in broad `Exception` catch (Termux throws `IllegalArgumentException`, not `IndexOutOfBoundsException`). Root cause: race between Compose draw (`gridRows=52`) and `TerminalBuffer` resize (`mScreenRows=51`). The catch skips the transient out-of-bounds row for one frame.
 - **~~Bug 2: Swipe-up crash in terminal view~~** — Fixed (same root cause as Bug 1). Swipe-up triggers layout resize via system nav bar gesture, which triggered the same race condition.
 - **~~Bug 3: Bad ELF magic on native Gemini binary~~** — Fixed. `buildBashEnvSh()` now detects shebang-less JS/ESM files (checking for `import`, `require(`, `"use strict"`, `//`, `/*`, `module.exports` patterns) and routes them through `linker64 node script "$@"` instead of trying to load them directly as ELF binaries.
 
