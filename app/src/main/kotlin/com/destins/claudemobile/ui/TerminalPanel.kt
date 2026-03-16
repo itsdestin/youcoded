@@ -235,10 +235,12 @@ fun TerminalPanel(
         val baseline = -fm.ascent   // offset from top of cell to text baseline
 
         val totalRows = screen.getActiveRows()
-        val scrollRows = scrollOffsetRows.toInt().coerceIn(0, (totalRows - gridRows).coerceAtLeast(0))
-
-        // Clamp scroll now that we know actual buffer height
-        // (we can't write state inside draw, so just use the clamped value for rendering)
+        // scrollRows = how many rows above the live screen to show.
+        // Max = totalRows - gridRows (oldest available history).
+        // externalToInternalRow convention: 0..mScreenRows-1 = visible screen,
+        // negative = scrollback history. So externalRow = rowIndex - scrollRows.
+        val maxScroll = (totalRows - gridRows).coerceAtLeast(0)
+        val scrollRows = scrollOffsetRows.toInt().coerceIn(0, maxScroll)
 
         // ── Pass 1: Collect visible rows and build combined text ────────
         // Each row contributes exactly gridCols characters to combinedText,
@@ -251,8 +253,10 @@ fun TerminalPanel(
         val spaces = " ".repeat(gridCols)
 
         for (rowIndex in 0 until gridRows) {
-            val bufferRow = rowIndex + scrollRows
-            if (bufferRow >= totalRows) { combinedText.append(spaces); continue }
+            // Subtract scrollRows to go into scrollback history.
+            // rowIndex=0, scrollRows=0 → externalRow=0 (top of live screen)
+            // rowIndex=0, scrollRows=5 → externalRow=-5 (5 rows into history)
+            val externalRow = rowIndex - scrollRows
 
             val internalRow = try {
                 screen.externalToInternalRow(bufferRow)
