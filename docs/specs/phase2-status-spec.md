@@ -257,15 +257,11 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 ## Known Bugs / Issues
 
-### Bug 1: TerminalPanel.kt:209 crash on resize
-**Severity:** High (7 identical crashes logged)
-`TerminalPanel.kt:209` requests 1 row beyond what `TerminalBuffer` allows during a Compose draw pass after a resize. `extRow=52, mScreenRows=51, mActiveTranscriptRows=149`. Crashes the app. Needs bounds check before row access.
+No known bugs. Previous bugs fixed in v2.2:
 
-### Bug 2: Swipe-up crash in terminal view
-After opening the Gemini CLI chat in terminal view, swiping up from the bottom crashes the app. Likely a gesture conflict with the system navigation bar or Compose input handling.
-
-### Bug 3: Bad ELF magic on native Gemini binary
-Running `gemini` in Shell view produces `error: bad ELF magic: 696d706f`. The native binary installed by npm can't be executed directly on Android. The alias-based approach (node + JS entry point) works — need to ensure the installer always uses the alias fallback, not the native binary.
+- **~~Bug 1: TerminalPanel crash on resize~~** — Fixed. `externalToInternalRow()` and `allocateFullLineIfNecessary()` now wrapped in `IndexOutOfBoundsException` catch. Root cause: race between Compose draw (`gridRows=52`) and `TerminalBuffer` resize (`mScreenRows=51`). The catch skips the transient out-of-bounds row for one frame.
+- **~~Bug 2: Swipe-up crash in terminal view~~** — Fixed (same root cause as Bug 1). Swipe-up triggers layout resize via system nav bar gesture, which triggered the same race condition.
+- **~~Bug 3: Bad ELF magic on native Gemini binary~~** — Fixed. `buildBashEnvSh()` now detects shebang-less JS/ESM files (checking for `import`, `require(`, `"use strict"`, `//`, `/*`, `module.exports` patterns) and routes them through `linker64 node script "$@"` instead of trying to load them directly as ELF binaries.
 
 ## Planned Updates
 
