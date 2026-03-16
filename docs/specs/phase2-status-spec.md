@@ -357,7 +357,7 @@ Add links to financially support the project (donate, sponsor, etc.) within the 
 
 Swap the direction of the up/down arrow keys in the terminal keyboard row. (from inbox 2026-03-16)
 
-### Priority 21: Dynamic / Two-Tier Action Pills in Chat Mode
+### Priority 19: Dynamic / Two-Tier Action Pills in Chat Mode
 
 Chat mode pills that show action words first (Open, Write, Explain, etc.) then context-specific subjects. Two-tier UX where the action verb moves to the text box and subjects appear. (from inbox 2026-03-16)
 
