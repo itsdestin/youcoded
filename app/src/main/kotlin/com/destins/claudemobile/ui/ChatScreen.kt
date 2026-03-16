@@ -64,7 +64,9 @@ fun ChatScreen(bridge: PtyBridge) {
                         if (event.text.isNotBlank()) {
                             val text = event.text.trim()
                             // Detect numbered/bulleted menu options arriving one per event
-                            val isMenuLine = text.matches(Regex("""^[❯>\s]*\d+\.\s+.+"""))
+                            val isMenuLine = Regex("""^.*\d+\.\s+\S""").containsMatchIn(text) &&
+                                !text.startsWith("╌") && text.length < 100
+                            android.util.Log.d("ChatEvents", "MENU CHECK: isMenu=$isMenuLine text=${text.take(50)}")
                             if (isMenuLine) {
                                 menuAccumulator.add(text.replace(Regex("""^[❯>\s]*"""), "").trim())
                                 // Cancel previous flush, wait for more options
@@ -79,10 +81,16 @@ fun ChatScreen(bridge: PtyBridge) {
                                     menuAccumulator.clear()
                                 }
                             } else {
-                                // Flush any pending menu items as text
-                                if (menuAccumulator.isNotEmpty()) {
+                                // Only flush menu accumulator on real content, not decorations
+                                val isDecoration = text.all { it in "╌─━═┄┈╍┅┉╸╺╴╶-–—" || it.isWhitespace() }
+                                if (menuAccumulator.isNotEmpty() && !isDecoration) {
+                                    // Real non-menu content arrived — flush accumulated as menu if enough
                                     menuFlushJob?.cancel()
-                                    menuAccumulator.forEach { chatState.addClaudeText(it) }
+                                    if (menuAccumulator.size >= 2) {
+                                        chatState.addMenu(menuAccumulator.toList(), menuAccumulator.joinToString("\n"))
+                                    } else {
+                                        menuAccumulator.forEach { chatState.addClaudeText(it) }
+                                    }
                                     menuAccumulator.clear()
                                 }
                                 chatState.addClaudeText(text)
