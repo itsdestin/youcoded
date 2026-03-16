@@ -145,7 +145,7 @@ object AppIcons {
             viewportWidth = 24f,
             viewportHeight = 24f
         ).apply {
-            // Body + legs + arms as one filled shape, eyes as cutouts
+            // Body + legs + square arms as one filled shape, eyes as cutouts
             path(
                 fill = SolidColor(Color.Black),
                 stroke = null,
@@ -154,15 +154,6 @@ object AppIcons {
                 // Main body block
                 moveTo(5f, 2f)
                 lineTo(19f, 2f)
-                lineTo(19f, 15f)
-                // Right arm
-                lineTo(22f, 15f)
-                lineTo(22f, 11f)
-                lineTo(19f, 11f)
-                lineTo(19f, 2f)
-                lineTo(19f, 15f)
-                lineTo(22f, 15f)
-                lineTo(22f, 17f)
                 lineTo(19f, 17f)
                 // Right leg
                 lineTo(17f, 17f)
@@ -174,33 +165,39 @@ object AppIcons {
                 lineTo(10f, 22f)
                 lineTo(7f, 22f)
                 lineTo(7f, 17f)
-                // Left arm
                 lineTo(5f, 17f)
-                lineTo(2f, 17f)
-                lineTo(2f, 15f)
-                lineTo(5f, 15f)
+                close()
+
+                // Left arm (square — short, not tall)
+                moveTo(2f, 11f)
                 lineTo(5f, 11f)
-                lineTo(2f, 11f)
-                lineTo(2f, 15f)
-                lineTo(5f, 15f)
+                lineTo(5f, 14f)
+                lineTo(2f, 14f)
                 close()
 
-                // Left eye > (cutout)
-                moveTo(8f, 7.5f)
+                // Right arm (square)
+                moveTo(19f, 11f)
+                lineTo(22f, 11f)
+                lineTo(22f, 14f)
+                lineTo(19f, 14f)
+                close()
+
+                // Left eye > (cutout — gentler angle)
+                moveTo(8.5f, 8f)
                 lineTo(10.5f, 10f)
-                lineTo(8f, 12.5f)
-                lineTo(9f, 12.5f)
+                lineTo(8.5f, 12f)
+                lineTo(9.5f, 12f)
                 lineTo(11.5f, 10f)
-                lineTo(9f, 7.5f)
+                lineTo(9.5f, 8f)
                 close()
 
-                // Right eye < (cutout)
-                moveTo(16f, 7.5f)
+                // Right eye < (cutout — gentler angle)
+                moveTo(15.5f, 8f)
                 lineTo(13.5f, 10f)
-                lineTo(16f, 12.5f)
-                lineTo(15f, 12.5f)
+                lineTo(15.5f, 12f)
+                lineTo(14.5f, 12f)
                 lineTo(12.5f, 10f)
-                lineTo(15f, 7.5f)
+                lineTo(14.5f, 8f)
                 close()
             }
         }.build()

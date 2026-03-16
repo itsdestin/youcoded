@@ -82,7 +82,18 @@ fun ChatScreen(bridge: PtyBridge) {
                                 // Short code fragments like "3 }", "1 {", etc.
                                 text.matches(Regex("""^\d+\s*[{}()\[\];]?\s*$""")) ||
                                 // "Syntax highlighting available only in native build" (ink preview noise)
-                                text.contains("Syntax highlighting available only in native")
+                                text.contains("Syntax highlighting available only in native") ||
+                                // OAuth flow noise
+                                text.contains("url below to sign") ||
+                                text.contains("Opening browser") ||
+                                (text == "in") ||
+                                (text == "c to copy") ||
+                                // URL fragments (wrapped OAuth URLs — contain encoded chars, no spaces)
+                                (text.length > 10 && !text.contains(' ') && (
+                                    text.count { it == '%' || it == '&' || it == '=' } > text.length / 5
+                                )) ||
+                                // URL continuation lines
+                                text.matches(Regex("""^[a-zA-Z0-9%&=+_./:-]+$""")) && text.length > 20 && text.contains('&')
                             if (isNoise) {
                                 // Skip — don't add to chat
                             }

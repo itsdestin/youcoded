@@ -96,7 +96,10 @@ fun MessageBubble(
             return
         }
         is MessageContent.OAuth -> {
-            com.destins.claudemobile.ui.widgets.OAuthWidget(url = content.url)
+            com.destins.claudemobile.ui.widgets.OAuthWidget(
+                url = content.url,
+                onSwitchToTerminal = onViewTerminal,
+            )
             return
         }
         is MessageContent.Confirm -> {
