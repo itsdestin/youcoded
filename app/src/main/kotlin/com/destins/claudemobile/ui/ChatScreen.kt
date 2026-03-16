@@ -307,61 +307,29 @@ fun ChatScreen(bridge: PtyBridge) {
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
-                Row(
+                // Invisible text field — forwards soft keyboard input to PTY in real time
+                BasicTextField(
+                    value = shellInputBuffer,
+                    onValueChange = { newValue ->
+                        if (newValue.length > shellInputBuffer.length) {
+                            shell.writeInput(newValue.substring(shellInputBuffer.length))
+                        } else if (newValue.length < shellInputBuffer.length) {
+                            repeat(shellInputBuffer.length - newValue.length) {
+                                shell.writeInput("\u007f")
+                            }
+                        }
+                        shellInputBuffer = newValue
+                    },
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+                    keyboardActions = KeyboardActions(onSend = { shell.writeInput("\r") }),
+                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 1.sp),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.background)
-                        .padding(horizontal = 6.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .weight(1f)
-                            .height(42.dp)
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        BasicTextField(
-                            value = shellInput,
-                            onValueChange = { shellInput = it },
-                            singleLine = true,
-                            textStyle = androidx.compose.ui.text.TextStyle(
-                                fontSize = 13.sp,
-                                fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
-                                color = MaterialTheme.colorScheme.onSurface,
-                            ),
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
-                            decorationBox = { innerTextField ->
-                                if (shellInput.isEmpty()) {
-                                    Text("$ ", fontSize = 13.sp,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f))
-                                }
-                                innerTextField()
-                            },
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .size(42.dp)
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .clickable {
-                                if (shellInput.isNotBlank()) {
-                                    shell.writeInput(shellInput + "\r")
-                                    shellInput = ""
-                                }
-                            },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(Icons.AutoMirrored.Filled.Send, contentDescription = "Send",
-                            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(16.dp))
-                    }
-                }
+                        .height(1.dp)
+                        .alpha(0f)
+                        .focusRequester(shellFocusRequester),
+                )
 
                 TerminalKeyboardRow(onKeyPress = { seq -> shell.writeInput(seq) })
             }
