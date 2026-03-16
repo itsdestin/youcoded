@@ -345,7 +345,7 @@ Voice input/output mode for Claude Mobile interactions. (from inbox 2026-03-16)
 
 Auto-switch to terminal view whenever an "enter to confirm / esc to cancel" prompt is detected, so the user can respond directly. (from inbox 2026-03-16)
 
-### Priority 18: Terminal Icon in Smart Card
+### Priority 16: Terminal Icon in Smart Card
 
 Show a terminal icon whenever a live terminal session is active in a smart card, so the user can quickly jump to the terminal view. (from inbox 2026-03-16)
 
