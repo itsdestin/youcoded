@@ -79,8 +79,9 @@ The existing `Progress.Installing(packageName)` callback handles this automatica
 
 ### Cleanup
 
-- Remove `installGit()` function (dead code)
+- Remove `installGit()` function (dead code). No external callers exist — `installGit()` is only defined and referenced within `Bootstrap.kt`.
 - Remove sentinel file checks (`libssl.so` existence, etc.) that guarded on-demand install
+- Carry forward existing TODO comments about resolving `.deb` paths from Termux API (currently hardcoded URLs)
 
 ### Impact
 
