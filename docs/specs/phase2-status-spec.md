@@ -309,7 +309,7 @@ Unreachable components from the parser era:
 - `InputBar` (ChatScreen builds its own inline input)
 - `CardStateManager` (ChatState has its own toggle)
 
-### Priority 8: Direct Shell UI Affordance
+### Priority 7: Direct Shell UI Affordance
 
 DirectShellBridge works via long-press on Terminal button but there's no visible indicator. Users won't discover it. Needs a UI element (toggle, menu item, or labeled button).
 
