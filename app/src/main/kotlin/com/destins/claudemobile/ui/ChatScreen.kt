@@ -175,14 +175,31 @@ fun ChatScreen(bridge: PtyBridge) {
         val screen = emulator.screen ?: return@LaunchedEffect
         val transcript = screen.getTranscriptText()
 
+        // Log last few lines of terminal screen for debugging
+        val lines = transcript.lines().filter { it.isNotBlank() }.takeLast(10)
+        android.util.Log.d("ScreenScan", "Screen (last 10 lines): ${lines.joinToString(" | ").take(300)}")
+
         // Look for numbered menu patterns in the current screen
-        val menuPattern = Regex("""(?:^|\n)\s*[❯>]?\s*(\d+\.\s+\S.+)""")
-        val matches = menuPattern.findAll(transcript).map { it.groupValues[1].trim() }.toList()
+        val numberedPattern = Regex("""(?:^|\n)\s*[❯>]?\s*(\d+\.\s+\S.+)""")
+        val numberedMatches = numberedPattern.findAll(transcript).map { it.groupValues[1].trim() }.toList()
+
+        // Also look for ❯-prefixed menu items (ink selector style without numbers)
+        val selectorPattern = Regex("""(?:^|\n)\s*[❯>]\s+(.+)""")
+        val allLines = transcript.lines().filter { it.isNotBlank() }
+        // Detect ink menus: lines with ❯ selector or indented options following a question
+        val inkMenuOptions = allLines.filter { line ->
+            val trimmed = line.trim()
+            trimmed.startsWith("❯") || trimmed.startsWith(">") ||
+            // Detect bullet-style options
+            trimmed.matches(Regex("""^[●○◉◎•]\s+.+"""))
+        }.map { it.trim().removePrefix("❯").removePrefix(">").removePrefix("●").removePrefix("○").removePrefix("•").trim() }
+
+        val matches = if (numberedMatches.size >= 2) numberedMatches else if (inkMenuOptions.size >= 2) inkMenuOptions else emptyList()
+
         if (matches.size >= 2) {
             val hash = matches.hashCode()
             if (hash != lastMenuHash.value) {
                 lastMenuHash.value = hash
-                // Check if there's already an active (unresolved) menu
                 val hasActiveMenu = chatState.messages.any { it.content is MessageContent.Menu }
                 if (!hasActiveMenu) {
                     chatState.addMenu(matches, matches.joinToString("\n"))
