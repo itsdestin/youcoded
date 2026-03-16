@@ -43,6 +43,10 @@ fun ChatScreen(bridge: PtyBridge) {
     val shownMenuHashes = remember { mutableSetOf<Int>() }
     val pendingMenuScan = remember { mutableStateOf(false) }
 
+    // URL accumulator — joins URL fragments split across events
+    val urlAccumulator = remember { StringBuilder() }
+    var urlFlushJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+
     // Collect screen version to trigger terminal panel recomposition on PTY output
     val screenVersion by bridge.screenVersion.collectAsState()
 
@@ -87,15 +91,41 @@ fun ChatScreen(bridge: PtyBridge) {
                                 text.contains("url below to sign") ||
                                 text.contains("Opening browser") ||
                                 (text == "in") ||
-                                (text == "c to copy") ||
-                                // URL fragments (wrapped OAuth URLs — contain encoded chars, no spaces)
-                                (text.length > 10 && !text.contains(' ') && (
-                                    text.count { it == '%' || it == '&' || it == '=' } > text.length / 5
-                                )) ||
-                                // URL continuation lines
-                                text.matches(Regex("""^[a-zA-Z0-9%&=+_./:-]+$""")) && text.length > 20 && text.contains('&')
+                                (text == "c to copy")
                             if (isNoise) {
                                 // Skip — don't add to chat
+                            }
+                            // URL accumulator — detect start of URL or continuation fragment
+                            else if (text.contains("https://") && !text.contains(' ')) {
+                                // Start of a URL
+                                urlAccumulator.clear()
+                                urlAccumulator.append(text)
+                                urlFlushJob?.cancel()
+                                urlFlushJob = coroutineScope.launch {
+                                    kotlinx.coroutines.delay(500)
+                                    val fullUrl = urlAccumulator.toString()
+                                    urlAccumulator.clear()
+                                    if (fullUrl.contains("claude") || fullUrl.contains("anthropic") || fullUrl.contains("oauth")) {
+                                        chatState.addOAuth(fullUrl)
+                                    } else {
+                                        chatState.addClaudeText(fullUrl)
+                                    }
+                                }
+                            } else if (urlAccumulator.isNotEmpty() && !text.contains(' ') && text.length > 5 &&
+                                text.matches(Regex("""^[a-zA-Z0-9%&=+_./:?-]+$"""))) {
+                                // URL continuation fragment — append to accumulator
+                                urlAccumulator.append(text)
+                                urlFlushJob?.cancel()
+                                urlFlushJob = coroutineScope.launch {
+                                    kotlinx.coroutines.delay(500)
+                                    val fullUrl = urlAccumulator.toString()
+                                    urlAccumulator.clear()
+                                    if (fullUrl.contains("claude") || fullUrl.contains("anthropic") || fullUrl.contains("oauth")) {
+                                        chatState.addOAuth(fullUrl)
+                                    } else {
+                                        chatState.addClaudeText(fullUrl)
+                                    }
+                                }
                             }
                             // Detect numbered menu options
                             else if (Regex("""^.*\d+\.\s+\S""").containsMatchIn(text) && text.length < 100) {
@@ -111,15 +141,6 @@ fun ChatScreen(bridge: PtyBridge) {
                                         menuAccumulator.forEach { chatState.addClaudeText(it) }
                                     }
                                     menuAccumulator.clear()
-                                }
-                            // Detect auth/login URLs — show as widget, don't auto-open
-                            // (auto-open often gets truncated URLs missing query params)
-                            } else if (text.contains("https://") && (text.contains("anthropic") || text.contains("claude.ai") || text.contains("auth") || text.contains("login"))) {
-                                val url = Regex("""https?://[^\s"'<>]+""").find(text)?.value
-                                if (url != null) {
-                                    chatState.addOAuth(url)
-                                } else {
-                                    chatState.addClaudeText(text)
                                 }
                             } else {
                                 // Flush menu accumulator on real content
