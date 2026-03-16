@@ -341,7 +341,7 @@ Shift the typing space in terminal mode to the very bottom of the screen, replac
 
 Voice input/output mode for Claude Mobile interactions. (from inbox 2026-03-16)
 
-### Priority 17: Terminal View on Confirm/Cancel Detection
+### Priority 15: Terminal View on Confirm/Cancel Detection
 
 Auto-switch to terminal view whenever an "enter to confirm / esc to cancel" prompt is detected, so the user can respond directly. (from inbox 2026-03-16)
 
