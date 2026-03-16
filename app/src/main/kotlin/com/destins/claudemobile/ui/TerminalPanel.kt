@@ -317,7 +317,8 @@ fun TerminalPanel(
                 val rawFg = resolveColor(fgIndex, DEFAULT_FG)
                 val rawBg = resolveColor(bgIndex, DEFAULT_BG)
 
-                val fgColor = if (isInverse) rawBg else rawFg
+                val inUrl = col in urlCols
+                val fgColor = if (inUrl) LINK_COLOR.toArgb() else if (isInverse) rawBg else rawFg
                 val bgColor = if (isInverse) rawFg else rawBg
 
                 val xLeft = col * cellW + 4f // small left margin to avoid edge clipping
