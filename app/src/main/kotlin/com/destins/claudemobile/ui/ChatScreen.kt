@@ -534,11 +534,35 @@ fun ChatScreen(bridge: PtyBridge) {
                             ),
                             modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
                             decorationBox = { innerTextField ->
-                                if (chatInputText.isEmpty()) {
-                                    Text("Type a message...", fontSize = 14.sp,
-                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f))
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.fillMaxWidth(),
+                                ) {
+                                    Box(modifier = Modifier.weight(1f)) {
+                                        if (chatInputText.isEmpty()) {
+                                            Text("Type a message...", fontSize = 14.sp,
+                                                color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f))
+                                        }
+                                        innerTextField()
+                                    }
+                                    Icon(
+                                        Icons.Outlined.Image,
+                                        contentDescription = "Attach image",
+                                        tint = if (attachmentPath != null)
+                                            Color(0xFFc96442)
+                                        else
+                                            Color(0xFF555555),
+                                        modifier = Modifier
+                                            .size(20.dp)
+                                            .clickable {
+                                                photoPickerLauncher.launch(
+                                                    PickVisualMediaRequest(
+                                                        ActivityResultContracts.PickVisualMedia.ImageOnly
+                                                    )
+                                                )
+                                            },
+                                    )
                                 }
-                                innerTextField()
                             },
                         )
                     }
