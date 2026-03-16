@@ -250,7 +250,8 @@ fun ChatScreen(bridge: PtyBridge) {
             // ── Direct shell mode ─────────────────────────────────────
             val shell = directShellBridge ?: return@Box
             val shellScreenVersion by shell.screenVersion.collectAsState()
-            var shellInput by remember { mutableStateOf("") }
+            val shellFocusRequester = remember { FocusRequester() }
+            var shellInputBuffer by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
