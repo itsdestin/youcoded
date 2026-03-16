@@ -259,7 +259,7 @@ fun TerminalPanel(
             val externalRow = rowIndex - scrollRows
 
             val internalRow = try {
-                screen.externalToInternalRow(bufferRow)
+                screen.externalToInternalRow(externalRow)
             } catch (_: Exception) { combinedText.append(spaces); continue }
 
             val row: TerminalRow? = try {
