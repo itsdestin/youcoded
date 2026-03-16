@@ -35,18 +35,18 @@ class SessionService : Service() {
         bridge.start()
         ptyBridge = bridge
 
-        val parserScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        bridge.startParser(parserScope, applicationContext)
-        this.parserScope = parserScope
+        val bridgeScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        bridge.startEventBridge(bridgeScope)
+        this.bridgeScope = bridgeScope
 
         startForeground(NOTIFICATION_ID, buildNotification())
     }
 
-    private var parserScope: CoroutineScope? = null
+    private var bridgeScope: CoroutineScope? = null
 
     fun stopSession() {
-        parserScope?.cancel()
-        parserScope = null
+        bridgeScope?.cancel()
+        bridgeScope = null
         ptyBridge?.stop()
         ptyBridge = null
         stopForeground(STOP_FOREGROUND_REMOVE)
