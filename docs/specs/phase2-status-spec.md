@@ -349,7 +349,7 @@ Auto-switch to terminal view whenever an "enter to confirm / esc to cancel" prom
 
 Show a terminal icon whenever a live terminal session is active in a smart card, so the user can quickly jump to the terminal view. (from inbox 2026-03-16)
 
-### Priority 19: Financial Support Links
+### Priority 17: Financial Support Links
 
 Add links to financially support the project (donate, sponsor, etc.) within the app. (from inbox 2026-03-16)
 
