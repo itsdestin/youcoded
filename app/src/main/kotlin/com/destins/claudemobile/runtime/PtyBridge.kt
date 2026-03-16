@@ -146,6 +146,7 @@ class PtyBridge(
             .start()
 
         val bridge = EventBridge(socketPath)
+        bridge.onConnected = { onSocketConnected() }
         bridge.connect(scope)
         eventBridge = bridge
     }
