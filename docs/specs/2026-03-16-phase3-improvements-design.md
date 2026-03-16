@@ -112,14 +112,20 @@ The existing `Progress.Installing(packageName)` callback handles this automatica
 
 #### 3. Prompt Injection
 
-When sending a message with an attached image:
+When sending a message with an attached image, use the absolute path (not `~`) since Claude Code's Read tool needs a resolvable path:
 ```
-[Image attached: ~/attachments/<timestamp>.png]
+[Image attached: /data/data/com.destins.claudemobile/files/home/attachments/<timestamp>.png]
 
 <user's message text>
 ```
 
+The absolute path is constructed from `homeDir.absolutePath + "/attachments/<timestamp>.png"` at copy time.
+
 Send combined string via `bridge.writeInput()`. Clear attachment state after send. Claude Code's Read tool natively reads image files.
+
+### Limitations
+
+- Single image attachment at a time (v1 scope). Multiple images would require a list UI and more complex prompt formatting.
 
 ### Permissions
 
