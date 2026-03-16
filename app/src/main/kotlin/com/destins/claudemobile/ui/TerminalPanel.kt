@@ -112,6 +112,7 @@ fun TerminalPanel(
     modifier: Modifier = Modifier,
     scrollOffset: Float = 0f,
     onScrollOffsetChanged: ((Float) -> Unit)? = null,
+    onTap: (() -> Unit)? = null,
 ) {
     val terminalBg = ClaudeMobileTheme.extended.terminalBg
     val context = LocalContext.current
