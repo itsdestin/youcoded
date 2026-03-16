@@ -574,10 +574,24 @@ fun ChatScreen(bridge: PtyBridge) {
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .clickable {
-                                if (chatInputText.isNotBlank()) {
-                                    chatState.addUserMessage(chatInputText)
-                                    bridge.writeInput(chatInputText + "\r")
+                                if (chatInputText.isNotBlank() || attachmentPath != null) {
+                                    val messageText = buildString {
+                                        attachmentPath?.let { path ->
+                                            appendLine("[Image attached: $path]")
+                                            appendLine()
+                                        }
+                                        append(chatInputText)
+                                    }.trim()
+                                    val displayText = when {
+                                        attachmentPath != null && chatInputText.isBlank() -> "[image]"
+                                        attachmentPath != null -> "[image] $chatInputText"
+                                        else -> chatInputText
+                                    }
+                                    chatState.addUserMessage(displayText)
+                                    bridge.writeInput(messageText + "\r")
                                     chatInputText = ""
+                                    attachmentPath = null
+                                    attachmentBitmap = null
                                 }
                             },
                         contentAlignment = Alignment.Center,
