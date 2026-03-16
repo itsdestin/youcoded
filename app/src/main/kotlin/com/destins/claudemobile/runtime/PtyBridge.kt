@@ -167,6 +167,11 @@ var TERMUX_PREFIX = '/data/data/com.termux/files/usr';
 function isEB(f) { return f && (PREFIX && f.startsWith(PREFIX + '/') || f.startsWith(TERMUX_PREFIX + '/')); }
 // Rewrite Termux paths to our prefix so linker64 can find the actual binary
 function fixPath(f) { return f.startsWith(TERMUX_PREFIX + '/') ? PREFIX + f.substring(TERMUX_PREFIX.length) : f; }
+// Fix shell option — Termux-compiled Node.js resolves shell:true to the
+// hardcoded /data/data/com.termux/files/usr/bin/sh which doesn't exist
+// in our relocated prefix. Redirect to our prefix's sh (symlink to bash).
+function fixShell(s) { if (s === true) return PREFIX + '/bin/sh'; return (typeof s === 'string' && isEB(s)) ? fixPath(s) : s; }
+function fixOpts(o) { if (o && o.shell != null && o.shell !== false) { var s = fixShell(o.shell); if (s !== o.shell) return Object.assign({}, o, {shell: s}); } return o; }
 var _as = fs.accessSync;
 fs.accessSync = function(p, m) {
     if (isEB(p) && m !== undefined && (m & fs.constants.X_OK)) return _as.call(this, fixPath(p), fs.constants.R_OK);
@@ -219,6 +224,13 @@ child_process.spawn = function(command, args, options) {
         actualArgs = injectEnv(command, actualArgs);
         return _sp.call(this, LINKER64, [command].concat(actualArgs), actualOpts);
     }
+    // Fix shell option pointing to EB path (e.g. Termux default shell)
+    var o = Array.isArray(args) ? options : args;
+    var fo = fixOpts(o);
+    if (fo !== o) {
+        if (Array.isArray(args)) return _sp.call(this, command, args, fo);
+        return _sp.call(this, command, fo);
+    }
     return _sp.call(this, command, args, options);
 };
 var _sps = child_process.spawnSync;
@@ -231,7 +243,24 @@ child_process.spawnSync = function(command, args, options) {
         actualArgs = injectEnv(command, actualArgs);
         return _sps.call(this, LINKER64, [command].concat(actualArgs), actualOpts);
     }
+    var o2 = Array.isArray(args) ? options : args;
+    var fo2 = fixOpts(o2);
+    if (fo2 !== o2) {
+        if (Array.isArray(args)) return _sps.call(this, command, args, fo2);
+        return _sps.call(this, command, fo2);
+    }
     return _sps.call(this, command, args, options);
+};
+// Patch exec/execSync — hooks use these to run commands via a shell.
+// Termux-compiled Node.js defaults to a shell path that doesn't exist.
+var _exec = child_process.exec;
+child_process.exec = function(cmd, opts, cb) {
+    if (typeof opts === 'function') { cb = opts; opts = undefined; }
+    return _exec.call(this, cmd, fixOpts(opts || {}), cb);
+};
+var _execSync = child_process.execSync;
+child_process.execSync = function(cmd, opts) {
+    return _execSync.call(this, cmd, fixOpts(opts || {}));
 };
 var cliPath = process.argv[2];
 if (!cliPath) { process.stderr.write('claude-wrapper: missing CLI path\n'); process.exit(1); }
