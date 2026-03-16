@@ -325,7 +325,7 @@ Current icon needs rework. Reference image available (B1 Original comparison sho
 
 Register Claude Mobile as an Android voice assistant so it can be invoked system-wide. (from inbox 2026-03-16)
 
-### Priority 12: "My Files" View
+### Priority 11: "My Files" View
 
 In-app file browser for accessing files within the app's data directory. (from inbox 2026-03-16)
 
