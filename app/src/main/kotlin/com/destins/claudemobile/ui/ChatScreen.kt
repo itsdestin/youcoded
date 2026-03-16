@@ -434,9 +434,16 @@ fun ChatScreen(bridge: PtyBridge) {
                                     val selected = menuMsg.options.getOrElse(index) { "" }
                                     chatState.resolveMenu(selected)
                                 }
-                                // Send arrow-down × index + enter to navigate ink menu
-                                repeat(index) { bridge.writeInput("\u001b[B") }
-                                bridge.writeInput("\r")
+                                // Send arrow-down × index + enter with delays
+                                // (ink needs time to process each keypress)
+                                coroutineScope.launch {
+                                    repeat(index) {
+                                        bridge.writeInput("\u001b[B")
+                                        kotlinx.coroutines.delay(50)
+                                    }
+                                    kotlinx.coroutines.delay(100)
+                                    bridge.writeInput("\r")
+                                }
                             },
                             onConfirmYes = { bridge.writeInput("y\n") },
                             onConfirmNo = { bridge.writeInput("n\n") },

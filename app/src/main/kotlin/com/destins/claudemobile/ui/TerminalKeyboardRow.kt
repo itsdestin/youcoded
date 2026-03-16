@@ -5,8 +5,14 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
+import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -24,7 +30,6 @@ fun TerminalKeyboardRow(
     modifier: Modifier = Modifier,
 ) {
     var ctrlActive by remember { mutableStateOf(false) }
-
     val borderColor = ClaudeMobileTheme.extended.surfaceBorder
 
     Row(
@@ -32,52 +37,47 @@ fun TerminalKeyboardRow(
             .fillMaxWidth()
             .background(MaterialTheme.colorScheme.background)
             .padding(horizontal = 6.dp, vertical = 5.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Ctrl toggle — separate styling
-        KeyPill(
+        // Ctrl — narrow, tall
+        SmallPill(
             label = "Ctrl",
             isActive = ctrlActive,
             borderColor = borderColor,
-            modifier = Modifier.weight(1f),
+            modifier = Modifier.weight(0.7f).height(38.dp),
         ) { ctrlActive = !ctrlActive }
 
-        // Esc
-        KeyPill("Esc", borderColor = borderColor, modifier = Modifier.weight(1f)) {
+        // Esc — narrow, tall
+        SmallPill("Esc", borderColor = borderColor, modifier = Modifier.weight(0.7f).height(38.dp)) {
             sendKey("\u001b", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Tab
-        KeyPill("Tab", borderColor = borderColor, modifier = Modifier.weight(1f)) {
+        // Tab — narrow, tall
+        SmallPill("Tab", borderColor = borderColor, modifier = Modifier.weight(0.7f).height(38.dp)) {
             sendKey("\t", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Arrow cluster — grouped tighter
-        Row(
-            modifier = Modifier.weight(2.2f),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            KeyPill("←", borderColor = borderColor, modifier = Modifier.weight(1f)) {
-                sendKey("\u001b[D", ctrlActive, onKeyPress) { ctrlActive = false }
-            }
-            KeyPill("↓", borderColor = borderColor, modifier = Modifier.weight(1f)) {
-                sendKey("\u001b[B", ctrlActive, onKeyPress) { ctrlActive = false }
-            }
-            KeyPill("↑", borderColor = borderColor, modifier = Modifier.weight(1f)) {
-                sendKey("\u001b[A", ctrlActive, onKeyPress) { ctrlActive = false }
-            }
-            KeyPill("→", borderColor = borderColor, modifier = Modifier.weight(1f)) {
-                sendKey("\u001b[C", ctrlActive, onKeyPress) { ctrlActive = false }
-            }
+        // Arrow keys — larger, using Material icons
+        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", borderColor, Modifier.weight(1f).height(38.dp)) {
+            sendKey("\u001b[D", ctrlActive, onKeyPress) { ctrlActive = false }
+        }
+        ArrowPill(Icons.Filled.KeyboardArrowDown, "Down", borderColor, Modifier.weight(1f).height(38.dp)) {
+            sendKey("\u001b[B", ctrlActive, onKeyPress) { ctrlActive = false }
+        }
+        ArrowPill(Icons.Filled.KeyboardArrowUp, "Up", borderColor, Modifier.weight(1f).height(38.dp)) {
+            sendKey("\u001b[A", ctrlActive, onKeyPress) { ctrlActive = false }
+        }
+        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", borderColor, Modifier.weight(1f).height(38.dp)) {
+            sendKey("\u001b[C", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Enter
-        KeyPill(
+        // Enter — primary tint
+        SmallPill(
             "⏎",
-            borderColor = borderColor,
             isPrimary = true,
-            modifier = Modifier.weight(1f),
+            borderColor = borderColor,
+            modifier = Modifier.weight(0.7f).height(38.dp),
         ) {
             sendKey("\r", ctrlActive, onKeyPress) { ctrlActive = false }
         }
@@ -108,7 +108,7 @@ private fun sendKey(
 }
 
 @Composable
-private fun KeyPill(
+private fun SmallPill(
     label: String,
     isActive: Boolean = false,
     isPrimary: Boolean = false,
@@ -129,7 +129,6 @@ private fun KeyPill(
 
     Box(
         modifier = modifier
-            .height(34.dp)
             .clip(RoundedCornerShape(6.dp))
             .background(bg)
             .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
@@ -138,9 +137,34 @@ private fun KeyPill(
     ) {
         Text(
             label,
-            fontSize = 13.sp,
+            fontSize = 11.sp,
             fontWeight = if (isActive || isPrimary) FontWeight.SemiBold else FontWeight.Normal,
             color = textColor,
+        )
+    }
+}
+
+@Composable
+private fun ArrowPill(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    borderColor: androidx.compose.ui.graphics.Color,
+    modifier: Modifier = Modifier,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(22.dp),
         )
     }
 }
