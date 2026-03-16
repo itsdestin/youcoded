@@ -49,6 +49,29 @@ private val TERMINAL_PALETTE = intArrayOf(
 
 private val DEFAULT_FG = Color(0xFFE8E0D8)
 private val DEFAULT_BG = Color(0xFF0A0A0A)
+private val LINK_COLOR = Color(0xFF66AAFF) // Bright blue for clickable URLs
+private val URL_PATTERN = Regex("""https?://[^\s)>\]"'`]+""")
+
+private data class UrlRegion(val url: String, val left: Float, val top: Float, val right: Float, val bottom: Float)
+
+/** Extract visible text from a TerminalRow for URL pattern matching. */
+private fun extractRowText(row: TerminalRow, cols: Int): String {
+    val sb = StringBuilder(cols)
+    var col = 0
+    while (col < cols) {
+        val charIndex = row.findStartOfColumn(col)
+        val spaceUsed = row.getSpaceUsed()
+        if (charIndex >= spaceUsed) { sb.append(' '); col++; continue }
+        val ch = row.mText[charIndex]
+        val cp = if (Character.isHighSurrogate(ch) && charIndex + 1 < spaceUsed) {
+            val low = row.mText[charIndex + 1]
+            if (Character.isLowSurrogate(low)) Character.toCodePoint(ch, low) else ch.code
+        } else ch.code
+        sb.append(if (cp == 0 || cp == ' '.code) ' ' else String(Character.toChars(cp)))
+        col++
+    }
+    return sb.toString()
+}
 
 /**
  * Resolves a Termux color index to an ARGB int.
