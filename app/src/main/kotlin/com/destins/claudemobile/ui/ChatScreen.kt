@@ -130,27 +130,22 @@ fun ChatScreen(bridge: PtyBridge) {
             var terminalInput by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top bar — matches bottom pills style
-                Row(
+                // Top bar — icon left, centered title, Claude icon right
+                val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.background)
                         .padding(horizontal = 6.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    // Chat toggle — styled as a key pill
-                    val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
+                    // Chat toggle pill — left
                     Box(
                         modifier = Modifier
+                            .align(Alignment.CenterStart)
                             .height(34.dp)
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.surface)
-                            .border(
-                                0.5.dp,
-                                borderColor.copy(alpha = 0.5f),
-                                androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-                            )
+                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .clickable { isTerminalMode = false }
                             .padding(horizontal = 10.dp),
                         contentAlignment = Alignment.Center,
@@ -162,12 +157,25 @@ fun ChatScreen(bridge: PtyBridge) {
                             modifier = Modifier.size(18.dp),
                         )
                     }
-                    Spacer(Modifier.weight(1f))
+                    // Centered title
                     Text(
                         "Terminal",
                         fontSize = 13.sp,
                         color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
+                        modifier = Modifier.align(Alignment.Center),
                     )
+                    // Claude icon pill — right
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(34.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text("✦", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+                    }
                 }
                 // Divider below top bar
                 HorizontalDivider(color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder, thickness = 0.5.dp)
@@ -269,26 +277,21 @@ fun ChatScreen(bridge: PtyBridge) {
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
 
-                // Top bar — pill icon + title, matching terminal style
-                Row(
+                // Top bar — icon left, centered title, Claude icon right
+                Box(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.background)
                         .padding(horizontal = 6.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    // Terminal toggle — styled as a pill
+                    // Terminal toggle pill — left
                     Box(
                         modifier = Modifier
+                            .align(Alignment.CenterStart)
                             .height(34.dp)
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.surface)
-                            .border(
-                                0.5.dp,
-                                borderColor.copy(alpha = 0.5f),
-                                androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
-                            )
+                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .clickable { isTerminalMode = true }
                             .padding(horizontal = 10.dp),
                         contentAlignment = Alignment.Center,
@@ -303,31 +306,24 @@ fun ChatScreen(bridge: PtyBridge) {
                             modifier = Modifier.size(18.dp),
                         )
                     }
-                    Spacer(Modifier.width(2.dp))
+                    // Centered title
                     Text(
-                        "Claude Mobile",
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        "Chat",
+                        fontSize = 13.sp,
+                        color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
+                        modifier = Modifier.align(Alignment.Center),
                     )
-                    Spacer(Modifier.weight(1f))
-                    // Claude icon pill — circular, matching terminal pill proportions
+                    // Claude icon pill — right
                     Box(
                         modifier = Modifier
+                            .align(Alignment.CenterEnd)
                             .size(34.dp)
                             .clip(androidx.compose.foundation.shape.CircleShape)
                             .background(MaterialTheme.colorScheme.surface)
-                            .border(
-                                0.5.dp,
-                                borderColor.copy(alpha = 0.5f),
-                                androidx.compose.foundation.shape.CircleShape
-                            ),
+                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text(
-                            "✦",
-                            fontSize = 16.sp,
-                            color = MaterialTheme.colorScheme.primary,
-                        )
+                        Text("✦", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
                     }
                 }
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
