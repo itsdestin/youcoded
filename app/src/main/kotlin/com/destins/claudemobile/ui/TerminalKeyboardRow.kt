@@ -40,44 +40,44 @@ fun TerminalKeyboardRow(
         horizontalArrangement = Arrangement.spacedBy(3.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        // Ctrl — narrow, tall
+        // Ctrl
         SmallPill(
             label = "Ctrl",
             isActive = ctrlActive,
             borderColor = borderColor,
-            modifier = Modifier.weight(0.7f).height(38.dp),
+            modifier = Modifier.weight(0.85f).height(36.dp),
         ) { ctrlActive = !ctrlActive }
 
-        // Esc — narrow, tall
-        SmallPill("Esc", borderColor = borderColor, modifier = Modifier.weight(0.7f).height(38.dp)) {
+        // Esc
+        SmallPill("Esc", borderColor = borderColor, modifier = Modifier.weight(0.85f).height(36.dp)) {
             sendKey("\u001b", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Tab — narrow, tall
-        SmallPill("Tab", borderColor = borderColor, modifier = Modifier.weight(0.7f).height(38.dp)) {
+        // Tab
+        SmallPill("Tab", borderColor = borderColor, modifier = Modifier.weight(0.85f).height(36.dp)) {
             sendKey("\t", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Arrow keys — larger, using Material icons
-        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", borderColor, Modifier.weight(1f).height(38.dp)) {
+        // Arrow keys — half-size left/right, normal up/down
+        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", borderColor, Modifier.weight(0.55f).height(36.dp)) {
             sendKey("\u001b[D", ctrlActive, onKeyPress) { ctrlActive = false }
         }
-        ArrowPill(Icons.Filled.KeyboardArrowDown, "Down", borderColor, Modifier.weight(1f).height(38.dp)) {
+        ArrowPill(Icons.Filled.KeyboardArrowDown, "Down", borderColor, Modifier.weight(0.75f).height(36.dp)) {
             sendKey("\u001b[B", ctrlActive, onKeyPress) { ctrlActive = false }
         }
-        ArrowPill(Icons.Filled.KeyboardArrowUp, "Up", borderColor, Modifier.weight(1f).height(38.dp)) {
+        ArrowPill(Icons.Filled.KeyboardArrowUp, "Up", borderColor, Modifier.weight(0.75f).height(36.dp)) {
             sendKey("\u001b[A", ctrlActive, onKeyPress) { ctrlActive = false }
         }
-        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", borderColor, Modifier.weight(1f).height(38.dp)) {
+        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", borderColor, Modifier.weight(0.55f).height(36.dp)) {
             sendKey("\u001b[C", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Enter — primary tint
+        // Enter
         SmallPill(
             "⏎",
             isPrimary = true,
             borderColor = borderColor,
-            modifier = Modifier.weight(0.7f).height(38.dp),
+            modifier = Modifier.weight(0.85f).height(36.dp),
         ) {
             sendKey("\r", ctrlActive, onKeyPress) { ctrlActive = false }
         }
