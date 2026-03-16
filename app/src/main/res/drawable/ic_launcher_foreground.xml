@@ -7,79 +7,87 @@
 
     <!-- All elements centered in the 72dp safe zone (18–90) -->
 
-    <!-- Main circular body -->
+    <!-- Square "hat/cap" — floating above top-left of body with gap -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M46,30 A20,20 0,1 1,46,70 A20,20 0,1 1,46,30 Z" />
+        android:pathData="M28,20 L39,20 A2.5,2.5 0,0 1,41.5,22.5 L41.5,29.5 A2.5,2.5 0,0 1,39,32 L28,32 A2.5,2.5 0,0 1,25.5,29.5 L25.5,22.5 A2.5,2.5 0,0 1,28,20 Z" />
 
-    <!-- Code text lines inside body (white, low alpha) -->
-    <path android:fillColor="#ffffff" android:fillAlpha="0.18"
-        android:pathData="M31,38 L55,38 L55,40 L31,40 Z" />
-    <path android:fillColor="#ffffff" android:fillAlpha="0.14"
-        android:pathData="M31,42.5 L50,42.5 L50,44.5 L31,44.5 Z" />
+    <!-- Main body — rounded rectangle (nearly square, large corner radius) -->
+    <path
+        android:fillColor="#1c1c1c"
+        android:pathData="
+            M36,35 L56,35
+            A10,10 0,0 1,66,45
+            L66,63
+            A10,10 0,0 1,56,73
+            L36,73
+            A10,10 0,0 1,26,63
+            L26,45
+            A10,10 0,0 1,36,35 Z" />
+
+    <!-- Code text lines inside body (white, very low alpha) -->
+    <path android:fillColor="#ffffff" android:fillAlpha="0.16"
+        android:pathData="M31,42 L61,42 L61,44 L31,44 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.12"
-        android:pathData="M31,47 L53,47 L53,49 L31,49 Z" />
+        android:pathData="M31,46.5 L55,46.5 L55,48.5 L31,48.5 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.10"
-        android:pathData="M31,51.5 L45,51.5 L45,53.5 L31,53.5 Z" />
+        android:pathData="M31,51 L58,51 L58,53 L31,53 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.08"
-        android:pathData="M31,56 L52,56 L52,58 L31,58 Z" />
+        android:pathData="M31,55.5 L49,55.5 L49,57.5 L31,57.5 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.06"
-        android:pathData="M31,60.5 L41,60.5 L41,62.5 L31,62.5 Z" />
+        android:pathData="M31,60 L56,60 L56,62 L31,62 Z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.05"
+        android:pathData="M31,64.5 L42,64.5 L42,66.5 L31,66.5 Z" />
 
-    <!-- Square "hat" — overlapping top-left of head -->
+    <!-- Face: right-pointing chevron ">" (cream, left eye) -->
     <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M28,24 L39,24 A2,2 0,0 1,41,26 L41,34 A2,2 0,0 1,39,36 L28,36 A2,2 0,0 1,26,34 L26,26 A2,2 0,0 1,28,24 Z" />
-
-    <!-- Face: right-pointing chevron ">" (cream) -->
-    <path
-        android:pathData="M37,41 L47,50 L37,59"
+        android:pathData="M34,44 L44,54 L34,64"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="4"
+        android:strokeWidth="3.6"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
-    <!-- Face: left-pointing chevron "<" (cream) -->
+    <!-- Face: left-pointing chevron "<" (cream, right eye) -->
     <path
-        android:pathData="M55,41 L45,50 L55,59"
+        android:pathData="M58,44 L48,54 L58,64"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="4"
+        android:strokeWidth="3.6"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
     <!-- Upper-right dot (larger) -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M70,34 A4.5,4.5 0,1 1,70,43 A4.5,4.5 0,1 1,70,34 Z" />
+        android:pathData="M72,38 A5,5 0,1 1,72,48 A5,5 0,1 1,72,38 Z" />
 
     <!-- Lower-right dot (smaller) -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M71,48 A3.5,3.5 0,1 1,71,55 A3.5,3.5 0,1 1,71,48 Z" />
+        android:pathData="M73,52 A3.5,3.5 0,1 1,73,59 A3.5,3.5 0,1 1,73,52 Z" />
 
     <!-- Cursor "|" (sienna accent) -->
     <path
-        android:pathData="M76,53 L76,64"
+        android:pathData="M80,55 L80,67"
         android:strokeColor="#c96442"
-        android:strokeWidth="2.8"
+        android:strokeWidth="2.5"
         android:strokeLineCap="round" />
 
-    <!-- Right chevron ">" (sienna accent) -->
+    <!-- Terminal chevron ">" (sienna accent) -->
     <path
-        android:pathData="M69,64 L77,70 L69,76"
+        android:pathData="M73,68 L80,74 L73,80"
         android:strokeColor="#c96442"
-        android:strokeWidth="2.8"
+        android:strokeWidth="2.5"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
     <!-- Left leg -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M37,68 L44,68 L44,79 A3.5,3.5 0,0 1,40.5,82.5 L40.5,82.5 A3.5,3.5 0,0 1,37,79 Z" />
+        android:pathData="M35,72 L43,72 L43,82 A4,4 0,0 1,39,86 L39,86 A4,4 0,0 1,35,82 Z" />
 
     <!-- Right leg -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M48,68 L55,68 L55,79 A3.5,3.5 0,0 1,51.5,82.5 L51.5,82.5 A3.5,3.5 0,0 1,48,79 Z" />
+        android:pathData="M49,72 L57,72 L57,82 A4,4 0,0 1,53,86 L53,86 A4,4 0,0 1,49,82 Z" />
 
 </vector>
