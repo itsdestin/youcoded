@@ -328,9 +328,9 @@ In-app file browser for accessing files within the app's data directory. (from i
 
 Claude on-device auto-patched a broken Gemini CLI install (alias-based fix for shebangs that don't work in the Android sandbox). This self-repair behavior should be documented and codified as a general capability — detect broken installs and auto-fix them. (from inbox 2026-03-16)
 
-### Priority 13: Terminal Input Repositioning
+### ~~Priority 13: Terminal Input Repositioning~~ — Done (v2.5)
 
-Shift the typing space in terminal mode to the very bottom of the screen, replacing the current space. Keep the bottom enter button. (from inbox 2026-03-16)
+Terminal and Shell modes now use an invisible `BasicTextField` that forwards soft keyboard input to the PTY in real time — characters appear in the terminal's native input line instead of a separate app text box. Tapping the terminal canvas focuses the hidden field (opens keyboard). The visible text input row and separate Send button are removed. The `⏎` pill in `TerminalKeyboardRow` is the sole Enter/confirm/send control. Soft keyboard Enter also sends `\r` via `ImeAction.Send`.
 
 ### Priority 14: Voice Mode
 
