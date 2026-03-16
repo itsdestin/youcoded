@@ -1,0 +1,49 @@
+<h2>Input Bar: Attachment Button Placement</h2>
+<p class="subtitle">Where should the image attach button go in the existing input row?</p>
+
+<div class="options">
+  <div class="option" data-choice="a" onclick="toggleSelect(this)">
+    <div class="letter">A</div>
+    <div class="content">
+      <h3>Leading Icon</h3>
+      <p>Paperclip/image icon to the left of the text field, before the input area</p>
+      <div style="margin-top:12px; background:#1c1c1c; border-radius:12px; padding:12px; font-family:monospace; color:#e8e0d8; display:flex; align-items:center; gap:8px;">
+        <span style="color:#c96442; font-size:20px;">📎</span>
+        <span style="flex:1; background:#111; border-radius:8px; padding:8px 12px; color:#666;">Message Claude...</span>
+        <span style="color:#c96442; font-size:20px;">➤</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="b" onclick="toggleSelect(this)">
+    <div class="letter">B</div>
+    <div class="content">
+      <h3>Trailing Icon (before Send)</h3>
+      <p>Image icon between the text field and the send button</p>
+      <div style="margin-top:12px; background:#1c1c1c; border-radius:12px; padding:12px; font-family:monospace; color:#e8e0d8; display:flex; align-items:center; gap:8px;">
+        <span style="flex:1; background:#111; border-radius:8px; padding:8px 12px; color:#666;">Message Claude...</span>
+        <span style="color:#c96442; font-size:20px;">🖼️</span>
+        <span style="color:#c96442; font-size:20px;">➤</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="option" data-choice="c" onclick="toggleSelect(this)">
+    <div class="letter">C</div>
+    <div class="content">
+      <h3>Inside Text Field</h3>
+      <p>Small icon inside the text field on the right edge, send button stays outside</p>
+      <div style="margin-top:12px; background:#1c1c1c; border-radius:12px; padding:12px; font-family:monospace; color:#e8e0d8; display:flex; align-items:center; gap:8px;">
+        <span style="flex:1; background:#111; border-radius:8px; padding:8px 12px; color:#666; display:flex; align-items:center; justify-content:space-between;">
+          <span>Message Claude...</span>
+          <span style="color:#555; font-size:16px;">📷</span>
+        </span>
+        <span style="color:#c96442; font-size:20px;">➤</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div style="margin-top:24px; padding:16px; background:#1a1a2e; border-radius:8px;">
+  <p class="subtitle" style="margin:0;">When an image is attached, a small thumbnail preview would appear above the input bar with an ✕ to remove it.</p>
+</div>
