@@ -98,6 +98,18 @@ fun ChatScreen(bridge: PtyBridge) {
                                     }
                                     menuAccumulator.clear()
                                 }
+                            // Detect auth/login URLs and render as OAuthWidget
+                            } else if (text.contains("https://") && (text.contains("anthropic") || text.contains("auth") || text.contains("login"))) {
+                                val url = Regex("""https?://[^\s"'<>]+""").find(text)?.value
+                                if (url != null) {
+                                    chatState.addOAuth(url)
+                                    try {
+                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                                        context.startActivity(intent)
+                                    } catch (_: Exception) {}
+                                } else {
+                                    chatState.addClaudeText(text)
+                                }
                             } else {
                                 // Flush menu accumulator on real content
                                 if (menuAccumulator.isNotEmpty() && !text.all { it in noiseChars || it.isWhitespace() }) {
@@ -175,42 +187,8 @@ fun ChatScreen(bridge: PtyBridge) {
         }
     }
 
-    // Follow-up menu scanner — after a menu is selected, wait for ink to
-    // finish redrawing, then scan the terminal for the next menu.
-    val lastMenuHash = remember { mutableStateOf(0) }
-    val menuWasResolved = remember { mutableStateOf(false) }
-    LaunchedEffect(menuWasResolved.value) {
-        if (!menuWasResolved.value) return@LaunchedEffect
-
-        // Wait for ink to finish redrawing after menu selection
-        kotlinx.coroutines.delay(2000)
-
-        val session = bridge.getSession() ?: return@LaunchedEffect
-        val emulator = session.emulator ?: return@LaunchedEffect
-        val screen = emulator.screen ?: return@LaunchedEffect
-        val transcript = screen.getTranscriptText()
-
-        // Read ALL non-blank lines since ink rewrites the entire screen
-        val allLines = transcript.lines().filter { it.isNotBlank() }
-        val visibleText = allLines.joinToString("\n")
-        android.util.Log.d("ScreenScan", "POST-SELECT (${allLines.size} lines): ${allLines.takeLast(10).joinToString(" | ").take(400)}")
-
-        // Numbered menus
-        val menuPattern = Regex("""^\s*[❯>]?\s*(\d+\.\s+\S.+)""", RegexOption.MULTILINE)
-        val matches = menuPattern.findAll(visibleText).map { it.groupValues[1].trim() }.toList()
-
-        if (matches.size >= 2) {
-            val hash = matches.hashCode()
-            if (hash != lastMenuHash.value) {
-                lastMenuHash.value = hash
-                val hasActiveMenu = chatState.messages.any { it.content is MessageContent.Menu }
-                if (!hasActiveMenu) {
-                    chatState.addMenu(matches, matches.joinToString("\n"))
-                }
-            }
-        }
-        menuWasResolved.value = false
-    }
+    // No screen scanner — ink redraws now re-emit transcript via PtyBridge
+    // so the text event accumulator catches follow-up menus naturally.
 
     LaunchedEffect(chatState.messages.size) {
         if (chatState.messages.isNotEmpty()) {
@@ -454,7 +432,6 @@ fun ChatScreen(bridge: PtyBridge) {
                                 if (menuMsg is MessageContent.Menu) {
                                     val selected = menuMsg.options.getOrElse(index) { "" }
                                     chatState.resolveMenu(selected)
-                                    menuWasResolved.value = true
                                 }
                                 // Send arrow-down × index + enter with delays
                                 coroutineScope.launch {
