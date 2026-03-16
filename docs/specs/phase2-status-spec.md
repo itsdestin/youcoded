@@ -232,6 +232,7 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 2. **Environment changes:**
    - `SHELL` → embedded bash path (was `/system/bin/sh`)
    - `CLAUDE_CODE_SHELL` → embedded bash path (checked first by Claude Code)
+   - `PATH` → `$HOME/.local/bin:$PREFIX/bin:$PREFIX/bin/applets:/system/bin` (includes `~/.local/bin` for native installers)
    - `CLAUDE_CODE_TMPDIR` → `$HOME/tmp` (Claude Code defaults to `/tmp` which doesn't exist on Android)
    - `BASH_ENV` → path to generated `linker64-env.sh`
    - `LD_PRELOAD` → `libtermux-exec-ld-preload.so` (conditional on `.so` existing)
