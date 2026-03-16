@@ -728,7 +728,7 @@ With:
                             },
 ```
 
-This sends the absolute path (e.g., `/data/data/com.destins.claudemobile/files/home/attachments/1234567890.png`) which Claude Code's Read tool can resolve. The chat bubble shows a camera emoji prefix so the user knows an image was included. Attachment state clears after send.
+This sends the absolute path (e.g., `/data/data/com.destins.claudemobile/files/home/attachments/1234567890.png`) which Claude Code's Read tool can resolve. The chat bubble shows `[image]` prefix so the user knows an image was included. Attachment state clears after send.
 
 - [ ] **Step 2: Verify build**
 
