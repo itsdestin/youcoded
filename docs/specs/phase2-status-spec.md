@@ -361,7 +361,7 @@ Swap the direction of the up/down arrow keys in the terminal keyboard row. (from
 
 Chat mode pills that show action words first (Open, Write, Explain, etc.) then context-specific subjects. Two-tier UX where the action verb moves to the text box and subjects appear. (from inbox 2026-03-16)
 
-### Priority 22: Replace Tab Key
+### Priority 20: Replace Tab Key
 
 Consider replacing the tab key in the terminal keyboard row with something more useful for common workflows. (from inbox 2026-03-16)
 
