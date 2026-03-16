@@ -125,8 +125,9 @@ fun ChatScreen(bridge: PtyBridge) {
         when (screenMode) {
         ScreenMode.Terminal -> {
             // ── Full-screen terminal mode ──────────────────────────────
-            var terminalInput by remember { mutableStateOf("") }
             var termScrollOffset by remember { mutableFloatStateOf(0f) }
+            val termFocusRequester = remember { FocusRequester() }
+            var termInputBuffer by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
