@@ -340,6 +340,7 @@ class Bootstrap(private val context: Context) {
     fun buildRuntimeEnv(): Map<String, String> = mapOf(
         "HOME" to homeDir.absolutePath,
         "PREFIX" to usrDir.absolutePath,
+        "SHELL" to "/system/bin/sh",
         "PATH" to "${usrDir.absolutePath}/bin:${usrDir.absolutePath}/bin/applets:/system/bin",
         "LD_LIBRARY_PATH" to "${usrDir.absolutePath}/lib",
         "LANG" to "en_US.UTF-8",
