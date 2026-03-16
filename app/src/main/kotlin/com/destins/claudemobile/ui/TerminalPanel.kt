@@ -240,6 +240,9 @@ fun TerminalPanel(
         // Clamp scroll now that we know actual buffer height
         // (we can't write state inside draw, so just use the clamped value for rendering)
 
+        urlRegions.clear()
+        val linkPaint = Paint().apply { color = LINK_COLOR.toArgb(); strokeWidth = 1.5f }
+
         for (rowIndex in 0 until gridRows) {
             val bufferRow = rowIndex + scrollRows
             if (bufferRow >= totalRows) break
