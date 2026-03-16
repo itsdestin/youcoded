@@ -127,6 +127,10 @@ fun TerminalPanel(
     // Font size is calculated on layout to fit minCols columns
     var fontSizePx by remember { mutableFloatStateOf(30f) }
 
+    // Clickable URL regions — populated during Canvas draw, read by tap handler.
+    // Plain mutable list (not State) is safe because both draw and tap run on main thread.
+    val urlRegions = remember { mutableListOf<UrlRegion>() }
+
     // Load Cascadia Mono from resources
     val cascadiaRegular = remember {
         ResourcesCompat.getFont(context, R.font.cascadia_mono_regular) ?: Typeface.MONOSPACE
