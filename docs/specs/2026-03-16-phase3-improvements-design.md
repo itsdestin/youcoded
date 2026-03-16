@@ -106,11 +106,11 @@ The existing `Progress.Installing(packageName)` callback handles this automatica
 
 #### 2. Input Bar Modification
 
-- Add `Icons.Outlined.Image` icon inside the `BasicTextField`'s `decorationBox` lambda, positioned at the trailing edge of the inner content area
+- Inside the `BasicTextField`'s `decorationBox` lambda, wrap `innerTextField()` in a `Row` with `Icons.Outlined.Image` aligned to `CenterVertically` at the trailing edge. The `innerTextField()` gets `Modifier.weight(1f)` so it fills remaining space without overlapping the icon.
 - Icon color: `#555` idle, `#c96442` when image attached
 - Tapping launches photo picker
 - When image attached: show 48dp rounded thumbnail row above input bar with `Icons.Close` remove button
-- Attachment path stored via `rememberSaveable` so it survives configuration changes; thumbnail reconstructed from path on restore
+- Attachment path stored via `rememberSaveable` so it survives configuration changes; thumbnail `Bitmap` loaded from saved path via `BitmapFactory.decodeFile()` in a `LaunchedEffect` on restore (not stored in state directly)
 
 #### 3. Prompt Injection
 
