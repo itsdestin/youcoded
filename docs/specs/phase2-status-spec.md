@@ -59,6 +59,7 @@ A full-screen terminal emulator that renders Claude Code's output directly from 
 - Canvas `fillMaxSize()` removed from modifier chain — conflicted with `weight()` in Column layout
 - Terminal redraws on ALL `onTextChanged` calls, including when transcript shrinks (ink menu redraws)
 - Initial emulator size matches panel size (60x40) to prevent resize mismatch with ink menus
+- `externalToInternalRow()` and `allocateFullLineIfNecessary()` wrapped in `catch(_: Exception)` — Termux throws `IllegalArgumentException` during resize race when `gridRows` temporarily exceeds `mScreenRows`
 
 **Status:** Fully functional. Users can navigate Claude Code's first-run menus (theme picker, login method, OAuth), type commands, paste auth codes, and interact normally. Arrow keys, escape sequences, and Ctrl modifiers work correctly.
 
