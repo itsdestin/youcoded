@@ -320,6 +320,58 @@ DirectShellBridge works via long-press on Terminal button but there's no visible
 
 Config-only change in `ChipConfig.kt` — no new files or complex logic.
 
+### Priority 10: Fix / Rebuild App Icon
+
+Current icon needs rework. Reference image available (B1 Original comparison shot). (from inbox 2026-03-16)
+
+### Priority 11: Voice Assistant OS Integration
+
+Register Claude Mobile as an Android voice assistant so it can be invoked system-wide. (from inbox 2026-03-16)
+
+### Priority 12: "My Files" View
+
+In-app file browser for accessing files within the app's data directory. (from inbox 2026-03-16)
+
+### Priority 13: Codify Auto-Patching Install Capability
+
+Claude on-device auto-patched a broken Gemini CLI install (alias-based fix for shebangs that don't work in the Android sandbox). This self-repair behavior should be documented and codified as a general capability — detect broken installs and auto-fix them. (from inbox 2026-03-16)
+
+### Priority 14: Fix Native Installer Fallback
+
+Native binary installer produces bad ELF errors on Android. The installer should detect this and fall back to the alias-based (node + JS entry point) approach automatically. Related to Bug 3. (from inbox 2026-03-16)
+
+### Priority 15: Terminal Input Repositioning
+
+Shift the typing space in terminal mode to the very bottom of the screen, replacing the current space. Keep the bottom enter button. (from inbox 2026-03-16)
+
+### Priority 16: Voice Mode
+
+Voice input/output mode for Claude Mobile interactions. (from inbox 2026-03-16)
+
+### Priority 17: Terminal View on Confirm/Cancel Detection
+
+Auto-switch to terminal view whenever an "enter to confirm / esc to cancel" prompt is detected, so the user can respond directly. (from inbox 2026-03-16)
+
+### Priority 18: Terminal Icon in Smart Card
+
+Show a terminal icon whenever a live terminal session is active in a smart card, so the user can quickly jump to the terminal view. (from inbox 2026-03-16)
+
+### Priority 19: Financial Support Links
+
+Add links to financially support the project (donate, sponsor, etc.) within the app. (from inbox 2026-03-16)
+
+### Priority 20: Flip Up/Down Arrows in Terminal Mode
+
+Swap the direction of the up/down arrow keys in the terminal keyboard row. (from inbox 2026-03-16)
+
+### Priority 21: Dynamic / Two-Tier Action Pills in Chat Mode
+
+Chat mode pills that show action words first (Open, Write, Explain, etc.) then context-specific subjects. Two-tier UX where the action verb moves to the text box and subjects appear. (from inbox 2026-03-16)
+
+### Priority 22: Replace Tab Key
+
+Consider replacing the tab key in the terminal keyboard row with something more useful for common workflows. (from inbox 2026-03-16)
+
 ## Open Questions
 
 1. **Tablet layout:** Split-view (2/3 chat + 1/3 file preview) deferred to Phase 3.
