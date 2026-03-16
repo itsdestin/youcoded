@@ -13,6 +13,8 @@ class EventBridge(private val socketPath: String) {
     private val _events = MutableSharedFlow<ParsedEvent>(extraBufferCapacity = 1000)
     val events: SharedFlow<ParsedEvent> = _events
 
+    var onConnected: (() -> Unit)? = null
+
     private var socket: LocalSocket? = null
     private var outputStream: OutputStream? = null
     private var readJob: Job? = null
@@ -25,6 +27,7 @@ class EventBridge(private val socketPath: String) {
                     s.connect(LocalSocketAddress(socketPath, LocalSocketAddress.Namespace.FILESYSTEM))
                     socket = s
                     outputStream = s.outputStream
+                    onConnected?.invoke()
 
                     val reader = BufferedReader(InputStreamReader(s.inputStream))
                     while (isActive) {
