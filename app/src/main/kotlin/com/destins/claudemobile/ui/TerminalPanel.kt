@@ -82,8 +82,12 @@ private fun resolveColor(colorIndex: Int, defaultColor: Color): Int {
 @Composable
 fun TerminalPanel(
     session: TerminalSession?,
+    screenVersion: Int = 0, // changes trigger Canvas redraw
     modifier: Modifier = Modifier,
 ) {
+    // Reading screenVersion here ensures Compose recomposes this function
+    // (and thus redraws the Canvas) whenever the terminal buffer changes.
+    @Suppress("UNUSED_EXPRESSION") screenVersion
     val terminalBg = ClaudeMobileTheme.extended.terminalBg
     val context = LocalContext.current
 

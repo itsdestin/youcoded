@@ -1,0 +1,133 @@
+<h2>Claude Mobile — Theme Direction</h2>
+<p class="subtitle">Claude's brand palette applied to the mobile chat UI</p>
+
+<div class="cards">
+  <div class="card" data-choice="a" onclick="toggleSelect(this)">
+    <div class="card-image" style="background: #1a1a1a; padding: 20px; border-radius: 8px 8px 0 0;">
+      <!-- Phone mockup A: Dark with terracotta accents -->
+      <div style="background: #0d0d0d; border-radius: 16px; padding: 12px; max-width: 280px; margin: 0 auto; font-family: system-ui; overflow: hidden; border: 2px solid #2a2a2a;">
+        <!-- Status bar -->
+        <div style="display: flex; justify-content: space-between; color: #888; font-size: 11px; padding: 4px 8px 8px;">
+          <span>Claude Mobile</span>
+          <span style="color: #d4714a;">●</span>
+        </div>
+        <!-- Messages -->
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px;">
+          <div style="background: #1e1e1e; border-radius: 12px; padding: 10px 14px; color: #e0e0e0; font-size: 12px; max-width: 85%; border-left: 3px solid #d4714a;">
+            I've read the file. Here's what I found...
+          </div>
+          <div style="background: #d4714a; border-radius: 12px; padding: 10px 14px; color: #fff; font-size: 12px; max-width: 75%; align-self: flex-end;">
+            fix the bug in auth.kt
+          </div>
+          <!-- Tool card -->
+          <div style="background: #1a1507; border: 1px solid #3d2e0a; border-radius: 8px; padding: 8px 12px; font-size: 11px;">
+            <span style="color: #d4714a; font-weight: 600;">Read</span>
+            <span style="color: #888;"> src/auth/AuthManager.kt</span>
+          </div>
+          <div style="background: #1e1e1e; border-radius: 12px; padding: 10px 14px; color: #e0e0e0; font-size: 12px; max-width: 85%; border-left: 3px solid #d4714a;">
+            Found the issue — the token refresh...
+          </div>
+        </div>
+        <!-- Input bar -->
+        <div style="display: flex; gap: 8px; padding: 8px; align-items: center; margin-top: 8px;">
+          <div style="flex: 1; background: #1e1e1e; border-radius: 20px; padding: 10px 16px; color: #666; font-size: 12px; border: 1px solid #333;">Message...</div>
+          <div style="width: 36px; height: 36px; background: #d4714a; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px;">↑</div>
+        </div>
+        <!-- Terminal toggle -->
+        <div style="display: flex; justify-content: center; padding: 4px;">
+          <span style="color: #666; font-size: 10px;">⌨ Terminal</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>A: Dark + Terracotta</h3>
+      <p>Near-black background (#0d0d0d), warm terracotta (#d4714a) as primary accent. User bubbles in terracotta, Claude messages with terracotta left border. Tool cards in dark amber tint. Feels premium, easy on eyes at night.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="b" onclick="toggleSelect(this)">
+    <div class="card-image" style="background: #1a1a1a; padding: 20px; border-radius: 8px 8px 0 0;">
+      <!-- Phone mockup B: Warm dark with orange highlights -->
+      <div style="background: #1a1410; border-radius: 16px; padding: 12px; max-width: 280px; margin: 0 auto; font-family: system-ui; overflow: hidden; border: 2px solid #2e2418;">
+        <!-- Status bar -->
+        <div style="display: flex; justify-content: space-between; color: #998877; font-size: 11px; padding: 4px 8px 8px;">
+          <span>Claude Mobile</span>
+          <span style="color: #e07840;">●</span>
+        </div>
+        <!-- Messages -->
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px;">
+          <div style="background: #231c14; border-radius: 12px; padding: 10px 14px; color: #ddd0c0; font-size: 12px; max-width: 85%; border-left: 3px solid #e07840;">
+            I've read the file. Here's what I found...
+          </div>
+          <div style="background: #e07840; border-radius: 12px; padding: 10px 14px; color: #fff; font-size: 12px; max-width: 75%; align-self: flex-end;">
+            fix the bug in auth.kt
+          </div>
+          <!-- Tool card -->
+          <div style="background: #261c0e; border: 1px solid #4a3520; border-radius: 8px; padding: 8px 12px; font-size: 11px;">
+            <span style="color: #e07840; font-weight: 600;">Read</span>
+            <span style="color: #998877;"> src/auth/AuthManager.kt</span>
+          </div>
+          <div style="background: #231c14; border-radius: 12px; padding: 10px 14px; color: #ddd0c0; font-size: 12px; max-width: 85%; border-left: 3px solid #e07840;">
+            Found the issue — the token refresh...
+          </div>
+        </div>
+        <!-- Input bar -->
+        <div style="display: flex; gap: 8px; padding: 8px; align-items: center; margin-top: 8px;">
+          <div style="flex: 1; background: #231c14; border-radius: 20px; padding: 10px 16px; color: #776655; font-size: 12px; border: 1px solid #3a2e20;">Message...</div>
+          <div style="width: 36px; height: 36px; background: #e07840; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px;">↑</div>
+        </div>
+        <!-- Terminal toggle -->
+        <div style="display: flex; justify-content: center; padding: 4px;">
+          <span style="color: #776655; font-size: 10px;">⌨ Terminal</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>B: Warm Dark + Burnt Orange</h3>
+      <p>Warm-tinted dark background (#1a1410) with burnt orange (#e07840) accents. Everything has a slight warmth — surfaces, text, borders. Feels cozy and distinct from every other dark-mode app. More personality.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="c" onclick="toggleSelect(this)">
+    <div class="card-image" style="background: #1a1a1a; padding: 20px; border-radius: 8px 8px 0 0;">
+      <!-- Phone mockup C: Clean dark with claude beige/sand -->
+      <div style="background: #111111; border-radius: 16px; padding: 12px; max-width: 280px; margin: 0 auto; font-family: system-ui; overflow: hidden; border: 2px solid #262626;">
+        <!-- Status bar -->
+        <div style="display: flex; justify-content: space-between; color: #888; font-size: 11px; padding: 4px 8px 8px;">
+          <span>Claude Mobile</span>
+          <span style="color: #c96442;">●</span>
+        </div>
+        <!-- Messages -->
+        <div style="display: flex; flex-direction: column; gap: 8px; padding: 8px;">
+          <div style="background: #1c1c1c; border-radius: 12px; padding: 10px 14px; color: #e8e0d8; font-size: 12px; max-width: 85%;">
+            I've read the file. Here's what I found...
+          </div>
+          <div style="background: #c96442; border-radius: 12px; padding: 10px 14px; color: #fff; font-size: 12px; max-width: 75%; align-self: flex-end;">
+            fix the bug in auth.kt
+          </div>
+          <!-- Tool card -->
+          <div style="background: #1c1c1c; border: 1px solid #333; border-radius: 8px; padding: 8px 12px; font-size: 11px;">
+            <span style="color: #c96442; font-weight: 600;">Read</span>
+            <span style="color: #999;"> src/auth/AuthManager.kt</span>
+          </div>
+          <div style="background: #1c1c1c; border-radius: 12px; padding: 10px 14px; color: #e8e0d8; font-size: 12px; max-width: 85%;">
+            Found the issue — the token refresh...
+          </div>
+        </div>
+        <!-- Input bar -->
+        <div style="display: flex; gap: 8px; padding: 8px; align-items: center; margin-top: 8px;">
+          <div style="flex: 1; background: #1c1c1c; border-radius: 20px; padding: 10px 16px; color: #666; font-size: 12px; border: 1px solid #333;">Message...</div>
+          <div style="width: 36px; height: 36px; background: #c96442; border-radius: 50%; display: flex; align-items: center; justify-content: center; color: white; font-size: 14px;">↑</div>
+        </div>
+        <!-- Terminal toggle -->
+        <div style="display: flex; justify-content: center; padding: 4px;">
+          <span style="color: #666; font-size: 10px;">⌨ Terminal</span>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>C: Neutral Dark + Claude Sienna</h3>
+      <p>Pure dark background (#111), neutral surfaces, with Claude's sienna (#c96442) only for accents and user bubbles. No left borders on Claude messages — cleaner, more minimal. Closest to Claude.ai's actual dark mode aesthetic.</p>
+    </div>
+  </div>
+</div>

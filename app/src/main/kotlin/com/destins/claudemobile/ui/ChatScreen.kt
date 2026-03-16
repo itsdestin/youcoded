@@ -29,6 +29,9 @@ fun ChatScreen(bridge: PtyBridge) {
     var hasUnhandledInteractive by remember { mutableStateOf(false) }
     var showBtwSheet by remember { mutableStateOf(false) }
 
+    // Collect screen version to trigger terminal panel recomposition on PTY output
+    val screenVersion by bridge.screenVersion.collectAsState()
+
     LaunchedEffect(bridge) {
         val eventBridge = bridge.getEventBridge()
         if (eventBridge != null) {
@@ -134,6 +137,7 @@ fun ChatScreen(bridge: PtyBridge) {
                 Column(modifier = Modifier.weight(0.6f)) {
                     TerminalPanel(
                         session = bridge.getSession(),
+                        screenVersion = screenVersion,
                         modifier = Modifier.weight(1f),
                     )
                     TerminalKeyboardRow(
