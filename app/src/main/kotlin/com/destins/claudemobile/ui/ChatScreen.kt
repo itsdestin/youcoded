@@ -424,7 +424,7 @@ fun ChatScreen(bridge: PtyBridge) {
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    items(chatState.messages, key = { it.timestamp }) { message ->
+                    items(chatState.messages, key = { it.id }) { message ->
                         MessageBubble(
                             message = message,
                             expandedCardId = chatState.expandedCardId,
