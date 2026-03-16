@@ -91,7 +91,9 @@ fun ChatScreen(bridge: PtyBridge) {
                                 text.contains("url below to sign") ||
                                 text.contains("Opening browser") ||
                                 (text == "in") ||
-                                (text == "c to copy")
+                                (text == "c to copy") ||
+                                // Long alphanumeric-only strings (auth code echoes, hashes, tokens)
+                                (text.length > 15 && !text.contains(' ') && text.all { it.isLetterOrDigit() || it in "-_#" })
                             if (isNoise) {
                                 // Skip — don't add to chat
                             }
