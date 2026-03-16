@@ -200,65 +200,35 @@ class Bootstrap(private val context: Context) {
             primarySo.setExecutable(true)
         }
 
-        // Git is deferred to on-demand installation via installGit().
-        // Claude Code runs without git for journaling/inbox use cases.
-    }
-
-    /**
-     * Install git and its runtime dependencies on demand.
-     * Git is not included in the initial bootstrap to keep first-run setup fast.
-     * Call this before any operation that requires git (repo clone, commit, etc.).
-     *
-     * Dependencies are installed in order: shared libraries first, then git itself.
-     * Each package is skipped if its sentinel file already exists (idempotent).
-     */
-    suspend fun installGit(onProgress: (Progress) -> Unit) = withContext(Dispatchers.IO) {
-        try {
-            if (!File(usrDir, "lib/libssl.so").exists()) {
-                onProgress(Progress.Installing("openssl"))
-                // TODO: Resolve exact .deb path from https://packages.termux.dev/apt/termux-main/
-                //       e.g. pool/main/o/openssl/openssl_3.x.x_aarch64.deb
-                installDeb("pool/main/o/openssl/openssl_3.5.0_aarch64.deb")
-            }
-            if (!File(usrDir, "lib/libcurl.so").exists()) {
-                onProgress(Progress.Installing("libcurl"))
-                // TODO: Resolve exact .deb path from https://packages.termux.dev/apt/termux-main/
-                //       e.g. pool/main/c/curl/libcurl_8.x.x_aarch64.deb
-                installDeb("pool/main/c/curl/libcurl_8.13.0_aarch64.deb")
-            }
-            if (!File(usrDir, "lib/libexpat.so").exists()) {
-                onProgress(Progress.Installing("libexpat"))
-                // TODO: Resolve exact .deb path from https://packages.termux.dev/apt/termux-main/
-                //       e.g. pool/main/e/expat/libexpat_2.x.x_aarch64.deb
-                installDeb("pool/main/e/expat/libexpat_2.7.1_aarch64.deb")
-            }
-            if (!File(usrDir, "lib/libiconv.so").exists()) {
-                onProgress(Progress.Installing("libiconv"))
-                // TODO: Resolve exact .deb path from https://packages.termux.dev/apt/termux-main/
-                //       e.g. pool/main/libi/libiconv/libiconv_1.x.x_aarch64.deb
-                installDeb("pool/main/libi/libiconv/libiconv_1.18_aarch64.deb")
-            }
-            if (!File(usrDir, "lib/libpcre2-8.so").exists()) {
-                onProgress(Progress.Installing("pcre2"))
-                // TODO: Resolve exact .deb path from https://packages.termux.dev/apt/termux-main/
-                //       e.g. pool/main/p/pcre2/libpcre2_10.x.x_aarch64.deb
-                installDeb("pool/main/p/pcre2/libpcre2_10.45_aarch64.deb")
-            }
-            if (!File(usrDir, "lib/libz.so").exists()) {
-                onProgress(Progress.Installing("zlib"))
-                // TODO: Resolve exact .deb path from https://packages.termux.dev/apt/termux-main/
-                //       e.g. pool/main/z/zlib/zlib_1.x.x_aarch64.deb
-                installDeb("pool/main/z/zlib/zlib_1.3.1_aarch64.deb")
-            }
-            if (!File(usrDir, "bin/git").exists()) {
-                onProgress(Progress.Installing("git"))
-                // TODO: Resolve exact .deb path from https://packages.termux.dev/apt/termux-main/
-                //       e.g. pool/main/g/git/git_2.x.x_aarch64.deb
-                installDeb("pool/main/g/git/git_2.49.0_aarch64.deb")
-            }
-            onProgress(Progress.Complete)
-        } catch (e: Exception) {
-            onProgress(Progress.Error(e.message ?: "Unknown error during git installation"))
+        // Git and its runtime dependencies
+        // TODO: Resolve exact .deb paths from Termux API (currently hardcoded URLs)
+        if (!File(usrDir, "lib/libssl.so").exists()) {
+            onProgress(Progress.Installing("openssl"))
+            installDeb("pool/main/o/openssl/openssl_3.5.0_aarch64.deb")
+        }
+        if (!File(usrDir, "lib/libcurl.so").exists()) {
+            onProgress(Progress.Installing("libcurl"))
+            installDeb("pool/main/c/curl/libcurl_8.13.0_aarch64.deb")
+        }
+        if (!File(usrDir, "lib/libexpat.so").exists()) {
+            onProgress(Progress.Installing("libexpat"))
+            installDeb("pool/main/e/expat/libexpat_2.7.1_aarch64.deb")
+        }
+        if (!File(usrDir, "lib/libiconv.so").exists()) {
+            onProgress(Progress.Installing("libiconv"))
+            installDeb("pool/main/libi/libiconv/libiconv_1.18_aarch64.deb")
+        }
+        if (!File(usrDir, "lib/libpcre2-8.so").exists()) {
+            onProgress(Progress.Installing("pcre2"))
+            installDeb("pool/main/p/pcre2/libpcre2_10.45_aarch64.deb")
+        }
+        if (!File(usrDir, "lib/libz.so").exists()) {
+            onProgress(Progress.Installing("zlib"))
+            installDeb("pool/main/z/zlib/zlib_1.3.1_aarch64.deb")
+        }
+        if (!File(usrDir, "bin/git").exists()) {
+            onProgress(Progress.Installing("git"))
+            installDeb("pool/main/g/git/git_2.49.0_aarch64.deb")
         }
     }
 
