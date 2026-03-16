@@ -6,6 +6,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.Font
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontWeight
+import com.destins.claudemobile.R
 
 data class ExtendedColors(
     val surfaceBorder: Color = Color(0xFF333333),
@@ -14,6 +18,11 @@ data class ExtendedColors(
 )
 
 val LocalExtendedColors = staticCompositionLocalOf { ExtendedColors() }
+
+val CascadiaMono = FontFamily(
+    Font(R.font.cascadia_mono_regular, FontWeight.Normal),
+    Font(R.font.cascadia_mono_bold, FontWeight.Bold),
+)
 
 private val DarkColorScheme = darkColorScheme(
     primary = Color(0xFFC96442),

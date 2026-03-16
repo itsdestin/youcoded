@@ -91,7 +91,7 @@ private fun DiffLine(line: String) {
     Text(
         line,
         color = color,
-        fontFamily = FontFamily.Monospace,
+        fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
         fontSize = 11.sp,
         maxLines = 1,
     )

@@ -42,7 +42,7 @@ object SyntaxHighlighter {
         return buildAnnotatedString {
             append(code)
             // Apply monospace to entire string
-            addStyle(SpanStyle(fontFamily = FontFamily.Monospace), 0, code.length)
+            addStyle(SpanStyle(fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono), 0, code.length)
 
             if (keywords.isEmpty()) return@buildAnnotatedString
 
