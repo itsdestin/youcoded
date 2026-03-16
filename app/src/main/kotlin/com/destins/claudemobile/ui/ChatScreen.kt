@@ -185,11 +185,29 @@ fun ChatScreen(bridge: PtyBridge) {
         val session = bridge.getSession() ?: return@LaunchedEffect
         val emulator = session.emulator ?: return@LaunchedEffect
         val screen = emulator.screen ?: return@LaunchedEffect
-        val transcript = screen.getTranscriptText()
 
-        // Numbered menus
-        val menuPattern = Regex("""(?:^|\n)\s*[❯>]?\s*(\d+\.\s+\S.+)""")
-        val matches = menuPattern.findAll(transcript).map { it.groupValues[1].trim() }.toList()
+        // Read only VISIBLE screen rows (not scrollback history)
+        // screen.getActiveRows() gives total rows including scrollback.
+        // The visible area is the last `rows` rows where rows = terminal height.
+        val totalRows = screen.getActiveRows()
+        val termRows = session.emulator?.mRows ?: 40
+        val startRow = (totalRows - termRows).coerceAtLeast(0)
+        val visibleLines = mutableListOf<String>()
+        for (row in startRow until totalRows) {
+            try {
+                val internalRow = screen.externalToInternalRow(row)
+                val termRow = screen.allocateFullLineIfNecessary(internalRow)
+                if (termRow != null) {
+                    val chars = String(termRow.mText, 0, termRow.spaceUsed)
+                    visibleLines.add(chars.trim())
+                }
+            } catch (_: Exception) {}
+        }
+        val visibleText = visibleLines.filter { it.isNotBlank() }.joinToString("\n")
+
+        // Numbered menus in visible area only
+        val menuPattern = Regex("""^\s*[❯>]?\s*(\d+\.\s+\S.+)""", RegexOption.MULTILINE)
+        val matches = menuPattern.findAll(visibleText).map { it.groupValues[1].trim() }.toList()
 
         if (matches.size >= 2) {
             val hash = matches.hashCode()
