@@ -427,11 +427,16 @@ runtime/PtyBridge.kt       — screenVersion, session accessor, \r input,
                               SELinux exec bypass (claude-wrapper.js deployment,
                               WRAPPER_JS with stripLogin + injectEnv + spawnFix + fixExecShell,
                               hook installation, DirectShellBridge factory, sendApproval())
-runtime/Bootstrap.kt       — installGit(), buildRuntimeEnv(), deployBashEnv() + buildBashEnvSh()
-                              (ELF/script detection, pkg manager wrappers, cd/pwd fixes, .bashrc setup),
+runtime/Bootstrap.kt       — installGit(), buildRuntimeEnv() (PATH includes ~/.local/bin),
+                              deployBashEnv() + buildBashEnvSh() (scans $PREFIX/bin + ~/.local/bin,
+                              ELF/script/JS detection, pkg manager wrappers, cd/pwd fixes, .bashrc setup),
                               setupAptSources() with apt.conf dir overrides + dpkg state init,
                               installHooks() with hook-relay.js deployment + settings.json merge
-parser/EventBridge.kt      — Rewritten as LocalServerSocket (abstract namespace), SharedFlow emitter
+runtime/SessionService.kt  — startSession() starts EventBridge BEFORE PtyBridge.start()
+parser/EventBridge.kt      — LocalServerSocket (abstract namespace), SharedFlow emitter,
+                              logs unparseable payloads for debugging
+parser/HookEvent.kt        — Stop event tries 4 field names for assistant message,
+                              logs payload keys when empty
 MainActivity.kt            — Edge-to-edge, system bar insets, IME padding
 app/build.gradle.kts       — material-icons-extended, version 0.2.0
 ```
