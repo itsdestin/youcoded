@@ -116,7 +116,23 @@ The OAuth flow requires a localhost callback server or a clipboard-based code ex
 - Running a minimal HTTP server in the embedded runtime to catch the OAuth callback
 - Or implementing a custom URI scheme handler for the callback redirect
 
-### Priority 3: Smart Card Integration
+### Priority 3: Shell Access for Bash Tool
+
+Claude Code's Bash tool fails with "No suitable shell found." The embedded Termux runtime has `bash` at `usr/bin/bash` but it can't be executed directly due to SELinux (`app_data_file` context blocks exec). Current workarounds tried:
+- `SHELL=/system/bin/sh` — Android's toybox `sh` isn't a full POSIX shell, Claude Code rejects it
+- `SHELL=usr/bin/sh-wrapper` (script with `exec linker64 bash`) — scripts also blocked by SELinux
+- `export SHELL` in launch command — same underlying issue
+
+**Root cause:** Claude Code validates `$SHELL` by spawning it, but no shell binary in `app_data_file` can be exec'd directly, and `/system/bin/sh` isn't POSIX-compliant enough.
+
+**Possible solutions:**
+- Patch Claude Code's shell detection to accept `/system/bin/sh` (not feasible for a released binary)
+- Create a native executable wrapper (compiled C, not a script) that calls linker64 + bash — native binaries can potentially be loaded via linker64 themselves
+- Use `LD_PRELOAD` or process spawning tricks to make bash accessible
+- Pre-exec linker64 bash as a daemon that Claude Code connects to via a socket
+- Investigate if Termux's `login` or `termux-exec` packages solve this (they handle the exec interception for Termux proper)
+
+### Priority 4: Smart Card Integration
 
 Smart cards are built but need real-world testing with actual Claude Code tool output. The parser's tool_start/tool_end, diff_block, and code_block detection patterns need validation against live output.
 
