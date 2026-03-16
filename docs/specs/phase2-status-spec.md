@@ -100,11 +100,12 @@ A message-based view that receives structured events directly from Claude Code h
 - Multiple tools per turn stack chronologically
 - System notices display as dimmed text
 - Quick chips send commands directly to Claude Code
+- URLs in chat bubbles are clickable (bright blue, underlined, opens browser)
+- Rapid message sending: responses insert after the correct user message, queued messages show dimmed
 
 **Current limitations:**
-- Response text renders as plain text (no markdown parsing — no bold, italic, code spans, or links)
+- Response text renders as plain text (no markdown parsing — no bold, italic, code spans)
 - Edit tool results use generic ToolCard (DiffCard exists but isn't routed — no diff parsing from `toolResponse`)
-- Session messages lost on recomposition (no ViewModel/persistence)
 
 **Status:** Implemented. Needs on-device validation with live Claude Code hook output.
 
