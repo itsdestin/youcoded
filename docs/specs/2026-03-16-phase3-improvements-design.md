@@ -104,10 +104,11 @@ The existing `Progress.Installing(packageName)` callback handles this automatica
 
 #### 2. Input Bar Modification
 
-- Add `Icons.Outlined.Image` icon inside the `BasicTextField` trailing edge
+- Add `Icons.Outlined.Image` icon inside the `BasicTextField`'s `decorationBox` lambda, positioned at the trailing edge of the inner content area
 - Icon color: `#555` idle, `#c96442` when image attached
 - Tapping launches photo picker
 - When image attached: show 48dp rounded thumbnail row above input bar with `Icons.Close` remove button
+- Attachment path stored via `rememberSaveable` so it survives configuration changes; thumbnail reconstructed from path on restore
 
 #### 3. Prompt Injection
 
