@@ -1,8 +1,12 @@
 package com.destins.claudemobile.ui
 
 import androidx.compose.animation.*
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -107,18 +111,27 @@ fun InputBar(
                         singleLine = false,
                         maxLines = 4,
                     )
-                    Button(
+                    IconButton(
                         onClick = {
                             if (text.isNotBlank()) {
                                 onSend(text)
                                 text = ""
                             }
                         },
-                        enabled = text.isNotBlank(),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.height(52.dp)
+                        modifier = Modifier
+                            .size(44.dp)
+                            .background(
+                                if (text.isNotBlank()) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                                shape = CircleShape
+                            ),
                     ) {
-                        Text("Send")
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            tint = Color.White,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
             }

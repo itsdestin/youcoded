@@ -7,6 +7,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -16,7 +17,7 @@ fun MessageBubble(message: ChatMessage) {
     val isUser = message.role == MessageRole.USER
     val bgColor = when {
         message.isBtw -> MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
-        isUser -> MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)
+        isUser -> MaterialTheme.colorScheme.primary
         else -> MaterialTheme.colorScheme.surface
     }
     val alignment = if (isUser) Arrangement.End else Arrangement.Start
@@ -48,7 +49,7 @@ fun MessageBubble(message: ChatMessage) {
                     Text(
                         text = content.text,
                         style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                        color = if (isUser) Color.White else MaterialTheme.colorScheme.onSurface,
                     )
                 }
                 is MessageContent.RawTerminal -> {
