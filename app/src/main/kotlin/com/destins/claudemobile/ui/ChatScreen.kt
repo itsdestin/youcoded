@@ -1,10 +1,14 @@
 package com.destins.claudemobile.ui
 
+import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
+import androidx.compose.ui.draw.clip
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Chat
@@ -152,50 +156,79 @@ fun ChatScreen(bridge: PtyBridge) {
                     onKeyPress = { seq -> bridge.writeInput(seq) },
                 )
 
+                // Input row — same background as key pills row
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 6.dp, vertical = 4.dp),
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 6.dp, vertical = 5.dp),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
-                    TextField(
-                        value = terminalInput,
-                        onValueChange = { terminalInput = it },
-                        placeholder = { Text("Type here...", fontSize = 13.sp, color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f)) },
-                        modifier = Modifier.weight(1f).height(46.dp),
-                        shape = androidx.compose.foundation.shape.RoundedCornerShape(23.dp),
-                        singleLine = true,
-                        colors = TextFieldDefaults.colors(
-                            focusedContainerColor = MaterialTheme.colorScheme.surface,
-                            unfocusedContainerColor = MaterialTheme.colorScheme.surface,
-                            focusedIndicatorColor = Color.Transparent,
-                            unfocusedIndicatorColor = Color.Transparent,
-                        ),
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            fontSize = 14.sp,
-                            fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
-                        ),
-                    )
-                    IconButton(
-                        onClick = {
-                            if (terminalInput.isNotBlank()) {
-                                bridge.writeInput(terminalInput + "\n")
-                                terminalInput = ""
-                            }
-                        },
+                    // Text field styled as a pill matching the key buttons
+                    val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
+                    androidx.compose.foundation.layout.Box(
                         modifier = Modifier
-                            .size(40.dp)
-                            .background(
-                                MaterialTheme.colorScheme.primary,
-                                shape = androidx.compose.foundation.shape.CircleShape
+                            .weight(1f)
+                            .height(34.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(
+                                0.5.dp,
+                                borderColor.copy(alpha = 0.5f),
+                                androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
                             ),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        BasicTextField(
+                            value = terminalInput,
+                            onValueChange = { terminalInput = it },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontSize = 13.sp,
+                                fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp),
+                            decorationBox = { innerTextField ->
+                                if (terminalInput.isEmpty()) {
+                                    Text(
+                                        "Type here...",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                                    )
+                                }
+                                innerTextField()
+                            },
+                        )
+                    }
+
+                    // Send button styled as a key pill
+                    androidx.compose.foundation.layout.Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                            .border(
+                                0.5.dp,
+                                borderColor.copy(alpha = 0.5f),
+                                androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+                            )
+                            .clickable {
+                                if (terminalInput.isNotBlank()) {
+                                    bridge.writeInput(terminalInput + "\n")
+                                    terminalInput = ""
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
                     ) {
                         Icon(
                             Icons.AutoMirrored.Filled.Send,
                             contentDescription = "Send",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp),
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
                         )
                     }
                 }
