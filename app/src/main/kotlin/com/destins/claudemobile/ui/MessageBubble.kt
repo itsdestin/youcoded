@@ -11,9 +11,51 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.destins.claudemobile.ui.cards.*
 
 @Composable
-fun MessageBubble(message: ChatMessage) {
+fun MessageBubble(
+    message: ChatMessage,
+    expandedCardId: String? = null,
+    onToggleCard: (String) -> Unit = {},
+    onApprove: () -> Unit = {},
+    onReject: () -> Unit = {},
+    onViewTerminal: () -> Unit = {},
+) {
+    when (val content = message.content) {
+        is MessageContent.ToolCall -> {
+            ToolCard(cardId = content.cardId, tool = content.tool, args = content.args,
+                duration = content.duration, isExpanded = expandedCardId == content.cardId,
+                onToggle = onToggleCard)
+            return
+        }
+        is MessageContent.Diff -> {
+            DiffCard(cardId = content.cardId, filename = content.filename, hunks = content.hunks,
+                isExpanded = expandedCardId == content.cardId, onToggle = onToggleCard)
+            return
+        }
+        is MessageContent.Code -> {
+            CodeCard(cardId = content.cardId, language = content.language, code = content.code,
+                isExpanded = expandedCardId == content.cardId, onToggle = onToggleCard)
+            return
+        }
+        is MessageContent.Error -> {
+            ErrorCard(cardId = content.cardId, message = content.message, details = content.details,
+                isExpanded = expandedCardId == content.cardId, onToggle = onToggleCard)
+            return
+        }
+        is MessageContent.Progress -> {
+            ProgressCard(message = content.message)
+            return
+        }
+        is MessageContent.ApprovalRequest -> {
+            ApprovalCard(tool = content.tool, summary = content.summary,
+                onAccept = onApprove, onReject = onReject, onViewTerminal = onViewTerminal)
+            return
+        }
+        else -> Unit
+    }
+
     val isUser = message.role == MessageRole.USER
     val bgColor = when {
         message.isBtw -> MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
@@ -60,13 +102,7 @@ fun MessageBubble(message: ChatMessage) {
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
                     )
                 }
-                is MessageContent.ApprovalRequest -> {
-                    Text(
-                        text = "Requesting approval: ${content.summary}",
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.primary,
-                    )
-                }
+                else -> Unit
             }
         }
     }

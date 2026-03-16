@@ -30,17 +30,25 @@ fun ChatScreen(bridge: PtyBridge) {
         if (eventBridge != null) {
             eventBridge.events.collect { event ->
                 when (event) {
-                    is ParsedEvent.ApprovalPrompt -> {
-                        chatState.requestApproval(event.summary)
+                    is ParsedEvent.ApprovalPrompt -> chatState.requestApproval(event.tool, event.summary)
+                    is ParsedEvent.ToolStart -> chatState.addToolStart(event.tool, event.args)
+                    is ParsedEvent.ToolEnd -> {
+                        // Deferred: updating duration on matching ToolCall card
                     }
-                    is ParsedEvent.ToolCall -> {
-                        chatState.addClaudeText("[${event.tool}] ${event.raw}")
+                    is ParsedEvent.DiffBlock -> chatState.addDiff(event.filename, event.hunks)
+                    is ParsedEvent.CodeBlock -> chatState.addCode(event.language, event.code)
+                    is ParsedEvent.Error -> chatState.addError(event.message, event.details)
+                    is ParsedEvent.Progress -> chatState.addProgress(event.message)
+                    is ParsedEvent.Text -> {
+                        if (event.text.isNotBlank()) chatState.addClaudeText(event.text)
                     }
-                    is ParsedEvent.Raw -> {
-                        if (event.text.isNotBlank()) {
-                            chatState.addRawOutput(event.text)
-                        }
+                    is ParsedEvent.InteractiveMenu -> {
+                        chatState.addRawOutput(event.raw)
+                        hasUnhandledInteractive = true
                     }
+                    is ParsedEvent.Confirmation -> chatState.addClaudeText(event.question)
+                    is ParsedEvent.TextPrompt -> chatState.addClaudeText(event.prompt)
+                    is ParsedEvent.OAuthRedirect -> chatState.addClaudeText("Open: ${event.url}")
                 }
             }
         } else {
@@ -105,7 +113,14 @@ fun ChatScreen(bridge: PtyBridge) {
             contentPadding = PaddingValues(vertical = 8.dp)
         ) {
             items(chatState.messages) { message ->
-                MessageBubble(message)
+                MessageBubble(
+                    message = message,
+                    expandedCardId = chatState.expandedCardId,
+                    onToggleCard = { chatState.toggleCard(it) },
+                    onApprove = { bridge.sendApproval(true); chatState.resolveApproval() },
+                    onReject = { bridge.sendApproval(false); chatState.resolveApproval() },
+                    onViewTerminal = { isTerminalMode = true },
+                )
             }
         }
 
