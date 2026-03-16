@@ -257,7 +257,15 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 ## Known Bugs / Issues
 
-*None currently tracked.*
+### Bug 1: TerminalPanel.kt:209 crash on resize
+**Severity:** High (7 identical crashes logged)
+`TerminalPanel.kt:209` requests 1 row beyond what `TerminalBuffer` allows during a Compose draw pass after a resize. `extRow=52, mScreenRows=51, mActiveTranscriptRows=149`. Crashes the app. Needs bounds check before row access.
+
+### Bug 2: Swipe-up crash in terminal view
+After opening the Gemini CLI chat in terminal view, swiping up from the bottom crashes the app. Likely a gesture conflict with the system navigation bar or Compose input handling.
+
+### Bug 3: Bad ELF magic on native Gemini binary
+Running `gemini` in Shell view produces `error: bad ELF magic: 696d706f`. The native binary installed by npm can't be executed directly on Android. The alias-based approach (node + JS entry point) works — need to ensure the installer always uses the alias fallback, not the native binary.
 
 ## Planned Updates
 
