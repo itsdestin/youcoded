@@ -10,42 +10,44 @@
     <!-- Square "hat" — top-left of head -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M30,26 L40,26 A2,2 0,0 1,42,28 L42,34 A2,2 0,0 1,40,36 L30,36 A2,2 0,0 1,28,34 L28,28 A2,2 0,0 1,30,26 Z" />
+        android:pathData="M30,25 L40,25 A2,2 0,0 1,42,27 L42,34 A2,2 0,0 1,40,36 L30,36 A2,2 0,0 1,28,34 L28,27 A2,2 0,0 1,30,25 Z" />
 
     <!-- Main circular body -->
     <path
         android:fillColor="#1c1c1c"
         android:pathData="M46,30 A20,20 0,1 1,46,70 A20,20 0,1 1,46,30 Z" />
 
-    <!-- White X mark on face — stroke 1 (top-left to bottom-right) -->
+    <!-- Face: left chevron ">" (cream, pointing right) -->
     <path
-        android:pathData="M38,42 L54,58"
+        android:pathData="M39,42 L48,50 L39,58"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="4"
-        android:strokeLineCap="round" />
+        android:strokeWidth="3.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 
-    <!-- White X mark on face — stroke 2 (bottom-left to top-right) -->
+    <!-- Face: right chevron "<" (cream, pointing left) -->
     <path
-        android:pathData="M38,58 L54,42"
+        android:pathData="M53,42 L44,50 L53,58"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="4"
-        android:strokeLineCap="round" />
+        android:strokeWidth="3.8"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
 
-    <!-- Upper-right dot -->
+    <!-- Upper-right dot (larger) -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M71,36 A4,4 0,1 1,71,44 A4,4 0,1 1,71,36 Z" />
+        android:pathData="M71,35 A4.5,4.5 0,1 1,71,44 A4.5,4.5 0,1 1,71,35 Z" />
 
-    <!-- Lower-right dot -->
+    <!-- Lower-right dot (smaller) -->
     <path
         android:fillColor="#1c1c1c"
         android:pathData="M72,49 A3,3 0,1 1,72,55 A3,3 0,1 1,72,49 Z" />
 
-    <!-- Right chevron ">" -->
+    <!-- Right chevron ">" (sienna accent) -->
     <path
-        android:pathData="M70,60 L78,66 L70,72"
-        android:strokeColor="#1c1c1c"
-        android:strokeWidth="3.2"
+        android:pathData="M70,61 L78,67 L70,73"
+        android:strokeColor="#c96442"
+        android:strokeWidth="3"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
