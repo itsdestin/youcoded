@@ -216,8 +216,10 @@ fun TerminalPanel(
             }
             .pointerInput(Unit) {
                 detectVerticalDragGestures { _, dragAmount ->
-                    // Negative drag = scroll up (into history); positive = scroll down
-                    scrollOffsetRows = (scrollOffsetRows - dragAmount / cellHeightPx)
+                    // Swipe up (negative dragAmount) = toward live/recent (decrease offset)
+                    // Swipe down (positive dragAmount) = into history (increase offset)
+                    // This matches standard mobile scroll: swipe up to see bottom content.
+                    scrollOffsetRows = (scrollOffsetRows + dragAmount / cellHeightPx)
                         .coerceAtLeast(0f)
                 }
             }
