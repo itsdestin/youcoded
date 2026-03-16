@@ -342,6 +342,86 @@ class Bootstrap(private val context: Context) {
         context.assets.open("claude-wrapper.js").use { input ->
             wrapperFile.outputStream().use { output -> input.copyTo(output) }
         }
+
+        installHooks()
+    }
+
+    /**
+     * Install hook-relay.js and write Claude Code hook configuration.
+     * Hooks relay structured JSON events (tool calls, responses, notifications)
+     * over a Unix socket to EventBridge for rendering in the chat view.
+     */
+    fun installHooks() {
+        val mobileDir = File(homeDir, ".claude-mobile")
+        mobileDir.mkdirs()
+
+        // Deploy hook-relay.js from assets
+        val relayFile = File(mobileDir, "hook-relay.js")
+        // Always redeploy — ensures latest version after APK update
+        context.assets.open("hook-relay.js").use { input ->
+            relayFile.outputStream().use { output -> input.copyTo(output) }
+        }
+
+        // Write hook configuration into Claude Code's settings
+        val claudeDir = File(homeDir, ".claude")
+        claudeDir.mkdirs()
+        val settingsFile = File(claudeDir, "settings.json")
+
+        val nodePath = File(usrDir, "bin/node").absolutePath
+        val relayPath = relayFile.absolutePath
+        val hookCommand = "$nodePath $relayPath"
+
+        // Build hook entries for all events we care about
+        val hookEvents = listOf(
+            "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
+        )
+
+        // Read existing settings and merge (additive — don't overwrite user hooks)
+        val existingJson = if (settingsFile.exists()) {
+            try { org.json.JSONObject(settingsFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+        } else {
+            org.json.JSONObject()
+        }
+
+        val hooksObj = existingJson.optJSONObject("hooks") ?: org.json.JSONObject()
+
+        for (event in hookEvents) {
+            val eventArray = hooksObj.optJSONArray(event) ?: org.json.JSONArray()
+
+            // Check if our hook is already registered (avoid duplicates)
+            var alreadyRegistered = false
+            for (i in 0 until eventArray.length()) {
+                val entry = eventArray.optJSONObject(i)
+                val hooks = entry?.optJSONArray("hooks")
+                if (hooks != null) {
+                    for (j in 0 until hooks.length()) {
+                        val h = hooks.optJSONObject(j)
+                        if (h?.optString("command")?.contains("hook-relay.js") == true) {
+                            alreadyRegistered = true
+                            break
+                        }
+                    }
+                }
+                if (alreadyRegistered) break
+            }
+
+            if (!alreadyRegistered) {
+                val hookEntry = org.json.JSONObject()
+                hookEntry.put("matcher", ".*")
+                val hooksList = org.json.JSONArray()
+                val hookDef = org.json.JSONObject()
+                hookDef.put("type", "command")
+                hookDef.put("command", hookCommand)
+                hooksList.put(hookDef)
+                hookEntry.put("hooks", hooksList)
+                eventArray.put(hookEntry)
+            }
+
+            hooksObj.put(event, eventArray)
+        }
+
+        existingJson.put("hooks", hooksObj)
+        settingsFile.writeText(existingJson.toString(2))
     }
 
     /**
