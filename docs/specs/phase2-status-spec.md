@@ -286,7 +286,17 @@ Response bubbles currently render `last_assistant_message` as plain text. Claude
 - Compose markdown library (e.g., `mikepenz/multiplatform-markdown-renderer`)
 - Basic regex-based annotated string (handles bold/italic/code spans, skips full block rendering)
 
-### Priority 3: DiffCard for Edit Tool
+### Priority 3: Native Binary Support (R&D)
+
+Run the native Claude Code binary (Bun/glibc, 222MB, `ET_EXEC`) on Android instead of npm+Node.js. Eliminates "install native" nag, potentially faster startup. **Full research notes:** `docs/plans/native-binary-research (03-16-2026).md`.
+
+**Status:** Blocked on bionic's 64-byte TLS alignment requirement. Two paths forward:
+- **Path A:** Custom bionic linker that relaxes TLS check (medium-high effort)
+- **Path B:** Bionic launcher that sets up glibc ld-linux with correct auxv/PHDR (medium effort, recommended)
+
+**Assets already built:** glibc libs deployed on device (`~/.claude-mobile/glibc/`), execve interceptor compiled (`libexec-intercept.so`), ELF patching proven (e_type fix works). Zig cross-compiler available at `/tmp/zig-extract/`.
+
+### Priority 4: DiffCard for Edit Tool
 
 DiffCard is built (syntax-highlighted red/green diffs) but unreachable — Edit tool results go through generic ToolCard. Need to parse `toolResponse` JSON from PostToolUse into DiffHunk format and route Edit/Write tools to DiffCard in MessageBubble.
 
