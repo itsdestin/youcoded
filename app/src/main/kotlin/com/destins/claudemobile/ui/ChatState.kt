@@ -5,6 +5,7 @@ import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import org.json.JSONObject
+import java.util.UUID
 
 enum class MessageRole { USER, CLAUDE, SYSTEM }
 
@@ -45,6 +46,8 @@ data class ChatMessage(
     val content: MessageContent,
     val isBtw: Boolean = false,
     val timestamp: Long = System.currentTimeMillis(),
+    val id: String = UUID.randomUUID().toString(),
+    val isQueued: Boolean = false,
 )
 
 class ChatState {
@@ -54,31 +57,60 @@ class ChatState {
     /** Current tool being worked on — for activity indicator text */
     var activeToolName: String? by mutableStateOf(null)
 
+    /** True while Claude is processing a user message (between send and Stop) */
+    var isProcessing: Boolean by mutableStateOf(false)
+        private set
+
     private var nextCardId = 0
     private fun nextId(): String = "card-${nextCardId++}"
+
+    // Insertion cursor — Claude events (tools, responses) insert here,
+    // which is always before any queued user messages.
+    private var insertPos = 0
+
+    // IDs of user messages waiting for Claude to process them
+    private val queuedIds = mutableListOf<String>()
 
     fun toggleCard(cardId: String) {
         expandedCardId = if (expandedCardId == cardId) null else cardId
     }
 
     fun addUserMessage(text: String, isBtw: Boolean = false) {
-        messages.add(ChatMessage(MessageRole.USER, MessageContent.Text(text), isBtw = isBtw))
+        val shouldQueue = isProcessing
+        val msg = ChatMessage(
+            role = MessageRole.USER,
+            content = MessageContent.Text(text),
+            isBtw = isBtw,
+            isQueued = shouldQueue,
+        )
+        messages.add(msg) // queued messages always go at the end
+        if (shouldQueue) {
+            queuedIds.add(msg.id)
+        } else {
+            isProcessing = true
+            insertPos = messages.size // after this user message
+        }
     }
 
     fun addResponse(markdown: String) {
         if (markdown.isNotBlank()) {
-            messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Response(markdown)))
+            messages.add(insertPos, ChatMessage(
+                MessageRole.CLAUDE, MessageContent.Response(markdown),
+            ))
+            insertPos++
         }
         activeToolName = null
+        advanceQueue()
     }
 
     fun addToolRunning(toolUseId: String, tool: String, args: String) {
         val id = nextId()
         activeToolName = tool
-        messages.add(ChatMessage(
+        messages.add(insertPos, ChatMessage(
             MessageRole.CLAUDE,
             MessageContent.ToolRunning(id, toolUseId, tool, args),
         ))
+        insertPos++
     }
 
     fun updateToolToApproval(toolUseId: String) {
@@ -140,6 +172,24 @@ class ChatState {
     }
 
     fun addSystemNotice(text: String) {
-        messages.add(ChatMessage(MessageRole.SYSTEM, MessageContent.SystemNotice(text)))
+        messages.add(insertPos, ChatMessage(
+            MessageRole.SYSTEM, MessageContent.SystemNotice(text),
+        ))
+        insertPos++
+    }
+
+    /** Advance to the next queued user message, or stop processing. */
+    private fun advanceQueue() {
+        if (queuedIds.isNotEmpty()) {
+            val nextId = queuedIds.removeFirst()
+            val idx = messages.indexOfFirst { it.id == nextId }
+            if (idx >= 0) {
+                messages[idx] = messages[idx].copy(isQueued = false)
+                insertPos = idx + 1
+            }
+            // isProcessing stays true — Claude will process the un-queued message
+        } else {
+            isProcessing = false
+        }
     }
 }
