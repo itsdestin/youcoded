@@ -175,7 +175,6 @@ fun TerminalPanel(
                         .coerceAtLeast(0f)
                 }
             }
-            .fillMaxSize()
     ) {
         // ── Force Canvas invalidation when screenVersion changes ──────
         // Without this, Compose may skip redrawing the Canvas even when

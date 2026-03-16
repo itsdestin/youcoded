@@ -121,38 +121,31 @@ fun ChatScreen(bridge: PtyBridge) {
             var terminalInput by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top bar with toggle on the left — distinct from terminal bg
-                Column {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .background(MaterialTheme.colorScheme.surface)
-                            .padding(horizontal = 8.dp, vertical = 6.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        IconButton(
-                            onClick = { isTerminalMode = false },
-                            modifier = Modifier.size(36.dp),
-                        ) {
-                            Icon(
-                                com.destins.claudemobile.ui.theme.AppIcons.Chat,
-                                contentDescription = "Switch to chat",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(22.dp),
-                            )
-                        }
-                        Spacer(Modifier.width(6.dp))
-                        Text(
-                            "Terminal",
-                            style = MaterialTheme.typography.titleSmall,
-                            color = MaterialTheme.colorScheme.onSurface,
-                        )
-                    }
-                    HorizontalDivider(
-                        color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder,
-                        thickness = 0.5.dp,
+                // Top bar — uses bright surface color to stand out
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.surface)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        "← Chat",
+                        color = MaterialTheme.colorScheme.primary,
+                        fontSize = 16.sp,
+                        modifier = Modifier.clickable { isTerminalMode = false },
+                    )
+                    Spacer(Modifier.weight(1f))
+                    Text(
+                        "Terminal",
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.primary.copy(alpha = 0.3f),
+                    thickness = 1.dp,
+                )
 
                 // Terminal canvas — fills all available space
                 TerminalPanel(
