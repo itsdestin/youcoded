@@ -648,9 +648,9 @@ With:
                                         Icons.Outlined.Image,
                                         contentDescription = "Attach image",
                                         tint = if (attachmentPath != null)
-                                            MaterialTheme.colorScheme.primary
+                                            Color(0xFFc96442)
                                         else
-                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                                            Color(0xFF555555),
                                         modifier = Modifier
                                             .size(20.dp)
                                             .clickable {
