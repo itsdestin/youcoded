@@ -35,7 +35,9 @@ Base path for all Kotlin files: `app/src/main/kotlin/com/destins/claudemobile`
 
 - [ ] **Step 1: Add git dependency debs to installPackages()**
 
-In `Bootstrap.kt`, find the comment `// Git is deferred to on-demand installation via installGit()` at the end of `installPackages()` (around line 203). Replace that comment block with the git package installations, using the same sentinel-file-check + `installDeb()` pattern as the existing packages:
+In `Bootstrap.kt`, find the comment `// Git is deferred to on-demand installation via installGit()` at the end of `installPackages()` (around line 203). Replace that comment block with the git package installations, using the same sentinel-file-check + `installDeb()` pattern as the existing packages.
+
+Note: `installPackages()` is called from `setup()` which already runs on `Dispatchers.IO` via `withContext`, so no dispatcher change is needed despite the removed `installGit()` having its own `withContext(Dispatchers.IO)` wrapper.
 
 ```kotlin
         // Git and its runtime dependencies
