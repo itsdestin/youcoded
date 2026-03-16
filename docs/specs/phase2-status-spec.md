@@ -289,7 +289,7 @@ Response bubbles currently render `last_assistant_message` as plain text. Claude
 
 DiffCard is built (syntax-highlighted red/green diffs) but unreachable — Edit tool results go through generic ToolCard. Need to parse `toolResponse` JSON from PostToolUse into DiffHunk format and route Edit/Write tools to DiffCard in MessageBubble.
 
-### Priority 5: OAuth Flow
+### Priority 4: OAuth Flow
 
 Clickable terminal links (v2.3) partially address this — users can now tap the OAuth URL to open the browser. Remaining friction: pasting the auth code back. Consider:
 - Localhost HTTP server in embedded Node.js to catch the OAuth callback
