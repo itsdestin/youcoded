@@ -120,7 +120,14 @@ The OAuth flow requires a localhost callback server or a clipboard-based code ex
 
 Smart cards are built but need real-world testing with actual Claude Code tool output. The parser's tool_start/tool_end, diff_block, and code_block detection patterns need validation against live output.
 
-### Priority 4: Session Persistence
+### Priority 4: Direct Terminal Access
+
+Add an option to open a plain shell session (no Claude Code) for direct terminal access. The PTY infrastructure already supports this — `PtyBridge.start()` just needs a parameterized launch command (`/system/bin/sh` instead of the Claude Code binary). Options:
+- Long-press terminal toggle for raw shell
+- Session picker (Claude Code / Terminal) on launch
+- Tab-based multi-session with simultaneous Claude + shell
+
+### Priority 5: Session Persistence
 
 Chat messages are lost on tab switch (Compose recomposition). Need to hoist state to ViewModel or persist across configuration changes.
 
