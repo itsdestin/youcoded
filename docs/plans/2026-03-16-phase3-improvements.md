@@ -493,7 +493,7 @@ git commit -m "feat: render Claude responses with markdown instead of plain text
 
 - [ ] **Step 1: Add imports**
 
-At the top of `ChatScreen.kt`, add these imports:
+At the top of `ChatScreen.kt`, add these imports (skip any that already exist in the file):
 
 ```kotlin
 import android.graphics.Bitmap
@@ -506,9 +506,12 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import java.io.File
 ```
+
+Note: `Icons.Outlined.Image` requires the `material-icons-extended` dependency which is already in `build.gradle.kts`.
 
 - [ ] **Step 2: Add attachment state variables**
 
