@@ -9,8 +9,11 @@ import androidx.compose.material.icons.filled.Chat
 import androidx.compose.material.icons.filled.Code
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.destins.claudemobile.config.defaultChips
 import com.destins.claudemobile.parser.ParsedEvent
 import com.destins.claudemobile.runtime.PtyBridge
@@ -24,6 +27,7 @@ fun ChatScreen(bridge: PtyBridge) {
     var prefillText by remember { mutableStateOf("") }
     var isTerminalMode by remember { mutableStateOf(false) }
     var hasUnhandledInteractive by remember { mutableStateOf(false) }
+    var showBtwSheet by remember { mutableStateOf(false) }
 
     LaunchedEffect(bridge) {
         val eventBridge = bridge.getEventBridge()
@@ -67,112 +71,139 @@ fun ChatScreen(bridge: PtyBridge) {
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize()) {
-        // Top bar
-        Surface(
-            color = MaterialTheme.colorScheme.background,
-            tonalElevation = 2.dp,
-        ) {
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
-                horizontalArrangement = Arrangement.SpaceBetween
+    Box(modifier = Modifier.fillMaxSize()) {
+        Column(modifier = Modifier.fillMaxSize()) {
+            // Top bar
+            Surface(
+                color = MaterialTheme.colorScheme.background,
+                tonalElevation = 2.dp,
             ) {
-                Text("Claude Mobile", style = MaterialTheme.typography.titleMedium)
-                Row {
-                    IconButton(onClick = { isTerminalMode = !isTerminalMode }) {
-                        Icon(
-                            if (isTerminalMode) Icons.Filled.Chat else Icons.Filled.Code,
-                            contentDescription = "Toggle terminal",
-                            tint = if (hasUnhandledInteractive)
-                                MaterialTheme.colorScheme.primary
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Text("Claude Mobile", style = MaterialTheme.typography.titleMedium)
+                    Row {
+                        IconButton(onClick = { isTerminalMode = !isTerminalMode }) {
+                            Icon(
+                                if (isTerminalMode) Icons.Filled.Chat else Icons.Filled.Code,
+                                contentDescription = "Toggle terminal",
+                                tint = if (hasUnhandledInteractive)
+                                    MaterialTheme.colorScheme.primary
+                                else
+                                    MaterialTheme.colorScheme.onSurface
+                            )
+                        }
+                        Text(
+                            if (bridge.isRunning) "Connected" else "Disconnected",
+                            color = if (bridge.isRunning)
+                                MaterialTheme.colorScheme.secondary
                             else
-                                MaterialTheme.colorScheme.onSurface
+                                MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall,
+                            modifier = Modifier.padding(top = 12.dp)
                         )
                     }
-                    Text(
-                        if (bridge.isRunning) "Connected" else "Disconnected",
-                        color = if (bridge.isRunning)
-                            MaterialTheme.colorScheme.secondary
-                        else
-                            MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        modifier = Modifier.padding(top = 12.dp)
+                }
+            }
+
+            // Chat messages — compressed when terminal is open
+            LazyColumn(
+                state = listState,
+                modifier = Modifier
+                    .weight(if (isTerminalMode) 0.4f else 1f)
+                    .fillMaxWidth(),
+                contentPadding = PaddingValues(vertical = 8.dp)
+            ) {
+                items(chatState.messages) { message ->
+                    MessageBubble(
+                        message = message,
+                        expandedCardId = chatState.expandedCardId,
+                        onToggleCard = { chatState.toggleCard(it) },
+                        onApprove = { bridge.sendApproval(true); chatState.resolveApproval() },
+                        onReject = { bridge.sendApproval(false); chatState.resolveApproval() },
+                        onViewTerminal = { isTerminalMode = true },
                     )
                 }
             }
-        }
 
-        // Chat messages — compressed when terminal is open
-        LazyColumn(
-            state = listState,
-            modifier = Modifier
-                .weight(if (isTerminalMode) 0.4f else 1f)
-                .fillMaxWidth(),
-            contentPadding = PaddingValues(vertical = 8.dp)
-        ) {
-            items(chatState.messages) { message ->
-                MessageBubble(
-                    message = message,
-                    expandedCardId = chatState.expandedCardId,
-                    onToggleCard = { chatState.toggleCard(it) },
-                    onApprove = { bridge.sendApproval(true); chatState.resolveApproval() },
-                    onReject = { bridge.sendApproval(false); chatState.resolveApproval() },
-                    onViewTerminal = { isTerminalMode = true },
-                )
+            // Terminal panel — only shown when toggled
+            if (isTerminalMode) {
+                Column(modifier = Modifier.weight(0.6f)) {
+                    TerminalPanel(
+                        session = bridge.getSession(),
+                        modifier = Modifier.weight(1f),
+                    )
+                    TerminalKeyboardRow(
+                        onKeyPress = { seq -> bridge.writeInput(seq) },
+                    )
+                }
             }
-        }
 
-        // Terminal panel — only shown when toggled
-        if (isTerminalMode) {
-            Column(modifier = Modifier.weight(0.6f)) {
-                TerminalPanel(
-                    session = bridge.getSession(),
-                    modifier = Modifier.weight(1f),
-                )
-                TerminalKeyboardRow(
-                    onKeyPress = { seq -> bridge.writeInput(seq) },
-                )
-            }
-        }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
 
-        HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.3f))
-
-        // Normal input + chips — hidden when terminal is open
-        if (!isTerminalMode) {
-            if (!chatState.isWaitingForApproval) {
-                QuickChips(
-                    chips = defaultChips,
-                    onChipTap = { chip ->
-                        if (chip.needsCompletion) {
-                            prefillText = chip.prompt
-                        } else {
-                            chatState.addUserMessage(chip.prompt)
-                            bridge.writeInput(chip.prompt + "\n")
+            // Normal input + chips — hidden when terminal is open
+            if (!isTerminalMode) {
+                if (!chatState.isWaitingForApproval) {
+                    QuickChips(
+                        chips = defaultChips,
+                        onChipTap = { chip ->
+                            if (chip.needsCompletion) {
+                                prefillText = chip.prompt
+                            } else {
+                                chatState.addUserMessage(chip.prompt)
+                                bridge.writeInput(chip.prompt + "\n")
+                            }
                         }
-                    }
+                    )
+                }
+
+                InputBar(
+                    isApprovalMode = chatState.isWaitingForApproval,
+                    approvalSummary = chatState.approvalSummary,
+                    prefillText = prefillText,
+                    onPrefillConsumed = { prefillText = "" },
+                    onSend = { text ->
+                        chatState.addUserMessage(text)
+                        bridge.writeInput(text + "\n")
+                    },
+                    onApprove = {
+                        bridge.sendApproval(true)
+                        chatState.resolveApproval()
+                    },
+                    onReject = {
+                        bridge.sendApproval(false)
+                        chatState.resolveApproval()
+                    },
                 )
             }
-
-            InputBar(
-                isApprovalMode = chatState.isWaitingForApproval,
-                approvalSummary = chatState.approvalSummary,
-                prefillText = prefillText,
-                onPrefillConsumed = { prefillText = "" },
-                onSend = { text ->
-                    chatState.addUserMessage(text)
-                    bridge.writeInput(text + "\n")
-                },
-                onApprove = {
-                    bridge.sendApproval(true)
-                    chatState.resolveApproval()
-                },
-                onReject = {
-                    bridge.sendApproval(false)
-                    chatState.resolveApproval()
-                },
-            )
         }
+
+        // /btw FAB — hidden when terminal is open
+        if (!isTerminalMode) {
+            FloatingActionButton(
+                onClick = { showBtwSheet = true },
+                containerColor = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 16.dp, bottom = 80.dp),
+            ) {
+                Text("/btw", color = Color.White, fontSize = 12.sp)
+            }
+        }
+    }
+
+    // Bottom sheet (outside the Box)
+    if (showBtwSheet) {
+        BtwSheet(
+            messages = chatState.messages,
+            onSend = { text ->
+                chatState.addUserMessage(text, isBtw = true)
+                bridge.sendBtw(text)
+            },
+            onDismiss = { showBtwSheet = false },
+        )
     }
 }
