@@ -49,6 +49,7 @@ A full-screen terminal emulator that renders Claude Code's output directly from 
 **Architecture:**
 - `TerminalPanel.kt` — Compose `Canvas` that reads `TerminalRow` data cell-by-cell from `TerminalBuffer`, rendering characters with correct foreground/background colors and attributes (bold, underline, inverse). Two-pass rendering: pass 1 collects all visible rows into a combined text buffer (each row = exactly `gridCols` chars), detects URLs via regex across wrapped lines, and builds tap-target regions; pass 2 draws characters with link styling (bright blue + underline) for URL columns.
 - **Clickable URLs:** `https://` links detected across wrapped terminal lines, rendered in bright blue (#66AAFF) with underline. Tap opens in system browser via `Intent.ACTION_VIEW`. Enables OAuth authorization flow without manual copy-paste.
+- **Scrollback history:** Swipe down to scroll into history, swipe up to return to live view (standard mobile scroll direction). Blue indicator bar at bottom when scrolled up shows row count; tap to snap back. External row mapping: `externalRow = rowIndex - scrollRows` (negative = scrollback).
 - Font size auto-calculated via binary search to fit 60 columns in screen width
 - `TerminalKeyboardRow.kt` — pill-styled buttons for Ctrl, Esc, Tab, arrow keys (Material icons), and Enter
 - Text input field with Cascadia Mono font, sends raw keystrokes via `\r` (carriage return)
