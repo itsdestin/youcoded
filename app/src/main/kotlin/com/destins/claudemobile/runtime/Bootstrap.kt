@@ -552,66 +552,76 @@ class Bootstrap(private val context: Context) {
         // Track generated functions to avoid duplicates when scanning multiple dirs
         val generated = mutableSetOf<String>()
 
-        binDir.listFiles()?.sorted()?.forEach { file ->
-            if (!file.isFile) return@forEach
-            val n = file.name
-            if (n in skip) return@forEach
-            if (n in pkgManagerOverrides) return@forEach  // handled below
-            if (!n.matches(Regex("[a-zA-Z_][a-zA-Z0-9_.+-]*"))) return@forEach
+        // Scan a directory for binaries and generate linker64 shell function wrappers.
+        // binDirPath = the directory to scan, usrBinPath = where interpreters live ($PREFIX/bin)
+        fun scanBinDir(scanDir: File, label: String) {
+            if (!scanDir.isDirectory) return
+            sb.appendLine()
+            sb.appendLine("# Wrappers for $label")
+            scanDir.listFiles()?.sorted()?.forEach { file ->
+                if (!file.isFile) return@forEach
+                val n = file.name
+                if (n in skip) return@forEach
+                if (n in pkgManagerOverrides) return@forEach
+                if (n in generated) return@forEach  // already generated from higher-priority dir
+                if (!n.matches(Regex("[a-zA-Z_][a-zA-Z0-9_.+-]*"))) return@forEach
 
-            // Read first bytes to determine file type
-            val header = ByteArray(512)
-            val bytesRead = try {
-                file.inputStream().use { it.read(header) }
-            } catch (_: Exception) { return@forEach }
-            if (bytesRead < 2) return@forEach
+                val filePath = file.absolutePath
+                val header = ByteArray(512)
+                val bytesRead = try {
+                    file.inputStream().use { it.read(header) }
+                } catch (_: Exception) { return@forEach }
+                if (bytesRead < 2) return@forEach
 
-            val isElf = bytesRead >= 4 &&
-                header[0] == 0x7f.toByte() &&
-                header[1] == 'E'.code.toByte() &&
-                header[2] == 'L'.code.toByte() &&
-                header[3] == 'F'.code.toByte()
+                val isElf = bytesRead >= 4 &&
+                    header[0] == 0x7f.toByte() &&
+                    header[1] == 'E'.code.toByte() &&
+                    header[2] == 'L'.code.toByte() &&
+                    header[3] == 'F'.code.toByte()
 
-            val isScript = header[0] == '#'.code.toByte() &&
-                header[1] == '!'.code.toByte()
+                val isScript = header[0] == '#'.code.toByte() &&
+                    header[1] == '!'.code.toByte()
 
-            if (isElf) {
-                sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$n" "${'$'}@"; }""")
-            } else if (isScript) {
-                val shebangLine = String(header, 0, bytesRead)
-                    .lines().first().removePrefix("#!").trim()
-                val parts = shebangLine.split(Regex("\\s+"))
-                val interpreter = parts[0]
-                val interpArgs = parts.drop(1)
+                if (isElf) {
+                    sb.appendLine("""$n() { /system/bin/linker64 "$filePath" "${'$'}@"; }""")
+                } else if (isScript) {
+                    val shebangLine = String(header, 0, bytesRead)
+                        .lines().first().removePrefix("#!").trim()
+                    val parts = shebangLine.split(Regex("\\s+"))
+                    val interpreter = parts[0]
+                    val interpArgs = parts.drop(1)
 
-                if (interpreter.endsWith("/env") && interpArgs.isNotEmpty()) {
-                    val prog = interpArgs[0]
-                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$prog" "$usrPath/bin/$n" "${'$'}@"; }""")
+                    if (interpreter.endsWith("/env") && interpArgs.isNotEmpty()) {
+                        val prog = interpArgs[0]
+                        sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$prog" "$filePath" "${'$'}@"; }""")
+                    } else {
+                        val interpName = File(interpreter).name
+                        sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$interpName" "$filePath" "${'$'}@"; }""")
+                    }
                 } else {
-                    val interpName = File(interpreter).name
-                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$interpName" "$usrPath/bin/$n" "${'$'}@"; }""")
+                    val headerStr = String(header, 0, bytesRead.coerceAtMost(64))
+                    val looksLikeJs = headerStr.startsWith("import ") ||
+                        headerStr.startsWith("import{") ||
+                        headerStr.startsWith("require(") ||
+                        headerStr.startsWith("\"use strict\"") ||
+                        headerStr.startsWith("'use strict'") ||
+                        headerStr.startsWith("//") ||
+                        headerStr.startsWith("/*") ||
+                        headerStr.startsWith("module.exports")
+                    if (looksLikeJs) {
+                        sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/node" "$filePath" "${'$'}@"; }""")
+                    } else {
+                        sb.appendLine("""$n() { /system/bin/linker64 "$filePath" "${'$'}@"; }""")
+                    }
                 }
-            } else {
-                // Not ELF and no shebang — check if it's a JS/ESM file (e.g. npm-installed
-                // CLIs like `gemini` that start with `import`/`require`/`"use strict"`).
-                // linker64 can only load ELF binaries; these need node as interpreter.
-                val headerStr = String(header, 0, bytesRead.coerceAtMost(64))
-                val looksLikeJs = headerStr.startsWith("import ") ||
-                    headerStr.startsWith("import{") ||
-                    headerStr.startsWith("require(") ||
-                    headerStr.startsWith("\"use strict\"") ||
-                    headerStr.startsWith("'use strict'") ||
-                    headerStr.startsWith("//") ||
-                    headerStr.startsWith("/*") ||
-                    headerStr.startsWith("module.exports")
-                if (looksLikeJs) {
-                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/node" "$usrPath/bin/$n" "${'$'}@"; }""")
-                } else {
-                    sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$n" "${'$'}@"; }""")
-                }
+                generated.add(n)
+                functionNames.add(n)
             }
-            functionNames.add(n)
         }
+
+        // Scan $PREFIX/bin first (highest priority), then ~/.local/bin
+        scanBinDir(binDir, "$usrPath/bin")
+        scanBinDir(File(homeDir, ".local/bin"), "~/.local/bin")
 
         // Package manager functions — override hardcoded /data/data/com.termux/ paths.
         // apt reads APT_CONFIG env var which points to our apt.conf with all Dir overrides.
