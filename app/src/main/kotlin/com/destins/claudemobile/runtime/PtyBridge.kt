@@ -116,7 +116,7 @@ class PtyBridge(
         )
         // initializeEmulator forks the process and starts the PTY.
         // Without this call, the session is created but nothing runs.
-        session?.initializeEmulator(80, 24)
+        session?.initializeEmulator(60, 40)
     }
 
     fun writeInput(text: String) {

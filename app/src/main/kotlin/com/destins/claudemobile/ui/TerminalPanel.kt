@@ -90,7 +90,7 @@ fun TerminalPanel(
 
     // Terminal keeps a minimum of 80 columns. Font size is calculated
     // dynamically to fit 80 columns in the available width.
-    val minCols = 80
+    val minCols = 60
     var gridCols by remember { mutableIntStateOf(minCols) }
     var gridRows by remember { mutableIntStateOf(24) }
 
