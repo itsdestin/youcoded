@@ -353,7 +353,7 @@ Show a terminal icon whenever a live terminal session is active in a smart card,
 
 Add links to financially support the project (donate, sponsor, etc.) within the app. (from inbox 2026-03-16)
 
-### Priority 20: Flip Up/Down Arrows in Terminal Mode
+### Priority 18: Flip Up/Down Arrows in Terminal Mode
 
 Swap the direction of the up/down arrow keys in the terminal keyboard row. (from inbox 2026-03-16)
 
