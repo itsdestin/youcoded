@@ -414,8 +414,13 @@ ui/theme/Theme.kt         — Color palette, CascadiaMono FontFamily, app Typogr
 ui/ChatScreen.kt           — Three-mode layout (Chat/Terminal/Shell), hook event routing,
                               approval detection (primary + fallback heuristic)
 ui/ChatState.kt            — 7 MessageContent variants, tool state machine transitions,
-                              activeToolName tracking for activity indicator
-ui/MessageBubble.kt        — Routes content types to ToolCard/CodeCard/ErrorCard/text bubbles
+                              activeToolName tracking for activity indicator,
+                              insertion cursor for correct message ordering (insertPos),
+                              queued message tracking (isQueued, queuedIds),
+                              isProcessing state for rapid message handling
+ui/MessageBubble.kt        — Routes content types to ToolCard/CodeCard/ErrorCard/text bubbles,
+                              LinkableText composable for clickable URLs via AnnotatedString,
+                              queued message visual treatment (dimmed bg + "queued" label)
 ui/InputBar.kt             — Circular send button (unused — ChatScreen builds inline input)
 ui/QuickChips.kt           — Pill-styled chips matching keyboard row
 runtime/PtyBridge.kt       — screenVersion, session accessor, \r input,
