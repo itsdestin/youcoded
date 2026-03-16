@@ -200,10 +200,11 @@ fun MessageBubble(
                     }
                 }
                 is MessageContent.Response -> {
-                    LinkableText(
-                        text = content.markdown,
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurface,
+                    MarkdownRenderer(
+                        markdown = content.markdown,
+                        textColor = MaterialTheme.colorScheme.onSurface,
+                        expandedCardId = expandedCardId,
+                        onToggleCard = onToggleCard,
                     )
                 }
                 else -> Unit
