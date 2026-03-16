@@ -1,12 +1,12 @@
 # Claude Mobile Phase 2 — Spec
 
-**Version:** 2.0
+**Version:** 2.1
 **Last updated:** 2026-03-16
 **Feature location:** `~/claude-mobile/` (Android app), key files: `runtime/PtyBridge.kt`, `runtime/Bootstrap.kt`, `ui/TerminalPanel.kt`, `ui/ChatScreen.kt`, `parser/EventBridge.kt`
 
 ## Purpose
 
-Claude Mobile Phase 2 adds two interaction modes to the Android app: a full-screen **Terminal** view and a widget-based **Chat** view. The Terminal view renders Claude Code's output directly from the Termux `TerminalEmulator` screen buffer and is fully functional for all Claude Code interactions. The Chat view renders structured widgets for menus, confirmations, and OAuth flows but has significant reliability issues with message parsing, noise filtering, and URL reconstruction that make it unsuitable for production use — a hooks-based rebuild is planned.
+Claude Mobile Phase 2 adds three interaction modes to the Android app: a **Chat** view (hooks-based structured events), a full-screen **Terminal** view (raw PTY), and a **Shell** view (standalone bash). The Terminal view renders Claude Code's output directly from the Termux `TerminalEmulator` screen buffer and is the ground-truth fallback. The Chat view receives structured events from Claude Code hooks (PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification) via a Unix socket relay, rendering tool cards, approval prompts, and response bubbles without any terminal parsing. The Shell view provides direct bash access with the same linker64/BASH_ENV environment.
 
 **Related documents:**
 - **Phase 1 spec:** `~/docs/superpowers/specs/claude-mobile-android-design-spec.md`
@@ -60,39 +60,50 @@ A full-screen terminal emulator that renders Claude Code's output directly from 
 
 **Status:** Fully functional. Users can navigate Claude Code's first-run menus (theme picker, login method, OAuth), type commands, paste auth codes, and interact normally. Arrow keys, escape sequences, and Ctrl modifiers work correctly.
 
-#### Chat View — Needs Rebuild
+#### Chat View — Hooks-Based (Rebuilt)
 
-A message-based view that attempts to translate terminal output into structured chat bubbles and interactive widgets.
+A message-based view that receives structured events directly from Claude Code hooks, bypassing terminal parsing entirely. The old parser sidecar (`parser.js`, `patterns.js`, `ParsedEvent.kt`) and all heuristic parsing code have been deleted.
 
 **Architecture:**
-- Parser sidecar (`parser.js`) classifies PTY output into 12 event types via state machine
-- `PtyBridge` accumulates output for 100ms before forwarding to parser
-- `EventBridge` receives JSON events over Unix socket, emits `ParsedEvent` sealed class
-- `ChatScreen` routes events to `ChatState` which manages message list
-- `MessageBubble` delegates to card/widget composables based on content type
+- `hook-relay.js` (~10 lines) — Claude Code hook script that reads stdin JSON and writes to an Android abstract-namespace Unix socket
+- `EventBridge.kt` — `LocalServerSocket` that accepts hook-relay connections, parses JSON, emits `HookEvent` via `SharedFlow` (buffer: 1000)
+- `HookEvent.kt` — sealed class with 5 variants: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `Notification`
+- `ChatState.kt` — 7 `MessageContent` variants (`Text`, `Response`, `ToolRunning`, `ToolAwaitingApproval`, `ToolComplete`, `ToolFailed`, `SystemNotice`) with tool state machine transitions
+- `ChatScreen.kt` — collects `EventBridge.events`, routes each hook type to the appropriate `ChatState` mutation
+- `MessageBubble.kt` — routes content types to card composables (ToolCard, CodeCard, ErrorCard) or text bubbles
+
+**Event routing:**
+- `PreToolUse` → adds `ToolRunning` message (extracts args summary from `command`/`file_path`/`pattern` fields)
+- `PostToolUse` → finds matching card by `toolUseId`, transitions to `ToolComplete`
+- `PostToolUseFailure` → finds matching card by `toolUseId`, transitions to `ToolFailed`
+- `Stop` → adds `Response` message with `lastAssistantMessage`
+- `Notification` → if `permission_prompt`, transitions last `ToolRunning` to `ToolAwaitingApproval`; otherwise adds `SystemNotice`
+
+**Approval flow:**
+- Primary: `Notification` hook with `notificationType == "permission_prompt"`
+- Fallback: 2-second PTY silence heuristic (if `ToolRunning` persists and no PTY output for 2s, assume approval needed)
+- UI: ToolCard expands to show mini-terminal (160dp) + Accept/Reject buttons
+- Actions: Accept sends `\r` (Enter), Reject sends `\u001b` (Esc) via `PtyBridge.sendApproval()`
+
+**Activity indicator:**
+- `ActivityIndicator.kt` — animated dots with tool-specific labels (Read→"Reading", Edit→"Editing", Bash→"Running command", etc.)
+- Active when PTY output within last 2s OR `ChatState.activeToolName` is set
+- Clears on `Stop` or tool completion
 
 **What works:**
-- Theme picker renders as `MenuWidget` (radio buttons + Select button)
-- Menu selection sends delayed arrow-key sequences (50ms gaps) to ink
-- Follow-up menus detected via hash-based transcript scanner after selection
-- `MenuResolved` widget shows green checkmark with selected option
-- OAuth URLs detected and shown as `OAuthWidget` with "Sign in with Claude" button
-- Basic text deduplication prevents identical consecutive messages
-- Noise filter suppresses ASCII art, block characters, decoration lines, code preview fragments
+- Full tool lifecycle (running → approval → complete/failed) renders as ToolCard state transitions
+- Bash tool results render as CodeCard with syntax highlighting
+- Failed tools render as ErrorCard with expandable details
+- Multiple tools per turn stack chronologically
+- System notices display as dimmed text
+- Quick chips send commands directly to Claude Code
 
-**What doesn't work reliably:**
+**Current limitations:**
+- Response text renders as plain text (no markdown parsing — no bold, italic, code spans, or links)
+- Edit tool results use generic ToolCard (DiffCard exists but isn't routed — no diff parsing from `toolResponse`)
+- Session messages lost on recomposition (no ViewModel/persistence)
 
-1. **Message noise filtering is fragile** — Uses a growing list of ad-hoc heuristics (character counting, regex patterns, hardcoded strings). New Claude Code output patterns will bypass filters. ASCII art fragments, diff preview lines, auth code echoes, and terminal decorations all required individual filter rules. The approach is fundamentally reactive rather than structural.
-
-2. **URL reconstruction from fragments** — OAuth URLs wrap at 60 columns, producing ~8 text events. The URL accumulator joins fragments by detecting `https://` start + no-space continuation lines, then reads the full URL from `getTranscriptText()` with newline joining. This pipeline is multi-stage and fragile. `getTranscriptText()` itself splits URLs with `\n` at column boundaries, requiring `\n(?=\S)` regex replacement before extraction.
-
-3. **Menu detection depends on numbered format** — Only detects `N. option text` patterns. Non-numbered menus (bullet points, ink selector-only) are not caught. Menu options arrive as separate text events requiring a 300ms accumulator with decoration-aware flush logic.
-
-4. **Follow-up menu detection is indirect** — After menu selection, polls transcript 5 times over 5 seconds looking for menus with a new hash. Relies on `getTranscriptText()` which includes scrollback history. Previous attempts to read only visible rows failed due to Termux API access issues.
-
-5. **Event pipeline has no concept of "screen state"** — The parser processes text line-by-line. It has no awareness of whether Claude Code is showing a menu, waiting for input, displaying output, or idle. Every piece of output goes through the same noise/menu/URL heuristic chain.
-
-6. **Widget state management is scattered** — `menuWasResolved`, `shownMenuHashes`, `urlAccumulator`, `menuAccumulator`, `menuFlushJob`, `urlFlushJob`, `pendingMenuScan` are all separate `remember` state in `ChatScreen`. The interaction between these states creates subtle bugs (e.g., menu scanner activating too early, URL accumulator not being set).
+**Status:** Implemented. Needs on-device validation with live Claude Code hook output.
 
 #### Theme & Visual Design — Complete
 
@@ -105,18 +116,25 @@ A message-based view that attempts to translate terminal output into structured 
 - **Claude mascot icon:** Blocky pixel-art character with >< eyes (EvenOdd cutouts), square arms, legs. Tintable single-path vector.
 - **System integration:** `enableEdgeToEdge()` + `statusBarsPadding()` + `navigationBarsPadding()` + `imePadding()` for proper insets
 
-#### Smart Cards — Built, Untested in Production
+#### Smart Cards — Partially Integrated
 
-Card composables built but largely untested beyond compilation:
-- `ToolCard` — collapsible tool name + args
-- `DiffCard` — syntax-highlighted red/green diffs
-- `CodeCard` — syntax-highlighted code with copy button
-- `ErrorCard` — red-bordered error display
-- `ProgressCard` — spinner + progress text
-- `ApprovalCard` — Accept/Reject buttons
-- `SyntaxHighlighter` — token-based highlighting for Kotlin, JS/TS, Python
+Cards wired into the hooks pipeline and receiving real data:
+- `ToolCard` — 3 states (Running with spinner, AwaitingApproval with mini-terminal + Accept/Reject, Complete with expandable result). Fully functional.
+- `CodeCard` — syntax-highlighted code with copy button. Routed for Bash tool results.
+- `ErrorCard` — red-bordered expandable error display. Routed for ToolFailed events.
+- `SyntaxHighlighter` — token-based highlighting for Kotlin, JS/TS, Python. Used by CodeCard.
 
-Single-expanded-card constraint managed by `CardStateManager`.
+Cards built but **not reachable** from the hooks pipeline (no MessageContent type routes to them):
+- `DiffCard` — syntax-highlighted red/green diffs. Needs diff parsing from Edit tool `toolResponse`.
+- `ApprovalCard` — standalone Accept/Reject buttons. Superseded by ToolCard's AwaitingApproval state.
+- `ProgressCard` — spinner + progress text. Superseded by ActivityIndicator.
+
+Widgets built but **not reachable** (designed for old parser, no hook event drives them):
+- `MenuWidget`, `ConfirmationWidget`, `OAuthWidget` — orphaned from the parser-era architecture.
+
+Dead code:
+- `InputBar` — ChatScreen builds its own inline input instead of using this component.
+- `CardStateManager` — ChatState has its own identical toggle logic.
 
 #### Shell Access for Bash Tool — Implemented
 
@@ -223,16 +241,16 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 #### Other Components — Built
 
-- **Output accumulator:** 100ms coroutine-based debounce in PtyBridge with socket connection backlog flush
-- **Parser state machine:** 5 modes (NORMAL, IN_TOOL, IN_DIFF, IN_CODE_BLOCK, IN_ERROR) tracking multi-line constructs
-- **On-demand git install:** `Bootstrap.installGit()` with .deb package list (URLs need verification)
-- **Quick chips:** Journal, Inbox, Briefing, Draft Text styled as pill buttons
+- **On-demand git install:** `Bootstrap.installGit()` with .deb package list (hardcoded URLs — functional but could be dynamically resolved from Termux repos)
+- **Quick chips:** Journal, Inbox, Briefing, Draft Text styled as pill buttons. Fully wired — tapping sends the command to Claude Code; "Briefing" and "Draft Text" pre-fill input for completion.
+- **Direct shell:** `DirectShellBridge.kt` provides standalone bash with full linker64/BASH_ENV environment. Accessible via long-press on Terminal button. No visible UI affordance.
+- **/btw sheet:** `BtwSheet.kt` — modal bottom sheet for quick asides via `/btw` command.
 
 ## Dependencies
 
 - **Claude Code CLI** — the desktop CLI that runs inside the embedded terminal
 - **Termux terminal-emulator library** — provides `TerminalSession`, `TerminalEmulator`, screen buffer APIs
-- **Node.js** — embedded runtime for Claude Code, parser sidecar, and hook relay
+- **Node.js** — embedded runtime for Claude Code and hook relay
 - **Bash** — embedded shell for Claude Code's Bash tool
 - **rclone** — bundled for Google Drive sync (initial install, not deferred)
 - **Cascadia Mono font** — bundled Regular + Bold for terminal and UI typography
@@ -243,45 +261,63 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 ## Planned Updates
 
-### Priority 1: Rebuild Chat View
+### Priority 1: On-Device Validation
 
-The chat view's approach of parsing terminal output line-by-line and reconstructing interactive elements through heuristic pattern matching is fundamentally flawed. The terminal is the source of truth; the chat view is a lossy interpretation layer that creates more problems than it solves in its current form.
+The hooks-based chat pipeline is implemented but needs end-to-end validation with live Claude Code output. Specific areas:
+- Full tool lifecycle: PreToolUse → Notification (approval) → PostToolUse → Stop
+- Multiple tools in a single turn (cards should stack chronologically)
+- Hook execution performance (Unix socket write should be sub-millisecond)
+- ToolCard expand/collapse with real JSON results
+- Activity indicator clearing reliably on Stop events
 
-**Recommended approach:** Hooks-based architecture as documented in `docs/plans/chat-rebuild-design (03-15-2026).md`. Direct structured events from Claude Code hooks, bypassing terminal parsing entirely.
+### Priority 2: Markdown Rendering
 
-### Priority 2: OAuth Flow
+Response bubbles currently render `last_assistant_message` as plain text. Claude's output is markdown — bold, italic, code spans, code blocks, links, and lists are all lost. Options:
+- Compose markdown library (e.g., `mikepenz/multiplatform-markdown-renderer`)
+- Basic regex-based annotated string (handles bold/italic/code spans, skips full block rendering)
 
-The OAuth flow requires a localhost callback server or a clipboard-based code exchange. Current approach (URL reconstruction + browser open + manual code paste) works but is clunky. Consider:
-- Running a minimal HTTP server in the embedded runtime to catch the OAuth callback
-- Or implementing a custom URI scheme handler for the callback redirect
+### Priority 3: Session Persistence
 
-### Priority 3: Smart Card Integration
+Chat messages are lost on tab switch (Compose recomposition). Need to hoist `ChatState` to a ViewModel or persist across configuration changes. This becomes painful once the chat view is the primary interaction mode.
 
-Smart cards are built but need real-world testing with actual Claude Code tool output. The parser's tool_start/tool_end, diff_block, and code_block detection patterns need validation against live output.
+### Priority 4: DiffCard for Edit Tool
 
-### Priority 4: Direct Terminal Access — Partially Implemented
+DiffCard is built (syntax-highlighted red/green diffs) but unreachable — Edit tool results go through generic ToolCard. Need to parse `toolResponse` JSON from PostToolUse into DiffHunk format and route Edit/Write tools to DiffCard in MessageBubble.
 
-A standalone bash shell session (no Claude Code) is available via `DirectShellBridge.kt`. It shares the Bootstrap environment (PATH, LD_PRELOAD, BASH_ENV) so all embedded binaries are accessible. `PtyBridge.createDirectShell()` is the factory method. UI integration (toggle button, session picker) is not yet wired up.
+### Priority 5: OAuth Flow
 
-### Priority 5: Session Persistence
+Current approach requires manual browser + paste. Consider:
+- Localhost HTTP server in embedded Node.js to catch the OAuth callback
+- Custom URI scheme handler (`claudemobile://callback`) for redirect
+- Or accept the manual flow if it works well enough on-device
 
-Chat messages are lost on tab switch (Compose recomposition). Need to hoist state to ViewModel or persist across configuration changes.
+### Priority 6: Hook Config Merge
 
-### Phase 2 Open Questions
+`Bootstrap.installHooks()` does deduplication but could clobber existing user hooks from desktop Claude Code if they have custom matchers. Needs true additive merge: read existing hooks, append ours, preserve theirs.
 
-1. **Pattern discovery:** Parser patterns are still best-guesses. Need 2-3 days of capturing real Claude Code output to refine. Can happen during implementation.
-2. **Tablet layout:** Split-view (2/3 chat + 1/3 file preview) deferred to Phase 3. Phase 1 spec included this in the base design but Phase 1 was phone-only in practice.
-3. **Config sync from Drive:** rclone integration for syncing `~/.claude/` from Google Drive deferred to Phase 3.
-4. **Notifications:** Actionable notifications when Claude needs approval while app is backgrounded — deferred to Phase 3.
-5. **GPL compliance:** Termux runtime licensing question remains open from Phase 1.
-6. **Priority item 9 (chips):** "Person briefings + text drafting chips" is a config-only change in `ChipConfig.kt` — no new files or complex logic.
+### Priority 7: Dead Code Cleanup
 
-### Chat Rebuild Open Questions
+Unreachable components from the parser era:
+- `ApprovalCard` (superseded by ToolCard.AwaitingApproval)
+- `ProgressCard` (superseded by ActivityIndicator)
+- `MenuWidget`, `ConfirmationWidget`, `OAuthWidget` (no hook event drives them)
+- `InputBar` (ChatScreen builds its own inline input)
+- `CardStateManager` (ChatState has its own toggle)
 
-1. **Markdown rendering in `Stop` responses.** Claude's response text in `last_assistant_message` is markdown. Basic rendering (bold, italic, code spans, paragraphs) is straightforward. Full markdown may need a library (e.g., `mikepenz/multiplatform-markdown-renderer` for Compose). Defer to implementation — start with basic, add a library if needed.
-2. **Hook execution performance.** Hook scripts run synchronously in Claude Code's process. The Unix socket write should be sub-millisecond, but needs validation on-device. If slow, consider async fire-and-forget in the hook script.
-3. **Multiple tools in one turn.** Claude Code can call several tools in sequence within a single turn. Each gets its own PreToolUse/PostToolUse pair. The Stop hook fires once at the end with the full response. Cards stack chronologically.
-4. **Hook config conflicts.** If the user (via desktop Claude Code) has existing hooks in settings.json, the bootstrap write must merge rather than overwrite. Strategy: append to existing arrays per event type (additive), never replace. Implementation detail for Bootstrap.kt.
+### Priority 8: Direct Shell UI Affordance
+
+DirectShellBridge works via long-press on Terminal button but there's no visible indicator. Users won't discover it. Needs a UI element (toggle, menu item, or labeled button).
+
+### Priority 9: Person Briefings + Text Drafting Chips
+
+Config-only change in `ChipConfig.kt` — no new files or complex logic.
+
+## Open Questions
+
+1. **Tablet layout:** Split-view (2/3 chat + 1/3 file preview) deferred to Phase 3.
+2. **Config sync from Drive:** rclone integration for syncing `~/.claude/` from Google Drive deferred to Phase 3.
+3. **Notifications:** Actionable notifications when Claude needs approval while app is backgrounded — deferred to Phase 3.
+4. **GPL compliance:** Termux runtime licensing question remains open from Phase 1.
 
 ## File Inventory
 
@@ -289,47 +325,55 @@ Chat messages are lost on tab switch (Compose recomposition). Need to hoist stat
 ```
 ui/TerminalPanel.kt            — Terminal canvas renderer
 ui/TerminalKeyboardRow.kt      — Special key buttons
+ui/ActivityIndicator.kt        — Tool-specific animated "Working..." indicator
 ui/SyntaxHighlighter.kt        — Token-based code highlighting
-ui/BtwSheet.kt                 — /btw bottom sheet (74 lines, implemented)
+ui/BtwSheet.kt                 — /btw bottom sheet
 ui/ApiKeyScreen.kt             — API key entry screen
-ui/cards/CardState.kt          — Expand/collapse state manager
-ui/cards/ToolCard.kt           — Tool call card
-ui/cards/DiffCard.kt           — Diff display card
-ui/cards/CodeCard.kt           — Code block card
-ui/cards/ErrorCard.kt          — Error display card
-ui/cards/ProgressCard.kt       — Progress indicator
-ui/cards/ApprovalCard.kt       — Approval prompt card
-ui/widgets/MenuWidget.kt       — Radio button menu selector
-ui/widgets/ConfirmationWidget.kt — Yes/No prompt
-ui/widgets/OAuthWidget.kt      — Sign-in button
+ui/cards/CardState.kt          — Expand/collapse state manager (unused — ChatState has own toggle)
+ui/cards/ToolCard.kt           — Tool call card (3 states: Running, AwaitingApproval, Complete)
+ui/cards/DiffCard.kt           — Diff display card (built, not routed from hooks pipeline)
+ui/cards/CodeCard.kt           — Code block card with syntax highlighting + copy
+ui/cards/ErrorCard.kt          — Error display card with expandable details
+ui/cards/ProgressCard.kt       — Progress indicator (unused — superseded by ActivityIndicator)
+ui/cards/ApprovalCard.kt       — Approval prompt card (unused — superseded by ToolCard.AwaitingApproval)
+ui/widgets/MenuWidget.kt       — Radio button menu selector (unused — no hook event drives it)
+ui/widgets/ConfirmationWidget.kt — Yes/No prompt (unused — no hook event drives it)
+ui/widgets/OAuthWidget.kt      — Sign-in button (unused — no hook event drives it)
 ui/theme/AppIcons.kt           — Custom vector icons (Terminal, Chat, ClaudeMascot)
+parser/HookEvent.kt            — Sealed class: 5 hook event types with JSON deserialization
 runtime/DirectShellBridge.kt   — Standalone bash shell session (no Claude Code)
+assets/hook-relay.js           — Hook script: reads stdin JSON, writes to abstract-namespace socket
 assets/claude-wrapper.js       — Reference copy of SELinux exec bypass wrapper
 res/font/cascadia_mono_regular.ttf
 res/font/cascadia_mono_bold.ttf
 ```
 
+### Deleted Files (removed during hooks rebuild)
+```
+parser/ParsedEvent.kt          — 12 event types + DiffHunk (replaced by HookEvent.kt)
+assets/parser/parser.js        — Parser sidecar state machine (deleted — hooks replace parsing)
+assets/parser/patterns.js      — Pattern matching rules (deleted — hooks replace parsing)
+```
+
 ### Modified Files
 ```
 ui/theme/Theme.kt         — Color palette, CascadiaMono FontFamily, app Typography
-ui/ChatScreen.kt           — Dual-mode layout, event routing, menu/URL accumulators
-ui/ChatState.kt            — MessageContent types, menu/OAuth/confirm content
-ui/MessageBubble.kt        — Card/widget delegation
-ui/InputBar.kt             — Circular send button (chat mode uses BasicTextField now)
+ui/ChatScreen.kt           — Three-mode layout (Chat/Terminal/Shell), hook event routing,
+                              approval detection (primary + fallback heuristic)
+ui/ChatState.kt            — 7 MessageContent variants, tool state machine transitions,
+                              activeToolName tracking for activity indicator
+ui/MessageBubble.kt        — Routes content types to ToolCard/CodeCard/ErrorCard/text bubbles
+ui/InputBar.kt             — Circular send button (unused — ChatScreen builds inline input)
 ui/QuickChips.kt           — Pill-styled chips matching keyboard row
-ui/SetupScreen.kt          — Unchanged
 runtime/PtyBridge.kt       — screenVersion, session accessor, \r input,
                               SELinux exec bypass (claude-wrapper.js deployment,
                               WRAPPER_JS with stripLogin + injectEnv + spawnFix + fixExecShell,
-                              hook installation, DirectShellBridge factory)
+                              hook installation, DirectShellBridge factory, sendApproval())
 runtime/Bootstrap.kt       — installGit(), buildRuntimeEnv(), deployBashEnv() + buildBashEnvSh()
                               (ELF/script detection, pkg manager wrappers, cd/pwd fixes, .bashrc setup),
-                              setupAptSources() with apt.conf dir overrides + dpkg state init
-parser/EventBridge.kt      — onConnected callback
-parser/ParsedEvent.kt      — 12 event types + DiffHunk
-assets/parser/parser.js    — State machine rewrite
-assets/parser/patterns.js  — Expanded pattern set
-assets/claude-wrapper.js   — Reference copy (actual deploy is from PtyBridge.kt string)
+                              setupAptSources() with apt.conf dir overrides + dpkg state init,
+                              installHooks() with hook-relay.js deployment + settings.json merge
+parser/EventBridge.kt      — Rewritten as LocalServerSocket (abstract namespace), SharedFlow emitter
 MainActivity.kt            — Edge-to-edge, system bar insets, IME padding
 app/build.gradle.kts       — material-icons-extended, version 0.2.0
 ```
@@ -343,3 +387,4 @@ app/build.gradle.kts       — material-icons-extended, version 0.2.0
 | 2026-03-16 | 1.2 | First on-device test results: 6 bugs and fixes. ELF/script-aware binary detection, package manager path remapping, Android filesystem workarounds. Moved buildBashEnvSh to shared Bootstrap.deployBashEnv(). Added .bashrc/.bash_profile for interactive shells | Update | Destin | On-device testing |
 | 2026-03-16 | 1.3 | Hook execution fix (Problem 6): abstract namespace sockets, shell path resolution, three-tier spawnFix(). Document exec/execSync patching, hook installation system, design decisions on shell bypass and command splitting | Update | Destin | Hook debugging |
 | 2026-03-16 | 2.0 | Restructured to standard spec format. Added User Mandates, Design Decisions table, Dependencies. Consolidated open questions from frozen design docs. Updated cross-references to new filenames | Format | Destin | Specs reorganization |
+| 2026-03-16 | 2.1 | Reflect hooks-based chat rebuild as implemented (not planned). Rewrite Chat View section with hooks architecture. Update Smart Cards to show integrated vs orphaned. Remove obsolete open questions (parser patterns, multiple tools per turn). Reprioritize Planned Updates: P1=on-device validation, P2=markdown, P3=session persistence, P4=DiffCard routing, P5=OAuth, P6=hook merge, P7=dead code cleanup, P8=shell UI, P9=chips. Update File Inventory (add HookEvent/hook-relay/ActivityIndicator, remove parser.js/patterns.js/ParsedEvent, add Deleted Files section) | Update | Destin | Spec review |
