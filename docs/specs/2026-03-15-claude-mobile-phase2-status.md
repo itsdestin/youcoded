@@ -296,6 +296,10 @@ MainActivity.kt            — Edge-to-edge, system bar insets, IME padding
 app/build.gradle.kts       — material-icons-extended, version 0.2.0
 ```
 
+## Known Bugs / Issues
+
+*None currently tracked.*
+
 ## Change Log
 
 | Version | Date | Changes |

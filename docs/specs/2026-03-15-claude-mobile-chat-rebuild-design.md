@@ -348,6 +348,10 @@ The terminal is always the ground truth. The chat view is a structured interpret
 3. **Multiple tools in one turn.** Claude Code can call several tools in sequence within a single turn. Each gets its own PreToolUse/PostToolUse pair. The Stop hook fires once at the end with the full response. Cards stack chronologically.
 4. **Hook config conflicts.** If the user (via desktop Claude Code) has existing hooks in settings.json, the bootstrap write must merge rather than overwrite. Strategy: append to existing arrays per event type (additive), never replace. Implementation detail for Bootstrap.kt.
 
+## Known Bugs / Issues
+
+*None currently tracked.*
+
 ## Change Log
 
 | Version | Date | Changes |

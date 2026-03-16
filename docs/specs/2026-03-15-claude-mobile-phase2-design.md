@@ -373,6 +373,10 @@ Phase 1 spec listed `git` in the first-launch install sequence. Phase 2 changes 
 5. **GPL compliance:** Termux runtime licensing question remains open from Phase 1.
 6. **Priority item 9 (chips):** "Person briefings + text drafting chips" is a config-only change in `ChipConfig.kt` — no new files or complex logic.
 
+## Known Bugs / Issues
+
+*None currently tracked.*
+
 ## Change Log
 
 | Version | Date | Changes |
