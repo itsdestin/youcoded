@@ -51,5 +51,8 @@ dependencies {
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("org.tukaani:xz:1.10")
 
+    // Markdown parsing for chat view
+    implementation("org.commonmark:commonmark:0.24.0")
+
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
