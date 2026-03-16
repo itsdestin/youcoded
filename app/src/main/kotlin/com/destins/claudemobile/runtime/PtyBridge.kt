@@ -88,18 +88,27 @@ class PtyBridge(
         val claudePath = File(bootstrap.usrDir, "lib/node_modules/@anthropic-ai/claude-code/cli.js")
         val nodePath = File(bootstrap.usrDir, "bin/node")
 
-        // TerminalSession calls execvp(shellPath, args) where args[0] is typically
-        // the program name. To launch Claude Code via linker64, we use sh -c with
-        // the full command inline.
-        val usrPath = bootstrap.usrDir.absolutePath
-        val homePath = bootstrap.homeDir.absolutePath
-        val launchCmd = "export SHELL=/system/bin/sh && exec /system/bin/linker64 ${nodePath.absolutePath} ${claudePath.absolutePath}"
+        // Always deploy/update helper files before launch — setup() may not run
+        // on existing installations after an APK update.
+        val mobileDir = File(bootstrap.homeDir, ".claude-mobile")
+        mobileDir.mkdirs()
+        val wrapperPath = File(mobileDir, "claude-wrapper.js")
+        wrapperPath.writeText(WRAPPER_JS)
 
-        // Add all env vars needed for the runtime
-        env["OPENSSL_CONF"] = "$usrPath/etc/tls/openssl.cnf"
-        env["SSL_CERT_FILE"] = "$usrPath/etc/tls/cert.pem"
-        env["SSL_CERT_DIR"] = "$usrPath/etc/tls/certs"
-        env["TMPDIR"] = "$homePath/tmp"
+        // Deploy BASH_ENV script that creates shell functions for all embedded
+        // binaries, routing them through linker64. This fixes "Permission denied"
+        // errors when bash tries to exec binaries in app_data_file (SELinux blocks
+        // direct exec, but shell functions run in-process — no exec needed).
+        val bashEnvPath = File(mobileDir, "linker64-env.sh")
+        bashEnvPath.writeText(buildBashEnvSh(bootstrap.usrDir.absolutePath))
+        env["BASH_ENV"] = bashEnvPath.absolutePath
+
+        // Launch Claude Code through the JS wrapper, which patches child_process
+        // and fs to route embedded binary exec calls through linker64.
+        // The wrapper fixes Claude Code's shell detection (it requires bash/zsh
+        // but can't exec them directly due to SELinux on app_data_file).
+        val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPath.absolutePath} ${claudePath.absolutePath}"
+
         File(bootstrap.homeDir, "tmp").mkdirs()
 
         val envArray = env.map { "${it.key}=${it.value}" }.toTypedArray()
@@ -169,6 +178,11 @@ class PtyBridge(
 
     fun getEventBridge(): EventBridge? = eventBridge
 
+    /** Create a standalone bash shell session (no Claude Code). */
+    fun createDirectShell(): DirectShellBridge {
+        return DirectShellBridge(bootstrap).also { it.start() }
+    }
+
     private val approvalPattern = Regex("""Do you want to proceed\?|Approve\?|y/n|yes/no""", RegexOption.IGNORE_CASE)
 
     fun onPtyOutput(delta: String) {
@@ -214,5 +228,105 @@ class PtyBridge(
         parserProcess?.destroyForcibly()
         session?.finishIfRunning()
         session = null
+    }
+
+    companion object {
+        // Embedded wrapper JS — patches child_process/fs for SELinux exec bypass.
+        // Key addition: injectEnv() explicitly sources BASH_ENV into every bash -c
+        // command, ensuring shell function wrappers are always available.
+        private val WRAPPER_JS = """
+'use strict';
+var child_process = require('child_process');
+var fs = require('fs');
+var LINKER64 = '/system/bin/linker64';
+var PREFIX = process.env.PREFIX || '';
+var BASH_ENV_FILE = process.env.BASH_ENV || '';
+function isEB(f) { return f && PREFIX && f.startsWith(PREFIX + '/'); }
+var _as = fs.accessSync;
+fs.accessSync = function(p, m) {
+    if (isEB(p) && m !== undefined && (m & fs.constants.X_OK)) return _as.call(this, p, fs.constants.R_OK);
+    return _as.apply(this, arguments);
+};
+function injectEnv(cmd, args) {
+    if (BASH_ENV_FILE && cmd.endsWith('/bash') && Array.isArray(args) && args[0] === '-c' && args.length >= 2) {
+        args = args.slice();
+        args[1] = '. "' + BASH_ENV_FILE + '" 2>/dev/null; ' + args[1];
+    }
+    return args;
+}
+var _efs = child_process.execFileSync;
+child_process.execFileSync = function(file) {
+    if (isEB(file)) {
+        var args = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
+        var opts = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[2] : arguments[1];
+        args = injectEnv(file, args);
+        return _efs.call(this, LINKER64, [file].concat(args), opts);
+    }
+    return _efs.apply(this, arguments);
+};
+var _ef = child_process.execFile;
+child_process.execFile = function(file) {
+    if (isEB(file)) {
+        var rest = Array.prototype.slice.call(arguments, 1);
+        var args = rest.length > 0 && Array.isArray(rest[0]) ? rest[0] : [];
+        var remaining = rest.length > 0 && Array.isArray(rest[0]) ? rest.slice(1) : rest;
+        args = injectEnv(file, args);
+        return _ef.apply(this, [LINKER64, [file].concat(args)].concat(remaining));
+    }
+    return _ef.apply(this, arguments);
+};
+// Strip -l flag from bash args. Claude Code sends ["-c", "-l", cmd] but
+// via linker64 bash treats -l as the command string, not an option.
+function stripLogin(args) {
+    return args.filter(function(a) { return a !== '-l'; });
+}
+var _sp = child_process.spawn;
+child_process.spawn = function(command, args, options) {
+    if (isEB(command)) {
+        var actualArgs = Array.isArray(args) ? args : [];
+        var actualOpts = Array.isArray(args) ? options : args;
+        actualArgs = stripLogin(actualArgs);
+        actualArgs = injectEnv(command, actualArgs);
+        return _sp.call(this, LINKER64, [command].concat(actualArgs), actualOpts);
+    }
+    return _sp.call(this, command, args, options);
+};
+var _sps = child_process.spawnSync;
+child_process.spawnSync = function(command, args, options) {
+    if (isEB(command)) {
+        var actualArgs = Array.isArray(args) ? args : [];
+        var actualOpts = Array.isArray(args) ? options : args;
+        actualArgs = stripLogin(actualArgs);
+        actualArgs = injectEnv(command, actualArgs);
+        return _sps.call(this, LINKER64, [command].concat(actualArgs), actualOpts);
+    }
+    return _sps.call(this, command, args, options);
+};
+var cliPath = process.argv[2];
+if (!cliPath) { process.stderr.write('claude-wrapper: missing CLI path\n'); process.exit(1); }
+process.argv = [process.argv[0], cliPath].concat(process.argv.slice(3));
+require(cliPath);
+        """.trimIndent()
+
+        /**
+         * Generate BASH_ENV script with explicit shell functions for each binary.
+         * Generated at launch time from the actual files in usr/bin/ — avoids all
+         * shell eval/escaping issues since each function is a static string.
+         */
+        private fun buildBashEnvSh(usrPath: String): String {
+            val binDir = File(usrPath, "bin")
+            if (!binDir.isDirectory) return "# bin dir not found\n"
+            val skip = setOf("bash", "sh", "sh-wrapper", "env")
+            val sb = StringBuilder("# linker64 wrapper functions for embedded binaries\n")
+            binDir.listFiles()?.sorted()?.forEach { file ->
+                if (!file.isFile) return@forEach
+                val n = file.name
+                if (n in skip) return@forEach
+                if (!n.matches(Regex("[a-zA-Z_][a-zA-Z0-9_.+-]*"))) return@forEach
+                // Shell function: runs in-process, no exec syscall, SELinux can't block
+                sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$n" "${'$'}@"; }""")
+            }
+            return sb.toString()
+        }
     }
 }

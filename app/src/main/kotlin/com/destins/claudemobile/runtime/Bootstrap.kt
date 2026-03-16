@@ -145,6 +145,25 @@ class Bootstrap(private val context: Context) {
             installDeb("pool/main/n/npm/npm_11.11.1_all.deb")
         }
 
+        // termux-exec: LD_PRELOAD library that intercepts execve() calls and routes
+        // embedded binaries through /system/bin/linker64 (bypasses SELinux).
+        // Required for Claude Code's Bash tool to spawn shell subprocesses.
+        if (!File(usrDir, "lib/libtermux-exec-linker-ld-preload.so").exists()) {
+            onProgress(Progress.Installing("termux-exec"))
+            installDeb("pool/main/t/termux-exec/termux-exec_1:2.4.0-1_aarch64.deb")
+        }
+        // The postinst script normally runs `termux-exec-ld-preload-lib setup` to
+        // create the primary .so, but that requires a working shell. Instead, copy
+        // the linker variant directly (needed for Android 15+ SELinux restrictions).
+        val linkerSo = File(usrDir, "lib/libtermux-exec-linker-ld-preload.so")
+        val primarySo = File(usrDir, "lib/libtermux-exec-ld-preload.so")
+        if (linkerSo.exists() && !primarySo.exists()) {
+            linkerSo.inputStream().use { input ->
+                primarySo.outputStream().use { output -> input.copyTo(output) }
+            }
+            primarySo.setExecutable(true)
+        }
+
         // Git is deferred to on-demand installation via installGit().
         // Claude Code runs without git for journaling/inbox use cases.
     }
@@ -313,13 +332,16 @@ class Bootstrap(private val context: Context) {
         File(homeDir, ".claude").mkdirs()
         File(homeDir, "tmp").mkdirs()
 
-        // Create shell wrapper scripts that use linker64 to bypass SELinux.
-        // Claude Code spawns subprocesses via SHELL, which fails without this.
-        val binDir = File(usrDir, "bin")
-        val bashReal = File(binDir, "bash").absolutePath
-        val shWrapper = File(binDir, "sh-wrapper")
-        shWrapper.writeText("#!/system/bin/sh\nexec /system/bin/linker64 $bashReal \"\$@\"\n")
-        shWrapper.setExecutable(true)
+        // Deploy the Node.js wrapper that patches child_process/fs to route
+        // embedded binary execution through linker64. This is the primary fix
+        // for Claude Code's "No suitable shell found" error — it intercepts
+        // shell validation (fs.accessSync X_OK) and spawn calls at the JS level.
+        val mobileDir = File(homeDir, ".claude-mobile")
+        mobileDir.mkdirs()
+        val wrapperFile = File(mobileDir, "claude-wrapper.js")
+        context.assets.open("claude-wrapper.js").use { input ->
+            wrapperFile.outputStream().use { output -> input.copyTo(output) }
+        }
     }
 
     /**
@@ -345,19 +367,43 @@ class Bootstrap(private val context: Context) {
         }
     }
 
-    fun buildRuntimeEnv(): Map<String, String> = mapOf(
-        "HOME" to homeDir.absolutePath,
-        "PREFIX" to usrDir.absolutePath,
-        "SHELL" to "/system/bin/sh",
-        "PATH" to "${usrDir.absolutePath}/bin:${usrDir.absolutePath}/bin/applets:/system/bin",
-        "LD_LIBRARY_PATH" to "${usrDir.absolutePath}/lib",
-        "LANG" to "en_US.UTF-8",
-        "TERM" to "xterm-256color",
-        // Override hardcoded Termux paths in compiled binaries
-        "OPENSSL_CONF" to "${usrDir.absolutePath}/etc/tls/openssl.cnf",
-        "SSL_CERT_FILE" to "${usrDir.absolutePath}/etc/tls/cert.pem",
-        "SSL_CERT_DIR" to "${usrDir.absolutePath}/etc/tls/certs",
-        "TERMUX_PREFIX" to usrDir.absolutePath,
-        "TMPDIR" to "${homeDir.absolutePath}/tmp",
-    )
+    fun buildRuntimeEnv(): Map<String, String> {
+        val usr = usrDir.absolutePath
+        val home = homeDir.absolutePath
+        val bashPath = "$usr/bin/bash"
+        val ldPreloadSo = "$usr/lib/libtermux-exec-ld-preload.so"
+
+        return buildMap {
+            put("HOME", home)
+            put("PREFIX", usr)
+            // Point SHELL and CLAUDE_CODE_SHELL to embedded bash.
+            // Claude Code ONLY accepts shells with "bash" or "zsh" in the path —
+            // /system/bin/sh is silently ignored regardless of POSIX compliance.
+            put("SHELL", bashPath)
+            put("CLAUDE_CODE_SHELL", bashPath)
+            put("PATH", "$usr/bin:$usr/bin/applets:/system/bin")
+            put("LD_LIBRARY_PATH", "$usr/lib")
+            // termux-exec LD_PRELOAD: intercepts execve() in bash subprocesses
+            // and routes them through linker64. Complements the JS wrapper which
+            // only covers Node.js-level spawn calls.
+            if (File(ldPreloadSo).exists()) {
+                put("LD_PRELOAD", ldPreloadSo)
+            }
+            put("LANG", "en_US.UTF-8")
+            put("TERM", "xterm-256color")
+            // Override hardcoded Termux paths in compiled binaries
+            put("OPENSSL_CONF", "$usr/etc/tls/openssl.cnf")
+            put("SSL_CERT_FILE", "$usr/etc/tls/cert.pem")
+            put("SSL_CERT_DIR", "$usr/etc/tls/certs")
+            // termux-exec v2.x reads TERMUX__PREFIX (double underscore) to
+            // determine the runtime prefix. Without this, it falls back to
+            // the hardcoded /data/data/com.termux/files/usr path.
+            put("TERMUX__PREFIX", usr)
+            put("TERMUX_PREFIX", usr)
+            put("TMPDIR", "$home/tmp")
+            // Claude Code uses CLAUDE_CODE_TMPDIR for its own temp files
+            // (sandbox dirs, etc.). Falls back to /tmp which doesn't exist on Android.
+            put("CLAUDE_CODE_TMPDIR", "$home/tmp")
+        }
+    }
 }

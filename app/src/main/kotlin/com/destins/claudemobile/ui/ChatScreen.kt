@@ -1,14 +1,18 @@
 package com.destins.claudemobile.ui
 
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.Chat
@@ -22,9 +26,13 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.destins.claudemobile.config.defaultChips
 import com.destins.claudemobile.parser.ParsedEvent
+import com.destins.claudemobile.runtime.DirectShellBridge
 import com.destins.claudemobile.runtime.PtyBridge
 import kotlinx.coroutines.launch
 
+private enum class ScreenMode { Chat, Terminal, Shell }
+
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(bridge: PtyBridge) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -34,7 +42,9 @@ fun ChatScreen(bridge: PtyBridge) {
     var prefillText by remember { mutableStateOf("") }
     var chatInputText by remember { mutableStateOf("") }
     val onPrefillConsumed = { prefillText = "" }
-    var isTerminalMode by remember { mutableStateOf(false) }
+    var screenMode by remember { mutableStateOf(ScreenMode.Chat) }
+    var directShellBridge by remember { mutableStateOf<DirectShellBridge?>(null) }
+    val haptic = LocalHapticFeedback.current
     var hasUnhandledInteractive by remember { mutableStateOf(false) }
 
     // Menu accumulator — collects numbered options arriving as separate text events
@@ -231,7 +241,8 @@ fun ChatScreen(bridge: PtyBridge) {
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
-        if (isTerminalMode) {
+        when (screenMode) {
+        ScreenMode.Terminal -> {
             // ── Full-screen terminal mode ──────────────────────────────
             var terminalInput by remember { mutableStateOf("") }
 
@@ -252,7 +263,7 @@ fun ChatScreen(bridge: PtyBridge) {
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.surface)
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .clickable { isTerminalMode = false }
+                            .clickable { screenMode = ScreenMode.Chat }
                             .padding(horizontal = 10.dp),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -383,7 +394,161 @@ fun ChatScreen(bridge: PtyBridge) {
                     onKeyPress = { seq -> bridge.writeInput(seq) },
                 )
             }
-        } else {
+        }
+
+        ScreenMode.Shell -> {
+            // ── Direct shell mode ─────────────────────────────────────
+            val shell = directShellBridge ?: return@Box
+            val shellScreenVersion by shell.screenVersion.collectAsState()
+            var shellInput by remember { mutableStateOf("") }
+
+            Column(modifier = Modifier.fillMaxSize()) {
+                val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
+                // Top bar — chat icon left, "Shell" title, terminal icon right
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 6.dp, vertical = 5.dp),
+                ) {
+                    // Chat pill — left (back to chat)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterStart)
+                            .height(34.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                            .clickable { screenMode = ScreenMode.Chat }
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            com.destins.claudemobile.ui.theme.AppIcons.Chat,
+                            contentDescription = "Switch to chat",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                    // Centered title
+                    Text(
+                        "Shell",
+                        fontSize = 15.sp,
+                        color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
+                        modifier = Modifier.align(Alignment.Center),
+                    )
+                    // Terminal pill — right (switch to Claude terminal)
+                    Box(
+                        modifier = Modifier
+                            .align(Alignment.CenterEnd)
+                            .size(34.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
+                            .clickable { screenMode = ScreenMode.Terminal },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            com.destins.claudemobile.ui.theme.AppIcons.ClaudeMascot,
+                            contentDescription = "Claude terminal",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
+                }
+                HorizontalDivider(color = borderColor, thickness = 0.5.dp)
+
+                // Terminal canvas — direct shell
+                TerminalPanel(
+                    session = shell.getSession(),
+                    screenVersion = shellScreenVersion,
+                    modifier = Modifier.weight(1f).fillMaxWidth(),
+                )
+
+                HorizontalDivider(color = borderColor, thickness = 0.5.dp)
+
+                // Text input row
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MaterialTheme.colorScheme.background)
+                        .padding(horizontal = 6.dp, vertical = 5.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .height(42.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(
+                                0.5.dp,
+                                borderColor.copy(alpha = 0.5f),
+                                androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+                            ),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        BasicTextField(
+                            value = shellInput,
+                            onValueChange = { shellInput = it },
+                            singleLine = true,
+                            textStyle = androidx.compose.ui.text.TextStyle(
+                                fontSize = 13.sp,
+                                fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                                color = MaterialTheme.colorScheme.onSurface,
+                            ),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp),
+                            decorationBox = { innerTextField ->
+                                if (shellInput.isEmpty()) {
+                                    Text(
+                                        "$ ",
+                                        fontSize = 13.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                                    )
+                                }
+                                innerTextField()
+                            },
+                        )
+                    }
+
+                    Box(
+                        modifier = Modifier
+                            .size(42.dp)
+                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                            .border(
+                                0.5.dp,
+                                borderColor.copy(alpha = 0.5f),
+                                androidx.compose.foundation.shape.RoundedCornerShape(6.dp)
+                            )
+                            .clickable {
+                                if (shellInput.isNotBlank()) {
+                                    shell.writeInput(shellInput + "\r")
+                                    shellInput = ""
+                                }
+                            },
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.Send,
+                            contentDescription = "Send",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+
+                // Special keys row
+                TerminalKeyboardRow(
+                    onKeyPress = { seq -> shell.writeInput(seq) },
+                )
+            }
+        }
+
+        ScreenMode.Chat -> {
             // ── Chat mode — mirrors terminal page formatting ─────────
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
@@ -395,7 +560,7 @@ fun ChatScreen(bridge: PtyBridge) {
                         .background(MaterialTheme.colorScheme.background)
                         .padding(horizontal = 6.dp, vertical = 5.dp),
                 ) {
-                    // Terminal toggle pill — left
+                    // Terminal toggle pill — left: tap = Claude terminal, long-press = direct shell
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterStart)
@@ -403,7 +568,16 @@ fun ChatScreen(bridge: PtyBridge) {
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.surface)
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .clickable { isTerminalMode = true }
+                            .combinedClickable(
+                                onClick = { screenMode = ScreenMode.Terminal },
+                                onLongClick = {
+                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                    if (directShellBridge == null) {
+                                        directShellBridge = bridge.createDirectShell()
+                                    }
+                                    screenMode = ScreenMode.Shell
+                                },
+                            )
                             .padding(horizontal = 10.dp),
                         contentAlignment = Alignment.Center,
                     ) {
@@ -459,7 +633,7 @@ fun ChatScreen(bridge: PtyBridge) {
                             onToggleCard = { chatState.toggleCard(it) },
                             onApprove = { bridge.sendApproval(true); chatState.resolveApproval() },
                             onReject = { bridge.sendApproval(false); chatState.resolveApproval() },
-                            onViewTerminal = { isTerminalMode = true },
+                            onViewTerminal = { screenMode = ScreenMode.Terminal },
                             onMenuSelect = { index ->
                                 val menuMsg = message.content
                                 if (menuMsg is MessageContent.Menu) {
@@ -578,7 +752,8 @@ fun ChatScreen(bridge: PtyBridge) {
                     )
                 }
             }
-
         }
+
+        } // when
     }
 }
