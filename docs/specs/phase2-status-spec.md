@@ -317,7 +317,7 @@ DirectShellBridge works via long-press on Terminal button but there's no visible
 
 Config-only change in `ChipConfig.kt` — no new files or complex logic.
 
-### Priority 10: Fix / Rebuild App Icon
+### Priority 9: Fix / Rebuild App Icon
 
 Current icon needs rework. Reference image available (B1 Original comparison shot). (from inbox 2026-03-16)
 
