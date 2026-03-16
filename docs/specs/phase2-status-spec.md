@@ -381,11 +381,6 @@ ui/cards/ToolCard.kt           — Tool call card (3 states: Running, AwaitingAp
 ui/cards/DiffCard.kt           — Diff display card (built, not routed from hooks pipeline)
 ui/cards/CodeCard.kt           — Code block card with syntax highlighting + copy
 ui/cards/ErrorCard.kt          — Error display card with expandable details
-ui/cards/ProgressCard.kt       — Progress indicator (unused — superseded by ActivityIndicator)
-ui/cards/ApprovalCard.kt       — Approval prompt card (unused — superseded by ToolCard.AwaitingApproval)
-ui/widgets/MenuWidget.kt       — Radio button menu selector (unused — no hook event drives it)
-ui/widgets/ConfirmationWidget.kt — Yes/No prompt (unused — no hook event drives it)
-ui/widgets/OAuthWidget.kt      — Sign-in button (unused — no hook event drives it)
 ui/theme/AppIcons.kt           — Custom vector icons (Terminal, Chat, ClaudeMascot)
 parser/HookEvent.kt            — Sealed class: 5 hook event types with JSON deserialization
 runtime/DirectShellBridge.kt   — Standalone bash shell session (no Claude Code)
