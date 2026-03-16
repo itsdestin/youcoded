@@ -256,11 +256,11 @@ fun TerminalPanel(
 
             val internalRow = try {
                 screen.externalToInternalRow(bufferRow)
-            } catch (_: IndexOutOfBoundsException) { combinedText.append(spaces); continue }
+            } catch (_: Exception) { combinedText.append(spaces); continue }
 
             val row: TerminalRow? = try {
                 screen.allocateFullLineIfNecessary(internalRow)
-            } catch (_: IndexOutOfBoundsException) { null }
+            } catch (_: Exception) { null }
 
             if (row == null) { combinedText.append(spaces); continue }
             visibleRowData[rowIndex] = row
