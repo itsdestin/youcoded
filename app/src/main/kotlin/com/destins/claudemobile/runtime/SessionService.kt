@@ -32,12 +32,15 @@ class SessionService : Service() {
 
     fun startSession(bootstrap: Bootstrap, apiKey: String? = null) {
         val bridge = PtyBridge(bootstrap, apiKey)
-        bridge.start()
         ptyBridge = bridge
 
+        // Start EventBridge BEFORE Claude Code — hooks fire immediately on launch
+        // and hook-relay.js silently drops events if the socket isn't ready.
         val bridgeScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
         bridge.startEventBridge(bridgeScope)
         this.bridgeScope = bridgeScope
+
+        bridge.start()
 
         startForeground(NOTIFICATION_ID, buildNotification())
     }
