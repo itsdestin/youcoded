@@ -119,6 +119,7 @@ fun ChatScreen(bridge: PtyBridge) {
         ScreenMode.Terminal -> {
             // ── Full-screen terminal mode ──────────────────────────────
             var terminalInput by remember { mutableStateOf("") }
+            var termScrollOffset by remember { mutableFloatStateOf(0f) }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
@@ -171,11 +172,39 @@ fun ChatScreen(bridge: PtyBridge) {
                 }
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
-                TerminalPanel(
-                    session = bridge.getSession(),
-                    screenVersion = screenVersion,
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                )
+                // Terminal + floating scroll-to-bottom button
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    TerminalPanel(
+                        session = bridge.getSession(),
+                        screenVersion = screenVersion,
+                        modifier = Modifier.fillMaxSize(),
+                        scrollOffset = termScrollOffset,
+                        onScrollOffsetChanged = { termScrollOffset = it },
+                    )
+
+                    // Floating "return to bottom" pill
+                    if (termScrollOffset > 1f) {
+                        Box(
+                            modifier = Modifier
+                                .align(Alignment.BottomCenter)
+                                .padding(bottom = 8.dp)
+                                .height(30.dp)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(15.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(15.dp))
+                                .clickable { termScrollOffset = 0f }
+                                .padding(horizontal = 14.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                "↓ Return to bottom",
+                                fontSize = 11.sp,
+                                color = MaterialTheme.colorScheme.primary,
+                                fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                            )
+                        }
+                    }
+                }
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
