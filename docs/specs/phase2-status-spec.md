@@ -395,6 +395,13 @@ res/font/cascadia_mono_bold.ttf
 parser/ParsedEvent.kt          — 12 event types + DiffHunk (replaced by HookEvent.kt)
 assets/parser/parser.js        — Parser sidecar state machine (deleted — hooks replace parsing)
 assets/parser/patterns.js      — Pattern matching rules (deleted — hooks replace parsing)
+ui/cards/ApprovalCard.kt       — Approval prompt card (deleted v2.5 — superseded by ToolCard.AwaitingApproval)
+ui/cards/ProgressCard.kt       — Progress indicator (deleted v2.5 — superseded by ActivityIndicator)
+ui/cards/CardState.kt          — Expand/collapse state manager (deleted v2.5 — ChatState has own toggle)
+ui/widgets/MenuWidget.kt       — Radio button menu selector (deleted v2.5 — no hook event drives it)
+ui/widgets/ConfirmationWidget.kt — Yes/No prompt (deleted v2.5 — no hook event drives it)
+ui/widgets/OAuthWidget.kt      — Sign-in button (deleted v2.5 — no hook event drives it)
+ui/InputBar.kt                 — Chat input bar (deleted v2.5 — ChatScreen builds inline input)
 ```
 
 ### Modified Files
