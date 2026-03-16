@@ -329,7 +329,7 @@ Register Claude Mobile as an Android voice assistant so it can be invoked system
 
 In-app file browser for accessing files within the app's data directory. (from inbox 2026-03-16)
 
-### Priority 13: Codify Auto-Patching Install Capability
+### Priority 12: Codify Auto-Patching Install Capability
 
 Claude on-device auto-patched a broken Gemini CLI install (alias-based fix for shebangs that don't work in the Android sandbox). This self-repair behavior should be documented and codified as a general capability — detect broken installs and auto-fix them. (from inbox 2026-03-16)
 
