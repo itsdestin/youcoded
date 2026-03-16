@@ -62,11 +62,11 @@ fun TerminalKeyboardRow(
         ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", borderColor, Modifier.weight(0.55f).height(36.dp)) {
             sendKey("\u001b[D", ctrlActive, onKeyPress) { ctrlActive = false }
         }
-        ArrowPill(Icons.Filled.KeyboardArrowDown, "Down", borderColor, Modifier.weight(0.75f).height(36.dp)) {
-            sendKey("\u001b[B", ctrlActive, onKeyPress) { ctrlActive = false }
-        }
         ArrowPill(Icons.Filled.KeyboardArrowUp, "Up", borderColor, Modifier.weight(0.75f).height(36.dp)) {
             sendKey("\u001b[A", ctrlActive, onKeyPress) { ctrlActive = false }
+        }
+        ArrowPill(Icons.Filled.KeyboardArrowDown, "Down", borderColor, Modifier.weight(0.75f).height(36.dp)) {
+            sendKey("\u001b[B", ctrlActive, onKeyPress) { ctrlActive = false }
         }
         ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", borderColor, Modifier.weight(0.55f).height(36.dp)) {
             sendKey("\u001b[C", ctrlActive, onKeyPress) { ctrlActive = false }
