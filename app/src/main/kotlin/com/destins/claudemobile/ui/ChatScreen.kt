@@ -56,7 +56,23 @@ fun ChatScreen(bridge: PtyBridge) {
                     is ParsedEvent.Error -> chatState.addError(event.message, event.details)
                     is ParsedEvent.Progress -> chatState.addProgress(event.message)
                     is ParsedEvent.Text -> {
-                        if (event.text.isNotBlank()) chatState.addClaudeText(event.text)
+                        if (event.text.isNotBlank()) {
+                            val text = event.text
+                            // Detect numbered menu options (e.g., "1. Dark mode")
+                            val numberedPattern = Regex("""^\s*\d+\.\s+\S""")
+                            if (numberedPattern.containsMatchIn(text)) {
+                                val options = text.lines()
+                                    .filter { numberedPattern.containsMatchIn(it) }
+                                    .map { it.trim() }
+                                if (options.size >= 2) {
+                                    chatState.addMenu(options, text)
+                                } else {
+                                    chatState.addClaudeText(text)
+                                }
+                            } else {
+                                chatState.addClaudeText(text)
+                            }
+                        }
                     }
                     is ParsedEvent.InteractiveMenu -> {
                         // Try to parse menu options from raw text
@@ -174,7 +190,12 @@ fun ChatScreen(bridge: PtyBridge) {
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("✦", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            com.destins.claudemobile.ui.theme.AppIcons.ClaudeMascot,
+                            contentDescription = "Claude",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
                 // Divider below top bar
@@ -323,7 +344,12 @@ fun ChatScreen(bridge: PtyBridge) {
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
                         contentAlignment = Alignment.Center,
                     ) {
-                        Text("✦", fontSize = 16.sp, color = MaterialTheme.colorScheme.primary)
+                        Icon(
+                            com.destins.claudemobile.ui.theme.AppIcons.ClaudeMascot,
+                            contentDescription = "Claude",
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.size(20.dp),
+                        )
                     }
                 }
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)

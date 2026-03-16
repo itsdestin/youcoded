@@ -132,4 +132,61 @@ object AppIcons {
             }
         }.build()
     }
+
+    /**
+     * Claude mascot — simplified pixel art with >< eyes and legs.
+     */
+    val ClaudeMascot: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "ClaudeMascot",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            // Body block with legs
+            path(
+                fill = SolidColor(Color.Black),
+                stroke = null,
+            ) {
+                moveTo(4f, 3f)
+                lineTo(20f, 3f)
+                lineTo(20f, 17f)
+                lineTo(18f, 17f)
+                lineTo(18f, 21f)
+                lineTo(15f, 21f)
+                lineTo(15f, 17f)
+                lineTo(9f, 17f)
+                lineTo(9f, 21f)
+                lineTo(6f, 21f)
+                lineTo(6f, 17f)
+                lineTo(4f, 17f)
+                close()
+            }
+            // Left eye >
+            path(
+                fill = null,
+                stroke = SolidColor(Color(0xFFC96442)),
+                strokeLineWidth = 1.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(8f, 8f)
+                lineTo(10f, 10f)
+                lineTo(8f, 12f)
+            }
+            // Right eye <
+            path(
+                fill = null,
+                stroke = SolidColor(Color(0xFFC96442)),
+                strokeLineWidth = 1.5f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                moveTo(16f, 8f)
+                lineTo(14f, 10f)
+                lineTo(16f, 12f)
+            }
+        }.build()
+    }
 }
