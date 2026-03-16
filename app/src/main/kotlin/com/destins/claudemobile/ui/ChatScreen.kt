@@ -151,12 +151,7 @@ fun ChatScreen(bridge: PtyBridge) {
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
 
-                // Special keys + text input
-                TerminalKeyboardRow(
-                    onKeyPress = { seq -> bridge.writeInput(seq) },
-                )
-
-                // Input row — same background as key pills row
+                // Text input row
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -170,7 +165,7 @@ fun ChatScreen(bridge: PtyBridge) {
                     androidx.compose.foundation.layout.Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(34.dp)
+                            .height(42.dp)
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.surface)
                             .border(
@@ -208,7 +203,7 @@ fun ChatScreen(bridge: PtyBridge) {
                     // Send button styled as a key pill
                     androidx.compose.foundation.layout.Box(
                         modifier = Modifier
-                            .size(34.dp)
+                            .size(42.dp)
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                             .border(
@@ -232,6 +227,11 @@ fun ChatScreen(bridge: PtyBridge) {
                         )
                     }
                 }
+
+                // Special keys row — below text input
+                TerminalKeyboardRow(
+                    onKeyPress = { seq -> bridge.writeInput(seq) },
+                )
             }
         } else {
             // ── Chat mode ──────────────────────────────────────────────

@@ -68,8 +68,8 @@ object AppIcons {
     }
 
     /**
-     * Chat icon — speech bubble with a subtle Claude sparkle.
-     * Rounded speech bubble with a small dot pattern inside.
+     * Chat icon — speech bubble with three dots.
+     * Simple rounded bubble with tail and dots inside.
      */
     val Chat: ImageVector by lazy {
         ImageVector.Builder(
@@ -79,7 +79,7 @@ object AppIcons {
             viewportWidth = 24f,
             viewportHeight = 24f
         ).apply {
-            // Speech bubble outline
+            // Speech bubble outline with tail
             path(
                 fill = null,
                 stroke = SolidColor(Color.White),
@@ -87,49 +87,48 @@ object AppIcons {
                 strokeLineCap = StrokeCap.Round,
                 strokeLineJoin = StrokeJoin.Round,
             ) {
-                moveTo(21f, 11.5f)
-                arcTo(8.38f, 5.56f, 0f, false, true, 19.5f, 15.7f)
-                arcTo(17.5f, 17.5f, 0f, false, true, 12f, 17f)
-                lineTo(7f, 20f)
-                lineTo(8f, 16.5f)
-                arcTo(8.38f, 5.56f, 0f, false, true, 3f, 11.5f)
-                arcTo(8.38f, 5.56f, 0f, false, true, 12f, 6f)
-                arcTo(8.38f, 5.56f, 0f, false, true, 21f, 11.5f)
+                // Rounded rectangle bubble
+                moveTo(4f, 5f)
+                lineTo(20f, 5f)
+                arcTo(2f, 2f, 0f, false, true, 22f, 7f)
+                lineTo(22f, 15f)
+                arcTo(2f, 2f, 0f, false, true, 20f, 17f)
+                lineTo(10f, 17f)
+                lineTo(6f, 20f)
+                lineTo(7f, 17f)
+                lineTo(4f, 17f)
+                arcTo(2f, 2f, 0f, false, true, 2f, 15f)
+                lineTo(2f, 7f)
+                arcTo(2f, 2f, 0f, false, true, 4f, 5f)
                 close()
             }
-            // Three dots inside (Claude's thinking dots)
-            // Left dot
+            // Three dots — drawn as short thick lines (more reliable than arcs)
             path(
-                fill = SolidColor(Color.White),
-                stroke = null,
-                pathFillType = PathFillType.NonZero,
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2.5f,
+                strokeLineCap = StrokeCap.Round,
             ) {
-                moveTo(9.25f, 10.5f)
-                arcTo(0.75f, 0.75f, 0f, true, true, 9.25f, 12f)
-                arcTo(0.75f, 0.75f, 0f, true, true, 9.25f, 10.5f)
-                close()
+                moveTo(8.5f, 11f)
+                lineTo(8.5f, 11.01f)
             }
-            // Center dot
             path(
-                fill = SolidColor(Color.White),
-                stroke = null,
-                pathFillType = PathFillType.NonZero,
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2.5f,
+                strokeLineCap = StrokeCap.Round,
             ) {
-                moveTo(12f, 10.5f)
-                arcTo(0.75f, 0.75f, 0f, true, true, 12f, 12f)
-                arcTo(0.75f, 0.75f, 0f, true, true, 12f, 10.5f)
-                close()
+                moveTo(12f, 11f)
+                lineTo(12f, 11.01f)
             }
-            // Right dot
             path(
-                fill = SolidColor(Color.White),
-                stroke = null,
-                pathFillType = PathFillType.NonZero,
+                fill = null,
+                stroke = SolidColor(Color.White),
+                strokeLineWidth = 2.5f,
+                strokeLineCap = StrokeCap.Round,
             ) {
-                moveTo(14.75f, 10.5f)
-                arcTo(0.75f, 0.75f, 0f, true, true, 14.75f, 12f)
-                arcTo(0.75f, 0.75f, 0f, true, true, 14.75f, 10.5f)
-                close()
+                moveTo(15.5f, 11f)
+                lineTo(15.5f, 11.01f)
             }
         }.build()
     }
