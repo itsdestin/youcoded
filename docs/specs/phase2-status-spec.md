@@ -333,11 +333,7 @@ In-app file browser for accessing files within the app's data directory. (from i
 
 Claude on-device auto-patched a broken Gemini CLI install (alias-based fix for shebangs that don't work in the Android sandbox). This self-repair behavior should be documented and codified as a general capability — detect broken installs and auto-fix them. (from inbox 2026-03-16)
 
-### Priority 14: Fix Native Installer Fallback
-
-Native binary installer produces bad ELF errors on Android. The installer should detect this and fall back to the alias-based (node + JS entry point) approach automatically. Related to Bug 3. (from inbox 2026-03-16)
-
-### Priority 15: Terminal Input Repositioning
+### Priority 13: Terminal Input Repositioning
 
 Shift the typing space in terminal mode to the very bottom of the screen, replacing the current space. Keep the bottom enter button. (from inbox 2026-03-16)
 
