@@ -263,6 +263,23 @@ fun TerminalPanel(
 
             val yTop = rowIndex * cellH
 
+            // Detect URLs in this row for clickable links + visual styling
+            val rowText = extractRowText(row, gridCols)
+            val urlMatches = URL_PATTERN.findAll(rowText).toList()
+            // Build a set of columns that are part of a URL for link coloring
+            val urlCols = mutableSetOf<Int>()
+            for (match in urlMatches) {
+                for (c in match.range) urlCols.add(c)
+                val url = match.value.trimEnd('.', ',', ';', ':', '!')
+                urlRegions.add(UrlRegion(
+                    url = url,
+                    left = match.range.first * cellW + 4f,
+                    top = yTop,
+                    right = (match.range.last + 1) * cellW + 4f,
+                    bottom = yTop + cellH,
+                ))
+            }
+
             var col = 0
             while (col < gridCols) {
                 // findStartOfColumn gives us the char-array index for column `col`
