@@ -1,7 +1,7 @@
 # Phase 3 Improvements Design: Markdown, Git, Image Input
 
 **Date:** 2026-03-16
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Approved
 
 ## Overview
