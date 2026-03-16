@@ -77,7 +77,11 @@ fun ChatScreen(bridge: PtyBridge) {
                                 // Very short non-words (single chars like "-", "+", decorations)
                                 (text.length <= 2 && !text.all { it.isLetterOrDigit() }) ||
                                 // Lines starting with line numbers + code (diff preview)
-                                text.matches(Regex("""^\d+\s+(function|console|return|var|let|const|if|for)\b.*"""))
+                                text.matches(Regex("""^\d+\s+(function|console|return|var|let|const|if|for)\b.*""")) ||
+                                // Short code fragments like "3 }", "1 {", etc.
+                                text.matches(Regex("""^\d+\s*[{}()\[\];]?\s*$""")) ||
+                                // "Syntax highlighting available only in native build" (ink preview noise)
+                                text.contains("Syntax highlighting available only in native")
                             if (isNoise) {
                                 // Skip — don't add to chat
                             }
@@ -171,9 +175,34 @@ fun ChatScreen(bridge: PtyBridge) {
         }
     }
 
-    // Screen buffer scanner removed — was duplicating menus already
-    // detected by the text event accumulator. If follow-up menus are
-    // missed, the user can switch to terminal mode.
+    // Screen buffer scanner — only active after a menu was selected.
+    // Detects follow-up menus that ink renders via cursor rewrite
+    // (which the parser misses since transcript shrinks).
+    val lastMenuHash = remember { mutableStateOf(0) }
+    val menuWasResolved = remember { mutableStateOf(false) }
+    LaunchedEffect(screenVersion) {
+        if (!menuWasResolved.value) return@LaunchedEffect
+        val session = bridge.getSession() ?: return@LaunchedEffect
+        val emulator = session.emulator ?: return@LaunchedEffect
+        val screen = emulator.screen ?: return@LaunchedEffect
+        val transcript = screen.getTranscriptText()
+
+        // Numbered menus
+        val menuPattern = Regex("""(?:^|\n)\s*[❯>]?\s*(\d+\.\s+\S.+)""")
+        val matches = menuPattern.findAll(transcript).map { it.groupValues[1].trim() }.toList()
+
+        if (matches.size >= 2) {
+            val hash = matches.hashCode()
+            if (hash != lastMenuHash.value) {
+                lastMenuHash.value = hash
+                val hasActiveMenu = chatState.messages.any { it.content is MessageContent.Menu }
+                if (!hasActiveMenu) {
+                    chatState.addMenu(matches, matches.joinToString("\n"))
+                    menuWasResolved.value = false
+                }
+            }
+        }
+    }
 
     LaunchedEffect(chatState.messages.size) {
         if (chatState.messages.isNotEmpty()) {
@@ -417,9 +446,9 @@ fun ChatScreen(bridge: PtyBridge) {
                                 if (menuMsg is MessageContent.Menu) {
                                     val selected = menuMsg.options.getOrElse(index) { "" }
                                     chatState.resolveMenu(selected)
+                                    menuWasResolved.value = true
                                 }
                                 // Send arrow-down × index + enter with delays
-                                // (ink needs time to process each keypress)
                                 coroutineScope.launch {
                                     repeat(index) {
                                         bridge.writeInput("\u001b[B")
