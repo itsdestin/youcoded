@@ -44,9 +44,13 @@ fun ChatScreen(bridge: PtyBridge) {
     val screenVersion by bridge.screenVersion.collectAsState()
     val lastPtyOutput by bridge.lastPtyOutputTime.collectAsState()
 
-    // Hook event collector
+    // Hook event collector — retries until EventBridge is available
     LaunchedEffect(bridge) {
-        val eventBridge = bridge.getEventBridge() ?: return@LaunchedEffect
+        var eventBridge = bridge.getEventBridge()
+        while (eventBridge == null) {
+            delay(200)
+            eventBridge = bridge.getEventBridge()
+        }
         eventBridge.events.collect { event ->
             android.util.Log.d("ChatEvents", "HOOK: ${event::class.simpleName}")
             when (event) {
