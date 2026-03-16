@@ -188,6 +188,7 @@ fun ChatScreen(bridge: PtyBridge) {
                         modifier = Modifier.fillMaxSize(),
                         scrollOffset = termScrollOffset,
                         onScrollOffsetChanged = { termScrollOffset = it },
+                        onTap = { termFocusRequester.requestFocus() },
                     )
 
                     // Floating "return to bottom" pill
