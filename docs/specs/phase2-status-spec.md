@@ -300,7 +300,7 @@ Clickable terminal links (v2.3) partially address this — users can now tap the
 
 `Bootstrap.installHooks()` does deduplication but could clobber existing user hooks from desktop Claude Code if they have custom matchers. Needs true additive merge: read existing hooks, append ours, preserve theirs.
 
-### Priority 7: Dead Code Cleanup
+### Priority 6: Dead Code Cleanup
 
 Unreachable components from the parser era:
 - `ApprovalCard` (superseded by ToolCard.AwaitingApproval)
