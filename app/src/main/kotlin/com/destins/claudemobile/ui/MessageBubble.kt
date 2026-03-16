@@ -8,111 +8,101 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.destins.claudemobile.ui.cards.*
+import com.termux.terminal.TerminalSession
 
 @Composable
 fun MessageBubble(
     message: ChatMessage,
     expandedCardId: String? = null,
     onToggleCard: (String) -> Unit = {},
-    onApprove: () -> Unit = {},
-    onReject: () -> Unit = {},
-    onViewTerminal: () -> Unit = {},
-    onMenuSelect: (Int) -> Unit = {},
-    onConfirmYes: () -> Unit = {},
-    onConfirmNo: () -> Unit = {},
+    onAcceptApproval: () -> Unit = {},
+    onRejectApproval: () -> Unit = {},
+    session: TerminalSession? = null,
+    screenVersion: Int = 0,
 ) {
     when (val content = message.content) {
-        is MessageContent.ToolCall -> {
-            ToolCard(cardId = content.cardId, tool = content.tool, args = content.args,
-                duration = content.duration, isExpanded = expandedCardId == content.cardId,
-                onToggle = onToggleCard)
-            return
-        }
-        is MessageContent.Diff -> {
-            DiffCard(cardId = content.cardId, filename = content.filename, hunks = content.hunks,
-                isExpanded = expandedCardId == content.cardId, onToggle = onToggleCard)
-            return
-        }
-        is MessageContent.Code -> {
-            CodeCard(cardId = content.cardId, language = content.language, code = content.code,
-                isExpanded = expandedCardId == content.cardId, onToggle = onToggleCard)
-            return
-        }
-        is MessageContent.Error -> {
-            ErrorCard(cardId = content.cardId, message = content.message, details = content.details,
-                isExpanded = expandedCardId == content.cardId, onToggle = onToggleCard)
-            return
-        }
-        is MessageContent.Progress -> {
-            ProgressCard(message = content.message)
-            return
-        }
-        is MessageContent.ApprovalRequest -> {
-            ApprovalCard(tool = content.tool, summary = content.summary,
-                onAccept = onApprove, onReject = onReject, onViewTerminal = onViewTerminal)
-            return
-        }
-        is MessageContent.Menu -> {
-            com.destins.claudemobile.ui.widgets.MenuWidget(
-                options = content.options,
-                onSelect = onMenuSelect,
+        is MessageContent.ToolRunning -> {
+            ToolCard(
+                cardId = content.cardId,
+                tool = content.tool,
+                args = content.args,
+                state = ToolCardState.Running,
+                isExpanded = expandedCardId == content.cardId,
+                onToggle = onToggleCard,
             )
             return
         }
-        is MessageContent.MenuResolved -> {
-            // Styled confirmation widget
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp)
-                    .clip(RoundedCornerShape(8.dp))
-                    .background(MaterialTheme.colorScheme.surface)
-                    .padding(12.dp),
-            ) {
-                Text(
-                    "Claude",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(bottom = 4.dp),
-                )
-                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
-                    Text(
-                        "✓",
-                        color = Color(0xFF44DD44),
-                        fontSize = 16.sp,
+        is MessageContent.ToolAwaitingApproval -> {
+            ToolCard(
+                cardId = content.cardId,
+                tool = content.tool,
+                args = content.args,
+                state = ToolCardState.AwaitingApproval,
+                isExpanded = true, // Always expanded when awaiting approval
+                onToggle = onToggleCard,
+                session = session,
+                screenVersion = screenVersion,
+                onAccept = onAcceptApproval,
+                onReject = onRejectApproval,
+            )
+            return
+        }
+        is MessageContent.ToolComplete -> {
+            when (content.tool) {
+                "Bash" -> {
+                    val command = content.result.optString("command", content.args)
+                    val output = content.result.optString("stdout",
+                        content.result.optString("output", content.result.toString()))
+                    CodeCard(
+                        cardId = content.cardId,
+                        language = "bash",
+                        code = "$ $command\n$output",
+                        isExpanded = expandedCardId == content.cardId,
+                        onToggle = onToggleCard,
                     )
-                    Spacer(Modifier.width(8.dp))
-                    Text(
-                        content.selected,
-                        fontSize = 14.sp,
-                        color = MaterialTheme.colorScheme.onSurface,
+                }
+                else -> {
+                    ToolCard(
+                        cardId = content.cardId,
+                        tool = content.tool,
+                        args = content.args,
+                        state = ToolCardState.Complete,
+                        result = content.result,
+                        isExpanded = expandedCardId == content.cardId,
+                        onToggle = onToggleCard,
+                        session = session,
+                        screenVersion = screenVersion,
                     )
                 }
             }
             return
         }
-        is MessageContent.OAuth -> {
-            com.destins.claudemobile.ui.widgets.OAuthWidget(
-                url = content.url,
-                onSwitchToTerminal = onViewTerminal,
+        is MessageContent.ToolFailed -> {
+            ErrorCard(
+                cardId = content.cardId,
+                message = "${content.tool} failed",
+                details = content.error.optString("message", content.error.toString()),
+                isExpanded = expandedCardId == content.cardId,
+                onToggle = onToggleCard,
             )
             return
         }
-        is MessageContent.Confirm -> {
-            com.destins.claudemobile.ui.widgets.ConfirmationWidget(
-                question = content.question,
-                onYes = onConfirmYes,
-                onNo = onConfirmNo,
+        is MessageContent.SystemNotice -> {
+            Text(
+                text = content.text,
+                fontSize = 12.sp,
+                color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
             )
             return
         }
         else -> Unit
     }
 
+    // Text bubbles (user messages and Claude responses)
     val isUser = message.role == MessageRole.USER
     val bgColor = when {
         message.isBtw -> MaterialTheme.colorScheme.surface.copy(alpha = 0.5f)
@@ -129,7 +119,7 @@ fun MessageBubble(
     ) {
         Column(
             modifier = Modifier
-                .fillMaxWidth(0.75f)
+                .fillMaxWidth(0.85f)
                 .clip(RoundedCornerShape(12.dp))
                 .background(bgColor)
                 .padding(10.dp)
@@ -151,12 +141,11 @@ fun MessageBubble(
                         color = if (isUser) Color.White else MaterialTheme.colorScheme.onSurface,
                     )
                 }
-                is MessageContent.RawTerminal -> {
+                is MessageContent.Response -> {
                     Text(
-                        text = content.text,
-                        fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
-                        fontSize = 12.sp,
-                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
+                        text = content.markdown,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
                     )
                 }
                 else -> Unit
