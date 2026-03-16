@@ -709,10 +709,12 @@ With:
                                         }
                                         append(chatInputText)
                                     }.trim()
-                                    chatState.addUserMessage(
-                                        if (attachmentPath != null) "📷 $chatInputText"
-                                        else chatInputText
-                                    )
+                                    val displayText = when {
+                                        attachmentPath != null && chatInputText.isBlank() -> "[image]"
+                                        attachmentPath != null -> "[image] $chatInputText"
+                                        else -> chatInputText
+                                    }
+                                    chatState.addUserMessage(displayText)
                                     bridge.writeInput(messageText + "\r")
                                     chatInputText = ""
                                     attachmentPath = null
