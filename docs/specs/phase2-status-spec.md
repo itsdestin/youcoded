@@ -296,6 +296,22 @@ MainActivity.kt            — Edge-to-edge, system bar insets, IME padding
 app/build.gradle.kts       — material-icons-extended, version 0.2.0
 ```
 
+### Phase 2 Open Questions
+
+1. **Pattern discovery:** Parser patterns are still best-guesses. Need 2-3 days of capturing real Claude Code output to refine. Can happen during implementation.
+2. **Tablet layout:** Split-view (2/3 chat + 1/3 file preview) deferred to Phase 3. Phase 1 spec included this in the base design but Phase 1 was phone-only in practice.
+3. **Config sync from Drive:** rclone integration for syncing `~/.claude/` from Google Drive deferred to Phase 3.
+4. **Notifications:** Actionable notifications when Claude needs approval while app is backgrounded — deferred to Phase 3.
+5. **GPL compliance:** Termux runtime licensing question remains open from Phase 1.
+6. **Priority item 9 (chips):** "Person briefings + text drafting chips" is a config-only change in `ChipConfig.kt` — no new files or complex logic.
+
+### Chat Rebuild Open Questions
+
+1. **Markdown rendering in `Stop` responses.** Claude's response text in `last_assistant_message` is markdown. Basic rendering (bold, italic, code spans, paragraphs) is straightforward. Full markdown may need a library (e.g., `mikepenz/multiplatform-markdown-renderer` for Compose). Defer to implementation — start with basic, add a library if needed.
+2. **Hook execution performance.** Hook scripts run synchronously in Claude Code's process. The Unix socket write should be sub-millisecond, but needs validation on-device. If slow, consider async fire-and-forget in the hook script.
+3. **Multiple tools in one turn.** Claude Code can call several tools in sequence within a single turn. Each gets its own PreToolUse/PostToolUse pair. The Stop hook fires once at the end with the full response. Cards stack chronologically.
+4. **Hook config conflicts.** If the user (via desktop Claude Code) has existing hooks in settings.json, the bootstrap write must merge rather than overwrite. Strategy: append to existing arrays per event type (additive), never replace. Implementation detail for Bootstrap.kt.
+
 ## Known Bugs / Issues
 
 *None currently tracked.*

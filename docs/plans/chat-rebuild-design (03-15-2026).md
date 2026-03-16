@@ -341,17 +341,6 @@ The terminal is always the ground truth. The chat view is a structured interpret
 - `runtime/SessionManager.kt`, `runtime/SessionService.kt`
 - `config/*`
 
-## Open Questions
-
-1. **Markdown rendering in `Stop` responses.** Claude's response text in `last_assistant_message` is markdown. Basic rendering (bold, italic, code spans, paragraphs) is straightforward. Full markdown may need a library (e.g., `mikepenz/multiplatform-markdown-renderer` for Compose). Defer to implementation — start with basic, add a library if needed.
-2. **Hook execution performance.** Hook scripts run synchronously in Claude Code's process. The Unix socket write should be sub-millisecond, but needs validation on-device. If slow, consider async fire-and-forget in the hook script.
-3. **Multiple tools in one turn.** Claude Code can call several tools in sequence within a single turn. Each gets its own PreToolUse/PostToolUse pair. The Stop hook fires once at the end with the full response. Cards stack chronologically.
-4. **Hook config conflicts.** If the user (via desktop Claude Code) has existing hooks in settings.json, the bootstrap write must merge rather than overwrite. Strategy: append to existing arrays per event type (additive), never replace. Implementation detail for Bootstrap.kt.
-
-## Known Bugs / Issues
-
-*None currently tracked.*
-
 ## Change Log
 
 | Version | Date | Changes |

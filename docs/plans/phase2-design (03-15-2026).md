@@ -364,19 +364,6 @@ Phase 1 spec listed `git` in the first-launch install sequence. Phase 2 changes 
 - `runtime/Bootstrap.kt` — on-demand git install support
 - `config/ChipConfig.kt` — enhanced chip definitions
 
-## Open Questions (Deferred)
-
-1. **Pattern discovery:** Parser patterns are still best-guesses. Need 2-3 days of capturing real Claude Code output to refine. Can happen during implementation.
-2. **Tablet layout:** Split-view (2/3 chat + 1/3 file preview) deferred to Phase 3. Phase 1 spec included this in the base design but Phase 1 was phone-only in practice.
-3. **Config sync from Drive:** rclone integration for syncing `~/.claude/` from Google Drive deferred to Phase 3.
-4. **Notifications:** Actionable notifications when Claude needs approval while app is backgrounded — deferred to Phase 3.
-5. **GPL compliance:** Termux runtime licensing question remains open from Phase 1.
-6. **Priority item 9 (chips):** "Person briefings + text drafting chips" is a config-only change in `ChipConfig.kt` — no new files or complex logic.
-
-## Known Bugs / Issues
-
-*None currently tracked.*
-
 ## Change Log
 
 | Version | Date | Changes |
