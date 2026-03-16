@@ -121,27 +121,37 @@ fun ChatScreen(bridge: PtyBridge) {
             var terminalInput by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top bar with toggle on the left
-                Surface(
-                    color = MaterialTheme.colorScheme.background,
-                    tonalElevation = 2.dp,
-                ) {
+                // Top bar with toggle on the left — distinct from terminal bg
+                Column {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .padding(horizontal = 8.dp, vertical = 4.dp),
+                            .background(MaterialTheme.colorScheme.surface)
+                            .padding(horizontal = 8.dp, vertical = 6.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        IconButton(onClick = { isTerminalMode = false }) {
+                        IconButton(
+                            onClick = { isTerminalMode = false },
+                            modifier = Modifier.size(36.dp),
+                        ) {
                             Icon(
                                 com.destins.claudemobile.ui.theme.AppIcons.Chat,
                                 contentDescription = "Switch to chat",
                                 tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(22.dp),
                             )
                         }
-                        Spacer(Modifier.width(4.dp))
-                        Text("Terminal", style = MaterialTheme.typography.titleSmall)
+                        Spacer(Modifier.width(6.dp))
+                        Text(
+                            "Terminal",
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.onSurface,
+                        )
                     }
+                    HorizontalDivider(
+                        color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder,
+                        thickness = 0.5.dp,
+                    )
                 }
 
                 // Terminal canvas — fills all available space
