@@ -36,6 +36,10 @@ fun ChatScreen(bridge: PtyBridge) {
     val onPrefillConsumed = { prefillText = "" }
     var isTerminalMode by remember { mutableStateOf(false) }
     var hasUnhandledInteractive by remember { mutableStateOf(false) }
+
+    // Menu accumulator — collects numbered options arriving as separate text events
+    val menuAccumulator = remember { mutableListOf<String>() }
+    var menuFlushJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
     // var showBtwSheet by remember { mutableStateOf(false) } // /btw deferred
 
     // Collect screen version to trigger terminal panel recomposition on PTY output
@@ -45,6 +49,7 @@ fun ChatScreen(bridge: PtyBridge) {
         val eventBridge = bridge.getEventBridge()
         if (eventBridge != null) {
             eventBridge.events.collect { event ->
+                android.util.Log.d("ChatEvents", "EVENT: ${event::class.simpleName} → ${event.toString().take(200)}")
                 when (event) {
                     is ParsedEvent.ApprovalPrompt -> chatState.requestApproval(event.tool, event.summary)
                     is ParsedEvent.ToolStart -> chatState.addToolStart(event.tool, event.args)
@@ -57,19 +62,29 @@ fun ChatScreen(bridge: PtyBridge) {
                     is ParsedEvent.Progress -> chatState.addProgress(event.message)
                     is ParsedEvent.Text -> {
                         if (event.text.isNotBlank()) {
-                            val text = event.text
-                            // Detect numbered menu options (e.g., "1. Dark mode")
-                            val numberedPattern = Regex("""^\s*\d+\.\s+\S""")
-                            if (numberedPattern.containsMatchIn(text)) {
-                                val options = text.lines()
-                                    .filter { numberedPattern.containsMatchIn(it) }
-                                    .map { it.trim() }
-                                if (options.size >= 2) {
-                                    chatState.addMenu(options, text)
-                                } else {
-                                    chatState.addClaudeText(text)
+                            val text = event.text.trim()
+                            // Detect numbered/bulleted menu options arriving one per event
+                            val isMenuLine = text.matches(Regex("""^[❯>\s]*\d+\.\s+.+"""))
+                            if (isMenuLine) {
+                                menuAccumulator.add(text.replace(Regex("""^[❯>\s]*"""), "").trim())
+                                // Cancel previous flush, wait for more options
+                                menuFlushJob?.cancel()
+                                menuFlushJob = coroutineScope.launch {
+                                    kotlinx.coroutines.delay(300) // wait for all options to arrive
+                                    if (menuAccumulator.size >= 2) {
+                                        chatState.addMenu(menuAccumulator.toList(), menuAccumulator.joinToString("\n"))
+                                    } else {
+                                        menuAccumulator.forEach { chatState.addClaudeText(it) }
+                                    }
+                                    menuAccumulator.clear()
                                 }
                             } else {
+                                // Flush any pending menu items as text
+                                if (menuAccumulator.isNotEmpty()) {
+                                    menuFlushJob?.cancel()
+                                    menuAccumulator.forEach { chatState.addClaudeText(it) }
+                                    menuAccumulator.clear()
+                                }
                                 chatState.addClaudeText(text)
                             }
                         }
@@ -101,9 +116,11 @@ fun ChatScreen(bridge: PtyBridge) {
                 }
             }
         } else {
-            // Fallback: raw PTY output
+            // Fallback: raw PTY output (parser not connected)
+            android.util.Log.d("ChatEvents", "NO PARSER — using raw output fallback")
             bridge.outputFlow.collect { output ->
                 if (output.isNotBlank()) {
+                    android.util.Log.d("ChatEvents", "RAW: ${output.take(100)}")
                     chatState.addRawOutput(output)
                 }
             }
