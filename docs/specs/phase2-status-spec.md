@@ -296,7 +296,7 @@ Run the native Claude Code binary (Bun/glibc, 222MB, `ET_EXEC`) on Android inste
 
 **Assets already built:** glibc libs deployed on device (`~/.claude-mobile/glibc/`), execve interceptor compiled (`libexec-intercept.so`), ELF patching proven (e_type fix works). Zig cross-compiler available at `/tmp/zig-extract/`.
 
-### Priority 4: DiffCard for Edit Tool (was P3)
+### Priority 4: DiffCard for Edit Tool
 
 DiffCard is built (syntax-highlighted red/green diffs) but unreachable — Edit tool results go through generic ToolCard. Need to parse `toolResponse` JSON from PostToolUse into DiffHunk format and route Edit/Write tools to DiffCard in MessageBubble.
 
