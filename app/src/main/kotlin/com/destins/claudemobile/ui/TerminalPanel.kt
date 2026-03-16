@@ -110,6 +110,8 @@ fun TerminalPanel(
     session: TerminalSession?,
     screenVersion: Int = 0, // changes trigger Canvas redraw
     modifier: Modifier = Modifier,
+    scrollOffset: Float = 0f,
+    onScrollOffsetChanged: ((Float) -> Unit)? = null,
 ) {
     val terminalBg = ClaudeMobileTheme.extended.terminalBg
     val context = LocalContext.current
@@ -120,8 +122,11 @@ fun TerminalPanel(
     var gridCols by remember { mutableIntStateOf(minCols) }
     var gridRows by remember { mutableIntStateOf(24) }
 
-    // Vertical scroll offset (in rows) into scrollback history
-    var scrollOffsetRows by remember { mutableFloatStateOf(0f) }
+    // Vertical scroll offset (in rows) into scrollback history.
+    // Managed externally when onScrollOffsetChanged is provided.
+    var scrollOffsetRows by remember { mutableFloatStateOf(scrollOffset) }
+    // Sync from parent when it resets scroll (e.g. "return to bottom" button)
+    LaunchedEffect(scrollOffset) { scrollOffsetRows = scrollOffset }
     var cellHeightPx by remember { mutableFloatStateOf(1f) }
 
     // Font size is calculated on layout to fit minCols columns
