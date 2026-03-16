@@ -8,7 +8,14 @@ import kotlinx.coroutines.flow.SharedFlow
 import java.io.BufferedReader
 import java.io.InputStreamReader
 
-class EventBridge(private val socketPath: String) {
+/**
+ * Listens on an Android abstract-namespace Unix socket for hook-relay.js connections.
+ * Each connection delivers one JSON line (a Claude Code hook event).
+ *
+ * Uses Android's LocalServerSocket which creates abstract namespace sockets.
+ * hook-relay.js connects via Node.js net.connect() with '\0' prefix for abstract namespace.
+ */
+class EventBridge(private val socketName: String) {
     private val _events = MutableSharedFlow<HookEvent>(extraBufferCapacity = 1000)
     val events: SharedFlow<HookEvent> = _events
 
@@ -16,12 +23,11 @@ class EventBridge(private val socketPath: String) {
     private var listenJob: Job? = null
 
     fun startServer(scope: CoroutineScope) {
-        // Remove stale socket file if it exists
-        try { java.io.File(socketPath).delete() } catch (_: Exception) {}
-
         listenJob = scope.launch(Dispatchers.IO) {
             try {
-                serverSocket = LocalServerSocket(socketPath)
+                serverSocket = LocalServerSocket(socketName)
+                android.util.Log.d("EventBridge", "Listening on abstract socket: $socketName")
+
                 while (isActive) {
                     val client: LocalSocket = serverSocket!!.accept()
                     launch {
@@ -41,6 +47,7 @@ class EventBridge(private val socketPath: String) {
             client.use { socket ->
                 val reader = BufferedReader(InputStreamReader(socket.inputStream))
                 val line = reader.readLine() ?: return
+                android.util.Log.d("EventBridge", "Received: ${line.take(200)}")
                 HookEvent.fromJson(line)?.let { _events.emit(it) }
             }
         } catch (e: Exception) {
@@ -51,7 +58,6 @@ class EventBridge(private val socketPath: String) {
     fun stop() {
         listenJob?.cancel()
         try { serverSocket?.close() } catch (_: Exception) {}
-        try { java.io.File(socketPath).delete() } catch (_: Exception) {}
         serverSocket = null
     }
 }
