@@ -60,7 +60,7 @@ private fun RenderBlock(
     onToggleCard: (String) -> Unit,
 ) {
     when (node) {
-        is Paragraph -> {
+        is org.commonmark.node.Paragraph -> {
             RenderInlineContent(node, textColor)
         }
         is Heading -> {
