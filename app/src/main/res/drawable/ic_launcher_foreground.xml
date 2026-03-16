@@ -5,60 +5,81 @@
     android:viewportWidth="108"
     android:viewportHeight="108">
 
-    <!-- All elements offset to center in the 72dp safe zone (18–90) -->
-
-    <!-- Square "hat" — top-left of head -->
-    <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M30,25 L40,25 A2,2 0,0 1,42,27 L42,34 A2,2 0,0 1,40,36 L30,36 A2,2 0,0 1,28,34 L28,27 A2,2 0,0 1,30,25 Z" />
+    <!-- All elements centered in the 72dp safe zone (18–90) -->
 
     <!-- Main circular body -->
     <path
         android:fillColor="#1c1c1c"
         android:pathData="M46,30 A20,20 0,1 1,46,70 A20,20 0,1 1,46,30 Z" />
 
-    <!-- Face: left chevron ">" (cream, pointing right) -->
+    <!-- Code text lines inside body (white, low alpha) -->
+    <path android:fillColor="#ffffff" android:fillAlpha="0.18"
+        android:pathData="M31,38 L55,38 L55,40 L31,40 Z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.14"
+        android:pathData="M31,42.5 L50,42.5 L50,44.5 L31,44.5 Z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.12"
+        android:pathData="M31,47 L53,47 L53,49 L31,49 Z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.10"
+        android:pathData="M31,51.5 L45,51.5 L45,53.5 L31,53.5 Z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.08"
+        android:pathData="M31,56 L52,56 L52,58 L31,58 Z" />
+    <path android:fillColor="#ffffff" android:fillAlpha="0.06"
+        android:pathData="M31,60.5 L41,60.5 L41,62.5 L31,62.5 Z" />
+
+    <!-- Square "hat" — overlapping top-left of head -->
     <path
-        android:pathData="M39,42 L48,50 L39,58"
+        android:fillColor="#1c1c1c"
+        android:pathData="M28,24 L39,24 A2,2 0,0 1,41,26 L41,34 A2,2 0,0 1,39,36 L28,36 A2,2 0,0 1,26,34 L26,26 A2,2 0,0 1,28,24 Z" />
+
+    <!-- Face: right-pointing chevron ">" (cream) -->
+    <path
+        android:pathData="M37,41 L47,50 L37,59"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="3.8"
+        android:strokeWidth="4"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
-    <!-- Face: right chevron "<" (cream, pointing left) -->
+    <!-- Face: left-pointing chevron "<" (cream) -->
     <path
-        android:pathData="M53,42 L44,50 L53,58"
+        android:pathData="M55,41 L45,50 L55,59"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="3.8"
+        android:strokeWidth="4"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
     <!-- Upper-right dot (larger) -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M71,35 A4.5,4.5 0,1 1,71,44 A4.5,4.5 0,1 1,71,35 Z" />
+        android:pathData="M70,34 A4.5,4.5 0,1 1,70,43 A4.5,4.5 0,1 1,70,34 Z" />
 
     <!-- Lower-right dot (smaller) -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M72,49 A3,3 0,1 1,72,55 A3,3 0,1 1,72,49 Z" />
+        android:pathData="M71,48 A3.5,3.5 0,1 1,71,55 A3.5,3.5 0,1 1,71,48 Z" />
+
+    <!-- Cursor "|" (sienna accent) -->
+    <path
+        android:pathData="M76,53 L76,64"
+        android:strokeColor="#c96442"
+        android:strokeWidth="2.8"
+        android:strokeLineCap="round" />
 
     <!-- Right chevron ">" (sienna accent) -->
     <path
-        android:pathData="M70,61 L78,67 L70,73"
+        android:pathData="M69,64 L77,70 L69,76"
         android:strokeColor="#c96442"
-        android:strokeWidth="3"
+        android:strokeWidth="2.8"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
     <!-- Left leg -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M36,68 L43,68 L43,79 A3.5,3.5 0,0 1,39.5,82.5 L39.5,82.5 A3.5,3.5 0,0 1,36,79 Z" />
+        android:pathData="M37,68 L44,68 L44,79 A3.5,3.5 0,0 1,40.5,82.5 L40.5,82.5 A3.5,3.5 0,0 1,37,79 Z" />
 
     <!-- Right leg -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M49,68 L56,68 L56,79 A3.5,3.5 0,0 1,52.5,82.5 L52.5,82.5 A3.5,3.5 0,0 1,49,79 Z" />
+        android:pathData="M48,68 L55,68 L55,79 A3.5,3.5 0,0 1,51.5,82.5 L51.5,82.5 A3.5,3.5 0,0 1,48,79 Z" />
 
 </vector>
