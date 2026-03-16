@@ -291,10 +291,10 @@ DiffCard is built (syntax-highlighted red/green diffs) but unreachable — Edit 
 
 ### Priority 5: OAuth Flow
 
-Current approach requires manual browser + paste. Consider:
+Clickable terminal links (v2.3) partially address this — users can now tap the OAuth URL to open the browser. Remaining friction: pasting the auth code back. Consider:
 - Localhost HTTP server in embedded Node.js to catch the OAuth callback
 - Custom URI scheme handler (`claudemobile://callback`) for redirect
-- Or accept the manual flow if it works well enough on-device
+- Or accept the tap-to-open + manual paste flow if it works well enough
 
 ### Priority 6: Hook Config Merge
 
