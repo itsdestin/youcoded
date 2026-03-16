@@ -41,7 +41,7 @@ fun ErrorCard(
         Text(
             message.lines().first(),
             color = MaterialTheme.colorScheme.onSurface,
-            fontFamily = FontFamily.Monospace,
+            fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
             fontSize = 12.sp,
             maxLines = if (isExpanded) Int.MAX_VALUE else 1,
         )
@@ -49,7 +49,7 @@ fun ErrorCard(
             Text(
                 details,
                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
-                fontFamily = FontFamily.Monospace,
+                fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
                 fontSize = 11.sp,
                 modifier = Modifier.padding(top = 4.dp),
             )

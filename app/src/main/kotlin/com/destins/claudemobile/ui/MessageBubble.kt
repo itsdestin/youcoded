@@ -97,7 +97,7 @@ fun MessageBubble(
                 is MessageContent.RawTerminal -> {
                     Text(
                         text = content.text,
-                        fontFamily = FontFamily.Monospace,
+                        fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
                         fontSize = 12.sp,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.8f),
                     )

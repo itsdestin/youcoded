@@ -2,6 +2,9 @@ package com.destins.claudemobile.ui
 
 import android.graphics.Paint
 import android.graphics.Typeface
+import androidx.compose.ui.platform.LocalContext
+import androidx.core.content.res.ResourcesCompat
+import com.destins.claudemobile.R
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.fillMaxSize
@@ -81,6 +84,7 @@ fun TerminalPanel(
     modifier: Modifier = Modifier,
 ) {
     val terminalBg = ClaudeMobileTheme.extended.terminalBg
+    val context = LocalContext.current
 
     // Grid dimensions in cells, updated whenever the panel is laid out
     var gridCols by remember { mutableIntStateOf(80) }
@@ -90,17 +94,26 @@ fun TerminalPanel(
     var scrollOffsetRows by remember { mutableFloatStateOf(0f) }
     var cellHeightPx by remember { mutableFloatStateOf(1f) }
 
+    // Load Cascadia Mono from resources
+    val cascadiaRegular = remember {
+        ResourcesCompat.getFont(context, R.font.cascadia_mono_regular) ?: Typeface.MONOSPACE
+    }
+    val cascadiaBold = remember {
+        ResourcesCompat.getFont(context, R.font.cascadia_mono_bold)
+            ?: Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    }
+
     // Paint objects are created once and reused across frames
-    val normalPaint = remember {
+    val normalPaint = remember(cascadiaRegular) {
         Paint().apply {
-            typeface = Typeface.MONOSPACE
+            typeface = cascadiaRegular
             textSize = 13.sp.value
             isAntiAlias = true
         }
     }
-    val boldPaint = remember {
+    val boldPaint = remember(cascadiaBold) {
         Paint().apply {
-            typeface = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+            typeface = cascadiaBold
             textSize = 13.sp.value
             isAntiAlias = true
         }
