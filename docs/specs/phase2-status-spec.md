@@ -1,6 +1,6 @@
 # Claude Mobile Phase 2 — Spec
 
-**Version:** 2.1
+**Version:** 2.2
 **Last updated:** 2026-03-16
 **Feature location:** `~/claude-mobile/` (Android app), key files: `runtime/PtyBridge.kt`, `runtime/Bootstrap.kt`, `ui/TerminalPanel.kt`, `ui/ChatScreen.kt`, `parser/EventBridge.kt`
 
