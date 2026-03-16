@@ -5,8 +5,14 @@ import com.destins.claudemobile.parser.EventBridge
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.launch
 import java.io.File
 
 class PtyBridge(
@@ -24,6 +30,12 @@ class PtyBridge(
     val rawBuffer: String get() = _rawBuffer.toString()
     private var lastTranscriptLength = 0
 
+    private val accumulatorBuffer = StringBuilder()
+    private var accumulatorJob: Job? = null
+    private var lastOutputTime = 0L
+    private var socketConnected = false
+    private val accumulatorScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+
     val isRunning: Boolean get() = session?.isRunning == true
 
     private val sessionClient = object : TerminalSessionClient {
@@ -34,7 +46,7 @@ class PtyBridge(
                 lastTranscriptLength = transcript.length
                 _rawBuffer.append(delta)
                 _outputFlow.tryEmit(delta)
-                eventBridge?.sendPtyOutput(delta)
+                onPtyOutput(delta)
             }
         }
 
@@ -142,7 +154,47 @@ class PtyBridge(
 
     fun getEventBridge(): EventBridge? = eventBridge
 
+    private val approvalPattern = Regex("""Do you want to proceed\?|Approve\?|y/n|yes/no""", RegexOption.IGNORE_CASE)
+
+    fun onPtyOutput(delta: String) {
+        val hasApprovalMatch: Boolean
+        synchronized(accumulatorBuffer) {
+            accumulatorBuffer.append(delta)
+            hasApprovalMatch = approvalPattern.containsMatchIn(accumulatorBuffer)
+        }
+
+        if (hasApprovalMatch) {
+            accumulatorJob?.cancel()
+            accumulatorJob = null
+            flushAccumulator()
+        } else {
+            accumulatorJob?.cancel()
+            accumulatorJob = accumulatorScope.launch {
+                delay(100)
+                flushAccumulator()
+            }
+        }
+        lastOutputTime = System.currentTimeMillis()
+    }
+
+    fun flushAccumulator() {
+        val chunk: String
+        synchronized(accumulatorBuffer) {
+            chunk = accumulatorBuffer.toString()
+            accumulatorBuffer.clear()
+        }
+        if (socketConnected && chunk.isNotEmpty()) {
+            eventBridge?.sendPtyOutput(chunk)
+        }
+    }
+
+    fun onSocketConnected() {
+        socketConnected = true
+        flushAccumulator()
+    }
+
     fun stop() {
+        accumulatorScope.cancel()
         eventBridge?.disconnect()
         parserProcess?.destroyForcibly()
         session?.finishIfRunning()
