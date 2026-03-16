@@ -121,7 +121,7 @@ fun ChatScreen(bridge: PtyBridge) {
             var terminalInput by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
-                // Top bar — uses bright surface color to stand out
+                // Top bar
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()

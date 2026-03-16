@@ -183,7 +183,7 @@ fun TerminalPanel(
         val ver = screenVersion // read to force Canvas invalidation
 
         // ── Draw background ─────────────────────────────────────────────
-        drawContext.canvas.nativeCanvas.drawColor(terminalBg.toArgb())
+        drawRect(color = terminalBg)
 
         val emulator = session?.emulator ?: return@Canvas
         val screen: TerminalBuffer = emulator.screen ?: return@Canvas
