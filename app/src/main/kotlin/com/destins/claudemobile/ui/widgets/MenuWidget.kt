@@ -29,6 +29,12 @@ fun MenuWidget(
             .background(MaterialTheme.colorScheme.surface)
             .padding(12.dp)
     ) {
+        Text(
+            "Claude",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
         if (submitted) {
             // Show confirmation after selection
             Text(

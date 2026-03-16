@@ -63,6 +63,38 @@ fun MessageBubble(
             )
             return
         }
+        is MessageContent.MenuResolved -> {
+            // Styled confirmation widget
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(12.dp),
+            ) {
+                Text(
+                    "Claude",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(bottom = 4.dp),
+                )
+                Row(verticalAlignment = androidx.compose.ui.Alignment.CenterVertically) {
+                    Text(
+                        "✓",
+                        color = Color(0xFF44DD44),
+                        fontSize = 16.sp,
+                    )
+                    Spacer(Modifier.width(8.dp))
+                    Text(
+                        content.selected,
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                }
+            }
+            return
+        }
         is MessageContent.OAuth -> {
             com.destins.claudemobile.ui.widgets.OAuthWidget(url = content.url)
             return
