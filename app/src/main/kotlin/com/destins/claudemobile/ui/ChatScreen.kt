@@ -302,6 +302,7 @@ fun ChatScreen(bridge: PtyBridge) {
                     session = shell.getSession(),
                     screenVersion = shellScreenVersion,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
+                    onTap = { shellFocusRequester.requestFocus() },
                 )
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
