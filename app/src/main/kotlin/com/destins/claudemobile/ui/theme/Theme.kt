@@ -6,9 +6,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.material3.Typography
+import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import com.destins.claudemobile.R
 
 data class ExtendedColors(
@@ -36,6 +39,25 @@ private val DarkColorScheme = darkColorScheme(
     onError = Color.White,
 )
 
+// App-wide typography using Cascadia Mono
+private val AppTypography = Typography(
+    displayLarge = TextStyle(fontFamily = CascadiaMono),
+    displayMedium = TextStyle(fontFamily = CascadiaMono),
+    displaySmall = TextStyle(fontFamily = CascadiaMono),
+    headlineLarge = TextStyle(fontFamily = CascadiaMono),
+    headlineMedium = TextStyle(fontFamily = CascadiaMono),
+    headlineSmall = TextStyle(fontFamily = CascadiaMono),
+    titleLarge = TextStyle(fontFamily = CascadiaMono, fontSize = 20.sp, fontWeight = FontWeight.Bold),
+    titleMedium = TextStyle(fontFamily = CascadiaMono, fontSize = 16.sp, fontWeight = FontWeight.SemiBold),
+    titleSmall = TextStyle(fontFamily = CascadiaMono, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+    bodyLarge = TextStyle(fontFamily = CascadiaMono, fontSize = 16.sp),
+    bodyMedium = TextStyle(fontFamily = CascadiaMono, fontSize = 14.sp),
+    bodySmall = TextStyle(fontFamily = CascadiaMono, fontSize = 12.sp),
+    labelLarge = TextStyle(fontFamily = CascadiaMono, fontSize = 14.sp, fontWeight = FontWeight.SemiBold),
+    labelMedium = TextStyle(fontFamily = CascadiaMono, fontSize = 12.sp),
+    labelSmall = TextStyle(fontFamily = CascadiaMono, fontSize = 11.sp),
+)
+
 @Composable
 fun ClaudeMobileTheme(content: @Composable () -> Unit) {
     androidx.compose.runtime.CompositionLocalProvider(
@@ -43,6 +65,7 @@ fun ClaudeMobileTheme(content: @Composable () -> Unit) {
     ) {
         MaterialTheme(
             colorScheme = DarkColorScheme,
+            typography = AppTypography,
             content = content
         )
     }

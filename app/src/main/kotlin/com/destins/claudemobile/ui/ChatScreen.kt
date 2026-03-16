@@ -34,8 +34,7 @@ fun ChatScreen(bridge: PtyBridge) {
     var prefillText by remember { mutableStateOf("") }
     var chatInputText by remember { mutableStateOf("") }
     val onPrefillConsumed = { prefillText = "" }
-    // Start in terminal mode — first-run interactive menus need terminal input
-    var isTerminalMode by remember { mutableStateOf(true) }
+    var isTerminalMode by remember { mutableStateOf(false) }
     var hasUnhandledInteractive by remember { mutableStateOf(false) }
     // var showBtwSheet by remember { mutableStateOf(false) } // /btw deferred
 
@@ -60,13 +59,21 @@ fun ChatScreen(bridge: PtyBridge) {
                         if (event.text.isNotBlank()) chatState.addClaudeText(event.text)
                     }
                     is ParsedEvent.InteractiveMenu -> {
-                        chatState.addRawOutput(event.raw)
-                        hasUnhandledInteractive = true
+                        // Try to parse menu options from raw text
+                        val lines = event.raw.lines().filter { it.isNotBlank() }
+                        val options = lines.map { it.trim().removePrefix("❯").removePrefix(">").trim() }
+                        if (options.size >= 2) {
+                            chatState.addMenu(options, event.raw)
+                        } else {
+                            chatState.addRawOutput(event.raw)
+                            hasUnhandledInteractive = true
+                        }
                     }
-                    is ParsedEvent.Confirmation -> chatState.addClaudeText(event.question)
+                    is ParsedEvent.Confirmation -> chatState.addConfirm(event.question)
                     is ParsedEvent.TextPrompt -> chatState.addClaudeText(event.prompt)
                     is ParsedEvent.OAuthRedirect -> {
-                        // Auto-open auth URL in system browser
+                        chatState.addOAuth(event.url)
+                        // Also auto-open in browser
                         try {
                             val intent = android.content.Intent(
                                 android.content.Intent.ACTION_VIEW,
@@ -74,7 +81,6 @@ fun ChatScreen(bridge: PtyBridge) {
                             )
                             context.startActivity(intent)
                         } catch (_: Exception) {}
-                        chatState.addClaudeText("Opening: ${event.url}")
                     }
                 }
             }
@@ -304,14 +310,25 @@ fun ChatScreen(bridge: PtyBridge) {
                         color = MaterialTheme.colorScheme.onSurface,
                     )
                     Spacer(Modifier.weight(1f))
-                    Text(
-                        if (bridge.isRunning) "Connected" else "Disconnected",
-                        fontSize = 13.sp,
-                        color = if (bridge.isRunning)
-                            com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary
-                        else
-                            MaterialTheme.colorScheme.error,
-                    )
+                    // Claude icon pill — circular, matching terminal pill proportions
+                    Box(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clip(androidx.compose.foundation.shape.CircleShape)
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(
+                                0.5.dp,
+                                borderColor.copy(alpha = 0.5f),
+                                androidx.compose.foundation.shape.CircleShape
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Text(
+                            "✦",
+                            fontSize = 16.sp,
+                            color = MaterialTheme.colorScheme.primary,
+                        )
+                    }
                 }
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
@@ -331,6 +348,13 @@ fun ChatScreen(bridge: PtyBridge) {
                             onApprove = { bridge.sendApproval(true); chatState.resolveApproval() },
                             onReject = { bridge.sendApproval(false); chatState.resolveApproval() },
                             onViewTerminal = { isTerminalMode = true },
+                            onMenuSelect = { index ->
+                                // Send arrow-down × index + enter to navigate ink menu
+                                repeat(index) { bridge.writeInput("\u001b[B") }
+                                bridge.writeInput("\r")
+                            },
+                            onConfirmYes = { bridge.writeInput("y\n") },
+                            onConfirmNo = { bridge.writeInput("n\n") },
                         )
                     }
                 }

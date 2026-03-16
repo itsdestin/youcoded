@@ -21,6 +21,9 @@ fun MessageBubble(
     onApprove: () -> Unit = {},
     onReject: () -> Unit = {},
     onViewTerminal: () -> Unit = {},
+    onMenuSelect: (Int) -> Unit = {},
+    onConfirmYes: () -> Unit = {},
+    onConfirmNo: () -> Unit = {},
 ) {
     when (val content = message.content) {
         is MessageContent.ToolCall -> {
@@ -51,6 +54,25 @@ fun MessageBubble(
         is MessageContent.ApprovalRequest -> {
             ApprovalCard(tool = content.tool, summary = content.summary,
                 onAccept = onApprove, onReject = onReject, onViewTerminal = onViewTerminal)
+            return
+        }
+        is MessageContent.Menu -> {
+            com.destins.claudemobile.ui.widgets.MenuWidget(
+                options = content.options,
+                onSelect = onMenuSelect,
+            )
+            return
+        }
+        is MessageContent.OAuth -> {
+            com.destins.claudemobile.ui.widgets.OAuthWidget(url = content.url)
+            return
+        }
+        is MessageContent.Confirm -> {
+            com.destins.claudemobile.ui.widgets.ConfirmationWidget(
+                question = content.question,
+                onYes = onConfirmYes,
+                onNo = onConfirmNo,
+            )
             return
         }
         else -> Unit

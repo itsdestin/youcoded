@@ -16,6 +16,9 @@ sealed class MessageContent {
     data class Code(val cardId: String, val language: String, val code: String) : MessageContent()
     data class Error(val cardId: String, val message: String, val details: String) : MessageContent()
     data class Progress(val message: String) : MessageContent()
+    data class Menu(val options: List<String>, val raw: String) : MessageContent()
+    data class OAuth(val url: String) : MessageContent()
+    data class Confirm(val question: String) : MessageContent()
 }
 
 data class ChatMessage(
@@ -79,6 +82,18 @@ class ChatState {
     fun addError(message: String, details: String) {
         val id = nextId()
         messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Error(id, message, details)))
+    }
+
+    fun addMenu(options: List<String>, raw: String) {
+        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Menu(options, raw)))
+    }
+
+    fun addOAuth(url: String) {
+        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.OAuth(url)))
+    }
+
+    fun addConfirm(question: String) {
+        messages.add(ChatMessage(MessageRole.CLAUDE, MessageContent.Confirm(question)))
     }
 
     fun addProgress(message: String) {
