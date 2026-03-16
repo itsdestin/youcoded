@@ -175,37 +175,27 @@ fun ChatScreen(bridge: PtyBridge) {
         }
     }
 
-    // Screen buffer scanner — only active after a menu was selected.
-    // Detects follow-up menus that ink renders via cursor rewrite
-    // (which the parser misses since transcript shrinks).
+    // Follow-up menu scanner — after a menu is selected, wait for ink to
+    // finish redrawing, then scan the terminal for the next menu.
     val lastMenuHash = remember { mutableStateOf(0) }
     val menuWasResolved = remember { mutableStateOf(false) }
-    LaunchedEffect(screenVersion) {
+    LaunchedEffect(menuWasResolved.value) {
         if (!menuWasResolved.value) return@LaunchedEffect
+
+        // Wait for ink to finish redrawing after menu selection
+        kotlinx.coroutines.delay(2000)
+
         val session = bridge.getSession() ?: return@LaunchedEffect
         val emulator = session.emulator ?: return@LaunchedEffect
         val screen = emulator.screen ?: return@LaunchedEffect
+        val transcript = screen.getTranscriptText()
 
-        // Read only VISIBLE screen rows (not scrollback history)
-        // screen.getActiveRows() gives total rows including scrollback.
-        // The visible area is the last `rows` rows where rows = terminal height.
-        val totalRows = screen.getActiveRows()
-        val termRows = session.emulator?.mRows ?: 40
-        val startRow = (totalRows - termRows).coerceAtLeast(0)
-        val visibleLines = mutableListOf<String>()
-        for (row in startRow until totalRows) {
-            try {
-                val internalRow = screen.externalToInternalRow(row)
-                val termRow = screen.allocateFullLineIfNecessary(internalRow)
-                if (termRow != null) {
-                    val chars = String(termRow.mText, 0, termRow.spaceUsed)
-                    visibleLines.add(chars.trim())
-                }
-            } catch (_: Exception) {}
-        }
-        val visibleText = visibleLines.filter { it.isNotBlank() }.joinToString("\n")
+        // Read ALL non-blank lines since ink rewrites the entire screen
+        val allLines = transcript.lines().filter { it.isNotBlank() }
+        val visibleText = allLines.joinToString("\n")
+        android.util.Log.d("ScreenScan", "POST-SELECT (${allLines.size} lines): ${allLines.takeLast(10).joinToString(" | ").take(400)}")
 
-        // Numbered menus in visible area only
+        // Numbered menus
         val menuPattern = Regex("""^\s*[❯>]?\s*(\d+\.\s+\S.+)""", RegexOption.MULTILINE)
         val matches = menuPattern.findAll(visibleText).map { it.groupValues[1].trim() }.toList()
 
@@ -216,10 +206,10 @@ fun ChatScreen(bridge: PtyBridge) {
                 val hasActiveMenu = chatState.messages.any { it.content is MessageContent.Menu }
                 if (!hasActiveMenu) {
                     chatState.addMenu(matches, matches.joinToString("\n"))
-                    menuWasResolved.value = false
                 }
             }
         }
+        menuWasResolved.value = false
     }
 
     LaunchedEffect(chatState.messages.size) {
