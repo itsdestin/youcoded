@@ -17,6 +17,7 @@ sealed class MessageContent {
     data class Error(val cardId: String, val message: String, val details: String) : MessageContent()
     data class Progress(val message: String) : MessageContent()
     data class Menu(val options: List<String>, val raw: String) : MessageContent()
+    data class MenuResolved(val selected: String) : MessageContent()
     data class OAuth(val url: String) : MessageContent()
     data class Confirm(val question: String) : MessageContent()
 }
@@ -94,12 +95,12 @@ class ChatState {
     }
 
     fun resolveMenu(selectedOption: String) {
-        // Replace the last Menu message with a "Selected" text
+        // Replace the last Menu message with a styled resolved widget
         val idx = messages.indexOfLast { it.content is MessageContent.Menu }
         if (idx >= 0) {
             messages[idx] = ChatMessage(
                 MessageRole.CLAUDE,
-                MessageContent.Text("Selected: $selectedOption"),
+                MessageContent.MenuResolved(selectedOption),
             )
         }
     }

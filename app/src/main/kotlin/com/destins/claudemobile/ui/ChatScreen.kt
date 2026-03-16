@@ -101,15 +101,12 @@ fun ChatScreen(bridge: PtyBridge) {
                                     }
                                     menuAccumulator.clear()
                                 }
-                            // Detect auth/login URLs and render as OAuthWidget
-                            } else if (text.contains("https://") && (text.contains("anthropic") || text.contains("auth") || text.contains("login"))) {
+                            // Detect auth/login URLs — show as widget, don't auto-open
+                            // (auto-open often gets truncated URLs missing query params)
+                            } else if (text.contains("https://") && (text.contains("anthropic") || text.contains("claude.ai") || text.contains("auth") || text.contains("login"))) {
                                 val url = Regex("""https?://[^\s"'<>]+""").find(text)?.value
                                 if (url != null) {
                                     chatState.addOAuth(url)
-                                    try {
-                                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
-                                        context.startActivity(intent)
-                                    } catch (_: Exception) {}
                                 } else {
                                     chatState.addClaudeText(text)
                                 }
@@ -143,14 +140,6 @@ fun ChatScreen(bridge: PtyBridge) {
                     is ParsedEvent.TextPrompt -> chatState.addClaudeText(event.prompt)
                     is ParsedEvent.OAuthRedirect -> {
                         chatState.addOAuth(event.url)
-                        // Also auto-open in browser
-                        try {
-                            val intent = android.content.Intent(
-                                android.content.Intent.ACTION_VIEW,
-                                android.net.Uri.parse(event.url)
-                            )
-                            context.startActivity(intent)
-                        } catch (_: Exception) {}
                     }
                 }
             }
@@ -166,29 +155,8 @@ fun ChatScreen(bridge: PtyBridge) {
         }
     }
 
-    // Also watch raw output for URLs the parser might miss (e.g., auth URLs)
-    // This catches URLs regardless of parser state
-    val urlPattern = remember { Regex("""https?://[^\s"'<>]+""") }
-    val openedUrls = remember { mutableSetOf<String>() }
-    LaunchedEffect(bridge) {
-        bridge.outputFlow.collect { output ->
-            // Only auto-open URLs that look like auth/login flows
-            if (output.contains("anthropic.com") || output.contains("oauth") ||
-                output.contains("login") || output.contains("authorize")) {
-                val match = urlPattern.find(output)
-                if (match != null && match.value !in openedUrls) {
-                    openedUrls.add(match.value)
-                    try {
-                        val intent = android.content.Intent(
-                            android.content.Intent.ACTION_VIEW,
-                            android.net.Uri.parse(match.value)
-                        )
-                        context.startActivity(intent)
-                    } catch (_: Exception) {}
-                }
-            }
-        }
-    }
+    // Raw output URL watcher removed — auto-opening was truncating URLs.
+    // OAuth URLs are now shown as tappable widgets in the chat.
 
     // Follow-up menu detector — polls transcript after menu selection
     // to find NEW menus that weren't in the previous scan.
@@ -262,7 +230,7 @@ fun ChatScreen(bridge: PtyBridge) {
                     // Centered title
                     Text(
                         "Terminal",
-                        fontSize = 13.sp,
+                        fontSize = 15.sp,
                         color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
                         modifier = Modifier.align(Alignment.Center),
                     )
@@ -416,7 +384,7 @@ fun ChatScreen(bridge: PtyBridge) {
                     // Centered title
                     Text(
                         "Chat",
-                        fontSize = 13.sp,
+                        fontSize = 15.sp,
                         color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
                         modifier = Modifier.align(Alignment.Center),
                     )

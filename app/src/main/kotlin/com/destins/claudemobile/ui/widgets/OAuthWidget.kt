@@ -12,6 +12,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.destins.claudemobile.ui.theme.ClaudeMobileTheme
 
 @Composable
 fun OAuthWidget(url: String) {
@@ -26,21 +27,40 @@ fun OAuthWidget(url: String) {
             .padding(12.dp)
     ) {
         Text(
+            "Claude",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(bottom = 6.dp),
+        )
+        Text(
             "Claude Code needs you to sign in",
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurface,
         )
+        Spacer(Modifier.height(4.dp))
+        Text(
+            "Use the terminal view for the complete login URL",
+            fontSize = 11.sp,
+            color = ClaudeMobileTheme.extended.textSecondary,
+        )
         Spacer(Modifier.height(8.dp))
-        Button(
-            onClick = {
-                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                context.startActivity(intent)
-            },
-            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
-            shape = RoundedCornerShape(8.dp),
+        Row(
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
             modifier = Modifier.fillMaxWidth(),
         ) {
-            Text("Sign in with Claude", fontSize = 14.sp)
+            Button(
+                onClick = {
+                    try {
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                        context.startActivity(intent)
+                    } catch (_: Exception) {}
+                },
+                colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
+                shape = RoundedCornerShape(8.dp),
+                modifier = Modifier.weight(1f),
+            ) {
+                Text("Try Opening", fontSize = 13.sp)
+            }
         }
     }
 }
