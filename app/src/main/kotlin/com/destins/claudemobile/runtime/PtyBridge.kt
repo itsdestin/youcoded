@@ -26,6 +26,10 @@ class PtyBridge(
 
     private val _outputFlow = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1000)
     val outputFlow: SharedFlow<String> = _outputFlow
+
+    // Incremented on every onTextChanged — observed by TerminalPanel to trigger recomposition
+    private val _screenVersion = kotlinx.coroutines.flow.MutableStateFlow(0)
+    val screenVersion: kotlinx.coroutines.flow.StateFlow<Int> = _screenVersion
     private val _rawBuffer = StringBuilder()
     val rawBuffer: String get() = _rawBuffer.toString()
     private var lastTranscriptLength = 0
@@ -46,6 +50,7 @@ class PtyBridge(
                 lastTranscriptLength = transcript.length
                 _rawBuffer.append(delta)
                 _outputFlow.tryEmit(delta)
+                _screenVersion.value++
                 onPtyOutput(delta)
             }
         }
