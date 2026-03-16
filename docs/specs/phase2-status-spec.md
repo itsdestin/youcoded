@@ -337,7 +337,7 @@ Claude on-device auto-patched a broken Gemini CLI install (alias-based fix for s
 
 Shift the typing space in terminal mode to the very bottom of the screen, replacing the current space. Keep the bottom enter button. (from inbox 2026-03-16)
 
-### Priority 16: Voice Mode
+### Priority 14: Voice Mode
 
 Voice input/output mode for Claude Mobile interactions. (from inbox 2026-03-16)
 
