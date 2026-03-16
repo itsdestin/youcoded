@@ -8,3 +8,11 @@
 .externalNativeBuild
 .cxx
 local.properties
+
+# Claude Code local settings
+.claude/
+
+# Drafts and temp files
+icon-drafts/
+tmp-screenshots/
+screenshot.png

@@ -371,27 +371,12 @@ class Bootstrap(private val context: Context) {
         val mobileDir = File(homeDir, ".claude-mobile")
         mobileDir.mkdirs()
 
-        // Create .bash_profile and .bashrc that source the linker64 wrapper
-        // functions. BASH_ENV only works for non-interactive shells (Claude Code's
-        // bash -c invocations). Interactive shells (login shell in Shell view)
-        // need .bash_profile → .bashrc to load the same functions.
-        val bashProfile = File(homeDir, ".bash_profile")
-        if (!bashProfile.exists()) {
-            bashProfile.writeText(
-                "# Source .bashrc for login shells\n" +
-                "[ -f \"\$HOME/.bashrc\" ] && . \"\$HOME/.bashrc\"\n"
-            )
-        }
-        val bashrc = File(homeDir, ".bashrc")
-        // Always rewrite — ensures linker64-env.sh sourcing is present
-        val existingBashrc = if (bashrc.exists()) bashrc.readText() else ""
-        if (!existingBashrc.contains("linker64-env.sh")) {
-            bashrc.writeText(
-                "# Load linker64 wrapper functions for embedded binaries\n" +
-                "[ -f \"\$HOME/.claude-mobile/linker64-env.sh\" ] && . \"\$HOME/.claude-mobile/linker64-env.sh\"\n" +
-                if (existingBashrc.isNotEmpty()) "\n$existingBashrc" else ""
-            )
-        }
+        // Ensure .bash_profile and .bashrc source linker64-env.sh.
+        // The env file won't exist yet (deployed per-launch by deployBashEnv),
+        // but the [ -f ] guards handle that gracefully.
+        ensureShellProfileSources(
+            File(mobileDir, "linker64-env.sh").absolutePath
+        )
 
         installHooks()
     }
@@ -515,7 +500,44 @@ class Bootstrap(private val context: Context) {
         mobileDir.mkdirs()
         val bashEnvPath = File(mobileDir, "linker64-env.sh")
         bashEnvPath.writeText(buildBashEnvSh(usrDir.absolutePath))
+
+        // Repair .bash_profile/.bashrc sourcing every launch — a previous app
+        // version or Claude Code may have clobbered these files.
+        ensureShellProfileSources(bashEnvPath.absolutePath)
+
         return bashEnvPath.absolutePath
+    }
+
+    /**
+     * Ensure .bash_profile and .bashrc source linker64-env.sh.
+     * Called every shell launch (not just bootstrap) to self-heal after
+     * external modifications to profile files.
+     */
+    private fun ensureShellProfileSources(bashEnvPath: String) {
+        val bashProfile = File(homeDir, ".bash_profile")
+        val existingProfile = if (bashProfile.exists()) bashProfile.readText() else ""
+        val profileAdditions = StringBuilder()
+        if (!existingProfile.contains(".bashrc")) {
+            profileAdditions.appendLine("# Source .bashrc for login shells")
+            profileAdditions.appendLine("[ -f \"\$HOME/.bashrc\" ] && . \"\$HOME/.bashrc\"")
+        }
+        if (!existingProfile.contains("linker64-env.sh")) {
+            profileAdditions.appendLine("# Load linker64 wrapper functions for embedded binaries")
+            profileAdditions.appendLine("[ -f \"\$HOME/.claude-mobile/linker64-env.sh\" ] && . \"\$HOME/.claude-mobile/linker64-env.sh\"")
+        }
+        if (profileAdditions.isNotEmpty()) {
+            bashProfile.writeText(profileAdditions.toString() + existingProfile)
+        }
+
+        val bashrc = File(homeDir, ".bashrc")
+        val existingBashrc = if (bashrc.exists()) bashrc.readText() else ""
+        if (!existingBashrc.contains("linker64-env.sh")) {
+            bashrc.writeText(
+                "# Load linker64 wrapper functions for embedded binaries\n" +
+                "[ -f \"\$HOME/.claude-mobile/linker64-env.sh\" ] && . \"\$HOME/.claude-mobile/linker64-env.sh\"\n" +
+                if (existingBashrc.isNotEmpty()) "\n$existingBashrc" else ""
+            )
+        }
     }
 
     private fun buildBashEnvSh(usrPath: String): String {

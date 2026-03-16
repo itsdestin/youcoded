@@ -134,8 +134,9 @@ object AppIcons {
     }
 
     /**
-     * Claude mascot — blocky character with >< eyes, arms, and legs.
-     * Uses EvenOdd fill so eyes are cut out from the body.
+     * Claude mascot — squat rounded character with >< eyes, nub arms, stubby legs.
+     * Body + eyes use EvenOdd so eyes are cutouts (works with Icon tint).
+     * Arms and legs are separate filled paths.
      */
     val ClaudeMascot: ImageVector by lazy {
         ImageVector.Builder(
@@ -145,44 +146,25 @@ object AppIcons {
             viewportWidth = 24f,
             viewportHeight = 24f
         ).apply {
-            // Body + legs + square arms as one filled shape, eyes as cutouts
+            // Body with eye cutouts (EvenOdd)
             path(
                 fill = SolidColor(Color.Black),
                 stroke = null,
                 pathFillType = PathFillType.EvenOdd,
             ) {
-                // Main body block
-                moveTo(5f, 2f)
-                lineTo(19f, 2f)
-                lineTo(19f, 17f)
-                // Right leg
-                lineTo(17f, 17f)
-                lineTo(17f, 22f)
-                lineTo(14f, 22f)
-                lineTo(14f, 17f)
-                // Left leg
-                lineTo(10f, 17f)
-                lineTo(10f, 22f)
-                lineTo(7f, 22f)
-                lineTo(7f, 17f)
-                lineTo(5f, 17f)
+                // Rounded rect body: x=5, y=4, w=14, h=12, rx=4
+                moveTo(9f, 4f)
+                lineTo(15f, 4f)
+                arcTo(4f, 4f, 0f, false, true, 19f, 8f)
+                lineTo(19f, 12f)
+                arcTo(4f, 4f, 0f, false, true, 15f, 16f)
+                lineTo(9f, 16f)
+                arcTo(4f, 4f, 0f, false, true, 5f, 12f)
+                lineTo(5f, 8f)
+                arcTo(4f, 4f, 0f, false, true, 9f, 4f)
                 close()
 
-                // Left arm (square — short, not tall)
-                moveTo(2f, 11f)
-                lineTo(5f, 11f)
-                lineTo(5f, 14f)
-                lineTo(2f, 14f)
-                close()
-
-                // Right arm (square)
-                moveTo(19f, 11f)
-                lineTo(22f, 11f)
-                lineTo(22f, 14f)
-                lineTo(19f, 14f)
-                close()
-
-                // Left eye > (cutout — gentler angle)
+                // Left eye > (cutout)
                 moveTo(8.5f, 8f)
                 lineTo(10.5f, 10f)
                 lineTo(8.5f, 12f)
@@ -191,13 +173,61 @@ object AppIcons {
                 lineTo(9.5f, 8f)
                 close()
 
-                // Right eye < (cutout — gentler angle)
+                // Right eye < (cutout)
                 moveTo(15.5f, 8f)
                 lineTo(13.5f, 10f)
                 lineTo(15.5f, 12f)
                 lineTo(14.5f, 12f)
                 lineTo(12.5f, 10f)
                 lineTo(14.5f, 8f)
+                close()
+            }
+            // Left nub arm (air gap — 1 unit from body)
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(1.8f, 9f)
+                lineTo(3.2f, 9f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 4f, 9.8f)
+                lineTo(4f, 12.2f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 3.2f, 13f)
+                lineTo(1.8f, 13f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 1f, 12.2f)
+                lineTo(1f, 9.8f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 1.8f, 9f)
+                close()
+            }
+            // Right nub arm (air gap — 1 unit from body)
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(20.8f, 9f)
+                lineTo(22.2f, 9f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 23f, 9.8f)
+                lineTo(23f, 12.2f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 22.2f, 13f)
+                lineTo(20.8f, 13f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 20f, 12.2f)
+                lineTo(20f, 9.8f)
+                arcTo(0.8f, 0.8f, 0f, false, true, 20.8f, 9f)
+                close()
+            }
+            // Left stubby leg (rx=1.75)
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(8.75f, 16f)
+                lineTo(10.5f, 16f)
+                lineTo(10.5f, 18.25f)
+                arcTo(1.75f, 1.75f, 0f, false, true, 8.75f, 20f)
+                lineTo(8.75f, 20f)
+                arcTo(1.75f, 1.75f, 0f, false, true, 7f, 18.25f)
+                lineTo(7f, 16f)
+                close()
+            }
+            // Right stubby leg (rx=1.75)
+            path(fill = SolidColor(Color.Black)) {
+                moveTo(15.25f, 16f)
+                lineTo(17f, 16f)
+                lineTo(17f, 18.25f)
+                arcTo(1.75f, 1.75f, 0f, false, true, 15.25f, 20f)
+                lineTo(15.25f, 20f)
+                arcTo(1.75f, 1.75f, 0f, false, true, 13.5f, 18.25f)
+                lineTo(13.5f, 16f)
                 close()
             }
         }.build()

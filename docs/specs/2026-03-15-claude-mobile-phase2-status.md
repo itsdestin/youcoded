@@ -1,6 +1,6 @@
 # Claude Mobile Phase 2 — Implementation Status Spec
 
-**Version:** 1.2
+**Version:** 1.3
 **Date:** 2026-03-16
 **Status:** In Progress
 
@@ -199,7 +199,33 @@ Two issues discovered during on-device testing:
 
 4. **Interactive shell support:** `Bootstrap.setupHome()` creates `.bash_profile` (sources `.bashrc`) and `.bashrc` (sources `linker64-env.sh`). This ensures interactive login shells (Shell view) get the same linker64 functions that non-interactive shells get via `BASH_ENV`.
 
-**Status:** First on-device test completed. Shell detection, bash subprocess exec, `-l` flag stripping, package management, and filesystem workarounds are implemented. Claude Code successfully installed git 2.53.0 and gh 2.88.1 from Termux repos during testing.
+**Status:** First on-device test completed. Shell detection, bash subprocess exec, `-l` flag stripping, package management, filesystem workarounds, and hook execution are implemented. Claude Code successfully installed git 2.53.0 and gh 2.88.1 from Termux repos during testing.
+
+#### Problem 6: Hook Execution — "spawn /data/data/com.termux/files/usr/bin/sh ENOENT"
+
+Claude Code hooks (`"type": "command"` in `settings.json`) failed with ENOENT when Claude Code tried to execute the hook command. The hooks are installed by `Bootstrap.installHooks()` which writes a `settings.json` with hook entries for PreToolUse, PostToolUse, PostToolUseFailure, Stop, and Notification events. Each hook runs `<PREFIX>/bin/node <HOME>/.claude-mobile/hook-relay.js`, which reads stdin and relays JSON events over an Android abstract-namespace Unix socket to `EventBridge`.
+
+**Three sub-problems were discovered and fixed:**
+
+**6a. Abstract namespace sockets.** `hook-relay.js` originally used `net.connect(socketPath)` which creates a filesystem socket. Android's `LocalServerSocket` creates abstract-namespace sockets (kernel-managed, no filesystem path). Node.js requires a `\0` prefix to connect to abstract namespace sockets: `net.connect({ path: '\0' + socketPath })`. `EventBridge.kt` was also updated to use `LocalServerSocket` (abstract namespace) and remove filesystem socket cleanup.
+
+**6b. Shell path resolution.** Claude Code executes hooks via `spawn(hookCommand, [], {shell: true})` (discovered by reading the minified bundle at `cli.js` line 6948: `N_z(Z,[],{env:f,cwd:V,shell:v,windowsHide:!0})`). Termux-compiled Node.js resolves `shell: true` to the hardcoded `/data/data/com.termux/files/usr/bin/sh` deep inside `normalizeSpawnArguments` (C++ level), which doesn't exist in our relocated prefix.
+
+The wrapper's original `isEB` check made this worse: the hook command string (`/data/user/0/.../node /data/user/0/.../hook-relay.js`) starts with PREFIX, so `isEB` returned `true` and the wrapper tried to pass the ENTIRE COMMAND STRING to linker64 as if it were a binary path — while still passing `{shell: true}` in options. The original spawn then resolved the shell to the Termux path → ENOENT.
+
+Attempts to fix the shell path alone (patching `exec`/`execSync`, adding `fixOpts` to rewrite `shell: true` → `PREFIX/bin/bash`) failed because Node.js can't execute `PREFIX/bin/bash` directly either — SELinux blocks `execve()` on `app_data_file` context. The shell binary needs linker64 to load it, but when `shell` is processed inside Node.js's `normalizeSpawnArguments`, it goes directly to libuv's `uv_spawn` which calls `execve` without linker64.
+
+**6c. The fix — three-tier `spawnFix()`.** The wrapper's `spawn`/`spawnSync` patches now use a unified `spawnFix()` function with three tiers:
+
+1. **`shell` + EB command** → Bypass the shell entirely. Split the command string on whitespace, extract the binary path, fix it with `fixPath()`, route through linker64 with `shell` removed from options. For hooks: `spawn(LINKER64, [PREFIX/bin/node, hookRelayPath], {env, cwd})`.
+2. **`shell` + non-EB command** → Fix the shell path. `fixOpts()` rewrites `shell: true` → `PREFIX/bin/bash` and Termux string paths via `fixPath()`. For commands like `which npm`: `spawn("which npm", [], {shell: PREFIX/bin/bash})`.
+3. **No `shell` + EB command** → Route binary through linker64 (existing behavior). For direct binary calls: `spawn(LINKER64, [PREFIX/bin/git, "status"], opts)`.
+
+Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactively sets `shell: PREFIX/bin/bash` when shell is undefined or `true`, before Node.js's internal resolution can substitute the Termux default.
+
+**Design decision: bypass shell vs fix shell for EB commands.** Earlier iterations tried to fix the shell path and let Node.js handle shell execution normally. This failed because the fixed shell binary (`PREFIX/bin/bash`) still can't be directly `execve()`d — it needs linker64. On Android, `termux-exec` (LD_PRELOAD) is supposed to intercept `execve()` calls and route through linker64, but the prebuilt `.so` has hardcoded Termux prefix paths and doesn't intercept for our custom prefix (see Problem 3 note about termux-exec). The shell-bypass approach avoids the shell execution problem entirely for EB commands, while the shell-fix approach handles non-EB commands (like `which`, `uname`) where `/system/bin/sh` could work but the Termux default still fails.
+
+**Design decision: command string splitting.** Splitting on `\s+` works for hook commands (which are simple `binary arg` patterns) but would break for commands with quoted arguments containing spaces. This is acceptable because the EB+shell case only triggers when the command string starts with PREFIX or TERMUX_PREFIX — these are always machine-generated paths from hook configuration, not user-authored shell commands.
 
 ### Priority 4: Smart Card Integration
 
@@ -256,7 +282,8 @@ ui/QuickChips.kt           — Pill-styled chips matching keyboard row
 ui/SetupScreen.kt          — Unchanged
 runtime/PtyBridge.kt       — screenVersion, session accessor, \r input,
                               SELinux exec bypass (claude-wrapper.js deployment,
-                              WRAPPER_JS with stripLogin + injectEnv, DirectShellBridge factory)
+                              WRAPPER_JS with stripLogin + injectEnv + spawnFix + fixExecShell,
+                              hook installation, DirectShellBridge factory)
 runtime/Bootstrap.kt       — installGit(), buildRuntimeEnv(), deployBashEnv() + buildBashEnvSh()
                               (ELF/script detection, pkg manager wrappers, cd/pwd fixes, .bashrc setup),
                               setupAptSources() with apt.conf dir overrides + dpkg state init
@@ -276,3 +303,4 @@ app/build.gradle.kts       — material-icons-extended, version 0.2.0
 | 1.0 | 2026-03-15 | Initial status spec documenting Phase 2 implementation |
 | 1.1 | 2026-03-16 | Shell access: document three-layer fix (JS wrapper → BASH_ENV functions → `-l` flag strip), termux-exec prefix limitation, deployment strategy (PtyBridge.start not Bootstrap.setup), `CLAUDE_CODE_TMPDIR` env var. Freshen stale items: update commit count (59→81), fix duplicate Priority 4 numbering, add DirectShellBridge/ApiKeyScreen/BtwSheet to file inventory, add chat rebuild spec/plan references, update Direct Terminal Access status to partially implemented |
 | 1.2 | 2026-03-16 | First on-device test results: document 6 bugs and fixes. New: ELF/script-aware binary detection in buildBashEnvSh (Problem 2 update), package manager path remapping via APT_CONFIG + dpkg --admindir (Problem 4), Android filesystem workarounds for cd /tmp and pwd inode errors (Problem 5). Moved buildBashEnvSh to Bootstrap.deployBashEnv() shared by both bridges. Added .bashrc/.bash_profile for interactive shell support. Updated file inventory for Bootstrap.kt and PtyBridge.kt |
+| 1.3 | 2026-03-16 | Hook execution fix (Problem 6): document three sub-problems — abstract namespace sockets for hook-relay.js/EventBridge, Termux-compiled Node.js shell path resolution in spawn, and the three-tier spawnFix() solution (shell+EB bypass, shell+non-EB fix, no-shell+EB linker64). Document exec/execSync patching with fixExecShell(). Document hook installation system (Bootstrap.installHooks, settings.json, hook-relay.js). Design decisions on shell bypass vs fix, and command string splitting safety |

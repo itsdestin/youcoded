@@ -1,6 +1,6 @@
 # Claude Mobile Phase 2 — Design Spec
 
-**Version:** 1.1
+**Version:** 1.3
 **Date:** 2026-03-15
 **Status:** Approved
 
@@ -107,6 +107,30 @@ The terminal panel is the ground truth. The chat view is a pretty interpretation
 | `textSecondary` | `#999999` | Secondary text, timestamps, labels |
 | `error` | `#dd4444` | Error card border, error text |
 | `terminalBg` | `#0a0a0a` | Terminal panel background |
+
+### Claude Mascot Icon (Top-Right Header)
+
+34dp circle with 0.5dp border, 20dp icon inside. Tinted with `primary`.
+
+**Design:** Squat rounded mascot with `><` chevron eyes.
+- **Body:** Short rounded rect (14×12 units, rx=4) — wider than tall, friendly proportions
+- **Arms:** Nearly-square nubs (3×4 units, rx=0.8) — attached at body midpoint
+- **Legs:** Stubby rounded rects (3.5×4 units, rx=1.75) — short, separated by a gap
+- **Eyes:** `><` chevrons as EvenOdd cutouts within the body path — punches through the tint color so eyes always match the background
+- **Arms:** Float with a visible air gap (1 unit) from the body — not attached
+
+Defined as `AppIcons.ClaudeMascot` in `ui/theme/AppIcons.kt`.
+
+### Launcher Icon (Adaptive)
+
+Cream background (`#f5ede4`), foreground layers:
+
+- **Mascot:** B1 proportions (body 14×12, rx=4) — code-filled variant. Body shape clips a dark (`#1c1c1c`) fill with faint monospace code text (white, ~30-50% alpha). Arms are dark with an air gap from the body (not touching). Right arm raised in a wave (rotated -20°).
+- **Sparkles:** Small diamond shapes in corners (sienna, ~30-35% alpha)
+- **Terminal prompt:** `>_` below the mascot in sienna (~53% alpha, stroke-width 1). Chevron + underscore cursor line.
+- **Eyes:** Cream-colored `><` stroked chevrons over the dark body
+
+Design reference: `icon-drafts/preview-launcher-b1-final.html` (B1 + F2 air gap arms)
 
 ### Style Rules
 - No left border accent on Claude messages (minimal aesthetic)
@@ -355,3 +379,5 @@ Phase 1 spec listed `git` in the first-launch install sequence. Phase 2 changes 
 |---|---|---|
 | 1.0 | 2026-03-15 | Initial Phase 2 design |
 | 1.1 | 2026-03-15 | Address spec review: event migration table, accumulator details, terminal rendering details, parser state machine, detection aggressiveness table, key sequence configurability, card state management, git install clarifications |
+| 1.2 | 2026-03-16 | Document Claude mascot icon design (squat rounded body, nub arms, stubby legs, stroked chevron eyes) |
+| 1.3 | 2026-03-16 | Eyes use EvenOdd cutouts (not stroked paths) for tint compatibility. Arms have air gap. Add launcher icon design (B1: code-filled body, waving, sparkles, terminal prompt on cream bg) |
