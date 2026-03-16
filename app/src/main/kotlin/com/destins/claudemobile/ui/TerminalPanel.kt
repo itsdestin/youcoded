@@ -341,8 +341,9 @@ fun TerminalPanel(
                     )
 
                     // Underline: draw a line 1px below the baseline
-                    if (isUnderline) {
-                        val ulPaint = Paint().apply {
+                    // URLs are always underlined (bright blue) for visual affordance
+                    if (isUnderline || inUrl) {
+                        val ulPaint = if (inUrl) linkPaint else Paint().apply {
                             color = fgColor
                             strokeWidth = 1f
                         }
