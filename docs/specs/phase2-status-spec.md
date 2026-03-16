@@ -159,7 +159,7 @@ Claude Code's shell detection (`El1` function) only accepts shells with "bash" o
 Even after Claude Code's shell detection passes, the Bash tool spawns `bash -c "command"`. When bash tries to exec embedded binaries (e.g., `head`, `apt`, `npm`), SELinux blocks `execve()` on `app_data_file` context. The JS wrapper can't intercept these calls — they happen inside the bash process, not in Node.js.
 
 **Fix:** BASH_ENV shell function wrappers — generated at launch time by Kotlin (`Bootstrap.buildBashEnvSh()`):
-- Scans `usr/bin/` and reads first bytes of each file to detect type:
+- Scans `$PREFIX/bin/` then `~/.local/bin/` (for native installers, pip, etc.) and reads first bytes of each file to detect type (`$PREFIX/bin` has priority; duplicates skipped):
   - **ELF binaries** (`\x7fELF`) → `git() { /system/bin/linker64 "$PREFIX/bin/git" "$@"; }`
   - **Scripts with shebangs** (`#!/usr/bin/env node`) → `claude() { /system/bin/linker64 "$PREFIX/bin/node" "$PREFIX/bin/claude" "$@"; }` — runs the *interpreter* through linker64 with the script as an argument (linker64 can only load ELF binaries, not scripts)
   - **`#!/usr/bin/env <prog>`** shebangs → resolves `<prog>` to `$PREFIX/bin/<prog>`
