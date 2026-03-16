@@ -348,9 +348,9 @@ Show a terminal icon whenever a live terminal session is active in a smart card,
 
 Add links to financially support the project (donate, sponsor, etc.) within the app. (from inbox 2026-03-16)
 
-### Priority 18: Flip Up/Down Arrows in Terminal Mode
+### ~~Priority 18: Flip Up/Down Arrows in Terminal Mode~~ — Done (v2.5)
 
-Swap the direction of the up/down arrow keys in the terminal keyboard row. (from inbox 2026-03-16)
+Swapped arrow order from `← ↓ ↑ →` to `← ↑ ↓ →` in `TerminalKeyboardRow.kt`.
 
 ### Priority 19: Dynamic / Two-Tier Action Pills in Chat Mode
 
