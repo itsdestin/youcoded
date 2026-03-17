@@ -810,6 +810,10 @@ class Bootstrap(private val context: Context) {
             // the hardcoded /data/data/com.termux/files/usr path.
             put("TERMUX__PREFIX", usr)
             put("TERMUX_PREFIX", usr)
+            // Git helper programs (git-remote-https, git-upload-pack, etc.)
+            // have Termux paths baked in — override with our relocated prefix.
+            put("GIT_EXEC_PATH", "$usr/libexec/git-core")
+            put("GIT_TEMPLATE_DIR", "$usr/share/git-core/templates")
             put("TMPDIR", "$home/tmp")
             // Claude Code uses CLAUDE_CODE_TMPDIR for its own temp files
             // (sandbox dirs, etc.). Falls back to /tmp which doesn't exist on Android.
