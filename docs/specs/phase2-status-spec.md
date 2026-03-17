@@ -130,15 +130,6 @@ Cards wired into the hooks pipeline and receiving real data:
 
 Cards built but **not reachable** from the hooks pipeline (no MessageContent type routes to them):
 - `DiffCard` — syntax-highlighted red/green diffs. Needs diff parsing from Edit tool `toolResponse`.
-- `ApprovalCard` — standalone Accept/Reject buttons. Superseded by ToolCard's AwaitingApproval state.
-- `ProgressCard` — spinner + progress text. Superseded by ActivityIndicator.
-
-Widgets built but **not reachable** (designed for old parser, no hook event drives them):
-- `MenuWidget`, `ConfirmationWidget`, `OAuthWidget` — orphaned from the parser-era architecture.
-
-Dead code:
-- `InputBar` — ChatScreen builds its own inline input instead of using this component.
-- `CardStateManager` — ChatState has its own identical toggle logic.
 
 #### Shell Access for Bash Tool — Implemented
 
