@@ -263,7 +263,13 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 ## Known Bugs / Issues
 
-No known bugs. Previous bugs fixed in v2.2:
+1. **Cards staying after approval** — Approval cards in chat view are not dismissing after the user approves or rejects. *(Reported 2026-03-17 from inbox)*
+
+2. **Colors not correctly updating on usage** — Color scheme not refreshing properly during use. *(Reported 2026-03-17 from inbox)*
+
+3. **Hook subprocess "Permission denied"** — Node binary gets "Permission denied" when invoked from within hook execution context. The hook execution environment lacks the LD_PRELOAD/linker64 setup that the main shell has. SELinux blocks node in a different execution context where the app's private data directory isn't accessible via `/data/user/0/` path. See `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_232816.jpg` for full diagnosis. *(Reported 2026-03-17 from inbox)*
+
+Previous bugs fixed in v2.2:
 
 - **~~Bug 1: TerminalPanel crash on resize~~** — Fixed. `externalToInternalRow()` and `allocateFullLineIfNecessary()` now wrapped in broad `Exception` catch (Termux throws `IllegalArgumentException`, not `IndexOutOfBoundsException`). Root cause: race between Compose draw (`gridRows=52`) and `TerminalBuffer` resize (`mScreenRows=51`). The catch skips the transient out-of-bounds row for one frame.
 - **~~Bug 2: Swipe-up crash in terminal view~~** — Fixed (same root cause as Bug 1). Swipe-up triggers layout resize via system nav bar gesture, which triggered the same race condition.
