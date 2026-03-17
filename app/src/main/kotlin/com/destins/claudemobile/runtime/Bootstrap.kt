@@ -451,8 +451,11 @@ class Bootstrap(private val context: Context) {
             .redirectErrorStream(true)
         pb.environment().putAll(buildRuntimeEnv())
         val process = pb.start()
-        val output = process.inputStream.bufferedReader().readText()
+        val outputFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+            process.inputStream.bufferedReader().readText()
+        }
         val exitCode = process.waitFor()
+        val output = outputFuture.get()
         if (exitCode != 0) {
             throw IOException("${command[0]} failed (exit $exitCode): $output")
         }
