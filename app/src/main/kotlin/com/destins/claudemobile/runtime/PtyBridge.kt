@@ -135,14 +135,17 @@ class PtyBridge(
         session?.write(text)
     }
 
-    fun sendApproval(accepted: Boolean) {
-        // Claude Code's permission prompt is an Ink Select component:
-        //   > 1. Yes  /  2. Yes, and don't ask again  /  3. No
-        //   Esc to cancel · Tab to amend
-        // Enter selects the highlighted default (option 1 "Yes").
-        // Esc cancels (equivalent to "No").
-        writeInput(if (accepted) "\r" else "\u001b")
+    /** Send approval response to Claude Code's Ink Select permission prompt.
+     *  Options: 1. Yes (Enter), 2. Yes + don't ask again (↓ Enter), 3. No (Esc) */
+    fun sendApproval(option: ApprovalOption) {
+        when (option) {
+            ApprovalOption.Yes -> writeInput("\r")
+            ApprovalOption.YesAlways -> writeInput("\u001b[B\r") // down-arrow then Enter
+            ApprovalOption.No -> writeInput("\u001b")
+        }
     }
+
+    enum class ApprovalOption { Yes, YesAlways, No }
 
     fun sendBtw(message: String) {
         writeInput("/btw $message\r")
