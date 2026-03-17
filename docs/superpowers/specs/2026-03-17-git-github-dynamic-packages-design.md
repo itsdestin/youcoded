@@ -196,3 +196,13 @@ No changes to the app's Kotlin code needed for auth — it's entirely handled by
 - **Auto-upgrading packages** — only installs/upgrades during bootstrap, not in background
 - **Dependency resolution** — we list all required packages explicitly rather than walking the dependency tree. This is intentional: Termux's dependency graph is large and we only need a known set.
 - **App settings UI for GitHub** — users authenticate via `gh auth login` in the terminal
+
+## Implementation Notes
+
+**Package installation order matters.** Dependencies must be extracted before dependents (e.g., `openssl` before `libcurl`, `libcurl` before `git`). The `requiredPackages` list is in dependency order — preserve this during implementation.
+
+**Install consistency.** If the app crashes between extraction and writing `installed.properties`, the package appears uninstalled but files are partially present. Use a dual check: skip installation only if BOTH the version matches in `installed.properties` AND the expected binary exists on disk.
+
+**gh is a Go binary.** It may behave unexpectedly under linker64 since Go uses its own syscall layer. Smoke test `gh --version` and `gh auth login` after implementation. SELinux still blocks direct `execve()` regardless of static vs dynamic linking, so linker64 routing is still required.
+
+**Auth persistence.** `gh auth login` stores tokens in `~/.config/gh/hosts.yml` (inside app private storage). Tokens survive app restarts but are lost on app uninstall/data clear. This is expected Android behavior.
