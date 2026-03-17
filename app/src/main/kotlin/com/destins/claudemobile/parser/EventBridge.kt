@@ -24,10 +24,26 @@ class EventBridge(private val socketName: String) {
 
     fun startServer(scope: CoroutineScope) {
         listenJob = scope.launch(Dispatchers.IO) {
-            try {
-                serverSocket = LocalServerSocket(socketName)
-                android.util.Log.d("EventBridge", "Listening on abstract socket: $socketName")
+            // Retry binding — socket may linger briefly after a previous session
+            var retries = 3
+            while (retries > 0) {
+                try {
+                    serverSocket = LocalServerSocket(socketName)
+                    android.util.Log.d("EventBridge", "Listening on abstract socket: $socketName")
+                    break
+                } catch (e: java.io.IOException) {
+                    retries--
+                    if (retries > 0) {
+                        android.util.Log.w("EventBridge", "Socket bind failed, retrying in 500ms ($retries left)")
+                        delay(500)
+                    } else {
+                        android.util.Log.e("EventBridge", "Socket bind failed after retries", e)
+                        return@launch
+                    }
+                }
+            }
 
+            try {
                 while (isActive) {
                     val client: LocalSocket = serverSocket!!.accept()
                     launch {
