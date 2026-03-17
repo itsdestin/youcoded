@@ -269,6 +269,7 @@ int main(int argc, char **argv, char **envp) {
     memcpy(frame, auxv, ai * sizeof(Elf64_auxv_t));
 
     /* 6. Jump to ld-linux's entry point */
+    errstr("jumping to ld-linux entry...\n");
     jump_to_entry(ld_entry, sp);
     return 0;
 }
