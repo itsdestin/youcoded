@@ -44,8 +44,15 @@ class MainActivity : ComponentActivity() {
                         var progress by remember { mutableStateOf<Bootstrap.Progress?>(null) }
 
                         if (!isReady) {
-                            SetupScreen(progress)
-                            LaunchedEffect(Unit) {
+                            var setupAttempt by remember { mutableIntStateOf(0) }
+                            SetupScreen(
+                                progress = progress,
+                                onRetry = {
+                                    progress = null
+                                    setupAttempt++
+                                },
+                            )
+                            LaunchedEffect(setupAttempt) {
                                 bootstrap.setup { p ->
                                     progress = p
                                     if (p is Bootstrap.Progress.Complete) {
