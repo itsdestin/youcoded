@@ -189,9 +189,9 @@ int main(int argc, char **argv, char **envp) {
     /* Program's mapped phdrs (in the loaded image) */
     Elf64_Phdr *prog_phdr = (Elf64_Phdr *)(prog_bias + prog_ehdr.e_phoff);
 
-    /* 3. Build argv for the program (skip loader name and ld-linux path) */
-    int new_argc = argc - 2;
-    char **new_argv = &argv[2];
+    /* 3. Build argv for the program (from program path onward) */
+    int new_argc = argc - arg_start - 1;  /* skip ld-linux, keep program + its args */
+    char **new_argv = &argv[arg_start + 1];
 
     /* Count envp */
     int envc = 0;
