@@ -127,8 +127,8 @@ static uintptr_t map_elf(int fd, Elf64_Ehdr *ehdr) {
             }
         }
 
-        /* Restore correct permissions */
-        if (!(phdrs[i].p_flags & PF_W))
+        /* Restore correct permissions (only if we added PROT_WRITE for BSS) */
+        if (phdrs[i].p_memsz > phdrs[i].p_filesz && !(phdrs[i].p_flags & PF_W))
             mprotect((void *)map_start, map_end - map_start, prot);
     }
     return load_bias;
