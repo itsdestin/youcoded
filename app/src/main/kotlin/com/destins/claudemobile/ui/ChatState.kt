@@ -186,6 +186,9 @@ class ChatState {
             if (idx >= 0) {
                 messages[idx] = messages[idx].copy(isQueued = false)
                 insertPos = idx + 1
+            } else {
+                // Queued message was lost — recover by inserting at end
+                insertPos = messages.size
             }
             // isProcessing stays true — Claude will process the un-queued message
         } else {
