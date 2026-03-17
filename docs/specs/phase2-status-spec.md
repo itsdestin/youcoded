@@ -415,10 +415,10 @@ assets/parser/patterns.js      — Pattern matching rules (deleted — hooks rep
 ui/cards/ApprovalCard.kt       — Approval prompt card (deleted v2.5 — superseded by ToolCard.AwaitingApproval)
 ui/cards/ProgressCard.kt       — Progress indicator (deleted v2.5 — superseded by ActivityIndicator)
 ui/cards/CardState.kt          — Expand/collapse state manager (deleted v2.5 — ChatState has own toggle)
-ui/widgets/MenuWidget.kt       — Radio button menu selector (deleted v2.5 — no hook event drives it)
-ui/widgets/ConfirmationWidget.kt — Yes/No prompt (deleted v2.5 — no hook event drives it)
-ui/widgets/OAuthWidget.kt      — Sign-in button (deleted v2.5 — no hook event drives it)
 ui/InputBar.kt                 — Chat input bar (deleted v2.5 — ChatScreen builds inline input)
+ui/widgets/MenuWidget.kt       — Radio button menu selector (deleted v2.6 — no hook event drives it)
+ui/widgets/ConfirmationWidget.kt — Yes/No prompt (deleted v2.6 — no hook event drives it)
+ui/widgets/OAuthWidget.kt      — Sign-in button (deleted v2.6 — no hook event drives it)
 ```
 
 ### Modified Files
