@@ -325,10 +325,15 @@ class Bootstrap(private val context: Context) {
             saveInstalledVersions(installed)
         }
 
-        // termux-exec postinst: copy linker variant to primary .so
+        // termux-exec postinst: always overwrite primary .so with linker variant.
+        // The linker variant intercepts execve() in subprocesses and routes them
+        // through /system/bin/linker64, which is required for SELinux bypass.
+        // The default (direct) variant only fixes paths but doesn't use linker64,
+        // causing "Permission denied" when binaries fork+exec helpers (e.g. git
+        // calling git-remote-https).
         val linkerSo = File(usrDir, "lib/libtermux-exec-linker-ld-preload.so")
         val primarySo = File(usrDir, "lib/libtermux-exec-ld-preload.so")
-        if (linkerSo.exists() && !primarySo.exists()) {
+        if (linkerSo.exists()) {
             linkerSo.inputStream().use { input ->
                 primarySo.outputStream().use { output -> input.copyTo(output) }
             }
@@ -477,6 +482,27 @@ class Bootstrap(private val context: Context) {
 
         val mobileDir = File(homeDir, ".claude-mobile")
         mobileDir.mkdirs()
+
+        // Deploy browser-open helper — uses Android's am start to open URLs.
+        // Tools like rclone, gh, and npm read the BROWSER env var for OAuth
+        // flows. Without this, browser-based auth fails on Android.
+        // Uses /system/bin/sh (always available) and calls app_process directly
+        // with the termux-am APK, avoiding broken Termux shebangs and SELinux.
+        val amApkPath = File(usrDir, "libexec/termux-am/am.apk").absolutePath
+        val browserScript = File(mobileDir, "browser-open")
+        browserScript.writeText(
+            "#!/system/bin/sh\n" +
+            "AM_APK=\"$amApkPath\"\n" +
+            "if [ -f \"\$AM_APK\" ]; then\n" +
+            "  export CLASSPATH=\"\$AM_APK\"\n" +
+            "  unset LD_LIBRARY_PATH LD_PRELOAD\n" +
+            "  /system/bin/app_process -Xnoimage-dex2oat / com.termux.termuxam.Am " +
+            "start -a android.intent.action.VIEW -d \"\$1\" >/dev/null 2>&1\n" +
+            "else\n" +
+            "  /system/bin/am start -a android.intent.action.VIEW -d \"\$1\" >/dev/null 2>&1\n" +
+            "fi\n"
+        )
+        browserScript.setExecutable(true)
 
         // Ensure .bash_profile and .bashrc source linker64-env.sh.
         // The env file won't exist yet (deployed per-launch by deployBashEnv),
@@ -830,11 +856,16 @@ class Bootstrap(private val context: Context) {
             put("OPENSSL_CONF", "$usr/etc/tls/openssl.cnf")
             put("SSL_CERT_FILE", "$usr/etc/tls/cert.pem")
             put("SSL_CERT_DIR", "$usr/etc/tls/certs")
-            // termux-exec v2.x reads TERMUX__PREFIX (double underscore) to
-            // determine the runtime prefix. Without this, it falls back to
-            // the hardcoded /data/data/com.termux/files/usr path.
+            // termux-exec v2.x reads these env vars to determine the runtime
+            // prefix and enable linker64 exec mode. Without them, it falls back
+            // to the hardcoded /data/data/com.termux/files/usr path and won't
+            // intercept execve() calls for our relocated prefix.
+            val filesDir = context.filesDir.absolutePath
             put("TERMUX__PREFIX", usr)
             put("TERMUX_PREFIX", usr)
+            put("TERMUX__ROOTFS", filesDir)
+            put("TERMUX_APP__DATA_DIR", filesDir)
+            put("TERMUX_EXEC__SYSTEM_LINKER_EXEC__MODE", "enable")
             // Git helper programs (git-remote-https, git-upload-pack, etc.)
             // have Termux paths baked in — override with our relocated prefix.
             put("GIT_EXEC_PATH", "$usr/libexec/git-core")
@@ -843,6 +874,12 @@ class Bootstrap(private val context: Context) {
             // Claude Code uses CLAUDE_CODE_TMPDIR for its own temp files
             // (sandbox dirs, etc.). Falls back to /tmp which doesn't exist on Android.
             put("CLAUDE_CODE_TMPDIR", "$home/tmp")
+            // BROWSER tells rclone, gh, npm, etc. how to open URLs for OAuth.
+            // Points to our browser-open script that uses Android's am start.
+            val browserOpen = "$home/.claude-mobile/browser-open"
+            if (File(browserOpen).exists()) {
+                put("BROWSER", browserOpen)
+            }
         }
     }
 }
