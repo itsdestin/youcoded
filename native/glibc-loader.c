@@ -217,9 +217,9 @@ int main(int argc, char **argv, char **envp) {
     memcpy(sp, random_bytes, 16);
     uintptr_t random_addr = (uintptr_t)sp;
 
-    size_t execfn_len = strlen(program_path) + 1;
+    size_t execfn_len = strlen(ldlinux_path) + 1;
     sp = (uintptr_t *)((uintptr_t)sp - ((execfn_len + 15) & ~15UL));
-    memcpy(sp, program_path, execfn_len);
+    memcpy(sp, ldlinux_path, execfn_len);
     uintptr_t execfn_addr = (uintptr_t)sp;
 
     /* 5. Build auxiliary vector — INTERPRETER MODE
