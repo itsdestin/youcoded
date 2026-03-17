@@ -223,32 +223,46 @@ int main(int argc, char **argv, char **envp) {
     uintptr_t execfn_addr = (uintptr_t)sp;
 
     /* 5. Build auxiliary vector — COMMAND MODE
-     * Forward real hardware capabilities from the kernel's auxv.
-     * AT_HWCAP/AT_HWCAP2 are critical — glibc uses them to select
-     * optimized routines during bootstrap (before any relocation).
+     * Copy the ENTIRE original auxv from the kernel, only overriding
+     * AT_PHDR, AT_PHENT, AT_PHNUM, AT_ENTRY, AT_BASE, AT_RANDOM, AT_EXECFN.
+     * This preserves all obscure entries glibc might depend on.
      */
-    #define AUX_MAX 24
+
+    /* Find the original auxv by walking past envp on OUR stack */
+    char **orig_envp = envp;
+    while (*orig_envp) orig_envp++;
+    orig_envp++; /* skip NULL terminator */
+    Elf64_auxv_t *orig_auxv = (Elf64_auxv_t *)orig_envp;
+
+    /* Count original auxv entries */
+    int orig_auxc = 0;
+    while (orig_auxv[orig_auxc].a_type != AT_NULL) orig_auxc++;
+    orig_auxc++; /* include AT_NULL */
+
+    /* Copy and patch */
+    #define AUX_MAX 64
     Elf64_auxv_t auxv[AUX_MAX];
     int ai = 0;
-    auxv[ai].a_type = AT_PHDR;    auxv[ai].a_un.a_val = (uintptr_t)ld_phdr; ai++;
-    auxv[ai].a_type = AT_PHENT;   auxv[ai].a_un.a_val = sizeof(Elf64_Phdr); ai++;
-    auxv[ai].a_type = AT_PHNUM;   auxv[ai].a_un.a_val = ld_ehdr.e_phnum; ai++;
-    auxv[ai].a_type = AT_PAGESZ;  auxv[ai].a_un.a_val = sysconf(_SC_PAGESIZE); ai++;
-    auxv[ai].a_type = AT_BASE;    auxv[ai].a_un.a_val = 0; ai++;
-    auxv[ai].a_type = AT_ENTRY;   auxv[ai].a_un.a_val = ld_entry; ai++;
-    auxv[ai].a_type = AT_FLAGS;   auxv[ai].a_un.a_val = 0; ai++;
-    auxv[ai].a_type = AT_UID;     auxv[ai].a_un.a_val = getuid(); ai++;
-    auxv[ai].a_type = AT_EUID;    auxv[ai].a_un.a_val = geteuid(); ai++;
-    auxv[ai].a_type = AT_GID;     auxv[ai].a_un.a_val = getgid(); ai++;
-    auxv[ai].a_type = AT_EGID;    auxv[ai].a_un.a_val = getegid(); ai++;
-    auxv[ai].a_type = AT_RANDOM;  auxv[ai].a_un.a_val = random_addr; ai++;
-    auxv[ai].a_type = AT_EXECFN;  auxv[ai].a_un.a_val = execfn_addr; ai++;
-    auxv[ai].a_type = AT_SECURE;  auxv[ai].a_un.a_val = 0; ai++;
-    /* Forward real HWCAP from kernel */
-    auxv[ai].a_type = AT_HWCAP;   auxv[ai].a_un.a_val = getauxval(AT_HWCAP); ai++;
-    auxv[ai].a_type = AT_HWCAP2;  auxv[ai].a_un.a_val = getauxval(AT_HWCAP2); ai++;
-    auxv[ai].a_type = AT_CLKTCK;  auxv[ai].a_un.a_val = getauxval(AT_CLKTCK); ai++;
-    auxv[ai].a_type = AT_NULL;    auxv[ai].a_un.a_val = 0; ai++;
+    for (int i = 0; i < orig_auxc && ai < AUX_MAX - 1; i++) {
+        auxv[ai] = orig_auxv[i];
+        /* Override specific entries */
+        switch (auxv[ai].a_type) {
+        case AT_PHDR:   auxv[ai].a_un.a_val = (uintptr_t)ld_phdr; break;
+        case AT_PHENT:  auxv[ai].a_un.a_val = sizeof(Elf64_Phdr); break;
+        case AT_PHNUM:  auxv[ai].a_un.a_val = ld_ehdr.e_phnum; break;
+        case AT_BASE:   auxv[ai].a_un.a_val = 0; break;
+        case AT_ENTRY:  auxv[ai].a_un.a_val = ld_entry; break;
+        case AT_RANDOM: auxv[ai].a_un.a_val = random_addr; break;
+        case AT_EXECFN: auxv[ai].a_un.a_val = execfn_addr; break;
+        }
+        ai++;
+    }
+    /* Ensure AT_NULL terminator */
+    if (ai == 0 || auxv[ai-1].a_type != AT_NULL) {
+        auxv[ai].a_type = AT_NULL;
+        auxv[ai].a_un.a_val = 0;
+        ai++;
+    }
 
     /* Calculate frame size and build it */
     size_t frame_size = sizeof(uintptr_t)
