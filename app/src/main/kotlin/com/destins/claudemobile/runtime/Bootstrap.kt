@@ -504,6 +504,14 @@ class Bootstrap(private val context: Context) {
         )
         browserScript.setExecutable(true)
 
+        // Sync gh CLI token to ~/.netrc so git can authenticate over HTTPS.
+        // Git's credential helper system doesn't work on Android because:
+        // 1. `gh auth setup-git` fails (Go binaries bypass LD_PRELOAD)
+        // 2. Shell-based credential helpers fail (git can't exec scripts
+        //    through its internal shell on our SELinux-restricted prefix)
+        // .netrc is read natively by libcurl with no script execution needed.
+        syncGhTokenToNetrc()
+
         // Ensure .bash_profile and .bashrc source linker64-env.sh.
         // The env file won't exist yet (deployed per-launch by deployBashEnv),
         // but the [ -f ] guards handle that gracefully.
@@ -590,6 +598,50 @@ class Bootstrap(private val context: Context) {
 
         existingJson.put("hooks", hooksObj)
         settingsFile.writeText(existingJson.toString(2))
+    }
+
+    /**
+     * Sync the gh CLI OAuth token into ~/.netrc so git can authenticate.
+     * Called during setupHome() and can be called again after `gh auth login`.
+     * Only updates the github.com entry; preserves other .netrc entries.
+     */
+    private fun syncGhTokenToNetrc() {
+        val hostsFile = File(homeDir, ".config/gh/hosts.yml")
+        if (!hostsFile.exists()) return
+
+        // Parse oauth_token from gh's hosts.yml using simple line scanning.
+        var token: String? = null
+        for (line in hostsFile.readLines()) {
+            val trimmed = line.trim()
+            if (trimmed.startsWith("oauth_token:")) {
+                token = trimmed.removePrefix("oauth_token:").trim()
+                break
+            }
+        }
+        if (token.isNullOrBlank()) return
+
+        val netrc = File(homeDir, ".netrc")
+        val entry = "machine github.com login x-access-token password $token"
+
+        if (netrc.exists()) {
+            // Replace existing github.com line or append
+            val lines = netrc.readLines().toMutableList()
+            val idx = lines.indexOfFirst { it.contains("machine github.com") }
+            if (idx >= 0) {
+                if (lines[idx] == entry) return  // Already up to date
+                lines[idx] = entry
+            } else {
+                lines.add(entry)
+            }
+            netrc.writeText(lines.joinToString("\n") + "\n")
+        } else {
+            netrc.writeText(entry + "\n")
+        }
+        // .netrc must be owner-readable only
+        netrc.setReadable(false, false)
+        netrc.setReadable(true, true)
+        netrc.setWritable(false, false)
+        netrc.setWritable(true, true)
     }
 
     /**
@@ -852,10 +904,13 @@ class Bootstrap(private val context: Context) {
             }
             put("LANG", "en_US.UTF-8")
             put("TERM", "xterm-256color")
-            // Override hardcoded Termux paths in compiled binaries
+            // Override hardcoded Termux paths in compiled binaries.
+            // GIT_SSL_CAINFO is required because git's libcurl has the Termux
+            // cert path compiled in and ignores SSL_CERT_FILE.
             put("OPENSSL_CONF", "$usr/etc/tls/openssl.cnf")
             put("SSL_CERT_FILE", "$usr/etc/tls/cert.pem")
             put("SSL_CERT_DIR", "$usr/etc/tls/certs")
+            put("GIT_SSL_CAINFO", "$usr/etc/tls/cert.pem")
             // termux-exec v2.x reads these env vars to determine the runtime
             // prefix and enable linker64 exec mode. Without them, it falls back
             // to the hardcoded /data/data/com.termux/files/usr path and won't
