@@ -398,7 +398,7 @@ Note: The `isFullySetup` property (line 20-22) is intentionally NOT changed — 
 
 ---
 
-### Task 5: Add Git Environment Variables
+### Task 4: Add Git Environment Variables
 
 **Files:**
 - Modify: `app/src/main/kotlin/.../runtime/Bootstrap.kt` — `buildRuntimeEnv()` method (lines 674-712)
