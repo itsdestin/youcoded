@@ -289,7 +289,8 @@ class Bootstrap(private val context: Context) {
         val index = fetchPackagesIndex()
         val installed = loadInstalledVersions()
 
-        for (name in requiredPackages) {
+        val total = requiredPackages.size
+        for ((i, name) in requiredPackages.withIndex()) {
             val pkg = index[name]
             if (pkg == null) {
                 Log.w("Bootstrap", "Package '$name' not found in Termux index — skipping")
@@ -302,7 +303,9 @@ class Bootstrap(private val context: Context) {
             // Skip only if BOTH version matches AND binary exists (crash-safe)
             if (fileExists && versionMatch) continue
 
-            onProgress(Progress.Installing(name))
+            // Packages = 30-80% of overall progress
+            val overallPercent = 30 + (i * 50) / total
+            onProgress(Progress.Installing(name, overallPercent))
             installDeb(pkg)
             installed[name] = pkg.version
             saveInstalledVersions(installed)
