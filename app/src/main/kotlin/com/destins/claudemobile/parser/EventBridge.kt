@@ -19,7 +19,7 @@ class EventBridge(private val socketName: String) {
     private val _events = MutableSharedFlow<HookEvent>(extraBufferCapacity = 1000)
     val events: SharedFlow<HookEvent> = _events
 
-    private var serverSocket: LocalServerSocket? = null
+    @Volatile private var serverSocket: LocalServerSocket? = null
     private var listenJob: Job? = null
 
     fun startServer(scope: CoroutineScope) {
