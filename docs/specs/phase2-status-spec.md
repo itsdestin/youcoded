@@ -253,11 +253,11 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 ## Known Bugs / Issues
 
-1. **Cards staying after approval** — Approval cards in chat view are not dismissing after the user approves or rejects. *(Reported 2026-03-17 from inbox)*
+1. **~~Cards staying after approval~~** — Fixed (v2.6). Root cause: after the user taps Accept/Reject, the card stayed in `AwaitingApproval` state waiting for the `PostToolUse` event. If the event was delayed or lost, the card was stuck forever with no fallback. Fix: `revertApprovalToRunning()` immediately transitions the card back to `ToolRunning` when the user acts, so the normal PostToolUse flow finalizes it. *(Reported 2026-03-17)*
 
-2. **Colors not correctly updating on usage** — Color scheme not refreshing properly during use. *(Reported 2026-03-17 from inbox)*
+2. **Colors not correctly updating on usage** — Moved to claudifest destiny backlog. *(Reported 2026-03-17)*
 
-3. **Hook subprocess "Permission denied"** — Node binary gets "Permission denied" when invoked from within hook execution context. The hook execution environment lacks the LD_PRELOAD/linker64 setup that the main shell has. SELinux blocks node in a different execution context where the app's private data directory isn't accessible via `/data/user/0/` path. See `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_232816.jpg` for full diagnosis. *(Reported 2026-03-17 from inbox)*
+3. **Hook subprocess "Permission denied"** — Node binary gets "Permission denied" when invoked from within hook execution context. **Investigation (v2.6):** The wrapper's `spawnFix()` DOES intercept hook commands (they match "shell + EB command" tier). The real issue is likely one of: (a) `/data/user/0/` vs `/data/data/` path mismatch under different SELinux contexts — the hook node path is hardcoded at config time but may resolve differently when Claude Code spawns the subprocess, (b) LD_PRELOAD not propagating to the hook subprocess if Claude Code spawns with a restricted environment, (c) the hook subprocess runs in a different SELinux domain where the app's private data directory isn't accessible. **Proposed fix:** wrap the hook command in explicit environment setup, or use a shell wrapper that sources the runtime env before executing. Needs on-device debugging with `strace` or SELinux audit logs. See `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_232816.jpg`. *(Reported 2026-03-17)*
 
 Previous bugs fixed in v2.2:
 
