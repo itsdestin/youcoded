@@ -147,6 +147,13 @@ class PtyBridge(
 
     enum class ApprovalOption { Yes, YesAlways, No }
 
+    /** Check whether the current PTY screen contains an "always allow" option.
+     *  Used to distinguish 2-option (Yes/No) from 3-option (Yes/Always/No) prompts. */
+    fun hasAlwaysAllowOption(): Boolean {
+        val recent = rawBuffer.takeLast(500).lowercase()
+        return "always" in recent || "don't ask again" in recent
+    }
+
     fun sendBtw(message: String) {
         writeInput("/btw $message\r")
     }
