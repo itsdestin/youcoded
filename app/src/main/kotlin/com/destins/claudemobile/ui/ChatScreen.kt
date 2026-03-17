@@ -182,58 +182,14 @@ fun ChatScreen(bridge: PtyBridge) {
             // ── Full-screen terminal mode ──────────────────────────────
             var termScrollOffset by remember { mutableFloatStateOf(0f) }
             val termFocusRequester = remember { FocusRequester() }
-            var termInputBuffer by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.background)
-                        .padding(horizontal = 6.dp, vertical = 5.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .height(34.dp)
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .clickable { screenMode = ScreenMode.Chat }
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            com.destins.claudemobile.ui.theme.AppIcons.Chat,
-                            contentDescription = "Switch to chat",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-                    Text(
-                        "Terminal",
-                        fontSize = 15.sp,
-                        color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
-                        modifier = Modifier.align(Alignment.Center),
-                    )
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .size(34.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            com.destins.claudemobile.ui.theme.AppIcons.ClaudeMascot,
-                            contentDescription = "Claude",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-                }
-                HorizontalDivider(color = borderColor, thickness = 0.5.dp)
+                ModeHeader(
+                    title = "Terminal",
+                    leftIcon = com.destins.claudemobile.ui.theme.AppIcons.Chat,
+                    onLeftClick = { screenMode = ScreenMode.Chat },
+                )
 
                 // Terminal + floating scroll-to-bottom button
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -271,33 +227,11 @@ fun ChatScreen(bridge: PtyBridge) {
                 }
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
-
-                // Invisible text field — forwards soft keyboard input to PTY in real time
-                // so characters appear in the terminal's native input line
-                BasicTextField(
-                    value = termInputBuffer,
-                    onValueChange = { newValue ->
-                        if (newValue.length > termInputBuffer.length) {
-                            bridge.writeInput(newValue.substring(termInputBuffer.length))
-                        } else if (newValue.length < termInputBuffer.length) {
-                            repeat(termInputBuffer.length - newValue.length) {
-                                bridge.writeInput("\u007f")
-                            }
-                        }
-                        // Cap buffer to prevent unbounded growth — PTY owns the visible input
-                        termInputBuffer = if (newValue.length > 1000) newValue.takeLast(500) else newValue
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { bridge.writeInput("\r") }),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 1.sp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .alpha(0f)
-                        .focusRequester(termFocusRequester),
+                PtyInputField(
+                    focusRequester = termFocusRequester,
+                    onInput = { bridge.writeInput(it) },
+                    onEnter = { bridge.writeInput("\r") },
                 )
-
                 TerminalKeyboardRow(onKeyPress = { seq -> bridge.writeInput(seq) })
             }
         }
@@ -307,52 +241,16 @@ fun ChatScreen(bridge: PtyBridge) {
             val shell = directShellBridge ?: return@Box
             val shellScreenVersion by shell.screenVersion.collectAsState()
             val shellFocusRequester = remember { FocusRequester() }
-            var shellInputBuffer by remember { mutableStateOf("") }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.background)
-                        .padding(horizontal = 6.dp, vertical = 5.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .height(34.dp)
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .clickable { screenMode = ScreenMode.Chat }
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(com.destins.claudemobile.ui.theme.AppIcons.Chat,
-                            contentDescription = "Switch to chat",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp))
-                    }
-                    Text("Shell", fontSize = 15.sp,
-                        color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
-                        modifier = Modifier.align(Alignment.Center))
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .size(34.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
-                            .clickable { screenMode = ScreenMode.Terminal },
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(com.destins.claudemobile.ui.theme.AppIcons.ClaudeMascot,
-                            contentDescription = "Claude terminal",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp))
-                    }
-                }
-                HorizontalDivider(color = borderColor, thickness = 0.5.dp)
+                ModeHeader(
+                    title = "Shell",
+                    leftIcon = com.destins.claudemobile.ui.theme.AppIcons.Chat,
+                    onLeftClick = { screenMode = ScreenMode.Chat },
+                    rightIcon = com.destins.claudemobile.ui.theme.AppIcons.ClaudeMascot,
+                    onRightClick = { screenMode = ScreenMode.Terminal },
+                )
 
                 TerminalPanel(
                     session = shell.getSession(),
@@ -362,32 +260,11 @@ fun ChatScreen(bridge: PtyBridge) {
                 )
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
-
-                // Invisible text field — forwards soft keyboard input to PTY in real time
-                BasicTextField(
-                    value = shellInputBuffer,
-                    onValueChange = { newValue ->
-                        if (newValue.length > shellInputBuffer.length) {
-                            shell.writeInput(newValue.substring(shellInputBuffer.length))
-                        } else if (newValue.length < shellInputBuffer.length) {
-                            repeat(shellInputBuffer.length - newValue.length) {
-                                shell.writeInput("\u007f")
-                            }
-                        }
-                        // Cap buffer to prevent unbounded growth — PTY owns the visible input
-                        shellInputBuffer = if (newValue.length > 1000) newValue.takeLast(500) else newValue
-                    },
-                    singleLine = true,
-                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { shell.writeInput("\r") }),
-                    textStyle = androidx.compose.ui.text.TextStyle(fontSize = 1.sp),
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .height(1.dp)
-                        .alpha(0f)
-                        .focusRequester(shellFocusRequester),
+                PtyInputField(
+                    focusRequester = shellFocusRequester,
+                    onInput = { shell.writeInput(it) },
+                    onEnter = { shell.writeInput("\r") },
                 )
-
                 TerminalKeyboardRow(onKeyPress = { seq -> shell.writeInput(seq) })
             }
         }
