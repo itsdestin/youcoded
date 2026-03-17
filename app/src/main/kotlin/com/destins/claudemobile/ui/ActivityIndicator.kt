@@ -12,10 +12,34 @@ import androidx.compose.ui.unit.sp
 import com.destins.claudemobile.ui.theme.ClaudeMobileTheme
 import kotlinx.coroutines.delay
 
+private val thinkingLines = listOf(
+    "Thinking",
+    "Cogitating",
+    "Pondering",
+    "Ruminating",
+    "Noodling",
+    "Percolating",
+    "Brainstorming",
+    "Deliberating",
+    "Marinating",
+    "Musing",
+    "Contemplating",
+    "Stewing",
+    "Mulling it over",
+    "Chewing on it",
+    "Untangling",
+    "Connecting dots",
+    "Rearranging neurons",
+    "Consulting the vibes",
+    "Findangling",
+    "Embellishing",
+    "Simmering",
+    "Calibrating",
+)
+
 @Composable
 fun ActivityIndicator(
     isActive: Boolean,
-    toolName: String?,
     modifier: Modifier = Modifier,
 ) {
     AnimatedVisibility(
@@ -24,37 +48,24 @@ fun ActivityIndicator(
         exit = fadeOut(),
         modifier = modifier,
     ) {
+        val line by produceState(initialValue = thinkingLines.random()) {
+            while (true) {
+                delay(2500)
+                value = thinkingLines.random()
+            }
+        }
         val dotCount by produceState(initialValue = 1) {
             while (true) {
                 delay(400)
                 value = (value % 3) + 1
             }
         }
-        val dots = ".".repeat(dotCount)
-        val label = when {
-            toolName != null -> "${friendlyToolName(toolName)}$dots"
-            else -> "Working$dots"
-        }
 
         Text(
-            text = label,
+            text = "$line${".".repeat(dotCount)}",
             fontSize = 13.sp,
             color = ClaudeMobileTheme.extended.textSecondary,
             modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
         )
     }
-}
-
-private fun friendlyToolName(tool: String): String = when (tool) {
-    "Read" -> "Reading"
-    "Write" -> "Writing"
-    "Edit" -> "Editing"
-    "Bash" -> "Running command"
-    "Glob" -> "Searching files"
-    "Grep" -> "Searching"
-    "Agent" -> "Running agent"
-    "WebSearch" -> "Searching web"
-    "WebFetch" -> "Fetching"
-    "Skill" -> "Using skill"
-    else -> "Working"
 }
