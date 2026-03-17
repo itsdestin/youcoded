@@ -169,6 +169,7 @@ int main(int argc, char **argv, char **envp) {
     const char *program_path = argv[arg_start + 1];
 
     /* 1. Map ld-linux (unrelocated, just like kernel does) */
+    errstr("mapping ld-linux...\n");
     int ld_fd = open(ldlinux_path, O_RDONLY);
     if (ld_fd < 0) die("open ld-linux");
     Elf64_Ehdr ld_ehdr;
@@ -176,8 +177,10 @@ int main(int argc, char **argv, char **envp) {
     uintptr_t ld_bias = map_elf(ld_fd, &ld_ehdr);
     uintptr_t ld_entry = ld_ehdr.e_entry + ld_bias;
     close(ld_fd);
+    errstr("ld-linux mapped OK\n");
 
     /* 2. Map the target program (unrelocated, just like kernel does) */
+    errstr("mapping program...\n");
     int prog_fd = open(program_path, O_RDONLY);
     if (prog_fd < 0) die("open program");
     Elf64_Ehdr prog_ehdr;
@@ -185,6 +188,7 @@ int main(int argc, char **argv, char **envp) {
     uintptr_t prog_bias = map_elf(prog_fd, &prog_ehdr);
     uintptr_t prog_entry = prog_ehdr.e_entry + prog_bias;
     close(prog_fd);
+    errstr("program mapped OK\n");
 
     /* Program's mapped phdrs (in the loaded image) */
     Elf64_Phdr *prog_phdr = (Elf64_Phdr *)(prog_bias + prog_ehdr.e_phoff);
