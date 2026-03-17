@@ -22,7 +22,7 @@ import com.termux.terminal.TerminalSession
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
-enum class ToolCardState { Running, AwaitingApproval, Complete }
+enum class ToolCardState { Running, AwaitingApproval, Complete, Failed }
 
 private fun friendlyToolAction(tool: String): String = when (tool) {
     "Read" -> "Reading"
@@ -50,6 +50,7 @@ fun ToolCard(
     onToggle: (String) -> Unit = {},
     session: TerminalSession? = null,
     screenVersion: Int = 0,
+    errorMessage: String? = null,
     onAccept: () -> Unit = {},
     onAcceptAlways: () -> Unit = {},
     onReject: () -> Unit = {},
@@ -59,6 +60,7 @@ fun ToolCard(
         ToolCardState.Running -> MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
         ToolCardState.AwaitingApproval -> MaterialTheme.colorScheme.primary
         ToolCardState.Complete -> ClaudeMobileTheme.extended.surfaceBorder
+        ToolCardState.Failed -> MaterialTheme.colorScheme.error
     }
 
     Column(
@@ -66,7 +68,7 @@ fun ToolCard(
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(8.dp))
-            .border(0.5.dp, borderColor, RoundedCornerShape(8.dp))
+            .border(if (state == ToolCardState.Failed) 1.dp else 0.5.dp, borderColor, RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface)
             .clickable { onToggle(cardId) }
             .padding(10.dp)
@@ -115,6 +117,23 @@ fun ToolCard(
                     Text(
                         tool,
                         color = MaterialTheme.colorScheme.primary,
+                        fontWeight = FontWeight.SemiBold,
+                        fontSize = 13.sp,
+                    )
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        args.take(60) + if (args.length > 60) "..." else "",
+                        color = ClaudeMobileTheme.extended.textSecondary,
+                        fontSize = 12.sp,
+                        maxLines = 1,
+                    )
+                }
+                ToolCardState.Failed -> {
+                    Text("\u2717", fontSize = 13.sp, color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.width(6.dp))
+                    Text(
+                        tool,
+                        color = MaterialTheme.colorScheme.error,
                         fontWeight = FontWeight.SemiBold,
                         fontSize = 13.sp,
                     )
@@ -188,32 +207,37 @@ fun ToolCard(
         if (state == ToolCardState.Complete) {
             AnimatedVisibility(visible = isExpanded) {
                 Column(modifier = Modifier.padding(top = 6.dp)) {
-                    if (session != null && tool == "Bash") {
-                        TerminalPanel(
-                            session = session,
-                            screenVersion = screenVersion,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(120.dp)
-                                .clip(RoundedCornerShape(4.dp)),
+                    val resultText = result?.toString(2) ?: ""
+                    if (resultText.length > 200) {
+                        Text(
+                            resultText.take(200) + "...",
+                            fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 11.sp,
                         )
-                    } else {
-                        val resultText = result?.toString(2) ?: ""
-                        if (resultText.length > 200) {
-                            Text(
-                                resultText.take(200) + "...",
-                                fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 11.sp,
-                            )
-                        } else if (resultText.isNotBlank()) {
-                            Text(
-                                resultText,
-                                fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
-                                color = MaterialTheme.colorScheme.onSurface,
-                                fontSize = 11.sp,
-                            )
-                        }
+                    } else if (resultText.isNotBlank()) {
+                        Text(
+                            resultText,
+                            fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                            color = MaterialTheme.colorScheme.onSurface,
+                            fontSize = 11.sp,
+                        )
+                    }
+                }
+            }
+        }
+
+        // Failed: expandable error details
+        if (state == ToolCardState.Failed) {
+            AnimatedVisibility(visible = isExpanded) {
+                Column(modifier = Modifier.padding(top = 6.dp)) {
+                    if (!errorMessage.isNullOrBlank()) {
+                        Text(
+                            errorMessage,
+                            fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f),
+                            fontSize = 11.sp,
+                        )
                     }
                 }
             }

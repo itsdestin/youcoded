@@ -18,7 +18,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.background
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.outlined.Image
 import androidx.compose.ui.draw.clip
@@ -418,25 +420,30 @@ fun ChatScreen(bridge: PtyBridge) {
                     Box(
                         modifier = Modifier
                             .weight(1f)
-                            .height(42.dp)
+                            .heightIn(min = 42.dp, max = 120.dp)
                             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .background(MaterialTheme.colorScheme.surface)
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
-                        contentAlignment = Alignment.CenterStart,
+                        contentAlignment = Alignment.TopStart,
                     ) {
+                        val inputScrollState = rememberScrollState()
                         BasicTextField(
                             value = chatInputText,
                             onValueChange = { chatInputText = it },
-                            singleLine = true,
+                            singleLine = false,
+                            maxLines = 5,
                             textStyle = androidx.compose.ui.text.TextStyle(
                                 fontSize = 14.sp,
                                 fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
                                 color = MaterialTheme.colorScheme.onSurface,
                             ),
-                            modifier = Modifier.fillMaxWidth().padding(horizontal = 10.dp),
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(horizontal = 10.dp, vertical = 10.dp)
+                                .verticalScroll(inputScrollState),
                             decorationBox = { innerTextField ->
                                 Row(
-                                    verticalAlignment = Alignment.CenterVertically,
+                                    verticalAlignment = Alignment.Top,
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Box(modifier = Modifier.weight(1f)) {
