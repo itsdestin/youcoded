@@ -249,6 +249,7 @@ function injectEnv(cmd, args) {
 }
 var _efs = child_process.execFileSync;
 child_process.execFileSync = function(file) {
+    file = resolveCmd(file);
     if (isEB(file)) {
         file = fixPath(file);
         var a = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
@@ -261,6 +262,7 @@ child_process.execFileSync = function(file) {
 };
 var _ef = child_process.execFile;
 child_process.execFile = function(file) {
+    file = resolveCmd(file);
     if (isEB(file)) {
         file = fixPath(file);
         var rest = Array.prototype.slice.call(arguments, 1);
@@ -281,6 +283,7 @@ function stripLogin(args) {
 // When shell:true + EB command string, bypass the shell entirely — split the
 // command and route the binary through linker64 (avoids SELinux shell exec).
 function spawnFix(orig, command, args, options) {
+    command = resolveCmd(String(command));
     var o = Array.isArray(args) ? options : args;
     var hasShell = o && o.shell && o.shell !== false;
     // Shell + EB command: the command is a shell string like "/prefix/bin/node script.js"
