@@ -263,7 +263,6 @@ fun TerminalPanel(
         // so character offset / gridCols = screen row index. This lets URLs
         // that wrap across terminal lines match as a single regex hit.
         urlRegions.clear()
-        val linkPaint = Paint().apply { color = LINK_COLOR.toArgb(); strokeWidth = 1.5f }
         val visibleRowData = arrayOfNulls<TerminalRow>(gridRows)
         val combinedText = StringBuilder(gridRows * gridCols)
         val spaces = " ".repeat(gridCols)
