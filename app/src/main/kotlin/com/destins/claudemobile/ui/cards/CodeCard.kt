@@ -70,8 +70,7 @@ fun CodeCard(
         Spacer(Modifier.height(4.dp))
 
         // Content
-        val displayText = if (isExpanded) highlighted
-            else SyntaxHighlighter.highlight(previewLines.joinToString("\n"), language)
+        val displayText = if (isExpanded) highlighted else previewHighlighted
 
         Box(
             modifier = Modifier.horizontalScroll(rememberScrollState())
