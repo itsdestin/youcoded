@@ -23,6 +23,7 @@ sealed class MessageContent {
         val toolUseId: String,
         val tool: String,
         val args: String,
+        val hasAlwaysOption: Boolean = true,
     ) : MessageContent()
     data class ToolComplete(
         val cardId: String,
