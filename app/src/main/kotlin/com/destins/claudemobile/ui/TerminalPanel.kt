@@ -353,9 +353,9 @@ fun TerminalPanel(
 
                 // Draw cell background only if it differs from the terminal background
                 if (bgColor != terminalBg.toArgb()) {
-                    val bgPaint = Paint().apply { color = bgColor }
+                    bgCellPaint.color = bgColor
                     drawContext.canvas.nativeCanvas.drawRect(
-                        xLeft, yTop, xLeft + cellW, yTop + cellH, bgPaint
+                        xLeft, yTop, xLeft + cellW, yTop + cellH, bgCellPaint
                     )
                 }
 
