@@ -37,7 +37,15 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
             is Bootstrap.Progress.Installing -> {
                 Text("Installing ${progress.packageName}...")
                 Spacer(modifier = Modifier.height(16.dp))
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                if (progress.overallPercent >= 0) {
+                    LinearProgressIndicator(
+                        progress = { progress.overallPercent / 100f },
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                    Text("${progress.overallPercent}%", style = MaterialTheme.typography.bodySmall)
+                } else {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                }
             }
             is Bootstrap.Progress.Error -> {
                 Text(
