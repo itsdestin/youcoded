@@ -53,6 +53,7 @@ fun ToolCard(
     onAccept: () -> Unit = {},
     onAcceptAlways: () -> Unit = {},
     onReject: () -> Unit = {},
+    hasAlwaysOption: Boolean = true,
 ) {
     val borderColor = when (state) {
         ToolCardState.Running -> MaterialTheme.colorScheme.primary.copy(alpha = 0.3f)
