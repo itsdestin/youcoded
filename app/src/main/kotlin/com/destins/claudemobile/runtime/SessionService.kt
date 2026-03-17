@@ -30,22 +30,28 @@ class SessionService : Service() {
         createNotificationChannel()
     }
 
+    private var bridgeScope: CoroutineScope? = null
+
     fun startSession(bootstrap: Bootstrap, apiKey: String? = null) {
+        // Clean up any previous session to avoid orphaned coroutines/sockets
+        bridgeScope?.cancel()
+        bridgeScope = null
+        ptyBridge?.stop()
+        ptyBridge = null
+
         val bridge = PtyBridge(bootstrap, apiKey)
         ptyBridge = bridge
 
         // Start EventBridge BEFORE Claude Code — hooks fire immediately on launch
         // and hook-relay.js silently drops events if the socket isn't ready.
-        val bridgeScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        bridge.startEventBridge(bridgeScope)
-        this.bridgeScope = bridgeScope
+        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+        bridge.startEventBridge(scope)
+        bridgeScope = scope
 
         bridge.start()
 
         startForeground(NOTIFICATION_ID, buildNotification())
     }
-
-    private var bridgeScope: CoroutineScope? = null
 
     fun stopSession() {
         bridgeScope?.cancel()
