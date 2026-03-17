@@ -400,6 +400,7 @@ class Bootstrap(private val context: Context) {
                             } else if (tarEntry.isSymbolicLink) {
                                 target.parentFile?.mkdirs()
                                 try {
+                                    target.delete() // Remove old file/symlink before creating
                                     java.nio.file.Files.createSymbolicLink(
                                         target.toPath(),
                                         java.nio.file.Paths.get(tarEntry.linkName)
