@@ -253,6 +253,7 @@ var _open = fs.open; fs.open = function(p) { var a = Array.prototype.slice.call(
 var _cws = fs.createWriteStream; fs.createWriteStream = function(p) { var a = Array.prototype.slice.call(arguments); if (typeof a[0] === 'string') a[0] = fixTmp(a[0]); return _cws.apply(this, a); };
 var _crs = fs.createReadStream; fs.createReadStream = function(p) { var a = Array.prototype.slice.call(arguments); if (typeof a[0] === 'string') a[0] = fixTmp(a[0]); return _crs.apply(this, a); };
 function resolveCmd(c) {
+    c = fixTmp(c);
     if (c && c.indexOf('/') === -1) {
         var r = PREFIX + '/bin/' + c;
         try { _as.call(null, r, fs.constants.R_OK); return r; }
