@@ -261,6 +261,11 @@ function resolveCmd(c) {
     }
     return c;
 }
+// Fix /tmp paths in spawn/exec argument arrays
+function fixTmpArgs(args) {
+    if (!Array.isArray(args)) return args;
+    return args.map(function(a) { return typeof a === 'string' ? fixTmp(a) : a; });
+}
 function injectEnv(cmd, args) {
     if (BASH_ENV_FILE && cmd.endsWith('/bash') && Array.isArray(args) && args[0] === '-c' && args.length >= 2) {
         args = args.slice();
