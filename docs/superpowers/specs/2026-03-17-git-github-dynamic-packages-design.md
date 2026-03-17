@@ -111,7 +111,26 @@ if (connection.responseCode != 200) {
 
 This surfaces the failure immediately instead of silently producing a broken install.
 
-### 5. Wrapper Fix — Bare Command Name Resolution
+### 5. Git Environment Variables
+
+Git requires environment variables to find its helper programs and templates. Termux's git has hardcoded paths to `/data/data/com.termux/files/usr/...` which don't match our relocated prefix. Without these, `git clone`, `git push`, `git fetch`, and any operation that invokes helpers will fail.
+
+**Add to `buildRuntimeEnv()`:**
+- `GIT_EXEC_PATH` = `$PREFIX/libexec/git-core` — where git finds `git-remote-https`, `git-upload-pack`, etc.
+- `GIT_TEMPLATE_DIR` = `$PREFIX/share/git-core/templates` — init templates
+
+**Git helper binary execution:** Files in `$PREFIX/libexec/git-core/` are ELF binaries that git invokes via `execve()`. They face the same SELinux restriction. The `termux-exec` LD_PRELOAD library (`libtermux-exec-ld-preload.so`) intercepts `execve()` at the libc level and routes through linker64, which should cover these calls. The `TERMUX__PREFIX` env var (already set) tells termux-exec where our prefix is. This must be verified during implementation — if termux-exec doesn't handle the relocated prefix for libexec paths, `linker64-env.sh` must be extended to scan `$PREFIX/libexec/git-core/` in addition to `$PREFIX/bin/`.
+
+### 6. Zstandard Decompression Support
+
+The current `installDeb` hardcodes XZ decompression (`XZInputStream`). Termux has been migrating packages to `data.tar.zst` (Zstandard). If a required package ships as zst, extraction silently fails.
+
+**Fix:** Check the data.tar entry name and use the appropriate decompressor:
+- `data.tar.xz` → `XZInputStream` (existing)
+- `data.tar.zst` → Zstandard decompressor (add `com.github.luben:zstd-jni` dependency)
+- `data.tar.gz` → `GZIPInputStream` (fallback)
+
+### 7. Wrapper Fix — Bare Command Name Resolution
 
 **Current bug:** `isEB("git")` returns `false` because `"git"` doesn't start with `PREFIX + "/"`.
 
