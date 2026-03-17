@@ -9,7 +9,7 @@ import androidx.compose.ui.unit.dp
 import com.destins.claudemobile.runtime.Bootstrap
 
 @Composable
-fun SetupScreen(progress: Bootstrap.Progress?) {
+fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -45,7 +45,7 @@ fun SetupScreen(progress: Bootstrap.Progress?) {
                     color = MaterialTheme.colorScheme.error
                 )
                 Spacer(modifier = Modifier.height(16.dp))
-                Button(onClick = { /* retry handled by MainActivity */ }) {
+                Button(onClick = { onRetry?.invoke() }) {
                     Text("Retry")
                 }
             }
