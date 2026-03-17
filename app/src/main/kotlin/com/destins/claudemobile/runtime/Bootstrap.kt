@@ -320,43 +320,64 @@ class Bootstrap(private val context: Context) {
     }
 
     /**
-     * Download a .deb from Termux repos and extract it using pure Java.
-     * No shelling out — avoids all SELinux exec restrictions.
-     *
-     * A .deb is an ar archive containing:
-     *   - debian-binary (version string)
-     *   - control.tar.xz (package metadata)
-     *   - data.tar.xz (actual files to install)
-     *
-     * We parse the ar format, find data.tar.xz, decompress with XZ,
-     * then extract the tar entries directly into usrDir.
+     * Download a .deb from Termux repos, verify SHA256, and extract.
+     * Supports data.tar.xz, data.tar.zst, and data.tar.gz compression.
      */
-    private fun installDeb(debPath: String) {
-        val url = "$termuxRepo/$debPath"
+    private fun installDeb(pkg: PackageInfo) {
+        val url = "$termuxRepo/${pkg.filename}"
         val tmpDeb = File(context.cacheDir, "tmp.deb")
+        var connection: java.net.HttpURLConnection? = null
         try {
-            // Download .deb
-            URL(url).openStream().use { input ->
+            // Download with HTTP error checking
+            connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 15000
+            connection.readTimeout = 60000
+            if (connection.responseCode != 200) {
+                throw IOException("Failed to download ${pkg.name}: HTTP ${connection.responseCode} from $url")
+            }
+            connection.inputStream.use { input ->
                 tmpDeb.outputStream().use { output -> input.copyTo(output) }
             }
+            connection.disconnect()
+            connection = null
 
-            // Parse the ar archive to find data.tar.xz
+            // SHA256 verification
+            if (pkg.sha256.isNotEmpty()) {
+                val digest = MessageDigest.getInstance("SHA-256")
+                tmpDeb.inputStream().use { input ->
+                    val buf = ByteArray(8192)
+                    var n: Int
+                    while (input.read(buf).also { n = it } != -1) {
+                        digest.update(buf, 0, n)
+                    }
+                }
+                val actualSha256 = digest.digest().joinToString("") { "%02x".format(it) }
+                if (actualSha256 != pkg.sha256) {
+                    throw IOException(
+                        "SHA256 mismatch for ${pkg.name}: expected ${pkg.sha256}, got $actualSha256"
+                    )
+                }
+            }
+
+            // Parse ar archive to find data.tar
             ArArchiveInputStream(BufferedInputStream(tmpDeb.inputStream())).use { arStream ->
                 var arEntry = arStream.nextEntry
                 while (arEntry != null) {
                     if (arEntry.name.startsWith("data.tar")) {
-                        // Decompress XZ and extract tar
-                        val tarStream = TarArchiveInputStream(XZInputStream(arStream))
+                        val decompressed: java.io.InputStream = when {
+                            arEntry.name.contains(".xz") -> XZInputStream(arStream)
+                            arEntry.name.contains(".zst") -> ZstdInputStream(arStream)
+                            arEntry.name.contains(".gz") -> java.util.zip.GZIPInputStream(arStream)
+                            else -> arStream
+                        }
+                        val tarStream = TarArchiveInputStream(decompressed)
                         var tarEntry = tarStream.nextEntry
                         while (tarEntry != null) {
-                            // Strip Termux prefix from tar paths.
-                            // Entries may be "./bin/node" or "data/data/com.termux/files/usr/bin/node"
                             val termuxPrefix = "data/data/com.termux/files/usr/"
                             var entryPath = tarEntry.name.removePrefix("./").removePrefix("/")
                             if (entryPath.startsWith(termuxPrefix)) {
                                 entryPath = entryPath.removePrefix(termuxPrefix)
                             }
-                            // Also handle absolute paths
                             val absPrefix = "/data/data/com.termux/files/usr/"
                             if (tarEntry.name.startsWith(absPrefix)) {
                                 entryPath = tarEntry.name.removePrefix(absPrefix)
@@ -370,16 +391,13 @@ class Bootstrap(private val context: Context) {
                             if (tarEntry.isDirectory) {
                                 target.mkdirs()
                             } else if (tarEntry.isSymbolicLink) {
-                                // Create symlink
                                 target.parentFile?.mkdirs()
                                 try {
                                     java.nio.file.Files.createSymbolicLink(
                                         target.toPath(),
                                         java.nio.file.Paths.get(tarEntry.linkName)
                                     )
-                                } catch (_: Exception) {
-                                    // Symlinks may fail on some Android versions; non-fatal
-                                }
+                                } catch (_: Exception) {}
                             } else {
                                 target.parentFile?.mkdirs()
                                 target.outputStream().use { out ->
@@ -389,12 +407,13 @@ class Bootstrap(private val context: Context) {
                             }
                             tarEntry = tarStream.nextEntry
                         }
-                        break // Done with data.tar
+                        break
                     }
                     arEntry = arStream.nextEntry
                 }
             }
         } finally {
+            connection?.disconnect()
             tmpDeb.delete()
         }
     }
