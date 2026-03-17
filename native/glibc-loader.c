@@ -152,6 +152,20 @@ __asm__(
 );
 
 int main(int argc, char **argv, char **envp) {
+    /* Debug: print argc */
+    char dbg[64];
+    int n = 0;
+    dbg[n++] = 'a'; dbg[n++] = 'r'; dbg[n++] = 'g';
+    dbg[n++] = 'c'; dbg[n++] = '=';
+    dbg[n++] = '0' + argc;
+    dbg[n++] = '\n';
+    write(2, dbg, n);
+    for (int i = 0; i < argc && i < 5; i++) {
+        write(2, "  ", 2);
+        write(2, argv[i], strlen(argv[i]));
+        write(2, "\n", 1);
+    }
+
     if (argc < 3) {
         errstr("Usage: glibc-loader <ld-linux.so> <program> [args...]\n");
         _exit(1);
