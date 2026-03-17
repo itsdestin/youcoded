@@ -353,12 +353,13 @@ fun ChatScreen(bridge: PtyBridge) {
                             screenVersion = screenVersion,
                         )
                     }
-                    // Activity indicator as trailing item
+                    // Activity indicator — only when PTY is active and no tool card is showing
                     item {
                         var now by remember { mutableStateOf(System.currentTimeMillis()) }
                         LaunchedEffect(Unit) { while (true) { delay(500); now = System.currentTimeMillis() } }
-                        val isActive = (now - lastPtyOutput) < 2000 || chatState.activeToolName != null
-                        ActivityIndicator(isActive = isActive, toolName = chatState.activeToolName)
+                        val ptyActive = (now - lastPtyOutput) < 2000
+                        val hasActiveTool = chatState.activeToolName != null
+                        ActivityIndicator(isActive = ptyActive && !hasActiveTool)
                     }
                 }
 
