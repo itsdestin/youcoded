@@ -165,7 +165,8 @@ fun ChatScreen(bridge: PtyBridge) {
             val now = System.currentTimeMillis()
             val lastOutput = bridge.lastPtyOutputTime.value
             if (now - lastOutput > 2000) {
-                chatState.updateToolToApproval(running.toolUseId)
+                val hasAlways = bridge.hasAlwaysAllowOption()
+                chatState.updateToolToApproval(running.toolUseId, hasAlways)
             }
         }
     }
