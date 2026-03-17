@@ -280,7 +280,8 @@ fun ChatScreen(bridge: PtyBridge) {
                                 bridge.writeInput("\u007f")
                             }
                         }
-                        termInputBuffer = newValue
+                        // Cap buffer to prevent unbounded growth — PTY owns the visible input
+                        termInputBuffer = if (newValue.length > 1000) newValue.takeLast(500) else newValue
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
@@ -369,7 +370,8 @@ fun ChatScreen(bridge: PtyBridge) {
                                 shell.writeInput("\u007f")
                             }
                         }
-                        shellInputBuffer = newValue
+                        // Cap buffer to prevent unbounded growth — PTY owns the visible input
+                        shellInputBuffer = if (newValue.length > 1000) newValue.takeLast(500) else newValue
                     },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
