@@ -300,6 +300,22 @@ int main(int argc, char **argv, char **envp) {
         uint32_t first_insn = *(volatile uint32_t *)ld_entry;
         HEXPRINT("INSN@ENTRY=", first_insn);
 
+        /* Test: can we mmap PROT_EXEC on an app_data_file? */
+        int test_fd = open(new_argv[new_argc-1], O_RDONLY);
+        if (test_fd >= 0) {
+            void *test = mmap(NULL, 4096, PROT_READ|PROT_EXEC,
+                              MAP_PRIVATE, test_fd, 0);
+            if (test == MAP_FAILED) {
+                errstr("MMAP_EXEC_TEST=FAILED\n");
+            } else {
+                errstr("MMAP_EXEC_TEST=OK\n");
+                munmap(test, 4096);
+            }
+            close(test_fd);
+        } else {
+            errstr("MMAP_EXEC_TEST=no_file\n");
+        }
+
         errstr("jumping to ld-linux entry...\n");
     }
     jump_to_entry(ld_entry, sp);
