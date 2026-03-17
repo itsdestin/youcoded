@@ -134,7 +134,7 @@ class ChatState {
         }
     }
 
-    fun updateToolToApproval(toolUseId: String) {
+    fun updateToolToApproval(toolUseId: String, hasAlwaysOption: Boolean = true) {
         val idx = messages.indexOfLast {
             val c = it.content
             c is MessageContent.ToolRunning && c.toolUseId == toolUseId
@@ -147,6 +147,7 @@ class ChatState {
                     toolUseId = running.toolUseId,
                     tool = running.tool,
                     args = running.args,
+                    hasAlwaysOption = hasAlwaysOption,
                 )
             )
         }
