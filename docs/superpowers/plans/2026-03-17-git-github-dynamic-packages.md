@@ -184,23 +184,102 @@ git commit -m "feat: add Termux Packages index parser and caching"
 
 ---
 
-### Task 3: SHA256 Verification + Zstd Support in installDeb
+### Task 3: Rewrite installDeb + installPackages (Atomic)
+
+These two changes MUST happen together — `installDeb` changes its signature from `String` to `PackageInfo`, and `installPackages` is the only caller. Splitting them would break compilation.
 
 **Files:**
-- Modify: `app/src/main/kotlin/.../runtime/Bootstrap.kt` — rewrite `installDeb` method (lines 247-313)
+- Modify: `app/src/main/kotlin/.../runtime/Bootstrap.kt` — rewrite both `installDeb` (lines 247-313) and `installPackages` (lines 157-233)
 
 - [ ] **Step 1: Add imports**
 
 At the top of Bootstrap.kt, add:
 
 ```kotlin
+import android.util.Log
 import java.security.MessageDigest
 import com.github.luben.zstd.ZstdInputStream
 ```
 
-- [ ] **Step 2: Rewrite installDeb to accept PackageInfo**
+- [ ] **Step 2: Add requiredPackages list and packageFileExists**
 
-Replace the existing `installDeb(debPath: String)` method with:
+Replace the entire `installPackages` method and the `// TODO` comment above the git deps section (lines 157-233) with:
+
+```kotlin
+/** Packages required for Claude Mobile, in dependency order. */
+private val requiredPackages = listOf(
+    // Node.js runtime + deps
+    "c-ares", "libicu", "libsqlite", "nodejs", "npm",
+    // SELinux exec bypass
+    "termux-exec",
+    // Git + deps (deps first)
+    "openssl", "libcurl", "libexpat", "libiconv", "pcre2", "zlib", "git",
+    // GitHub CLI + deps
+    "openssh", "gh"
+)
+
+/** Check files that indicate a package is properly installed. */
+private fun packageFileExists(name: String): Boolean {
+    val checkFile = when (name) {
+        "c-ares" -> "lib/libcares.so"
+        "libicu" -> return usrDir.resolve("lib").listFiles()
+            ?.any { it.name.startsWith("libicuuc.so") } == true
+        "libsqlite" -> "lib/libsqlite3.so"
+        "nodejs" -> "bin/node"
+        "npm" -> "lib/node_modules/npm"
+        "termux-exec" -> "lib/libtermux-exec-linker-ld-preload.so"
+        "openssl" -> "lib/libssl.so"
+        "libcurl" -> "lib/libcurl.so"
+        "libexpat" -> "lib/libexpat.so"
+        "libiconv" -> "lib/libiconv.so"
+        "pcre2" -> "lib/libpcre2-8.so"
+        "zlib" -> "lib/libz.so"
+        "git" -> "bin/git"
+        "gh" -> "bin/gh"
+        "openssh" -> "bin/ssh"
+        else -> return false
+    }
+    return File(usrDir, checkFile).exists()
+}
+
+private fun installPackages(onProgress: (Progress) -> Unit) {
+    val index = fetchPackagesIndex()
+    val installed = loadInstalledVersions()
+
+    for (name in requiredPackages) {
+        val pkg = index[name]
+        if (pkg == null) {
+            Log.w("Bootstrap", "Package '$name' not found in Termux index — skipping")
+            continue
+        }
+
+        val fileExists = packageFileExists(name)
+        val versionMatch = installed[name] == pkg.version
+
+        // Skip only if BOTH version matches AND binary exists (crash-safe)
+        if (fileExists && versionMatch) continue
+
+        onProgress(Progress.Installing(name))
+        installDeb(pkg)
+        installed[name] = pkg.version
+        saveInstalledVersions(installed)
+    }
+
+    // termux-exec postinst: copy linker variant to primary .so
+    val linkerSo = File(usrDir, "lib/libtermux-exec-linker-ld-preload.so")
+    val primarySo = File(usrDir, "lib/libtermux-exec-ld-preload.so")
+    if (linkerSo.exists() && !primarySo.exists()) {
+        linkerSo.inputStream().use { input ->
+            primarySo.outputStream().use { output -> input.copyTo(output) }
+        }
+        primarySo.setExecutable(true)
+    }
+}
+```
+
+- [ ] **Step 3: Rewrite installDeb to accept PackageInfo**
+
+Delete the existing `installDeb(debPath: String)` method entirely (lines 247-313) and replace with:
 
 ```kotlin
 /**
@@ -210,9 +289,10 @@ Replace the existing `installDeb(debPath: String)` method with:
 private fun installDeb(pkg: PackageInfo) {
     val url = "$termuxRepo/${pkg.filename}"
     val tmpDeb = File(context.cacheDir, "tmp.deb")
+    var connection: java.net.HttpURLConnection? = null
     try {
         // Download with HTTP error checking
-        val connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
+        connection = java.net.URL(url).openConnection() as java.net.HttpURLConnection
         connection.connectTimeout = 15000
         connection.readTimeout = 60000
         if (connection.responseCode != 200) {
@@ -221,6 +301,8 @@ private fun installDeb(pkg: PackageInfo) {
         connection.inputStream.use { input ->
             tmpDeb.outputStream().use { output -> input.copyTo(output) }
         }
+        connection.disconnect()
+        connection = null
 
         // SHA256 verification
         if (pkg.sha256.isNotEmpty()) {
@@ -294,117 +376,25 @@ private fun installDeb(pkg: PackageInfo) {
             }
         }
     } finally {
+        connection?.disconnect()
         tmpDeb.delete()
     }
 }
 ```
 
-- [ ] **Step 3: Verify it compiles**
+- [ ] **Step 4: Verify it compiles**
 
 Run: `./gradlew --no-daemon :app:compileReleaseKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
-- [ ] **Step 4: Commit**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add app/src/main/kotlin/com/destins/claudemobile/runtime/Bootstrap.kt
-git commit -m "feat: add SHA256 verification and zstd decompression to installDeb"
+git commit -m "feat: dynamic package resolution with SHA256 verification and zstd support"
 ```
 
----
-
-### Task 4: Rewrite installPackages with Dynamic Resolution
-
-**Files:**
-- Modify: `app/src/main/kotlin/.../runtime/Bootstrap.kt` — rewrite `installPackages` method (lines 157-233)
-
-- [ ] **Step 1: Replace installPackages**
-
-Replace the entire `installPackages` method (and remove old hardcoded calls) with:
-
-```kotlin
-/** Packages required for Claude Mobile, in dependency order. */
-private val requiredPackages = listOf(
-    // Node.js runtime + deps
-    "c-ares", "libicu", "libsqlite", "nodejs", "npm",
-    // SELinux exec bypass
-    "termux-exec",
-    // Git + deps (deps first)
-    "openssl", "libcurl", "libexpat", "libiconv", "pcre2", "zlib", "git",
-    // GitHub CLI + deps
-    "openssh", "gh"
-)
-
-/** Check files that indicate a package is properly installed. */
-private fun packageFileExists(name: String): Boolean {
-    val checkFile = when (name) {
-        "c-ares" -> "lib/libcares.so"
-        "libicu" -> return usrDir.resolve("lib").listFiles()
-            ?.any { it.name.startsWith("libicuuc.so") } == true
-        "libsqlite" -> "lib/libsqlite3.so"
-        "nodejs" -> "bin/node"
-        "npm" -> "lib/node_modules/npm"
-        "termux-exec" -> "lib/libtermux-exec-linker-ld-preload.so"
-        "openssl" -> "lib/libssl.so"
-        "libcurl" -> "lib/libcurl.so"
-        "libexpat" -> "lib/libexpat.so"
-        "libiconv" -> "lib/libiconv.so"
-        "pcre2" -> "lib/libpcre2-8.so"
-        "zlib" -> "lib/libz.so"
-        "git" -> "bin/git"
-        "gh" -> "bin/gh"
-        "openssh" -> "bin/ssh"
-        else -> return false
-    }
-    return File(usrDir, checkFile).exists()
-}
-
-private fun installPackages(onProgress: (Progress) -> Unit) {
-    val index = fetchPackagesIndex()
-    val installed = loadInstalledVersions()
-
-    for (name in requiredPackages) {
-        val pkg = index[name]
-        if (pkg == null) {
-            // Package not in index — skip with warning
-            continue
-        }
-
-        val fileExists = packageFileExists(name)
-        val versionMatch = installed[name] == pkg.version
-
-        // Skip only if BOTH version matches AND binary exists (crash-safe)
-        if (fileExists && versionMatch) continue
-
-        onProgress(Progress.Installing(name))
-        installDeb(pkg)
-        installed[name] = pkg.version
-        saveInstalledVersions(installed)
-    }
-
-    // termux-exec postinst: copy linker variant to primary .so
-    val linkerSo = File(usrDir, "lib/libtermux-exec-linker-ld-preload.so")
-    val primarySo = File(usrDir, "lib/libtermux-exec-ld-preload.so")
-    if (linkerSo.exists() && !primarySo.exists()) {
-        linkerSo.inputStream().use { input ->
-            primarySo.outputStream().use { output -> input.copyTo(output) }
-        }
-        primarySo.setExecutable(true)
-    }
-}
-```
-
-- [ ] **Step 2: Verify it compiles**
-
-Run: `./gradlew --no-daemon :app:compileReleaseKotlin 2>&1 | tail -5`
-Expected: BUILD SUCCESSFUL
-
-- [ ] **Step 3: Commit**
-
-```bash
-git add app/src/main/kotlin/com/destins/claudemobile/runtime/Bootstrap.kt
-git commit -m "feat: replace hardcoded package URLs with dynamic Termux index resolution"
-```
+Note: The `isFullySetup` property (line 20-22) is intentionally NOT changed — it gates on node/npm/claude-code, not git/gh. Git and gh are best-effort packages that don't block app startup.
 
 ---
 
