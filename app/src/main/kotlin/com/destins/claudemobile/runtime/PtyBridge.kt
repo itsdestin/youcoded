@@ -149,10 +149,39 @@ class PtyBridge(
 
     /** Check whether the current PTY screen contains an "always allow" option.
      *  Used to distinguish 2-option (Yes/No) from 3-option (Yes/Always/No) prompts. */
+    /** Read current visible screen content directly from the terminal emulator. */
+    private fun readScreenText(): String {
+        val screen = session?.emulator?.screen ?: return ""
+        val rows = screen.getActiveRows()
+        val cols = session?.emulator?.mColumns ?: 80
+        val sb = StringBuilder(rows * cols)
+        for (row in 0 until rows) {
+            try {
+                val internalRow = screen.externalToInternalRow(row)
+                val termRow = screen.allocateFullLineIfNecessary(internalRow)
+                for (col in 0 until cols) {
+                    val charIndex = termRow.findStartOfColumn(col)
+                    val spaceUsed = termRow.getSpaceUsed()
+                    if (charIndex >= spaceUsed) { sb.append(' '); continue }
+                    val ch = termRow.mText[charIndex]
+                    val cp = if (Character.isHighSurrogate(ch) && charIndex + 1 < spaceUsed) {
+                        val low = termRow.mText[charIndex + 1]
+                        if (Character.isLowSurrogate(low)) Character.toCodePoint(ch, low) else ch.code
+                    } else ch.code
+                    sb.append(if (cp == 0) ' ' else String(Character.toChars(cp)))
+                }
+                sb.append('\n')
+            } catch (_: Exception) { continue }
+        }
+        return sb.toString()
+    }
+
+    /** Check whether the current PTY screen contains an "always allow" option.
+     *  Reads the live screen buffer to detect 3-option vs 2-option prompts. */
     fun hasAlwaysAllowOption(): Boolean {
-        val recent = rawBuffer.takeLast(2000).lowercase()
-        val result = "always" in recent || "ask again" in recent
-        android.util.Log.d("PtyBridge", "hasAlwaysAllowOption=$result, recent buffer (last 500): [$recent]")
+        val screenText = readScreenText().lowercase()
+        val result = "always" in screenText || "ask again" in screenText
+        android.util.Log.d("PtyBridge", "hasAlwaysAllowOption=$result, screen text: [${screenText.trim().takeLast(300)}]")
         return result
     }
 
