@@ -377,6 +377,18 @@ Chat mode pills that show action words first (Open, Write, Explain, etc.) then c
 
 Consider replacing the tab key in the terminal keyboard row with something more useful for common workflows. (from inbox 2026-03-16)
 
+### Priority 21: Light Mode / Theme Support
+
+Add light mode option for Claude Mobile. Currently only dark theme. (from inbox 2026-03-17)
+
+### Priority 22: Multi-Session / New Chat Support
+
+Ability to exit the current session, create a new chat, or maintain multiple ongoing sessions. Currently single-session only. (from inbox 2026-03-17)
+
+### Priority 23: Bundle gh CLI by Default
+
+Pre-install GitHub CLI (`gh`) in the app's embedded environment. All standard install methods fail on Android/Termux due to SELinux (pkg, apt, npm, binary download all fail). Needs linker64 approach or prebuilt ARM64 binary deployed at bootstrap. See `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_175521.jpg` and `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_175553.jpg` for failure evidence. (from inbox 2026-03-17)
+
 ## Open Questions
 
 1. **Tablet layout:** Split-view (2/3 chat + 1/3 file preview) deferred to Phase 3.
