@@ -146,7 +146,8 @@ fun TerminalPanel(
             ?: Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
     }
 
-    // Paint objects — textSize updated when layout changes
+    // Paint objects — textSize updated when layout changes.
+    // Reusable paints for cell backgrounds and underlines to avoid per-frame allocation.
     val normalPaint = remember(cascadiaRegular) {
         Paint().apply {
             typeface = cascadiaRegular
@@ -161,6 +162,9 @@ fun TerminalPanel(
             isAntiAlias = true
         }
     }
+    val bgCellPaint = remember { Paint() }
+    val underlinePaint = remember { Paint().apply { strokeWidth = 1f } }
+    val linkPaint = remember { Paint().apply { color = LINK_COLOR.toArgb(); strokeWidth = 1.5f } }
 
     // onSizeChanged: calculate font size to fit 80 columns, then derive rows
     Canvas(
