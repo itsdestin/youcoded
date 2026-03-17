@@ -151,7 +151,9 @@ class PtyBridge(
      *  Used to distinguish 2-option (Yes/No) from 3-option (Yes/Always/No) prompts. */
     fun hasAlwaysAllowOption(): Boolean {
         val recent = rawBuffer.takeLast(500).lowercase()
-        return "always" in recent || "don't ask again" in recent
+        val result = "always" in recent || "don't ask again" in recent
+        android.util.Log.d("PtyBridge", "hasAlwaysAllowOption=$result, recent buffer (last 500): [$recent]")
+        return result
     }
 
     fun sendBtw(message: String) {
