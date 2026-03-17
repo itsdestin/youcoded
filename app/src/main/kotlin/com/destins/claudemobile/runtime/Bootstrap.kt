@@ -58,7 +58,8 @@ class Bootstrap(private val context: Context) {
         while (entry != null) {
             count++
             if (count % 100 == 0) {
-                onProgress(Progress.Extracting((count * 100) / 5000))
+                // Extraction = 0-30% of overall progress
+                onProgress(Progress.Extracting((count * 30) / 5000))
             }
             if (entry.name == "SYMLINKS.txt") {
                 symlinksContent = zip.bufferedReader().readText()
