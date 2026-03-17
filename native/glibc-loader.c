@@ -223,12 +223,12 @@ int main(int argc, char **argv, char **envp) {
     uintptr_t execfn_addr = (uintptr_t)sp;
 
     /* 5. Build auxiliary vector — COMMAND MODE
-     * AT_PHDR  → ld-linux's own phdrs (it IS the program)
-     * AT_ENTRY → ld-linux's entry point
-     * AT_BASE  → 0 (no separate interpreter)
+     * Forward real hardware capabilities from the kernel's auxv.
+     * AT_HWCAP/AT_HWCAP2 are critical — glibc uses them to select
+     * optimized routines during bootstrap (before any relocation).
      */
-    #define AUX_CNT 12
-    Elf64_auxv_t auxv[AUX_CNT + 1];
+    #define AUX_MAX 24
+    Elf64_auxv_t auxv[AUX_MAX];
     int ai = 0;
     auxv[ai].a_type = AT_PHDR;    auxv[ai].a_un.a_val = (uintptr_t)ld_phdr; ai++;
     auxv[ai].a_type = AT_PHENT;   auxv[ai].a_un.a_val = sizeof(Elf64_Phdr); ai++;
@@ -238,10 +238,16 @@ int main(int argc, char **argv, char **envp) {
     auxv[ai].a_type = AT_ENTRY;   auxv[ai].a_un.a_val = ld_entry; ai++;
     auxv[ai].a_type = AT_FLAGS;   auxv[ai].a_un.a_val = 0; ai++;
     auxv[ai].a_type = AT_UID;     auxv[ai].a_un.a_val = getuid(); ai++;
+    auxv[ai].a_type = AT_EUID;    auxv[ai].a_un.a_val = geteuid(); ai++;
     auxv[ai].a_type = AT_GID;     auxv[ai].a_un.a_val = getgid(); ai++;
+    auxv[ai].a_type = AT_EGID;    auxv[ai].a_un.a_val = getegid(); ai++;
     auxv[ai].a_type = AT_RANDOM;  auxv[ai].a_un.a_val = random_addr; ai++;
     auxv[ai].a_type = AT_EXECFN;  auxv[ai].a_un.a_val = execfn_addr; ai++;
     auxv[ai].a_type = AT_SECURE;  auxv[ai].a_un.a_val = 0; ai++;
+    /* Forward real HWCAP from kernel */
+    auxv[ai].a_type = AT_HWCAP;   auxv[ai].a_un.a_val = getauxval(AT_HWCAP); ai++;
+    auxv[ai].a_type = AT_HWCAP2;  auxv[ai].a_un.a_val = getauxval(AT_HWCAP2); ai++;
+    auxv[ai].a_type = AT_CLKTCK;  auxv[ai].a_un.a_val = getauxval(AT_CLKTCK); ai++;
     auxv[ai].a_type = AT_NULL;    auxv[ai].a_un.a_val = 0; ai++;
 
     /* Calculate frame size and build it */
