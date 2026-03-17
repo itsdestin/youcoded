@@ -32,8 +32,10 @@ fun CodeCard(
 ) {
     val clipboard = LocalClipboardManager.current
     val lines = code.lines()
-    val previewLines = lines.take(5)
-    val highlighted = SyntaxHighlighter.highlight(code, language)
+    val highlighted = remember(code, language) { SyntaxHighlighter.highlight(code, language) }
+    val previewHighlighted = remember(code, language) {
+        SyntaxHighlighter.highlight(lines.take(5).joinToString("\n"), language)
+    }
 
     Column(
         modifier = Modifier
