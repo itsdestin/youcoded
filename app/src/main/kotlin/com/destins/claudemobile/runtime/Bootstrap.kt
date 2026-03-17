@@ -259,7 +259,9 @@ class Bootstrap(private val context: Context) {
         // Git + deps (deps first)
         "openssl", "libcurl", "libexpat", "libiconv", "pcre2", "zlib", "git",
         // GitHub CLI + deps
-        "openssh", "gh"
+        "openssh", "gh",
+        // Cloud storage sync
+        "rclone"
     )
 
     /** Check files that indicate a package is properly installed. */
