@@ -432,7 +432,7 @@ class Bootstrap(private val context: Context) {
 
     private fun installClaudeCode(onProgress: (Progress) -> Unit) {
         if (File(usrDir, "lib/node_modules/@anthropic-ai/claude-code").exists()) return
-        onProgress(Progress.Installing("claude-code"))
+        onProgress(Progress.Installing("claude-code", 80))
         // npm is a JS script, not an ELF binary — run it via node + linker64.
         // node <npm-cli.js> install -g @anthropic-ai/claude-code
         val nodePath = File(usrDir, "bin/node").absolutePath
