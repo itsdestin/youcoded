@@ -359,6 +359,24 @@ int main(int argc, char **argv, char **envp) {
 
         errstr("jumping to ld-linux entry...\n");
     }
+
+    /* Install crash handler on alt stack (our new stack will replace sp) */
+    {
+        stack_t ss;
+        ss.ss_sp = mmap(NULL, 65536, PROT_READ|PROT_WRITE,
+                        MAP_PRIVATE|MAP_ANONYMOUS, -1, 0);
+        ss.ss_size = 65536;
+        ss.ss_flags = 0;
+        sigaltstack(&ss, NULL);
+
+        struct sigaction sa;
+        memset(&sa, 0, sizeof(sa));
+        sa.sa_sigaction = crash_handler;
+        sa.sa_flags = SA_SIGINFO | SA_ONSTACK;
+        sigaction(SIGSEGV, &sa, NULL);
+        sigaction(SIGBUS, &sa, NULL);
+    }
+
     jump_to_entry(ld_entry, sp);
     return 0;
 }
