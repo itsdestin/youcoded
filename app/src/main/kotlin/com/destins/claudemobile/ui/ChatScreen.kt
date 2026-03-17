@@ -80,17 +80,21 @@ fun ChatScreen(bridge: PtyBridge) {
     val photoPickerLauncher = rememberLauncherForActivityResult(
         ActivityResultContracts.PickVisualMedia()
     ) { uri ->
-        uri?.let {
-            val attachDir = File(bridge.homeDir, "attachments").also { it.mkdirs() }
-            val timestamp = System.currentTimeMillis()
-            val destFile = File(attachDir, "$timestamp.png")
-            try {
-                context.contentResolver.openInputStream(it)?.use { input ->
-                    destFile.outputStream().use { output -> input.copyTo(output) }
+        uri?.let { selectedUri ->
+            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+                val attachDir = File(bridge.homeDir, "attachments").also { it.mkdirs() }
+                val timestamp = System.currentTimeMillis()
+                val destFile = File(attachDir, "$timestamp.png")
+                try {
+                    context.contentResolver.openInputStream(selectedUri)?.use { input ->
+                        destFile.outputStream().use { output -> input.copyTo(output) }
+                    }
+                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                        attachmentPath = destFile.absolutePath
+                    }
+                } catch (_: Exception) {
+                    // Silently fail — user can retry
                 }
-                attachmentPath = destFile.absolutePath
-            } catch (_: Exception) {
-                // Silently fail — user can retry
             }
         }
     }
