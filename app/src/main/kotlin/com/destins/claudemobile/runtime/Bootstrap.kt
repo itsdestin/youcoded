@@ -104,7 +104,7 @@ class Bootstrap(private val context: Context) {
         // Configure apt sources for Termux package repos
         setupAptSources()
 
-        onProgress(Progress.Extracting(100))
+        onProgress(Progress.Extracting(30))
     }
 
     /**
