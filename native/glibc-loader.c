@@ -25,6 +25,31 @@
 #include <unistd.h>
 
 static void errstr(const char *s) { write(2, s, strlen(s)); }
+
+static void hexprint(const char *label, uintptr_t val) {
+    char buf[80];
+    int len = 0;
+    while (*label) buf[len++] = *label++;
+    for (int s = 60; s >= 0; s -= 4) {
+        int n = (val >> s) & 0xf;
+        buf[len++] = n < 10 ? '0'+n : 'a'+n-10;
+    }
+    buf[len++] = '\n';
+    write(2, buf, len);
+}
+
+static void crash_handler(int sig, siginfo_t *info, void *ctx) {
+    errstr("=== SIGSEGV CAUGHT ===\n");
+    hexprint("fault_addr=", (uintptr_t)info->si_addr);
+    ucontext_t *uc = (ucontext_t *)ctx;
+    hexprint("pc=", uc->uc_mcontext.pc);
+    hexprint("sp=", uc->uc_mcontext.sp);
+    hexprint("x0=", uc->uc_mcontext.regs[0]);
+    hexprint("x1=", uc->uc_mcontext.regs[1]);
+    hexprint("x29=", uc->uc_mcontext.regs[29]);
+    hexprint("x30=", uc->uc_mcontext.regs[30]);
+    _exit(139);
+}
 static void die(const char *msg) {
     errstr("glibc-loader: ");
     errstr(msg);
