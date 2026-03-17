@@ -46,6 +46,9 @@ class PtyBridge(
                 val delta = transcript.substring(lastTranscriptLength)
                 lastTranscriptLength = transcript.length
                 _rawBuffer.append(delta)
+                if (_rawBuffer.length > RAW_BUFFER_MAX) {
+                    _rawBuffer.delete(0, _rawBuffer.length - RAW_BUFFER_MAX)
+                }
                 _outputFlow.tryEmit(delta)
             } else if (transcript.length < lastTranscriptLength) {
                 lastTranscriptLength = transcript.length
