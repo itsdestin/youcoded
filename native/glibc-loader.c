@@ -107,8 +107,12 @@ static uintptr_t map_elf(int fd, Elf64_Ehdr *ehdr) {
         if (file_map_len > map_end - map_start)
             file_map_len = map_end - map_start;
 
+        int mmap_prot = prot;
+        /* Add PROT_WRITE temporarily if we need to zero BSS in this segment */
+        if (phdrs[i].p_memsz > phdrs[i].p_filesz)
+            mmap_prot |= PROT_WRITE;
         void *seg = mmap((void *)map_start, file_map_len,
-                         prot | PROT_WRITE,
+                         mmap_prot,
                          MAP_PRIVATE | MAP_FIXED, fd, map_off);
         if (seg == MAP_FAILED) die("mmap segment");
 
