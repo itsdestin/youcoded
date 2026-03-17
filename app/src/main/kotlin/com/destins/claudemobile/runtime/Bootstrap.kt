@@ -148,6 +148,104 @@ class Bootstrap(private val context: Context) {
 
     private val termuxRepo = "https://packages.termux.dev/apt/termux-main"
 
+    data class PackageInfo(
+        val name: String,
+        val version: String,
+        val filename: String,
+        val sha256: String,
+        val depends: List<String>
+    )
+
+    /**
+     * Parse the Termux Packages index (RFC 822-style stanzas).
+     * Returns map of package name to PackageInfo.
+     */
+    private fun parsePackagesIndex(text: String): Map<String, PackageInfo> {
+        val packages = mutableMapOf<String, PackageInfo>()
+        val stanzas = text.replace("\r\n", "\n").split("\n\n")
+        for (stanza in stanzas) {
+            val fields = mutableMapOf<String, String>()
+            var currentKey = ""
+            for (line in stanza.lines()) {
+                if (line.startsWith(" ") || line.startsWith("\t")) {
+                    fields[currentKey] = (fields[currentKey] ?: "") + "\n" + line.trim()
+                } else if (":" in line) {
+                    val (key, value) = line.split(":", limit = 2)
+                    currentKey = key.trim()
+                    fields[currentKey] = value.trim()
+                }
+            }
+            val name = fields["Package"] ?: continue
+            val version = fields["Version"] ?: continue
+            val filename = fields["Filename"] ?: continue
+            val sha256 = fields["SHA256"] ?: continue
+            val depends = fields["Depends"]
+                ?.split(",")
+                ?.map { it.trim().split("\\s+".toRegex()).first() }
+                ?: emptyList()
+            packages[name] = PackageInfo(name, version, filename, sha256, depends)
+        }
+        return packages
+    }
+
+    private val indexDir get() = File(usrDir, "var/lib/claude-mobile").also { it.mkdirs() }
+    private val cachedIndexFile get() = File(indexDir, "Packages")
+    private val installedVersionsFile get() = File(indexDir, "installed.properties")
+
+    private fun loadInstalledVersions(): MutableMap<String, String> {
+        val map = mutableMapOf<String, String>()
+        if (installedVersionsFile.exists()) {
+            for (line in installedVersionsFile.readLines()) {
+                val parts = line.split("=", limit = 2)
+                if (parts.size == 2) map[parts[0]] = parts[1]
+            }
+        }
+        return map
+    }
+
+    private fun saveInstalledVersions(versions: Map<String, String>) {
+        installedVersionsFile.writeText(
+            versions.entries.joinToString("\n") { "${it.key}=${it.value}" }
+        )
+    }
+
+    /**
+     * Fetch (or use cached) Termux Packages index.
+     * Re-fetches if cache is missing, stale (>24h), or force=true.
+     */
+    private fun fetchPackagesIndex(force: Boolean = false): Map<String, PackageInfo> {
+        val cacheMaxAge = 24 * 60 * 60 * 1000L
+        val cacheValid = cachedIndexFile.exists() &&
+            (System.currentTimeMillis() - cachedIndexFile.lastModified()) < cacheMaxAge
+
+        if (!force && cacheValid) {
+            return parsePackagesIndex(cachedIndexFile.readText())
+        }
+
+        val indexUrl = "$termuxRepo/dists/stable/main/binary-aarch64/Packages"
+        var connection: java.net.HttpURLConnection? = null
+        try {
+            connection = java.net.URL(indexUrl).openConnection() as java.net.HttpURLConnection
+            connection.connectTimeout = 15000
+            connection.readTimeout = 30000
+            if (connection.responseCode != 200) {
+                throw IOException("Failed to fetch package index: HTTP ${connection.responseCode}")
+            }
+            val text = connection.inputStream.bufferedReader().readText()
+            connection.disconnect()
+            connection = null
+            cachedIndexFile.parentFile?.mkdirs()
+            cachedIndexFile.writeText(text)
+            return parsePackagesIndex(text)
+        } catch (e: Exception) {
+            connection?.disconnect()
+            if (cachedIndexFile.exists()) {
+                return parsePackagesIndex(cachedIndexFile.readText())
+            }
+            throw IOException("Cannot fetch package index and no cache available: ${e.message}", e)
+        }
+    }
+
     /**
      * Download .deb packages directly from Termux repos and extract them.
      * Uses pure Java extraction (no shell) because this runs during initial
