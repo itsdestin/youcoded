@@ -150,18 +150,22 @@ private fun fetchPackagesIndex(force: Boolean = false): Map<String, PackageInfo>
     }
 
     val indexUrl = "$termuxRepo/dists/stable/main/binary-aarch64/Packages"
+    var connection: java.net.HttpURLConnection? = null
     try {
-        val connection = java.net.URL(indexUrl).openConnection() as java.net.HttpURLConnection
+        connection = java.net.URL(indexUrl).openConnection() as java.net.HttpURLConnection
         connection.connectTimeout = 15000
         connection.readTimeout = 30000
         if (connection.responseCode != 200) {
             throw IOException("Failed to fetch package index: HTTP ${connection.responseCode}")
         }
         val text = connection.inputStream.bufferedReader().readText()
+        connection.disconnect()
+        connection = null
         cachedIndexFile.parentFile?.mkdirs()
         cachedIndexFile.writeText(text)
         return parsePackagesIndex(text)
     } catch (e: Exception) {
+        connection?.disconnect()
         if (cachedIndexFile.exists()) {
             return parsePackagesIndex(cachedIndexFile.readText())
         }
