@@ -249,49 +249,66 @@ class Bootstrap(private val context: Context) {
         }
     }
 
-    /**
-     * Download .deb packages directly from Termux repos and extract them.
-     * Uses pure Java extraction (no shell) because this runs during initial
-     * setup before the shell environment is fully configured. Runtime package
-     * installation via apt/pkg is available after setup (see setupAptSources).
-     */
+    /** Packages required for Claude Mobile, in dependency order. */
+    private val requiredPackages = listOf(
+        // Node.js runtime + deps
+        "c-ares", "libicu", "libsqlite", "nodejs", "npm",
+        // SELinux exec bypass
+        "termux-exec",
+        // Git + deps (deps first)
+        "openssl", "libcurl", "libexpat", "libiconv", "pcre2", "zlib", "git",
+        // GitHub CLI + deps
+        "openssh", "gh"
+    )
+
+    /** Check files that indicate a package is properly installed. */
+    private fun packageFileExists(name: String): Boolean {
+        val checkFile = when (name) {
+            "c-ares" -> "lib/libcares.so"
+            "libicu" -> return usrDir.resolve("lib").listFiles()
+                ?.any { it.name.startsWith("libicuuc.so") } == true
+            "libsqlite" -> "lib/libsqlite3.so"
+            "nodejs" -> "bin/node"
+            "npm" -> "lib/node_modules/npm"
+            "termux-exec" -> "lib/libtermux-exec-linker-ld-preload.so"
+            "openssl" -> "lib/libssl.so"
+            "libcurl" -> "lib/libcurl.so"
+            "libexpat" -> "lib/libexpat.so"
+            "libiconv" -> "lib/libiconv.so"
+            "pcre2" -> "lib/libpcre2-8.so"
+            "zlib" -> "lib/libz.so"
+            "git" -> "bin/git"
+            "gh" -> "bin/gh"
+            "openssh" -> "bin/ssh"
+            else -> return false
+        }
+        return File(usrDir, checkFile).exists()
+    }
+
     private fun installPackages(onProgress: (Progress) -> Unit) {
-        // Node.js dependencies first
-        if (!File(usrDir, "lib/libcares.so").exists()) {
-            onProgress(Progress.Installing("c-ares"))
-            installDeb("pool/main/c/c-ares/c-ares_1.34.6_aarch64.deb")
-        }
-        if (!File(usrDir, "lib/libicuuc.so.78").exists()) {
-            onProgress(Progress.Installing("libicu"))
-            installDeb("pool/main/libi/libicu/libicu_78.2_aarch64.deb")
-        }
-        if (!File(usrDir, "lib/libsqlite3.so").exists()) {
-            onProgress(Progress.Installing("libsqlite"))
-            installDeb("pool/main/libs/libsqlite/libsqlite_3.52.0-1_aarch64.deb")
+        val index = fetchPackagesIndex()
+        val installed = loadInstalledVersions()
+
+        for (name in requiredPackages) {
+            val pkg = index[name]
+            if (pkg == null) {
+                Log.w("Bootstrap", "Package '$name' not found in Termux index — skipping")
+                continue
+            }
+
+            val fileExists = packageFileExists(name)
+            val versionMatch = installed[name] == pkg.version
+
+            // Skip only if BOTH version matches AND binary exists (crash-safe)
+            if (fileExists && versionMatch) continue
+
+            onProgress(Progress.Installing(name))
+            installDeb(pkg)
+            installed[name] = pkg.version
+            saveInstalledVersions(installed)
         }
 
-        // Node.js is required for Claude Code and the parser
-        if (!File(usrDir, "bin/node").exists()) {
-            onProgress(Progress.Installing("nodejs"))
-            installDeb("pool/main/n/nodejs/nodejs_25.8.1_aarch64.deb")
-        }
-
-        // npm is needed to install Claude Code
-        if (!File(usrDir, "lib/node_modules/npm").exists()) {
-            onProgress(Progress.Installing("npm"))
-            installDeb("pool/main/n/npm/npm_11.11.1_all.deb")
-        }
-
-        // termux-exec: LD_PRELOAD library that intercepts execve() calls and routes
-        // embedded binaries through /system/bin/linker64 (bypasses SELinux).
-        // Required for Claude Code's Bash tool to spawn shell subprocesses.
-        if (!File(usrDir, "lib/libtermux-exec-linker-ld-preload.so").exists()) {
-            onProgress(Progress.Installing("termux-exec"))
-            installDeb("pool/main/t/termux-exec/termux-exec_1:2.4.0-1_aarch64.deb")
-        }
-        // The postinst script normally runs `termux-exec-ld-preload-lib setup` to
-        // create the primary .so, but that requires a working shell. Instead, copy
-        // the linker variant directly (needed for Android 15+ SELinux restrictions).
+        // termux-exec postinst: copy linker variant to primary .so
         val linkerSo = File(usrDir, "lib/libtermux-exec-linker-ld-preload.so")
         val primarySo = File(usrDir, "lib/libtermux-exec-ld-preload.so")
         if (linkerSo.exists() && !primarySo.exists()) {
@@ -299,37 +316,6 @@ class Bootstrap(private val context: Context) {
                 primarySo.outputStream().use { output -> input.copyTo(output) }
             }
             primarySo.setExecutable(true)
-        }
-
-        // Git and its runtime dependencies
-        // TODO: Resolve exact .deb paths from Termux API (currently hardcoded URLs)
-        if (!File(usrDir, "lib/libssl.so").exists()) {
-            onProgress(Progress.Installing("openssl"))
-            installDeb("pool/main/o/openssl/openssl_3.5.0_aarch64.deb")
-        }
-        if (!File(usrDir, "lib/libcurl.so").exists()) {
-            onProgress(Progress.Installing("libcurl"))
-            installDeb("pool/main/c/curl/libcurl_8.13.0_aarch64.deb")
-        }
-        if (!File(usrDir, "lib/libexpat.so").exists()) {
-            onProgress(Progress.Installing("libexpat"))
-            installDeb("pool/main/e/expat/libexpat_2.7.1_aarch64.deb")
-        }
-        if (!File(usrDir, "lib/libiconv.so").exists()) {
-            onProgress(Progress.Installing("libiconv"))
-            installDeb("pool/main/libi/libiconv/libiconv_1.18_aarch64.deb")
-        }
-        if (!File(usrDir, "lib/libpcre2-8.so").exists()) {
-            onProgress(Progress.Installing("pcre2"))
-            installDeb("pool/main/p/pcre2/libpcre2_10.45_aarch64.deb")
-        }
-        if (!File(usrDir, "lib/libz.so").exists()) {
-            onProgress(Progress.Installing("zlib"))
-            installDeb("pool/main/z/zlib/zlib_1.3.1_aarch64.deb")
-        }
-        if (!File(usrDir, "bin/git").exists()) {
-            onProgress(Progress.Installing("git"))
-            installDeb("pool/main/g/git/git_2.49.0_aarch64.deb")
         }
     }
 
