@@ -170,7 +170,6 @@ int main(int argc, char **argv, char **envp) {
     }
 
     const char *ldlinux_path = argv[arg_start];
-    const char *program_path = argv[arg_start + 1];
 
     /* 1. Map ld-linux (unrelocated, just like kernel does) */
     errstr("mapping ld-linux...\n");
@@ -183,23 +182,14 @@ int main(int argc, char **argv, char **envp) {
     close(ld_fd);
     errstr("ld-linux mapped OK\n");
 
-    /* 2. Map the target program (unrelocated, just like kernel does) */
-    errstr("mapping program...\n");
-    int prog_fd = open(program_path, O_RDONLY);
-    if (prog_fd < 0) die("open program");
-    Elf64_Ehdr prog_ehdr;
-    if (read_ehdr(prog_fd, &prog_ehdr) < 0) die("bad program ELF");
-    uintptr_t prog_bias = map_elf(prog_fd, &prog_ehdr);
-    uintptr_t prog_entry = prog_ehdr.e_entry + prog_bias;
-    close(prog_fd);
-    errstr("program mapped OK\n");
+    /* ld-linux's mapped phdrs (in the loaded image) */
+    Elf64_Phdr *ld_phdr = (Elf64_Phdr *)(ld_bias + ld_ehdr.e_phoff);
 
-    /* Program's mapped phdrs (in the loaded image) */
-    Elf64_Phdr *prog_phdr = (Elf64_Phdr *)(prog_bias + prog_ehdr.e_phoff);
-
-    /* 3. Build argv for the program (from program path onward) */
-    int new_argc = argc - arg_start - 1;  /* skip ld-linux, keep program + its args */
-    char **new_argv = &argv[arg_start + 1];
+    /* Command mode: ld-linux IS the program.
+     * Pass all remaining args (after ld-linux path) as ld-linux's argv.
+     * ld-linux will parse --library-path, find the program, open & map it. */
+    int new_argc = argc - arg_start;  /* include ld-linux path as argv[0] */
+    char **new_argv = &argv[arg_start];
 
     /* Count envp */
     int envc = 0;
