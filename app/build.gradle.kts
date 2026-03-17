@@ -47,9 +47,10 @@ dependencies {
     // Termux terminal emulator (PTY session management)
     implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")
 
-    // Apache Commons Compress for extracting .deb packages (ar + tar + xz)
+    // Apache Commons Compress for extracting .deb packages (ar + tar + xz + zstd)
     implementation("org.apache.commons:commons-compress:1.27.1")
     implementation("org.tukaani:xz:1.10")
+    implementation("com.github.luben:zstd-jni:1.5.6-3")
 
     // Markdown parsing for chat view
     implementation("org.commonmark:commonmark:0.24.0")
