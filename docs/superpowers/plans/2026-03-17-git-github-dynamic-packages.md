@@ -428,14 +428,14 @@ git commit -m "fix: add GIT_EXEC_PATH and GIT_TEMPLATE_DIR for relocated prefix"
 
 ---
 
-### Task 6: Fix Wrapper — Bare Command Name Resolution
+### Task 5: Fix Wrapper — Bare Command Name Resolution
 
 **Files:**
 - Modify: `app/src/main/kotlin/.../runtime/PtyBridge.kt` — `WRAPPER_JS` constant (lines 213-336)
 
 - [ ] **Step 1: Add resolveCmd function to wrapper**
 
-In the WRAPPER_JS string, after the `fixPath` function definition (line 224), add:
+In the WRAPPER_JS string, place this AFTER the `fs.accessSync` patch (after line 234, where `_as` is already defined). It must come after `_as` is saved or it will crash at runtime:
 
 ```javascript
 function resolveCmd(c) {
@@ -447,8 +447,6 @@ function resolveCmd(c) {
     return c;
 }
 ```
-
-Note: `_as` is the saved original `fs.accessSync` (already defined on line 230). The `resolveCmd` definition must appear AFTER `_as` is defined. Place it after line 234 (after the `fs.accessSync` patch).
 
 - [ ] **Step 2: Apply resolveCmd in execFileSync**
 
