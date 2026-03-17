@@ -147,16 +147,18 @@ fun ChatScreen(bridge: PtyBridge) {
     }
 
     // Fallback approval detection: PTY silence heuristic
-    LaunchedEffect(chatState.messages.size) {
+    LaunchedEffect(chatState.messages.size, "approval_heuristic") {
         val lastMsg = chatState.messages.lastOrNull()
         val running = lastMsg?.content as? MessageContent.ToolRunning ?: return@LaunchedEffect
         delay(2000)
-        // Check if still in running state and PTY is quiet
-        val stillRunning = chatState.messages.lastOrNull {
+        // Re-check the tool's current state — the real event path may have
+        // already transitioned it to Complete/Failed/AwaitingApproval
+        val currentMsg = chatState.messages.lastOrNull {
             val c = it.content
             c is MessageContent.ToolRunning && c.toolUseId == running.toolUseId
         }
-        if (stillRunning != null) {
+        // Only apply heuristic if the tool is still in Running state
+        if (currentMsg != null) {
             val now = System.currentTimeMillis()
             val lastOutput = bridge.lastPtyOutputTime.value
             if (now - lastOutput > 2000) {
@@ -166,7 +168,7 @@ fun ChatScreen(bridge: PtyBridge) {
     }
 
     // Auto-scroll on new messages
-    LaunchedEffect(chatState.messages.size) {
+    LaunchedEffect(chatState.messages.size, "auto_scroll") {
         if (chatState.messages.isNotEmpty()) {
             listState.animateScrollToItem(chatState.messages.size - 1)
         }
