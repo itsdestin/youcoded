@@ -268,8 +268,29 @@ int main(int argc, char **argv, char **envp) {
     *frame++ = 0;
     memcpy(frame, auxv, ai * sizeof(Elf64_auxv_t));
 
-    /* 6. Jump to ld-linux's entry point */
-    errstr("jumping to ld-linux entry...\n");
+    /* 6. Verify stack layout before jump */
+    {
+        char hex[32];
+        uintptr_t *p = sp;
+        errstr("stack[0] argc=");
+        int v = (int)*p; hex[0]='0'+v; hex[1]='\n'; write(2,hex,2);
+        p++; /* argv[0] */
+        errstr("argv[0]="); errstr((char*)*p); errstr("\n");
+
+        /* Print AT_BASE value */
+        char buf[80];
+        int len = 0;
+        buf[len++]='B'; buf[len++]='A'; buf[len++]='S'; buf[len++]='E'; buf[len++]='=';
+        uintptr_t bv = ld_bias;
+        for (int s = 60; s >= 0; s -= 4) {
+            int nib = (bv >> s) & 0xf;
+            buf[len++] = nib < 10 ? '0'+nib : 'a'+nib-10;
+        }
+        buf[len++] = '\n';
+        write(2, buf, len);
+
+        errstr("jumping to ld-linux entry...\n");
+    }
     jump_to_entry(ld_entry, sp);
     return 0;
 }
