@@ -119,8 +119,9 @@ private fun RenderBlock(
             ) {
                 Column {
                     var child = node.firstChild
+                    var childIdx = 0
                     while (child != null) {
-                        RenderBlock(child, BLOCKQUOTE_TEXT, expandedCardId, onToggleCard)
+                        RenderBlock(child, BLOCKQUOTE_TEXT, blockIndex * 100 + childIdx++, expandedCardId, onToggleCard)
                         child = child.next
                     }
                 }
@@ -129,6 +130,7 @@ private fun RenderBlock(
         is BulletList -> {
             Column(modifier = Modifier.padding(start = 8.dp)) {
                 var item = node.firstChild
+                var childIdx = 0
                 while (item != null) {
                     if (item is ListItem) {
                         Row(modifier = Modifier.padding(vertical = 1.dp)) {
@@ -136,7 +138,7 @@ private fun RenderBlock(
                             Column(modifier = Modifier.weight(1f)) {
                                 var child = item.firstChild
                                 while (child != null) {
-                                    RenderBlock(child, textColor, expandedCardId, onToggleCard)
+                                    RenderBlock(child, textColor, blockIndex * 100 + childIdx++, expandedCardId, onToggleCard)
                                     child = child.next
                                 }
                             }
@@ -150,6 +152,7 @@ private fun RenderBlock(
             Column(modifier = Modifier.padding(start = 8.dp)) {
                 var index = node.startNumber
                 var item = node.firstChild
+                var childIdx = 0
                 while (item != null) {
                     if (item is ListItem) {
                         Row(modifier = Modifier.padding(vertical = 1.dp)) {
@@ -157,7 +160,7 @@ private fun RenderBlock(
                             Column(modifier = Modifier.weight(1f)) {
                                 var child = item.firstChild
                                 while (child != null) {
-                                    RenderBlock(child, textColor, expandedCardId, onToggleCard)
+                                    RenderBlock(child, textColor, blockIndex * 100 + childIdx++, expandedCardId, onToggleCard)
                                     child = child.next
                                 }
                             }
