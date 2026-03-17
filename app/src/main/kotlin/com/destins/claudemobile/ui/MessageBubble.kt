@@ -93,6 +93,7 @@ fun MessageBubble(
                 session = session,
                 screenVersion = screenVersion,
                 onAccept = onAcceptApproval,
+                onAcceptAlways = onAcceptAlwaysApproval,
                 onReject = onRejectApproval,
             )
             return
