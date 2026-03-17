@@ -181,29 +181,9 @@ int main(int argc, char **argv, char **envp) {
     /* Read ld-linux's phdrs from the mapped image */
     Elf64_Phdr *ld_phdr = (Elf64_Phdr *)(ld_bias + ld_ehdr.e_phoff);
 
-    /* Open the target program to get its info for auxv */
-    int prog_fd = open(argv[2], O_RDONLY);
-    if (prog_fd < 0) die("open program");
-
-    Elf64_Ehdr prog_ehdr;
-    if (read_ehdr(prog_fd, &prog_ehdr) < 0) die("bad program ELF");
-
-    /* We DON'T map the program — ld-linux will do that.
-     * But we need the program's PHDR info for auxv.
-     * Actually, ld-linux reads the program path from argv[0] (its first arg).
-     * For the "ld-linux <program>" invocation mode, ld-linux opens the program
-     * itself. We just need to pass it as argv.
-     *
-     * The auxv we construct tells ld-linux about ITSELF:
-     * - AT_PHDR = ld-linux's mapped phdrs
-     * - AT_PHNUM = ld-linux's phdr count
-     * - AT_PHENT = sizeof(Elf64_Phdr)
-     * - AT_BASE = 0 (ld-linux IS the program from auxv perspective)
-     * - AT_ENTRY = ld-linux's entry (not used in this mode)
-     * - AT_PAGESZ = page size
-     * - AT_RANDOM = 16 random bytes
-     */
-    close(prog_fd);
+    /* We DON'T open or map the target program — ld-linux will do that.
+     * ld-linux reads the program path from its argv (the --library-path and
+     * program args we pass through). The auxv tells ld-linux about ITSELF. */
 
     /* Count envp */
     int envc = 0;
