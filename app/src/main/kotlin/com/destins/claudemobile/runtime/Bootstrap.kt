@@ -1,16 +1,19 @@
 package com.destins.claudemobile.runtime
 
 import android.content.Context
+import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
 import java.net.URL
+import java.security.MessageDigest
 import java.util.zip.ZipInputStream
 import org.apache.commons.compress.archivers.ar.ArArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.tukaani.xz.XZInputStream
+import com.github.luben.zstd.ZstdInputStream
 
 class Bootstrap(private val context: Context) {
 
