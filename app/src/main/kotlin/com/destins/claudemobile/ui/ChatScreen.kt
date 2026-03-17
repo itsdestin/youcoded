@@ -506,3 +506,83 @@ fun ChatScreen(bridge: PtyBridge) {
         } // when
     }
 }
+
+/** Shared header bar for Terminal and Shell modes. */
+@Composable
+private fun ModeHeader(
+    title: String,
+    leftIcon: androidx.compose.ui.graphics.vector.ImageVector,
+    onLeftClick: () -> Unit,
+    rightIcon: androidx.compose.ui.graphics.vector.ImageVector = com.destins.claudemobile.ui.theme.AppIcons.ClaudeMascot,
+    onRightClick: (() -> Unit)? = null,
+) {
+    val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(MaterialTheme.colorScheme.background)
+            .padding(horizontal = 6.dp, vertical = 5.dp),
+    ) {
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterStart)
+                .height(34.dp)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                .background(MaterialTheme.colorScheme.surface)
+                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                .clickable(onClick = onLeftClick)
+                .padding(horizontal = 10.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(leftIcon, contentDescription = "Back",
+                tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(18.dp))
+        }
+        Text(title, fontSize = 15.sp,
+            color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
+            modifier = Modifier.align(Alignment.Center))
+        Box(
+            modifier = Modifier
+                .align(Alignment.CenterEnd)
+                .size(34.dp)
+                .clip(androidx.compose.foundation.shape.CircleShape)
+                .background(MaterialTheme.colorScheme.surface)
+                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
+                .then(if (onRightClick != null) Modifier.clickable(onClick = onRightClick) else Modifier),
+            contentAlignment = Alignment.Center,
+        ) {
+            Icon(rightIcon, contentDescription = title,
+                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        }
+    }
+    HorizontalDivider(color = borderColor, thickness = 0.5.dp)
+}
+
+/** Invisible text field that forwards soft keyboard input to a PTY. */
+@Composable
+private fun PtyInputField(
+    focusRequester: FocusRequester,
+    onInput: (String) -> Unit,
+    onEnter: () -> Unit,
+) {
+    var buffer by remember { mutableStateOf("") }
+    BasicTextField(
+        value = buffer,
+        onValueChange = { newValue ->
+            if (newValue.length > buffer.length) {
+                onInput(newValue.substring(buffer.length))
+            } else if (newValue.length < buffer.length) {
+                repeat(buffer.length - newValue.length) { onInput("\u007f") }
+            }
+            buffer = if (newValue.length > 1000) newValue.takeLast(500) else newValue
+        },
+        singleLine = true,
+        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
+        keyboardActions = KeyboardActions(onSend = { onEnter() }),
+        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 1.sp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(1.dp)
+            .alpha(0f)
+            .focusRequester(focusRequester),
+    )
+}
