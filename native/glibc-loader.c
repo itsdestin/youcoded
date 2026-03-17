@@ -222,20 +222,20 @@ int main(int argc, char **argv, char **envp) {
     memcpy(sp, ldlinux_path, execfn_len);
     uintptr_t execfn_addr = (uintptr_t)sp;
 
-    /* 5. Build auxiliary vector — INTERPRETER MODE
-     * AT_PHDR  → program's phdrs (already mapped)
-     * AT_BASE  → ld-linux's load bias (so it can find itself)
-     * AT_ENTRY → program's entry point
+    /* 5. Build auxiliary vector — COMMAND MODE
+     * AT_PHDR  → ld-linux's own phdrs (it IS the program)
+     * AT_ENTRY → ld-linux's entry point
+     * AT_BASE  → 0 (no separate interpreter)
      */
     #define AUX_CNT 12
     Elf64_auxv_t auxv[AUX_CNT + 1];
     int ai = 0;
-    auxv[ai].a_type = AT_PHDR;    auxv[ai].a_un.a_val = (uintptr_t)prog_phdr; ai++;
+    auxv[ai].a_type = AT_PHDR;    auxv[ai].a_un.a_val = (uintptr_t)ld_phdr; ai++;
     auxv[ai].a_type = AT_PHENT;   auxv[ai].a_un.a_val = sizeof(Elf64_Phdr); ai++;
-    auxv[ai].a_type = AT_PHNUM;   auxv[ai].a_un.a_val = prog_ehdr.e_phnum; ai++;
+    auxv[ai].a_type = AT_PHNUM;   auxv[ai].a_un.a_val = ld_ehdr.e_phnum; ai++;
     auxv[ai].a_type = AT_PAGESZ;  auxv[ai].a_un.a_val = sysconf(_SC_PAGESIZE); ai++;
-    auxv[ai].a_type = AT_BASE;    auxv[ai].a_un.a_val = ld_bias; ai++;
-    auxv[ai].a_type = AT_ENTRY;   auxv[ai].a_un.a_val = prog_entry; ai++;
+    auxv[ai].a_type = AT_BASE;    auxv[ai].a_un.a_val = 0; ai++;
+    auxv[ai].a_type = AT_ENTRY;   auxv[ai].a_un.a_val = ld_entry; ai++;
     auxv[ai].a_type = AT_FLAGS;   auxv[ai].a_un.a_val = 0; ai++;
     auxv[ai].a_type = AT_UID;     auxv[ai].a_un.a_val = getuid(); ai++;
     auxv[ai].a_type = AT_GID;     auxv[ai].a_un.a_val = getgid(); ai++;
