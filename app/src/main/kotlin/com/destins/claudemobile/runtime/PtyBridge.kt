@@ -237,7 +237,7 @@ fs.accessSync = function(p, m) {
     var a = Array.prototype.slice.call(arguments); a[0] = p;
     return _as.apply(this, a);
 };
-// Redirect /tmp to $HOME/tmp for common fs operations
+// Redirect /tmp to HOME/tmp for common fs operations
 ['writeFileSync','readFileSync','existsSync','statSync','lstatSync','readdirSync',
  'mkdirSync','unlinkSync','rmdirSync','chmodSync','renameSync','copyFileSync'].forEach(function(m) {
     var orig = fs[m]; if (!orig) return;
