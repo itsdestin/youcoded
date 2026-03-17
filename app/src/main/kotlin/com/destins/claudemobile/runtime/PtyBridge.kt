@@ -281,10 +281,13 @@ child_process.execFileSync = function(file) {
         var a = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
         var opts = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[2] : arguments[1];
         if (file.endsWith('/bash')) { a = stripLogin(a); }
+        a = fixTmpArgs(a);
         a = injectEnv(file, a);
         return _efs.call(this, LINKER64, [file].concat(a), opts);
     }
-    return _efs.apply(this, arguments);
+    var all = Array.prototype.slice.call(arguments);
+    if (all.length > 1 && Array.isArray(all[1])) all[1] = fixTmpArgs(all[1]);
+    return _efs.apply(this, all);
 };
 var _ef = child_process.execFile;
 child_process.execFile = function(file) {
@@ -295,10 +298,13 @@ child_process.execFile = function(file) {
         var a = rest.length > 0 && Array.isArray(rest[0]) ? rest[0] : [];
         var remaining = rest.length > 0 && Array.isArray(rest[0]) ? rest.slice(1) : rest;
         if (file.endsWith('/bash')) { a = stripLogin(a); }
+        a = fixTmpArgs(a);
         a = injectEnv(file, a);
         return _ef.apply(this, [LINKER64, [file].concat(a)].concat(remaining));
     }
-    return _ef.apply(this, arguments);
+    var all = Array.prototype.slice.call(arguments);
+    if (all.length > 1 && Array.isArray(all[1])) all[1] = fixTmpArgs(all[1]);
+    return _ef.apply(this, all);
 };
 // Strip -l flag from bash args. Claude Code sends ["-c", "-l", cmd] but
 // via linker64 bash treats -l as the command string, not an option.
