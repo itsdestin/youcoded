@@ -100,40 +100,24 @@ fun MessageBubble(
             return
         }
         is MessageContent.ToolComplete -> {
-            when (content.tool) {
-                "Bash" -> {
-                    val command = content.result.optString("command", content.args)
-                    val output = content.result.optString("stdout",
-                        content.result.optString("output", content.result.toString()))
-                    CodeCard(
-                        cardId = content.cardId,
-                        language = "bash",
-                        code = "$ $command\n$output",
-                        isExpanded = expandedCardId == content.cardId,
-                        onToggle = onToggleCard,
-                    )
-                }
-                else -> {
-                    ToolCard(
-                        cardId = content.cardId,
-                        tool = content.tool,
-                        args = content.args,
-                        state = ToolCardState.Complete,
-                        result = content.result,
-                        isExpanded = expandedCardId == content.cardId,
-                        onToggle = onToggleCard,
-                        session = session,
-                        screenVersion = screenVersion,
-                    )
-                }
-            }
+            ToolCard(
+                cardId = content.cardId,
+                tool = content.tool,
+                args = content.args,
+                state = ToolCardState.Complete,
+                result = content.result,
+                isExpanded = expandedCardId == content.cardId,
+                onToggle = onToggleCard,
+            )
             return
         }
         is MessageContent.ToolFailed -> {
-            ErrorCard(
+            ToolCard(
                 cardId = content.cardId,
-                message = "${content.tool} failed",
-                details = content.error.optString("message", content.error.toString()),
+                tool = content.tool,
+                args = content.args,
+                state = ToolCardState.Failed,
+                errorMessage = content.error.optString("message", content.error.toString()),
                 isExpanded = expandedCardId == content.cardId,
                 onToggle = onToggleCard,
             )
