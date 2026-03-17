@@ -65,6 +65,7 @@ fun MessageBubble(
     expandedCardId: String? = null,
     onToggleCard: (String) -> Unit = {},
     onAcceptApproval: () -> Unit = {},
+    onAcceptAlwaysApproval: () -> Unit = {},
     onRejectApproval: () -> Unit = {},
     session: TerminalSession? = null,
     screenVersion: Int = 0,
