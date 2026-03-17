@@ -157,7 +157,7 @@ This makes `spawn("git", ["status"])` resolve to `spawn("/data/.../usr/bin/git",
 
 **Same fix needed in `execFileSync` and `execFile`** — add `file = resolveCmd(file)` before the `isEB(file)` check.
 
-### 6. GitHub Authentication
+### 8. GitHub Authentication
 
 **Approach:** `gh auth login` device flow only. No app-level settings or token storage.
 
