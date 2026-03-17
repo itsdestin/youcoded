@@ -252,14 +252,24 @@ class Bootstrap(private val context: Context) {
 
     /** Packages required for Claude Mobile, in dependency order. */
     private val requiredPackages = listOf(
+        // Core shared libs (used by multiple packages)
+        "libandroid-support", "libandroid-posix-semaphore", "openssl", "zlib",
+        "libiconv", "libexpat", "pcre2",
         // Node.js runtime + deps
         "c-ares", "libicu", "libsqlite", "nodejs", "npm",
         // SELinux exec bypass
         "termux-exec",
-        // Git + deps (deps first)
-        "openssl", "libcurl", "libexpat", "libiconv", "pcre2", "zlib", "git",
+        // curl + deps (libcurl needs nghttp2/3, ngtcp2, libssh2)
+        "libnghttp2", "libnghttp3", "libngtcp2", "libssh2", "libcurl", "curl",
+        // Git + deps
+        "git",
         // GitHub CLI + deps
         "openssh", "gh",
+        // Python + deps
+        "gdbm", "libbz2", "libcrypt", "libffi", "liblzma",
+        "ncurses", "ncurses-ui-libs", "readline", "python",
+        // wget + deps
+        "libunistring", "libidn2", "libuuid", "wget",
         // Cloud storage sync
         "rclone"
     )
