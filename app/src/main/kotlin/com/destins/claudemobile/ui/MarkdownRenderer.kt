@@ -45,8 +45,9 @@ fun MarkdownRenderer(
 
     Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
         var node = document.firstChild
+        var blockIndex = 0
         while (node != null) {
-            RenderBlock(node, textColor, expandedCardId, onToggleCard)
+            RenderBlock(node, textColor, blockIndex++, expandedCardId, onToggleCard)
             node = node.next
         }
     }
