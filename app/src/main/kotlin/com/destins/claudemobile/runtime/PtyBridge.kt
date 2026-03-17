@@ -150,7 +150,7 @@ class PtyBridge(
     /** Check whether the current PTY screen contains an "always allow" option.
      *  Used to distinguish 2-option (Yes/No) from 3-option (Yes/Always/No) prompts. */
     fun hasAlwaysAllowOption(): Boolean {
-        val recent = rawBuffer.takeLast(500).lowercase()
+        val recent = rawBuffer.takeLast(2000).lowercase()
         val result = "always" in recent || "ask again" in recent
         android.util.Log.d("PtyBridge", "hasAlwaysAllowOption=$result, recent buffer (last 500): [$recent]")
         return result
