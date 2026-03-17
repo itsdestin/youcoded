@@ -152,27 +152,21 @@ __asm__(
 );
 
 int main(int argc, char **argv, char **envp) {
-    /* Debug: print argc */
-    char dbg[64];
-    int n = 0;
-    dbg[n++] = 'a'; dbg[n++] = 'r'; dbg[n++] = 'g';
-    dbg[n++] = 'c'; dbg[n++] = '=';
-    dbg[n++] = '0' + argc;
-    dbg[n++] = '\n';
-    write(2, dbg, n);
-    for (int i = 0; i < argc && i < 5; i++) {
-        write(2, "  ", 2);
-        write(2, argv[i], strlen(argv[i]));
-        write(2, "\n", 1);
-    }
+    /* linker64 sets argv[0] to itself and argv[1] to our binary.
+     * Skip past our own name to find the real arguments. */
+    int arg_start = 1; /* default: argv[1] is ld-linux */
+    /* If argv[0] contains "linker64", we're invoked via linker64 and
+     * argv[1] is our own path, so real args start at argv[2] */
+    if (argc >= 2 && strstr(argv[0], "linker64"))
+        arg_start = 2;
 
-    if (argc < 3) {
+    if (argc - arg_start < 2) {
         errstr("Usage: glibc-loader <ld-linux.so> <program> [args...]\n");
         _exit(1);
     }
 
-    const char *ldlinux_path = argv[1];
-    const char *program_path = argv[2];
+    const char *ldlinux_path = argv[arg_start];
+    const char *program_path = argv[arg_start + 1];
 
     /* 1. Map ld-linux (unrelocated, just like kernel does) */
     int ld_fd = open(ldlinux_path, O_RDONLY);
