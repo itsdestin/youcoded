@@ -276,11 +276,9 @@ The hooks-based chat pipeline is implemented but needs end-to-end validation wit
 - ToolCard expand/collapse with real JSON results
 - Activity indicator clearing reliably on Stop events
 
-### Priority 2: Markdown Rendering
+### ~~Priority 2: Markdown Rendering~~ — Done (v2.5)
 
-Response bubbles currently render `last_assistant_message` as plain text. Claude's output is markdown — bold, italic, code spans, code blocks, links, and lists are all lost. Options:
-- Compose markdown library (e.g., `mikepenz/multiplatform-markdown-renderer`)
-- Basic regex-based annotated string (handles bold/italic/code spans, skips full block rendering)
+`MarkdownRenderer.kt` renders Claude responses using CommonMark parser. Supports headings, bold, italic, inline code, fenced/indented code blocks (with `CodeCard` + syntax highlighting), blockquotes, bullet/ordered lists, thematic breaks, and clickable links. Response bubbles route through `MarkdownRenderer` in `MessageBubble.kt`.
 
 ### Priority 3: Native Binary Support (R&D)
 
