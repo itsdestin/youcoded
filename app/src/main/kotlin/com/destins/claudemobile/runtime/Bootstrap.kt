@@ -326,8 +326,14 @@ class Bootstrap(private val context: Context) {
             .redirectErrorStream(true)
         pb.environment().putAll(buildRuntimeEnv())
         val process = pb.start()
-        val output = process.inputStream.bufferedReader().readText()
+        // Read stdout in a separate thread to avoid pipe buffer deadlock.
+        // npm install can produce >64KB of output, which fills the OS pipe buffer
+        // and blocks the process if the reader hasn't drained it.
+        val outputFuture = java.util.concurrent.CompletableFuture.supplyAsync {
+            process.inputStream.bufferedReader().readText()
+        }
         val exitCode = process.waitFor()
+        val output = outputFuture.get()
         if (exitCode != 0) {
             throw IOException("npm install claude-code failed (exit $exitCode): $output")
         }
