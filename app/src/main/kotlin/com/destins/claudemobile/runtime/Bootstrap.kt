@@ -283,6 +283,7 @@ class Bootstrap(private val context: Context) {
             "git" -> "bin/git"
             "gh" -> "bin/gh"
             "openssh" -> "bin/ssh"
+            "rclone" -> "bin/rclone"
             else -> return false
         }
         return File(usrDir, checkFile).exists()
