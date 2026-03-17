@@ -217,7 +217,10 @@ var fs = require('fs');
 var LINKER64 = '/system/bin/linker64';
 var PREFIX = process.env.PREFIX || '';
 var BASH_ENV_FILE = process.env.BASH_ENV || '';
+var HOME = process.env.HOME || '';
 var TERMUX_PREFIX = '/data/data/com.termux/files/usr';
+// Android has no /tmp — redirect to $HOME/tmp for all fs and spawn operations
+function fixTmp(p) { if (typeof p === 'string') { if (p === '/tmp') return HOME + '/tmp'; if (p.startsWith('/tmp/')) return HOME + '/tmp/' + p.substring(5); if (p === '/var/tmp') return HOME + '/tmp'; if (p.startsWith('/var/tmp/')) return HOME + '/tmp/' + p.substring(9); } return p; }
 // Match both our prefix and hardcoded Termux paths (baked into npm-installed packages)
 function isEB(f) { return f && (PREFIX && f.startsWith(PREFIX + '/') || f.startsWith(TERMUX_PREFIX + '/')); }
 // Rewrite Termux paths to our prefix so linker64 can find the actual binary
