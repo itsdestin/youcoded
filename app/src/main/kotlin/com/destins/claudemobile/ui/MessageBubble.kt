@@ -95,6 +95,7 @@ fun MessageBubble(
                 onAccept = onAcceptApproval,
                 onAcceptAlways = onAcceptAlwaysApproval,
                 onReject = onRejectApproval,
+                hasAlwaysOption = content.hasAlwaysOption,
             )
             return
         }
