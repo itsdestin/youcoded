@@ -166,7 +166,7 @@ fun TerminalPanel(
     val underlinePaint = remember { Paint().apply { strokeWidth = 1f } }
     val linkPaint = remember { Paint().apply { color = LINK_COLOR.toArgb(); strokeWidth = 1.5f } }
 
-    // onSizeChanged: calculate font size to fit 80 columns, then derive rows
+    // onSizeChanged: calculate font size to fit minCols columns, then derive rows
     Canvas(
         modifier = modifier
             .onSizeChanged { size ->
