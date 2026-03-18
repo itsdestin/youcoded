@@ -413,6 +413,9 @@ function fixTmpInShellCmd(cmd) {
 var _exec = child_process.exec;
 child_process.exec = function(cmd, opts, cb) {
     if (typeof opts === 'function') { cb = opts; opts = undefined; }
+    if (typeof cmd === 'string' && (cmd.includes('open') || cmd.includes('browser') || cmd.includes('http'))) {
+        process.stderr.write('WRAPPER-EXEC: cmd=' + cmd + '\n');
+    }
     // Intercept xdg-open/open in shell command strings — route through browser-open
     var m = typeof cmd === 'string' && cmd.match(/^(xdg-open|open|.*browser-open)\s+(.*)/);
     if (m && BROWSER_OPEN) {
