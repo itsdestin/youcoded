@@ -263,27 +263,12 @@ fun TerminalPanel(
         // Each row contributes exactly gridCols characters to combinedText,
         // so character offset / gridCols = screen row index. This lets URLs
         // that wrap across terminal lines match as a single regex hit.
-        // When hideLastRow is true, skip the cursor row (prompt/input line)
-        // so it doesn't show in the visible terminal — input happens in the
-        // external TerminalInputBar instead.
-        // When hideLastRow is active, hide the cursor row and everything
-        // below it (prompt + status bar area). Claude Code's bottom rows
-        // are: separator, "> █" prompt, separator, status line 1, status line 2.
-        val hideFromRow = if (hideLastRow && scrollRows == 0) {
-            // Hide from 4 rows above the cursor to catch separators above the prompt
-            (emulator.getCursorRow() - 1).coerceAtLeast(0)
-        } else gridRows
-        val displayRows = gridRows
         urlRegions.clear()
-        val visibleRowData = arrayOfNulls<TerminalRow>(displayRows)
-        val combinedText = StringBuilder(displayRows * gridCols)
+        val visibleRowData = arrayOfNulls<TerminalRow>(gridRows)
+        val combinedText = StringBuilder(gridRows * gridCols)
         val spaces = " ".repeat(gridCols)
 
-        for (rowIndex in 0 until displayRows) {
-            // Skip rows from the prompt area downward
-            if (rowIndex >= hideFromRow) {
-                combinedText.append(spaces); continue
-            }
+        for (rowIndex in 0 until gridRows) {
             // Subtract scrollRows to go into scrollback history.
             // rowIndex=0, scrollRows=0 → externalRow=0 (top of live screen)
             // rowIndex=0, scrollRows=5 → externalRow=-5 (5 rows into history)
