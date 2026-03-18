@@ -222,8 +222,8 @@ fun ChatScreen(bridge: PtyBridge) {
         ScreenMode.Shell -> {
             // ── Direct shell mode ─────────────────────────────────────
             val shell = directShellBridge ?: return@Box
-            val shellScreenVersion by shell.screenVersion.collectAsState()
             val shellFocusRequester = remember { FocusRequester() }
+            val shellViewClient = remember { ClaudeTerminalViewClient() }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
@@ -235,11 +235,17 @@ fun ChatScreen(bridge: PtyBridge) {
                     onRightClick = { screenMode = ScreenMode.Terminal },
                 )
 
-                TerminalPanel(
-                    session = shell.getSession(),
-                    screenVersion = shellScreenVersion,
+                AndroidView(
+                    factory = { ctx ->
+                        TerminalView(ctx, null).apply {
+                            setTerminalViewClient(shellViewClient)
+                            shell.getSession()?.let { attachSession(it) }
+                        }
+                    },
+                    update = { view ->
+                        shell.getSession()?.let { view.attachSession(it) }
+                    },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
-                    onTap = { shellFocusRequester.requestFocus() },
                 )
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
