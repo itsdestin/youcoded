@@ -92,7 +92,11 @@ class MainActivity : ComponentActivity() {
                                         }
                                     }
 
-                                    ChatScreen(svc)
+                                    // Temporary: pass first session's bridge until Task 10 refactors ChatScreen
+                                    val currentSession = svc.sessionRegistry.getCurrentSession()
+                                    if (currentSession != null) {
+                                        ChatScreen(currentSession.ptyBridge)
+                                    }
                                 }
                                 is ServiceBinder.SessionState.Error -> {
                                     val error = (serviceState as ServiceBinder.SessionState.Error).message
