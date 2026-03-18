@@ -269,7 +269,7 @@ fun TerminalPanel(
         // external TerminalInputBar instead.
         val cursorScreenRow = if (hideLastRow) emulator.getCursorRow() else -1
         if (hideLastRow) {
-            android.util.Log.d("TermPanel", "cursorRow=${emulator.getCursorRow()} gridRows=$gridRows scrollRows=$scrollRows")
+            android.util.Log.d("PtyBridge", "CURSOR cursorRow=${emulator.getCursorRow()} gridRows=$gridRows scrollRows=$scrollRows")
         }
         val displayRows = gridRows
         urlRegions.clear()
