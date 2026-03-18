@@ -340,10 +340,10 @@ function spawnFix(orig, command, args, options) {
     var cmdName = String(command).replace(/^.*\//, '');
     if ((cmdName === 'xdg-open' || cmdName === 'open' || cmdName === 'browser-open' || String(command).endsWith('/browser-open'))) {
         var urlArgs = Array.isArray(args) ? args : [];
-        var o2 = Array.isArray(args) ? options : args;
         var url = urlArgs.find(function(a) { return typeof a === 'string' && a.startsWith('http'); });
         if (url) {
-            return orig.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], o2);
+            // Strip detached/stdio opts — am needs normal process context
+            return orig.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], {});
         }
     }
     command = resolveCmd(String(command));
