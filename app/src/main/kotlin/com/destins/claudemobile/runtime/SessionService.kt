@@ -68,6 +68,12 @@ class SessionService : Service() {
         val bs = bootstrap ?: throw IllegalStateException("Bootstrap not initialized")
         val session = sessionRegistry.createSession(bs, cwd, dangerousMode, apiKey, titlesDir)
 
+        // Wire clipboard callback
+        session.ptyBridge.onCopyToClipboard = { text ->
+            val clipboard = getSystemService(CLIPBOARD_SERVICE) as ClipboardManager
+            clipboard.setPrimaryClip(ClipData.newPlainText("Terminal", text))
+        }
+
         // Wire approval notification callbacks
         session.onApprovalNeeded = { sessionId, sessionName ->
             postApprovalNotification(sessionId, sessionName)
