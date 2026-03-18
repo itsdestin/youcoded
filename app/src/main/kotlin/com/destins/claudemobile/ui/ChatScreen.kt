@@ -185,6 +185,8 @@ fun ChatScreen(service: SessionService) {
                         TerminalView(ctx, null).apply {
                             setTextSize((10 * resources.displayMetrics.scaledDensity).toInt())
                             setTerminalViewClient(shellViewClient)
+                            isFocusable = true
+                            isFocusableInTouchMode = true
                             shell.getSession()?.let { attachSession(it) }
                         }
                     },
