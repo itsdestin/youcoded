@@ -250,9 +250,25 @@ class ChatState {
         ))
     }
 
-    /** Remove an interactive prompt after the user acts on it. */
+    /** Collapse a prompt to show the user's selection. */
+    fun completePrompt(promptId: String, selection: String) {
+        val idx = messages.indexOfLast {
+            (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId
+        }
+        if (idx >= 0) {
+            val prompt = messages[idx].content as MessageContent.InteractivePrompt
+            messages[idx] = messages[idx].copy(
+                content = MessageContent.CompletedPrompt(promptId, prompt.title, selection)
+            )
+        }
+    }
+
+    /** Remove a prompt entirely (used when detector clears stale prompts). */
     fun dismissPrompt(promptId: String) {
-        messages.removeAll { (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId }
+        // Only remove if still an active InteractivePrompt (don't remove completed ones)
+        messages.removeAll {
+            (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId
+        }
     }
 
     /** Advance to the next queued user message, or stop processing. */
