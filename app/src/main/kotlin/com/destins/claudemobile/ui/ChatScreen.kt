@@ -44,10 +44,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.destins.claudemobile.config.defaultChips
-import com.destins.claudemobile.parser.HookEvent
 import com.destins.claudemobile.runtime.ClaudeTerminalViewClient
 import com.destins.claudemobile.runtime.DirectShellBridge
-import com.destins.claudemobile.runtime.PtyBridge
+import com.destins.claudemobile.runtime.SessionService
 import com.termux.view.TerminalView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -57,23 +56,30 @@ private enum class ScreenMode { Chat, Terminal, Shell }
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun ChatScreen(bridge: PtyBridge) {
-    val chatState = remember { ChatState() }
+fun ChatScreen(service: SessionService) {
+    val sessions by service.sessionRegistry.sessions.collectAsState()
+    val currentSessionId by service.sessionRegistry.currentSessionId.collectAsState()
+    val currentSession = currentSessionId?.let { sessions[it] }
+    val bridge = currentSession?.ptyBridge
+    val chatState = currentSession?.chatState ?: remember { ChatState() }
+
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
     var chatInputText by remember { mutableStateOf("") }
     var screenMode by remember { mutableStateOf(ScreenMode.Chat) }
     var directShellBridge by remember { mutableStateOf<DirectShellBridge?>(null) }
-    // Clean up shell process when composable leaves composition (config change, navigation)
     DisposableEffect(Unit) { onDispose { directShellBridge?.stop() } }
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+
+    // Session switcher state
+    var switcherExpanded by remember { mutableStateOf(false) }
+    var showNewSessionDialog by remember { mutableStateOf(false) }
 
     // Image attachment state
     var attachmentPath by rememberSaveable { mutableStateOf<String?>(null) }
     var attachmentBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    // Reconstruct thumbnail from saved path on restore
     LaunchedEffect(attachmentPath) {
         attachmentBitmap = attachmentPath?.let { path ->
             try {
@@ -88,7 +94,8 @@ fun ChatScreen(bridge: PtyBridge) {
     ) { uri ->
         uri?.let { selectedUri ->
             coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                val attachDir = File(bridge.homeDir, "attachments").also { it.mkdirs() }
+                val homeDir = service.bootstrap?.homeDir ?: return@launch
+                val attachDir = File(homeDir, "attachments").also { it.mkdirs() }
                 val timestamp = System.currentTimeMillis()
                 val destFile = File(attachDir, "$timestamp.png")
                 try {
@@ -98,81 +105,13 @@ fun ChatScreen(bridge: PtyBridge) {
                     kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
                         attachmentPath = destFile.absolutePath
                     }
-                } catch (_: Exception) {
-                    // Silently fail — user can retry
-                }
+                } catch (_: Exception) {}
             }
         }
     }
 
-    val screenVersion by bridge.screenVersion.collectAsState()
-    val lastPtyOutput by bridge.lastPtyOutputTime.collectAsState()
-
-    // Hook event collector — retries until EventBridge is available
-    LaunchedEffect(bridge) {
-        var eventBridge = bridge.getEventBridge()
-        while (eventBridge == null) {
-            delay(200)
-            eventBridge = bridge.getEventBridge()
-        }
-        eventBridge.events.collect { event ->
-            when (event) {
-                is HookEvent.PreToolUse -> {
-                    val argsSummary = event.toolInput.optString("command",
-                        event.toolInput.optString("file_path",
-                            event.toolInput.optString("pattern",
-                                event.toolInput.toString().take(80))))
-                    chatState.addToolRunning(event.toolUseId, event.toolName, argsSummary)
-                }
-                is HookEvent.PostToolUse -> {
-                    chatState.updateToolToComplete(event.toolUseId, event.toolResponse)
-                }
-                is HookEvent.PostToolUseFailure -> {
-                    chatState.updateToolToFailed(event.toolUseId, event.toolResponse)
-                }
-                is HookEvent.Stop -> {
-                    chatState.addResponse(event.lastAssistantMessage)
-                }
-                is HookEvent.Notification -> {
-                    if (event.notificationType == "permission_prompt") {
-                        // Find the most recent running tool and transition to approval
-                        val lastRunning = chatState.messages.lastOrNull {
-                            it.content is MessageContent.ToolRunning
-                        }
-                        val toolUseId = (lastRunning?.content as? MessageContent.ToolRunning)?.toolUseId
-                        if (toolUseId != null) {
-                            val hasAlways = bridge.hasAlwaysAllowOption()
-                            chatState.updateToolToApproval(toolUseId, hasAlways)
-                        }
-                    } else {
-                        chatState.addSystemNotice(event.message)
-                    }
-                }
-            }
-        }
-    }
-
-    // Fallback approval detection: PTY silence heuristic
-    LaunchedEffect(chatState.messages.size, "approval_heuristic") {
-        val lastMsg = chatState.messages.lastOrNull()
-        val running = lastMsg?.content as? MessageContent.ToolRunning ?: return@LaunchedEffect
-        delay(2000)
-        // Re-check the tool's current state — the real event path may have
-        // already transitioned it to Complete/Failed/AwaitingApproval
-        val currentMsg = chatState.messages.lastOrNull {
-            val c = it.content
-            c is MessageContent.ToolRunning && c.toolUseId == running.toolUseId
-        }
-        // Only apply heuristic if the tool is still in Running state
-        if (currentMsg != null) {
-            val now = System.currentTimeMillis()
-            val lastOutput = bridge.lastPtyOutputTime.value
-            if (now - lastOutput > 2000) {
-                val hasAlways = bridge.hasAlwaysAllowOption()
-                chatState.updateToolToApproval(running.toolUseId, hasAlways)
-            }
-        }
-    }
+    val lastPtyOutput by (bridge?.lastPtyOutputTime?.collectAsState()
+        ?: remember { mutableStateOf(0L) })
 
     // Auto-scroll on new messages
     LaunchedEffect(chatState.messages.size, "auto_scroll") {
@@ -184,7 +123,6 @@ fun ChatScreen(bridge: PtyBridge) {
     Box(modifier = Modifier.fillMaxSize()) {
         when (screenMode) {
         ScreenMode.Terminal -> {
-            // ── Full-screen terminal mode ──────────────────────────────
             val termFocusRequester = remember { FocusRequester() }
             val termViewClient = remember { ClaudeTerminalViewClient() }
 
@@ -200,11 +138,11 @@ fun ChatScreen(bridge: PtyBridge) {
                     factory = { ctx ->
                         TerminalView(ctx, null).apply {
                             setTerminalViewClient(termViewClient)
-                            bridge.getSession()?.let { attachSession(it) }
+                            bridge?.getSession()?.let { attachSession(it) }
                         }
                     },
                     update = { view ->
-                        bridge.getSession()?.let { view.attachSession(it) }
+                        bridge?.getSession()?.let { view.attachSession(it) }
                     },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
@@ -212,14 +150,13 @@ fun ChatScreen(bridge: PtyBridge) {
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
                 TerminalInputBar(
                     focusRequester = termFocusRequester,
-                    onSend = { text -> bridge.writeInput(text + "\r") },
-                    onKeyPress = { seq -> bridge.writeInput(seq) },
+                    onSend = { text -> bridge?.writeInput(text + "\r") },
+                    onKeyPress = { seq -> bridge?.writeInput(seq) },
                 )
             }
         }
 
         ScreenMode.Shell -> {
-            // ── Direct shell mode ─────────────────────────────────────
             val shell = directShellBridge ?: return@Box
             val shellFocusRequester = remember { FocusRequester() }
             val shellViewClient = remember { ClaudeTerminalViewClient() }
@@ -257,7 +194,6 @@ fun ChatScreen(bridge: PtyBridge) {
         }
 
         ScreenMode.Chat -> {
-            // ── Chat mode ─────────────────────────────────────────────
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
 
@@ -281,7 +217,9 @@ fun ChatScreen(bridge: PtyBridge) {
                                 onLongClick = {
                                     haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                     if (directShellBridge == null) {
-                                        directShellBridge = bridge.createDirectShell()
+                                        service.bootstrap?.let { bs ->
+                                            directShellBridge = service.sessionRegistry.createDirectShell(bs)
+                                        }
                                     }
                                     screenMode = ScreenMode.Shell
                                 },
@@ -296,9 +234,30 @@ fun ChatScreen(bridge: PtyBridge) {
                             modifier = Modifier.size(18.dp),
                         )
                     }
-                    Text("Chat", fontSize = 15.sp,
-                        color = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.textSecondary,
-                        modifier = Modifier.align(Alignment.Center))
+
+                    // Session switcher pill (center)
+                    Box(modifier = Modifier.align(Alignment.Center)) {
+                        SessionSwitcherPill(
+                            currentSession = currentSession,
+                            expanded = switcherExpanded,
+                            onToggle = { switcherExpanded = !switcherExpanded },
+                        )
+                        SessionDropdown(
+                            expanded = switcherExpanded,
+                            onDismiss = { switcherExpanded = false },
+                            sessions = sessions,
+                            currentSessionId = currentSessionId,
+                            onSelect = { service.sessionRegistry.switchTo(it) },
+                            onDestroy = { service.destroySession(it) },
+                            onRelaunch = {
+                                service.sessionRegistry.relaunchSession(
+                                    it, service.bootstrap!!, null, service.titlesDir
+                                )
+                            },
+                            onNewSession = { showNewSessionDialog = true },
+                        )
+                    }
+
                     Box(
                         modifier = Modifier
                             .align(Alignment.CenterEnd)
@@ -330,21 +289,20 @@ fun ChatScreen(bridge: PtyBridge) {
                             onToggleCard = { chatState.toggleCard(it) },
                             onAcceptApproval = {
                                 toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                bridge.sendApproval(com.destins.claudemobile.runtime.PtyBridge.ApprovalOption.Yes)
+                                bridge?.sendApproval(com.destins.claudemobile.runtime.PtyBridge.ApprovalOption.Yes)
                             },
                             onAcceptAlwaysApproval = {
                                 toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                bridge.sendApproval(com.destins.claudemobile.runtime.PtyBridge.ApprovalOption.YesAlways)
+                                bridge?.sendApproval(com.destins.claudemobile.runtime.PtyBridge.ApprovalOption.YesAlways)
                             },
                             onRejectApproval = {
                                 toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                bridge.sendApproval(com.destins.claudemobile.runtime.PtyBridge.ApprovalOption.No)
+                                bridge?.sendApproval(com.destins.claudemobile.runtime.PtyBridge.ApprovalOption.No)
                             },
-                            session = bridge.getSession(),
-                            screenVersion = screenVersion,
+                            session = bridge?.getSession(),
+                            screenVersion = 0,
                         )
                     }
-                    // Activity indicator — only when PTY is active and no tool card is showing
                     item {
                         var now by remember { mutableStateOf(System.currentTimeMillis()) }
                         LaunchedEffect(Unit) { while (true) { delay(500); now = System.currentTimeMillis() } }
@@ -479,7 +437,7 @@ fun ChatScreen(bridge: PtyBridge) {
                                         else -> chatInputText
                                     }
                                     chatState.addUserMessage(displayText)
-                                    bridge.writeInput(messageText + "\r")
+                                    bridge?.writeInput(messageText + "\r")
                                     chatInputText = ""
                                     attachmentPath = null
                                     attachmentBitmap = null
@@ -500,7 +458,7 @@ fun ChatScreen(bridge: PtyBridge) {
                             chatInputText = chip.prompt
                         } else {
                             chatState.addUserMessage(chip.prompt)
-                            bridge.writeInput(chip.prompt + "\r")
+                            bridge?.writeInput(chip.prompt + "\r")
                         }
                     }
                 )
@@ -508,6 +466,34 @@ fun ChatScreen(bridge: PtyBridge) {
         }
 
         } // when
+    }
+
+    // New session dialog
+    if (showNewSessionDialog) {
+        if (service.sessionRegistry.sessionCount >= 5) {
+            AlertDialog(
+                onDismissRequest = { showNewSessionDialog = false },
+                title = { Text("Session Limit") },
+                text = { Text("You have 5 active sessions. Close one before creating a new session.") },
+                confirmButton = {
+                    TextButton(onClick = { showNewSessionDialog = false }) { Text("OK") }
+                },
+            )
+        } else {
+            val knownDirs = listOf(
+                "Home (~)" to service.bootstrap!!.homeDir,
+                "claude-mobile" to File(service.bootstrap!!.homeDir, "claude-mobile"),
+                "destin-claude" to File(service.bootstrap!!.homeDir, "destin-claude"),
+            )
+            NewSessionDialog(
+                knownDirs = knownDirs,
+                onDismiss = { showNewSessionDialog = false },
+                onCreate = { config ->
+                    showNewSessionDialog = false
+                    service.createSession(config.cwd, config.dangerousMode, null)
+                },
+            )
+        }
     }
 }
 
@@ -561,11 +547,7 @@ private fun ModeHeader(
     HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 }
 
-/** Visible terminal input bar — text is composed locally (with full
- *  Gboard prediction/autocorrect support) and sent to the PTY as a
- *  complete line on Enter/Send. No character-by-character streaming,
- *  no diffing, no backspace issues. Special keys (Ctrl, Esc, Tab,
- *  arrows) are provided via the TerminalKeyboardRow below. */
+/** Visible terminal input bar */
 @Composable
 private fun TerminalInputBar(
     focusRequester: FocusRequester,
@@ -583,7 +565,6 @@ private fun TerminalInputBar(
             verticalAlignment = Alignment.Bottom,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
         ) {
-            // Text input field
             Box(
                 modifier = Modifier
                     .weight(1f)
@@ -633,7 +614,6 @@ private fun TerminalInputBar(
                 )
             }
 
-            // Send button
             Box(
                 modifier = Modifier
                     .size(36.dp)
@@ -658,7 +638,6 @@ private fun TerminalInputBar(
             }
         }
 
-        // Special keys row
         TerminalKeyboardRow(onKeyPress = onKeyPress)
     }
 }
