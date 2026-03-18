@@ -161,7 +161,7 @@ class PtyBridge(
     /** Check whether the current PTY screen contains an "always allow" option.
      *  Used to distinguish 2-option (Yes/No) from 3-option (Yes/Always/No) prompts. */
     /** Read current visible screen content directly from the terminal emulator. */
-    private fun readScreenText(): String {
+    fun readScreenText(): String {
         val screen = session?.emulator?.screen ?: return ""
         val rows = screen.getActiveRows()
         val cols = session?.emulator?.mColumns ?: 80
