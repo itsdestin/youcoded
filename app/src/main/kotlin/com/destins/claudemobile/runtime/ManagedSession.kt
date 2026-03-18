@@ -124,6 +124,9 @@ class ManagedSession(
         }
     }
 
+    // Track prompts that have been completed so we don't re-create them
+    private val completedPromptIds = mutableSetOf<String>()
+
     /** Known setup prompts and their button mappings. */
     private fun detectPrompts(screen: String, activePrompts: MutableSet<String>) {
         val lower = screen.lowercase()
