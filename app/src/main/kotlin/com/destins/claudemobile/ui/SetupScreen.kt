@@ -43,45 +43,38 @@ private fun SetupSpinner() {
     )
 }
 
-/**
- * Smooth progress that creeps forward between real updates.
- * When a real update arrives, it jumps to the new value and resumes creeping.
- * Creep speed slows as it approaches the next expected milestone to avoid overshooting.
- */
 @Composable
-private fun SmoothProgress(targetPercent: Int): Float {
+fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
+    // Single smooth progress state that persists across Extracting → Installing transitions
     var displayProgress by remember { mutableFloatStateOf(0f) }
-    val target = targetPercent / 100f
+    val realPercent = when (progress) {
+        is Bootstrap.Progress.Extracting -> progress.percent
+        is Bootstrap.Progress.Installing -> if (progress.overallPercent >= 0) progress.overallPercent else -1
+        else -> -1
+    }
+    val realTarget = if (realPercent >= 0) realPercent / 100f else -1f
 
-    LaunchedEffect(target) {
-        // Snap forward if real progress jumped ahead of our creep
-        if (target > displayProgress) {
-            displayProgress = target
+    // Snap forward when real progress jumps ahead
+    LaunchedEffect(realTarget) {
+        if (realTarget >= 0 && realTarget > displayProgress) {
+            displayProgress = realTarget
         }
     }
 
-    // Creep forward slowly between real updates
+    // Creep forward slowly between real updates — never exceeds 95%
     LaunchedEffect(Unit) {
         while (true) {
-            delay(200)
+            delay(500)
             val current = displayProgress
-            // Creep toward 95% max (never reach 100% on our own)
             val ceiling = 0.95f
-            if (current < ceiling) {
-                // Slow down as we get further from last real update
-                // This gives a nice deceleration curve
+            if (current in 0.001f..ceiling) {
                 val remaining = ceiling - current
-                val increment = (remaining * 0.008f).coerceAtLeast(0.001f)
+                val increment = (remaining * 0.003f).coerceAtLeast(0.0005f)
                 displayProgress = (current + increment).coerceAtMost(ceiling)
             }
         }
     }
 
-    return displayProgress
-}
-
-@Composable
-fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -98,7 +91,6 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
 
         when (progress) {
             is Bootstrap.Progress.Extracting -> {
-                val smoothProgress = SmoothProgress(progress.percent)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -112,20 +104,17 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                 }
                 Spacer(modifier = Modifier.height(16.dp))
                 LinearProgressIndicator(
-                    progress = { smoothProgress },
+                    progress = { displayProgress },
                     modifier = Modifier.fillMaxWidth(),
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
-                    "${(smoothProgress * 100).toInt()}%",
+                    "${(displayProgress * 100).toInt()}%",
                     style = MaterialTheme.typography.bodySmall,
                     color = ClaudeMobileTheme.extended.textSecondary,
                 )
             }
             is Bootstrap.Progress.Installing -> {
-                val smoothProgress = SmoothProgress(
-                    if (progress.overallPercent >= 0) progress.overallPercent else 0
-                )
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -140,12 +129,12 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                 Spacer(modifier = Modifier.height(16.dp))
                 if (progress.overallPercent >= 0) {
                     LinearProgressIndicator(
-                        progress = { smoothProgress },
+                        progress = { displayProgress },
                         modifier = Modifier.fillMaxWidth(),
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        "${(smoothProgress * 100).toInt()}%",
+                        "${(displayProgress * 100).toInt()}%",
                         style = MaterialTheme.typography.bodySmall,
                         color = ClaudeMobileTheme.extended.textSecondary,
                     )
