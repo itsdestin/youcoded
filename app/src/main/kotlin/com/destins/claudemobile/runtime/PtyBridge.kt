@@ -13,10 +13,13 @@ import java.io.File
 class PtyBridge(
     private val bootstrap: Bootstrap,
     private val apiKey: String? = null,
+    private val socketName: String = "${bootstrap.homeDir.absolutePath}/.claude-mobile/parser.sock",
+    private val cwd: File = bootstrap.homeDir,
+    private val dangerousMode: Boolean = false,
 ) {
     private var session: TerminalSession? = null
     private var eventBridge: EventBridge? = null
-    val socketPath: String get() = "${bootstrap.homeDir.absolutePath}/.claude-mobile/parser.sock"
+    val socketPath: String get() = socketName
     val homeDir: File get() = bootstrap.homeDir
 
     private val _outputFlow = MutableSharedFlow<String>(replay = 0, extraBufferCapacity = 1000)
