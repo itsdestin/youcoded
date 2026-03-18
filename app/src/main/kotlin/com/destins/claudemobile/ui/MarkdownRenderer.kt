@@ -245,11 +245,7 @@ private fun AnnotatedString.Builder.appendInlineChildren(
                 val start = this.length
                 appendInlineChildren(child, LINK_COLOR, isBold, isItalic)
                 val end = this.length
-                addStyle(
-                    SpanStyle(textDecoration = TextDecoration.Underline),
-                    start, end,
-                )
-                addStringAnnotation("URL", linkUrl, start, end)
+                addLink(LinkAnnotation.Url(linkUrl, LINK_STYLES), start, end)
             }
             else -> {
                 appendInlineChildren(child, textColor, isBold, isItalic)
