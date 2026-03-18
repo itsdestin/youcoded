@@ -286,8 +286,8 @@ child_process.execFileSync = function(file) {
         var a = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
         var url = a.find(function(x) { return typeof x === 'string' && x.startsWith('http'); });
         if (url) {
-            var ce = {}; Object.keys(process.env).forEach(function(k) { if (k !== 'LD_PRELOAD' && k !== 'LD_LIBRARY_PATH') ce[k] = process.env[k]; });
-            return _efs.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], { env: ce });
+            try { fs.writeFileSync(HOME + '/.claude-mobile/open-url', url); } catch(e) {}
+            return Buffer.alloc(0);
         }
     }
     file = resolveCmd(file);
