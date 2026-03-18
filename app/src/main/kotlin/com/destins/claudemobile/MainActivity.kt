@@ -1,6 +1,5 @@
 package com.destins.claudemobile
 
-import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -71,34 +70,12 @@ class MainActivity : ComponentActivity() {
                                 onDispose { serviceBinder.unbind() }
                             }
 
-                            when (serviceState) {
-                                is ServiceBinder.SessionState.Connected -> {
-                                    val svc = (serviceState as ServiceBinder.SessionState.Connected).service
-
-                                    // Auto-create first session if none exist
-                                    LaunchedEffect(svc) {
-                                        if (svc.sessionRegistry.sessionCount == 0) {
-                                            svc.initBootstrap(bootstrap)
-                                            svc.createSession(bootstrap.homeDir, dangerousMode = false, apiKey = null)
-                                        }
-                                    }
-
-                                    // Handle intent session_id from notification tap
-                                    LaunchedEffect(Unit) {
-                                        val targetSessionId = intent?.getStringExtra("session_id")
-                                        if (targetSessionId != null) {
-                                            svc.sessionRegistry.switchTo(targetSessionId)
-                                            intent?.removeExtra("session_id")
-                                        }
-                                    }
-
-                                    // Temporary: pass first session's bridge until Task 10 refactors ChatScreen
-                                    val currentSession = svc.sessionRegistry.getCurrentSession()
-                                    if (currentSession != null) {
-                                        ChatScreen(currentSession.ptyBridge)
-                                    }
+                            when {
+                                serviceState is ServiceBinder.SessionState.Connected -> {
+                                    val bridge = (serviceState as ServiceBinder.SessionState.Connected).bridge
+                                    ChatScreen(bridge)
                                 }
-                                is ServiceBinder.SessionState.Error -> {
+                                serviceState is ServiceBinder.SessionState.Error -> {
                                     val error = (serviceState as ServiceBinder.SessionState.Error).message
                                     Column(
                                         modifier = Modifier
@@ -111,7 +88,7 @@ class MainActivity : ComponentActivity() {
                                         Spacer(modifier = Modifier.height(16.dp))
                                         Button(onClick = {
                                             coroutineScope.launch {
-                                                serviceBinder.startService(bootstrap)
+                                                serviceBinder.startSession(bootstrap)
                                             }
                                         }) {
                                             Text("Retry")
@@ -120,7 +97,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 else -> {
                                     LaunchedEffect(Unit) {
-                                        serviceBinder.startService(bootstrap)
+                                        serviceBinder.startSession(bootstrap)
                                     }
                                     SetupScreen(Bootstrap.Progress.Installing("Claude Code session"))
                                 }
@@ -130,10 +107,5 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        setIntent(intent)
     }
 }
