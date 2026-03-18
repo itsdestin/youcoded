@@ -136,7 +136,7 @@ class ManagedSession(
         val lower = screen.lowercase()
 
         // Theme selection
-        if ("choose the text style" in lower || "looks best with your terminal" in lower) {
+        if ("dark mode" in lower && "light mode" in lower && "/theme" in lower) {
             if ("theme" !in activePrompts) {
                 activePrompts.add("theme")
                 chatState.showInteractivePrompt("theme", "Choose theme", listOf(
