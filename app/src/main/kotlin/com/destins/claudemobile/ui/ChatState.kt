@@ -235,6 +235,21 @@ class ChatState {
         insertPos++
     }
 
+    /** Show an interactive prompt card. Replaces existing prompt with same ID. */
+    fun showInteractivePrompt(promptId: String, title: String, buttons: List<PromptButton>) {
+        // Remove existing prompt with same ID to avoid duplicates
+        messages.removeAll { (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId }
+        messages.add(ChatMessage(
+            MessageRole.SYSTEM,
+            MessageContent.InteractivePrompt(promptId, title, buttons),
+        ))
+    }
+
+    /** Remove an interactive prompt after the user acts on it. */
+    fun dismissPrompt(promptId: String) {
+        messages.removeAll { (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId }
+    }
+
     /** Advance to the next queued user message, or stop processing. */
     private fun advanceQueue() {
         if (queuedIds.isNotEmpty()) {
