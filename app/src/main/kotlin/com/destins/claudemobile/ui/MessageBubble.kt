@@ -119,6 +119,47 @@ fun MessageBubble(
             )
             return
         }
+        is MessageContent.InteractivePrompt -> {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 4.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                Text(
+                    content.title,
+                    color = MaterialTheme.colorScheme.primary,
+                    fontSize = 14.sp,
+                    style = MaterialTheme.typography.titleSmall,
+                )
+                // Arrange buttons in a flow layout (wrap to multiple rows if needed)
+                val chunked = content.buttons.chunked(3)
+                for (row in chunked) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    ) {
+                        for (button in row) {
+                            Button(
+                                onClick = { onPromptAction?.invoke(content.promptId, button.input) },
+                                modifier = Modifier.weight(1f),
+                                shape = RoundedCornerShape(8.dp),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                                    contentColor = MaterialTheme.colorScheme.primary,
+                                ),
+                            ) {
+                                Text(button.label, fontSize = 12.sp, maxLines = 1)
+                            }
+                        }
+                    }
+                }
+            }
+            return
+        }
         is MessageContent.SystemNotice -> {
             Text(
                 text = content.text,
