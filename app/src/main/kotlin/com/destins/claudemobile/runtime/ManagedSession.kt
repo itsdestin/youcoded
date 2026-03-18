@@ -198,7 +198,7 @@ class ManagedSession(
         // Browser auth / paste code prompt
         if (("paste code" in lower || "paste the code" in lower || "browser" in lower) &&
             ("sign" in lower || "code" in lower || "authorize" in lower)) {
-            if ("paste_code" !in activePrompts) {
+            if ("paste_code" !in activePrompts && "paste_code" !in completedPromptIds) {
                 activePrompts.add("paste_code")
                 chatState.showInteractivePrompt("paste_code", "Complete sign-in in your browser", listOf(
                     PromptButton("Browser opened — waiting for code...", ""),
