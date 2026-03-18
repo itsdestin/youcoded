@@ -267,10 +267,13 @@ fun TerminalPanel(
         // When hideLastRow is true, skip the cursor row (prompt/input line)
         // so it doesn't show in the visible terminal — input happens in the
         // external TerminalInputBar instead.
-        val cursorScreenRow = if (hideLastRow) emulator.getCursorRow() else -1
-        if (hideLastRow) {
-            android.util.Log.d("PtyBridge", "CURSOR cursorRow=${emulator.getCursorRow()} gridRows=$gridRows scrollRows=$scrollRows")
-        }
+        // When hideLastRow is active, hide the cursor row and everything
+        // below it (prompt + status bar area). Claude Code's bottom rows
+        // are: separator, "> █" prompt, separator, status line 1, status line 2.
+        val hideFromRow = if (hideLastRow && scrollRows == 0) {
+            // Hide from 4 rows above the cursor to catch separators above the prompt
+            (emulator.getCursorRow() - 1).coerceAtLeast(0)
+        } else gridRows
         val displayRows = gridRows
         urlRegions.clear()
         val visibleRowData = arrayOfNulls<TerminalRow>(displayRows)
@@ -278,8 +281,8 @@ fun TerminalPanel(
         val spaces = " ".repeat(gridCols)
 
         for (rowIndex in 0 until displayRows) {
-            // Skip the cursor row when hideLastRow is active
-            if (rowIndex == cursorScreenRow && scrollRows == 0) {
+            // Skip rows from the prompt area downward
+            if (rowIndex >= hideFromRow) {
                 combinedText.append(spaces); continue
             }
             // Subtract scrollRows to go into scrollback history.
