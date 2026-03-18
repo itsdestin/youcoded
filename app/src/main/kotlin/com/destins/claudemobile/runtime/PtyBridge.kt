@@ -282,10 +282,11 @@ function injectEnv(cmd, args) {
 var _efs = child_process.execFileSync;
 child_process.execFileSync = function(file) {
     var fn = String(file).replace(/^.*\//, '');
-    if ((fn === 'xdg-open' || fn === 'open' || fn === 'browser-open') && BROWSER_OPEN) {
+    if (fn === 'xdg-open' || fn === 'open' || fn === 'browser-open') {
         var a = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
         var opts = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[2] : arguments[1];
-        return _efs.call(this, '/system/bin/sh', [BROWSER_OPEN].concat(a), opts);
+        var url = a.find(function(x) { return typeof x === 'string' && x.startsWith('http'); });
+        if (url) return _efs.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], opts);
     }
     file = resolveCmd(file);
     if (isEB(file)) {
