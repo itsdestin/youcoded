@@ -116,9 +116,6 @@ class ManagedSession(
                     val screen = try { ptyBridge.readScreenText() } catch (_: Exception) { "" }
                     val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (_: Exception) { "" }
                     val combined = screen + "\n" + raw
-                    // Log full screen content (trimmed of trailing whitespace lines)
-                    val trimmed = screen.lines().dropLastWhile { it.isBlank() }.joinToString("\\n")
-                    android.util.Log.d("PromptDetector", "FULL(${trimmed.length}): ${trimmed.takeLast(600)}")
                     withContext(Dispatchers.Main) {
                         detectPrompts(combined, activePrompts)
                     }
