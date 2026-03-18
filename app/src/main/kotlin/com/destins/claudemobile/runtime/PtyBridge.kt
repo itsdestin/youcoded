@@ -339,18 +339,15 @@ function stripLogin(args) {
 // When shell:true + EB command string, bypass the shell entirely — split the
 // command and route the binary through linker64 (avoids SELinux shell exec).
 function spawnFix(orig, command, args, options) {
-    // Log all spawn calls for diagnostics
-    var cmdStr = String(command);
-    var argsStr = Array.isArray(args) ? args.join(' ') : '';
-    if (cmdStr.includes('open') || cmdStr.includes('browser') || cmdStr.includes('http') || argsStr.includes('http')) {
-        process.stderr.write('WRAPPER-SPAWN: cmd=' + cmdStr + ' args=' + argsStr + '\n');
-    }
-    // Intercept xdg-open/open/browser-open — route through /system/bin/sh (shell scripts, not ELF)
+    // Intercept xdg-open/open/browser-open — use Android am start directly
     var cmdName = String(command).replace(/^.*\//, '');
-    if ((cmdName === 'xdg-open' || cmdName === 'open' || cmdName === 'browser-open' || String(command).endsWith('/browser-open')) && BROWSER_OPEN) {
+    if ((cmdName === 'xdg-open' || cmdName === 'open' || cmdName === 'browser-open' || String(command).endsWith('/browser-open'))) {
         var urlArgs = Array.isArray(args) ? args : [];
         var o2 = Array.isArray(args) ? options : args;
-        return orig.call(this, '/system/bin/sh', [BROWSER_OPEN].concat(urlArgs), o2);
+        var url = urlArgs.find(function(a) { return typeof a === 'string' && a.startsWith('http'); });
+        if (url) {
+            return orig.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], o2);
+        }
     }
     command = resolveCmd(String(command));
     var o = Array.isArray(args) ? options : args;
