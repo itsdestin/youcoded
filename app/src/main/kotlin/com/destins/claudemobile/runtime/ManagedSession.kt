@@ -4,6 +4,7 @@ import android.os.FileObserver
 import com.destins.claudemobile.parser.HookEvent
 import com.destins.claudemobile.ui.ChatState
 import com.destins.claudemobile.ui.MessageContent
+import com.destins.claudemobile.ui.PromptButton
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
