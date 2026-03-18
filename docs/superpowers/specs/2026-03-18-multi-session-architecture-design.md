@@ -434,7 +434,7 @@ Auto-title hook fires → writes to ~/.claude-mobile/titles/{sessionId}
 |------|---------|
 | `runtime/SessionManager.kt` | **Renamed to `ServiceBinder.kt`** — same functionality, name freed for clarity |
 | `runtime/SessionService.kt` | Holds SessionRegistry instead of single PtyBridge, adds wake lock, dual notification channels, dynamic notification |
-| `runtime/PtyBridge.kt` | Constructor accepts socket name (currently computed internally), accept CWD and dangerousMode params |
+| `runtime/PtyBridge.kt` | Constructor accepts socket name (currently computed internally), CWD (currently hardcoded to `bootstrap.homeDir`), and dangerousMode flag. `start()` method appends `--dangerously-skip-permissions` to the Claude Code launch command when flagged. `TerminalSession` CWD parameter (currently `bootstrap.homeDir.absolutePath`) uses the new CWD param instead. |
 | `ui/ChatScreen.kt` | Observe currentSessionId from SessionRegistry, render current session's ChatState. Replace TerminalPanel with TerminalView via AndroidView. Add session switcher in header. |
 | `ui/cards/` (approval card) | Add mini TerminalView embed (new functionality) |
 | `runtime/Bootstrap.kt` | Add `selfTest()`, title file directory setup (`~/.claude-mobile/titles/`) |
