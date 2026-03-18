@@ -119,6 +119,8 @@ class ManagedSession(
                     val combined = screen + "\n" + raw
                     val lower = combined.lowercase()
                     android.util.Log.d("PromptDetector", "screen=${screen.length}ch raw=${raw.length}ch theme=${lower.contains("choose the text style")} trust=${lower.contains("do you trust")}")
+                    // Dump first 500 chars of raw buffer for diagnosis
+                    if (raw.isNotEmpty()) android.util.Log.d("PromptDetector", "RAW: ${raw.take(500).replace("\n", "\\n").replace("\r", "\\r")}")
                     withContext(Dispatchers.Main) {
                         detectPrompts(combined, activePrompts)
                     }
