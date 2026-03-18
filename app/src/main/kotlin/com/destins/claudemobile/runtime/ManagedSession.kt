@@ -214,6 +214,7 @@ class ManagedSession(
             // Auto-collapse the browser sign-in card if still active
             if ("paste_code" in activePrompts) {
                 activePrompts.remove("paste_code")
+                completedPromptIds.add("paste_code")
                 chatState.completePrompt("paste_code", "Signed in")
             }
             if ("continue" !in activePrompts && "continue" !in completedPromptIds) {
