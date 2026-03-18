@@ -116,9 +116,8 @@ class ManagedSession(
                     val screen = try { ptyBridge.readScreenText() } catch (_: Exception) { "" }
                     val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (_: Exception) { "" }
                     val combined = screen + "\n" + raw
-                    val lower = combined.lowercase()
-                    if (raw.length > 100) {
-                        android.util.Log.d("PromptDetector", "RAW_TAIL: ${raw.takeLast(400).replace("\n", "\\n").replace("\r", "\\r")}")
+                    if (screen.length > 50) {
+                        android.util.Log.d("PromptDetector", "SCREEN: ${screen.take(500).replace("\n", "\\n").replace("\r", "\\r")}")
                     }
                     withContext(Dispatchers.Main) {
                         detectPrompts(combined, activePrompts)
