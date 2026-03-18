@@ -154,9 +154,14 @@ fun ToolCard(
         // Awaiting approval: mini-terminal + 3-button row
         if (state == ToolCardState.AwaitingApproval && session != null) {
             Spacer(Modifier.height(6.dp))
-            TerminalPanel(
-                session = session,
-                screenVersion = screenVersion,
+            val readOnlyClient = remember { ReadOnlyTerminalViewClient() }
+            AndroidView(
+                factory = { ctx ->
+                    TerminalView(ctx, null).apply {
+                        setTerminalViewClient(readOnlyClient)
+                        attachSession(session)
+                    }
+                },
                 modifier = Modifier
                     .fillMaxWidth()
                     .height(160.dp)
