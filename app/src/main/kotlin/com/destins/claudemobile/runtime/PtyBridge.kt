@@ -139,7 +139,10 @@ class PtyBridge(
         )
         // initializeEmulator forks the process and starts the PTY.
         // Without this call, the session is created but nothing runs.
-        session?.initializeEmulator(40, 24)
+        // Use 80x60 so Claude Code's Ink UI renders fully — TerminalView will
+        // resize to actual dimensions when attached, but this ensures the setup
+        // screens (theme, auth, trust) render their full content before that.
+        session?.initializeEmulator(80, 60)
     }
 
     fun writeInput(text: String) {
