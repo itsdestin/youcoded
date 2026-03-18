@@ -114,7 +114,6 @@ fun ChatScreen(bridge: PtyBridge) {
             eventBridge = bridge.getEventBridge()
         }
         eventBridge.events.collect { event ->
-            android.util.Log.d("ChatEvents", "HOOK: ${event::class.simpleName}")
             when (event) {
                 is HookEvent.PreToolUse -> {
                     val argsSummary = event.toolInput.optString("command",
