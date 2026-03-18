@@ -384,6 +384,8 @@ Made during implementation based on test results. The design accommodates either
 
 If the user switches Claude Code sessions, the Shell mode still shows the same `DirectShellBridge` instance. This matches Termux's model where additional terminal sessions are independent of each other.
 
+**Factory method migration:** `createDirectShell()` currently lives on `PtyBridge` (line 195), which is awkward since DirectShellBridge only needs `Bootstrap`, not a specific PtyBridge. Move this factory method to `SessionService` or `SessionRegistry`, which holds the Bootstrap reference.
+
 ## Data Flow
 
 ```
