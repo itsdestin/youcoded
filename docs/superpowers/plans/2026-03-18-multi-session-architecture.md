@@ -642,6 +642,15 @@ class SessionService : Service() {
     fun createSession(cwd: File, dangerousMode: Boolean, apiKey: String?): ManagedSession {
         val bs = bootstrap ?: throw IllegalStateException("Bootstrap not initialized")
         val session = sessionRegistry.createSession(bs, cwd, dangerousMode, apiKey, titlesDir)
+
+        // Wire approval notification callbacks
+        session.onApprovalNeeded = { sessionId, sessionName ->
+            postApprovalNotification(sessionId, sessionName)
+        }
+        session.onApprovalCleared = { sessionId ->
+            clearApprovalNotification(sessionId)
+        }
+
         acquireWakeLock()
         updateNotification()
         return session
