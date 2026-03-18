@@ -278,7 +278,7 @@ child_process.execFileSync = function(file) {
         file = fixPath(file);
         var a = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
         var opts = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[2] : arguments[1];
-        if (file.endsWith('/bash')) { a = stripLogin(a); }
+        if (file.endsWith('/bash') || file.endsWith('/sh')) { a = stripLogin(a); var ci = a.indexOf('-c'); if (ci !== -1 && ci + 1 < a.length && typeof a[ci + 1] === 'string') { a = a.slice(); a[ci + 1] = fixTmpInShellCmd(a[ci + 1]); } }
         a = fixTmpArgs(a);
         a = injectEnv(file, a);
         return _efs.call(this, LINKER64, [file].concat(a), opts);
@@ -295,7 +295,7 @@ child_process.execFile = function(file) {
         var rest = Array.prototype.slice.call(arguments, 1);
         var a = rest.length > 0 && Array.isArray(rest[0]) ? rest[0] : [];
         var remaining = rest.length > 0 && Array.isArray(rest[0]) ? rest.slice(1) : rest;
-        if (file.endsWith('/bash')) { a = stripLogin(a); }
+        if (file.endsWith('/bash') || file.endsWith('/sh')) { a = stripLogin(a); var ci = a.indexOf('-c'); if (ci !== -1 && ci + 1 < a.length && typeof a[ci + 1] === 'string') { a = a.slice(); a[ci + 1] = fixTmpInShellCmd(a[ci + 1]); } }
         a = fixTmpArgs(a);
         a = injectEnv(file, a);
         return _ef.apply(this, [LINKER64, [file].concat(a)].concat(remaining));
