@@ -279,7 +279,7 @@ function injectEnv(cmd, args) {
 var _efs = child_process.execFileSync;
 child_process.execFileSync = function(file) {
     var fn = String(file).replace(/^.*\//, '');
-    if ((fn === 'xdg-open' || fn === 'open') && BROWSER_OPEN) {
+    if ((fn === 'xdg-open' || fn === 'open' || fn === 'browser-open') && BROWSER_OPEN) {
         var a = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
         var opts = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[2] : arguments[1];
         return _efs.call(this, '/system/bin/sh', [BROWSER_OPEN].concat(a), opts);
