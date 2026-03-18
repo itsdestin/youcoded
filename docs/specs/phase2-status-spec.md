@@ -1,6 +1,6 @@
 # Claude Mobile Phase 2 — Spec
 
-**Version:** 2.6
+**Version:** 2.7
 **Last updated:** 2026-03-17
 **Feature location:** `~/claude-mobile/` (Android app), key files: `runtime/PtyBridge.kt`, `runtime/Bootstrap.kt`, `ui/TerminalPanel.kt`, `ui/ChatScreen.kt`, `parser/EventBridge.kt`
 
@@ -259,6 +259,12 @@ Additionally, `exec`/`execSync` are patched with `fixExecShell()` which proactiv
 
 3. **Hook subprocess "Permission denied"** — Node binary gets "Permission denied" when invoked from within hook execution context. **Investigation (v2.6):** The wrapper's `spawnFix()` DOES intercept hook commands (they match "shell + EB command" tier). The real issue is likely one of: (a) `/data/user/0/` vs `/data/data/` path mismatch under different SELinux contexts — the hook node path is hardcoded at config time but may resolve differently when Claude Code spawns the subprocess, (b) LD_PRELOAD not propagating to the hook subprocess if Claude Code spawns with a restricted environment, (c) the hook subprocess runs in a different SELinux domain where the app's private data directory isn't accessible. **Proposed fix:** wrap the hook command in explicit environment setup, or use a shell wrapper that sources the runtime env before executing. Needs on-device debugging with `strace` or SELinux audit logs. See `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_232816.jpg`. *(Reported 2026-03-17)*
 
+4. **GitHub login timeout** — 2-minute timeout on GitHub login flow makes the experience frustrating. Auth itself now works (v2.6 fixed SELinux/OAuth), but the timeout duration is too aggressive. *(Reported 2026-03-17)*
+
+5. **Occasionally missing 3-way prompts** — Chat view sometimes doesn't display the three-option approval prompts (Yes / Yes and don't ask again / No). May be a race condition in the hooks pipeline or a missing event type. *(Reported 2026-03-17)*
+
+6. **Terminal input: no backspace, no autocorrect, click-out/click-in broken** — In terminal mode, backspace key doesn't work, autocorrect is disabled, and if you click out of the terminal typing area and click back in, input doesn't resume properly. *(Reported 2026-03-17)*
+
 Previous bugs fixed in v2.2:
 
 - **~~Bug 1: TerminalPanel crash on resize~~** — Fixed. `externalToInternalRow()` and `allocateFullLineIfNecessary()` now wrapped in broad `Exception` catch (Termux throws `IllegalArgumentException`, not `IndexOutOfBoundsException`). Root cause: race between Compose draw (`gridRows=52`) and `TerminalBuffer` resize (`mScreenRows=51`). The catch skips the transient out-of-bounds row for one frame.
@@ -377,6 +383,42 @@ Ability to exit the current session, create a new chat, or maintain multiple ong
 
 Pre-install GitHub CLI (`gh`) in the app's embedded environment. All standard install methods fail on Android/Termux due to SELinux (pkg, apt, npm, binary download all fail). Needs linker64 approach or prebuilt ARM64 binary deployed at bootstrap. See `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_175521.jpg` and `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_175553.jpg` for failure evidence. (from inbox 2026-03-17)
 
+### Priority 24: Skip Permissions Mode Button
+
+Add a button in Claude Mobile to relaunch in "dangerously skip permissions" mode. Saves the user from having to type the flag manually in terminal. (from inbox 2026-03-17)
+
+### Priority 25: OAuth Auto-Return to App
+
+After completing browser-based OAuth (GitHub, rclone, etc.), automatically exit the browser and return to Claude Mobile. Currently the user has to manually switch back. Partially addressed by v2.6 browser-open script but auto-return not yet implemented. (from inbox 2026-03-17)
+
+### Priority 26: Hide Return Button on Scroll
+
+Hide the "Return to bottom" button on scroll-up, show only on scroll-down. Never show while keyboard is active. (from inbox 2026-03-17)
+
+### Priority 27: Gemini CLI / Claude Code Quick-Switch
+
+Icon at top right to quickly switch between Gemini CLI and Claude Code. Switch to Gemini colors and Gemini icon when in Gemini mode. (from inbox 2026-03-17)
+
+### Priority 28: Inject Android Environment Prompt
+
+Inject a prompt into every new Claude Mobile instance noting the Android environment and listing correct restrictions / in-Claude workarounds for various commands. (from inbox 2026-03-17)
+
+### Priority 29: UI Overhaul — Send Buttons, Settings, Raw Terminal
+
+Remove send buttons in Claude Mobile and use built-in keyboard send buttons. Move chat/terminal swap button and add new "settings" type menus. In terminal, allow access to full raw bash terminal, multiple Claude instances, and projects/file explorer. (from inbox 2026-03-17)
+
+### Priority 30: Compact Tool Call Boxes
+
+Instead of each tool call being a full line, render as small stacked boxes: `[Bashing...][Reading...][Writing...]` etc. After response is received, merge tool calls into the end of the message. Text responses should take up most screen space, not tool cards. (from inbox 2026-03-17)
+
+### Priority 31: Google Sign-In Auto-Linking (Future)
+
+Add a sign-in with Google option that auto-links/synchronizes GitHub, Claude auth, rclone auth, etc. Major future feature. (from inbox 2026-03-17)
+
+### Priority 32: Rename to "Code Mobile" (Future)
+
+Rename "Claude Mobile" to "Code Mobile" to avoid potential trademark/legal issues with Anthropic's "Claude" branding. (from inbox 2026-03-17)
+
 ## Open Questions
 
 1. **Tablet layout:** Split-view (2/3 chat + 1/3 file preview) deferred to Phase 3.
@@ -467,4 +509,5 @@ app/build.gradle.kts       — material-icons-extended, version 0.2.0
 | 2026-03-16 | 2.3 | Clickable terminal URLs: two-pass rendering detects `https://` links across wrapped lines, renders bright blue + underline, tap opens browser. Unblocks OAuth authorization flow | Feature | Destin | Clickable links |
 | 2026-03-16 | 2.5 | (1) Flip up/down arrows in TerminalKeyboardRow (← ↑ ↓ → order). (2) Delete 7 dead code files from parser era. (3) Terminal/Shell input unification: remove visible text field + Send button, add invisible BasicTextField that forwards keystrokes to PTY in real time. Tap terminal to open keyboard. TerminalKeyboardRow ⏎ is sole Enter/confirm. TerminalPanel gains `onTap` callback. (4) Native binary R&D: proved ELF e_type patch works (linker64 accepts ET_DYN), blocked on TLS alignment. Built glibc LD_PRELOAD interceptor. Research doc at `docs/plans/native-binary-research (03-16-2026).md`. Add Priority 3 for native binary support | R&D + UX | Destin | Quick wins + native research |
 | 2026-03-16 | 2.4 | Major reliability + UX pass: (1) Hooks reliability — EventBridge starts before Claude Code, hook-relay.js retries 3x with backoff, ChatScreen retries EventBridge poll, Stop event tries 4 field names. (2) Exception catch widened to `Exception` (Termux throws `IllegalArgumentException`). (3) Chat message ordering — insertion cursor ensures responses appear after their user message, queued messages dimmed with label. (4) Clickable URLs in chat bubbles via `LinkableText`/`AnnotatedString`. (5) Terminal scrollback — `externalRow = rowIndex - scrollRows` with mobile-standard direction (swipe up = recent). (6) `~/.local/bin` added to PATH and `buildBashEnvSh` scans it for native installer binaries. Remove session persistence from planned (confirmed working), remove native installer fallback (resolved). Renumber priorities 1-20. | Update | Destin | Reliability + UX |
+| 2026-03-17 | 2.7 | Inbox processing: add 3 new known bugs (GitHub login timeout, missing 3-way prompts, terminal input issues). Add 9 new planned updates (Priorities 24-32): skip permissions button, OAuth auto-return, hide return on scroll, Gemini CLI switch, Android env prompt, UI overhaul, compact tool calls, Google sign-in, Code Mobile rename | Inbox | Destin | Inbox processing |
 | 2026-03-17 | 2.6 | Code review + stability pass. **Dead code:** Deleted 3 remaining orphan widgets (MenuWidget, ConfirmationWidget, OAuthWidget) + `widgets/` dir. **OOM/ANR fixes:** (1) PtyBridge `_rawBuffer` capped at 512KB rolling window, changed to thread-safe `StringBuffer`. (2) Photo picker file copy moved off main thread. (3) TerminalPanel Paint objects hoisted to `remember` blocks (eliminates hundreds of per-frame allocations). (4) Bootstrap process stdout read via `CompletableFuture` to prevent pipe deadlock. (5) PTY input buffers capped at 1000 chars. **Race conditions:** (6) SessionManager `CompletableDeferred` replaced with `MutableStateFlow` for retry safety. (7) SessionService.startSession() cleans up previous scope/bridge. (8) EventBridge.serverSocket marked `@Volatile`. (9) Approval heuristic re-checks tool state; distinct `LaunchedEffect` keys. (10) ChatState.advanceQueue() handles missing messages. (11) DirectShellBridge cleanup via `DisposableEffect`. **Correctness:** (12) SyntaxHighlighter span priority reversed (strings > keywords). (13) CodeCard highlighting cached with `remember`. (14) MarkdownRenderer cardId uses block index (not content hash). (15) BtwSheet double-reversal removed. (16) SetupScreen retry button wired to callback. (17) Terminal/Shell duplicated headers extracted to `ModeHeader`/`PtyInputField`. **Bug fixes:** (18) Approval cards now revert to Running on Accept/Reject tap. (19) Hook permission denied investigated, root cause documented. Mark Priority 2 (Markdown) done, update Priority 6. | Review + Bugfix | Destin | Code review |
