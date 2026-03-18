@@ -40,7 +40,14 @@ sealed class MessageContent {
         val error: JSONObject,
     ) : MessageContent()
     data class SystemNotice(val text: String) : MessageContent()
+    data class InteractivePrompt(
+        val promptId: String,
+        val title: String,
+        val buttons: List<PromptButton>,
+    ) : MessageContent()
 }
+
+data class PromptButton(val label: String, val input: String)
 
 data class ChatMessage(
     val role: MessageRole,
