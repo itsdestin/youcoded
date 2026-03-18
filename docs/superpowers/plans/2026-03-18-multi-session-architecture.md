@@ -856,7 +856,11 @@ class ClaudeTerminalViewClient(
 }
 ```
 
-**Important:** The actual `TerminalViewClient` interface may have different method signatures than shown above. At implementation time, use the IDE's "implement members" feature on the interface to get the exact signatures. The code above shows the intent — implement clipboard, return defaults for everything else.
+**CRITICAL:** The code above is illustrative, NOT copy-paste ready. `TerminalViewClient` and `TerminalSessionClient` are separate interfaces in Termux. The code above may mix methods from both. At implementation time:
+1. Check the actual `com.termux.view.TerminalViewClient` interface source in the terminal-view library
+2. Use the IDE's "implement members" feature to get the exact signatures
+3. Only implement clipboard (copy/paste) and input forwarding; return defaults for everything else
+4. The `TerminalSessionClient` callbacks (onTextChanged, onBell, etc.) are already handled by PtyBridge's sessionClient — do NOT duplicate them here
 
 Also create a read-only variant for card embeds:
 ```kotlin
