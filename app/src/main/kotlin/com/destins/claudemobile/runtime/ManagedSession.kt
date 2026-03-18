@@ -208,6 +208,11 @@ class ManagedSession(
 
         // "Press Enter to continue" / login successful
         if ("press enter to continue" in lower || "login successful" in lower) {
+            // Auto-collapse the browser sign-in card if still active
+            if ("paste_code" in activePrompts) {
+                activePrompts.remove("paste_code")
+                chatState.completePrompt("paste_code", "Signed in")
+            }
             if ("continue" !in activePrompts) {
                 activePrompts.add("continue")
                 chatState.showInteractivePrompt("continue", "Login successful!", listOf(
