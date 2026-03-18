@@ -331,9 +331,9 @@ function stripLogin(args) {
 // When shell:true + EB command string, bypass the shell entirely — split the
 // command and route the binary through linker64 (avoids SELinux shell exec).
 function spawnFix(orig, command, args, options) {
-    // Intercept xdg-open/open — route through /system/bin/sh (shell script, not ELF)
+    // Intercept xdg-open/open/browser-open — route through /system/bin/sh (shell scripts, not ELF)
     var cmdName = String(command).replace(/^.*\//, '');
-    if ((cmdName === 'xdg-open' || cmdName === 'open') && BROWSER_OPEN) {
+    if ((cmdName === 'xdg-open' || cmdName === 'open' || cmdName === 'browser-open' || String(command).endsWith('/browser-open')) && BROWSER_OPEN) {
         var urlArgs = Array.isArray(args) ? args : [];
         var o2 = Array.isArray(args) ? options : args;
         return orig.call(this, '/system/bin/sh', [BROWSER_OPEN].concat(urlArgs), o2);
