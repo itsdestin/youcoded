@@ -964,7 +964,7 @@ class Bootstrap(private val context: Context) {
             // /system/bin/sh is silently ignored regardless of POSIX compliance.
             put("SHELL", bashPath)
             put("CLAUDE_CODE_SHELL", bashPath)
-            put("PATH", "$home/.local/bin:$usr/bin:$usr/bin/applets:/system/bin")
+            put("PATH", "$home/.claude-mobile:$home/.local/bin:$usr/bin:$usr/bin/applets:/system/bin")
             put("LD_LIBRARY_PATH", "$usr/lib")
             // termux-exec LD_PRELOAD: intercepts execve() in bash subprocesses
             // and routes them through linker64. Complements the JS wrapper which
