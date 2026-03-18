@@ -304,11 +304,6 @@ child_process.execFileSync = function(file) {
 };
 var _ef = child_process.execFile;
 child_process.execFile = function(file) {
-    var fileStr = String(file);
-    var efArgs = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1].join(' ') : '';
-    if (fileStr.includes('open') || fileStr.includes('browser') || fileStr.includes('http') || efArgs.includes('http')) {
-        process.stderr.write('WRAPPER-EXECFILE: file=' + fileStr + ' args=' + efArgs + '\n');
-    }
     var fn2 = String(file).replace(/^.*\//, '');
     if (fn2 === 'xdg-open' || fn2 === 'open' || fn2 === 'browser-open') {
         var rest = Array.prototype.slice.call(arguments, 1);
