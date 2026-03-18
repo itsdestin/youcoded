@@ -585,13 +585,13 @@ private fun ModeHeader(
 /** Invisible text field that forwards soft keyboard input to a PTY.
  *
  *  Uses TextFieldValue (not String) so Compose preserves the IME's
- *  composition state across recompositions — prevents Gboard from
- *  falling back to deleteSurroundingText for predictions.
+ *  composition state across recompositions.
  *
  *  Tracks what we've actually sent to the PTY (`ptySent`) and diffs
- *  against that using common-prefix matching. With autocorrect and
- *  autocapitalization disabled, the only word-level changes come from
- *  predictions, which are bounded to the current word (small diffs). */
+ *  against that using common-prefix matching. PTY writes are debounced
+ *  by 40ms so that rapid IME changes (e.g. Gboard double-space-to-period
+ *  replacing " " with ". ") are combined into a single atomic write,
+ *  avoiding visible backspace flicker. */
 @Composable
 private fun PtyInputField(
     focusRequester: FocusRequester,
@@ -599,52 +599,41 @@ private fun PtyInputField(
     onEnter: () -> Unit,
 ) {
     var tfv by remember { mutableStateOf(TextFieldValue()) }
-    // Ground truth: what the PTY currently has from our input
+    // Ground truth: what the PTY should have after all pending writes flush
     var ptySent by remember { mutableStateOf("") }
+    // Accumulated batch waiting to be flushed
+    var pendingBatch by remember { mutableStateOf("") }
+    val scope = rememberCoroutineScope()
+    var flushJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     BasicTextField(
         value = tfv,
         onValueChange = { newTfv ->
             val newText = newTfv.text
-            val oldText = tfv.text
-            val oldComp = tfv.composition
-            val newComp = newTfv.composition
-
-            android.util.Log.d("PtyInput", buildString {
-                append("onValueChange: ")
-                append("old=\"$oldText\"(${oldText.length}) ")
-                append("new=\"$newText\"(${newText.length}) ")
-                append("ptySent=\"$ptySent\"(${ptySent.length}) ")
-                append("oldComp=$oldComp newComp=$newComp ")
-                append("oldSel=${tfv.selection} newSel=${newTfv.selection}")
-            })
 
             if (newText != ptySent) {
                 val commonPrefix = ptySent.commonPrefixWith(newText).length
                 val toDelete = ptySent.length - commonPrefix
                 val toInsert = newText.substring(commonPrefix)
 
-                android.util.Log.d("PtyInput", buildString {
-                    append("DIFF: commonPrefix=$commonPrefix ")
-                    append("toDelete=$toDelete ")
-                    append("toInsert=\"$toInsert\"(${toInsert.length}) ")
-                    val escaped = ("\u007f".repeat(toDelete) + toInsert).map {
-                        if (it.code < 32 || it.code == 0x7f) "\\x${it.code.toString(16).padStart(2, '0')}" else it.toString()
-                    }.joinToString("")
-                    append("batch=\"$escaped\"")
-                })
-
                 if (toDelete <= 30) {
                     val batch = "\u007f".repeat(toDelete) + toInsert
-                    if (batch.isNotEmpty()) onInput(batch)
+                    // Accumulate into pending batch and debounce the flush
+                    pendingBatch += batch
                     ptySent = newText
+
+                    flushJob?.cancel()
+                    flushJob = scope.launch {
+                        delay(40)
+                        if (pendingBatch.isNotEmpty()) {
+                            onInput(pendingBatch)
+                            pendingBatch = ""
+                        }
+                    }
                 } else {
-                    android.util.Log.w("PtyInput",
-                        "SKIPPED large diff: delete=$toDelete insert=${toInsert.length}")
+                    // Too large — accept IME state but don't replay
                     ptySent = newText
                 }
-            } else {
-                android.util.Log.d("PtyInput", "NO-OP: newText == ptySent")
             }
 
             tfv = newTfv
