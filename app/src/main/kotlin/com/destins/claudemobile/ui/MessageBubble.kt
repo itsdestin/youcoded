@@ -127,7 +127,8 @@ fun MessageBubble(
                     .clip(RoundedCornerShape(8.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .padding(12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
             ) {
                 Text(
                     content.title,
@@ -135,26 +136,18 @@ fun MessageBubble(
                     fontSize = 14.sp,
                     style = MaterialTheme.typography.titleSmall,
                 )
-                // Arrange buttons in a flow layout (wrap to multiple rows if needed)
-                val chunked = content.buttons.chunked(3)
-                for (row in chunked) {
-                    Row(
+                Spacer(modifier = Modifier.height(2.dp))
+                for (button in content.buttons) {
+                    Button(
+                        onClick = { onPromptAction?.invoke(content.promptId, button.input) },
                         modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        shape = RoundedCornerShape(8.dp),
+                        colors = ButtonDefaults.buttonColors(
+                            containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            contentColor = MaterialTheme.colorScheme.primary,
+                        ),
                     ) {
-                        for (button in row) {
-                            Button(
-                                onClick = { onPromptAction?.invoke(content.promptId, button.input) },
-                                modifier = Modifier.weight(1f),
-                                shape = RoundedCornerShape(8.dp),
-                                colors = ButtonDefaults.buttonColors(
-                                    containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                                    contentColor = MaterialTheme.colorScheme.primary,
-                                ),
-                            ) {
-                                Text(button.label, fontSize = 12.sp, maxLines = 1)
-                            }
-                        }
+                        Text(button.label, fontSize = 13.sp)
                     }
                 }
             }
