@@ -43,10 +43,13 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import com.destins.claudemobile.config.defaultChips
 import com.destins.claudemobile.parser.HookEvent
+import com.destins.claudemobile.runtime.ClaudeTerminalViewClient
 import com.destins.claudemobile.runtime.DirectShellBridge
 import com.destins.claudemobile.runtime.PtyBridge
+import com.termux.view.TerminalView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
