@@ -1449,18 +1449,23 @@ data class SelfTestResult(
 
 fun selfTest(): SelfTestResult {
     val prefix = usrDir.absolutePath
-    val bashOk = try {
-        val p = ProcessBuilder("/system/bin/linker64", "$prefix/bin/bash", "--version")
-            .redirectErrorStream(true).start()
+    // ProcessBuilder needs LD_LIBRARY_PATH for linker64 to find shared libs
+    val env = mapOf(
+        "LD_LIBRARY_PATH" to "$prefix/lib",
+        "HOME" to homeDir.absolutePath,
+        "TMPDIR" to File(homeDir, "tmp").absolutePath,
+    )
+
+    fun runTest(vararg cmd: String): Boolean = try {
+        val p = ProcessBuilder(*cmd).redirectErrorStream(true).apply {
+            environment().putAll(env)
+        }.start()
+        p.inputStream.readBytes() // drain output to avoid pipe buffer deadlock
         p.waitFor() == 0
     } catch (_: Exception) { false }
 
-    val nodeOk = try {
-        val p = ProcessBuilder("/system/bin/linker64", "$prefix/bin/node", "-e", "process.exit(0)")
-            .redirectErrorStream(true).start()
-        p.waitFor() == 0
-    } catch (_: Exception) { false }
-
+    val bashOk = runTest("/system/bin/linker64", "$prefix/bin/bash", "--version")
+    val nodeOk = runTest("/system/bin/linker64", "$prefix/bin/node", "-e", "process.exit(0)")
     val cliExists = File("$prefix/lib/node_modules/@anthropic-ai/claude-code/cli.js").exists()
 
     return SelfTestResult(bashOk, nodeOk, cliExists)
