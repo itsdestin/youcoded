@@ -268,6 +268,11 @@ class ManagedSession(
         }
     }
 
+    /** Mark a prompt as completed so the detector won't re-create it. */
+    fun markPromptCompleted(promptId: String) {
+        completedPromptIds.add(promptId)
+    }
+
     fun startTitleObserver() {
         titleFile.parentFile?.mkdirs()
         if (!titleFile.exists()) titleFile.writeText("")
