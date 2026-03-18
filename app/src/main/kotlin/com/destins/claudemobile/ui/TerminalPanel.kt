@@ -324,6 +324,7 @@ fun TerminalPanel(
 
         // ── Pass 2: Draw characters ─────────────────────────────────────
         for (rowIndex in 0 until displayRows) {
+            if (rowIndex == cursorScreenRow && scrollRows == 0) continue
             val row = visibleRowData[rowIndex] ?: continue
             val yTop = rowIndex * cellH
             val urlCols: Set<Int> = urlColsByRow[rowIndex] ?: emptySet()
