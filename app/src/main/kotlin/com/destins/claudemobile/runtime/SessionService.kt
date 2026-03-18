@@ -47,6 +47,33 @@ class SessionService : Service() {
     fun initBootstrap(bs: Bootstrap) {
         bootstrap = bs
         titlesDir.mkdirs()
+        startUrlObserver(bs)
+    }
+
+    /** Watch ~/.claude-mobile/open-url for URLs written by the JS wrapper.
+     *  Opens them via Android Intent (only way to launch browser from app UID). */
+    private fun startUrlObserver(bs: Bootstrap) {
+        val mobileDir = File(bs.homeDir, ".claude-mobile")
+        mobileDir.mkdirs()
+        val urlFile = File(mobileDir, "open-url")
+
+        urlObserver?.stopWatching()
+        urlObserver = object : FileObserver(mobileDir, CLOSE_WRITE or MODIFY) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != "open-url") return
+                try {
+                    val url = urlFile.readText().trim()
+                    if (url.startsWith("http")) {
+                        urlFile.delete()
+                        val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                            addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        }
+                        startActivity(intent)
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        urlObserver?.startWatching()
     }
 
     val titlesDir: File get() = File(bootstrap?.homeDir ?: File("/"), ".claude-mobile/titles")
