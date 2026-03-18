@@ -198,7 +198,8 @@ fun TerminalPanel(
                     val cellW = normalPaint.measureText("M")
                     cellHeightPx = cellH
 
-                    val cols = (size.width / cellW).toInt().coerceAtLeast(minCols)
+                    // Subtract left padding (4f) so rightmost glyphs aren't clipped
+                    val cols = ((size.width - 8f) / cellW).toInt().coerceAtLeast(minCols)
                     val rows = (size.height / cellH).toInt().coerceAtLeast(1)
 
                     if (cols != gridCols || rows != gridRows) {
