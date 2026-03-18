@@ -123,7 +123,7 @@ class PtyBridge(
         // program name ("sh"), then "-c", then the command string.
         session = TerminalSession(
             "/system/bin/sh",
-            bootstrap.homeDir.absolutePath,
+            cwd.absolutePath,
             arrayOf("sh", "-c", launchCmd),
             envArray,
             200,
