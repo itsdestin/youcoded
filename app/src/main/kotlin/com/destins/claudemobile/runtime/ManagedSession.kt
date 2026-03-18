@@ -227,7 +227,7 @@ class ManagedSession(
                 val cid = "continue_${continueCounter++}"
                 val title = when {
                     "login successful" in lower -> "Login successful!"
-                    "security" in lower -> "Security notes"
+                    "security" in lower -> "Remember, Claude can make mistakes"
                     else -> "Ready"
                 }
                 chatState.showInteractivePrompt(cid, title, listOf(
