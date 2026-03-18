@@ -411,6 +411,10 @@ child_process.exec = function(cmd, opts, cb) {
 };
 var _execSync = child_process.execSync;
 child_process.execSync = function(cmd, opts) {
+    var m2 = typeof cmd === 'string' && cmd.match(/^(xdg-open|open)\s+(.*)/);
+    if (m2 && BROWSER_OPEN) {
+        cmd = '/system/bin/sh ' + BROWSER_OPEN + ' ' + m2[2];
+    }
     return _execSync.call(this, fixTmpInShellCmd(cmd), fixExecShell(opts));
 };
 var cliPath = process.argv[2];
