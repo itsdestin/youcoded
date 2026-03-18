@@ -62,6 +62,12 @@ class ChatState {
     var isProcessing: Boolean by mutableStateOf(false)
         private set
 
+    /** Timestamp when processing started — for timeout detection */
+    private var processingStartedAt = 0L
+
+    /** If true, at least one hook event was received for the current processing cycle */
+    private var receivedHookEvent = false
+
     private var nextCardId = 0
     private fun nextId(): String = "card-${nextCardId++}"
 
