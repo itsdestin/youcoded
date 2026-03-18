@@ -215,6 +215,7 @@ class ManagedSession(
         }
 
         // "Press Enter to continue" — can appear multiple times (login, security notes, etc.)
+        // Use the contextual title as part of the key to deduplicate
         if ("press enter to continue" in lower) {
             // Auto-collapse the browser sign-in card if still active
             if ("paste_code" in activePrompts) {
@@ -222,20 +223,22 @@ class ManagedSession(
                 completedPromptIds.add("paste_code")
                 chatState.completePrompt("paste_code", "Signed in")
             }
-            if ("continue" !in activePrompts) {
-                activePrompts.add("continue")
-                val cid = "continue_${continueCounter++}"
+            val continueKey = when {
+                "login successful" in lower -> "continue_login"
+                "security" in lower -> "continue_security"
+                else -> "continue_other_${continueCounter++}"
+            }
+            if (continueKey !in activePrompts && continueKey !in completedPromptIds) {
+                activePrompts.add(continueKey)
                 val title = when {
                     "login successful" in lower -> "Login successful!"
                     "security" in lower -> "Remember, Claude can make mistakes"
                     else -> "Ready"
                 }
-                chatState.showInteractivePrompt(cid, title, listOf(
+                chatState.showInteractivePrompt(continueKey, title, listOf(
                     PromptButton("Continue", "\r"),
                 ))
             }
-        } else if ("continue" in activePrompts) {
-            activePrompts.remove("continue")
         }
     }
 
