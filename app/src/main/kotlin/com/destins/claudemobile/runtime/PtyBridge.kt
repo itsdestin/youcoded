@@ -415,13 +415,10 @@ function fixTmpInShellCmd(cmd) {
 var _exec = child_process.exec;
 child_process.exec = function(cmd, opts, cb) {
     if (typeof opts === 'function') { cb = opts; opts = undefined; }
-    if (typeof cmd === 'string' && (cmd.includes('open') || cmd.includes('browser') || cmd.includes('http'))) {
-        process.stderr.write('WRAPPER-EXEC: cmd=' + cmd + '\n');
-    }
-    // Intercept xdg-open/open in shell command strings — route through browser-open
-    var m = typeof cmd === 'string' && cmd.match(/^(xdg-open|open|.*browser-open)\s+(.*)/);
-    if (m && BROWSER_OPEN) {
-        cmd = '/system/bin/sh ' + BROWSER_OPEN + ' ' + m[2];
+    // Intercept xdg-open/open/browser-open in shell command strings — use am start
+    var m = typeof cmd === 'string' && cmd.match(/^(?:.*\/)?(?:xdg-open|open|browser-open)\s+(https?:\/\/\S+)/);
+    if (m) {
+        cmd = '/system/bin/am start -a android.intent.action.VIEW -d ' + m[1];
     }
     return _exec.call(this, fixTmpInShellCmd(cmd), fixExecShell(opts), cb);
 };
