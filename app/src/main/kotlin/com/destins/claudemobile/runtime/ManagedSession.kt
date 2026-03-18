@@ -116,10 +116,11 @@ class ManagedSession(
                 val version = ptyBridge.screenVersion.value
                 if (version == lastVersion) continue
                 lastVersion = version
-                // Check both screen text and raw buffer for prompt patterns
                 val screen = ptyBridge.readScreenText()
                 val raw = ptyBridge.rawBuffer.takeLast(4000)
                 val combined = screen + "\n" + raw
+                val lower = combined.lowercase()
+                android.util.Log.d("PromptDetector", "v=$version screen=${screen.length}ch raw=${raw.length}ch theme=${lower.contains("choose the text style")} trust=${lower.contains("do you trust")}")
                 withContext(Dispatchers.Main) {
                     detectPrompts(combined, activePrompts)
                 }
