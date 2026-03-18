@@ -562,6 +562,18 @@ class Bootstrap(private val context: Context) {
         )
         browserScript.setExecutable(true)
 
+        // Deploy xdg-open and open wrappers — Claude Code calls xdg-open (Linux)
+        // or open (macOS) during auth. Neither exists on Android.
+        // These wrappers delegate to browser-open so auth URLs open correctly.
+        val browserOpenPath = browserScript.absolutePath
+        for (name in listOf("xdg-open", "open")) {
+            val wrapper = File(mobileDir, name)
+            wrapper.writeText(
+                "#!/system/bin/sh\nexec \"$browserOpenPath\" \"\$@\"\n"
+            )
+            wrapper.setExecutable(true)
+        }
+
         // Sync gh CLI token to ~/.netrc so git can authenticate over HTTPS.
         // Git's credential helper system doesn't work on Android because:
         // 1. `gh auth setup-git` fails (Go binaries bypass LD_PRELOAD)
