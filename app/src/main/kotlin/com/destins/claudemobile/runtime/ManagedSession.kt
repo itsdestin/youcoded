@@ -104,15 +104,24 @@ class ManagedSession(
             }
         }
 
-        // 4. Setup prompt detector — watches PTY screen for known interactive prompts.
+        // 4. Setup prompt detector — watches PTY output for known interactive prompts.
+        //    Reacts to screenVersion changes (new PTY output) + also polls the raw buffer
+        //    since screen text depends on emulator viewport size which may be tiny initially.
         scope.launch {
             val activePrompts = mutableSetOf<String>()
+            var lastVersion = -1
             while (true) {
-                delay(1000)
+                delay(500)
                 if (!ptyBridge.isRunning) break
+                val version = ptyBridge.screenVersion.value
+                if (version == lastVersion) continue
+                lastVersion = version
+                // Check both screen text and raw buffer for prompt patterns
                 val screen = ptyBridge.readScreenText()
+                val raw = ptyBridge.rawBuffer.takeLast(4000)
+                val combined = screen + "\n" + raw
                 withContext(Dispatchers.Main) {
-                    detectPrompts(screen, activePrompts)
+                    detectPrompts(combined, activePrompts)
                 }
             }
         }
