@@ -615,6 +615,14 @@ private fun PtyInputField(
         value = tfv,
         onValueChange = { newTfv ->
             ptyTarget = newTfv.text
+            val oldComp = tfv.composition
+            val newComp = newTfv.composition
+
+            android.util.Log.d("PtyInput", buildString {
+                append("CHG actual=\"$ptyActual\"(${ptyActual.length}) ")
+                append("target=\"$ptyTarget\"(${ptyTarget.length}) ")
+                append("comp=$oldComp→$newComp sel=${newTfv.selection}")
+            })
 
             // Always cancel pending flush — we'll either send immediately
             // or reschedule
@@ -628,29 +636,33 @@ private fun PtyInputField(
                 // Is this just appending a single space?
                 val isLoneSpace = toDelete == 0 && toInsert == " "
 
+                fun escBatch(b: String) = b.map {
+                    if (it.code < 32 || it.code == 0x7f) "\\x${it.code.toString(16).padStart(2, '0')}" else it.toString()
+                }.joinToString("")
+
                 if (toDelete > 30) {
-                    // Unreasonably large diff — accept IME state, skip PTY
+                    android.util.Log.w("PtyInput", "SKIP large del=$toDelete ins=${toInsert.length}")
                     ptyActual = ptyTarget
                 } else if (isLoneSpace) {
-                    // Debounce space to absorb Gboard double-space-to-period.
-                    // If the next change arrives before flush, the diff is
-                    // recomputed from ptyActual (which still lacks the space).
+                    android.util.Log.d("PtyInput", "DEBOUNCE space 300ms")
                     flushJob = scope.launch {
                         delay(300)
-                        // Recompute — ptyTarget may have changed during delay
                         val cp = ptyActual.commonPrefixWith(ptyTarget).length
                         val del = ptyActual.length - cp
                         val ins = ptyTarget.substring(cp)
                         val batch = "\u007f".repeat(del) + ins
+                        android.util.Log.d("PtyInput", "FLUSH del=$del ins=\"$ins\" batch=\"${escBatch(batch)}\"")
                         if (batch.isNotEmpty()) onInput(batch)
                         ptyActual = ptyTarget
                     }
                 } else {
-                    // Send immediately for low latency
                     val batch = "\u007f".repeat(toDelete) + toInsert
+                    android.util.Log.d("PtyInput", "SEND del=$toDelete ins=\"$toInsert\" batch=\"${escBatch(batch)}\"")
                     if (batch.isNotEmpty()) onInput(batch)
                     ptyActual = ptyTarget
                 }
+            } else {
+                android.util.Log.d("PtyInput", "NO-OP (target==actual)")
             }
 
             tfv = newTfv
