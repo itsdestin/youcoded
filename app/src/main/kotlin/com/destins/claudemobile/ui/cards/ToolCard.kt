@@ -16,9 +16,12 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.destins.claudemobile.ui.TerminalPanel
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
+import com.destins.claudemobile.runtime.ReadOnlyTerminalViewClient
 import com.destins.claudemobile.ui.theme.ClaudeMobileTheme
 import com.termux.terminal.TerminalSession
+import com.termux.view.TerminalView
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 
