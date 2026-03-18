@@ -1277,17 +1277,11 @@ if (showNewSessionDialog && service.sessionRegistry.sessionCount >= 5) {
 }
 ```
 
-- [ ] **Step 4: Update hook event collection to use current session**
+- [ ] **Step 4: REMOVE the hook event collection LaunchedEffect entirely**
 
-The `LaunchedEffect` that collects hook events (around line 110) needs to react to session switches:
+The `LaunchedEffect` that collects hook events (around line 110-151) is NO LONGER NEEDED. Hook event collection now happens inside `ManagedSession.startBackgroundCollectors()` (Task 3), which runs for each session's entire lifetime regardless of which session is "current". Delete the entire `LaunchedEffect(bridge)` block that calls `eventBridge.events.collect`.
 
-```kotlin
-LaunchedEffect(currentSession) {
-    val session = currentSession ?: return@LaunchedEffect
-    val eventBridge = session.ptyBridge.getEventBridge() ?: return@LaunchedEffect
-    // ... rest of event collection, using session.chatState instead of chatState
-}
-```
+Also REMOVE the fallback approval detection LaunchedEffect (around line 153-173) — this heuristic is now handled per-session inside `ManagedSession` via the status flow and approval callbacks.
 
 - [ ] **Step 5: Update DirectShellBridge creation**
 
