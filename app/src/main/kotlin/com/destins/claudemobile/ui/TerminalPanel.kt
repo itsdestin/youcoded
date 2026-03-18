@@ -275,6 +275,10 @@ fun TerminalPanel(
         val spaces = " ".repeat(gridCols)
 
         for (rowIndex in 0 until displayRows) {
+            // Skip the cursor row when hideLastRow is active
+            if (rowIndex == cursorScreenRow && scrollRows == 0) {
+                combinedText.append(spaces); continue
+            }
             // Subtract scrollRows to go into scrollback history.
             // rowIndex=0, scrollRows=0 → externalRow=0 (top of live screen)
             // rowIndex=0, scrollRows=5 → externalRow=-5 (5 rows into history)
