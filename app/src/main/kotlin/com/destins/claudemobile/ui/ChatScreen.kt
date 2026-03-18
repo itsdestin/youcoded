@@ -314,6 +314,10 @@ fun ChatScreen(service: SessionService) {
                                 toolUseId?.let { chatState.revertApprovalToRunning(it) }
                                 bridge?.sendApproval(com.destins.claudemobile.runtime.PtyBridge.ApprovalOption.No)
                             },
+                            onPromptAction = { promptId, input ->
+                                bridge?.writeInput(input)
+                                chatState.dismissPrompt(promptId)
+                            },
                             session = bridge?.getSession(),
                             screenVersion = 0,
                         )
