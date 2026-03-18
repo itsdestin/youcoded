@@ -154,6 +154,32 @@ fun MessageBubble(
             }
             return
         }
+        is MessageContent.CompletedPrompt -> {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 8.dp, vertical = 2.dp)
+                    .clip(RoundedCornerShape(8.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .padding(horizontal = 12.dp, vertical = 8.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("✓", fontSize = 13.sp, color = Color(0xFF4CAF50))
+                Spacer(modifier = Modifier.width(8.dp))
+                Text(
+                    content.title,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                )
+                Spacer(modifier = Modifier.width(6.dp))
+                Text(
+                    content.selection,
+                    fontSize = 12.sp,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            return
+        }
         is MessageContent.SystemNotice -> {
             Text(
                 text = content.text,
