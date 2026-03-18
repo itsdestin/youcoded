@@ -117,7 +117,8 @@ class ManagedSession(
                     val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (_: Exception) { "" }
                     val combined = screen + "\n" + raw
                     if (screen.length > 50) {
-                        android.util.Log.d("PromptDetector", "SCREEN: ${screen.take(500).replace("\n", "\\n").replace("\r", "\\r")}")
+                        // Log end of screen (where prompts typically appear)
+                        android.util.Log.d("PromptDetector", "SCREEN_END: ${screen.takeLast(400).replace("\n", "\\n").replace("\r", "\\r")}")
                     }
                     withContext(Dispatchers.Main) {
                         detectPrompts(combined, activePrompts)
