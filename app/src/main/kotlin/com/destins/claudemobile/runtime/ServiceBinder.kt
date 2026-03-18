@@ -19,7 +19,7 @@ class ServiceBinder(private val context: Context) {
     sealed class SessionState {
         data object Disconnected : SessionState()
         data object Connecting : SessionState()
-        data class Connected(val service: SessionService) : SessionState()
+        data class Connected(val bridge: PtyBridge) : SessionState()
         data class Error(val message: String) : SessionState()
     }
 
@@ -42,21 +42,26 @@ class ServiceBinder(private val context: Context) {
         context.bindService(intent, connection, Context.BIND_AUTO_CREATE)
     }
 
-    suspend fun startService(bootstrap: Bootstrap, apiKey: String? = null) {
+    suspend fun startSession(bootstrap: Bootstrap, apiKey: String? = null) {
         _state.value = SessionState.Connecting
         val intent = Intent(context, SessionService::class.java)
         context.startForegroundService(intent)
 
         try {
             val svc = serviceBound.filterNotNull().first()
-            _state.value = SessionState.Connected(svc)
+            svc.startSession(bootstrap, apiKey)
+            svc.ptyBridge?.let {
+                _state.value = SessionState.Connected(it)
+            } ?: run {
+                _state.value = SessionState.Error("PTY bridge failed to start")
+            }
         } catch (e: Exception) {
-            _state.value = SessionState.Error(e.message ?: "Failed to start service")
+            _state.value = SessionState.Error(e.message ?: "Failed to start session")
         }
     }
 
-    fun stopService() {
-        service?.destroyAllSessions()
+    fun stopSession() {
+        service?.stopSession()
         _state.value = SessionState.Disconnected
     }
 
