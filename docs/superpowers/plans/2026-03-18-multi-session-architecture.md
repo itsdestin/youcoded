@@ -518,6 +518,12 @@ class SessionRegistry {
         bridge.start()
         session.startTitleObserver()
 
+        // Wire approval notification callbacks (set by SessionService after creation)
+        // These are set externally via session.onApprovalNeeded / onApprovalCleared
+
+        // Start background collectors (hook events, status polling, approval observer)
+        session.startBackgroundCollectors()
+
         _sessions.update { it + (sessionId to session) }
         _currentSessionId.value = sessionId
 
