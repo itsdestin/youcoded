@@ -195,11 +195,6 @@ class PtyBridge(
 
     fun getEventBridge(): EventBridge? = eventBridge
 
-    /** Create a standalone bash shell session (no Claude Code). */
-    fun createDirectShell(): DirectShellBridge {
-        return DirectShellBridge(bootstrap).also { it.start() }
-    }
-
     fun stop() {
         eventBridge?.stop()
         session?.finishIfRunning()
