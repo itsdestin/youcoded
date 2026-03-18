@@ -108,26 +108,19 @@ class ManagedSession(
         //    Reacts to screenVersion changes (new PTY output) + also polls the raw buffer
         //    since screen text depends on emulator viewport size which may be tiny initially.
         scope.launch {
-            android.util.Log.d("PromptDetector", "Starting prompt detector for session $id")
             try {
                 val activePrompts = mutableSetOf<String>()
                 while (true) {
                     delay(1000)
                     if (!ptyBridge.isRunning) break
-                    val screen = try { ptyBridge.readScreenText() } catch (e: Exception) { "" }
-                    val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (e: Exception) { "" }
+                    val screen = try { ptyBridge.readScreenText() } catch (_: Exception) { "" }
+                    val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (_: Exception) { "" }
                     val combined = screen + "\n" + raw
-                    val lower = combined.lowercase()
-                    android.util.Log.d("PromptDetector", "screen=${screen.length}ch raw=${raw.length}ch theme=${lower.contains("choose the text style")} trust=${lower.contains("do you trust")}")
-                    // Dump first 500 chars of raw buffer for diagnosis
-                    if (raw.isNotEmpty()) android.util.Log.d("PromptDetector", "RAW: ${raw.take(500).replace("\n", "\\n").replace("\r", "\\r")}")
                     withContext(Dispatchers.Main) {
                         detectPrompts(combined, activePrompts)
                     }
                 }
-            } catch (e: Exception) {
-                android.util.Log.e("PromptDetector", "Detector crashed", e)
-            }
+            } catch (_: Exception) {}
         }
     }
 
