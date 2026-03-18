@@ -1,5 +1,6 @@
 package com.destins.claudemobile
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -12,7 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import com.destins.claudemobile.runtime.Bootstrap
-import com.destins.claudemobile.runtime.SessionManager
+import com.destins.claudemobile.runtime.ServiceBinder
 import com.destins.claudemobile.ui.ChatScreen
 import com.destins.claudemobile.ui.SetupScreen
 import com.destins.claudemobile.ui.theme.ClaudeMobileTheme
@@ -61,22 +62,40 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else {
-                            val sessionManager = remember { SessionManager(applicationContext) }
-                            val sessionState by sessionManager.state.collectAsState()
+                            val serviceBinder = remember { ServiceBinder(applicationContext) }
+                            val serviceState by serviceBinder.state.collectAsState()
                             val coroutineScope = rememberCoroutineScope()
 
                             DisposableEffect(Unit) {
-                                sessionManager.bind()
-                                onDispose { sessionManager.unbind() }
+                                serviceBinder.bind()
+                                onDispose { serviceBinder.unbind() }
                             }
 
-                            when {
-                                sessionState is SessionManager.SessionState.Connected -> {
-                                    val bridge = (sessionState as SessionManager.SessionState.Connected).bridge
-                                    ChatScreen(bridge)
+                            when (serviceState) {
+                                is ServiceBinder.SessionState.Connected -> {
+                                    val svc = (serviceState as ServiceBinder.SessionState.Connected).service
+
+                                    // Auto-create first session if none exist
+                                    LaunchedEffect(svc) {
+                                        if (svc.sessionRegistry.sessionCount == 0) {
+                                            svc.initBootstrap(bootstrap)
+                                            svc.createSession(bootstrap.homeDir, dangerousMode = false, apiKey = null)
+                                        }
+                                    }
+
+                                    // Handle intent session_id from notification tap
+                                    LaunchedEffect(Unit) {
+                                        val targetSessionId = intent?.getStringExtra("session_id")
+                                        if (targetSessionId != null) {
+                                            svc.sessionRegistry.switchTo(targetSessionId)
+                                            intent?.removeExtra("session_id")
+                                        }
+                                    }
+
+                                    ChatScreen(svc)
                                 }
-                                sessionState is SessionManager.SessionState.Error -> {
-                                    val error = (sessionState as SessionManager.SessionState.Error).message
+                                is ServiceBinder.SessionState.Error -> {
+                                    val error = (serviceState as ServiceBinder.SessionState.Error).message
                                     Column(
                                         modifier = Modifier
                                             .fillMaxSize()
@@ -88,7 +107,7 @@ class MainActivity : ComponentActivity() {
                                         Spacer(modifier = Modifier.height(16.dp))
                                         Button(onClick = {
                                             coroutineScope.launch {
-                                                sessionManager.startSession(bootstrap)
+                                                serviceBinder.startService(bootstrap)
                                             }
                                         }) {
                                             Text("Retry")
@@ -97,7 +116,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 else -> {
                                     LaunchedEffect(Unit) {
-                                        sessionManager.startSession(bootstrap)
+                                        serviceBinder.startService(bootstrap)
                                     }
                                     SetupScreen(Bootstrap.Progress.Installing("Claude Code session"))
                                 }
@@ -107,5 +126,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 }
