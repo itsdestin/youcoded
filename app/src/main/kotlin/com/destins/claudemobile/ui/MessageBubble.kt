@@ -1,18 +1,16 @@
 package com.destins.claudemobile.ui
 
-import android.content.Intent
-import android.net.Uri
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.text.ClickableText
 import androidx.compose.material3.*
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
@@ -23,14 +21,13 @@ import com.termux.terminal.TerminalSession
 private val URL_PATTERN = Regex("""https?://[^\s)>\]"'`]+""")
 private val LINK_COLOR = Color(0xFF66AAFF)
 
-/** Text composable with clickable URL detection. */
+/** Text composable with clickable URL detection using LinkAnnotation for reliable tap handling. */
 @Composable
 private fun LinkableText(
     text: String,
     style: androidx.compose.ui.text.TextStyle,
     color: Color,
 ) {
-    val context = LocalContext.current
     val matches = URL_PATTERN.findAll(text).toList()
 
     if (matches.isEmpty()) {
@@ -40,23 +37,21 @@ private fun LinkableText(
 
     val annotated = buildAnnotatedString {
         append(text)
-        // Apply default color to entire string
         addStyle(SpanStyle(color = color), 0, text.length)
         for (match in matches) {
             val url = match.value.trimEnd('.', ',', ';', ':', '!')
-            addStyle(
-                SpanStyle(color = LINK_COLOR, textDecoration = TextDecoration.Underline),
-                match.range.first, match.range.last + 1,
+            val end = match.range.first + url.length
+            addLink(
+                LinkAnnotation.Url(
+                    url,
+                    TextLinkStyles(style = SpanStyle(color = LINK_COLOR, textDecoration = TextDecoration.Underline)),
+                ),
+                match.range.first, end,
             )
-            addStringAnnotation("URL", url, match.range.first, match.range.last + 1)
         }
     }
 
-    ClickableText(text = annotated, style = style) { offset ->
-        annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let {
-            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it.item)))
-        }
-    }
+    Text(text = annotated, style = style)
 }
 
 @Composable
