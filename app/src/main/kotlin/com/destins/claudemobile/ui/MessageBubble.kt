@@ -62,6 +62,7 @@ fun MessageBubble(
     onAcceptApproval: () -> Unit = {},
     onAcceptAlwaysApproval: () -> Unit = {},
     onRejectApproval: () -> Unit = {},
+    onPromptAction: ((promptId: String, input: String) -> Unit)? = null,
     session: TerminalSession? = null,
     screenVersion: Int = 0,
 ) {
