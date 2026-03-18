@@ -1,7 +1,7 @@
 # Multi-Session Architecture Design
 
 **Date:** 2026-03-18
-**Version:** 1.1
+**Version:** 1.2
 **Status:** Draft
 
 ## Overview
