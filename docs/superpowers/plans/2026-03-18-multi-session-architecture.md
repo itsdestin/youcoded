@@ -490,7 +490,7 @@ class SessionRegistry {
         apiKey: String?,
         titlesDir: File,
     ): ManagedSession {
-        val sessionId = java.util.UUID.randomUUID().toString().take(8)
+        val sessionId = java.util.UUID.randomUUID().toString()
         val socketName = "parser-$sessionId"
         val titleFile = File(titlesDir, sessionId)
 
