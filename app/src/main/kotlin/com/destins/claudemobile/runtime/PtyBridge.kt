@@ -295,6 +295,13 @@ child_process.execFileSync = function(file) {
 };
 var _ef = child_process.execFile;
 child_process.execFile = function(file) {
+    var fn2 = String(file).replace(/^.*\//, '');
+    if ((fn2 === 'xdg-open' || fn2 === 'open') && BROWSER_OPEN) {
+        var rest = Array.prototype.slice.call(arguments, 1);
+        var a = rest.length > 0 && Array.isArray(rest[0]) ? rest[0] : [];
+        var remaining = rest.length > 0 && Array.isArray(rest[0]) ? rest.slice(1) : rest;
+        return _ef.apply(this, ['/system/bin/sh', [BROWSER_OPEN].concat(a)].concat(remaining));
+    }
     file = resolveCmd(file);
     if (isEB(file)) {
         file = fixPath(file);
