@@ -606,25 +606,45 @@ private fun PtyInputField(
         value = tfv,
         onValueChange = { newTfv ->
             val newText = newTfv.text
+            val oldText = tfv.text
+            val oldComp = tfv.composition
+            val newComp = newTfv.composition
+
+            android.util.Log.d("PtyInput", buildString {
+                append("onValueChange: ")
+                append("old=\"$oldText\"(${oldText.length}) ")
+                append("new=\"$newText\"(${newText.length}) ")
+                append("ptySent=\"$ptySent\"(${ptySent.length}) ")
+                append("oldComp=$oldComp newComp=$newComp ")
+                append("oldSel=${tfv.selection} newSel=${newTfv.selection}")
+            })
 
             if (newText != ptySent) {
                 val commonPrefix = ptySent.commonPrefixWith(newText).length
                 val toDelete = ptySent.length - commonPrefix
                 val toInsert = newText.substring(commonPrefix)
 
-                // Safety cap: if we'd send a huge number of backspaces,
-                // something unexpected changed (e.g. keyboard reformatted
-                // the whole buffer). Skip the PTY update to avoid damage.
+                android.util.Log.d("PtyInput", buildString {
+                    append("DIFF: commonPrefix=$commonPrefix ")
+                    append("toDelete=$toDelete ")
+                    append("toInsert=\"$toInsert\"(${toInsert.length}) ")
+                    val escaped = ("\u007f".repeat(toDelete) + toInsert).map {
+                        if (it.code < 32 || it.code == 0x7f) "\\x${it.code.toString(16).padStart(2, '0')}" else it.toString()
+                    }.joinToString("")
+                    append("batch=\"$escaped\"")
+                })
+
                 if (toDelete <= 30) {
                     val batch = "\u007f".repeat(toDelete) + toInsert
                     if (batch.isNotEmpty()) onInput(batch)
                     ptySent = newText
                 } else {
-                    // Accept the IME state but don't replay to PTY
                     android.util.Log.w("PtyInput",
-                        "Skipped large diff: delete=$toDelete insert=${toInsert.length}")
+                        "SKIPPED large diff: delete=$toDelete insert=${toInsert.length}")
                     ptySent = newText
                 }
+            } else {
+                android.util.Log.d("PtyInput", "NO-OP: newText == ptySent")
             }
 
             tfv = newTfv
