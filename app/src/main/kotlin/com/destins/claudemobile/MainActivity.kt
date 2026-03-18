@@ -1,5 +1,6 @@
 package com.destins.claudemobile
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -21,14 +22,12 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
 
-        // Draw behind system bars, then handle insets in Compose
         enableEdgeToEdge()
 
         val bootstrap = Bootstrap(applicationContext)
 
         setContent {
             ClaudeMobileTheme {
-                // Respect status bar, nav bar, and IME (keyboard) insets
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
@@ -70,12 +69,30 @@ class MainActivity : ComponentActivity() {
                                 onDispose { serviceBinder.unbind() }
                             }
 
-                            when {
-                                serviceState is ServiceBinder.SessionState.Connected -> {
-                                    val bridge = (serviceState as ServiceBinder.SessionState.Connected).bridge
-                                    ChatScreen(bridge)
+                            when (serviceState) {
+                                is ServiceBinder.SessionState.Connected -> {
+                                    val svc = (serviceState as ServiceBinder.SessionState.Connected).service
+
+                                    // Auto-create first session if none exist
+                                    LaunchedEffect(svc) {
+                                        if (svc.sessionRegistry.sessionCount == 0) {
+                                            svc.initBootstrap(bootstrap)
+                                            svc.createSession(bootstrap.homeDir, dangerousMode = false, apiKey = null)
+                                        }
+                                    }
+
+                                    // Handle intent session_id from notification tap
+                                    LaunchedEffect(Unit) {
+                                        val targetSessionId = intent?.getStringExtra("session_id")
+                                        if (targetSessionId != null) {
+                                            svc.sessionRegistry.switchTo(targetSessionId)
+                                            intent?.removeExtra("session_id")
+                                        }
+                                    }
+
+                                    ChatScreen(svc)
                                 }
-                                serviceState is ServiceBinder.SessionState.Error -> {
+                                is ServiceBinder.SessionState.Error -> {
                                     val error = (serviceState as ServiceBinder.SessionState.Error).message
                                     Column(
                                         modifier = Modifier
@@ -88,7 +105,7 @@ class MainActivity : ComponentActivity() {
                                         Spacer(modifier = Modifier.height(16.dp))
                                         Button(onClick = {
                                             coroutineScope.launch {
-                                                serviceBinder.startSession(bootstrap)
+                                                serviceBinder.startService(bootstrap)
                                             }
                                         }) {
                                             Text("Retry")
@@ -97,7 +114,7 @@ class MainActivity : ComponentActivity() {
                                 }
                                 else -> {
                                     LaunchedEffect(Unit) {
-                                        serviceBinder.startSession(bootstrap)
+                                        serviceBinder.startService(bootstrap)
                                     }
                                     SetupScreen(Bootstrap.Progress.Installing("Claude Code session"))
                                 }
@@ -107,5 +124,10 @@ class MainActivity : ComponentActivity() {
                 }
             }
         }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
     }
 }
