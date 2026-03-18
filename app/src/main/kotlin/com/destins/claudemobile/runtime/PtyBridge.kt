@@ -112,7 +112,8 @@ class PtyBridge(
         // and fs to route embedded binary exec calls through linker64.
         // The wrapper fixes Claude Code's shell detection (it requires bash/zsh
         // but can't exec them directly due to SELinux on app_data_file).
-        val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPath.absolutePath} ${claudePath.absolutePath}"
+        val dangerousFlag = if (dangerousMode) " --dangerously-skip-permissions" else ""
+        val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPath.absolutePath} ${claudePath.absolutePath}$dangerousFlag"
 
         File(bootstrap.homeDir, "tmp").mkdirs()
 
