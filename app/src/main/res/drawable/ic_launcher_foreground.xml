@@ -7,89 +7,89 @@
 
     <!-- All elements centered in the 72dp safe zone (18–90) -->
 
-    <!-- Hat/cap — small rounded square floating above top-right of body -->
+    <!-- Hat/cap — close to body's upper-right corner -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M57,27 L65,27 A2.5,2.5 0,0 1,67.5,29.5 L67.5,34.5 A2.5,2.5 0,0 1,65,37 L57,37 A2.5,2.5 0,0 1,54.5,34.5 L54.5,29.5 A2.5,2.5 0,0 1,57,27 Z" />
+        android:pathData="M58,27 L67,27 A2.5,2.5 0,0 1,69.5,29.5 L69.5,35.5 A2.5,2.5 0,0 1,67,38 L58,38 A2.5,2.5 0,0 1,55.5,35.5 L55.5,29.5 A2.5,2.5 0,0 1,58,27 Z" />
 
-    <!-- Left arm — rounded square, 6dp gap from body left edge -->
+    <!-- Left arm — rounded square, 5dp gap from body -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M19,48 L26,48 A2.5,2.5 0,0 1,28.5,50.5 L28.5,56.5 A2.5,2.5 0,0 1,26,59 L19,59 A2.5,2.5 0,0 1,16.5,56.5 L16.5,50.5 A2.5,2.5 0,0 1,19,48 Z" />
+        android:pathData="M17,48 L25,48 A2.5,2.5 0,0 1,27.5,50.5 L27.5,57.5 A2.5,2.5 0,0 1,25,60 L17,60 A2.5,2.5 0,0 1,14.5,57.5 L14.5,50.5 A2.5,2.5 0,0 1,17,48 Z" />
 
-    <!-- Right arm (waving, raised) — rounded square, 6dp gap from body right edge -->
+    <!-- Right arm (waving, raised) — rounded square, 5dp gap from body -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M69,36 L76,36 A2.5,2.5 0,0 1,78.5,38.5 L78.5,44.5 A2.5,2.5 0,0 1,76,47 L69,47 A2.5,2.5 0,0 1,66.5,44.5 L66.5,38.5 A2.5,2.5 0,0 1,69,36 Z" />
+        android:pathData="M70,34 L78,34 A2.5,2.5 0,0 1,80.5,36.5 L80.5,43.5 A2.5,2.5 0,0 1,78,46 L70,46 A2.5,2.5 0,0 1,67.5,43.5 L67.5,36.5 A2.5,2.5 0,0 1,70,34 Z" />
 
-    <!-- Main body — rounded square -->
+    <!-- Main body — large rounded square, centered -->
     <path
         android:fillColor="#1c1c1c"
         android:pathData="
-            M41,41 L55,41
-            A9,9 0,0 1,64,50
-            L64,61
-            A9,9 0,0 1,55,70
-            L41,70
-            A9,9 0,0 1,32,61
-            L32,50
-            A9,9 0,0 1,41,41 Z" />
+            M39,40 L57,40
+            A10,10 0,0 1,67,50
+            L67,62
+            A10,10 0,0 1,57,72
+            L39,72
+            A10,10 0,0 1,29,62
+            L29,50
+            A10,10 0,0 1,39,40 Z" />
 
     <!-- Faint code text lines inside body -->
     <path android:fillColor="#ffffff" android:fillAlpha="0.14"
-        android:pathData="M36,47 L60,47 L60,48.5 L36,48.5 Z" />
+        android:pathData="M34,47 L62,47 L62,48.5 L34,48.5 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.10"
-        android:pathData="M36,51 L54,51 L54,52.5 L36,52.5 Z" />
+        android:pathData="M34,51 L56,51 L56,52.5 L34,52.5 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.08"
-        android:pathData="M36,55 L57,55 L57,56.5 L36,56.5 Z" />
+        android:pathData="M34,55 L59,55 L59,56.5 L34,56.5 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.06"
-        android:pathData="M36,59 L50,59 L50,60.5 L36,60.5 Z" />
+        android:pathData="M34,59 L50,59 L50,60.5 L34,60.5 Z" />
     <path android:fillColor="#ffffff" android:fillAlpha="0.04"
-        android:pathData="M36,63 L53,63 L53,64.5 L36,64.5 Z" />
+        android:pathData="M34,63 L55,63 L55,64.5 L34,64.5 Z" />
 
-    <!-- Face: X shape — two crossing diagonal lines (cream) -->
+    <!-- Face: X shape — thick crossing diagonal lines (cream) -->
     <path
-        android:pathData="M39,48 L57,64"
+        android:pathData="M37,47 L59,67"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="3.6"
+        android:strokeWidth="4.0"
         android:strokeLineCap="round" />
     <path
-        android:pathData="M57,48 L39,64"
+        android:pathData="M59,47 L37,67"
         android:strokeColor="#f5ede4"
-        android:strokeWidth="3.6"
+        android:strokeWidth="4.0"
         android:strokeLineCap="round" />
 
-    <!-- Left leg — spread wider, 5dp gap below body -->
+    <!-- Left leg — under body, 3dp gap -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M33,75 L40,75 L40,82 A3.5,3.5 0,0 1,36.5,85.5 A3.5,3.5 0,0 1,33,82 Z" />
+        android:pathData="M37,75 L44,75 L44,83 A3.5,3.5 0,0 1,40.5,86.5 A3.5,3.5 0,0 1,37,83 Z" />
 
-    <!-- Right leg — spread wider, 5dp gap below body -->
+    <!-- Right leg — under body, 3dp gap -->
     <path
         android:fillColor="#1c1c1c"
-        android:pathData="M56,75 L63,75 L63,82 A3.5,3.5 0,0 1,59.5,85.5 A3.5,3.5 0,0 1,56,82 Z" />
+        android:pathData="M52,75 L59,75 L59,83 A3.5,3.5 0,0 1,55.5,86.5 A3.5,3.5 0,0 1,52,83 Z" />
 
-    <!-- Terminal chevron ">" (sienna accent) -->
+    <!-- Terminal chevron ">" (sienna accent, bolder) -->
     <path
-        android:pathData="M67,74 L74,80 L67,86"
+        android:pathData="M65,74 L73,80 L65,86"
         android:strokeColor="#c96442"
-        android:strokeWidth="2.5"
+        android:strokeWidth="3.0"
         android:strokeLineCap="round"
         android:strokeLineJoin="round" />
 
     <!-- Terminal underscore "_" (sienna accent) -->
     <path
-        android:pathData="M76,86 L84,86"
+        android:pathData="M75,86 L84,86"
         android:strokeColor="#c96442"
-        android:strokeWidth="2.5"
+        android:strokeWidth="3.0"
         android:strokeLineCap="round" />
 
-    <!-- Sparkle accent dots (sienna, subtle) -->
-    <path android:fillColor="#c96442" android:fillAlpha="0.45"
-        android:pathData="M24,35 A1.5,1.5 0,1 1,27,35 A1.5,1.5 0,1 1,24,35 Z" />
-    <path android:fillColor="#c96442" android:fillAlpha="0.30"
-        android:pathData="M79,28 A1.2,1.2 0,1 1,81.4,28 A1.2,1.2 0,1 1,79,28 Z" />
-    <path android:fillColor="#c96442" android:fillAlpha="0.20"
-        android:pathData="M82,57 A1,1 0,1 1,84,57 A1,1 0,1 1,82,57 Z" />
+    <!-- Sparkle accent dots (sienna) -->
+    <path android:fillColor="#c96442" android:fillAlpha="0.50"
+        android:pathData="M22,37 A2,2 0,1 1,26,37 A2,2 0,1 1,22,37 Z" />
+    <path android:fillColor="#c96442" android:fillAlpha="0.35"
+        android:pathData="M78,26 A1.5,1.5 0,1 1,81,26 A1.5,1.5 0,1 1,78,26 Z" />
+    <path android:fillColor="#c96442" android:fillAlpha="0.25"
+        android:pathData="M83,55 A1.3,1.3 0,1 1,85.6,55 A1.3,1.3 0,1 1,83,55 Z" />
 
 </vector>
