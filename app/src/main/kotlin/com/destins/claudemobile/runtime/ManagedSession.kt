@@ -116,6 +116,11 @@ class ManagedSession(
                     val screen = try { ptyBridge.readScreenText() } catch (_: Exception) { "" }
                     val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (_: Exception) { "" }
                     val combined = screen + "\n" + raw
+                    val lower = combined.lowercase()
+                    // Log when we don't match any known prompt but have content
+                    if (activePrompts.isEmpty() && raw.length > 100) {
+                        android.util.Log.d("PromptDetector", "RAW_TAIL: ${raw.takeLast(300).replace("\n", "\\n").replace("\r", "\\r")}")
+                    }
                     withContext(Dispatchers.Main) {
                         detectPrompts(combined, activePrompts)
                     }
