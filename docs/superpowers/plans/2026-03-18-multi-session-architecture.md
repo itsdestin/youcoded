@@ -428,21 +428,14 @@ val dangerousFlag = if (dangerousMode) " --dangerously-skip-permissions" else ""
 val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPath.absolutePath} ${claudePath.absolutePath}$dangerousFlag"
 ```
 
-- [ ] **Step 4: Remove createDirectShell() from PtyBridge**
+- [ ] **Step 4: Keep createDirectShell() on PtyBridge for now**
 
-Delete the `createDirectShell()` method (line ~194-197):
-```kotlin
-// DELETE this method — factory moves to SessionRegistry
-/** Create a standalone bash shell session (no Claude Code). */
-fun createDirectShell(): DirectShellBridge {
-    return DirectShellBridge(bootstrap).also { it.start() }
-}
-```
+Do NOT delete `createDirectShell()` yet — ChatScreen still calls it. It will be migrated to `SessionRegistry` in Task 5 and the call site updated in Task 10. Leaving it here avoids breaking the build mid-plan.
 
 - [ ] **Step 5: Verify build compiles**
 
 Run: `./gradlew assembleDebug`
-Expected: May fail if ChatScreen still references `bridge.createDirectShell()`. Fix compile errors by temporarily commenting the call site in ChatScreen.kt (line ~298). This will be properly fixed in Task 7.
+Expected: BUILD SUCCESSFUL. All existing code still works; new params have defaults.
 
 - [ ] **Step 6: Commit**
 
