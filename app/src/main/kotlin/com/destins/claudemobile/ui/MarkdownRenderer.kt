@@ -179,22 +179,13 @@ private fun RenderBlock(
 
 @Composable
 private fun RenderInlineContent(node: Node, textColor: Color) {
-    val context = LocalContext.current
     val annotated = buildInlineAnnotatedString(node, textColor)
-
-    if (annotated.getStringAnnotations("URL", 0, annotated.length).isEmpty()) {
-        Text(text = annotated, style = MaterialTheme.typography.bodyMedium)
-    } else {
-        ClickableText(
-            text = annotated,
-            style = MaterialTheme.typography.bodyMedium,
-        ) { offset ->
-            annotated.getStringAnnotations("URL", offset, offset).firstOrNull()?.let {
-                context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it.item)))
-            }
-        }
-    }
+    Text(text = annotated, style = MaterialTheme.typography.bodyMedium)
 }
+
+private val LINK_STYLES = TextLinkStyles(
+    style = SpanStyle(color = LINK_COLOR, textDecoration = TextDecoration.Underline),
+)
 
 private fun buildInlineAnnotatedString(
     node: Node,
@@ -202,19 +193,17 @@ private fun buildInlineAnnotatedString(
 ): AnnotatedString = buildAnnotatedString {
     appendInlineChildren(node, textColor, isBold = false, isItalic = false)
     val text = toAnnotatedString()
-    val existingUrls = text.getStringAnnotations("URL", 0, text.length)
+    // Collect ranges already linked by markdown [text](url) syntax
+    val linkedRanges = text.getLinkAnnotations(0, text.length)
     val urlMatches = URL_PATTERN.findAll(text.text)
     for (match in urlMatches) {
         val url = match.value.trimEnd('.', ',', ';', ':', '!')
-        val alreadyLinked = existingUrls.any { ann ->
+        val end = match.range.first + url.length
+        val alreadyLinked = linkedRanges.any { ann ->
             match.range.first >= ann.start && match.range.first < ann.end
         }
         if (!alreadyLinked) {
-            addStyle(
-                SpanStyle(color = LINK_COLOR, textDecoration = TextDecoration.Underline),
-                match.range.first, match.range.last + 1,
-            )
-            addStringAnnotation("URL", url, match.range.first, match.range.last + 1)
+            addLink(LinkAnnotation.Url(url, LINK_STYLES), match.range.first, end)
         }
     }
 }
