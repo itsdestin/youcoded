@@ -763,6 +763,15 @@ class Bootstrap(private val context: Context) {
         // version or Claude Code may have clobbered these files.
         ensureShellProfileSources(bashEnvPath.absolutePath)
 
+        // Deploy xdg-open/open wrappers every launch — Claude Code calls these
+        // during auth to open the browser. Neither exists on Android natively.
+        val browserOpenPath = File(mobileDir, "browser-open").absolutePath
+        for (name in listOf("xdg-open", "open")) {
+            val wrapper = File(mobileDir, name)
+            wrapper.writeText("#!/system/bin/sh\nexec \"$browserOpenPath\" \"\$@\"\n")
+            wrapper.setExecutable(true)
+        }
+
         return bashEnvPath.absolutePath
     }
 
