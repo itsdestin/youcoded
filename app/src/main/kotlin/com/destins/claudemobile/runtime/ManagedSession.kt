@@ -205,6 +205,19 @@ class ManagedSession(
             activePrompts.remove("paste_code")
             chatState.dismissPrompt("paste_code")
         }
+
+        // "Press Enter to continue" / login successful
+        if ("press enter to continue" in lower || "login successful" in lower) {
+            if ("continue" !in activePrompts) {
+                activePrompts.add("continue")
+                chatState.showInteractivePrompt("continue", "Login successful!", listOf(
+                    PromptButton("Continue", "\r"),
+                ))
+            }
+        } else if ("continue" in activePrompts) {
+            activePrompts.remove("continue")
+            chatState.dismissPrompt("continue")
+        }
     }
 
     /**
