@@ -8,14 +8,18 @@ import android.app.Service
 import android.content.Intent
 import android.os.Binder
 import android.os.IBinder
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
+import android.os.PowerManager
 import com.destins.claudemobile.MainActivity
+import java.io.File
 
 class SessionService : Service() {
     private val binder = LocalBinder()
+    val sessionRegistry = SessionRegistry()
+    private var wakeLock: PowerManager.WakeLock? = null
+    var bootstrap: Bootstrap? = null
+        private set
+
+    // Legacy single-session API — kept for ServiceBinder compatibility during migration
     var ptyBridge: PtyBridge? = null
         private set
 
@@ -27,71 +31,168 @@ class SessionService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        createNotificationChannel()
+        createNotificationChannels()
     }
 
-    private var bridgeScope: CoroutineScope? = null
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        startForeground(NOTIFICATION_ID, buildSessionNotification())
+        return START_STICKY
+    }
 
-    fun startSession(bootstrap: Bootstrap, apiKey: String? = null) {
-        // Clean up any previous session to avoid orphaned coroutines/sockets
-        bridgeScope?.cancel()
-        bridgeScope = null
-        ptyBridge?.stop()
-        ptyBridge = null
+    fun initBootstrap(bs: Bootstrap) {
+        bootstrap = bs
+        titlesDir.mkdirs()
+    }
 
-        val bridge = PtyBridge(bootstrap, apiKey)
-        ptyBridge = bridge
+    val titlesDir: File get() = File(bootstrap?.homeDir ?: File("/"), ".claude-mobile/titles")
 
-        // Start EventBridge BEFORE Claude Code — hooks fire immediately on launch
-        // and hook-relay.js silently drops events if the socket isn't ready.
-        val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
-        bridge.startEventBridge(scope)
-        bridgeScope = scope
-
-        bridge.start()
-
-        startForeground(NOTIFICATION_ID, buildNotification())
+    // Legacy single-session API — used by ServiceBinder until full migration
+    fun startSession(bs: Bootstrap, apiKey: String? = null) {
+        initBootstrap(bs)
+        val session = createSession(bs.homeDir, dangerousMode = false, apiKey = apiKey)
+        ptyBridge = session.ptyBridge
+        startForeground(NOTIFICATION_ID, buildSessionNotification())
     }
 
     fun stopSession() {
-        bridgeScope?.cancel()
-        bridgeScope = null
-        ptyBridge?.stop()
+        sessionRegistry.destroyAll()
         ptyBridge = null
+        releaseWakeLock()
         stopForeground(STOP_FOREGROUND_REMOVE)
         stopSelf()
     }
 
-    private fun createNotificationChannel() {
-        val channel = NotificationChannel(
-            CHANNEL_ID,
-            "Claude Code Session",
-            NotificationManager.IMPORTANCE_LOW
-        ).apply {
-            description = "Active Claude Code session"
+    fun createSession(cwd: File, dangerousMode: Boolean, apiKey: String?): ManagedSession {
+        val bs = bootstrap ?: throw IllegalStateException("Bootstrap not initialized")
+        val session = sessionRegistry.createSession(bs, cwd, dangerousMode, apiKey, titlesDir)
+
+        // Wire approval notification callbacks
+        session.onApprovalNeeded = { sessionId, sessionName ->
+            postApprovalNotification(sessionId, sessionName)
         }
-        val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(channel)
+        session.onApprovalCleared = { sessionId ->
+            clearApprovalNotification(sessionId)
+        }
+
+        acquireWakeLock()
+        updateNotification()
+        return session
     }
 
-    private fun buildNotification(): Notification {
+    fun destroySession(sessionId: String) {
+        sessionRegistry.destroySession(sessionId)
+        if (sessionRegistry.sessionCount == 0) {
+            releaseWakeLock()
+            stopForeground(STOP_FOREGROUND_REMOVE)
+            stopSelf()
+        } else {
+            updateNotification()
+        }
+    }
+
+    fun destroyAllSessions() {
+        sessionRegistry.destroyAll()
+        ptyBridge = null
+        releaseWakeLock()
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        stopSelf()
+    }
+
+    private fun acquireWakeLock() {
+        if (wakeLock == null) {
+            val pm = getSystemService(POWER_SERVICE) as PowerManager
+            wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "ClaudeMobile::Session").apply {
+                acquire(4 * 60 * 60 * 1000L) // 4 hour timeout
+            }
+        }
+    }
+
+    private fun releaseWakeLock() {
+        wakeLock?.let {
+            if (it.isHeld) it.release()
+        }
+        wakeLock = null
+    }
+
+    private fun createNotificationChannels() {
+        val manager = getSystemService(NotificationManager::class.java)
+
+        val sessionChannel = NotificationChannel(
+            CHANNEL_SESSION, "Claude Code Sessions", NotificationManager.IMPORTANCE_LOW
+        ).apply { description = "Active Claude Code sessions" }
+
+        val approvalChannel = NotificationChannel(
+            CHANNEL_APPROVAL, "Approval Prompts", NotificationManager.IMPORTANCE_HIGH
+        ).apply { description = "Claude Code permission prompts" }
+
+        manager.createNotificationChannel(sessionChannel)
+        manager.createNotificationChannel(approvalChannel)
+    }
+
+    private fun buildSessionNotification(): Notification {
+        val count = sessionRegistry.sessionCount
+        val text = if (count <= 1) "Session active" else "$count sessions active"
+
         val intent = Intent(this, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
-        val pending = PendingIntent.getActivity(
-            this, 0, intent, PendingIntent.FLAG_IMMUTABLE
-        )
-        return Notification.Builder(this, CHANNEL_ID)
+        val pending = PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE)
+
+        return Notification.Builder(this, CHANNEL_SESSION)
             .setContentTitle("Claude Code")
-            .setContentText("Session active")
+            .setContentText(text)
             .setSmallIcon(android.R.drawable.ic_menu_edit)
             .setContentIntent(pending)
             .setOngoing(true)
             .build()
     }
 
+    fun postApprovalNotification(sessionId: String, sessionName: String) {
+        val intent = Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            putExtra("session_id", sessionId)
+        }
+        val pending = PendingIntent.getActivity(
+            this, sessionId.hashCode(), intent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT,
+        )
+
+        val notification = Notification.Builder(this, CHANNEL_APPROVAL)
+            .setContentTitle("$sessionName: waiting for approval")
+            .setContentText("Tap to review permission request")
+            .setSmallIcon(android.R.drawable.ic_menu_edit)
+            .setContentIntent(pending)
+            .setAutoCancel(true)
+            .build()
+
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(APPROVAL_NOTIFICATION_BASE + sessionId.hashCode(), notification)
+    }
+
+    fun clearApprovalNotification(sessionId: String) {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.cancel(APPROVAL_NOTIFICATION_BASE + sessionId.hashCode())
+    }
+
+    private fun updateNotification() {
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.notify(NOTIFICATION_ID, buildSessionNotification())
+    }
+
+    override fun onTaskRemoved(rootIntent: Intent?) {
+        // Keep service running when user swipes app from recents
+    }
+
+    override fun onDestroy() {
+        sessionRegistry.destroyAll()
+        releaseWakeLock()
+        super.onDestroy()
+    }
+
     companion object {
-        const val CHANNEL_ID = "claude_session"
+        const val CHANNEL_SESSION = "claude_session"
+        const val CHANNEL_APPROVAL = "claude_approval"
         const val NOTIFICATION_ID = 1
+        const val APPROVAL_NOTIFICATION_BASE = 1000
     }
 }
