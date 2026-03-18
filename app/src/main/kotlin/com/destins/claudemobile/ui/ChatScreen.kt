@@ -125,6 +125,8 @@ fun ChatScreen(service: SessionService) {
         ScreenMode.Terminal -> {
             val termFocusRequester = remember { FocusRequester() }
             val termViewClient = remember { ClaudeTerminalViewClient() }
+            val termScreenVersion by (bridge?.screenVersion?.collectAsState()
+                ?: remember { mutableStateOf(0) })
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
@@ -137,12 +139,18 @@ fun ChatScreen(service: SessionService) {
                 AndroidView(
                     factory = { ctx ->
                         TerminalView(ctx, null).apply {
+                            setTextSize((10 * resources.displayMetrics.scaledDensity).toInt())
                             setTerminalViewClient(termViewClient)
+                            isFocusable = true
+                            isFocusableInTouchMode = true
                             bridge?.getSession()?.let { attachSession(it) }
                         }
                     },
                     update = { view ->
                         bridge?.getSession()?.let { view.attachSession(it) }
+                        @Suppress("UNUSED_EXPRESSION")
+                        termScreenVersion
+                        view.onScreenUpdated()
                     },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
@@ -160,6 +168,7 @@ fun ChatScreen(service: SessionService) {
             val shell = directShellBridge ?: return@Box
             val shellFocusRequester = remember { FocusRequester() }
             val shellViewClient = remember { ClaudeTerminalViewClient() }
+            val shellScreenVersion by shell.screenVersion.collectAsState()
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
@@ -174,12 +183,16 @@ fun ChatScreen(service: SessionService) {
                 AndroidView(
                     factory = { ctx ->
                         TerminalView(ctx, null).apply {
+                            setTextSize((10 * resources.displayMetrics.scaledDensity).toInt())
                             setTerminalViewClient(shellViewClient)
                             shell.getSession()?.let { attachSession(it) }
                         }
                     },
                     update = { view ->
                         shell.getSession()?.let { view.attachSession(it) }
+                        @Suppress("UNUSED_EXPRESSION")
+                        shellScreenVersion
+                        view.onScreenUpdated()
                     },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
