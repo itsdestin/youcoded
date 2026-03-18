@@ -131,7 +131,6 @@ class PtyBridge(
     }
 
     fun writeInput(text: String) {
-        android.util.Log.d("PtyBridge", "writeInput: ${text.map { if (it.code < 32) "\\x${it.code.toString(16)}" else it.toString() }.joinToString("")}")
         session?.write(text)
     }
 
