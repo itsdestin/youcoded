@@ -263,12 +263,11 @@ fun ChatScreen(bridge: PtyBridge) {
                 )
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
-                PtyInputField(
+                TerminalInputBar(
                     focusRequester = shellFocusRequester,
-                    onInput = { shell.writeInput(it) },
-                    onEnter = { shell.writeInput("\r") },
+                    onSend = { text -> shell.writeInput(text + "\r") },
+                    onKeyPress = { seq -> shell.writeInput(seq) },
                 )
-                TerminalKeyboardRow(onKeyPress = { seq -> shell.writeInput(seq) })
             }
         }
 
