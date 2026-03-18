@@ -431,7 +431,7 @@ var _execSync = child_process.execSync;
 child_process.execSync = function(cmd, opts) {
     var m2 = typeof cmd === 'string' && cmd.match(/^(?:.*\/)?(?:xdg-open|open|browser-open)\s+(https?:\/\/\S+)/);
     if (m2) {
-        cmd = '/system/bin/am start -a android.intent.action.VIEW -d ' + m2[1];
+        cmd = 'unset LD_PRELOAD LD_LIBRARY_PATH; /system/bin/am start -a android.intent.action.VIEW -d ' + m2[1];
     }
     return _execSync.call(this, fixTmpInShellCmd(cmd), fixExecShell(opts));
 };
