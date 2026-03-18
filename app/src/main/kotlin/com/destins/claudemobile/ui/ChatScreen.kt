@@ -581,118 +581,104 @@ private fun ModeHeader(
     HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 }
 
-/** Invisible text field that forwards soft keyboard input to a PTY.
- *
- *  Uses TextFieldValue (not String) so Compose preserves the IME's
- *  composition state across recompositions.
- *
- *  Tracks `ptyActual` (what was actually written to the PTY) separately
- *  from `ptyTarget` (what the IME thinks the text is). Diffs are always
- *  computed from ptyActual → ptyTarget, so if the IME modifies text
- *  retroactively (predictions, auto-punctuation), the diff is correct.
- *
- *  Lone space characters are debounced by 300ms to catch Gboard's
- *  double-space-to-period. During the debounce, the space hasn't been
- *  sent to the PTY yet, so if auto-punctuation fires, the diff from
- *  ptyActual is just ". " — no backspace needed. All other characters
- *  are sent immediately for low latency. */
+/** Visible terminal input bar — text is composed locally (with full
+ *  Gboard prediction/autocorrect support) and sent to the PTY as a
+ *  complete line on Enter/Send. No character-by-character streaming,
+ *  no diffing, no backspace issues. Special keys (Ctrl, Esc, Tab,
+ *  arrows) are provided via the TerminalKeyboardRow below. */
 @Composable
-private fun PtyInputField(
+private fun TerminalInputBar(
     focusRequester: FocusRequester,
-    onInput: (String) -> Unit,
-    onEnter: () -> Unit,
+    onSend: (String) -> Unit,
+    onKeyPress: (String) -> Unit,
 ) {
-    var tfv by remember { mutableStateOf(TextFieldValue()) }
-    // What the PTY actually has right now (only updated after a real write)
-    var ptyActual by remember { mutableStateOf("") }
-    // What the IME thinks the text is (updated on every onValueChange)
-    var ptyTarget by remember { mutableStateOf("") }
-    val scope = rememberCoroutineScope()
-    var flushJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
+    var text by remember { mutableStateOf("") }
+    val borderColor = com.destins.claudemobile.ui.theme.ClaudeMobileTheme.extended.surfaceBorder
 
-    BasicTextField(
-        value = tfv,
-        onValueChange = { newTfv ->
-            ptyTarget = newTfv.text
-            val oldComp = tfv.composition
-            val newComp = newTfv.composition
-
-            android.util.Log.d("PtyInput", buildString {
-                append("CHG actual=\"$ptyActual\"(${ptyActual.length}) ")
-                append("target=\"$ptyTarget\"(${ptyTarget.length}) ")
-                append("comp=$oldComp→$newComp sel=${newTfv.selection}")
-            })
-
-            // Always cancel pending flush — we'll either send immediately
-            // or reschedule
-            flushJob?.cancel()
-
-            if (ptyTarget != ptyActual) {
-                val commonPrefix = ptyActual.commonPrefixWith(ptyTarget).length
-                val toDelete = ptyActual.length - commonPrefix
-                val toInsert = ptyTarget.substring(commonPrefix)
-
-                // Is this just appending a single space?
-                val isLoneSpace = toDelete == 0 && toInsert == " "
-
-                fun escBatch(b: String) = b.map {
-                    if (it.code < 32 || it.code == 0x7f) "\\x${it.code.toString(16).padStart(2, '0')}" else it.toString()
-                }.joinToString("")
-
-                if (toDelete > 30) {
-                    android.util.Log.w("PtyInput", "SKIP large del=$toDelete ins=${toInsert.length}")
-                    ptyActual = ptyTarget
-                } else if (isLoneSpace) {
-                    android.util.Log.d("PtyInput", "DEBOUNCE space 300ms")
-                    flushJob = scope.launch {
-                        delay(300)
-                        val cp = ptyActual.commonPrefixWith(ptyTarget).length
-                        val del = ptyActual.length - cp
-                        val ins = ptyTarget.substring(cp)
-                        val batch = "\u007f".repeat(del) + ins
-                        android.util.Log.d("PtyInput", "FLUSH del=$del ins=\"$ins\" batch=\"${escBatch(batch)}\"")
-                        if (batch.isNotEmpty()) onInput(batch)
-                        ptyActual = ptyTarget
-                    }
-                } else {
-                    val batch = "\u007f".repeat(toDelete) + toInsert
-                    android.util.Log.d("PtyInput", "SEND del=$toDelete ins=\"$toInsert\" batch=\"${escBatch(batch)}\"")
-                    if (batch.isNotEmpty()) onInput(batch)
-                    ptyActual = ptyTarget
-                }
-            } else {
-                android.util.Log.d("PtyInput", "NO-OP (target==actual)")
+    Column {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.Bottom,
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            // Text input field
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .heightIn(min = 36.dp, max = 100.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.surface)
+                    .border(0.5.dp, borderColor.copy(alpha = 0.5f),
+                        androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
+                contentAlignment = Alignment.CenterStart,
+            ) {
+                BasicTextField(
+                    value = text,
+                    onValueChange = { text = it },
+                    singleLine = false,
+                    maxLines = 4,
+                    textStyle = androidx.compose.ui.text.TextStyle(
+                        fontSize = 14.sp,
+                        fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    ),
+                    keyboardOptions = KeyboardOptions(
+                        imeAction = ImeAction.Send,
+                    ),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (text.isNotEmpty()) {
+                            onSend(text)
+                            text = ""
+                        }
+                    }),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .focusRequester(focusRequester),
+                    decorationBox = { innerTextField ->
+                        Box {
+                            if (text.isEmpty()) {
+                                Text(
+                                    "Type a message…",
+                                    fontSize = 14.sp,
+                                    fontFamily = com.destins.claudemobile.ui.theme.CascadiaMono,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                                )
+                            }
+                            innerTextField()
+                        }
+                    },
+                )
             }
 
-            tfv = newTfv
-        },
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(
-            imeAction = ImeAction.Send,
-            autoCorrect = false,
-            capitalization = KeyboardCapitalization.None,
-            keyboardType = KeyboardType.Ascii,
-        ),
-        keyboardActions = KeyboardActions(onSend = {
-            flushJob?.cancel()
-            // Flush any pending space before sending Enter
-            if (ptyTarget != ptyActual) {
-                val cp = ptyActual.commonPrefixWith(ptyTarget).length
-                val del = ptyActual.length - cp
-                val ins = ptyTarget.substring(cp)
-                val batch = "\u007f".repeat(del) + ins
-                if (batch.isNotEmpty()) onInput(batch)
+            // Send button
+            Box(
+                modifier = Modifier
+                    .size(36.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                    .border(0.5.dp, borderColor.copy(alpha = 0.5f),
+                        androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .clickable {
+                        if (text.isNotEmpty()) {
+                            onSend(text)
+                            text = ""
+                        }
+                    },
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
+                )
             }
-            onEnter()
-            tfv = TextFieldValue()
-            ptyActual = ""
-            ptyTarget = ""
-        }),
-        textStyle = androidx.compose.ui.text.TextStyle(fontSize = 1.sp),
-        modifier = Modifier
-            .fillMaxWidth()
-            .height(1.dp)
-            .alpha(0f)
-            .focusRequester(focusRequester),
-    )
+        }
+
+        // Special keys row
+        TerminalKeyboardRow(onKeyPress = onKeyPress)
+    }
 }
