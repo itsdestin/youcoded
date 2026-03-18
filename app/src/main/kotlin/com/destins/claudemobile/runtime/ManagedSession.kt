@@ -284,18 +284,7 @@ class ManagedSession(
     /** Mark a prompt as completed so the detector won't re-create it. */
     fun markPromptCompleted(promptId: String) {
         completedPromptIds.add(promptId)
-        // "continue" prompts use a shared activePrompts key — clear it immediately
-        // so subsequent "press enter to continue" screens can create new cards
-        if (promptId.startsWith("continue_")) {
-            synchronized(this) {
-                // Remove from a thread-safe context since detector runs on IO
-                _pendingContinueReset = true
-            }
-        }
     }
-
-    @Volatile
-    private var _pendingContinueReset = false
 
     fun startTitleObserver() {
         titleFile.parentFile?.mkdirs()
