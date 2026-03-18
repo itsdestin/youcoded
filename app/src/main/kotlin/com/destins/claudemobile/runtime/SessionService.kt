@@ -8,7 +8,9 @@ import android.app.Service
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Intent
+import android.net.Uri
 import android.os.Binder
+import android.os.FileObserver
 import android.os.IBinder
 import android.os.PowerManager
 import com.destins.claudemobile.MainActivity
