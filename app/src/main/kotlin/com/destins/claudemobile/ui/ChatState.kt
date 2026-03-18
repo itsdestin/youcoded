@@ -45,6 +45,11 @@ sealed class MessageContent {
         val title: String,
         val buttons: List<PromptButton>,
     ) : MessageContent()
+    data class CompletedPrompt(
+        val promptId: String,
+        val title: String,
+        val selection: String,
+    ) : MessageContent()
 }
 
 data class PromptButton(val label: String, val input: String)
