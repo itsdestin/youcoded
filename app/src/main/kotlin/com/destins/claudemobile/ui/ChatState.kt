@@ -95,6 +95,8 @@ class ChatState {
             queuedIds.add(msg.id)
         } else {
             isProcessing = true
+            processingStartedAt = System.currentTimeMillis()
+            receivedHookEvent = false
             insertPos = messages.size // after this user message
         }
     }
