@@ -42,6 +42,9 @@ class PtyBridge(
     /** Set by the factory (e.g. SessionRegistry) to handle clipboard copy from terminal. */
     var onCopyToClipboard: ((String) -> Unit)? = null
 
+    /** Set by SessionService to open URLs via Android Intent (bypasses SELinux shell issues). */
+    var onOpenUrl: ((String) -> Unit)? = null
+
     private val sessionClient = object : TerminalSessionClient {
         override fun onTextChanged(changedSession: TerminalSession) {
             _screenVersion.value++
