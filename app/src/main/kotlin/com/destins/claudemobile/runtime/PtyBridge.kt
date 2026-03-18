@@ -63,7 +63,9 @@ class PtyBridge(
 
         override fun onTitleChanged(changedSession: TerminalSession) {}
         override fun onSessionFinished(finishedSession: TerminalSession) {}
-        override fun onCopyTextToClipboard(session: TerminalSession, text: String) {}
+        override fun onCopyTextToClipboard(session: TerminalSession, text: String) {
+            onCopyToClipboard?.invoke(text)
+        }
         override fun onPasteTextFromClipboard(session: TerminalSession) {}
         override fun onBell(session: TerminalSession) {}
         override fun onColorsChanged(session: TerminalSession) {}
