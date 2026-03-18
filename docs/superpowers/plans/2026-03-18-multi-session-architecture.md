@@ -1256,24 +1256,33 @@ At the bottom of the `ChatScreen` composable, add the dialog:
 
 ```kotlin
 if (showNewSessionDialog) {
-    val knownDirs = listOf(
-        "Home (~)" to service.bootstrap!!.homeDir,
-        "claude-mobile" to File(service.bootstrap!!.homeDir, "claude-mobile"),
-        "destin-claude" to File(service.bootstrap!!.homeDir, "destin-claude"),
-    )
-    NewSessionDialog(
-        knownDirs = knownDirs,
-        onDismiss = { showNewSessionDialog = false },
-        onCreate = { config ->
-            showNewSessionDialog = false
-            service.createSession(config.cwd, config.dangerousMode, null)
-        },
-    )
-}
-
-// Session limit warning
-if (showNewSessionDialog && service.sessionRegistry.sessionCount >= 5) {
-    // Show warning before the dialog, or integrate into the dialog
+    // Check session limit before showing dialog
+    if (service.sessionRegistry.sessionCount >= 5) {
+        AlertDialog(
+            onDismissRequest = { showNewSessionDialog = false },
+            title = { Text("Session Limit") },
+            text = { Text("You have 5 active sessions. Close one before creating a new session.") },
+            confirmButton = {
+                TextButton(onClick = { showNewSessionDialog = false }) { Text("OK") }
+            },
+        )
+    } else {
+        val knownDirs = listOf(
+            "Home (~)" to service.bootstrap!!.homeDir,
+            "claude-mobile" to File(service.bootstrap!!.homeDir, "claude-mobile"),
+            "destin-claude" to File(service.bootstrap!!.homeDir, "destin-claude"),
+        )
+        // Read API key from encrypted storage (same source as initial session)
+        val apiKey: String? = null // TODO: read from ApiKeyStore if configured
+        NewSessionDialog(
+            knownDirs = knownDirs,
+            onDismiss = { showNewSessionDialog = false },
+            onCreate = { config ->
+                showNewSessionDialog = false
+                service.createSession(config.cwd, config.dangerousMode, apiKey)
+            },
+        )
+    }
 }
 ```
 
