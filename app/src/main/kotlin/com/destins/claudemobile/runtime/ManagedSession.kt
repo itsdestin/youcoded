@@ -132,13 +132,15 @@ class ManagedSession(
         if ("dark mode" in lower && "light mode" in lower && "/theme" in lower) {
             if ("theme" !in activePrompts) {
                 activePrompts.add("theme")
-                chatState.showInteractivePrompt("theme", "Choose theme", listOf(
-                    PromptButton("Dark", "1\r"),
-                    PromptButton("Light", "2\r"),
-                    PromptButton("Dark (colorblind)", "3\r"),
-                    PromptButton("Light (colorblind)", "4\r"),
-                    PromptButton("Dark ANSI", "5\r"),
-                    PromptButton("Light ANSI", "6\r"),
+                // Ink Select: first item is pre-selected. Navigate with ↓ arrows then Enter.
+                val down = "\u001b[B"
+                chatState.showInteractivePrompt("theme", "Choose a Theme for the Terminal", listOf(
+                    PromptButton("Dark mode", "\r"),
+                    PromptButton("Light mode", "$down\r"),
+                    PromptButton("Dark (colorblind-friendly)", "$down$down\r"),
+                    PromptButton("Light (colorblind-friendly)", "$down$down$down\r"),
+                    PromptButton("Dark (ANSI only)", "$down$down$down$down\r"),
+                    PromptButton("Light (ANSI only)", "$down$down$down$down$down\r"),
                 ))
             }
         } else if ("theme" in activePrompts) {
