@@ -60,6 +60,29 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else {
+                            // Boot self-test
+                            val selfTestResult = remember(isReady) {
+                                if (isReady) bootstrap.selfTest() else null
+                            }
+
+                            if (selfTestResult != null && !selfTestResult.passed) {
+                                Column(
+                                    modifier = Modifier.fillMaxSize().padding(32.dp),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    Text("Bootstrap Self-Test Failed", style = MaterialTheme.typography.titleLarge)
+                                    Spacer(modifier = Modifier.height(16.dp))
+                                    Text(selfTestResult.failureMessage ?: "Unknown failure", color = MaterialTheme.colorScheme.error)
+                                    Spacer(modifier = Modifier.height(24.dp))
+                                    Button(onClick = {
+                                        isReady = false
+                                        progress = null
+                                    }) { Text("Re-extract") }
+                                }
+                                return@Column
+                            }
+
                             val serviceBinder = remember { ServiceBinder(applicationContext) }
                             val serviceState by serviceBinder.state.collectAsState()
                             val coroutineScope = rememberCoroutineScope()
