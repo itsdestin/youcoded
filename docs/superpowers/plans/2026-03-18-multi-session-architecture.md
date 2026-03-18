@@ -1325,7 +1325,23 @@ is ServiceBinder.SessionState.Connected -> {
         }
     }
 
+    // Handle intent session_id from notification tap — switch to the requested session
+    LaunchedEffect(Unit) {
+        val targetSessionId = intent?.getStringExtra("session_id")
+        if (targetSessionId != null) {
+            svc.sessionRegistry.switchTo(targetSessionId)
+            intent?.removeExtra("session_id") // consume it
+        }
+    }
+
     ChatScreen(svc)
+}
+
+// Also update onNewIntent to handle notification taps when activity is already running:
+// In MainActivity class body, add:
+override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent) // triggers recomposition via intent read
 }
 ```
 
