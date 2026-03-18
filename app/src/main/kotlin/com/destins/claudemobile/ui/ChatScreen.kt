@@ -578,7 +578,9 @@ private fun ModeHeader(
     HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 }
 
-/** Invisible text field that forwards soft keyboard input to a PTY. */
+/** Invisible text field that forwards soft keyboard input to a PTY.
+ *  Uses content-aware diffing to correctly handle autocorrect, swipe
+ *  typing, and IME composition replacements — not just length changes. */
 @Composable
 private fun PtyInputField(
     focusRequester: FocusRequester,
@@ -589,16 +591,30 @@ private fun PtyInputField(
     BasicTextField(
         value = buffer,
         onValueChange = { newValue ->
-            if (newValue.length > buffer.length) {
-                onInput(newValue.substring(buffer.length))
-            } else if (newValue.length < buffer.length) {
-                repeat(buffer.length - newValue.length) { onInput("\u007f") }
-            }
+            // Content-aware diff: find common prefix and suffix to detect
+            // exactly what was deleted and inserted, even for autocorrect
+            // replacements (e.g. "dod" → "did") where length stays the same.
+            val commonPrefix = buffer.commonPrefixWith(newValue).length
+            val oldRemainder = buffer.length - commonPrefix
+            val newRemainder = newValue.length - commonPrefix
+            val commonSuffix = buffer.substring(commonPrefix)
+                .commonSuffixWith(newValue.substring(commonPrefix)).length
+
+            val deletedCount = oldRemainder - commonSuffix
+            val insertedText = newValue.substring(commonPrefix, newValue.length - commonSuffix)
+
+            // Send backspaces for deleted chars, then the new text
+            repeat(deletedCount) { onInput("\u007f") }
+            if (insertedText.isNotEmpty()) onInput(insertedText)
+
             buffer = if (newValue.length > 1000) newValue.takeLast(500) else newValue
         },
         singleLine = true,
         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-        keyboardActions = KeyboardActions(onSend = { onEnter() }),
+        keyboardActions = KeyboardActions(onSend = {
+            onEnter()
+            buffer = ""  // reset after send to avoid drift
+        }),
         textStyle = androidx.compose.ui.text.TextStyle(fontSize = 1.sp),
         modifier = Modifier
             .fillMaxWidth()
