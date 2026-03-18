@@ -180,7 +180,6 @@ class PtyBridge(
     fun hasAlwaysAllowOption(): Boolean {
         val screenText = readScreenText().lowercase()
         val result = "always" in screenText || "ask again" in screenText
-        android.util.Log.d("PtyBridge", "hasAlwaysAllowOption=$result, screen text: [${screenText.trim().takeLast(300)}]")
         return result
     }
 
