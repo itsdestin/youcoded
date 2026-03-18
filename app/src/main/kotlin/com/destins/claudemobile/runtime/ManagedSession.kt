@@ -167,7 +167,7 @@ class ManagedSession(
 
         // Dangerous permissions / skip permissions warning
         if ("dangerously-skip-permissions" in lower || "skip all permission" in lower) {
-            if ("dangerous" !in activePrompts) {
+            if ("dangerous" !in activePrompts && "dangerous" !in completedPromptIds) {
                 activePrompts.add("dangerous")
                 chatState.showInteractivePrompt("dangerous", "Skip permissions warning", listOf(
                     PromptButton("Yes, I understand", "\r"),
