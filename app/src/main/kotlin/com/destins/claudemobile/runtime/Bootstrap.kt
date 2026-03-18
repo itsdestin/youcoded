@@ -817,7 +817,7 @@ class Bootstrap(private val context: Context) {
     private fun buildBashEnvSh(usrPath: String): String {
         val binDir = File(usrPath, "bin")
         if (!binDir.isDirectory) return "# bin dir not found\n"
-        val skip = setOf("bash", "sh", "sh-wrapper", "env")
+        val skip = setOf("bash", "sh", "sh-wrapper", "env", "xdg-open", "open")
         // Package manager binaries need special handling — they have hardcoded
         // /data/data/com.termux/ paths that must be overridden via config/flags.
         val pkgManagerOverrides = setOf("apt", "apt-get", "apt-cache", "apt-key", "dpkg", "dpkg-deb", "pkg")
