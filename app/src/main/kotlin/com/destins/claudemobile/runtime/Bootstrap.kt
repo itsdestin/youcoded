@@ -495,6 +495,43 @@ class Bootstrap(private val context: Context) {
         }
     }
 
+    data class SelfTestResult(
+        val bashOk: Boolean,
+        val nodeOk: Boolean,
+        val cliExists: Boolean,
+    ) {
+        val passed: Boolean get() = bashOk && nodeOk && cliExists
+        val failureMessage: String? get() = when {
+            !bashOk -> "bash failed to execute through linker64"
+            !nodeOk -> "Node.js failed to start"
+            !cliExists -> "Claude Code CLI entry point not found"
+            else -> null
+        }
+    }
+
+    fun selfTest(): SelfTestResult {
+        val prefix = usrDir.absolutePath
+        val env = mapOf(
+            "LD_LIBRARY_PATH" to "$prefix/lib",
+            "HOME" to homeDir.absolutePath,
+            "TMPDIR" to File(homeDir, "tmp").absolutePath,
+        )
+
+        fun runTest(vararg cmd: String): Boolean = try {
+            val p = ProcessBuilder(*cmd).redirectErrorStream(true).apply {
+                environment().putAll(env)
+            }.start()
+            p.inputStream.readBytes()
+            p.waitFor() == 0
+        } catch (_: Exception) { false }
+
+        val bashOk = runTest("/system/bin/linker64", "$prefix/bin/bash", "--version")
+        val nodeOk = runTest("/system/bin/linker64", "$prefix/bin/node", "-e", "process.exit(0)")
+        val cliExists = File("$prefix/lib/node_modules/@anthropic-ai/claude-code/cli.js").exists()
+
+        return SelfTestResult(bashOk, nodeOk, cliExists)
+    }
+
     private fun setupHome() {
         homeDir.mkdirs()
         File(homeDir, ".claude").mkdirs()
@@ -502,6 +539,7 @@ class Bootstrap(private val context: Context) {
 
         val mobileDir = File(homeDir, ".claude-mobile")
         mobileDir.mkdirs()
+        File(mobileDir, "titles").mkdirs()
 
         // Deploy browser-open helper — uses Android's am start to open URLs.
         // Tools like rclone, gh, and npm read the BROWSER env var for OAuth
