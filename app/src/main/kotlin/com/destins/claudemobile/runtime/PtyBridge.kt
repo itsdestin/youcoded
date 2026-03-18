@@ -339,6 +339,14 @@ function spawnFix(orig, command, args, options) {
         command = fixPath(command);
         var actualArgs = Array.isArray(args) ? args : [];
         actualArgs = stripLogin(actualArgs);
+        // Fix /tmp in bash -c command strings (e.g. spawn('bash', ['-c', 'cmd > /tmp/file']))
+        if (command.endsWith('/bash') || command.endsWith('/sh')) {
+            var ci = actualArgs.indexOf('-c');
+            if (ci !== -1 && ci + 1 < actualArgs.length && typeof actualArgs[ci + 1] === 'string') {
+                actualArgs = actualArgs.slice();
+                actualArgs[ci + 1] = fixTmpInShellCmd(actualArgs[ci + 1]);
+            }
+        }
         actualArgs = injectEnv(command, actualArgs);
         return orig.call(this, LINKER64, [command].concat(actualArgs), o);
     }
