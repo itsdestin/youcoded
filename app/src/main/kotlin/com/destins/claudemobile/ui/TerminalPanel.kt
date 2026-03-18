@@ -264,12 +264,16 @@ fun TerminalPanel(
         // Each row contributes exactly gridCols characters to combinedText,
         // so character offset / gridCols = screen row index. This lets URLs
         // that wrap across terminal lines match as a single regex hit.
+        // When hideLastRow is true, skip the bottom row (cursor/prompt line)
+        // so it doesn't show in the visible terminal — input happens in the
+        // external TerminalInputBar instead.
+        val displayRows = if (hideLastRow) (gridRows - 1).coerceAtLeast(1) else gridRows
         urlRegions.clear()
-        val visibleRowData = arrayOfNulls<TerminalRow>(gridRows)
-        val combinedText = StringBuilder(gridRows * gridCols)
+        val visibleRowData = arrayOfNulls<TerminalRow>(displayRows)
+        val combinedText = StringBuilder(displayRows * gridCols)
         val spaces = " ".repeat(gridCols)
 
-        for (rowIndex in 0 until gridRows) {
+        for (rowIndex in 0 until displayRows) {
             // Subtract scrollRows to go into scrollback history.
             // rowIndex=0, scrollRows=0 → externalRow=0 (top of live screen)
             // rowIndex=0, scrollRows=5 → externalRow=-5 (5 rows into history)
