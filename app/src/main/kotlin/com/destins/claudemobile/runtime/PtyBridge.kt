@@ -424,9 +424,9 @@ child_process.exec = function(cmd, opts, cb) {
 };
 var _execSync = child_process.execSync;
 child_process.execSync = function(cmd, opts) {
-    var m2 = typeof cmd === 'string' && cmd.match(/^(xdg-open|open|.*browser-open)\s+(.*)/);
-    if (m2 && BROWSER_OPEN) {
-        cmd = '/system/bin/sh ' + BROWSER_OPEN + ' ' + m2[2];
+    var m2 = typeof cmd === 'string' && cmd.match(/^(?:.*\/)?(?:xdg-open|open|browser-open)\s+(https?:\/\/\S+)/);
+    if (m2) {
+        cmd = '/system/bin/am start -a android.intent.action.VIEW -d ' + m2[1];
     }
     return _execSync.call(this, fixTmpInShellCmd(cmd), fixExecShell(opts));
 };
