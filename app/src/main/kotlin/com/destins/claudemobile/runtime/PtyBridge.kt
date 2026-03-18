@@ -342,18 +342,19 @@ function stripLogin(args) {
 // When shell:true + EB command string, bypass the shell entirely — split the
 // command and route the binary through linker64 (avoids SELinux shell exec).
 function spawnFix(orig, command, args, options) {
-    // Intercept xdg-open/open/browser-open — use Android am start with clean env
-    // CRITICAL: must strip LD_PRELOAD and LD_LIBRARY_PATH or system binaries crash
+    // Intercept xdg-open/open/browser-open — write URL to file for Kotlin-side Intent
+    // /system/bin/am doesn't work from app UID (SecurityException). Instead, write
+    // the URL to a trigger file that a FileObserver on the Kotlin side picks up and
+    // opens via startActivity(Intent.ACTION_VIEW).
     var cmdName = String(command).replace(/^.*\//, '');
     if ((cmdName === 'xdg-open' || cmdName === 'open' || cmdName === 'browser-open' || String(command).endsWith('/browser-open'))) {
         var urlArgs = Array.isArray(args) ? args : [];
         var url = urlArgs.find(function(a) { return typeof a === 'string' && a.startsWith('http'); });
         if (url) {
-            var cleanEnv = {};
-            Object.keys(process.env).forEach(function(k) {
-                if (k !== 'LD_PRELOAD' && k !== 'LD_LIBRARY_PATH') cleanEnv[k] = process.env[k];
-            });
-            return orig.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], { env: cleanEnv });
+            try { fs.writeFileSync(HOME + '/.claude-mobile/open-url', url); } catch(e) {}
+            // Return a dummy process that immediately exits successfully
+            var dummy = orig.call(this, '/system/bin/sh', ['-c', 'true'], {});
+            return dummy;
         }
     }
     command = resolveCmd(String(command));
