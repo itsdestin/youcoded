@@ -181,7 +181,7 @@ class ManagedSession(
 
         // Login method selection
         if ("select login method" in lower) {
-            if ("auth" !in activePrompts) {
+            if ("auth" !in activePrompts && "auth" !in completedPromptIds) {
                 activePrompts.add("auth")
                 val down = "\u001b[B"
                 chatState.showInteractivePrompt("auth", "Select Login Method", listOf(
