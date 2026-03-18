@@ -130,6 +130,10 @@ class ManagedSession(
 
     /** Known setup prompts and their button mappings. */
     private fun detectPrompts(screen: String, activePrompts: MutableSet<String>) {
+        if (_pendingContinueReset) {
+            _pendingContinueReset = false
+            activePrompts.remove("continue")
+        }
         val lower = screen.lowercase()
 
         // Theme selection
