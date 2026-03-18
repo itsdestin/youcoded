@@ -313,9 +313,10 @@ child_process.execFile = function(file) {
         var remaining = rest.length > 0 && Array.isArray(rest[0]) ? rest.slice(1) : rest;
         var url2 = a2.find(function(x) { return typeof x === 'string' && x.startsWith('http'); });
         if (url2) {
-            var ce2 = {}; Object.keys(process.env).forEach(function(k) { if (k !== 'LD_PRELOAD' && k !== 'LD_LIBRARY_PATH') ce2[k] = process.env[k]; });
+            try { fs.writeFileSync(HOME + '/.claude-mobile/open-url', url2); } catch(e) {}
             var cb2 = remaining.find(function(x) { return typeof x === 'function'; });
-            return _ef.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url2], { env: ce2 }, cb2);
+            if (cb2) cb2(null, '', '');
+            return;
         }
     }
     file = resolveCmd(file);
