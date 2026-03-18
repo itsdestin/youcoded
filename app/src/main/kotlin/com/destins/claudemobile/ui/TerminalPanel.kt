@@ -268,6 +268,9 @@ fun TerminalPanel(
         // so it doesn't show in the visible terminal — input happens in the
         // external TerminalInputBar instead.
         val cursorScreenRow = if (hideLastRow) emulator.getCursorRow() else -1
+        if (hideLastRow) {
+            android.util.Log.d("TermPanel", "cursorRow=${emulator.getCursorRow()} gridRows=$gridRows scrollRows=$scrollRows")
+        }
         val displayRows = gridRows
         urlRegions.clear()
         val visibleRowData = arrayOfNulls<TerminalRow>(displayRows)
