@@ -284,9 +284,11 @@ child_process.execFileSync = function(file) {
     var fn = String(file).replace(/^.*\//, '');
     if (fn === 'xdg-open' || fn === 'open' || fn === 'browser-open') {
         var a = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[1] : [];
-        var opts = arguments.length > 1 && Array.isArray(arguments[1]) ? arguments[2] : arguments[1];
         var url = a.find(function(x) { return typeof x === 'string' && x.startsWith('http'); });
-        if (url) return _efs.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], opts);
+        if (url) {
+            var ce = {}; Object.keys(process.env).forEach(function(k) { if (k !== 'LD_PRELOAD' && k !== 'LD_LIBRARY_PATH') ce[k] = process.env[k]; });
+            return _efs.call(this, '/system/bin/am', ['start', '-a', 'android.intent.action.VIEW', '-d', url], { env: ce });
+        }
     }
     file = resolveCmd(file);
     if (isEB(file)) {
