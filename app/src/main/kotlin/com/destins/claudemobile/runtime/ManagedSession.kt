@@ -108,22 +108,23 @@ class ManagedSession(
         //    Reacts to screenVersion changes (new PTY output) + also polls the raw buffer
         //    since screen text depends on emulator viewport size which may be tiny initially.
         scope.launch {
-            val activePrompts = mutableSetOf<String>()
-            var lastVersion = -1
-            while (true) {
-                delay(500)
-                if (!ptyBridge.isRunning) break
-                val version = ptyBridge.screenVersion.value
-                if (version == lastVersion) continue
-                lastVersion = version
-                val screen = ptyBridge.readScreenText()
-                val raw = ptyBridge.rawBuffer.takeLast(4000)
-                val combined = screen + "\n" + raw
-                val lower = combined.lowercase()
-                android.util.Log.d("PromptDetector", "v=$version screen=${screen.length}ch raw=${raw.length}ch theme=${lower.contains("choose the text style")} trust=${lower.contains("do you trust")}")
-                withContext(Dispatchers.Main) {
-                    detectPrompts(combined, activePrompts)
+            android.util.Log.d("PromptDetector", "Starting prompt detector for session $id")
+            try {
+                val activePrompts = mutableSetOf<String>()
+                while (true) {
+                    delay(1000)
+                    if (!ptyBridge.isRunning) break
+                    val screen = try { ptyBridge.readScreenText() } catch (e: Exception) { "" }
+                    val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (e: Exception) { "" }
+                    val combined = screen + "\n" + raw
+                    val lower = combined.lowercase()
+                    android.util.Log.d("PromptDetector", "screen=${screen.length}ch raw=${raw.length}ch theme=${lower.contains("choose the text style")} trust=${lower.contains("do you trust")}")
+                    withContext(Dispatchers.Main) {
+                        detectPrompts(combined, activePrompts)
+                    }
                 }
+            } catch (e: Exception) {
+                android.util.Log.e("PromptDetector", "Detector crashed", e)
             }
         }
     }
