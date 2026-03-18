@@ -587,11 +587,16 @@ private fun ModeHeader(
  *  Uses TextFieldValue (not String) so Compose preserves the IME's
  *  composition state across recompositions.
  *
- *  Tracks what we've actually sent to the PTY (`ptySent`) and diffs
- *  against that using common-prefix matching. PTY writes are debounced
- *  by 40ms so that rapid IME changes (e.g. Gboard double-space-to-period
- *  replacing " " with ". ") are combined into a single atomic write,
- *  avoiding visible backspace flicker. */
+ *  Tracks `ptyActual` (what was actually written to the PTY) separately
+ *  from `ptyTarget` (what the IME thinks the text is). Diffs are always
+ *  computed from ptyActual → ptyTarget, so if the IME modifies text
+ *  retroactively (predictions, auto-punctuation), the diff is correct.
+ *
+ *  Lone space characters are debounced by 300ms to catch Gboard's
+ *  double-space-to-period. During the debounce, the space hasn't been
+ *  sent to the PTY yet, so if auto-punctuation fires, the diff from
+ *  ptyActual is just ". " — no backspace needed. All other characters
+ *  are sent immediately for low latency. */
 @Composable
 private fun PtyInputField(
     focusRequester: FocusRequester,
@@ -599,40 +604,52 @@ private fun PtyInputField(
     onEnter: () -> Unit,
 ) {
     var tfv by remember { mutableStateOf(TextFieldValue()) }
-    // Ground truth: what the PTY should have after all pending writes flush
-    var ptySent by remember { mutableStateOf("") }
-    // Accumulated batch waiting to be flushed
-    var pendingBatch by remember { mutableStateOf("") }
+    // What the PTY actually has right now (only updated after a real write)
+    var ptyActual by remember { mutableStateOf("") }
+    // What the IME thinks the text is (updated on every onValueChange)
+    var ptyTarget by remember { mutableStateOf("") }
     val scope = rememberCoroutineScope()
     var flushJob by remember { mutableStateOf<kotlinx.coroutines.Job?>(null) }
 
     BasicTextField(
         value = tfv,
         onValueChange = { newTfv ->
-            val newText = newTfv.text
+            ptyTarget = newTfv.text
 
-            if (newText != ptySent) {
-                val commonPrefix = ptySent.commonPrefixWith(newText).length
-                val toDelete = ptySent.length - commonPrefix
-                val toInsert = newText.substring(commonPrefix)
+            // Always cancel pending flush — we'll either send immediately
+            // or reschedule
+            flushJob?.cancel()
 
-                if (toDelete <= 30) {
-                    val batch = "\u007f".repeat(toDelete) + toInsert
-                    // Accumulate into pending batch and debounce the flush
-                    pendingBatch += batch
-                    ptySent = newText
+            if (ptyTarget != ptyActual) {
+                val commonPrefix = ptyActual.commonPrefixWith(ptyTarget).length
+                val toDelete = ptyActual.length - commonPrefix
+                val toInsert = ptyTarget.substring(commonPrefix)
 
-                    flushJob?.cancel()
+                // Is this just appending a single space?
+                val isLoneSpace = toDelete == 0 && toInsert == " "
+
+                if (toDelete > 30) {
+                    // Unreasonably large diff — accept IME state, skip PTY
+                    ptyActual = ptyTarget
+                } else if (isLoneSpace) {
+                    // Debounce space to absorb Gboard double-space-to-period.
+                    // If the next change arrives before flush, the diff is
+                    // recomputed from ptyActual (which still lacks the space).
                     flushJob = scope.launch {
-                        delay(40)
-                        if (pendingBatch.isNotEmpty()) {
-                            onInput(pendingBatch)
-                            pendingBatch = ""
-                        }
+                        delay(300)
+                        // Recompute — ptyTarget may have changed during delay
+                        val cp = ptyActual.commonPrefixWith(ptyTarget).length
+                        val del = ptyActual.length - cp
+                        val ins = ptyTarget.substring(cp)
+                        val batch = "\u007f".repeat(del) + ins
+                        if (batch.isNotEmpty()) onInput(batch)
+                        ptyActual = ptyTarget
                     }
                 } else {
-                    // Too large — accept IME state but don't replay
-                    ptySent = newText
+                    // Send immediately for low latency
+                    val batch = "\u007f".repeat(toDelete) + toInsert
+                    if (batch.isNotEmpty()) onInput(batch)
+                    ptyActual = ptyTarget
                 }
             }
 
