@@ -139,7 +139,7 @@ fun ChatScreen(service: SessionService) {
                 AndroidView(
                     factory = { ctx ->
                         TerminalView(ctx, null).apply {
-                            setTextSize((10 * resources.displayMetrics.scaledDensity).toInt())
+                            setTextSize((12 * resources.displayMetrics.scaledDensity).toInt())
                             setTerminalViewClient(termViewClient)
                             isFocusable = true
                             isFocusableInTouchMode = true
@@ -183,7 +183,7 @@ fun ChatScreen(service: SessionService) {
                 AndroidView(
                     factory = { ctx ->
                         TerminalView(ctx, null).apply {
-                            setTextSize((10 * resources.displayMetrics.scaledDensity).toInt())
+                            setTextSize((12 * resources.displayMetrics.scaledDensity).toInt())
                             setTerminalViewClient(shellViewClient)
                             isFocusable = true
                             isFocusableInTouchMode = true
