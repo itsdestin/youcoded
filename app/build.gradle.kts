@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.destins.claudemobile"
+    namespace = "com.destin.code"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.destins.claudemobile"
+        applicationId = "com.destin.code"
         minSdk = 28
         targetSdk = 35
         versionCode = 2

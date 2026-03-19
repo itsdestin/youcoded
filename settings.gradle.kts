@@ -12,5 +12,5 @@ dependencyResolutionManagement {
         maven("https://jitpack.io")
     }
 }
-rootProject.name = "claude-mobile"
+rootProject.name = "destin-code"
 include(":app")

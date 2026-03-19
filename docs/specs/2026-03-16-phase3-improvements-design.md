@@ -6,7 +6,7 @@
 
 ## Overview
 
-Three improvements to Claude Mobile addressing the highest-impact gaps between mobile and desktop Claude Code usage:
+Three improvements to DestinCode addressing the highest-impact gaps between mobile and desktop Claude Code usage:
 
 1. **Markdown rendering** in chat view responses
 2. **Git bundled at bootstrap** instead of on-demand

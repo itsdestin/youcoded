@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Transform Claude Mobile from a single-session app into a multi-session client with process persistence, Termux terminal-view integration, and boot self-test.
+**Goal:** Transform DestinCode from a single-session app into a multi-session client with process persistence, Termux terminal-view integration, and boot self-test.
 
 **Architecture:** New `SessionRegistry` manages a map of `ManagedSession` objects, each bundling a PtyBridge + ChatState. `SessionService` holds the registry + wake lock. The existing `SessionManager` is renamed to `ServiceBinder`. Termux's `terminal-view` library replaces the custom `TerminalPanel.kt` Canvas renderer.
 

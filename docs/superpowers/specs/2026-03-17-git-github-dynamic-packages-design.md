@@ -2,13 +2,13 @@
 
 **Date:** 2026-03-17
 **Status:** Approved design
-**Goal:** Make git and GitHub CLI (gh) work reliably in Claude Mobile, with dynamic package version resolution so binaries never go stale.
+**Goal:** Make git and GitHub CLI (gh) work reliably in DestinCode, with dynamic package version resolution so binaries never go stale.
 
 ---
 
 ## Problem Statement
 
-Git and the GitHub CLI don't work in Claude Mobile despite binaries being present (or expected to be present) on device. Three root causes:
+Git and the GitHub CLI don't work in DestinCode despite binaries being present (or expected to be present) on device. Three root causes:
 
 1. **Stale package URLs** — `Bootstrap.kt` hardcodes Termux deb URLs with specific versions (e.g., `git_2.49.0`). Termux regularly removes old versions, causing 404s. The current `installDeb` silently fails on HTTP errors, so the binary simply doesn't get installed.
 2. **Missing `gh` package** — GitHub CLI is not in the bootstrap package list at all.

@@ -6,7 +6,7 @@
 
 ## Overview
 
-Transforms Claude Mobile from a single-session app into a multi-session client with process persistence and improved terminal quality. Inspired by Termux's session management model while preserving Claude Mobile's chat-primary interface, tool cards, approval widgets, and distinct chat/terminal views.
+Transforms DestinCode from a single-session app into a multi-session client with process persistence and improved terminal quality. Inspired by Termux's session management model while preserving DestinCode's chat-primary interface, tool cards, approval widgets, and distinct chat/terminal views.
 
 ### Goals
 

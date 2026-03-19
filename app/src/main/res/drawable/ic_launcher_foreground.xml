@@ -2,86 +2,55 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="108"
-    android:viewportHeight="108">
+    android:viewportWidth="40"
+    android:viewportHeight="40">
 
-    <!-- Positions derived from pixel-traced reference image -->
+  <!-- Rounded terminal window -->
+  <path
+      android:pathData="M8,8h24c1.1,0 2,0.9 2,2v20c0,1.1 -0.9,2 -2,2H8c-1.1,0 -2,-0.9 -2,-2V10c0,-1.1 0.9,-2 2,-2z"
+      android:fillColor="#2a2a2a"
+      android:strokeColor="#666666"
+      android:strokeWidth="0.5"/>
 
-    <!-- Hat — rounded square floating above body's upper-right -->
-    <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M81,17 L85,17 A3,3 0,0 1,88,20 L88,25 A3,3 0,0 1,85,28 L81,28 A3,3 0,0 1,78,25 L78,20 A3,3 0,0 1,81,17 Z" />
+  <!-- Top bar line -->
+  <path
+      android:pathData="M6,12.5h28"
+      android:strokeColor="#555555"
+      android:strokeWidth="0.4"/>
 
-    <!-- Left arm — rounded square, 5dp gap from body left edge -->
-    <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M19,38 L23,38 A3,3 0,0 1,26,41 L26,47 A3,3 0,0 1,23,50 L19,50 A3,3 0,0 1,16,47 L16,41 A3,3 0,0 1,19,38 Z" />
+  <!-- Bottom bar line -->
+  <path
+      android:pathData="M6,29.5h28"
+      android:strokeColor="#555555"
+      android:strokeWidth="0.4"/>
 
-    <!-- Right arm (waving, higher) — rounded square, 5dp gap from body right edge -->
-    <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M75,30 L79,30 A3,3 0,0 1,82,33 L82,39 A3,3 0,0 1,79,42 L75,42 A3,3 0,0 1,72,39 L72,33 A3,3 0,0 1,75,30 Z" />
+  <!-- Chevron prompt > -->
+  <path
+      android:pathData="M9,18.5l2.5,2.5 -2.5,2.5"
+      android:strokeColor="#E0E0E0"
+      android:strokeWidth="1.2"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"/>
 
-    <!-- Main body — large rounded square -->
-    <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M40,21 L58,21 A9,9 0,0 1,67,30 L67,51 A9,9 0,0 1,58,60 L40,60 A9,9 0,0 1,31,51 L31,30 A9,9 0,0 1,40,21 Z" />
+  <!-- D letter -->
+  <path
+      android:pathData="M14.5,18h2.5c1.4,0 2.5,1.1 2.5,2.5v0c0,1.4 -1.1,2.5 -2.5,2.5h-2.5z"
+      android:strokeColor="#F0F0F0"
+      android:strokeWidth="1.1"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"/>
 
-    <!-- Faint code text lines inside body -->
-    <path android:fillColor="#ffffff" android:fillAlpha="0.13"
-        android:pathData="M35,28 L63,28 L63,29.5 L35,29.5 Z" />
-    <path android:fillColor="#ffffff" android:fillAlpha="0.10"
-        android:pathData="M35,32 L57,32 L57,33.5 L35,33.5 Z" />
-    <path android:fillColor="#ffffff" android:fillAlpha="0.08"
-        android:pathData="M35,36 L60,36 L60,37.5 L35,37.5 Z" />
-    <path android:fillColor="#ffffff" android:fillAlpha="0.06"
-        android:pathData="M35,40 L52,40 L52,41.5 L35,41.5 Z" />
-    <path android:fillColor="#ffffff" android:fillAlpha="0.04"
-        android:pathData="M35,44 L56,44 L56,45.5 L35,45.5 Z" />
+  <!-- C letter -->
+  <path
+      android:pathData="M24,18c-1.4,0 -2.5,1.1 -2.5,2.5v0c0,1.4 1.1,2.5 2.5,2.5"
+      android:strokeColor="#E0E0E0"
+      android:strokeWidth="1.1"
+      android:strokeLineCap="round"
+      android:strokeLineJoin="round"/>
 
-    <!-- Face: X shape — crossing diagonal lines (cream) -->
-    <path
-        android:pathData="M38,28 L60,54"
-        android:strokeColor="#f5ede4"
-        android:strokeWidth="4.0"
-        android:strokeLineCap="round" />
-    <path
-        android:pathData="M60,28 L38,54"
-        android:strokeColor="#f5ede4"
-        android:strokeWidth="4.0"
-        android:strokeLineCap="round" />
-
-    <!-- Left leg — flat top, rounded bottom, 5dp gap below body -->
-    <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M36,65 L45,65 L45,72 A4.5,4.5 0,0 1,36,72 Z" />
-
-    <!-- Right leg — flat top, rounded bottom, 5dp gap below body -->
-    <path
-        android:fillColor="#1c1c1c"
-        android:pathData="M59,65 L68,65 L68,72 A4.5,4.5 0,0 1,59,72 Z" />
-
-    <!-- Terminal chevron ">" (sienna, traced position) -->
-    <path
-        android:pathData="M38,76 L46,83 L38,90"
-        android:strokeColor="#c96442"
-        android:strokeWidth="3.0"
-        android:strokeLineCap="round"
-        android:strokeLineJoin="round" />
-
-    <!-- Terminal underscore "_" (sienna, traced position) -->
-    <path
-        android:pathData="M50,90 L68,90"
-        android:strokeColor="#c96442"
-        android:strokeWidth="3.0"
-        android:strokeLineCap="round" />
-
-    <!-- Sparkle accent dot (upper-left) -->
-    <path android:fillColor="#c96442" android:fillAlpha="0.45"
-        android:pathData="M17,15.5 A2,2 0,1 1,21,15.5 A2,2 0,1 1,17,15.5 Z" />
-
-    <!-- Sparkle accent dot (right side) -->
-    <path android:fillColor="#c96442" android:fillAlpha="0.25"
-        android:pathData="M93,52.5 A1.5,1.5 0,1 1,96,52.5 A1.5,1.5 0,1 1,93,52.5 Z" />
-
+  <!-- Cursor block -->
+  <path
+      android:pathData="M27,18h2.5v5h-2.5z"
+      android:fillColor="#E0E0E0"
+      android:fillAlpha="0.5"/>
 </vector>
