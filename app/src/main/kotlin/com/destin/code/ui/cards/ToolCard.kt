@@ -155,12 +155,23 @@ fun ToolCard(
         if (state == ToolCardState.AwaitingApproval && session != null) {
             Spacer(Modifier.height(6.dp))
             val readOnlyClient = remember { ReadOnlyTerminalViewClient() }
+            val isDark = com.destin.code.ui.theme.LocalIsDarkTheme.current
             AndroidView(
                 factory = { ctx ->
                     TerminalView(ctx, null).apply {
                         setTextSize((14 * resources.displayMetrics.scaledDensity).toInt())
                         setTerminalViewClient(readOnlyClient)
                         attachSession(session)
+                    }
+                },
+                update = { _ ->
+                    val emulator = session.emulator ?: return@AndroidView
+                    if (isDark) {
+                        emulator.mColors.tryParseColor(256, "#E0E0E0")
+                        emulator.mColors.tryParseColor(257, "#0A0A0A")
+                    } else {
+                        emulator.mColors.tryParseColor(256, "#1A1A1A")
+                        emulator.mColors.tryParseColor(257, "#C8C8C8")
                     }
                 },
                 modifier = Modifier

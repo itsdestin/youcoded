@@ -65,7 +65,7 @@ private fun applyTerminalColors(session: com.termux.terminal.TerminalSession?, i
         emulator.mColors.tryParseColor(258, "#E0E0E0") // cursor
     } else {
         emulator.mColors.tryParseColor(256, "#1A1A1A") // foreground
-        emulator.mColors.tryParseColor(257, "#D8D8D8") // background
+        emulator.mColors.tryParseColor(257, "#C8C8C8") // background
         emulator.mColors.tryParseColor(258, "#1A1A1A") // cursor
     }
 }
