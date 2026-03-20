@@ -42,10 +42,27 @@ var inputDraft by mutableStateOf("")
 - On send: `chatState.addUserMessage(text)` → `bridge.writeInput(text + "\r")` → clear draft
 - Send guard: require `isNotBlank()`
 
-#### 4. TerminalKeyboardRow
+#### 4. ChatScreen — Shell mode input
+
+- Shell mode also uses `TerminalInputBar`, so it shares the same `chatState.inputDraft` — draft persists across all three modes
+- Shell mode does NOT capture input to ChatState (no `addUserMessage`) — Shell is a standalone bash session, not a Claude conversation, so chat messages would be meaningless
+- Send still writes to `shell.writeInput(text + "\r")` as before
+
+#### 5. ChatScreen — QuickChips
+
+- Update chip tap references from `chatInputText = chip.prompt` to `chatState.inputDraft = chip.prompt`
+
+#### 6. ChatScreen — Attachment handling
+
+- `attachmentPath`/`attachmentBitmap` remain in local `remember` state — they are only relevant in Chat mode (Terminal/Shell have no image attachment UI)
+- Chat mode send guard remains `isNotBlank() || attachmentPath != null` to allow attachment-only sends
+- Terminal/Shell mode send guard is `isNotBlank()` only
+
+#### 7. TerminalKeyboardRow
 
 - Remove the `⏎` Enter pill (lines 76-83)
 - Remaining keys: Ctrl, Esc, Tab, ←, ↑, ↓, →
+- **Deliberate limitation:** bare Enter (empty `\r`) cannot be sent in Terminal mode. This was a conscious user decision. If needed later, the Enter pill can be restored.
 
 ### Data Flow
 
@@ -71,7 +88,8 @@ regardless of which mode it was sent from
 ### What's NOT changing
 
 - No disk persistence for drafts (matches current behavior — messages aren't persisted either)
-- No changes to Shell mode input (DirectShellBridge)
 - No changes to hook event routing
 - No changes to session lifecycle
 - TerminalKeyboardRow special keys (Ctrl, Esc, Tab, arrows) still bypass the text field via `onKeyPress`
+- Attachment state stays local to Chat mode (not lifted into ChatState)
+- Both input bars already use `ImeAction.Send` — no IME configuration changes needed
