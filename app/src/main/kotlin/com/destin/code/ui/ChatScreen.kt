@@ -157,7 +157,13 @@ fun ChatScreen(service: SessionService) {
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
                 TerminalInputBar(
                     focusRequester = termFocusRequester,
-                    onSend = { text -> bridge?.writeInput(text + "\r") },
+                    draft = chatState.inputDraft,
+                    onDraftChange = { chatState.inputDraft = it },
+                    onSend = { text ->
+                        chatState.addUserMessage(text)
+                        bridge?.writeInput(text + "\r")
+                        chatState.inputDraft = ""
+                    },
                     onKeyPress = { seq -> bridge?.writeInput(seq) },
                 )
             }
@@ -201,7 +207,12 @@ fun ChatScreen(service: SessionService) {
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
                 TerminalInputBar(
                     focusRequester = shellFocusRequester,
-                    onSend = { text -> shell.writeInput(text + "\r") },
+                    draft = chatState.inputDraft,
+                    onDraftChange = { chatState.inputDraft = it },
+                    onSend = { text ->
+                        shell.writeInput(text + "\r")
+                        chatState.inputDraft = ""
+                    },
                     onKeyPress = { seq -> shell.writeInput(seq) },
                 )
             }
@@ -572,10 +583,11 @@ private fun ModeHeader(
 @Composable
 private fun TerminalInputBar(
     focusRequester: FocusRequester,
+    draft: String,
+    onDraftChange: (String) -> Unit,
     onSend: (String) -> Unit,
     onKeyPress: (String) -> Unit,
 ) {
-    var text by remember { mutableStateOf("") }
     val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
 
     Column {
@@ -597,8 +609,8 @@ private fun TerminalInputBar(
                 contentAlignment = Alignment.CenterStart,
             ) {
                 BasicTextField(
-                    value = text,
-                    onValueChange = { text = it },
+                    value = draft,
+                    onValueChange = onDraftChange,
                     singleLine = false,
                     maxLines = 4,
                     textStyle = androidx.compose.ui.text.TextStyle(
@@ -610,9 +622,8 @@ private fun TerminalInputBar(
                         imeAction = ImeAction.Send,
                     ),
                     keyboardActions = KeyboardActions(onSend = {
-                        if (text.isNotEmpty()) {
-                            onSend(text)
-                            text = ""
+                        if (draft.isNotBlank()) {
+                            onSend(draft)
                         }
                     }),
                     modifier = Modifier
@@ -621,7 +632,7 @@ private fun TerminalInputBar(
                         .focusRequester(focusRequester),
                     decorationBox = { innerTextField ->
                         Box {
-                            if (text.isEmpty()) {
+                            if (draft.isEmpty()) {
                                 Text(
                                     "Type a message…",
                                     fontSize = 14.sp,
@@ -643,9 +654,8 @@ private fun TerminalInputBar(
                     .border(0.5.dp, borderColor.copy(alpha = 0.5f),
                         androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                     .clickable {
-                        if (text.isNotEmpty()) {
-                            onSend(text)
-                            text = ""
+                        if (draft.isNotBlank()) {
+                            onSend(draft)
                         }
                     },
                 contentAlignment = Alignment.Center,
