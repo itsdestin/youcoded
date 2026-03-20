@@ -11,13 +11,15 @@ object InkSelectParser {
 
     // Matches the selected line: starts with ❯ (U+276F), optionally followed by number
     private val SELECTED_LINE = Regex("""^❯\s*(?:\d+\.\s+)?(.+)$""")
-    // Matches unselected lines: starts with 2+ spaces, optionally followed by number
-    private val UNSELECTED_LINE = Regex("""^\s{2,}(?:\d+\.\s+)?(.+)$""")
+    // Strips ANSI escape sequences from terminal output
+    private val ANSI_ESCAPE = Regex("\u001b\\[[0-9;]*[a-zA-Z]")
+    // Matches unselected lines: starts with exactly 2 spaces (Ink Select rendering), optionally numbered
+    private val UNSELECTED_LINE = Regex("""^ {2}(?:\d+\.\s+)?(.+)$""")
 
     // Title overrides for known prompts — keyed by lowercase keyword found in context
     private val TITLE_OVERRIDES = mapOf(
         "trust" to "Trust This Folder?",
-        "theme" to "Choose a Theme",
+        "dark mode" to "Choose a Theme",
         "login method" to "Select Login Method",
         "dangerously-skip-permissions" to "Skip Permissions Warning",
         "skip all permission" to "Skip Permissions Warning",
@@ -92,7 +94,7 @@ object InkSelectParser {
             val line = lines[i].trim()
             if (line.isEmpty()) continue
             // Skip ANSI escape sequences for matching
-            val clean = line.replace(Regex("\u001b\\[[0-9;]*[a-zA-Z]"), "").trim()
+            val clean = line.replace(ANSI_ESCAPE, "").trim()
             if (clean.isEmpty()) continue
             // Prefer lines ending with ? or : as titles
             if (clean.endsWith("?") || clean.endsWith(":")) {

@@ -166,7 +166,7 @@ class ManagedSession(
             if ("paste_code" !in activePrompts && "paste_code" !in completedPromptIds) {
                 activePrompts.add("paste_code")
                 chatState.showInteractivePrompt("paste_code", "Complete Sign-In in Your Browser", listOf(
-                    com.destin.code.ui.PromptButton("Browser opened — waiting for code...", ""),
+                    PromptButton("Browser opened — waiting for code...", ""),
                 ))
             }
         } else if ("paste_code" in activePrompts) {
@@ -196,7 +196,7 @@ class ManagedSession(
                     else -> "Ready"
                 }
                 chatState.showInteractivePrompt(continueKey, title, listOf(
-                    com.destin.code.ui.PromptButton("Continue", "\r"),
+                    PromptButton("Continue", "\r"),
                 ))
             }
         }
