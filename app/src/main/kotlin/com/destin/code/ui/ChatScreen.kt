@@ -21,6 +21,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -638,6 +640,7 @@ private fun TerminalInputBar(
     val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
 
     Column {
+        Box(modifier = Modifier.fillMaxWidth()) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -729,6 +732,54 @@ private fun TerminalInputBar(
             }
         }
 
+            // Floating up/down arrows — stacked vertically above the send button
+            Column(
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(end = 6.dp, bottom = 52.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                FloatingArrowButton(
+                    icon = Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Up",
+                    borderColor = borderColor,
+                    onClick = { onKeyPress("\u001b[A") },
+                )
+                FloatingArrowButton(
+                    icon = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Down",
+                    borderColor = borderColor,
+                    onClick = { onKeyPress("\u001b[B") },
+                )
+            }
+        } // end Box
+
         TerminalKeyboardRow(onKeyPress = onKeyPress)
+    }
+}
+
+@Composable
+private fun FloatingArrowButton(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    contentDescription: String,
+    borderColor: androidx.compose.ui.graphics.Color,
+    onClick: () -> Unit,
+) {
+    Box(
+        modifier = Modifier
+            .size(36.dp)
+            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
+            .border(0.5.dp, borderColor.copy(alpha = 0.5f),
+                androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+            .clickable(onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Icon(
+            icon,
+            contentDescription = contentDescription,
+            tint = MaterialTheme.colorScheme.onSurface,
+            modifier = Modifier.size(22.dp),
+        )
     }
 }

@@ -11,8 +11,6 @@ import androidx.compose.material3.Text
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowLeft
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -45,33 +43,31 @@ fun TerminalKeyboardRow(
             label = "Ctrl",
             isActive = ctrlActive,
             borderColor = borderColor,
-            modifier = Modifier.weight(0.85f).height(36.dp),
+            modifier = Modifier.weight(1f).height(36.dp),
         ) { ctrlActive = !ctrlActive }
 
         // Esc
-        SmallPill("Esc", borderColor = borderColor, modifier = Modifier.weight(0.85f).height(36.dp)) {
+        SmallPill("Esc", borderColor = borderColor, modifier = Modifier.weight(1f).height(36.dp)) {
             sendKey("\u001b", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
         // Tab
-        SmallPill("Tab", borderColor = borderColor, modifier = Modifier.weight(0.85f).height(36.dp)) {
+        SmallPill("Tab", borderColor = borderColor, modifier = Modifier.weight(1f).height(36.dp)) {
             sendKey("\t", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Arrow keys — half-size left/right, normal up/down
-        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", borderColor, Modifier.weight(0.55f).height(36.dp)) {
-            sendKey("\u001b[D", ctrlActive, onKeyPress) { ctrlActive = false }
-        }
-        ArrowPill(Icons.Filled.KeyboardArrowUp, "Up", borderColor, Modifier.weight(0.75f).height(36.dp)) {
-            sendKey("\u001b[A", ctrlActive, onKeyPress) { ctrlActive = false }
-        }
-        ArrowPill(Icons.Filled.KeyboardArrowDown, "Down", borderColor, Modifier.weight(0.75f).height(36.dp)) {
-            sendKey("\u001b[B", ctrlActive, onKeyPress) { ctrlActive = false }
-        }
-        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", borderColor, Modifier.weight(0.55f).height(36.dp)) {
-            sendKey("\u001b[C", ctrlActive, onKeyPress) { ctrlActive = false }
+        // Shift+Tab (sends ESC [ Z — reverse tab / backtab for Claude Code permission cycling)
+        SmallPill("\u21E7Tab", borderColor = borderColor, modifier = Modifier.weight(1f).height(36.dp)) {
+            onKeyPress("\u001b[Z")
         }
 
+        // Arrow keys — left/right only (up/down moved to floating arrows in TerminalInputBar)
+        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowLeft, "Left", borderColor, Modifier.weight(0.65f).height(36.dp)) {
+            sendKey("\u001b[D", ctrlActive, onKeyPress) { ctrlActive = false }
+        }
+        ArrowPill(Icons.AutoMirrored.Filled.KeyboardArrowRight, "Right", borderColor, Modifier.weight(0.65f).height(36.dp)) {
+            sendKey("\u001b[C", ctrlActive, onKeyPress) { ctrlActive = false }
+        }
     }
 }
 
