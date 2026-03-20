@@ -2,6 +2,7 @@ package com.destin.code.ui.theme
 
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
@@ -22,6 +23,12 @@ data class ExtendedColors(
 
 val LocalExtendedColors = staticCompositionLocalOf { ExtendedColors() }
 
+/** Whether the app is currently using dark theme. */
+val LocalIsDarkTheme = staticCompositionLocalOf { true }
+
+/** Callback to toggle between dark and light theme. */
+val LocalToggleTheme = staticCompositionLocalOf<() -> Unit> { {} }
+
 val CascadiaMono = FontFamily(
     Font(R.font.cascadia_mono_regular, FontWeight.Normal),
     Font(R.font.cascadia_mono_bold, FontWeight.Bold),
@@ -37,6 +44,30 @@ private val DarkColorScheme = darkColorScheme(
     onSurface = Color(0xFFE0E0E0),
     error = Color(0xFFDD4444),
     onError = Color.White,
+)
+
+private val DarkExtendedColors = ExtendedColors(
+    surfaceBorder = Color(0xFF333333),
+    textSecondary = Color(0xFF999999),
+    terminalBg = Color(0xFF0A0A0A),
+)
+
+private val LightColorScheme = lightColorScheme(
+    primary = Color(0xFF555555),
+    onPrimary = Color.White,
+    secondary = Color(0xFF555555),
+    background = Color(0xFFF5F5F5),
+    surface = Color(0xFFFFFFFF),
+    onBackground = Color(0xFF1A1A1A),
+    onSurface = Color(0xFF1A1A1A),
+    error = Color(0xFFCC3333),
+    onError = Color.White,
+)
+
+private val LightExtendedColors = ExtendedColors(
+    surfaceBorder = Color(0xFFD0D0D0),
+    textSecondary = Color(0xFF777777),
+    terminalBg = Color(0xFFF0F0F0),
 )
 
 // App-wide typography using Cascadia Mono
@@ -59,12 +90,21 @@ private val AppTypography = Typography(
 )
 
 @Composable
-fun DestinCodeTheme(content: @Composable () -> Unit) {
+fun DestinCodeTheme(
+    darkTheme: Boolean = true,
+    onToggleTheme: () -> Unit = {},
+    content: @Composable () -> Unit,
+) {
+    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val extendedColors = if (darkTheme) DarkExtendedColors else LightExtendedColors
+
     androidx.compose.runtime.CompositionLocalProvider(
-        LocalExtendedColors provides ExtendedColors()
+        LocalExtendedColors provides extendedColors,
+        LocalIsDarkTheme provides darkTheme,
+        LocalToggleTheme provides onToggleTheme,
     ) {
         MaterialTheme(
-            colorScheme = DarkColorScheme,
+            colorScheme = colorScheme,
             typography = AppTypography,
             content = content
         )

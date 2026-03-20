@@ -1,6 +1,8 @@
 package com.destin.code.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.*
@@ -9,11 +11,13 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalUriHandler
 import androidx.compose.ui.text.LinkAnnotation
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextLinkStyles
 import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.destin.code.ui.cards.*
@@ -53,6 +57,50 @@ private fun LinkableText(
     }
 
     Text(text = annotated, style = style)
+}
+
+/** Renders detected URLs as tappable pill buttons. */
+@Composable
+fun LinkPills(text: String) {
+    val urls = URL_PATTERN.findAll(text)
+        .map { it.value.trimEnd('.', ',', ';', ':', '!') }
+        .distinct()
+        .toList()
+    if (urls.isEmpty()) return
+
+    val uriHandler = LocalUriHandler.current
+    val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
+
+    Column(
+        modifier = Modifier.padding(top = 4.dp),
+        verticalArrangement = Arrangement.spacedBy(4.dp),
+    ) {
+        for (url in urls) {
+            val label = try {
+                val host = android.net.Uri.parse(url).host ?: url
+                val path = android.net.Uri.parse(url).path?.takeIf { it != "/" && it.isNotEmpty() }
+                if (path != null) "$host${path.take(20)}${if (path.length > 20) "…" else ""}" else host
+            } catch (_: Exception) { url.take(40) }
+
+            Box(
+                modifier = Modifier
+                    .clip(RoundedCornerShape(6.dp))
+                    .background(LINK_COLOR.copy(alpha = 0.1f))
+                    .border(0.5.dp, LINK_COLOR.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                    .clickable { uriHandler.openUri(url) }
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+            ) {
+                Text(
+                    text = label,
+                    fontSize = 12.sp,
+                    color = LINK_COLOR,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                )
+            }
+        }
+    }
 }
 
 @Composable
@@ -234,6 +282,7 @@ fun MessageBubble(
                             else if (isUser) Color.White
                             else MaterialTheme.colorScheme.onSurface,
                     )
+                    LinkPills(content.text)
                     if (isQueued) {
                         Text(
                             text = "queued",
@@ -250,6 +299,7 @@ fun MessageBubble(
                         expandedCardId = expandedCardId,
                         onToggleCard = onToggleCard,
                     )
+                    LinkPills(content.markdown)
                 }
                 else -> Unit
             }

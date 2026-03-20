@@ -27,7 +27,11 @@ class MainActivity : ComponentActivity() {
         val bootstrap = Bootstrap(applicationContext)
 
         setContent {
-            DestinCodeTheme {
+            var isDarkTheme by remember { mutableStateOf(true) }
+            DestinCodeTheme(
+                darkTheme = isDarkTheme,
+                onToggleTheme = { isDarkTheme = !isDarkTheme },
+            ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,

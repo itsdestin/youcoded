@@ -134,6 +134,44 @@ object AppIcons {
     }
 
     /**
+     * Menu icon — three horizontal dots (kebab menu rotated to horizontal).
+     */
+    val Menu: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Menu",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            // Left dot
+            path(
+                fill = SolidColor(Color.Black),
+            ) {
+                moveTo(6f, 12f)
+                arcTo(1.5f, 1.5f, 0f, true, true, 6f, 11.99f)
+                close()
+            }
+            // Center dot
+            path(
+                fill = SolidColor(Color.Black),
+            ) {
+                moveTo(12f, 12f)
+                arcTo(1.5f, 1.5f, 0f, true, true, 12f, 11.99f)
+                close()
+            }
+            // Right dot
+            path(
+                fill = SolidColor(Color.Black),
+            ) {
+                moveTo(18f, 12f)
+                arcTo(1.5f, 1.5f, 0f, true, true, 18f, 11.99f)
+                close()
+            }
+        }.build()
+    }
+
+    /**
      * App icon — squat rounded character with >< eyes, nub arms, stubby legs.
      * Body + eyes use EvenOdd so eyes are cutouts (works with Icon tint).
      * Arms and legs are separate filled paths.

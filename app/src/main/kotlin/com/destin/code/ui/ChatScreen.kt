@@ -40,6 +40,7 @@ import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
@@ -160,7 +161,7 @@ fun ChatScreen(service: SessionService) {
                     draft = chatState.inputDraft,
                     onDraftChange = { chatState.inputDraft = it },
                     onSend = { text ->
-                        chatState.addUserMessage(text)
+                        if (text.isNotBlank()) chatState.addUserMessage(text)
                         bridge?.writeInput(text + "\r")
                         chatState.inputDraft = ""
                     },
@@ -283,19 +284,49 @@ fun ChatScreen(service: SessionService) {
                         )
                     }
 
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterEnd)
-                            .size(34.dp)
-                            .clip(androidx.compose.foundation.shape.CircleShape)
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(com.destin.code.ui.theme.AppIcons.AppIcon,
-                            contentDescription = "DestinCode",
-                            tint = MaterialTheme.colorScheme.primary,
-                            modifier = Modifier.size(20.dp))
+                    // Menu button + dropdown
+                    Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                        var menuExpanded by remember { mutableStateOf(false) }
+                        val isDark = com.destin.code.ui.theme.LocalIsDarkTheme.current
+                        val toggleTheme = com.destin.code.ui.theme.LocalToggleTheme.current
+
+                        Box(
+                            modifier = Modifier
+                                .height(34.dp)
+                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                .background(MaterialTheme.colorScheme.surface)
+                                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                                .clickable { menuExpanded = true }
+                                .padding(horizontal = 10.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Icon(
+                                com.destin.code.ui.theme.AppIcons.Menu,
+                                contentDescription = "Menu",
+                                tint = MaterialTheme.colorScheme.onSurface,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        }
+
+                        DropdownMenu(
+                            expanded = menuExpanded,
+                            onDismissRequest = { menuExpanded = false },
+                            containerColor = MaterialTheme.colorScheme.surface,
+                        ) {
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
+                                        if (isDark) "Light Mode" else "Dark Mode",
+                                        fontSize = 13.sp,
+                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                                    )
+                                },
+                                onClick = {
+                                    toggleTheme()
+                                    menuExpanded = false
+                                },
+                            )
+                        }
                     }
                 }
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
@@ -565,11 +596,12 @@ private fun ModeHeader(
         Box(
             modifier = Modifier
                 .align(Alignment.CenterEnd)
-                .size(34.dp)
-                .clip(androidx.compose.foundation.shape.CircleShape)
+                .height(34.dp)
+                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                 .background(MaterialTheme.colorScheme.surface)
-                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.CircleShape)
-                .then(if (onRightClick != null) Modifier.clickable(onClick = onRightClick) else Modifier),
+                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                .then(if (onRightClick != null) Modifier.clickable(onClick = onRightClick) else Modifier)
+                .padding(horizontal = 10.dp),
             contentAlignment = Alignment.Center,
         ) {
             Icon(rightIcon, contentDescription = title,
@@ -622,9 +654,7 @@ private fun TerminalInputBar(
                         imeAction = ImeAction.Send,
                     ),
                     keyboardActions = KeyboardActions(onSend = {
-                        if (draft.isNotBlank()) {
-                            onSend(draft)
-                        }
+                        onSend(draft)
                     }),
                     modifier = Modifier
                         .fillMaxWidth()
@@ -653,11 +683,7 @@ private fun TerminalInputBar(
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                     .border(0.5.dp, borderColor.copy(alpha = 0.5f),
                         androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                    .clickable {
-                        if (draft.isNotBlank()) {
-                            onSend(draft)
-                        }
-                    },
+                    .clickable { onSend(draft) },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(
