@@ -1,6 +1,6 @@
 # DestinCode Phase 2 — Spec
 
-**Version:** 3.0
+**Version:** 1.0.0
 **Last updated:** 2026-03-20
 **Feature location:** `~/destincode/` (Android app), key files: `runtime/PtyBridge.kt`, `runtime/Bootstrap.kt`, `runtime/ManagedSession.kt`, `ui/ChatScreen.kt`, `parser/EventBridge.kt`, `parser/InkSelectParser.kt`
 
