@@ -44,7 +44,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.destin.code.config.defaultChips
-import com.destin.code.runtime.TerminalViewClient
+import com.destin.code.runtime.BaseTerminalViewClient
 import com.destin.code.runtime.DirectShellBridge
 import com.destin.code.runtime.SessionService
 import com.termux.view.TerminalView
@@ -123,7 +123,7 @@ fun ChatScreen(service: SessionService) {
         when (screenMode) {
         ScreenMode.Terminal -> {
             val termFocusRequester = remember { FocusRequester() }
-            val termViewClient = remember { TerminalViewClient() }
+            val termViewClient = remember { BaseTerminalViewClient() }
             val termScreenVersion by (bridge?.screenVersion?.collectAsState()
                 ?: remember { mutableStateOf(0) })
 
@@ -172,7 +172,7 @@ fun ChatScreen(service: SessionService) {
         ScreenMode.Shell -> {
             val shell = directShellBridge ?: return@Box
             val shellFocusRequester = remember { FocusRequester() }
-            val shellViewClient = remember { TerminalViewClient() }
+            val shellViewClient = remember { BaseTerminalViewClient() }
             val shellScreenVersion by shell.screenVersion.collectAsState()
 
             Column(modifier = Modifier.fillMaxSize()) {

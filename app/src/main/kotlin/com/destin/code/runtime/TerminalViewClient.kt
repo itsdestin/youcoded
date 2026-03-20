@@ -5,7 +5,7 @@ import android.view.MotionEvent
 import com.termux.terminal.TerminalSession
 import com.termux.view.TerminalViewClient
 
-open class TerminalViewClient : TerminalViewClient {
+open class BaseTerminalViewClient : TerminalViewClient {
 
     override fun onScale(scale: Float): Float = scale
 
@@ -46,7 +46,7 @@ open class TerminalViewClient : TerminalViewClient {
 }
 
 /** Read-only variant for card embeds — consumes all input. */
-class ReadOnlyTerminalViewClient : TerminalViewClient() {
+class ReadOnlyTerminalViewClient : BaseTerminalViewClient() {
     override fun onKeyDown(keyCode: Int, e: KeyEvent, session: TerminalSession) = true
     override fun onLongPress(event: MotionEvent) = true
     override fun onCodePoint(codePoint: Int, ctrlDown: Boolean, session: TerminalSession) = true
