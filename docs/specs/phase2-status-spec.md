@@ -1,8 +1,8 @@
 # DestinCode Phase 2 — Spec
 
-**Version:** 2.7
-**Last updated:** 2026-03-17
-**Feature location:** `~/claude-mobile/` (Android app), key files: `runtime/PtyBridge.kt`, `runtime/Bootstrap.kt`, `ui/TerminalPanel.kt`, `ui/ChatScreen.kt`, `parser/EventBridge.kt`
+**Version:** 3.0
+**Last updated:** 2026-03-20
+**Feature location:** `~/destincode/` (Android app), key files: `runtime/PtyBridge.kt`, `runtime/Bootstrap.kt`, `runtime/ManagedSession.kt`, `ui/ChatScreen.kt`, `parser/EventBridge.kt`, `parser/InkSelectParser.kt`
 
 ## Purpose
 
@@ -41,7 +41,7 @@ DestinCode Phase 2 adds three interaction modes to the Android app: a **Chat** v
 
 ## Current Implementation
 
-### What Was Built (81 commits)
+### What Was Built
 
 #### Terminal View — Production Ready
 
@@ -52,7 +52,8 @@ A full-screen terminal emulator that renders Claude Code's output directly from 
 - **Clickable URLs:** `https://` links detected across wrapped terminal lines, rendered in bright blue (#66AAFF) with underline. Tap opens in system browser via `Intent.ACTION_VIEW`. Enables OAuth authorization flow without manual copy-paste.
 - **Scrollback history:** Swipe down to scroll into history, swipe up to return to live view (standard mobile scroll direction). Blue indicator bar at bottom when scrolled up shows row count; tap to snap back. External row mapping: `externalRow = rowIndex - scrollRows` (negative = scrollback).
 - Font size auto-calculated via binary search to fit 60 columns in screen width
-- `TerminalKeyboardRow.kt` — pill-styled buttons for Ctrl, Esc, Tab, arrow keys (Material icons), and Enter
+- `TerminalKeyboardRow.kt` — pill-styled buttons for Ctrl, Esc, Tab, left/right arrows. Permission mode pill with canvas-drawn play/pause icons (▶ Normal, ▶▶ Auto-Accept, ▶▶▶ Bypass, ⏸ Plan Mode) replaces Shift+Tab — cycles Claude Code permission modes with optimistic update and screen-poll correction. Bypass mode excluded from cycle in non-dangerous sessions.
+- Floating up/down arrow buttons (42dp) overlaid on terminal view bottom-right for Ink Select menu navigation
 - Text input field with Cascadia Mono font, sends raw keystrokes via `\r` (carriage return)
 - `PtyBridge.screenVersion` StateFlow triggers Canvas recomposition on every `onTextChanged`
 
@@ -72,7 +73,8 @@ A message-based view that receives structured events directly from Claude Code h
 - `hook-relay.js` — Claude Code hook script that reads stdin JSON and writes to an Android abstract-namespace Unix socket. Retries up to 3 attempts with backoff on connection failure; logs errors to stderr.
 - `EventBridge.kt` — `LocalServerSocket` that accepts hook-relay connections, parses JSON, emits `HookEvent` via `SharedFlow` (buffer: 1000). Started BEFORE Claude Code session (not after) to prevent early events being dropped. Logs unparseable payloads for debugging.
 - `HookEvent.kt` — sealed class with 5 variants: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `Notification`
-- `ChatState.kt` — 7 `MessageContent` variants (`Text`, `Response`, `ToolRunning`, `ToolAwaitingApproval`, `ToolComplete`, `ToolFailed`, `SystemNotice`) with tool state machine transitions. Insertion cursor ensures responses appear after their corresponding user message, not at the end. Messages sent while Claude is processing are marked `isQueued` and visually dimmed.
+- `InkSelectParser.kt` — Generic regex-based parser that detects Ink Select menus from visible terminal screen text. Strips ANSI escape codes, extracts options from `❯`-marked lines, generates position-aware arrow-key sequences (up for items above cursor, down for items below). Title override map for known prompts (theme, trust, login, permissions). Login method menu hardcoded in ManagedSession (multi-line options break generic parser).
+- `ChatState.kt` — 9 `MessageContent` variants (`Text`, `Response`, `ToolRunning`, `ToolAwaitingApproval`, `ToolComplete`, `ToolFailed`, `SystemNotice`, `InteractivePrompt`, `CompletedPrompt`) with tool state machine transitions. `permissionMode` state tracked from screen text polling. Insertion cursor ensures responses appear after their corresponding user message, not at the end. Messages sent while Claude is processing are marked `isQueued` and visually dimmed.
 - `ChatScreen.kt` — collects `EventBridge.events`, routes each hook type to the appropriate `ChatState` mutation
 - `MessageBubble.kt` — routes content types to card composables (ToolCard, CodeCard, ErrorCard) or text bubbles. `LinkableText` composable detects URLs via `AnnotatedString` and makes them tappable. Queued messages render dimmed with "queued" label.
 
@@ -111,13 +113,16 @@ A message-based view that receives structured events directly from Claude Code h
 
 #### Theme & Visual Design — Complete
 
-- **Color palette:** Neutral dark (#111 background, #1c1c1c surface) with Claude sienna (#c96442) accents
+- **Theme modes:** 4-option theme selector in app menu: Default Dark, Default Light, Material Dark, Material Light
+  - Default themes: neutral terminal-style palette (#111 background, #1c1c1c surface, #B0B0B0 primary)
+  - Material You themes: full dynamic color scheme from wallpaper via `dynamicDarkColorScheme()`/`dynamicLightColorScheme()` (Android 12+, falls back to default on older)
+  - `ThemeMode` enum with `LocalThemeMode`/`LocalSetThemeMode` composition locals
 - **Font:** Cascadia Mono (Regular + Bold) bundled as app resources, set as app-wide Material Typography
 - **Layout:** Both views share identical header/footer structure:
-  - Header: navigation pill (left), centered title (15sp), Claude mascot pill (right)
+  - Header: navigation pill (left), centered title (15sp), menu button (right) with theme submenu
   - Footer: text input (42dp pill) + action row (keyboard pills or quick chips)
   - 0.5dp dividers between sections using surfaceBorder (#333)
-- **Claude mascot icon:** Blocky pixel-art character with >< eyes (EvenOdd cutouts), square arms, legs. Tintable single-path vector.
+- **Adaptive icon:** Terminal window with chevron prompt, "DC" monogram, and cursor block. Wrapped in `<group>` with scale+translate to fit within adaptive icon safe zone (66% inner area) for Samsung launcher compatibility.
 - **System integration:** `enableEdgeToEdge()` + `statusBarsPadding()` + `navigationBarsPadding()` + `imePadding()` for proper insets
 
 #### Smart Cards — Partially Integrated
@@ -323,7 +328,7 @@ DirectShellBridge works via long-press on Terminal button but there's no visible
 
 Config-only change in `ChipConfig.kt` — no new files or complex logic.
 
-### Priority 9: Fix / Rebuild App Icon
+### ~~Priority 9: Fix / Rebuild App Icon~~ — Done (v3.0)
 
 Current icon needs rework. Reference image available (B1 Original comparison shot). (from inbox 2026-03-16)
 
@@ -367,15 +372,15 @@ Swapped arrow order from `← ↓ ↑ →` to `← ↑ ↓ →` in `TerminalKeyb
 
 Chat mode pills that show action words first (Open, Write, Explain, etc.) then context-specific subjects. Two-tier UX where the action verb moves to the text box and subjects appear. (from inbox 2026-03-16)
 
-### Priority 20: Replace Tab Key
+### ~~Priority 20: Replace Tab Key~~ — Done (v3.0)
 
 Consider replacing the tab key in the terminal keyboard row with something more useful for common workflows. (from inbox 2026-03-16)
 
-### Priority 21: Light Mode / Theme Support
+### ~~Priority 21: Light Mode / Theme Support~~ — Done (v3.0)
 
 Add light mode option for DestinCode. Currently only dark theme. (from inbox 2026-03-17)
 
-### Priority 22: Multi-Session / New Chat Support
+### ~~Priority 22: Multi-Session / New Chat Support~~ — Done (v2.7)
 
 Ability to exit the current session, create a new chat, or maintain multiple ongoing sessions. Currently single-session only. (from inbox 2026-03-17)
 
@@ -383,7 +388,7 @@ Ability to exit the current session, create a new chat, or maintain multiple ong
 
 Pre-install GitHub CLI (`gh`) in the app's embedded environment. All standard install methods fail on Android/Termux due to SELinux (pkg, apt, npm, binary download all fail). Needs linker64 approach or prebuilt ARM64 binary deployed at bootstrap. See `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_175521.jpg` and `gdrive:Claude/Reference/claude-mobile/Screenshot_20260316_175553.jpg` for failure evidence. (from inbox 2026-03-17)
 
-### Priority 24: Skip Permissions Mode Button
+### ~~Priority 24: Skip Permissions Mode Button~~ — Done (v3.0)
 
 Add a button in DestinCode to relaunch in "dangerously skip permissions" mode. Saves the user from having to type the flag manually in terminal. (from inbox 2026-03-17)
 
@@ -510,4 +515,5 @@ app/build.gradle.kts       — material-icons-extended, version 0.2.0
 | 2026-03-16 | 2.5 | (1) Flip up/down arrows in TerminalKeyboardRow (← ↑ ↓ → order). (2) Delete 7 dead code files from parser era. (3) Terminal/Shell input unification: remove visible text field + Send button, add invisible BasicTextField that forwards keystrokes to PTY in real time. Tap terminal to open keyboard. TerminalKeyboardRow ⏎ is sole Enter/confirm. TerminalPanel gains `onTap` callback. (4) Native binary R&D: proved ELF e_type patch works (linker64 accepts ET_DYN), blocked on TLS alignment. Built glibc LD_PRELOAD interceptor. Research doc at `docs/plans/native-binary-research (03-16-2026).md`. Add Priority 3 for native binary support | R&D + UX | Destin | Quick wins + native research |
 | 2026-03-16 | 2.4 | Major reliability + UX pass: (1) Hooks reliability — EventBridge starts before Claude Code, hook-relay.js retries 3x with backoff, ChatScreen retries EventBridge poll, Stop event tries 4 field names. (2) Exception catch widened to `Exception` (Termux throws `IllegalArgumentException`). (3) Chat message ordering — insertion cursor ensures responses appear after their user message, queued messages dimmed with label. (4) Clickable URLs in chat bubbles via `LinkableText`/`AnnotatedString`. (5) Terminal scrollback — `externalRow = rowIndex - scrollRows` with mobile-standard direction (swipe up = recent). (6) `~/.local/bin` added to PATH and `buildBashEnvSh` scans it for native installer binaries. Remove session persistence from planned (confirmed working), remove native installer fallback (resolved). Renumber priorities 1-20. | Update | Destin | Reliability + UX |
 | 2026-03-17 | 2.7 | Inbox processing: add 3 new known bugs (GitHub login timeout, missing 3-way prompts, terminal input issues). Add 9 new planned updates (Priorities 24-32): skip permissions button, OAuth auto-return, hide return on scroll, Gemini CLI switch, Android env prompt, UI overhaul, compact tool calls, Google sign-in, Code Mobile rename | Inbox | Destin | Inbox processing |
+| 2026-03-20 | 3.0 | **v1.0.0 release.** (1) Generic Ink Select menu parser (`InkSelectParser.kt`) — regex-based detection of `❯`-marked menus from screen text with ANSI stripping, title overrides, position-aware arrow-key generation. Login method hardcoded (multi-line options). Screen-only parsing (not raw buffer) prevents stale menu persistence. (2) Permission mode pill — canvas-drawn play/pause icons (▶/▶▶/▶▶▶/⏸) replacing ⇧Tab text. Optimistic cycling with screen-poll correction. `ChatState.permissionMode` tracked from visible screen only. Bypass excluded in non-dangerous sessions. (3) Floating up/down arrows — overlaid on terminal view via Box, separate from input bar. (4) Material You theming — `ThemeMode` enum (DARK/LIGHT/MATERIAL_DARK/MATERIAL_LIGHT), full `dynamicDarkColorScheme`/`dynamicLightColorScheme` for Material modes, theme submenu in app menu. (5) Adaptive icon scaled to safe zone for Samsung. (6) Consistent placeholder text across views. Mark Priorities 9, 20, 21, 22, 24 done. | Feature + Release | Destin | Generic menu parser |
 | 2026-03-17 | 2.6 | Code review + stability pass. **Dead code:** Deleted 3 remaining orphan widgets (MenuWidget, ConfirmationWidget, OAuthWidget) + `widgets/` dir. **OOM/ANR fixes:** (1) PtyBridge `_rawBuffer` capped at 512KB rolling window, changed to thread-safe `StringBuffer`. (2) Photo picker file copy moved off main thread. (3) TerminalPanel Paint objects hoisted to `remember` blocks (eliminates hundreds of per-frame allocations). (4) Bootstrap process stdout read via `CompletableFuture` to prevent pipe deadlock. (5) PTY input buffers capped at 1000 chars. **Race conditions:** (6) SessionManager `CompletableDeferred` replaced with `MutableStateFlow` for retry safety. (7) SessionService.startSession() cleans up previous scope/bridge. (8) EventBridge.serverSocket marked `@Volatile`. (9) Approval heuristic re-checks tool state; distinct `LaunchedEffect` keys. (10) ChatState.advanceQueue() handles missing messages. (11) DirectShellBridge cleanup via `DisposableEffect`. **Correctness:** (12) SyntaxHighlighter span priority reversed (strings > keywords). (13) CodeCard highlighting cached with `remember`. (14) MarkdownRenderer cardId uses block index (not content hash). (15) BtwSheet double-reversal removed. (16) SetupScreen retry button wired to callback. (17) Terminal/Shell duplicated headers extracted to `ModeHeader`/`PtyInputField`. **Bug fixes:** (18) Approval cards now revert to Running on Accept/Reject tap. (19) Hook permission denied investigated, root cause documented. Mark Priority 2 (Markdown) done, update Priority 6. | Review + Bugfix | Destin | Code review |
