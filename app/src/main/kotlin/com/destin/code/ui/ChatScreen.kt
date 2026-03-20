@@ -658,6 +658,33 @@ private fun TerminalInputBar(
     val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
 
     Column {
+        // Floating up/down arrows — separate from input row, right-aligned
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 6.dp),
+            horizontalArrangement = Arrangement.End,
+        ) {
+            Column(
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                FloatingArrowButton(
+                    icon = Icons.Filled.KeyboardArrowUp,
+                    contentDescription = "Up",
+                    borderColor = borderColor,
+                    onClick = { onKeyPress("\u001b[A") },
+                )
+                FloatingArrowButton(
+                    icon = Icons.Filled.KeyboardArrowDown,
+                    contentDescription = "Down",
+                    borderColor = borderColor,
+                    onClick = { onKeyPress("\u001b[B") },
+                )
+            }
+        }
+
+        // Input row: text field + send button
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -730,43 +757,23 @@ private fun TerminalInputBar(
                 )
             }
 
-            // Send button + floating up/down arrows stacked above it
-            Column(
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.spacedBy(2.dp),
+            // Send button
+            Box(
+                modifier = Modifier
+                    .size(42.dp)
+                    .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                    .border(0.5.dp, borderColor.copy(alpha = 0.5f),
+                        androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
+                    .clickable { onSend(draft.text) },
+                contentAlignment = Alignment.Center,
             ) {
-                // Floating up/down arrows
-                FloatingArrowButton(
-                    icon = Icons.Filled.KeyboardArrowUp,
-                    contentDescription = "Up",
-                    borderColor = borderColor,
-                    onClick = { onKeyPress("\u001b[A") },
+                Icon(
+                    Icons.AutoMirrored.Filled.Send,
+                    contentDescription = "Send",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
                 )
-                FloatingArrowButton(
-                    icon = Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "Down",
-                    borderColor = borderColor,
-                    onClick = { onKeyPress("\u001b[B") },
-                )
-
-                // Send button
-                Box(
-                    modifier = Modifier
-                        .size(42.dp)
-                        .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                        .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
-                        .border(0.5.dp, borderColor.copy(alpha = 0.5f),
-                            androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                        .clickable { onSend(draft.text) },
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        Icons.AutoMirrored.Filled.Send,
-                        contentDescription = "Send",
-                        tint = MaterialTheme.colorScheme.primary,
-                        modifier = Modifier.size(16.dp),
-                    )
-                }
             }
         }
 
