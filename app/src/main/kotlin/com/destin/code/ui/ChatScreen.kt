@@ -65,7 +65,6 @@ fun ChatScreen(service: SessionService) {
 
     val listState = rememberLazyListState()
     val coroutineScope = rememberCoroutineScope()
-    var chatInputText by remember { mutableStateOf("") }
     var screenMode by remember { mutableStateOf(ScreenMode.Chat) }
     var directShellBridge by remember { mutableStateOf<DirectShellBridge?>(null) }
     DisposableEffect(Unit) { onDispose { directShellBridge?.stop() } }
@@ -391,8 +390,8 @@ fun ChatScreen(service: SessionService) {
                     ) {
                         val inputScrollState = rememberScrollState()
                         BasicTextField(
-                            value = chatInputText,
-                            onValueChange = { chatInputText = it },
+                            value = chatState.inputDraft,
+                            onValueChange = { chatState.inputDraft = it },
                             singleLine = false,
                             maxLines = 5,
                             textStyle = androidx.compose.ui.text.TextStyle(
@@ -410,7 +409,7 @@ fun ChatScreen(service: SessionService) {
                                     modifier = Modifier.fillMaxWidth(),
                                 ) {
                                     Box(modifier = Modifier.weight(1f)) {
-                                        if (chatInputText.isEmpty()) {
+                                        if (chatState.inputDraft.isEmpty()) {
                                             Text("Type a message...", fontSize = 14.sp,
                                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f))
                                         }
@@ -445,22 +444,22 @@ fun ChatScreen(service: SessionService) {
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .clickable {
-                                if (chatInputText.isNotBlank() || attachmentPath != null) {
+                                if (chatState.inputDraft.isNotBlank() || attachmentPath != null) {
                                     val messageText = buildString {
                                         attachmentPath?.let { path ->
                                             appendLine("[Image attached: $path]")
                                             appendLine()
                                         }
-                                        append(chatInputText)
+                                        append(chatState.inputDraft)
                                     }.trim()
                                     val displayText = when {
-                                        attachmentPath != null && chatInputText.isBlank() -> "[image]"
-                                        attachmentPath != null -> "[image] $chatInputText"
-                                        else -> chatInputText
+                                        attachmentPath != null && chatState.inputDraft.isBlank() -> "[image]"
+                                        attachmentPath != null -> "[image] $chatState.inputDraft"
+                                        else -> chatState.inputDraft
                                     }
                                     chatState.addUserMessage(displayText)
                                     bridge?.writeInput(messageText + "\r")
-                                    chatInputText = ""
+                                    chatState.inputDraft = ""
                                     attachmentPath = null
                                     attachmentBitmap = null
                                 }
@@ -477,7 +476,7 @@ fun ChatScreen(service: SessionService) {
                     chips = defaultChips,
                     onChipTap = { chip ->
                         if (chip.needsCompletion) {
-                            chatInputText = chip.prompt
+                            chatState.inputDraft = chip.prompt
                         } else {
                             chatState.addUserMessage(chip.prompt)
                             bridge?.writeInput(chip.prompt + "\r")
