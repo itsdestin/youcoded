@@ -1,12 +1,16 @@
 package com.destin.code.ui.theme
 
+import android.os.Build
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
+import androidx.compose.material3.dynamicDarkColorScheme
+import androidx.compose.material3.dynamicLightColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.ReadOnlyComposable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -14,6 +18,13 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.destin.code.R
+
+enum class ThemeMode(val label: String) {
+    DARK("Default Dark"),
+    LIGHT("Default Light"),
+    MATERIAL_DARK("Material Dark"),
+    MATERIAL_LIGHT("Material Light"),
+}
 
 data class ExtendedColors(
     val surfaceBorder: Color = Color(0xFF333333),
@@ -26,8 +37,11 @@ val LocalExtendedColors = staticCompositionLocalOf { ExtendedColors() }
 /** Whether the app is currently using dark theme. */
 val LocalIsDarkTheme = staticCompositionLocalOf { true }
 
-/** Callback to toggle between dark and light theme. */
-val LocalToggleTheme = staticCompositionLocalOf<() -> Unit> { {} }
+/** Current theme mode. */
+val LocalThemeMode = staticCompositionLocalOf { ThemeMode.DARK }
+
+/** Callback to set theme mode. */
+val LocalSetThemeMode = staticCompositionLocalOf<(ThemeMode) -> Unit> { {} }
 
 val CascadiaMono = FontFamily(
     Font(R.font.cascadia_mono_regular, FontWeight.Normal),
@@ -91,17 +105,27 @@ private val AppTypography = Typography(
 
 @Composable
 fun DestinCodeTheme(
-    darkTheme: Boolean = true,
-    onToggleTheme: () -> Unit = {},
+    themeMode: ThemeMode = ThemeMode.DARK,
+    onSetThemeMode: (ThemeMode) -> Unit = {},
     content: @Composable () -> Unit,
 ) {
-    val colorScheme = if (darkTheme) DarkColorScheme else LightColorScheme
+    val darkTheme = themeMode == ThemeMode.DARK || themeMode == ThemeMode.MATERIAL_DARK
+    val useMaterial = themeMode == ThemeMode.MATERIAL_DARK || themeMode == ThemeMode.MATERIAL_LIGHT
+    val baseScheme = if (darkTheme) DarkColorScheme else LightColorScheme
     val extendedColors = if (darkTheme) DarkExtendedColors else LightExtendedColors
+
+    val colorScheme = if (useMaterial && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+        val context = LocalContext.current
+        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
+    } else {
+        baseScheme
+    }
 
     androidx.compose.runtime.CompositionLocalProvider(
         LocalExtendedColors provides extendedColors,
         LocalIsDarkTheme provides darkTheme,
-        LocalToggleTheme provides onToggleTheme,
+        LocalThemeMode provides themeMode,
+        LocalSetThemeMode provides onSetThemeMode,
     ) {
         MaterialTheme(
             colorScheme = colorScheme,

@@ -17,6 +17,7 @@ import com.destin.code.runtime.ServiceBinder
 import com.destin.code.ui.ChatScreen
 import com.destin.code.ui.SetupScreen
 import com.destin.code.ui.theme.DestinCodeTheme
+import com.destin.code.ui.theme.ThemeMode
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -27,10 +28,10 @@ class MainActivity : ComponentActivity() {
         val bootstrap = Bootstrap(applicationContext)
 
         setContent {
-            var isDarkTheme by remember { mutableStateOf(true) }
+            var themeMode by remember { mutableStateOf(ThemeMode.DARK) }
             DestinCodeTheme(
-                darkTheme = isDarkTheme,
-                onToggleTheme = { isDarkTheme = !isDarkTheme },
+                themeMode = themeMode,
+                onSetThemeMode = { themeMode = it },
             ) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),

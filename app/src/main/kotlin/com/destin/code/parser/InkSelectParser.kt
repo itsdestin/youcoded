@@ -9,17 +9,17 @@ data class ParsedMenu(
 
 object InkSelectParser {
 
-    // Matches the selected line: starts with ❯ (U+276F), optionally followed by number
-    private val SELECTED_LINE = Regex("""^❯\s*(?:\d+\.\s+)?(.+)$""")
+    // Matches the selected line: optional leading whitespace + ❯, optionally followed by number
+    private val SELECTED_LINE = Regex("""^\s*❯\s*(?:\d+\.\s+)?(.+)$""")
     // Strips ANSI escape sequences from terminal output
     private val ANSI_ESCAPE = Regex("\u001b\\[[0-9;]*[a-zA-Z]")
-    // Matches unselected lines: starts with exactly 2 spaces (Ink Select rendering), optionally numbered
-    private val UNSELECTED_LINE = Regex("""^ {2}(?:\d+\.\s+)?(.+)$""")
+    // Matches unselected lines: 2+ leading spaces (no ❯), optionally numbered
+    private val UNSELECTED_LINE = Regex("""^\s{2,}(?:\d+\.\s+)?(.+)$""")
 
     // Title overrides for known prompts — keyed by lowercase keyword found in context
     private val TITLE_OVERRIDES = mapOf(
         "trust" to "Trust This Folder?",
-        "dark mode" to "Choose a Theme",
+        "dark mode" to "Choose a Theme for the Terminal",
         "login method" to "Select Login Method",
         "dangerously-skip-permissions" to "Skip Permissions Warning",
         "skip all permission" to "Skip Permissions Warning",
@@ -29,11 +29,16 @@ object InkSelectParser {
      * Attempt to parse an Ink Select menu from combined screen+raw PTY output.
      * Returns null if no menu is detected.
      */
+    /** Strip ANSI escape codes from a line for clean matching. */
+    private fun stripAnsi(line: String): String = line.replace(ANSI_ESCAPE, "")
+
     fun parse(screenText: String): ParsedMenu? {
         val lines = screenText.lines()
+        // Pre-strip ANSI codes for matching (terminal output is full of color codes)
+        val cleanLines = lines.map { stripAnsi(it) }
 
         // Find the selected-item line (starts with ❯)
-        val selectorIndex = lines.indexOfLast { line ->
+        val selectorIndex = cleanLines.indexOfLast { line ->
             SELECTED_LINE.matches(line.trimEnd())
         }
         if (selectorIndex < 0) return null
@@ -44,18 +49,22 @@ object InkSelectParser {
 
         // Walk backward from selector to find earlier options
         for (i in (selectorIndex - 1) downTo 0) {
-            val match = UNSELECTED_LINE.matchEntire(lines[i].trimEnd()) ?: break
+            val clean = cleanLines[i].trimEnd()
+            if ("❯" in clean) break  // don't cross into another selected line
+            val match = UNSELECTED_LINE.matchEntire(clean) ?: break
             options.add(0, match.groupValues[1].trim())
             optionIndices.add(0, i)
         }
         // Add the selected item
-        val selectedMatch = SELECTED_LINE.matchEntire(lines[selectorIndex].trimEnd()) ?: return null
+        val selectedMatch = SELECTED_LINE.matchEntire(cleanLines[selectorIndex].trimEnd()) ?: return null
         val selectedIndex = options.size  // index within our collected options list
         options.add(selectedMatch.groupValues[1].trim())
         optionIndices.add(selectorIndex)
         // Walk forward from selector+1 to find later options
-        for (i in (selectorIndex + 1) until lines.size) {
-            val match = UNSELECTED_LINE.matchEntire(lines[i].trimEnd()) ?: break
+        for (i in (selectorIndex + 1) until cleanLines.size) {
+            val clean = cleanLines[i].trimEnd()
+            if ("❯" in clean) break
+            val match = UNSELECTED_LINE.matchEntire(clean) ?: break
             options.add(match.groupValues[1].trim())
             optionIndices.add(i)
         }

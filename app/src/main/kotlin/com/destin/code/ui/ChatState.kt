@@ -82,6 +82,9 @@ class ChatState {
         inputDraft = TextFieldValue()
     }
 
+    /** Claude Code's current permission mode, detected from status bar */
+    var permissionMode: String by mutableStateOf("Normal")
+
     /** Current tool being worked on — for activity indicator text */
     var activeToolName: String? by mutableStateOf(null)
 
