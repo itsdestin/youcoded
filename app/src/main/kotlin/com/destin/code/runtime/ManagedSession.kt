@@ -2,6 +2,7 @@ package com.destin.code.runtime
 
 import android.os.FileObserver
 import com.destin.code.parser.HookEvent
+import com.destin.code.parser.InkSelectParser
 import com.destin.code.ui.ChatState
 import com.destin.code.ui.MessageContent
 import com.destin.code.ui.PromptButton
@@ -132,77 +133,40 @@ class ManagedSession(
     private fun detectPrompts(screen: String, activePrompts: MutableSet<String>) {
         val lower = screen.lowercase()
 
-        // Theme selection
-        if ("dark mode" in lower && "light mode" in lower && "/theme" in lower) {
-            if ("theme" !in activePrompts && "theme" !in completedPromptIds) {
-                activePrompts.add("theme")
-                // Ink Select: first item is pre-selected. Navigate with ↓ arrows then Enter.
-                val down = "\u001b[B"
-                chatState.showInteractivePrompt("theme", "Choose a Theme for the Terminal", listOf(
-                    PromptButton("Dark mode", "\r"),
-                    PromptButton("Light mode", "$down\r"),
-                    PromptButton("Dark (colorblind-friendly)", "$down$down\r"),
-                    PromptButton("Light (colorblind-friendly)", "$down$down$down\r"),
-                    PromptButton("Dark (ANSI only)", "$down$down$down$down\r"),
-                    PromptButton("Light (ANSI only)", "$down$down$down$down$down\r"),
-                ))
+        // --- Generic Ink Select menu detection ---
+        val parsed = InkSelectParser.parse(screen)
+        if (parsed != null) {
+            if (parsed.id !in activePrompts && parsed.id !in completedPromptIds) {
+                // Clear any previous generic menu that is no longer showing
+                val staleMenus = activePrompts.filter { it.startsWith("menu_") }
+                for (stale in staleMenus) {
+                    activePrompts.remove(stale)
+                    chatState.dismissPrompt(stale)
+                }
+                activePrompts.add(parsed.id)
+                chatState.showInteractivePrompt(
+                    parsed.id,
+                    parsed.title,
+                    InkSelectParser.toPromptButtons(parsed),
+                )
             }
-        } else if ("theme" in activePrompts) {
-            activePrompts.remove("theme")
-            chatState.dismissPrompt("theme")
+        } else {
+            // No menu detected — dismiss any active generic menus
+            val staleMenus = activePrompts.filter { it.startsWith("menu_") }
+            for (stale in staleMenus) {
+                activePrompts.remove(stale)
+                chatState.dismissPrompt(stale)
+            }
         }
 
-        // Trust folder
-        if ("do you trust" in lower && "folder" in lower) {
-            if ("trust" !in activePrompts && "trust" !in completedPromptIds) {
-                activePrompts.add("trust")
-                chatState.showInteractivePrompt("trust", "Trust this folder?", listOf(
-                    PromptButton("Yes", "\r"),
-                    PromptButton("No", "\u001b[B\r"),
-                ))
-            }
-        } else if ("trust" in activePrompts) {
-            activePrompts.remove("trust")
-            chatState.dismissPrompt("trust")
-        }
-
-        // Dangerous permissions / skip permissions warning
-        if ("dangerously-skip-permissions" in lower || "skip all permission" in lower) {
-            if ("dangerous" !in activePrompts && "dangerous" !in completedPromptIds) {
-                activePrompts.add("dangerous")
-                chatState.showInteractivePrompt("dangerous", "Skip permissions warning", listOf(
-                    PromptButton("Yes, I understand", "\r"),
-                    PromptButton("No", "\u001b"),
-                ))
-            }
-        } else if ("dangerous" in activePrompts) {
-            activePrompts.remove("dangerous")
-            chatState.dismissPrompt("dangerous")
-        }
-
-        // Login method selection
-        if ("select login method" in lower) {
-            if ("auth" !in activePrompts && "auth" !in completedPromptIds) {
-                activePrompts.add("auth")
-                val down = "\u001b[B"
-                chatState.showInteractivePrompt("auth", "Select Login Method", listOf(
-                    PromptButton("Claude account (Pro/Max/Team)", "\r"),
-                    PromptButton("Anthropic Console (API)", "$down\r"),
-                    PromptButton("3rd-party platform", "$down$down\r"),
-                ))
-            }
-        } else if ("auth" in activePrompts) {
-            activePrompts.remove("auth")
-            chatState.dismissPrompt("auth")
-        }
-
-        // Browser auth / paste code prompt
+        // --- Special-case: Browser auth / paste code prompt ---
+        // (Not an Ink Select menu — just informational text with no selectable options)
         if (("paste code" in lower || "paste the code" in lower || "browser" in lower) &&
             ("sign" in lower || "code" in lower || "authorize" in lower)) {
             if ("paste_code" !in activePrompts && "paste_code" !in completedPromptIds) {
                 activePrompts.add("paste_code")
-                chatState.showInteractivePrompt("paste_code", "Complete sign-in in your browser", listOf(
-                    PromptButton("Browser opened — waiting for code...", ""),
+                chatState.showInteractivePrompt("paste_code", "Complete Sign-In in Your Browser", listOf(
+                    com.destin.code.ui.PromptButton("Browser opened — waiting for code...", ""),
                 ))
             }
         } else if ("paste_code" in activePrompts) {
@@ -210,8 +174,8 @@ class ManagedSession(
             chatState.dismissPrompt("paste_code")
         }
 
-        // "Press Enter to continue" — can appear multiple times (login, security notes, etc.)
-        // Use the contextual title as part of the key to deduplicate
+        // --- Special-case: "Press Enter to continue" ---
+        // (Single-action prompt, not an Ink Select menu)
         if ("press enter to continue" in lower) {
             // Auto-collapse the browser sign-in card if still active
             if ("paste_code" in activePrompts) {
@@ -227,12 +191,12 @@ class ManagedSession(
             if (continueKey !in activePrompts && continueKey !in completedPromptIds) {
                 activePrompts.add(continueKey)
                 val title = when {
-                    "login successful" in lower -> "Login successful!"
-                    "security" in lower -> "Remember, Claude can make mistakes"
+                    "login successful" in lower -> "Login Successful!"
+                    "security" in lower -> "Remember, Claude Can Make Mistakes"
                     else -> "Ready"
                 }
                 chatState.showInteractivePrompt(continueKey, title, listOf(
-                    PromptButton("Continue", "\r"),
+                    com.destin.code.ui.PromptButton("Continue", "\r"),
                 ))
             }
         }
