@@ -4,6 +4,8 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateListOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import org.json.JSONObject
 import java.util.UUID
 
@@ -68,7 +70,17 @@ class ChatState {
     var expandedCardId: String? by mutableStateOf(null)
 
     /** Draft text in the input bar — shared across Chat/Terminal/Shell modes */
-    var inputDraft by mutableStateOf("")
+    var inputDraft by mutableStateOf(TextFieldValue())
+
+    /** Set draft text with cursor at end */
+    fun setDraftText(text: String) {
+        inputDraft = TextFieldValue(text, TextRange(text.length))
+    }
+
+    /** Clear draft */
+    fun clearDraft() {
+        inputDraft = TextFieldValue()
+    }
 
     /** Current tool being worked on — for activity indicator text */
     var activeToolName: String? by mutableStateOf(null)

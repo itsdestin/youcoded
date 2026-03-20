@@ -56,8 +56,8 @@ private val LightColorScheme = lightColorScheme(
     primary = Color(0xFF555555),
     onPrimary = Color.White,
     secondary = Color(0xFF555555),
-    background = Color(0xFFF5F5F5),
-    surface = Color(0xFFFFFFFF),
+    background = Color(0xFFDCDCDC),
+    surface = Color(0xFFE8E8E8),
     onBackground = Color(0xFF1A1A1A),
     onSurface = Color(0xFF1A1A1A),
     error = Color(0xFFCC3333),
@@ -65,9 +65,9 @@ private val LightColorScheme = lightColorScheme(
 )
 
 private val LightExtendedColors = ExtendedColors(
-    surfaceBorder = Color(0xFFD0D0D0),
-    textSecondary = Color(0xFF777777),
-    terminalBg = Color(0xFFF0F0F0),
+    surfaceBorder = Color(0xFFC0C0C0),
+    textSecondary = Color(0xFF666666),
+    terminalBg = Color(0xFFD8D8D8),
 )
 
 // App-wide typography using Cascadia Mono
