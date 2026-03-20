@@ -158,6 +158,7 @@ fun ToolCard(
             AndroidView(
                 factory = { ctx ->
                     TerminalView(ctx, null).apply {
+                        setTextSize((14 * resources.displayMetrics.scaledDensity).toInt())
                         setTerminalViewClient(readOnlyClient)
                         attachSession(session)
                     }
