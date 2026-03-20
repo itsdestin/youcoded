@@ -5,11 +5,11 @@ plugins {
 }
 
 android {
-    namespace = "com.destins.claudemobile"
+    namespace = "com.destin.code"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.destins.claudemobile"
+        applicationId = "com.destin.code"
         minSdk = 28
         targetSdk = 35
         versionCode = 2
@@ -44,8 +44,9 @@ dependencies {
     // Encrypted SharedPreferences for API key storage
     implementation("androidx.security:security-crypto:1.1.0-alpha06")
 
-    // Termux terminal emulator (PTY session management)
+    // Termux terminal emulator (PTY session management) + terminal view (native rendering)
     implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.1")
 
     // Apache Commons Compress for extracting .deb packages (ar + tar + xz + zstd)
     implementation("org.apache.commons:commons-compress:1.27.1")

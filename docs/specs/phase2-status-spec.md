@@ -1,4 +1,4 @@
-# Claude Mobile Phase 2 — Spec
+# DestinCode Phase 2 — Spec
 
 **Version:** 2.7
 **Last updated:** 2026-03-17
@@ -6,7 +6,7 @@
 
 ## Purpose
 
-Claude Mobile Phase 2 adds three interaction modes to the Android app: a **Chat** view (hooks-based structured events), a full-screen **Terminal** view (raw PTY), and a **Shell** view (standalone bash). The Terminal view renders Claude Code's output directly from the Termux `TerminalEmulator` screen buffer and is the ground-truth fallback. The Chat view receives structured events from Claude Code hooks (PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification) via a Unix socket relay, rendering tool cards, approval prompts, and response bubbles without any terminal parsing. The Shell view provides direct bash access with the same linker64/BASH_ENV environment.
+DestinCode Phase 2 adds three interaction modes to the Android app: a **Chat** view (hooks-based structured events), a full-screen **Terminal** view (raw PTY), and a **Shell** view (standalone bash). The Terminal view renders Claude Code's output directly from the Termux `TerminalEmulator` screen buffer and is the ground-truth fallback. The Chat view receives structured events from Claude Code hooks (PreToolUse, PostToolUse, PostToolUseFailure, Stop, Notification) via a Unix socket relay, rendering tool cards, approval prompts, and response bubbles without any terminal parsing. The Shell view provides direct bash access with the same linker64/BASH_ENV environment.
 
 **Related documents:**
 - **Phase 1 spec:** `~/docs/superpowers/specs/claude-mobile-android-design-spec.md`
@@ -329,7 +329,7 @@ Current icon needs rework. Reference image available (B1 Original comparison sho
 
 ### Priority 10: Voice Assistant OS Integration
 
-Register Claude Mobile as an Android voice assistant so it can be invoked system-wide. (from inbox 2026-03-16)
+Register DestinCode as an Android voice assistant so it can be invoked system-wide. (from inbox 2026-03-16)
 
 ### Priority 11: "My Files" View
 
@@ -345,7 +345,7 @@ Terminal and Shell modes now use an invisible `BasicTextField` that forwards sof
 
 ### Priority 14: Voice Mode
 
-Voice input/output mode for Claude Mobile interactions. (from inbox 2026-03-16)
+Voice input/output mode for DestinCode interactions. (from inbox 2026-03-16)
 
 ### Priority 15: Terminal View on Confirm/Cancel Detection
 
@@ -373,7 +373,7 @@ Consider replacing the tab key in the terminal keyboard row with something more 
 
 ### Priority 21: Light Mode / Theme Support
 
-Add light mode option for Claude Mobile. Currently only dark theme. (from inbox 2026-03-17)
+Add light mode option for DestinCode. Currently only dark theme. (from inbox 2026-03-17)
 
 ### Priority 22: Multi-Session / New Chat Support
 
@@ -385,11 +385,11 @@ Pre-install GitHub CLI (`gh`) in the app's embedded environment. All standard in
 
 ### Priority 24: Skip Permissions Mode Button
 
-Add a button in Claude Mobile to relaunch in "dangerously skip permissions" mode. Saves the user from having to type the flag manually in terminal. (from inbox 2026-03-17)
+Add a button in DestinCode to relaunch in "dangerously skip permissions" mode. Saves the user from having to type the flag manually in terminal. (from inbox 2026-03-17)
 
 ### Priority 25: OAuth Auto-Return to App
 
-After completing browser-based OAuth (GitHub, rclone, etc.), automatically exit the browser and return to Claude Mobile. Currently the user has to manually switch back. Partially addressed by v2.6 browser-open script but auto-return not yet implemented. (from inbox 2026-03-17)
+After completing browser-based OAuth (GitHub, rclone, etc.), automatically exit the browser and return to DestinCode. Currently the user has to manually switch back. Partially addressed by v2.6 browser-open script but auto-return not yet implemented. (from inbox 2026-03-17)
 
 ### Priority 26: Hide Return Button on Scroll
 
@@ -401,11 +401,11 @@ Icon at top right to quickly switch between Gemini CLI and Claude Code. Switch t
 
 ### Priority 28: Inject Android Environment Prompt
 
-Inject a prompt into every new Claude Mobile instance noting the Android environment and listing correct restrictions / in-Claude workarounds for various commands. (from inbox 2026-03-17)
+Inject a prompt into every new DestinCode instance noting the Android environment and listing correct restrictions / in-Claude workarounds for various commands. (from inbox 2026-03-17)
 
 ### Priority 29: UI Overhaul — Send Buttons, Settings, Raw Terminal
 
-Remove send buttons in Claude Mobile and use built-in keyboard send buttons. Move chat/terminal swap button and add new "settings" type menus. In terminal, allow access to full raw bash terminal, multiple Claude instances, and projects/file explorer. (from inbox 2026-03-17)
+Remove send buttons in DestinCode and use built-in keyboard send buttons. Move chat/terminal swap button and add new "settings" type menus. In terminal, allow access to full raw bash terminal, multiple Claude instances, and projects/file explorer. (from inbox 2026-03-17)
 
 ### Priority 30: Compact Tool Call Boxes
 
@@ -417,7 +417,7 @@ Add a sign-in with Google option that auto-links/synchronizes GitHub, Claude aut
 
 ### Priority 32: Rename to "Code Mobile" (Future)
 
-Rename "Claude Mobile" to "Code Mobile" to avoid potential trademark/legal issues with Anthropic's "Claude" branding. (from inbox 2026-03-17)
+Rename "DestinCode" to "Code Mobile" to avoid potential trademark/legal issues with Anthropic's "Claude" branding. (from inbox 2026-03-17)
 
 ## Open Questions
 

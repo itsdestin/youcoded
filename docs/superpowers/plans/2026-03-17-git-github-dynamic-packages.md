@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make git and GitHub CLI (gh) work reliably in Claude Mobile by replacing hardcoded Termux package URLs with dynamic resolution and fixing the command wrapper.
+**Goal:** Make git and GitHub CLI (gh) work reliably in DestinCode by replacing hardcoded Termux package URLs with dynamic resolution and fixing the command wrapper.
 
 **Architecture:** Add a Termux Packages index parser to Bootstrap that resolves current package URLs at runtime. Fix the JS wrapper to catch bare command names. Add git environment variables and zstd decompression support.
 
@@ -210,7 +210,7 @@ import com.github.luben.zstd.ZstdInputStream
 Replace the entire `installPackages` method and the `// TODO` comment above the git deps section (lines 157-233) with:
 
 ```kotlin
-/** Packages required for Claude Mobile, in dependency order. */
+/** Packages required for DestinCode, in dependency order. */
 private val requiredPackages = listOf(
     // Node.js runtime + deps
     "c-ares", "libicu", "libsqlite", "nodejs", "npm",

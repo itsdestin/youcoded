@@ -7,7 +7,7 @@
 
 ## What We Did
 
-Made git and GitHub CLI (`gh`) work in Claude Mobile by replacing the broken hardcoded package system with dynamic resolution from the Termux package index, fixing the JavaScript wrapper to catch bare command names, and adding missing git environment variables.
+Made git and GitHub CLI (`gh`) work in DestinCode by replacing the broken hardcoded package system with dynamic resolution from the Termux package index, fixing the JavaScript wrapper to catch bare command names, and adding missing git environment variables.
 
 ## Problems Solved
 

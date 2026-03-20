@@ -9,7 +9,7 @@
 .cxx
 local.properties
 
-# Claude Code local settings
+# DestinCode local settings
 .claude/
 
 # Drafts and temp files

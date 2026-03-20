@@ -1,4 +1,4 @@
-# Claude Mobile Phase 2 — Design Spec
+# DestinCode Phase 2 — Design Spec
 
 **Version:** 1.3
 **Date:** 2026-03-15
@@ -9,7 +9,7 @@
 
 ## Overview
 
-Phase 2 transforms Claude Mobile from a basic PTY chat wrapper into a polished, interactive mobile client. The core insight from Phase 1 usage: Claude Code's terminal UI uses interactive elements (arrow-key menus, OAuth flows, confirmation prompts) that the current plain-text input can't handle. Without proper terminal input, the app is stuck at the first-run onboarding screen.
+Phase 2 transforms DestinCode from a basic PTY chat wrapper into a polished, interactive mobile client. The core insight from Phase 1 usage: Claude Code's terminal UI uses interactive elements (arrow-key menus, OAuth flows, confirmation prompts) that the current plain-text input can't handle. Without proper terminal input, the app is stuck at the first-run onboarding screen.
 
 Phase 2 addresses this by adding a layered interaction model: native Android widgets handle common terminal interactions, with a full terminal emulator as an always-available fallback.
 
