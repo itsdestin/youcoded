@@ -161,25 +161,50 @@ fun ChatScreen(service: SessionService) {
                     onLeftClick = { screenMode = ScreenMode.Chat },
                 )
 
-                AndroidView(
-                    factory = { ctx ->
-                        TerminalView(ctx, null).apply {
-                            setTextSize((12 * resources.displayMetrics.scaledDensity).toInt())
-                            setTerminalViewClient(termViewClient)
-                            isFocusable = true
-                            isFocusableInTouchMode = true
-                            bridge?.getSession()?.let { attachSession(it) }
-                        }
-                    },
-                    update = { view ->
-                        bridge?.getSession()?.let { view.attachSession(it) }
-                        applyTerminalColors(bridge?.getSession(), isDark)
-                        @Suppress("UNUSED_EXPRESSION")
-                        termScreenVersion
-                        view.onScreenUpdated()
-                    },
-                    modifier = Modifier.weight(1f).fillMaxWidth(),
-                )
+                // Terminal view + floating arrows overlay
+                Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
+                    AndroidView(
+                        factory = { ctx ->
+                            TerminalView(ctx, null).apply {
+                                setTextSize((12 * resources.displayMetrics.scaledDensity).toInt())
+                                setTerminalViewClient(termViewClient)
+                                isFocusable = true
+                                isFocusableInTouchMode = true
+                                bridge?.getSession()?.let { attachSession(it) }
+                            }
+                        },
+                        update = { view ->
+                            bridge?.getSession()?.let { view.attachSession(it) }
+                            applyTerminalColors(bridge?.getSession(), isDark)
+                            @Suppress("UNUSED_EXPRESSION")
+                            termScreenVersion
+                            view.onScreenUpdated()
+                        },
+                        modifier = Modifier.fillMaxSize(),
+                    )
+
+                    // Floating up/down arrows — overlaid on terminal, bottom-right
+                    Column(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .padding(end = 8.dp, bottom = 8.dp),
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        FloatingArrowButton(
+                            icon = Icons.Filled.KeyboardArrowUp,
+                            contentDescription = "Up",
+                            borderColor = borderColor,
+                            onClick = { bridge?.writeInput("\u001b[A") },
+                        )
+                        FloatingArrowButton(
+                            icon = Icons.Filled.KeyboardArrowDown,
+                            contentDescription = "Down",
+                            borderColor = borderColor,
+                            onClick = { bridge?.writeInput("\u001b[B") },
+                        )
+                    }
+                }
 
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
                 TerminalInputBar(
@@ -196,6 +221,9 @@ fun ChatScreen(service: SessionService) {
                         filePickerLauncher.launch("*/*")
                     },
                     attachmentPath = attachmentPath,
+                    permissionMode = chatState.permissionMode,
+                    hasBypassMode = currentSession?.dangerousMode == true,
+                    onPermissionCycle = { chatState.permissionMode = it },
                 )
             }
         }
@@ -250,6 +278,9 @@ fun ChatScreen(service: SessionService) {
                         filePickerLauncher.launch("*/*")
                     },
                     attachmentPath = attachmentPath,
+                    permissionMode = chatState.permissionMode,
+                    hasBypassMode = currentSession?.dangerousMode == true,
+                    onPermissionCycle = { chatState.permissionMode = it },
                 )
             }
         }
@@ -322,8 +353,9 @@ fun ChatScreen(service: SessionService) {
                     // Menu button + dropdown
                     Box(modifier = Modifier.align(Alignment.CenterEnd)) {
                         var menuExpanded by remember { mutableStateOf(false) }
-                        val isDark = com.destin.code.ui.theme.LocalIsDarkTheme.current
-                        val toggleTheme = com.destin.code.ui.theme.LocalToggleTheme.current
+                        var themeSubmenuExpanded by remember { mutableStateOf(false) }
+                        val currentThemeMode = com.destin.code.ui.theme.LocalThemeMode.current
+                        val setThemeMode = com.destin.code.ui.theme.LocalSetThemeMode.current
 
                         Box(
                             modifier = Modifier
@@ -345,22 +377,54 @@ fun ChatScreen(service: SessionService) {
 
                         DropdownMenu(
                             expanded = menuExpanded,
-                            onDismissRequest = { menuExpanded = false },
+                            onDismissRequest = {
+                                menuExpanded = false
+                                themeSubmenuExpanded = false
+                            },
                             containerColor = MaterialTheme.colorScheme.surface,
                         ) {
                             DropdownMenuItem(
                                 text = {
                                     Text(
-                                        if (isDark) "Light Mode" else "Dark Mode",
+                                        "Theme",
                                         fontSize = 13.sp,
                                         fontFamily = com.destin.code.ui.theme.CascadiaMono,
                                     )
                                 },
-                                onClick = {
-                                    toggleTheme()
-                                    menuExpanded = false
-                                },
+                                onClick = { themeSubmenuExpanded = !themeSubmenuExpanded },
                             )
+                            if (themeSubmenuExpanded) {
+                                for (mode in com.destin.code.ui.theme.ThemeMode.entries) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                Text(
+                                                    if (mode == currentThemeMode) "●" else "○",
+                                                    fontSize = 10.sp,
+                                                    color = if (mode == currentThemeMode)
+                                                        MaterialTheme.colorScheme.primary
+                                                    else
+                                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                                )
+                                                Text(
+                                                    mode.label,
+                                                    fontSize = 12.sp,
+                                                    fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            setThemeMode(mode)
+                                            menuExpanded = false
+                                            themeSubmenuExpanded = false
+                                        },
+                                        modifier = Modifier.padding(start = 12.dp),
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -654,37 +718,13 @@ private fun TerminalInputBar(
     onKeyPress: (String) -> Unit,
     onAttachImage: (() -> Unit)? = null,
     attachmentPath: String? = null,
+    permissionMode: String = "Normal",
+    hasBypassMode: Boolean = false,
+    onPermissionCycle: ((String) -> Unit)? = null,
 ) {
     val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
 
     Column {
-        // Floating up/down arrows — separate from input row, right-aligned
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 6.dp),
-            horizontalArrangement = Arrangement.End,
-        ) {
-            Column(
-                verticalArrangement = Arrangement.spacedBy(2.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                FloatingArrowButton(
-                    icon = Icons.Filled.KeyboardArrowUp,
-                    contentDescription = "Up",
-                    borderColor = borderColor,
-                    onClick = { onKeyPress("\u001b[A") },
-                )
-                FloatingArrowButton(
-                    icon = Icons.Filled.KeyboardArrowDown,
-                    contentDescription = "Down",
-                    borderColor = borderColor,
-                    onClick = { onKeyPress("\u001b[B") },
-                )
-            }
-        }
-
-        // Input row: text field + send button
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -730,9 +770,8 @@ private fun TerminalInputBar(
                                 .padding(end = if (onAttachImage != null) 24.dp else 0.dp)) {
                                 if (draft.text.isEmpty()) {
                                     Text(
-                                        "Type a message…",
+                                        "Type a message...",
                                         fontSize = 14.sp,
-                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
                                     )
                                 }
@@ -777,7 +816,12 @@ private fun TerminalInputBar(
             }
         }
 
-        TerminalKeyboardRow(onKeyPress = onKeyPress)
+        TerminalKeyboardRow(
+            onKeyPress = onKeyPress,
+            permissionMode = permissionMode,
+            hasBypassMode = hasBypassMode,
+            onPermissionCycle = onPermissionCycle,
+        )
     }
 }
 
@@ -790,7 +834,7 @@ private fun FloatingArrowButton(
 ) {
     Box(
         modifier = Modifier
-            .size(36.dp)
+            .size(42.dp)
             .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.95f))
             .border(0.5.dp, borderColor.copy(alpha = 0.5f),

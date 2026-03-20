@@ -2,8 +2,15 @@
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     android:width="108dp"
     android:height="108dp"
-    android:viewportWidth="40"
-    android:viewportHeight="40">
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+  <!-- Scale content to sit within the 66% safe zone (roughly 18-90) -->
+  <group
+      android:translateX="24"
+      android:translateY="24"
+      android:scaleX="1.5"
+      android:scaleY="1.5">
 
   <!-- Rounded terminal window -->
   <path
@@ -71,4 +78,6 @@
       android:pathData="M30,15 L35,15 A0.5,0.5,0,0,1,35.5,15.5 L35.5,25.5 A0.5,0.5,0,0,1,35,26 L30,26 A0.5,0.5,0,0,1,29.5,25.5 L29.5,15.5 A0.5,0.5,0,0,1,30,15 Z"
       android:fillColor="#E0E0E0"
       android:fillAlpha="0.6"/>
+
+  </group>
 </vector>

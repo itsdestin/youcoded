@@ -118,7 +118,10 @@ class ManagedSession(
                     val raw = try { ptyBridge.rawBuffer.takeLast(4000) } catch (_: Exception) { "" }
                     val combined = screen + "\n" + raw
                     withContext(Dispatchers.Main) {
-                        detectPrompts(combined, activePrompts)
+                        // Use screen-only for menu parsing (raw buffer has stale menus)
+                        // Use combined for special-case keyword detection (paste_code, press-enter)
+                        detectPrompts(screen, combined, activePrompts)
+                        detectPermissionMode(screen)
                     }
                 }
             } catch (_: Exception) {}
@@ -129,12 +132,44 @@ class ManagedSession(
     private val completedPromptIds = mutableSetOf<String>()
     private var continueCounter = 0
 
-    /** Known setup prompts and their button mappings. */
-    private fun detectPrompts(screen: String, activePrompts: MutableSet<String>) {
+    /** Detect permission mode from visible screen only (not raw buffer). */
+    private fun detectPermissionMode(screen: String) {
         val lower = screen.lowercase()
+        chatState.permissionMode = when {
+            "bypass permissions on" in lower -> "Bypass"
+            "accept edits on" in lower -> "Auto-Accept"
+            "plan mode on" in lower -> "Plan Mode"
+            else -> "Normal"
+        }
+    }
 
-        // --- Generic Ink Select menu detection ---
-        val parsed = InkSelectParser.parse(screen)
+    /** Known setup prompts and their button mappings.
+     *  @param screenText visible terminal screen only (for menu parsing)
+     *  @param combined screen + raw buffer (for keyword-based special cases)
+     */
+    private fun detectPrompts(screenText: String, combined: String, activePrompts: MutableSet<String>) {
+        val lower = combined.lowercase()
+        val screenLower = screenText.lowercase()
+
+        // --- Hardcoded: Login method selection (multi-line options break generic parser) ---
+        if ("select login method" in screenLower) {
+            if ("auth" !in activePrompts && "auth" !in completedPromptIds) {
+                activePrompts.add("auth")
+                val down = "\u001b[B"
+                chatState.showInteractivePrompt("auth", "Select Login Method", listOf(
+                    PromptButton("Claude Account (Pro/Max/Team)", "\r"),
+                    PromptButton("Anthropic Console (API)", "$down\r"),
+                    PromptButton("3rd-Party Platform", "$down$down\r"),
+                ))
+            }
+            return  // skip generic parser for this screen
+        } else if ("auth" in activePrompts) {
+            activePrompts.remove("auth")
+            chatState.dismissPrompt("auth")
+        }
+
+        // --- Generic Ink Select menu detection (screen only, not raw buffer) ---
+        val parsed = InkSelectParser.parse(screenText)
         if (parsed != null) {
             if (parsed.id !in activePrompts && parsed.id !in completedPromptIds) {
                 // Clear any previous generic menu that is no longer showing
