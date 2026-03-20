@@ -67,6 +67,9 @@ class ChatState {
     val messages = mutableStateListOf<ChatMessage>()
     var expandedCardId: String? by mutableStateOf(null)
 
+    /** Draft text in the input bar — shared across Chat/Terminal/Shell modes */
+    var inputDraft by mutableStateOf("")
+
     /** Current tool being worked on — for activity indicator text */
     var activeToolName: String? by mutableStateOf(null)
 
