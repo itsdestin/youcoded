@@ -3,7 +3,6 @@ package com.destin.code.ui
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
@@ -22,7 +21,6 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.outlined.Image
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -38,6 +36,7 @@ import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
@@ -89,15 +88,23 @@ fun ChatScreen(service: SessionService) {
         }
     }
 
-    val photoPickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.PickVisualMedia()
+    val filePickerLauncher = rememberLauncherForActivityResult(
+        ActivityResultContracts.GetContent()
     ) { uri ->
         uri?.let { selectedUri ->
             coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
                 val homeDir = service.bootstrap?.homeDir ?: return@launch
                 val attachDir = File(homeDir, "attachments").also { it.mkdirs() }
                 val timestamp = System.currentTimeMillis()
-                val destFile = File(attachDir, "$timestamp.png")
+                // Derive extension from MIME type or URI
+                val mime = context.contentResolver.getType(selectedUri)
+                val ext = when {
+                    mime?.startsWith("image/png") == true -> "png"
+                    mime?.startsWith("image/jpeg") == true || mime?.startsWith("image/jpg") == true -> "jpg"
+                    mime?.startsWith("image/") == true -> mime.substringAfter("/")
+                    else -> selectedUri.lastPathSegment?.substringAfterLast('.', "bin") ?: "bin"
+                }
+                val destFile = File(attachDir, "$timestamp.$ext")
                 try {
                     context.contentResolver.openInputStream(selectedUri)?.use { input ->
                         destFile.outputStream().use { output -> input.copyTo(output) }
@@ -163,9 +170,13 @@ fun ChatScreen(service: SessionService) {
                     onSend = { text ->
                         if (text.isNotBlank()) chatState.addUserMessage(text)
                         bridge?.writeInput(text + "\r")
-                        chatState.inputDraft = ""
+                        chatState.clearDraft()
                     },
                     onKeyPress = { seq -> bridge?.writeInput(seq) },
+                    onAttachImage = {
+                        filePickerLauncher.launch("*/*")
+                    },
+                    attachmentPath = attachmentPath,
                 )
             }
         }
@@ -212,9 +223,13 @@ fun ChatScreen(service: SessionService) {
                     onDraftChange = { chatState.inputDraft = it },
                     onSend = { text ->
                         shell.writeInput(text + "\r")
-                        chatState.inputDraft = ""
+                        chatState.clearDraft()
                     },
                     onKeyPress = { seq -> shell.writeInput(seq) },
+                    onAttachImage = {
+                        filePickerLauncher.launch("*/*")
+                    },
+                    attachmentPath = attachmentPath,
                 )
             }
         }
@@ -388,14 +403,14 @@ fun ChatScreen(service: SessionService) {
                         attachmentBitmap?.let { bmp ->
                             Image(
                                 bitmap = bmp.asImageBitmap(),
-                                contentDescription = "Attached image",
+                                contentDescription = "Attached file",
                                 modifier = Modifier
                                     .size(48.dp)
                                     .clip(RoundedCornerShape(6.dp)),
                             )
                         }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("Image attached", fontSize = 12.sp,
+                        Text("File attached", fontSize = 12.sp,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                         Spacer(modifier = Modifier.weight(1f))
                         Icon(
@@ -418,7 +433,7 @@ fun ChatScreen(service: SessionService) {
                         .fillMaxWidth()
                         .background(MaterialTheme.colorScheme.background)
                         .padding(horizontal = 6.dp, vertical = 5.dp),
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalAlignment = Alignment.Bottom,
                     horizontalArrangement = Arrangement.spacedBy(4.dp),
                 ) {
                     Box(
@@ -434,6 +449,7 @@ fun ChatScreen(service: SessionService) {
                         BasicTextField(
                             value = chatState.inputDraft,
                             onValueChange = { chatState.inputDraft = it },
+                            cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                             singleLine = false,
                             maxLines = 5,
                             textStyle = androidx.compose.ui.text.TextStyle(
@@ -446,32 +462,28 @@ fun ChatScreen(service: SessionService) {
                                 .padding(horizontal = 10.dp, vertical = 10.dp)
                                 .verticalScroll(inputScrollState),
                             decorationBox = { innerTextField ->
-                                Row(
-                                    verticalAlignment = Alignment.Top,
-                                    modifier = Modifier.fillMaxWidth(),
-                                ) {
-                                    Box(modifier = Modifier.weight(1f)) {
-                                        if (chatState.inputDraft.isEmpty()) {
+                                Box(modifier = Modifier.fillMaxWidth()) {
+                                    Box(modifier = Modifier
+                                        .fillMaxWidth()
+                                        .padding(end = 24.dp)) {
+                                        if (chatState.inputDraft.text.isEmpty()) {
                                             Text("Type a message...", fontSize = 14.sp,
                                                 color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f))
                                         }
                                         innerTextField()
                                     }
                                     Icon(
-                                        Icons.Outlined.Image,
-                                        contentDescription = "Attach image",
+                                        com.destin.code.ui.theme.AppIcons.Attach,
+                                        contentDescription = "Attach file",
                                         tint = if (attachmentPath != null)
                                             Color(0xFFB0B0B0)
                                         else
                                             Color(0xFF555555),
                                         modifier = Modifier
                                             .size(20.dp)
+                                            .align(Alignment.BottomEnd)
                                             .clickable {
-                                                photoPickerLauncher.launch(
-                                                    PickVisualMediaRequest(
-                                                        ActivityResultContracts.PickVisualMedia.ImageOnly
-                                                    )
-                                                )
+                                                filePickerLauncher.launch("*/*")
                                             },
                                     )
                                 }
@@ -486,22 +498,23 @@ fun ChatScreen(service: SessionService) {
                             .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .clickable {
-                                if (chatState.inputDraft.isNotBlank() || attachmentPath != null) {
+                                val text = chatState.inputDraft.text
+                                if (text.isNotBlank() || attachmentPath != null) {
                                     val messageText = buildString {
                                         attachmentPath?.let { path ->
-                                            appendLine("[Image attached: $path]")
+                                            appendLine("[File attached: $path]")
                                             appendLine()
                                         }
-                                        append(chatState.inputDraft)
+                                        append(text)
                                     }.trim()
                                     val displayText = when {
-                                        attachmentPath != null && chatState.inputDraft.isBlank() -> "[image]"
-                                        attachmentPath != null -> "[image] ${chatState.inputDraft}"
-                                        else -> chatState.inputDraft
+                                        attachmentPath != null && text.isBlank() -> "[image]"
+                                        attachmentPath != null -> "[image] $text"
+                                        else -> text
                                     }
                                     chatState.addUserMessage(displayText)
                                     bridge?.writeInput(messageText + "\r")
-                                    chatState.inputDraft = ""
+                                    chatState.clearDraft()
                                     attachmentPath = null
                                     attachmentBitmap = null
                                 }
@@ -518,7 +531,7 @@ fun ChatScreen(service: SessionService) {
                     chips = defaultChips,
                     onChipTap = { chip ->
                         if (chip.needsCompletion) {
-                            chatState.inputDraft = chip.prompt
+                            chatState.setDraftText(chip.prompt)
                         } else {
                             chatState.addUserMessage(chip.prompt)
                             bridge?.writeInput(chip.prompt + "\r")
@@ -615,10 +628,12 @@ private fun ModeHeader(
 @Composable
 private fun TerminalInputBar(
     focusRequester: FocusRequester,
-    draft: String,
-    onDraftChange: (String) -> Unit,
+    draft: TextFieldValue,
+    onDraftChange: (TextFieldValue) -> Unit,
     onSend: (String) -> Unit,
     onKeyPress: (String) -> Unit,
+    onAttachImage: (() -> Unit)? = null,
+    attachmentPath: String? = null,
 ) {
     val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
 
@@ -626,25 +641,26 @@ private fun TerminalInputBar(
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(horizontal = 6.dp, vertical = 4.dp),
+                .padding(horizontal = 6.dp, vertical = 5.dp),
             verticalAlignment = Alignment.Bottom,
-            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
             Box(
                 modifier = Modifier
                     .weight(1f)
-                    .heightIn(min = 36.dp, max = 100.dp)
+                    .heightIn(min = 42.dp, max = 120.dp)
                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                     .background(MaterialTheme.colorScheme.surface)
                     .border(0.5.dp, borderColor.copy(alpha = 0.5f),
                         androidx.compose.foundation.shape.RoundedCornerShape(6.dp)),
-                contentAlignment = Alignment.CenterStart,
+                contentAlignment = Alignment.TopStart,
             ) {
                 BasicTextField(
                     value = draft,
                     onValueChange = onDraftChange,
+                    cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
                     singleLine = false,
-                    maxLines = 4,
+                    maxLines = 5,
                     textStyle = androidx.compose.ui.text.TextStyle(
                         fontSize = 14.sp,
                         fontFamily = com.destin.code.ui.theme.CascadiaMono,
@@ -654,23 +670,41 @@ private fun TerminalInputBar(
                         imeAction = ImeAction.Send,
                     ),
                     keyboardActions = KeyboardActions(onSend = {
-                        onSend(draft)
+                        onSend(draft.text)
                     }),
                     modifier = Modifier
                         .fillMaxWidth()
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .padding(horizontal = 10.dp, vertical = 10.dp)
                         .focusRequester(focusRequester),
                     decorationBox = { innerTextField ->
-                        Box {
-                            if (draft.isEmpty()) {
-                                Text(
-                                    "Type a message…",
-                                    fontSize = 14.sp,
-                                    fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                        Box(modifier = Modifier.fillMaxWidth()) {
+                            Box(modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(end = if (onAttachImage != null) 24.dp else 0.dp)) {
+                                if (draft.text.isEmpty()) {
+                                    Text(
+                                        "Type a message…",
+                                        fontSize = 14.sp,
+                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.35f),
+                                    )
+                                }
+                                innerTextField()
+                            }
+                            if (onAttachImage != null) {
+                                Icon(
+                                    com.destin.code.ui.theme.AppIcons.Attach,
+                                    contentDescription = "Attach file",
+                                    tint = if (attachmentPath != null)
+                                        Color(0xFFB0B0B0)
+                                    else
+                                        Color(0xFF555555),
+                                    modifier = Modifier
+                                        .size(20.dp)
+                                        .align(Alignment.BottomEnd)
+                                        .clickable { onAttachImage() },
                                 )
                             }
-                            innerTextField()
                         }
                     },
                 )
@@ -678,12 +712,12 @@ private fun TerminalInputBar(
 
             Box(
                 modifier = Modifier
-                    .size(36.dp)
+                    .size(42.dp)
                     .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                     .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
                     .border(0.5.dp, borderColor.copy(alpha = 0.5f),
                         androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                    .clickable { onSend(draft) },
+                    .clickable { onSend(draft.text) },
                 contentAlignment = Alignment.Center,
             ) {
                 Icon(

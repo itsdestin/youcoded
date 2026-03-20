@@ -172,6 +172,38 @@ object AppIcons {
     }
 
     /**
+     * Paperclip attachment icon — angled paperclip shape.
+     * Stroke-only, matches the terminal/chat icon style.
+     */
+    val Attach: ImageVector by lazy {
+        ImageVector.Builder(
+            name = "Attach",
+            defaultWidth = 24.dp,
+            defaultHeight = 24.dp,
+            viewportWidth = 24f,
+            viewportHeight = 24f
+        ).apply {
+            path(
+                fill = null,
+                stroke = SolidColor(Color.Black),
+                strokeLineWidth = 1.8f,
+                strokeLineCap = StrokeCap.Round,
+                strokeLineJoin = StrokeJoin.Round,
+            ) {
+                // Paperclip shape: bottom-up, inner loop
+                moveTo(15.5f, 6f)
+                lineTo(15.5f, 15.5f)
+                arcTo(3.5f, 3.5f, 0f, false, true, 8.5f, 15.5f)
+                lineTo(8.5f, 7f)
+                arcTo(2f, 2f, 0f, false, true, 12.5f, 7f)
+                lineTo(12.5f, 15.5f)
+                arcTo(0.5f, 0.5f, 0f, false, true, 11.5f, 15.5f)
+                lineTo(11.5f, 8.5f)
+            }
+        }.build()
+    }
+
+    /**
      * App icon — squat rounded character with >< eyes, nub arms, stubby legs.
      * Body + eyes use EvenOdd so eyes are cutouts (works with Icon tint).
      * Arms and legs are separate filled paths.
