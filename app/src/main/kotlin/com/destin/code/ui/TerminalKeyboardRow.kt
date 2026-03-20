@@ -72,15 +72,6 @@ fun TerminalKeyboardRow(
             sendKey("\u001b[C", ctrlActive, onKeyPress) { ctrlActive = false }
         }
 
-        // Enter
-        SmallPill(
-            "⏎",
-            isPrimary = true,
-            borderColor = borderColor,
-            modifier = Modifier.weight(0.85f).height(36.dp),
-        ) {
-            sendKey("\r", ctrlActive, onKeyPress) { ctrlActive = false }
-        }
     }
 }
 
