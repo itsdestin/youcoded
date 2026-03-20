@@ -465,7 +465,7 @@ fun ChatScreen(service: SessionService) {
                                     }.trim()
                                     val displayText = when {
                                         attachmentPath != null && chatState.inputDraft.isBlank() -> "[image]"
-                                        attachmentPath != null -> "[image] $chatState.inputDraft"
+                                        attachmentPath != null -> "[image] ${chatState.inputDraft}"
                                         else -> chatState.inputDraft
                                     }
                                     chatState.addUserMessage(displayText)
