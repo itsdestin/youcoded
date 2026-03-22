@@ -12,10 +12,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
+import com.destin.code.config.TierStore
 import com.destin.code.runtime.Bootstrap
 import com.destin.code.runtime.ServiceBinder
 import com.destin.code.ui.ChatScreen
 import com.destin.code.ui.SetupScreen
+import com.destin.code.ui.TierPickerScreen
 import com.destin.code.ui.theme.DestinCodeTheme
 import com.destin.code.ui.theme.ThemeMode
 
@@ -26,6 +28,7 @@ class MainActivity : ComponentActivity() {
         enableEdgeToEdge()
 
         val bootstrap = Bootstrap(applicationContext)
+        val tierStore = TierStore(applicationContext)
 
         setContent {
             var themeMode by remember { mutableStateOf(ThemeMode.DARK) }
@@ -48,23 +51,47 @@ class MainActivity : ComponentActivity() {
                         var progress by remember { mutableStateOf<Bootstrap.Progress?>(null) }
 
                         if (!isReady) {
-                            var setupAttempt by remember { mutableIntStateOf(0) }
-                            SetupScreen(
-                                progress = progress,
-                                onRetry = {
-                                    progress = null
-                                    setupAttempt++
-                                },
-                            )
-                            LaunchedEffect(setupAttempt) {
-                                bootstrap.setup { p ->
-                                    progress = p
-                                    if (p is Bootstrap.Progress.Complete) {
-                                        isReady = true
+                            // Track tier selection in Compose state (SharedPreferences
+                            // writes are NOT observable by Compose — need a bridge)
+                            var tierSelected by remember { mutableStateOf(tierStore.hasSelected) }
+
+                            if (!tierSelected) {
+                                // First run — show tier picker
+                                TierPickerScreen(
+                                    onConfirm = { tier ->
+                                        tierStore.selectedTier = tier
+                                        bootstrap.packageTier = tier
+                                        tierSelected = true  // triggers recomposition
+                                    },
+                                )
+                            } else {
+                                // Tier selected — run bootstrap
+                                var setupAttempt by remember { mutableIntStateOf(0) }
+                                LaunchedEffect(Unit) {
+                                    bootstrap.packageTier = tierStore.selectedTier
+                                }
+                                SetupScreen(
+                                    progress = progress,
+                                    onRetry = {
+                                        progress = null
+                                        setupAttempt++
+                                    },
+                                )
+                                LaunchedEffect(setupAttempt) {
+                                    bootstrap.setup { p ->
+                                        progress = p
+                                        if (p is Bootstrap.Progress.Complete) {
+                                            isReady = true
+                                        }
                                     }
                                 }
                             }
                         } else {
+                            // Apply current tier setting for potential tier upgrade
+                            LaunchedEffect(Unit) {
+                                bootstrap.packageTier = tierStore.selectedTier
+                            }
+
                             // Boot self-test
                             val selfTestResult = remember(isReady) {
                                 if (isReady) bootstrap.selfTest() else null
