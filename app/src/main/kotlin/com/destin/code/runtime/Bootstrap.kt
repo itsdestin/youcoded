@@ -1025,7 +1025,12 @@ class Bootstrap(private val context: Context) {
                 val isScript = header[0] == '#'.code.toByte() &&
                     header[1] == '!'.code.toByte()
 
-                if (isElf) {
+                if (isElf && n == "make") {
+                    // GNU make ignores the SHELL env var and uses its compiled-in
+                    // default (/data/data/com.termux/.../bin/sh). Override via
+                    // command-line variable assignment which takes highest priority.
+                    sb.appendLine("""$n() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$filePath" "SHELL=$usrPath/bin/bash" "${'$'}{__FT[@]}"; }""")
+                } else if (isElf) {
                     sb.appendLine("""$n() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$filePath" "${'$'}{__FT[@]}"; }""")
                 } else if (isScript) {
                     val shebangLine = String(header, 0, bytesRead)
