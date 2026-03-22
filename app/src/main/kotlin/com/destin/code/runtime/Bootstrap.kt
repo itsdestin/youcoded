@@ -346,27 +346,24 @@ class Bootstrap(private val context: Context) {
             "nano" -> "bin/nano"
             // Tier 2: Full Dev Environment
             "libsodium" -> "lib/libsodium.so"
-            "vim" -> "bin/vim"
-            "libmsgpack" -> "lib/libmsgpackc.so"
+            "vim" -> "libexec/vim/vim"
+            "libmsgpack" -> "lib/libmsgpack-c.so"
             "libunibilium" -> "lib/libunibilium.so"
             "libuv" -> "lib/libuv.so"
             "libvterm" -> "lib/libvterm.so"
             "lua51" -> "lib/liblua5.1.so"
-            "lua51-lpeg" -> return usrDir.resolve("lib/lua/5.1").listFiles()
-                ?.any { it.name.startsWith("lpeg") } == true
+            "lua51-lpeg" -> "lib/lua/5.1/lpeg.so"
             "luajit" -> "bin/luajit"
-            "luv" -> return usrDir.resolve("lib/lua/5.1").listFiles()
-                ?.any { it.name.startsWith("luv") } == true
+            "luv" -> "lib/libluv.so"
             "tree-sitter" -> "lib/libtree-sitter.so"
-            "tree-sitter-c" -> return File(usrDir, "lib/tree-sitter/c.so").exists()
-            "tree-sitter-lua" -> return File(usrDir, "lib/tree-sitter/lua.so").exists()
-            "tree-sitter-markdown" -> return File(usrDir, "lib/tree-sitter/markdown.so").exists()
-            "tree-sitter-query" -> return File(usrDir, "lib/tree-sitter/query.so").exists()
-            "tree-sitter-vimdoc" -> return File(usrDir, "lib/tree-sitter/vimdoc.so").exists()
-            "tree-sitter-vim" -> return File(usrDir, "lib/tree-sitter/vim.so").exists()
-            "tree-sitter-parsers" -> return File(usrDir, "lib/tree-sitter").let {
-                it.exists() && (it.listFiles()?.size ?: 0) >= 6
-            }
+            // Tree-sitter parsers install as lib/libtree-sitter-{lang}.so
+            "tree-sitter-c" -> "lib/libtree-sitter-c.so"
+            "tree-sitter-lua" -> "lib/libtree-sitter-lua.so"
+            "tree-sitter-markdown" -> "lib/libtree-sitter-markdown.so"
+            "tree-sitter-query" -> "lib/libtree-sitter-query.so"
+            "tree-sitter-vimdoc" -> "lib/libtree-sitter-vimdoc.so"
+            "tree-sitter-vim" -> "lib/libtree-sitter-vim.so"
+            "tree-sitter-parsers" -> "lib/libtree-sitter-c.so" // meta-package; check any parser
             "utf8proc" -> "lib/libutf8proc.so"
             "neovim" -> "bin/nvim"
             "make" -> "bin/make"
@@ -421,6 +418,28 @@ class Bootstrap(private val context: Context) {
                 primarySo.outputStream().use { output -> input.copyTo(output) }
             }
             primarySo.setExecutable(true)
+        }
+
+        // Post-install symlinks — Termux packages rely on post-install scripts
+        // to create bin/ symlinks for binaries in libexec/. We don't run those
+        // scripts, so create the symlinks manually.
+        val symlinks = mapOf(
+            "bin/vim" to "../libexec/vim/vim",
+            "bin/vi" to "../libexec/vim/vim",
+            "bin/vimdiff" to "../libexec/vim/vim",
+        )
+        for ((link, target) in symlinks) {
+            val linkFile = File(usrDir, link)
+            val targetFile = File(usrDir, link.substringBeforeLast("/") + "/" + target)
+            // Only create if target exists and link doesn't
+            if (!linkFile.exists() && targetFile.canonicalFile.exists()) {
+                try {
+                    java.nio.file.Files.createSymbolicLink(
+                        linkFile.toPath(),
+                        java.nio.file.Paths.get(target)
+                    )
+                } catch (_: Exception) {}
+            }
         }
     }
 
