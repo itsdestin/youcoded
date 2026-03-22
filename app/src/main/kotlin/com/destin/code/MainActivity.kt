@@ -47,7 +47,12 @@ class MainActivity : ComponentActivity() {
                             .navigationBarsPadding()
                             .imePadding()
                     ) {
-                        var isReady by remember { mutableStateOf(bootstrap.isBootstrapped) }
+                        // Check both core bootstrap AND tier satisfaction —
+                        // if user upgraded tiers, we need to re-enter setup to install packages
+                        bootstrap.packageTier = tierStore.selectedTier
+                        var isReady by remember {
+                            mutableStateOf(bootstrap.isBootstrapped && bootstrap.isTierSatisfied())
+                        }
                         var progress by remember { mutableStateOf<Bootstrap.Progress?>(null) }
 
                         if (!isReady) {
@@ -87,9 +92,6 @@ class MainActivity : ComponentActivity() {
                                 }
                             }
                         } else {
-                            // Apply current tier setting for potential tier upgrade
-                            bootstrap.packageTier = tierStore.selectedTier
-
                             // Boot self-test
                             val selfTestResult = remember(isReady) {
                                 if (isReady) bootstrap.selfTest() else null
