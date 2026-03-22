@@ -15,8 +15,6 @@ import androidx.compose.ui.unit.sp
 import com.destin.code.config.PackageTier
 import com.destin.code.ui.theme.CascadiaMono
 
-private val SIENNA = Color(0xFFc96442)
-
 @Composable
 fun TierPickerScreen(
     initialTier: PackageTier = PackageTier.DEVELOPER,
@@ -61,7 +59,7 @@ fun TierPickerScreen(
             modifier = Modifier
                 .fillMaxWidth()
                 .height(48.dp),
-            colors = ButtonDefaults.buttonColors(containerColor = SIENNA),
+            colors = ButtonDefaults.buttonColors(containerColor = MaterialTheme.colorScheme.primary),
             shape = RoundedCornerShape(8.dp),
         ) {
             Text("Continue", fontSize = 16.sp)
@@ -76,7 +74,8 @@ private fun TierCard(
     isSelected: Boolean,
     onClick: () -> Unit,
 ) {
-    val border = if (isSelected) BorderStroke(2.dp, SIENNA) else BorderStroke(1.dp, Color(0xFF333333))
+    val accentColor = MaterialTheme.colorScheme.primary
+    val border = if (isSelected) BorderStroke(2.dp, accentColor) else BorderStroke(1.dp, Color(0xFF333333))
     val bg = if (isSelected) Color(0xFF1a1a1a) else Color(0xFF111111)
 
     Card(
@@ -94,7 +93,7 @@ private fun TierCard(
             RadioButton(
                 selected = isSelected,
                 onClick = onClick,
-                colors = RadioButtonDefaults.colors(selectedColor = SIENNA),
+                colors = RadioButtonDefaults.colors(selectedColor = accentColor),
             )
             Spacer(modifier = Modifier.width(8.dp))
             Column(modifier = Modifier.weight(1f)) {
@@ -102,7 +101,7 @@ private fun TierCard(
                     tier.displayName,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,
-                    color = if (isSelected) SIENNA else MaterialTheme.colorScheme.onSurface,
+                    color = if (isSelected) accentColor else MaterialTheme.colorScheme.onSurface,
                 )
                 Spacer(modifier = Modifier.height(4.dp))
                 Text(
