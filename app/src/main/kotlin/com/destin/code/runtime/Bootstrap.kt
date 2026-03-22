@@ -1139,6 +1139,10 @@ class Bootstrap(private val context: Context) {
             // have Termux paths baked in — override with our relocated prefix.
             put("GIT_EXEC_PATH", "$usr/libexec/git-core")
             put("GIT_TEMPLATE_DIR", "$usr/share/git-core/templates")
+            // Vim has the Termux prefix baked in for $VIM/$VIMRUNTIME.
+            // Override so it can find defaults.vim, syntax files, etc.
+            put("VIM", "$usr/share/vim")
+            put("VIMRUNTIME", "$usr/share/vim/vim92")
             put("TMPDIR", "$home/tmp")
             // Claude Code uses CLAUDE_CODE_TMPDIR for its own temp files
             // (sandbox dirs, etc.). Falls back to /tmp which doesn't exist on Android.
