@@ -23,6 +23,10 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.ui.text.font.FontWeight
+import com.destin.code.config.PackageTier
+import com.destin.code.config.TierStore
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
@@ -45,7 +49,7 @@ import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import com.destin.code.config.defaultChips
+import com.destin.code.config.chipsForTier
 import com.destin.code.runtime.BaseTerminalViewClient
 import com.destin.code.runtime.DirectShellBridge
 import com.destin.code.runtime.SessionService
@@ -86,6 +90,8 @@ fun ChatScreen(service: SessionService) {
     DisposableEffect(Unit) { onDispose { directShellBridge?.stop() } }
     val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
+    val tierStore = remember { TierStore(context) }
+    var showTierDialog by remember { mutableStateOf(false) }
 
     // Session switcher state
     var switcherExpanded by remember { mutableStateOf(false) }
@@ -386,6 +392,19 @@ fun ChatScreen(service: SessionService) {
                             DropdownMenuItem(
                                 text = {
                                     Text(
+                                        "Package Tier",
+                                        fontSize = 13.sp,
+                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                                    )
+                                },
+                                onClick = {
+                                    menuExpanded = false
+                                    showTierDialog = true
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = {
+                                    Text(
                                         "Theme",
                                         fontSize = 13.sp,
                                         fontFamily = com.destin.code.ui.theme.CascadiaMono,
@@ -612,7 +631,7 @@ fun ChatScreen(service: SessionService) {
 
                 // Quick chips
                 QuickChips(
-                    chips = defaultChips,
+                    tier = tierStore.selectedTier,
                     onChipTap = { chip ->
                         if (chip.needsCompletion) {
                             chatState.setDraftText(chip.prompt)
@@ -626,6 +645,49 @@ fun ChatScreen(service: SessionService) {
         }
 
         } // when
+    }
+
+    // Tier change dialog
+    if (showTierDialog) {
+        var dialogTier by remember { mutableStateOf(tierStore.selectedTier) }
+
+        AlertDialog(
+            onDismissRequest = { showTierDialog = false },
+            title = { Text("Package Tier") },
+            text = {
+                Column {
+                    PackageTier.entries.forEach { tier ->
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { dialogTier = tier }
+                                .padding(vertical = 8.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            RadioButton(
+                                selected = dialogTier == tier,
+                                onClick = { dialogTier = tier },
+                            )
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Column {
+                                Text(tier.displayName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                Text(tier.description, fontSize = 12.sp,
+                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                            }
+                        }
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    tierStore.selectedTier = dialogTier
+                    showTierDialog = false
+                }) { Text("Save") }
+            },
+            dismissButton = {
+                TextButton(onClick = { showTierDialog = false }) { Text("Cancel") }
+            },
+        )
     }
 
     // New session dialog

@@ -15,12 +15,15 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.destin.code.config.PackageTier
 import com.destin.code.config.QuickChip
+import com.destin.code.config.chipsForTier
 import com.destin.code.ui.theme.DestinCodeTheme
 
 @Composable
 fun QuickChips(
-    chips: List<QuickChip>,
+    tier: PackageTier = PackageTier.CORE,
+    chips: List<QuickChip> = chipsForTier(tier),
     onChipTap: (QuickChip) -> Unit,
     modifier: Modifier = Modifier,
 ) {
