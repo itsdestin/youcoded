@@ -881,6 +881,25 @@ class Bootstrap(private val context: Context) {
         // /data/data/com.termux/ paths that must be overridden via config/flags.
         val pkgManagerOverrides = setOf("apt", "apt-get", "apt-cache", "apt-key", "dpkg", "dpkg-deb", "pkg")
         val sb = StringBuilder("# linker64 wrapper functions for embedded binaries\n")
+        // Helper function to rewrite /tmp and /var/tmp paths in command arguments.
+        // Android has no /tmp — we redirect to $HOME/tmp. This fixes install scripts
+        // and other programs that hardcode /tmp paths in arguments (e.g. curl -o /tmp/file).
+        sb.appendLine()
+        sb.appendLine("# Rewrite /tmp paths in command arguments — Android has no /tmp")
+        sb.appendLine("""__fix_tmp() {
+  __FT=()
+  for __ft_a in "${'$'}@"; do
+    case "${'$'}__ft_a" in
+      /tmp)       __FT+=("${'$'}HOME/tmp") ;;
+      /tmp/*)     __FT+=("${'$'}HOME/tmp/${'$'}{__ft_a#/tmp/}") ;;
+      /var/tmp)   __FT+=("${'$'}HOME/tmp") ;;
+      /var/tmp/*) __FT+=("${'$'}HOME/tmp/${'$'}{__ft_a#/var/tmp/}") ;;
+      *=/tmp)     __FT+=("${'$'}{__ft_a%=/tmp}=${'$'}HOME/tmp") ;;
+      *=/tmp/*)   __FT+=("${'$'}{__ft_a%%=/tmp/*}=${'$'}HOME/tmp/${'$'}{__ft_a#*=/tmp/}") ;;
+      *)          __FT+=("${'$'}__ft_a") ;;
+    esac
+  done
+}""")
         val functionNames = mutableListOf<String>()
         // Track generated functions to avoid duplicates when scanning multiple dirs
         val generated = mutableSetOf<String>()
@@ -916,7 +935,7 @@ class Bootstrap(private val context: Context) {
                     header[1] == '!'.code.toByte()
 
                 if (isElf) {
-                    sb.appendLine("""$n() { /system/bin/linker64 "$filePath" "${'$'}@"; }""")
+                    sb.appendLine("""$n() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$filePath" "${'$'}{__FT[@]}"; }""")
                 } else if (isScript) {
                     val shebangLine = String(header, 0, bytesRead)
                         .lines().first().removePrefix("#!").trim()
@@ -926,10 +945,10 @@ class Bootstrap(private val context: Context) {
 
                     if (interpreter.endsWith("/env") && interpArgs.isNotEmpty()) {
                         val prog = interpArgs[0]
-                        sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$prog" "$filePath" "${'$'}@"; }""")
+                        sb.appendLine("""$n() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$usrPath/bin/$prog" "$filePath" "${'$'}{__FT[@]}"; }""")
                     } else {
                         val interpName = File(interpreter).name
-                        sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/$interpName" "$filePath" "${'$'}@"; }""")
+                        sb.appendLine("""$n() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$usrPath/bin/$interpName" "$filePath" "${'$'}{__FT[@]}"; }""")
                     }
                 } else {
                     val headerStr = String(header, 0, bytesRead.coerceAtMost(64))
@@ -942,9 +961,9 @@ class Bootstrap(private val context: Context) {
                         headerStr.startsWith("/*") ||
                         headerStr.startsWith("module.exports")
                     if (looksLikeJs) {
-                        sb.appendLine("""$n() { /system/bin/linker64 "$usrPath/bin/node" "$filePath" "${'$'}@"; }""")
+                        sb.appendLine("""$n() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$usrPath/bin/node" "$filePath" "${'$'}{__FT[@]}"; }""")
                     } else {
-                        sb.appendLine("""$n() { /system/bin/linker64 "$filePath" "${'$'}@"; }""")
+                        sb.appendLine("""$n() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$filePath" "${'$'}{__FT[@]}"; }""")
                     }
                 }
                 generated.add(n)
@@ -956,6 +975,27 @@ class Bootstrap(private val context: Context) {
         scanBinDir(binDir, "$usrPath/bin")
         scanBinDir(File(homeDir, ".local/bin"), "~/.local/bin")
 
+        // Shell wrappers — bash and sh are in the skip set (we don't want the auto-scan
+        // to generate standard linker64 wrappers for them) but they DO need /tmp rewriting.
+        // Without these, `bash /tmp/install.sh` fails because bash opens the literal path.
+        // Subshells via (...) fork the process and don't invoke these functions.
+        sb.appendLine()
+        sb.appendLine("# Shell wrappers — /tmp rewriting for script arguments")
+        val bashBin = File(binDir, "bash")
+        if (bashBin.exists()) {
+            sb.appendLine("""bash() { __fix_tmp "${'$'}@"; /system/bin/linker64 "${bashBin.absolutePath}" "${'$'}{__FT[@]}"; }""")
+            functionNames.add("bash")
+        }
+        val shBin = File(binDir, "sh")
+        if (shBin.exists() && shBin.canonicalPath != bashBin.canonicalPath) {
+            sb.appendLine("""sh() { __fix_tmp "${'$'}@"; /system/bin/linker64 "${shBin.absolutePath}" "${'$'}{__FT[@]}"; }""")
+            functionNames.add("sh")
+        } else if (shBin.exists()) {
+            // sh is a link to bash — use the same wrapper
+            sb.appendLine("""sh() { bash "${'$'}@"; }""")
+            functionNames.add("sh")
+        }
+
         // Package manager functions — override hardcoded /data/data/com.termux/ paths.
         // apt reads APT_CONFIG env var which points to our apt.conf with all Dir overrides.
         // dpkg needs --admindir and --instdir flags at every invocation.
@@ -966,16 +1006,16 @@ class Bootstrap(private val context: Context) {
 
         for (aptCmd in listOf("apt", "apt-get", "apt-cache", "apt-key")) {
             if (File(binDir, aptCmd).exists()) {
-                sb.appendLine("""$aptCmd() { APT_CONFIG="$aptConf" /system/bin/linker64 "$usrPath/bin/$aptCmd" "${'$'}@"; }""")
+                sb.appendLine("""$aptCmd() { __fix_tmp "${'$'}@"; APT_CONFIG="$aptConf" /system/bin/linker64 "$usrPath/bin/$aptCmd" "${'$'}{__FT[@]}"; }""")
                 functionNames.add(aptCmd)
             }
         }
         if (File(binDir, "dpkg").exists()) {
-            sb.appendLine("""dpkg() { /system/bin/linker64 "$usrPath/bin/dpkg" --admindir="$dpkgAdmin" "${'$'}@"; }""")
+            sb.appendLine("""dpkg() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$usrPath/bin/dpkg" --admindir="$dpkgAdmin" "${'$'}{__FT[@]}"; }""")
             functionNames.add("dpkg")
         }
         if (File(binDir, "dpkg-deb").exists()) {
-            sb.appendLine("""dpkg-deb() { /system/bin/linker64 "$usrPath/bin/dpkg-deb" "${'$'}@"; }""")
+            sb.appendLine("""dpkg-deb() { __fix_tmp "${'$'}@"; /system/bin/linker64 "$usrPath/bin/dpkg-deb" "${'$'}{__FT[@]}"; }""")
             functionNames.add("dpkg-deb")
         }
         // pkg is Termux's friendly wrapper — redirect to our configured apt
@@ -1018,6 +1058,7 @@ class Bootstrap(private val context: Context) {
         if (functionNames.isNotEmpty()) {
             sb.appendLine()
             sb.appendLine("# Export functions for subshells")
+            sb.appendLine("export -f __fix_tmp 2>/dev/null")
             for (n in functionNames) {
                 sb.appendLine("export -f $n 2>/dev/null")
             }
