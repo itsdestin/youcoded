@@ -650,44 +650,80 @@ fun ChatScreen(service: SessionService) {
     // Tier change dialog
     if (showTierDialog) {
         var dialogTier by remember { mutableStateOf(tierStore.selectedTier) }
+        var showRestartConfirm by remember { mutableStateOf(false) }
 
-        AlertDialog(
-            onDismissRequest = { showTierDialog = false },
-            title = { Text("Package Tier") },
-            text = {
-                Column {
-                    PackageTier.entries.forEach { tier ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable { dialogTier = tier }
-                                .padding(vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            RadioButton(
-                                selected = dialogTier == tier,
-                                onClick = { dialogTier = tier },
-                            )
-                            Spacer(modifier = Modifier.width(8.dp))
-                            Column {
-                                Text(tier.displayName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                Text(tier.description, fontSize = 12.sp,
-                                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+        if (!showRestartConfirm) {
+            AlertDialog(
+                onDismissRequest = { showTierDialog = false },
+                title = { Text("Package Tier") },
+                text = {
+                    Column {
+                        PackageTier.entries.forEach { tier ->
+                            Row(
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { dialogTier = tier }
+                                    .padding(vertical = 8.dp),
+                                verticalAlignment = Alignment.CenterVertically,
+                            ) {
+                                RadioButton(
+                                    selected = dialogTier == tier,
+                                    onClick = { dialogTier = tier },
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Column {
+                                    Text(tier.displayName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+                                    Text(tier.description, fontSize = 12.sp,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                                }
                             }
                         }
                     }
-                }
-            },
-            confirmButton = {
-                TextButton(onClick = {
-                    tierStore.selectedTier = dialogTier
-                    showTierDialog = false
-                }) { Text("Save") }
-            },
-            dismissButton = {
-                TextButton(onClick = { showTierDialog = false }) { Text("Cancel") }
-            },
-        )
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        if (dialogTier != tierStore.selectedTier) {
+                            tierStore.selectedTier = dialogTier
+                            showRestartConfirm = true
+                        } else {
+                            showTierDialog = false
+                        }
+                    }) { Text("Save") }
+                },
+                dismissButton = {
+                    TextButton(onClick = { showTierDialog = false }) { Text("Cancel") }
+                },
+            )
+        } else {
+            AlertDialog(
+                onDismissRequest = { showTierDialog = false },
+                title = { Text("Tier Updated") },
+                text = {
+                    Text("Package tier changed to ${dialogTier.displayName}. " +
+                        "Restart now to install new packages.")
+                },
+                confirmButton = {
+                    TextButton(onClick = {
+                        // Kill process and relaunch — bootstrap will install missing packages
+                        val launchIntent = context.packageManager
+                            .getLaunchIntentForPackage(context.packageName)
+                        if (launchIntent != null) {
+                            launchIntent.addFlags(
+                                android.content.Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                                android.content.Intent.FLAG_ACTIVITY_NEW_TASK
+                            )
+                            context.startActivity(launchIntent)
+                        }
+                        kotlin.system.exitProcess(0)
+                    }) { Text("Restart Now") }
+                },
+                dismissButton = {
+                    TextButton(onClick = {
+                        showTierDialog = false
+                    }) { Text("Later") }
+                },
+            )
+        }
     }
 
     // New session dialog

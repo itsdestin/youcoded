@@ -152,6 +152,20 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                     Text("Retry")
                 }
             }
+            is Bootstrap.Progress.TierUpgradeComplete -> {
+                Text(
+                    "Packages installed",
+                    fontSize = 16.sp,
+                    fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                Spacer(modifier = Modifier.height(4.dp))
+                Text(
+                    "${progress.tierName} tier is ready",
+                    fontSize = 14.sp,
+                    color = DestinCodeTheme.extended.textSecondary,
+                )
+            }
             is Bootstrap.Progress.Complete -> {
                 Text("Ready!", color = MaterialTheme.colorScheme.secondary)
             }

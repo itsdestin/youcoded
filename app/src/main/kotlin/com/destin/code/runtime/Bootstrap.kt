@@ -40,6 +40,8 @@ class Bootstrap(private val context: Context) {
         data class Installing(val packageName: String, val overallPercent: Int = -1) : Progress()
         data class Error(val message: String) : Progress()
         data object Complete : Progress()
+        /** Shown briefly after a tier upgrade installs new packages. */
+        data class TierUpgradeComplete(val tierName: String) : Progress()
     }
 
     suspend fun setup(onProgress: (Progress) -> Unit) = withContext(Dispatchers.IO) {
@@ -54,6 +56,8 @@ class Bootstrap(private val context: Context) {
             } else if (!isTierSatisfied()) {
                 // Tier was upgraded — install new packages only
                 installPackages(onProgress)
+                onProgress(Progress.TierUpgradeComplete(packageTier.displayName))
+                kotlinx.coroutines.delay(2000) // Show success briefly
             }
             onProgress(Progress.Complete)
         } catch (e: Exception) {
