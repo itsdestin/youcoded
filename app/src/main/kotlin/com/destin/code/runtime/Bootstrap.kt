@@ -63,15 +63,24 @@ class Bootstrap(private val context: Context) {
             // Termux packages rely on post-install scripts for these, which we
             // don't run. Placed here instead of installPackages() so symlinks
             // are created even when no new packages need installing.
-            createPostInstallSymlinks()
+            applyPostInstallFixups()
             onProgress(Progress.Complete)
         } catch (e: Exception) {
             onProgress(Progress.Error(e.message ?: "Unknown error"))
         }
     }
 
-    /** Create bin/ symlinks for binaries that live in libexec/. Idempotent. */
-    private fun createPostInstallSymlinks() {
+    /**
+     * Post-install fixups for packages with hardcoded Termux paths.
+     * Runs every launch (idempotent). Handles:
+     * - Symlinks for binaries in libexec/
+     * - Wrapper script rewrites (nvim has hardcoded paths in its shell wrapper)
+     */
+    private fun applyPostInstallFixups() {
+        val usr = usrDir.absolutePath
+        val termuxUsr = "/data/data/com.termux/files/usr"
+
+        // 1. Symlinks — bin/ entries for binaries in libexec/
         val symlinks = mapOf(
             "bin/vim" to "../libexec/vim/vim",
             "bin/vi" to "../libexec/vim/vim",
@@ -87,6 +96,17 @@ class Bootstrap(private val context: Context) {
                         java.nio.file.Paths.get(target)
                     )
                 } catch (_: Exception) {}
+            }
+        }
+
+        // 2. Rewrite nvim wrapper script — it has hardcoded Termux paths to
+        // libluajit.so and the actual nvim binary in libexec/nvim/nvim.
+        val nvimWrapper = File(usrDir, "bin/nvim")
+        if (nvimWrapper.exists() && nvimWrapper.isFile) {
+            val content = nvimWrapper.readText()
+            if (content.contains(termuxUsr)) {
+                nvimWrapper.writeText(content.replace(termuxUsr, usr))
+                nvimWrapper.setExecutable(true)
             }
         }
     }
@@ -1143,6 +1163,14 @@ class Bootstrap(private val context: Context) {
             // Override so it can find defaults.vim, syntax files, etc.
             put("VIM", "$usr/share/vim")
             put("VIMRUNTIME", "$usr/share/vim/vim92")
+            // Nano looks for nanorc at the hardcoded Termux path.
+            val nanorc = "$usr/etc/nanorc"
+            if (File(nanorc).exists()) put("NANORC", nanorc)
+            // Tmux uses a hardcoded tmpdir for its socket.
+            put("TMUX_TMPDIR", "$home/tmp")
+            // CMake needs to find its modules at the relocated prefix.
+            val cmakeRoot = "$usr/share/cmake"
+            if (File(cmakeRoot).isDirectory) put("CMAKE_ROOT", cmakeRoot)
             put("TMPDIR", "$home/tmp")
             // Claude Code uses CLAUDE_CODE_TMPDIR for its own temp files
             // (sandbox dirs, etc.). Falls back to /tmp which doesn't exist on Android.
