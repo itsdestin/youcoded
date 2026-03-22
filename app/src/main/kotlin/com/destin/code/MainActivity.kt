@@ -66,10 +66,10 @@ class MainActivity : ComponentActivity() {
                                 )
                             } else {
                                 // Tier selected — run bootstrap
+                                // Set tier SYNCHRONOUSLY before setup() launches —
+                                // LaunchedEffect would race with the setup() coroutine
+                                bootstrap.packageTier = tierStore.selectedTier
                                 var setupAttempt by remember { mutableIntStateOf(0) }
-                                LaunchedEffect(Unit) {
-                                    bootstrap.packageTier = tierStore.selectedTier
-                                }
                                 SetupScreen(
                                     progress = progress,
                                     onRetry = {
@@ -88,9 +88,7 @@ class MainActivity : ComponentActivity() {
                             }
                         } else {
                             // Apply current tier setting for potential tier upgrade
-                            LaunchedEffect(Unit) {
-                                bootstrap.packageTier = tierStore.selectedTier
-                            }
+                            bootstrap.packageTier = tierStore.selectedTier
 
                             // Boot self-test
                             val selfTestResult = remember(isReady) {
