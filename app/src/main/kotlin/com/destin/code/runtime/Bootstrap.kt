@@ -14,6 +14,7 @@ import org.apache.commons.compress.archivers.ar.ArArchiveInputStream
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.tukaani.xz.XZInputStream
 import com.github.luben.zstd.ZstdInputStream
+import com.destin.code.config.PackageTier
 
 class Bootstrap(private val context: Context) {
 
@@ -24,6 +25,15 @@ class Bootstrap(private val context: Context) {
         File(usrDir, "lib/node_modules/npm").exists() &&
         File(usrDir, "lib/node_modules/@anthropic-ai/claude-code").exists()
     val isBootstrapped: Boolean get() = isExtracted && isFullySetup
+
+    /** The package tier to install. Set before calling setup(). */
+    var packageTier: PackageTier = PackageTier.CORE
+
+    /** True if all packages for the current tier are installed. */
+    fun isTierSatisfied(): Boolean {
+        val packages = requiredPackagesForTier()
+        return packages.all { packageFileExists(it) }
+    }
 
     sealed class Progress {
         data class Extracting(val percent: Int) : Progress()
@@ -41,6 +51,9 @@ class Bootstrap(private val context: Context) {
             if (!isFullySetup) {
                 installPackages(onProgress)
                 installClaudeCode(onProgress)
+            } else if (!isTierSatisfied()) {
+                // Tier was upgraded — install new packages only
+                installPackages(onProgress)
             }
             onProgress(Progress.Complete)
         } catch (e: Exception) {
@@ -250,29 +263,25 @@ class Bootstrap(private val context: Context) {
         }
     }
 
-    /** Packages required for DestinCode, in dependency order. */
-    private val requiredPackages = listOf(
-        // Core shared libs (used by multiple packages)
+    /** Core packages — always installed regardless of tier. */
+    private val corePackages = listOf(
         "libandroid-support", "libandroid-posix-semaphore", "openssl", "zlib",
         "libiconv", "libexpat", "pcre2",
-        // Node.js runtime + deps
         "c-ares", "libicu", "libsqlite", "nodejs", "npm",
-        // SELinux exec bypass
         "termux-exec",
-        // curl + deps (libcurl needs nghttp2/3, ngtcp2, libssh2)
         "libnghttp2", "libnghttp3", "libngtcp2", "libssh2", "libcurl", "curl",
-        // Git + deps
         "git",
-        // GitHub CLI + deps
         "openssh", "gh",
-        // Python + deps
         "gdbm", "libbz2", "libcrypt", "libffi", "liblzma",
         "ncurses", "ncurses-ui-libs", "readline", "python",
-        // wget + deps
         "libunistring", "libidn2", "libuuid", "wget",
-        // Cloud storage sync
         "rclone"
     )
+
+    /** Returns all packages to install based on the configured tier. */
+    private fun requiredPackagesForTier(): List<String> {
+        return corePackages + packageTier.allAdditionalPackages()
+    }
 
     /** Check files that indicate a package is properly installed. */
     private fun packageFileExists(name: String): Boolean {
@@ -314,6 +323,55 @@ class Bootstrap(private val context: Context) {
             "libidn2" -> "lib/libidn2.so"
             "libuuid" -> "lib/libuuid.so"
             "wget" -> "bin/wget"
+            // Tier 1: Developer Essentials
+            "fd" -> "bin/fd"
+            "micro" -> "bin/micro"
+            "tree" -> "bin/tree"
+            "ripgrep" -> "bin/rg"
+            "findutils" -> "bin/find"
+            "ncurses-utils" -> "bin/tput"
+            "fzf" -> "bin/fzf"
+            "oniguruma" -> "lib/libonig.so"
+            "jq" -> "bin/jq"
+            "libgit2" -> "lib/libgit2.so"
+            "bat" -> "bin/bat"
+            "eza" -> "bin/eza"
+            "libevent" -> "lib/libevent.so"
+            "libandroid-glob" -> "lib/libandroid-glob.so"
+            "tmux" -> "bin/tmux"
+            "nano" -> "bin/nano"
+            // Tier 2: Full Dev Environment
+            "libsodium" -> "lib/libsodium.so"
+            "vim" -> "bin/vim"
+            "libmsgpack" -> "lib/libmsgpackc.so"
+            "libunibilium" -> "lib/libunibilium.so"
+            "libuv" -> "lib/libuv.so"
+            "libvterm" -> "lib/libvterm.so"
+            "lua51" -> "lib/liblua5.1.so"
+            "lua51-lpeg" -> return usrDir.resolve("lib/lua/5.1").listFiles()
+                ?.any { it.name.startsWith("lpeg") } == true
+            "luajit" -> "bin/luajit"
+            "luv" -> return usrDir.resolve("lib/lua/5.1").listFiles()
+                ?.any { it.name.startsWith("luv") } == true
+            "tree-sitter" -> "lib/libtree-sitter.so"
+            "tree-sitter-c" -> return File(usrDir, "lib/tree-sitter/c.so").exists()
+            "tree-sitter-lua" -> return File(usrDir, "lib/tree-sitter/lua.so").exists()
+            "tree-sitter-markdown" -> return File(usrDir, "lib/tree-sitter/markdown.so").exists()
+            "tree-sitter-query" -> return File(usrDir, "lib/tree-sitter/query.so").exists()
+            "tree-sitter-vimdoc" -> return File(usrDir, "lib/tree-sitter/vimdoc.so").exists()
+            "tree-sitter-vim" -> return File(usrDir, "lib/tree-sitter/vim.so").exists()
+            "tree-sitter-parsers" -> return File(usrDir, "lib/tree-sitter").let {
+                it.exists() && (it.listFiles()?.size ?: 0) >= 6
+            }
+            "utf8proc" -> "lib/libutf8proc.so"
+            "neovim" -> "bin/nvim"
+            "make" -> "bin/make"
+            "libxml2" -> "lib/libxml2.so"
+            "libarchive" -> "lib/libarchive.so"
+            "jsoncpp" -> "lib/libjsoncpp.so"
+            "rhash" -> "lib/librhash.so"
+            "cmake" -> "bin/cmake"
+            "sqlite" -> "bin/sqlite3"
             else -> return false
         }
         return File(usrDir, checkFile).exists()
@@ -323,8 +381,9 @@ class Bootstrap(private val context: Context) {
         val index = fetchPackagesIndex()
         val installed = loadInstalledVersions()
 
-        val total = requiredPackages.size
-        for ((i, name) in requiredPackages.withIndex()) {
+        val packages = requiredPackagesForTier()
+        val total = packages.size
+        for ((i, name) in packages.withIndex()) {
             val pkg = index[name]
             if (pkg == null) {
                 Log.w("Bootstrap", "Package '$name' not found in Termux index — skipping")
