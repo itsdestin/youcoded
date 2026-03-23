@@ -161,6 +161,9 @@ fun ChatScreen(service: SessionService) {
             // Track whether user has scrolled up — suppress auto-scroll while they browse history.
             // topRow < 0 means scrolled up; topRow == 0 means at the bottom.
             var userScrolledUp by remember { mutableStateOf(false) }
+            // Track which session is currently attached to avoid re-attaching on every recomposition.
+            // Re-attaching resets the terminal view, causing text to flicker (write/unwrite/rewrite).
+            var attachedSession by remember { mutableStateOf<com.termux.terminal.TerminalSession?>(null) }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
@@ -179,12 +182,22 @@ fun ChatScreen(service: SessionService) {
                                 setTerminalViewClient(termViewClient)
                                 isFocusable = true
                                 isFocusableInTouchMode = true
-                                bridge?.getSession()?.let { attachSession(it) }
+                                bridge?.getSession()?.let {
+                                    attachSession(it)
+                                    attachedSession = it
+                                }
                             }
                         },
                         update = { view ->
-                            bridge?.getSession()?.let { view.attachSession(it) }
-                            applyTerminalColors(bridge?.getSession(), isDark)
+                            // Only re-attach when the session object actually changes (e.g. session
+                            // switch or relaunch). Re-attaching on every recomposition resets the
+                            // terminal view, causing visible text flicker.
+                            val session = bridge?.getSession()
+                            if (session != null && session !== attachedSession) {
+                                view.attachSession(session)
+                                attachedSession = session
+                            }
+                            applyTerminalColors(session, isDark)
                             @Suppress("UNUSED_EXPRESSION")
                             termScreenVersion
                             // Preserve user's scroll position when they've scrolled up into history.
@@ -258,6 +271,7 @@ fun ChatScreen(service: SessionService) {
             val shellViewClient = remember { BaseTerminalViewClient() }
             val shellScreenVersion by shell.screenVersion.collectAsState()
             var shellUserScrolledUp by remember { mutableStateOf(false) }
+            var shellAttachedSession by remember { mutableStateOf<com.termux.terminal.TerminalSession?>(null) }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
@@ -276,12 +290,19 @@ fun ChatScreen(service: SessionService) {
                             setTerminalViewClient(shellViewClient)
                             isFocusable = true
                             isFocusableInTouchMode = true
-                            shell.getSession()?.let { attachSession(it) }
+                            shell.getSession()?.let {
+                                attachSession(it)
+                                shellAttachedSession = it
+                            }
                         }
                     },
                     update = { view ->
-                        shell.getSession()?.let { view.attachSession(it) }
-                        applyTerminalColors(shell.getSession(), isDark)
+                        val session = shell.getSession()
+                        if (session != null && session !== shellAttachedSession) {
+                            view.attachSession(session)
+                            shellAttachedSession = session
+                        }
+                        applyTerminalColors(session, isDark)
                         @Suppress("UNUSED_EXPRESSION")
                         shellScreenVersion
                         // Same scroll-preservation as Terminal view
