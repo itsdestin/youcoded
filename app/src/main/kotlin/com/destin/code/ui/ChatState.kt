@@ -95,8 +95,8 @@ class ChatState {
     /** Timestamp when processing started — for timeout detection */
     private var processingStartedAt = 0L
 
-    /** If true, at least one hook event was received for the current processing cycle */
-    private var receivedHookEvent = false
+    /** Timestamp of the most recent hook event in the current processing cycle (0 = none yet) */
+    private var lastHookEventAt = 0L
 
     private var nextCardId = 0
     private fun nextId(): String = "card-${nextCardId++}"
@@ -112,22 +112,38 @@ class ChatState {
         expandedCardId = if (expandedCardId == cardId) null else cardId
     }
 
-    /** Reset stale processing state if no hook events arrived within timeout. */
+    /** Reset stale processing state based on time since last hook event.
+     *  - No hooks received at all: 15s timeout (assistant never saw the message)
+     *  - Hooks started but stalled: 30s since last hook (Stop event likely lost)
+     *  Called both from addUserMessage() and periodically from ManagedSession. */
     private fun resetStaleProcessing() {
         if (!isProcessing) return
-        val elapsed = System.currentTimeMillis() - processingStartedAt
-        // If 15s passed with no hook events, The assistant never saw the message — reset
-        if (!receivedHookEvent && elapsed > 15_000) {
-            isProcessing = false
-            queuedIds.clear()
-            // Un-queue any queued messages
-            for (i in messages.indices) {
-                if (messages[i].isQueued) {
-                    messages[i] = messages[i].copy(isQueued = false)
-                }
-            }
-            insertPos = messages.size
+        val now = System.currentTimeMillis()
+        val sinceStart = now - processingStartedAt
+        val sinceLastHook = if (lastHookEventAt > 0) now - lastHookEventAt else Long.MAX_VALUE
+        // 15s with no hooks at all, or 30s since last hook event
+        if ((lastHookEventAt == 0L && sinceStart > 15_000) ||
+            (lastHookEventAt > 0L && sinceLastHook > 30_000)) {
+            forceResetProcessing()
         }
+    }
+
+    /** Callable from ManagedSession for periodic health checks and session death cleanup. */
+    fun resetStaleProcessingPeriodic() {
+        resetStaleProcessing()
+    }
+
+    /** Force-clear all processing state and unqueue all messages. */
+    private fun forceResetProcessing() {
+        isProcessing = false
+        queuedIds.clear()
+        for (i in messages.indices) {
+            if (messages[i].isQueued) {
+                messages[i] = messages[i].copy(isQueued = false)
+            }
+        }
+        insertPos = messages.size
+        activeToolName = null
     }
 
     fun addUserMessage(text: String, isBtw: Boolean = false) {
@@ -145,7 +161,7 @@ class ChatState {
         } else {
             isProcessing = true
             processingStartedAt = System.currentTimeMillis()
-            receivedHookEvent = false
+            lastHookEventAt = 0L
             insertPos = messages.size // after this user message
         }
     }
@@ -162,7 +178,7 @@ class ChatState {
     }
 
     fun addToolRunning(toolUseId: String, tool: String, args: String) {
-        receivedHookEvent = true
+        lastHookEventAt = System.currentTimeMillis()
         val id = nextId()
         activeToolName = tool
         messages.add(insertPos, ChatMessage(
@@ -212,6 +228,7 @@ class ChatState {
     }
 
     fun updateToolToComplete(toolUseId: String, result: JSONObject) {
+        lastHookEventAt = System.currentTimeMillis()
         val idx = messages.indexOfLast {
             val c = it.content
             (c is MessageContent.ToolRunning && c.toolUseId == toolUseId) ||
@@ -232,6 +249,7 @@ class ChatState {
     }
 
     fun updateToolToFailed(toolUseId: String, error: JSONObject) {
+        lastHookEventAt = System.currentTimeMillis()
         val idx = messages.indexOfLast {
             val c = it.content
             (c is MessageContent.ToolRunning && c.toolUseId == toolUseId) ||
