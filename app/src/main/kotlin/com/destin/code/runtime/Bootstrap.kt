@@ -364,7 +364,10 @@ class Bootstrap(private val context: Context) {
         "gdbm", "libbz2", "libcrypt", "libffi", "liblzma",
         "ncurses", "ncurses-ui-libs", "readline", "python",
         "libunistring", "libidn2", "libuuid", "wget",
-        "rclone"
+        "rclone",
+        // ripgrep is required by Claude Code's built-in Grep and Glob tools.
+        // Without it, these core tools fail with ENOENT even with the vendor symlink.
+        "ripgrep", "oniguruma"
     )
 
     /** Returns all packages to install based on the configured tier. */
@@ -686,6 +689,15 @@ class Bootstrap(private val context: Context) {
         homeDir.mkdirs()
         File(homeDir, ".claude").mkdirs()
         File(homeDir, "tmp").mkdirs()
+        // Create .cache/tmpdir as the TMPDIR location (avoids Termux Node.js
+        // compiled-in /tmp rewriting — see buildRuntimeEnv() comment).
+        // This is a real directory, not a symlink, so all temp file operations work.
+        val cacheDir = File(homeDir, ".cache")
+        cacheDir.mkdirs()
+        val tmpDirAlias = File(cacheDir, "tmpdir")
+        if (!tmpDirAlias.exists()) {
+            tmpDirAlias.mkdirs()
+        }
 
         val mobileDir = File(homeDir, ".claude-mobile")
         mobileDir.mkdirs()
@@ -936,7 +948,12 @@ class Bootstrap(private val context: Context) {
         // Example: `gh repo clone` calls exec("git") which fails without this.
         val execWrappersDir = File(mobileDir, "exec-wrappers")
         execWrappersDir.mkdirs()
-        val wrapperBinaries = listOf("git", "ssh", "ssh-keygen", "gpg", "curl", "wget")
+        val wrapperBinaries = listOf(
+            "git", "ssh", "ssh-keygen", "gpg", "gpg2", "curl", "wget",
+            "rclone",  // Go binary — spawns xdg-open, curl for OAuth
+            "node",    // commonly exec'd by Go/Rust tools (e.g. npx packages)
+            "python3", "python",  // subprocess.Popen with absolute paths
+        )
         for (name in wrapperBinaries) {
             val realBin = File(usrDir, "bin/$name")
             // Resolve symlinks to get the actual ELF binary path
@@ -946,24 +963,56 @@ class Bootstrap(private val context: Context) {
             wrapper.setExecutable(true)
         }
 
-        // Create ripgrep vendor symlink for Claude Code's built-in Grep/Glob tools.
-        // Claude Code looks for vendor/ripgrep/<platform>/rg but doesn't ship arm64-android.
-        // Symlink to our installed rg binary so the tools work natively.
+        // Create vendor symlinks for Claude Code's built-in tools.
+        // Claude Code looks for vendor/<tool>/<platform>/<binary> but doesn't ship
+        // arm64-android variants. Symlink to installed binaries or compatible
+        // arm64-linux variants (Android IS Linux on arm64).
         val claudeCodeDir = File(usrDir, "lib/node_modules/@anthropic-ai/claude-code")
-        val vendorRgDir = File(claudeCodeDir, "vendor/ripgrep/arm64-android")
-        val systemRg = File(usrDir, "bin/rg")
-        if (claudeCodeDir.exists() && systemRg.exists() && !File(vendorRgDir, "rg").exists()) {
-            vendorRgDir.mkdirs()
-            val rgLink = File(vendorRgDir, "rg")
-            try {
-                java.nio.file.Files.createSymbolicLink(
-                    rgLink.toPath(),
-                    systemRg.canonicalFile.toPath()
-                )
-            } catch (_: Exception) {
-                // Fallback: copy instead of symlink if symlink fails
-                systemRg.copyTo(rgLink, overwrite = true)
-                rgLink.setExecutable(true)
+        if (claudeCodeDir.exists()) {
+            // Ripgrep — needed for Grep/Glob tools
+            val systemRg = File(usrDir, "bin/rg")
+            val vendorRgDir = File(claudeCodeDir, "vendor/ripgrep/arm64-android")
+            if (systemRg.exists() && !File(vendorRgDir, "rg").exists()) {
+                vendorRgDir.mkdirs()
+                val rgLink = File(vendorRgDir, "rg")
+                try {
+                    java.nio.file.Files.createSymbolicLink(
+                        rgLink.toPath(),
+                        systemRg.canonicalFile.toPath()
+                    )
+                } catch (_: Exception) {
+                    systemRg.copyTo(rgLink, overwrite = true)
+                    rgLink.setExecutable(true)
+                }
+            }
+
+            // tree-sitter-bash — needed for bash syntax analysis.
+            // The arm64-linux .node binary is compatible with Android (same kernel ABI).
+            val tsLinux = File(claudeCodeDir, "vendor/tree-sitter-bash/arm64-linux/tree-sitter-bash.node")
+            val tsAndroidDir = File(claudeCodeDir, "vendor/tree-sitter-bash/arm64-android")
+            if (tsLinux.exists() && !File(tsAndroidDir, "tree-sitter-bash.node").exists()) {
+                tsAndroidDir.mkdirs()
+                val tsLink = File(tsAndroidDir, "tree-sitter-bash.node")
+                try {
+                    java.nio.file.Files.createSymbolicLink(
+                        tsLink.toPath(),
+                        tsLinux.canonicalFile.toPath()
+                    )
+                } catch (_: Exception) {
+                    tsLinux.copyTo(tsLink, overwrite = true)
+                }
+            }
+
+            // audio-capture — same pattern, symlink arm64-linux for Android
+            val acLinux = File(claudeCodeDir, "vendor/audio-capture/arm64-linux")
+            val acAndroidDir = File(claudeCodeDir, "vendor/audio-capture/arm64-android")
+            if (acLinux.exists() && !acAndroidDir.exists()) {
+                try {
+                    java.nio.file.Files.createSymbolicLink(
+                        acAndroidDir.toPath(),
+                        acLinux.canonicalFile.toPath()
+                    )
+                } catch (_: Exception) { /* non-critical — voice input may not be used */ }
             }
         }
 
@@ -1265,10 +1314,17 @@ class Bootstrap(private val context: Context) {
             // CMake needs to find its modules at the relocated prefix.
             val cmakeRoot = "$usr/share/cmake"
             if (File(cmakeRoot).isDirectory) put("CMAKE_ROOT", cmakeRoot)
-            put("TMPDIR", "$home/tmp")
+            // IMPORTANT: Use ".cache/tmpdir" instead of "tmp" to avoid the
+            // Termux-compiled Node.js binary's compiled-in /tmp path rewriting.
+            // The Node binary intercepts getenv("TMPDIR") and rewrites any path
+            // containing "/tmp" by substituting "$HOME/tmp", causing double-prefix
+            // when TMPDIR is already "$HOME/tmp". Using a name without "tmp" as a
+            // substring avoids triggering this rewriting entirely.
+            val tmpDir = "$home/.cache/tmpdir"
+            put("TMPDIR", tmpDir)
             // Claude Code uses CLAUDE_CODE_TMPDIR for its own temp files
             // (sandbox dirs, etc.). Falls back to /tmp which doesn't exist on Android.
-            put("CLAUDE_CODE_TMPDIR", "$home/tmp")
+            put("CLAUDE_CODE_TMPDIR", tmpDir)
             // BROWSER tells rclone, gh, npm, etc. how to open URLs for OAuth.
             // Points to our browser-open script that uses Android's am start.
             val browserOpen = "$home/.claude-mobile/browser-open"

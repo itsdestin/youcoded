@@ -11,17 +11,17 @@ enum class PackageTier(
 ) {
     CORE(
         displayName = "Core",
-        description = "Claude Code essentials — git, python, curl, rclone",
+        description = "Claude Code essentials — git, python, curl, rclone, ripgrep",
         additionalPackages = emptyList(),
     ),
     DEVELOPER(
         displayName = "Developer Essentials",
-        description = "ripgrep, fd, fzf, jq, bat, tmux, nano, micro",
+        description = "fd, fzf, jq, bat, tmux, nano, micro",
         additionalPackages = listOf(
             "fd", "micro", "tree",
-            "ripgrep",
+            // ripgrep + oniguruma moved to corePackages (Claude Code Grep/Glob depend on rg)
             "findutils", "ncurses-utils", "fzf",
-            "oniguruma", "jq",
+            "jq",
             "libgit2", "bat", "eza",
             "libevent", "libandroid-glob", "tmux",
             "nano",

@@ -227,13 +227,19 @@ var PREFIX = process.env.PREFIX || '';
 var BASH_ENV_FILE = process.env.BASH_ENV || '';
 var HOME = process.env.HOME || '';
 var TERMUX_PREFIX = '/data/data/com.termux/files/usr';
+// Android has two paths to the same app directory: /data/user/0/pkg/ and /data/data/pkg/
+// (the latter is a symlink). PREFIX uses one form but resolved paths may use the other.
+// Compute the alternate form so isEB() matches regardless of which symlink was followed.
+var ALT_PREFIX = '';
+if (PREFIX.indexOf('/data/user/0/') === 0) ALT_PREFIX = '/data/data/' + PREFIX.substring('/data/user/0/'.length);
+else if (PREFIX.indexOf('/data/data/') === 0) ALT_PREFIX = '/data/user/0/' + PREFIX.substring('/data/data/'.length);
 var BROWSER_OPEN = HOME + '/.claude-mobile/browser-open';
 // Android has no /tmp — redirect to HOME/tmp for all fs and spawn operations
 function fixTmp(p) { if (typeof p === 'string') { if (p === '/tmp') return HOME + '/tmp'; if (p.startsWith('/tmp/')) return HOME + '/tmp/' + p.substring(5); if (p === '/var/tmp') return HOME + '/tmp'; if (p.startsWith('/var/tmp/')) return HOME + '/tmp/' + p.substring(9); } return p; }
-// Match both our prefix and hardcoded Termux paths (baked into npm-installed packages)
-function isEB(f) { return f && (PREFIX && f.startsWith(PREFIX + '/') || f.startsWith(TERMUX_PREFIX + '/')); }
-// Rewrite Termux paths to our prefix so linker64 can find the actual binary
-function fixPath(f) { return f.startsWith(TERMUX_PREFIX + '/') ? PREFIX + f.substring(TERMUX_PREFIX.length) : f; }
+// Match our prefix (either symlink form), hardcoded Termux paths, or the alternate prefix form
+function isEB(f) { return f && (PREFIX && f.startsWith(PREFIX + '/') || f.startsWith(TERMUX_PREFIX + '/') || (ALT_PREFIX && f.startsWith(ALT_PREFIX + '/'))); }
+// Rewrite Termux or alternate-symlink paths to our canonical prefix so linker64 can find the binary
+function fixPath(f) { if (f.startsWith(TERMUX_PREFIX + '/')) return PREFIX + f.substring(TERMUX_PREFIX.length); if (ALT_PREFIX && f.startsWith(ALT_PREFIX + '/')) return PREFIX + f.substring(ALT_PREFIX.length); return f; }
 // Fix shell option — Termux-compiled Node.js resolves shell:true to the
 // hardcoded /data/data/com.termux/files/usr/bin/sh which doesn't exist
 // in our relocated prefix. Redirect to our prefix's sh (symlink to bash).
