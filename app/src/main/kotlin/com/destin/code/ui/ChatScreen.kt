@@ -50,6 +50,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.destin.code.config.chipsForTier
+import com.destin.code.ui.cards.ToolGroupCard
 import com.destin.code.runtime.BaseTerminalViewClient
 import com.destin.code.runtime.DirectShellBridge
 import com.destin.code.runtime.SessionService
@@ -59,6 +60,44 @@ import kotlinx.coroutines.launch
 import java.io.File
 
 private enum class ScreenMode { Chat, Terminal, Shell }
+
+/** A display item in the chat list — either a single message or a collapsed group of tool calls. */
+private sealed class DisplayItem {
+    data class Single(val message: ChatMessage) : DisplayItem()
+    data class ToolGroup(val messages: List<ChatMessage>, val key: String) : DisplayItem()
+}
+
+/** Returns true if this message is a completed or failed tool call (should be grouped). */
+private fun ChatMessage.isFinishedTool(): Boolean =
+    content is MessageContent.ToolComplete || content is MessageContent.ToolFailed
+
+/**
+ * Groups consecutive finished tool calls into [DisplayItem.ToolGroup]s.
+ * Active tools (Running, AwaitingApproval) and all non-tool messages stay individual.
+ * Only groups runs of 2+ consecutive finished tools; a single finished tool stays individual.
+ */
+private fun groupMessages(messages: List<ChatMessage>): List<DisplayItem> {
+    val result = mutableListOf<DisplayItem>()
+    var i = 0
+    while (i < messages.size) {
+        if (messages[i].isFinishedTool()) {
+            // Collect the consecutive run of finished tools
+            val start = i
+            while (i < messages.size && messages[i].isFinishedTool()) i++
+            val group = messages.subList(start, i)
+            if (group.size >= 2) {
+                // Use first message's id as stable key for the group
+                result.add(DisplayItem.ToolGroup(group, "group_${group.first().id}"))
+            } else {
+                result.add(DisplayItem.Single(group.first()))
+            }
+        } else {
+            result.add(DisplayItem.Single(messages[i]))
+            i++
+        }
+    }
+    return result
+}
 
 /** Apply theme-appropriate foreground/background/cursor colors to a terminal emulator. */
 private fun applyTerminalColors(session: com.termux.terminal.TerminalSession?, isDark: Boolean) {
@@ -142,12 +181,7 @@ fun ChatScreen(service: SessionService) {
     val lastPtyOutput by (bridge?.lastPtyOutputTime?.collectAsState()
         ?: remember { mutableStateOf(0L) })
 
-    // Auto-scroll on new messages
-    LaunchedEffect(chatState.messages.size, "auto_scroll") {
-        if (chatState.messages.isNotEmpty()) {
-            listState.animateScrollToItem(chatState.messages.size - 1)
-        }
-    }
+    // Auto-scroll is handled inside ScreenMode.Chat after displayItems is computed
 
     val isDark = com.destin.code.ui.theme.LocalIsDarkTheme.current
 
@@ -500,39 +534,82 @@ fun ChatScreen(service: SessionService) {
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
                 // Messages + activity indicator
+                // Group consecutive completed/failed tool calls into collapsible summaries.
+                // Recompute when list size changes OR when any tool state transitions
+                // (e.g. Running→Complete). activeToolName changes on transitions, making
+                // it a lightweight proxy for "some tool card changed state".
+                val displayItems = remember(
+                    chatState.messages.size,
+                    chatState.activeToolName,
+                    chatState.messages.lastOrNull()?.content,
+                ) {
+                    groupMessages(chatState.messages)
+                }
+                // Track which tool groups are expanded
+                val expandedGroups = remember { mutableStateMapOf<String, Boolean>() }
+
+                // Auto-scroll on new messages (uses displayItems count for correct index)
+                LaunchedEffect(chatState.messages.size) {
+                    if (displayItems.isNotEmpty()) {
+                        // +1 for the activity indicator item at the end
+                        listState.animateScrollToItem(displayItems.size)
+                    }
+                }
+
                 LazyColumn(
                     state = listState,
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                     contentPadding = PaddingValues(vertical = 8.dp),
                 ) {
-                    items(chatState.messages, key = { it.id }) { message ->
-                        val toolUseId = (message.content as? MessageContent.ToolAwaitingApproval)?.toolUseId
-                        MessageBubble(
-                            message = message,
-                            expandedCardId = chatState.expandedCardId,
-                            onToggleCard = { chatState.toggleCard(it) },
-                            onAcceptApproval = {
-                                toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.Yes)
-                            },
-                            onAcceptAlwaysApproval = {
-                                toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.YesAlways)
-                            },
-                            onRejectApproval = {
-                                toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.No)
-                            },
-                            onPromptAction = { promptId, input ->
-                                bridge?.writeInput(input)
-                                val prompt = message.content as? MessageContent.InteractivePrompt
-                                val label = prompt?.buttons?.find { it.input == input }?.label ?: ""
-                                chatState.completePrompt(promptId, label)
-                                currentSession?.markPromptCompleted(promptId)
-                            },
-                            session = bridge?.getSession(),
-                            screenVersion = 0,
-                        )
+                    items(displayItems.size, key = { index ->
+                        when (val item = displayItems[index]) {
+                            is DisplayItem.Single -> item.message.id
+                            is DisplayItem.ToolGroup -> item.key
+                        }
+                    }) { index ->
+                        when (val item = displayItems[index]) {
+                            is DisplayItem.ToolGroup -> {
+                                ToolGroupCard(
+                                    messages = item.messages,
+                                    isExpanded = expandedGroups[item.key] == true,
+                                    onToggle = {
+                                        expandedGroups[item.key] = expandedGroups[item.key] != true
+                                    },
+                                    expandedCardId = chatState.expandedCardId,
+                                    onToggleCard = { chatState.toggleCard(it) },
+                                )
+                            }
+                            is DisplayItem.Single -> {
+                                val message = item.message
+                                val toolUseId = (message.content as? MessageContent.ToolAwaitingApproval)?.toolUseId
+                                MessageBubble(
+                                    message = message,
+                                    expandedCardId = chatState.expandedCardId,
+                                    onToggleCard = { chatState.toggleCard(it) },
+                                    onAcceptApproval = {
+                                        toolUseId?.let { chatState.revertApprovalToRunning(it) }
+                                        bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.Yes)
+                                    },
+                                    onAcceptAlwaysApproval = {
+                                        toolUseId?.let { chatState.revertApprovalToRunning(it) }
+                                        bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.YesAlways)
+                                    },
+                                    onRejectApproval = {
+                                        toolUseId?.let { chatState.revertApprovalToRunning(it) }
+                                        bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.No)
+                                    },
+                                    onPromptAction = { promptId, input ->
+                                        bridge?.writeInput(input)
+                                        val prompt = message.content as? MessageContent.InteractivePrompt
+                                        val label = prompt?.buttons?.find { it.input == input }?.label ?: ""
+                                        chatState.completePrompt(promptId, label)
+                                        currentSession?.markPromptCompleted(promptId)
+                                    },
+                                    session = bridge?.getSession(),
+                                    screenVersion = 0,
+                                )
+                            }
+                        }
                     }
                     item {
                         var now by remember { mutableStateOf(System.currentTimeMillis()) }
