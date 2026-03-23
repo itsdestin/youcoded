@@ -130,7 +130,6 @@ class ManagedSession(
 
     // Track prompts that have been completed so we don't re-create them
     private val completedPromptIds = mutableSetOf<String>()
-    private var continueCounter = 0
 
     /** Detect permission mode from visible screen only (not raw buffer). */
     private fun detectPermissionMode(screen: String) {
@@ -227,7 +226,7 @@ class ManagedSession(
             val continueKey = when {
                 "login successful" in lower -> "continue_login"
                 "security" in lower -> "continue_security"
-                else -> "continue_other_${continueCounter++}"
+                else -> "continue_other"
             }
             if (continueKey !in activePrompts && continueKey !in completedPromptIds) {
                 activePrompts.add(continueKey)
@@ -239,6 +238,13 @@ class ManagedSession(
                 chatState.showInteractivePrompt(continueKey, title, listOf(
                     PromptButton("Continue", "\r"),
                 ))
+            }
+        } else {
+            // Dismiss any active continue prompts when "press enter" leaves the screen
+            val staleContinues = activePrompts.filter { it.startsWith("continue_") }
+            for (stale in staleContinues) {
+                activePrompts.remove(stale)
+                chatState.dismissPrompt(stale)
             }
         }
     }
