@@ -83,11 +83,31 @@ class ManagedSession(
         }
 
         // 2. isRunning poller — makes Dead status reactive.
+        //    Also force-clears the message queue when the session dies (Fix 5).
         scope.launch {
             while (true) {
                 delay(5000)
                 _isRunningFlow.value = ptyBridge.isRunning
-                if (!ptyBridge.isRunning) break // Stop polling once dead
+                if (!ptyBridge.isRunning) {
+                    withContext(Dispatchers.Main) {
+                        chatState.resetStaleProcessingPeriodic()
+                    }
+                    break
+                }
+            }
+        }
+
+        // 2b. Periodic queue health check — catches stuck processing state
+        //     even when no new user message triggers resetStaleProcessing().
+        scope.launch {
+            while (true) {
+                delay(5000)
+                if (!ptyBridge.isRunning) break
+                if (chatState.isProcessing) {
+                    withContext(Dispatchers.Main) {
+                        chatState.resetStaleProcessingPeriodic()
+                    }
+                }
             }
         }
 
@@ -125,6 +145,37 @@ class ManagedSession(
                     }
                 }
             } catch (_: Exception) {}
+        }
+
+        // 5. PTY output consumer — surfaces important terminal messages (errors, warnings)
+        //    in the chat view. Without this, raw PTY output is invisible in chat mode.
+        scope.launch {
+            val debounceMs = 500L
+            var pendingNotice: String? = null
+            var lastEmitTime = 0L
+            ptyBridge.outputFlow.collect { delta ->
+                // Only surface lines containing error/warning keywords
+                val lines = delta.lines().filter { line ->
+                    val lower = line.lowercase().trim()
+                    lower.isNotEmpty() &&
+                    (lower.startsWith("error") || lower.startsWith("warning") ||
+                     lower.contains("fatal:") || lower.contains("panic:") ||
+                     lower.contains("exception:") || lower.contains("segfault"))
+                }
+                if (lines.isNotEmpty()) {
+                    val notice = lines.joinToString("\n").take(300)
+                    val now = System.currentTimeMillis()
+                    // Debounce: don't spam the chat with rapid-fire errors
+                    if (now - lastEmitTime > debounceMs) {
+                        lastEmitTime = now
+                        withContext(Dispatchers.Main) {
+                            chatState.addSystemNotice(notice)
+                        }
+                    } else {
+                        pendingNotice = notice
+                    }
+                }
+            }
         }
     }
 

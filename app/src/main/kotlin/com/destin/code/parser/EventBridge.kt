@@ -58,7 +58,7 @@ class EventBridge(private val socketName: String) {
         }
     }
 
-    private suspend fun handleClient(client: LocalSocket) {
+    private fun handleClient(client: LocalSocket) {
         try {
             client.use { socket ->
                 val reader = BufferedReader(InputStreamReader(socket.inputStream))
@@ -66,7 +66,9 @@ class EventBridge(private val socketName: String) {
                 android.util.Log.d("EventBridge", "Received: ${line.take(300)}")
                 val event = HookEvent.fromJson(line)
                 if (event != null) {
-                    _events.emit(event)
+                    if (!_events.tryEmit(event)) {
+                        android.util.Log.e("EventBridge", "Event buffer full, dropped: ${event::class.simpleName}")
+                    }
                 } else {
                     android.util.Log.w("EventBridge", "Failed to parse hook event: ${line.take(500)}")
                 }
