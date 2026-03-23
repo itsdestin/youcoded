@@ -158,6 +158,9 @@ fun ChatScreen(service: SessionService) {
             val termViewClient = remember { BaseTerminalViewClient() }
             val termScreenVersion by (bridge?.screenVersion?.collectAsState()
                 ?: remember { mutableStateOf(0) })
+            // Track whether user has scrolled up — suppress auto-scroll while they browse history.
+            // topRow < 0 means scrolled up; topRow == 0 means at the bottom.
+            var userScrolledUp by remember { mutableStateOf(false) }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
@@ -184,7 +187,22 @@ fun ChatScreen(service: SessionService) {
                             applyTerminalColors(bridge?.getSession(), isDark)
                             @Suppress("UNUSED_EXPRESSION")
                             termScreenVersion
-                            view.onScreenUpdated()
+                            // Preserve user's scroll position when they've scrolled up into history.
+                            // TerminalView.onScreenUpdated() unconditionally resets topRow to 0,
+                            // causing aggressive rubber-banding when Claude is producing output.
+                            val wasScrolledUp = view.topRow < 0
+                            if (wasScrolledUp) userScrolledUp = true
+                            if (userScrolledUp && wasScrolledUp) {
+                                // Save position, let onScreenUpdated() process new content
+                                // (clear scroll counter, clamp bounds, invalidate), then restore.
+                                val saved = view.topRow
+                                view.onScreenUpdated()
+                                view.topRow = saved
+                            } else {
+                                // At bottom — resume normal auto-scroll.
+                                userScrolledUp = false
+                                view.onScreenUpdated()
+                            }
                         },
                         modifier = Modifier.fillMaxSize(),
                     )
@@ -239,6 +257,7 @@ fun ChatScreen(service: SessionService) {
             val shellFocusRequester = remember { FocusRequester() }
             val shellViewClient = remember { BaseTerminalViewClient() }
             val shellScreenVersion by shell.screenVersion.collectAsState()
+            var shellUserScrolledUp by remember { mutableStateOf(false) }
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
@@ -265,7 +284,17 @@ fun ChatScreen(service: SessionService) {
                         applyTerminalColors(shell.getSession(), isDark)
                         @Suppress("UNUSED_EXPRESSION")
                         shellScreenVersion
-                        view.onScreenUpdated()
+                        // Same scroll-preservation as Terminal view
+                        val wasScrolledUp = view.topRow < 0
+                        if (wasScrolledUp) shellUserScrolledUp = true
+                        if (shellUserScrolledUp && wasScrolledUp) {
+                            val saved = view.topRow
+                            view.onScreenUpdated()
+                            view.topRow = saved
+                        } else {
+                            shellUserScrolledUp = false
+                            view.onScreenUpdated()
+                        }
                     },
                     modifier = Modifier.weight(1f).fillMaxWidth(),
                 )
