@@ -47,6 +47,15 @@ sealed class HookEvent {
         val notificationType: String?,
     ) : HookEvent()
 
+    data class PermissionRequest(
+        override val sessionId: String,
+        override val hookEventName: String,
+        val toolName: String,
+        val toolInput: JSONObject,
+        val permissionSuggestions: org.json.JSONArray?,
+        val requestId: String,
+    ) : HookEvent()
+
     companion object {
         fun fromJson(json: String): HookEvent? {
             return try {
@@ -99,6 +108,15 @@ sealed class HookEvent {
                         message = obj.optString("message", ""),
                         title = if (obj.has("title")) obj.getString("title") else null,
                         notificationType = if (obj.has("notification_type")) obj.getString("notification_type") else null,
+                    )
+                    "PermissionRequest" -> PermissionRequest(
+                        sessionId = sessionId,
+                        hookEventName = eventName,
+                        toolName = obj.optString("tool_name", ""),
+                        toolInput = obj.optJSONObject("tool_input") ?: JSONObject(),
+                        permissionSuggestions = if (obj.has("permission_suggestions"))
+                            obj.optJSONArray("permission_suggestions") else null,
+                        requestId = obj.optString("_requestId", ""),
                     )
                     else -> null
                 }

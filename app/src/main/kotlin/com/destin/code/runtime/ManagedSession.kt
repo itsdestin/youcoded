@@ -314,9 +314,12 @@ class ManagedSession(
                 chatState.addToolRunning(event.toolUseId, event.toolName, argsSummary)
             }
             is HookEvent.PostToolUse -> {
+                // Cross-path cleanup: if tool was awaiting approval with a held socket, close it
+                cleanupOrphanedSocket(event.toolUseId)
                 chatState.updateToolToComplete(event.toolUseId, event.toolResponse)
             }
             is HookEvent.PostToolUseFailure -> {
+                cleanupOrphanedSocket(event.toolUseId)
                 chatState.updateToolToFailed(event.toolUseId, event.toolResponse)
             }
             is HookEvent.Stop -> {
@@ -336,6 +339,32 @@ class ManagedSession(
                     chatState.addSystemNotice(event.message)
                 }
             }
+            is HookEvent.PermissionRequest -> {
+                val lastRunning = chatState.messages.lastOrNull {
+                    it.content is MessageContent.ToolRunning
+                }
+                val toolUseId = (lastRunning?.content as? MessageContent.ToolRunning)?.toolUseId
+                if (toolUseId != null) {
+                    val hasAlways = event.permissionSuggestions != null &&
+                        event.permissionSuggestions.length() > 0
+                    chatState.updateToolToApproval(
+                        toolUseId,
+                        hasAlways,
+                        event.requestId,
+                        event.permissionSuggestions,
+                    )
+                }
+            }
+        }
+    }
+
+    /** Close an orphaned PermissionRequest socket if the tool completes via another path. */
+    private fun cleanupOrphanedSocket(toolUseId: String) {
+        val approval = chatState.messages.lastOrNull {
+            (it.content as? MessageContent.ToolAwaitingApproval)?.toolUseId == toolUseId
+        }?.content as? MessageContent.ToolAwaitingApproval
+        if (approval?.requestId != null) {
+            ptyBridge.getEventBridge()?.closeSocket(approval.requestId)
         }
     }
 

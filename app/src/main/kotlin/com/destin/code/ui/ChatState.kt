@@ -26,6 +26,8 @@ sealed class MessageContent {
         val tool: String,
         val args: String,
         val hasAlwaysOption: Boolean = true,
+        val requestId: String? = null,
+        val permissionSuggestions: org.json.JSONArray? = null,
     ) : MessageContent()
     data class ToolComplete(
         val cardId: String,
@@ -208,7 +210,14 @@ class ChatState {
         }
     }
 
-    fun updateToolToApproval(toolUseId: String, hasAlwaysOption: Boolean = true) {
+    fun updateToolToApproval(
+        toolUseId: String,
+        hasAlwaysOption: Boolean = true,
+        requestId: String? = null,
+        permissionSuggestions: org.json.JSONArray? = null,
+    ) {
+        // Keep the stale-processing timer alive while user considers the approval prompt
+        lastHookEventAt = System.currentTimeMillis()
         val idx = messages.indexOfLast {
             val c = it.content
             c is MessageContent.ToolRunning && c.toolUseId == toolUseId
@@ -222,6 +231,8 @@ class ChatState {
                     tool = running.tool,
                     args = running.args,
                     hasAlwaysOption = hasAlwaysOption,
+                    requestId = requestId,
+                    permissionSuggestions = permissionSuggestions,
                 )
             )
         }

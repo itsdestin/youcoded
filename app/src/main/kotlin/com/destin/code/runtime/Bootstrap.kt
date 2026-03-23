@@ -763,11 +763,15 @@ class Bootstrap(private val context: Context) {
         val mobileDir = File(homeDir, ".claude-mobile")
         mobileDir.mkdirs()
 
-        // Deploy hook-relay.js from assets
+        // Deploy hook-relay.js and hook-relay-blocking.js from assets
         val relayFile = File(mobileDir, "hook-relay.js")
+        val blockingRelayFile = File(mobileDir, "hook-relay-blocking.js")
         // Always redeploy — ensures latest version after APK update
         context.assets.open("hook-relay.js").use { input ->
             relayFile.outputStream().use { output -> input.copyTo(output) }
+        }
+        context.assets.open("hook-relay-blocking.js").use { input ->
+            blockingRelayFile.outputStream().use { output -> input.copyTo(output) }
         }
 
         // Write hook configuration into Claude Code's settings
@@ -777,9 +781,11 @@ class Bootstrap(private val context: Context) {
 
         val nodePath = File(usrDir, "bin/node").absolutePath
         val relayPath = relayFile.absolutePath
+        val blockingRelayPath = blockingRelayFile.absolutePath
         val hookCommand = "$nodePath $relayPath"
+        val blockingHookCommand = "$nodePath $blockingRelayPath"
 
-        // Build hook entries for all events we care about
+        // Fire-and-forget events use relay.js
         val hookEvents = listOf(
             "PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop", "Notification"
         )
@@ -827,6 +833,38 @@ class Bootstrap(private val context: Context) {
 
             hooksObj.put(event, eventArray)
         }
+
+        // Register PermissionRequest with blocking relay (long timeout for user approval)
+        val prEvent = "PermissionRequest"
+        val prArray = hooksObj.optJSONArray(prEvent) ?: org.json.JSONArray()
+        var prRegistered = false
+        for (i in 0 until prArray.length()) {
+            val entry = prArray.optJSONObject(i)
+            val hooks = entry?.optJSONArray("hooks")
+            if (hooks != null) {
+                for (j in 0 until hooks.length()) {
+                    val h = hooks.optJSONObject(j)
+                    if (h?.optString("command")?.contains("hook-relay-blocking.js") == true) {
+                        prRegistered = true
+                        break
+                    }
+                }
+            }
+            if (prRegistered) break
+        }
+        if (!prRegistered) {
+            val hookEntry = org.json.JSONObject()
+            hookEntry.put("matcher", ".*")
+            val hooksList = org.json.JSONArray()
+            val hookDef = org.json.JSONObject()
+            hookDef.put("type", "command")
+            hookDef.put("command", blockingHookCommand)
+            hookDef.put("timeout", 300)
+            hooksList.put(hookDef)
+            hookEntry.put("hooks", hooksList)
+            prArray.put(hookEntry)
+        }
+        hooksObj.put(prEvent, prArray)
 
         existingJson.put("hooks", hooksObj)
         settingsFile.writeText(existingJson.toString(2))

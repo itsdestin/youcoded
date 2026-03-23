@@ -581,22 +581,43 @@ fun ChatScreen(service: SessionService) {
                             }
                             is DisplayItem.Single -> {
                                 val message = item.message
-                                val toolUseId = (message.content as? MessageContent.ToolAwaitingApproval)?.toolUseId
+                                val approval = message.content as? MessageContent.ToolAwaitingApproval
+                                val toolUseId = approval?.toolUseId
                                 MessageBubble(
                                     message = message,
                                     expandedCardId = chatState.expandedCardId,
                                     onToggleCard = { chatState.toggleCard(it) },
                                     onAcceptApproval = {
                                         toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                        bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.Yes)
+                                        if (approval?.requestId != null) {
+                                            val decision = org.json.JSONObject()
+                                                .put("decision", org.json.JSONObject().put("behavior", "allow"))
+                                            bridge?.getEventBridge()?.respond(approval.requestId, decision)
+                                        } else {
+                                            bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.Yes)
+                                        }
                                     },
                                     onAcceptAlwaysApproval = {
                                         toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                        bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.YesAlways)
+                                        if (approval?.requestId != null && approval.permissionSuggestions != null && approval.permissionSuggestions.length() > 0) {
+                                            val decision = org.json.JSONObject()
+                                                .put("decision", org.json.JSONObject()
+                                                    .put("behavior", "allow")
+                                                    .put("updatedPermissions", org.json.JSONArray().put(approval.permissionSuggestions.get(0))))
+                                            bridge?.getEventBridge()?.respond(approval.requestId, decision)
+                                        } else {
+                                            bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.YesAlways)
+                                        }
                                     },
                                     onRejectApproval = {
                                         toolUseId?.let { chatState.revertApprovalToRunning(it) }
-                                        bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.No)
+                                        if (approval?.requestId != null) {
+                                            val decision = org.json.JSONObject()
+                                                .put("decision", org.json.JSONObject().put("behavior", "deny"))
+                                            bridge?.getEventBridge()?.respond(approval.requestId, decision)
+                                        } else {
+                                            bridge?.sendApproval(com.destin.code.runtime.PtyBridge.ApprovalOption.No)
+                                        }
                                     },
                                     onPromptAction = { promptId, input ->
                                         bridge?.writeInput(input)
