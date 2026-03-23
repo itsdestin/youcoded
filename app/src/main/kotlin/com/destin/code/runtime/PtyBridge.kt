@@ -425,10 +425,10 @@ function fixExecShell(o) {
 }
 // Fix /tmp refs in shell command strings (e.g. "bash /tmp/install.sh > /tmp/out")
 // Only match /tmp at the start of a path (after whitespace, =, :, or start-of-string)
-// to avoid double-prefixing paths that already contain $HOME/tmp
+// to avoid double-prefixing paths that already contain ${'$'}HOME/tmp
 function fixTmpInShellCmd(cmd) {
     if (typeof cmd !== 'string') return cmd;
-    return cmd.replace(/(^|[\s=:])\/tmp\b/g, '$1' + HOME + '/tmp').replace(/(^|[\s=:])\/var\/tmp\b/g, '$1' + HOME + '/tmp');
+    return cmd.replace(/(^|[\s=:])\/tmp\b/g, '${'$'}1' + HOME + '/tmp').replace(/(^|[\s=:])\/var\/tmp\b/g, '${'$'}1' + HOME + '/tmp');
 }
 var _exec = child_process.exec;
 child_process.exec = function(cmd, opts, cb) {
