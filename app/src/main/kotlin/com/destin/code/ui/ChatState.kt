@@ -170,10 +170,36 @@ class ChatState {
 
     fun addResponse(markdown: String) {
         if (markdown.isNotBlank()) {
-            messages.add(insertPos, ChatMessage(
-                MessageRole.CLAUDE, MessageContent.Response(markdown),
-            ))
-            insertPos++
+            // Check if there are tool cards between the last user message and insertPos.
+            // If so, the Stop event's lastAssistantMessage may contain text from before AND
+            // after tool calls concatenated together. We need to deduplicate: if the response
+            // text is already partially displayed in an earlier Response bubble, only add the
+            // new portion.
+            val existingResponses = mutableListOf<String>()
+            for (i in 0 until insertPos.coerceAtMost(messages.size)) {
+                val c = messages[i].content
+                if (c is MessageContent.Response) {
+                    existingResponses.add(c.markdown.trim())
+                }
+            }
+
+            var remaining = markdown.trim()
+            // Strip any text that was already added as a response bubble earlier in this turn
+            for (existing in existingResponses) {
+                if (remaining.startsWith(existing)) {
+                    remaining = remaining.removePrefix(existing).trim()
+                } else if (remaining.contains(existing)) {
+                    remaining = remaining.replace(existing, "").trim()
+                }
+            }
+
+            if (remaining.isNotBlank()) {
+                messages.add(insertPos, ChatMessage(
+                    MessageRole.CLAUDE, MessageContent.Response(remaining),
+                ))
+                insertPos++
+                messageVersion++
+            }
         }
         activeToolName = null
         advanceQueue()
@@ -188,6 +214,7 @@ class ChatState {
             MessageContent.ToolRunning(id, toolUseId, tool, args),
         ))
         insertPos++
+        messageVersion++
     }
 
     /** Revert a tool from AwaitingApproval back to Running after the user acts.
@@ -256,6 +283,7 @@ class ChatState {
                 content = MessageContent.ToolComplete(cardId, toolUseId, tool, args, result),
             )
             activeToolName = null
+            messageVersion++
         }
     }
 
@@ -277,6 +305,7 @@ class ChatState {
                 content = MessageContent.ToolFailed(cardId, toolUseId, tool, args, error),
             )
             activeToolName = null
+            messageVersion++
         }
     }
 
@@ -287,10 +316,31 @@ class ChatState {
         insertPos++
     }
 
+    /** A version counter that increments on any message content change (not just list size). */
+    var messageVersion: Int by mutableStateOf(0)
+        private set
+
+    /** Remove messages matching a predicate, adjusting insertPos for shifted indices. */
+    private fun removeMessagesAdjusting(predicate: (ChatMessage) -> Boolean) {
+        var removed = 0
+        val iter = messages.listIterator()
+        var idx = 0
+        while (iter.hasNext()) {
+            val msg = iter.next()
+            if (predicate(msg)) {
+                iter.remove()
+                if (idx < insertPos) removed++
+            }
+            idx++
+        }
+        insertPos = (insertPos - removed).coerceAtLeast(0)
+        messageVersion++
+    }
+
     /** Show an interactive prompt card. Replaces existing prompt with same ID. */
     fun showInteractivePrompt(promptId: String, title: String, buttons: List<PromptButton>) {
         // Remove existing prompt with same ID to avoid duplicates
-        messages.removeAll { (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId }
+        removeMessagesAdjusting { (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId }
         messages.add(ChatMessage(
             MessageRole.SYSTEM,
             MessageContent.InteractivePrompt(promptId, title, buttons),
@@ -313,7 +363,7 @@ class ChatState {
     /** Remove a prompt entirely (used when detector clears stale prompts). */
     fun dismissPrompt(promptId: String) {
         // Only remove if still an active InteractivePrompt (don't remove completed ones)
-        messages.removeAll {
+        removeMessagesAdjusting {
             (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId
         }
     }

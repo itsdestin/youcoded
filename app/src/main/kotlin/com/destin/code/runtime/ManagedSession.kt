@@ -182,6 +182,11 @@ class ManagedSession(
     // Track prompts that have been completed so we don't re-create them
     private val completedPromptIds = mutableSetOf<String>()
 
+    // Track consecutive polls where a prompt was absent — debounce dismissal
+    // to prevent flicker when terminal output temporarily hides a prompt
+    private val absentPollCounts = mutableMapOf<String, Int>()
+    private val DISMISS_THRESHOLD = 2  // require 2+ absent polls before dismissing
+
     /** Detect permission mode from visible screen only (not raw buffer). */
     private fun detectPermissionMode(screen: String) {
         val lower = screen.lowercase()
@@ -203,9 +208,10 @@ class ManagedSession(
 
         // --- Hardcoded: Login method selection (multi-line options break generic parser) ---
         if ("select login method" in screenLower) {
+            absentPollCounts.remove("auth")
             if ("auth" !in activePrompts && "auth" !in completedPromptIds) {
                 activePrompts.add("auth")
-                val down = "\u001b[B"
+                val down = "^[[B"
                 chatState.showInteractivePrompt("auth", "Select Login Method", listOf(
                     PromptButton("Claude Account (Pro/Max/Team)", "\r"),
                     PromptButton("Anthropic Console (API)", "$down\r"),
@@ -214,8 +220,13 @@ class ManagedSession(
             }
             return  // skip generic parser for this screen
         } else if ("auth" in activePrompts) {
-            activePrompts.remove("auth")
-            chatState.dismissPrompt("auth")
+            val count = absentPollCounts.getOrDefault("auth", 0) + 1
+            absentPollCounts["auth"] = count
+            if (count >= DISMISS_THRESHOLD) {
+                activePrompts.remove("auth")
+                chatState.dismissPrompt("auth")
+                absentPollCounts.remove("auth")
+            }
         }
 
         // --- Skip generic parser when a tool approval card is already handling the prompt ---
@@ -227,12 +238,15 @@ class ManagedSession(
         // --- Generic Ink Select menu detection (screen only, not raw buffer) ---
         val parsed = InkSelectParser.parse(screenText)
         if (parsed != null) {
+            absentPollCounts.remove(parsed.id)
             if (parsed.id !in activePrompts && parsed.id !in completedPromptIds) {
                 // Clear any previous generic menu that is no longer showing
                 val staleMenus = activePrompts.filter { it.startsWith("menu_") }
                 for (stale in staleMenus) {
                     activePrompts.remove(stale)
+                    completedPromptIds.add(stale)
                     chatState.dismissPrompt(stale)
+                    absentPollCounts.remove(stale)
                 }
                 activePrompts.add(parsed.id)
                 chatState.showInteractivePrompt(
@@ -242,11 +256,16 @@ class ManagedSession(
                 )
             }
         } else {
-            // No menu detected — dismiss any active generic menus
+            // No menu detected — debounce dismissal of active generic menus
             val staleMenus = activePrompts.filter { it.startsWith("menu_") }
             for (stale in staleMenus) {
-                activePrompts.remove(stale)
-                chatState.dismissPrompt(stale)
+                val count = absentPollCounts.getOrDefault(stale, 0) + 1
+                absentPollCounts[stale] = count
+                if (count >= DISMISS_THRESHOLD) {
+                    activePrompts.remove(stale)
+                    chatState.dismissPrompt(stale)
+                    absentPollCounts.remove(stale)
+                }
             }
         }
 
@@ -261,8 +280,13 @@ class ManagedSession(
                 ))
             }
         } else if ("paste_code" in activePrompts) {
-            activePrompts.remove("paste_code")
-            chatState.dismissPrompt("paste_code")
+            val count = absentPollCounts.getOrDefault("paste_code", 0) + 1
+            absentPollCounts["paste_code"] = count
+            if (count >= DISMISS_THRESHOLD) {
+                activePrompts.remove("paste_code")
+                chatState.dismissPrompt("paste_code")
+                absentPollCounts.remove("paste_code")
+            }
         }
 
         // --- Special-case: "Press Enter to continue" ---
@@ -291,11 +315,16 @@ class ManagedSession(
                 ))
             }
         } else {
-            // Dismiss any active continue prompts when "press enter" leaves the screen
+            // Debounce dismissal of continue prompts
             val staleContinues = activePrompts.filter { it.startsWith("continue_") }
             for (stale in staleContinues) {
-                activePrompts.remove(stale)
-                chatState.dismissPrompt(stale)
+                val count = absentPollCounts.getOrDefault(stale, 0) + 1
+                absentPollCounts[stale] = count
+                if (count >= DISMISS_THRESHOLD) {
+                    activePrompts.remove(stale)
+                    chatState.dismissPrompt(stale)
+                    absentPollCounts.remove(stale)
+                }
             }
         }
     }
@@ -327,6 +356,8 @@ class ManagedSession(
             }
             is HookEvent.Notification -> {
                 if (event.notificationType == "permission_prompt") {
+                    // Best-effort match: Notification events don't carry tool_name,
+                    // so we still fall back to last running tool
                     val lastRunning = chatState.messages.lastOrNull {
                         it.content is MessageContent.ToolRunning
                     }
@@ -340,7 +371,13 @@ class ManagedSession(
                 }
             }
             is HookEvent.PermissionRequest -> {
-                val lastRunning = chatState.messages.lastOrNull {
+                // Match by tool name first for accuracy when multiple tools fire rapidly,
+                // then fall back to last running tool if no name match
+                val matchByName = chatState.messages.lastOrNull {
+                    val c = it.content
+                    c is MessageContent.ToolRunning && c.tool == event.toolName
+                }
+                val lastRunning = matchByName ?: chatState.messages.lastOrNull {
                     it.content is MessageContent.ToolRunning
                 }
                 val toolUseId = (lastRunning?.content as? MessageContent.ToolRunning)?.toolUseId

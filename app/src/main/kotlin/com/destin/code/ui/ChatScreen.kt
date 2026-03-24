@@ -266,13 +266,13 @@ fun ChatScreen(service: SessionService) {
                             icon = Icons.Filled.KeyboardArrowUp,
                             contentDescription = "Up",
                             borderColor = borderColor,
-                            onClick = { bridge?.writeInput("\u001b[A") },
+                            onClick = { bridge?.writeInput("^[[A") },
                         )
                         FloatingArrowButton(
                             icon = Icons.Filled.KeyboardArrowDown,
                             contentDescription = "Down",
                             borderColor = borderColor,
-                            onClick = { bridge?.writeInput("\u001b[B") },
+                            onClick = { bridge?.writeInput("^[[B") },
                         )
                     }
                 }
@@ -541,6 +541,7 @@ fun ChatScreen(service: SessionService) {
                 val displayItems = remember(
                     chatState.messages.size,
                     chatState.activeToolName,
+                    chatState.messageVersion,
                     chatState.messages.lastOrNull()?.content,
                 ) {
                     groupMessages(chatState.messages)
