@@ -36,7 +36,7 @@ class ManagedSession(
     /** Callback when session leaves AwaitingApproval (for notification clearing). */
     var onApprovalCleared: ((sessionId: String) -> Unit)? = null,
 ) {
-    private val _name = MutableStateFlow(cwd.name)
+    private val _name = MutableStateFlow("New Session")
     val name: StateFlow<String> = _name
 
     private var titleObserver: FileObserver? = null
@@ -444,6 +444,12 @@ class ManagedSession(
             }
         }
         titleObserver?.startWatching()
+
+        // Read current value if the file already has a title
+        val existing = titleFile.readText().trim()
+        if (existing.isNotBlank()) {
+            _name.value = existing
+        }
     }
 
     fun startTopicObserver(claudeSessionId: String) {

@@ -92,11 +92,12 @@ fun UnifiedTopBar(
             }
 
             // RIGHT: Chat/Terminal segmented toggle
-            Row(
-                modifier = pillModifier
-                    .padding(horizontal = 2.dp),
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
+            Box(modifier = Modifier.align(Alignment.CenterEnd)) {
+                Row(
+                    modifier = pillModifier
+                        .padding(horizontal = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
                 // Chat segment
                 Box(
                     modifier = Modifier
@@ -159,6 +160,7 @@ fun UnifiedTopBar(
                         ),
                         modifier = Modifier.size(18.dp),
                     )
+                }
                 }
             }
         }

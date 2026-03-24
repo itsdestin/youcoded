@@ -3,6 +3,7 @@ package com.destin.code.ui
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -14,10 +15,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.unit.DpOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.destin.code.runtime.ManagedSession
 import com.destin.code.runtime.SessionStatus
 import com.destin.code.ui.theme.CascadiaMono
@@ -46,16 +49,16 @@ fun SessionSwitcherPill(
     ) {
         StatusDot(status)
         Text(
-            "▾",
-            fontSize = 10.sp,
-            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-        )
-        Text(
             name,
             fontSize = 13.sp,
             color = MaterialTheme.colorScheme.onSurface,
             fontFamily = CascadiaMono,
             maxLines = 1,
+        )
+        Text(
+            "▾",
+            fontSize = 10.sp,
+            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
         )
     }
 }
@@ -71,65 +74,113 @@ fun SessionDropdown(
     onRelaunch: (String) -> Unit,
     onNewSession: () -> Unit,
 ) {
-    DropdownMenu(
-        expanded = expanded,
-        onDismissRequest = onDismiss,
-        offset = DpOffset(0.dp, 4.dp),
-    ) {
-        sessions.entries.sortedBy { it.value.createdAt }.forEach { (id, session) ->
-            val name by session.name.collectAsState()
-            val status by session.status.collectAsState()
-            val isCurrent = id == currentSessionId
+    if (!expanded) return
 
-            DropdownMenuItem(
-                text = {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        StatusDot(status)
-                        Text(
-                            name,
-                            fontSize = 13.sp,
-                            fontFamily = CascadiaMono,
-                            color = if (isCurrent) MaterialTheme.colorScheme.primary
-                                    else MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.weight(1f),
-                        )
-                        if (status == SessionStatus.Dead) {
-                            TextButton(onClick = { onRelaunch(id); onDismiss() }) {
-                                Text("Relaunch", fontSize = 11.sp)
+    Popup(
+        alignment = Alignment.TopCenter,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        // Scrim + centered card
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                ) { onDismiss() },
+            contentAlignment = Alignment.TopCenter,
+        ) {
+            Card(
+                modifier = Modifier
+                    .padding(top = 48.dp, start = 16.dp, end = 16.dp)
+                    .widthIn(max = 320.dp)
+                    .shadow(8.dp, RoundedCornerShape(12.dp))
+                    .clickable(
+                        indication = null,
+                        interactionSource = remember { MutableInteractionSource() },
+                    ) { /* consume clicks so they don't hit the scrim */ },
+                shape = RoundedCornerShape(12.dp),
+                colors = CardDefaults.cardColors(
+                    containerColor = MaterialTheme.colorScheme.surface,
+                ),
+            ) {
+                Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                    sessions.entries.sortedBy { it.value.createdAt }.forEach { (id, session) ->
+                        val name by session.name.collectAsState()
+                        val status by session.status.collectAsState()
+                        val isCurrent = id == currentSessionId
+
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { onSelect(id); onDismiss() }
+                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            StatusDot(status)
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    name,
+                                    fontSize = 13.sp,
+                                    fontFamily = CascadiaMono,
+                                    color = if (isCurrent) MaterialTheme.colorScheme.primary
+                                            else MaterialTheme.colorScheme.onSurface,
+                                )
+                                Row(
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    Text(
+                                        session.cwd.name,
+                                        fontSize = 11.sp,
+                                        fontFamily = CascadiaMono,
+                                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                                    )
+                                    if (session.dangerousMode) {
+                                        Text(
+                                            "SKIP PERMISSIONS",
+                                            fontSize = 9.sp,
+                                            fontFamily = CascadiaMono,
+                                            color = MaterialTheme.colorScheme.error,
+                                        )
+                                    }
+                                }
                             }
-                        } else {
-                            Icon(
-                                Icons.Default.Close,
-                                contentDescription = "Close session",
-                                modifier = Modifier
-                                    .size(18.dp)
-                                    .clickable { onDestroy(id); onDismiss() },
-                                tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                            )
+                            if (status == SessionStatus.Dead) {
+                                TextButton(onClick = { onRelaunch(id); onDismiss() }) {
+                                    Text("Relaunch", fontSize = 11.sp)
+                                }
+                            } else {
+                                Icon(
+                                    Icons.Default.Close,
+                                    contentDescription = "Close session",
+                                    modifier = Modifier
+                                        .size(18.dp)
+                                        .clickable { onDestroy(id); onDismiss() },
+                                    tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                )
+                            }
                         }
                     }
-                },
-                onClick = { onSelect(id); onDismiss() },
-            )
-        }
 
-        HorizontalDivider()
+                    HorizontalDivider(modifier = Modifier.padding(horizontal = 8.dp))
 
-        DropdownMenuItem(
-            text = {
-                Row(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Text("New Session", fontSize = 13.sp)
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { onNewSession(); onDismiss() }
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Text("New Session", fontSize = 13.sp, fontFamily = CascadiaMono)
+                    }
                 }
-            },
-            onClick = { onNewSession(); onDismiss() },
-        )
+            }
+        }
     }
 }
 
