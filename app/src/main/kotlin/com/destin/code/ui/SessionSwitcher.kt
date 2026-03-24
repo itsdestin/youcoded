@@ -18,6 +18,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.TextUnit
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.window.Popup
@@ -37,28 +38,37 @@ fun SessionSwitcherPill(
     val status by currentSession?.status?.collectAsState() ?: remember { mutableStateOf(SessionStatus.Dead) }
 
     val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
+    // Detect if name overflows a single line at full size to switch modes
+    var needsMultiLine by remember { mutableStateOf(false) }
+    val singleLineFontSize = 13.sp
+    val multiLineFontSize = 11.sp
+    val multiLineHeight = 14.sp
+
     Row(
         modifier = modifier
             .widthIn(max = 180.dp)
-            .heightIn(max = 38.dp)
+            .then(if (needsMultiLine) Modifier.heightIn(max = 38.dp) else Modifier.height(34.dp))
             .clip(RoundedCornerShape(6.dp))
             .background(MaterialTheme.colorScheme.surface)
             .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
             .clickable { onToggle() }
-            .padding(horizontal = 10.dp, vertical = 4.dp),
+            .padding(horizontal = 10.dp, vertical = if (needsMultiLine) 4.dp else 0.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
         StatusDot(status)
         Text(
             name,
-            fontSize = 11.sp,
-            lineHeight = 14.sp,
+            fontSize = if (needsMultiLine) multiLineFontSize else singleLineFontSize,
+            lineHeight = if (needsMultiLine) multiLineHeight else TextUnit.Unspecified,
             color = MaterialTheme.colorScheme.onSurface,
             fontFamily = CascadiaMono,
-            maxLines = 2,
+            maxLines = if (needsMultiLine) 2 else 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
+            onTextLayout = { result ->
+                needsMultiLine = result.hasVisualOverflow
+            },
         )
         Text(
             "▾",
