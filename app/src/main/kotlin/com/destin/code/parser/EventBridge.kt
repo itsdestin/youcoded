@@ -25,6 +25,11 @@ class EventBridge(private val socketName: String) {
     /** Sockets held open for blocking PermissionRequest responses. */
     private val pendingSockets = ConcurrentHashMap<String, LocalSocket>()
 
+    /** Maps mobile session IDs to Claude Code session IDs. */
+    private val sessionIdMap = ConcurrentHashMap<String, String>()
+
+    fun getClaudeSessionId(mobileSessionId: String): String? = sessionIdMap[mobileSessionId]
+
     @Volatile private var serverSocket: LocalServerSocket? = null
     private var listenJob: Job? = null
 
@@ -74,6 +79,13 @@ class EventBridge(private val socketName: String) {
             // Peek at event type to decide whether to hold the socket
             val json = try { JSONObject(line) } catch (_: Exception) { client.close(); return }
             val eventName = json.optString("hook_event_name", "")
+
+            // Extract session ID mapping if present
+            val mobileSessionId = json.optString("mobileSessionId", "")
+            val claudeSessionId = json.optString("session_id", "")
+            if (mobileSessionId.isNotBlank() && claudeSessionId.isNotBlank()) {
+                sessionIdMap[mobileSessionId] = claudeSessionId
+            }
 
             if (eventName == "PermissionRequest") {
                 // Hold socket open for blocking response

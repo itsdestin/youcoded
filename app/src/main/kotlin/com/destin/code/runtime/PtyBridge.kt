@@ -16,6 +16,7 @@ class PtyBridge(
     private val socketName: String = "${bootstrap.homeDir.absolutePath}/.claude-mobile/parser.sock",
     private val cwd: File = bootstrap.homeDir,
     private val dangerousMode: Boolean = false,
+    val mobileSessionId: String? = null,
 ) {
     private var session: TerminalSession? = null
     private var eventBridge: EventBridge? = null
@@ -97,6 +98,8 @@ class PtyBridge(
 
         // Set socket path for hook-relay.js
         env["CLAUDE_MOBILE_SOCKET"] = socketPath
+        // Set mobile session ID so hook-relay can inject it for session mapping
+        mobileSessionId?.let { env["CLAUDE_MOBILE_SESSION_ID"] = it }
 
         val claudePath = File(bootstrap.usrDir, "lib/node_modules/@anthropic-ai/claude-code/cli.js")
         val nodePath = File(bootstrap.usrDir, "bin/node")

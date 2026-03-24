@@ -24,6 +24,7 @@ enum class SessionStatus { Active, AwaitingApproval, Idle, Dead }
 class ManagedSession(
     val id: String = UUID.randomUUID().toString(),
     val cwd: File,
+    val homeDir: File,
     val dangerousMode: Boolean,
     val ptyBridge: PtyBridge,
     val chatState: ChatState = ChatState(),
@@ -39,6 +40,7 @@ class ManagedSession(
     val name: StateFlow<String> = _name
 
     private var titleObserver: FileObserver? = null
+    private var topicObserver: FileObserver? = null
 
     // Status uses combine + a periodic isRunning check (isRunning is not reactive).
     // A 5-second polling coroutine feeds _isRunningFlow to make Dead detection reactive.
@@ -76,6 +78,11 @@ class ManagedSession(
                 eventBridge = ptyBridge.getEventBridge()
             }
             eventBridge.events.collect { event ->
+                // Check for session ID mapping and start topic observer
+                val claudeSessionId = eventBridge.getClaudeSessionId(id)
+                if (claudeSessionId != null && topicObserver == null) {
+                    startTopicObserver(claudeSessionId)
+                }
                 withContext(Dispatchers.Main) {
                     routeHookEvent(event)
                 }
@@ -439,9 +446,41 @@ class ManagedSession(
         titleObserver?.startWatching()
     }
 
+    fun startTopicObserver(claudeSessionId: String) {
+        val topicDir = File(homeDir, ".claude/topics")
+        topicDir.mkdirs()
+        val topicFileName = "topic-$claudeSessionId"
+        val topicFile = File(topicDir, topicFileName)
+
+        // Watch the DIRECTORY, not the file — the file may not exist yet.
+        topicObserver = object : FileObserver(topicDir, CLOSE_WRITE or MODIFY or CREATE) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path != topicFileName) return
+                try {
+                    val newName = topicFile.readText().trim()
+                    if (newName.isNotBlank() && newName != "New Session") {
+                        _name.value = newName
+                        try { titleFile.writeText(newName) } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+            }
+        }
+        topicObserver?.startWatching()
+
+        // Read current value if the file already exists
+        if (topicFile.exists()) {
+            val currentTopic = topicFile.readText().trim()
+            if (currentTopic.isNotBlank() && currentTopic != "New Session") {
+                _name.value = currentTopic
+            }
+        }
+    }
+
     fun destroy() {
         titleObserver?.stopWatching()
         titleObserver = null
+        topicObserver?.stopWatching()
+        topicObserver = null
         ptyBridge.stop()
         try { titleFile.delete() } catch (_: Exception) {}
     }
