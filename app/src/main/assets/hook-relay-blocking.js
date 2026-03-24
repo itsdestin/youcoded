@@ -21,6 +21,15 @@ process.stdin.on('data', function(chunk) { input += chunk; });
 process.stdin.on('end', function() {
   if (!input.trim()) process.exit(0);
 
+  // Inject mobile session ID so EventBridge can map to Claude Code's session_id
+  if (process.env.CLAUDE_MOBILE_SESSION_ID) {
+    try {
+      var parsed = JSON.parse(input);
+      parsed.mobileSessionId = process.env.CLAUDE_MOBILE_SESSION_ID;
+      input = JSON.stringify(parsed);
+    } catch(e) { /* send raw if parse fails */ }
+  }
+
   var conn = net.connect({ path: '\0' + socket });
   var response = '';
 

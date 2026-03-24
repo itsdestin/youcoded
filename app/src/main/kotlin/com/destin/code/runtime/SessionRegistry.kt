@@ -39,11 +39,13 @@ class SessionRegistry {
             socketName = socketName,
             cwd = cwd,
             dangerousMode = dangerousMode,
+            mobileSessionId = sessionId,
         )
 
         val session = ManagedSession(
             id = sessionId,
             cwd = cwd,
+            homeDir = bootstrap.homeDir,
             dangerousMode = dangerousMode,
             ptyBridge = bridge,
             titleFile = titleFile,

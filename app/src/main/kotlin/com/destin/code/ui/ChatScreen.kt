@@ -4,14 +4,12 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -23,14 +21,11 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.Settings
 import androidx.compose.ui.text.font.FontWeight
 import com.destin.code.config.PackageTier
 import com.destin.code.config.TierStore
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material3.*
@@ -58,8 +53,6 @@ import com.termux.view.TerminalView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
-
-private enum class ScreenMode { Chat, Terminal, Shell }
 
 /** A display item in the chat list — either a single message or a collapsed group of tool calls. */
 private sealed class DisplayItem {
@@ -113,7 +106,6 @@ private fun applyTerminalColors(session: com.termux.terminal.TerminalSession?, i
     }
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(service: SessionService) {
     val sessions by service.sessionRegistry.sessions.collectAsState()
@@ -127,10 +119,14 @@ fun ChatScreen(service: SessionService) {
     var screenMode by remember { mutableStateOf(ScreenMode.Chat) }
     var directShellBridge by remember { mutableStateOf<DirectShellBridge?>(null) }
     DisposableEffect(Unit) { onDispose { directShellBridge?.stop() } }
-    val haptic = LocalHapticFeedback.current
     val context = LocalContext.current
     val tierStore = remember { TierStore(context) }
     var showTierDialog by remember { mutableStateOf(false) }
+
+    val workingDirStore = remember(service.bootstrap) {
+        service.bootstrap?.let { com.destin.code.config.WorkingDirStore(it.homeDir) }
+    }
+    var showManageDirectories by remember { mutableStateOf(false) }
 
     // Session switcher state
     var switcherExpanded by remember { mutableStateOf(false) }
@@ -185,7 +181,117 @@ fun ChatScreen(service: SessionService) {
 
     val isDark = com.destin.code.ui.theme.LocalIsDarkTheme.current
 
-    Box(modifier = Modifier.fillMaxSize()) {
+    Column(modifier = Modifier.fillMaxSize()) {
+        UnifiedTopBar(
+            screenMode = screenMode,
+            onModeChange = { newMode ->
+                when (newMode) {
+                    ScreenMode.Shell -> {
+                        if (directShellBridge == null) {
+                            service.bootstrap?.let { bs ->
+                                directShellBridge = service.sessionRegistry.createDirectShell(bs)
+                            }
+                        }
+                        screenMode = ScreenMode.Shell
+                    }
+                    else -> screenMode = newMode
+                }
+            },
+            currentSession = currentSession,
+            switcherExpanded = switcherExpanded,
+            onSwitcherToggle = { switcherExpanded = !switcherExpanded },
+            settingsMenuContent = { onDismiss ->
+                var themeSubmenuExpanded by remember { mutableStateOf(false) }
+                val currentThemeMode = com.destin.code.ui.theme.LocalThemeMode.current
+                val setThemeMode = com.destin.code.ui.theme.LocalSetThemeMode.current
+
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "Package Tier",
+                            fontSize = 13.sp,
+                            fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                        )
+                    },
+                    onClick = {
+                        onDismiss()
+                        showTierDialog = true
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "Manage Directories",
+                            fontSize = 13.sp,
+                            fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                        )
+                    },
+                    onClick = {
+                        onDismiss()
+                        showManageDirectories = true
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "Theme",
+                            fontSize = 13.sp,
+                            fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                        )
+                    },
+                    onClick = { themeSubmenuExpanded = !themeSubmenuExpanded },
+                )
+                if (themeSubmenuExpanded) {
+                    for (mode in com.destin.code.ui.theme.ThemeMode.entries) {
+                        DropdownMenuItem(
+                            text = {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    Text(
+                                        if (mode == currentThemeMode) "●" else "○",
+                                        fontSize = 10.sp,
+                                        color = if (mode == currentThemeMode)
+                                            MaterialTheme.colorScheme.primary
+                                        else
+                                            MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                    )
+                                    Text(
+                                        mode.label,
+                                        fontSize = 12.sp,
+                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                                    )
+                                }
+                            },
+                            onClick = {
+                                setThemeMode(mode)
+                                onDismiss()
+                            },
+                            modifier = Modifier.padding(start = 12.dp),
+                        )
+                    }
+                }
+            },
+            sessionDropdownContent = {
+                SessionDropdown(
+                    expanded = switcherExpanded,
+                    onDismiss = { switcherExpanded = false },
+                    sessions = sessions,
+                    currentSessionId = currentSessionId,
+                    onSelect = { service.sessionRegistry.switchTo(it) },
+                    onDestroy = { service.destroySession(it) },
+                    onRelaunch = {
+                        service.sessionRegistry.relaunchSession(
+                            it, service.bootstrap!!, null, service.titlesDir
+                        )
+                    },
+                    onNewSession = { showNewSessionDialog = true },
+                )
+            },
+        )
+
+        Box(modifier = Modifier.weight(1f).fillMaxSize()) {
         when (screenMode) {
         ScreenMode.Terminal -> {
             val termFocusRequester = remember { FocusRequester() }
@@ -201,11 +307,6 @@ fun ChatScreen(service: SessionService) {
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
-                ModeHeader(
-                    title = "Terminal",
-                    leftIcon = com.destin.code.ui.theme.AppIcons.Chat,
-                    onLeftClick = { screenMode = ScreenMode.Chat },
-                )
 
                 // Terminal view + floating arrows overlay
                 Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
@@ -309,13 +410,6 @@ fun ChatScreen(service: SessionService) {
 
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
-                ModeHeader(
-                    title = "Shell",
-                    leftIcon = com.destin.code.ui.theme.AppIcons.Chat,
-                    onLeftClick = { screenMode = ScreenMode.Chat },
-                    rightIcon = com.destin.code.ui.theme.AppIcons.AppIcon,
-                    onRightClick = { screenMode = ScreenMode.Terminal },
-                )
 
                 AndroidView(
                     factory = { ctx ->
@@ -378,160 +472,6 @@ fun ChatScreen(service: SessionService) {
         ScreenMode.Chat -> {
             Column(modifier = Modifier.fillMaxSize()) {
                 val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
-
-                // Top bar
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MaterialTheme.colorScheme.background)
-                        .padding(horizontal = 6.dp, vertical = 5.dp),
-                ) {
-                    // Terminal toggle pill — tap = DestinCode terminal, long-press = direct shell
-                    Box(
-                        modifier = Modifier
-                            .align(Alignment.CenterStart)
-                            .height(34.dp)
-                            .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .background(MaterialTheme.colorScheme.surface)
-                            .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                            .combinedClickable(
-                                onClick = { screenMode = ScreenMode.Terminal },
-                                onLongClick = {
-                                    haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                    if (directShellBridge == null) {
-                                        service.bootstrap?.let { bs ->
-                                            directShellBridge = service.sessionRegistry.createDirectShell(bs)
-                                        }
-                                    }
-                                    screenMode = ScreenMode.Shell
-                                },
-                            )
-                            .padding(horizontal = 10.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Icon(
-                            com.destin.code.ui.theme.AppIcons.Terminal,
-                            contentDescription = "Switch to terminal",
-                            tint = MaterialTheme.colorScheme.onSurface,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
-
-                    // Session switcher pill (center)
-                    Box(modifier = Modifier.align(Alignment.Center)) {
-                        SessionSwitcherPill(
-                            currentSession = currentSession,
-                            expanded = switcherExpanded,
-                            onToggle = { switcherExpanded = !switcherExpanded },
-                        )
-                        SessionDropdown(
-                            expanded = switcherExpanded,
-                            onDismiss = { switcherExpanded = false },
-                            sessions = sessions,
-                            currentSessionId = currentSessionId,
-                            onSelect = { service.sessionRegistry.switchTo(it) },
-                            onDestroy = { service.destroySession(it) },
-                            onRelaunch = {
-                                service.sessionRegistry.relaunchSession(
-                                    it, service.bootstrap!!, null, service.titlesDir
-                                )
-                            },
-                            onNewSession = { showNewSessionDialog = true },
-                        )
-                    }
-
-                    // Menu button + dropdown
-                    Box(modifier = Modifier.align(Alignment.CenterEnd)) {
-                        var menuExpanded by remember { mutableStateOf(false) }
-                        var themeSubmenuExpanded by remember { mutableStateOf(false) }
-                        val currentThemeMode = com.destin.code.ui.theme.LocalThemeMode.current
-                        val setThemeMode = com.destin.code.ui.theme.LocalSetThemeMode.current
-
-                        Box(
-                            modifier = Modifier
-                                .height(34.dp)
-                                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                                .background(MaterialTheme.colorScheme.surface)
-                                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                                .clickable { menuExpanded = true }
-                                .padding(horizontal = 10.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Icon(
-                                com.destin.code.ui.theme.AppIcons.Menu,
-                                contentDescription = "Menu",
-                                tint = MaterialTheme.colorScheme.onSurface,
-                                modifier = Modifier.size(18.dp),
-                            )
-                        }
-
-                        DropdownMenu(
-                            expanded = menuExpanded,
-                            onDismissRequest = {
-                                menuExpanded = false
-                                themeSubmenuExpanded = false
-                            },
-                            containerColor = MaterialTheme.colorScheme.surface,
-                        ) {
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Package Tier",
-                                        fontSize = 13.sp,
-                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                    )
-                                },
-                                onClick = {
-                                    menuExpanded = false
-                                    showTierDialog = true
-                                },
-                            )
-                            DropdownMenuItem(
-                                text = {
-                                    Text(
-                                        "Theme",
-                                        fontSize = 13.sp,
-                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                    )
-                                },
-                                onClick = { themeSubmenuExpanded = !themeSubmenuExpanded },
-                            )
-                            if (themeSubmenuExpanded) {
-                                for (mode in com.destin.code.ui.theme.ThemeMode.entries) {
-                                    DropdownMenuItem(
-                                        text = {
-                                            Row(
-                                                verticalAlignment = Alignment.CenterVertically,
-                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                            ) {
-                                                Text(
-                                                    if (mode == currentThemeMode) "●" else "○",
-                                                    fontSize = 10.sp,
-                                                    color = if (mode == currentThemeMode)
-                                                        MaterialTheme.colorScheme.primary
-                                                    else
-                                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
-                                                )
-                                                Text(
-                                                    mode.label,
-                                                    fontSize = 12.sp,
-                                                    fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                                )
-                                            }
-                                        },
-                                        onClick = {
-                                            setThemeMode(mode)
-                                            menuExpanded = false
-                                            themeSubmenuExpanded = false
-                                        },
-                                        modifier = Modifier.padding(start = 12.dp),
-                                    )
-                                }
-                            }
-                        }
-                    }
-                }
-                HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
                 // Messages + activity indicator
                 // Group consecutive completed/failed tool calls into collapsible summaries.
@@ -794,7 +734,8 @@ fun ChatScreen(service: SessionService) {
         }
 
         } // when
-    }
+        } // Box(weight)
+    } // Column(fillMaxSize)
 
     // Tier change dialog
     if (showTierDialog) {
@@ -887,72 +828,31 @@ fun ChatScreen(service: SessionService) {
                 },
             )
         } else {
-            val knownDirs = listOf(
-                "Home (~)" to service.bootstrap!!.homeDir,
-                "claude-mobile" to File(service.bootstrap!!.homeDir, "claude-mobile"),
-                "destin-claude" to File(service.bootstrap!!.homeDir, "destin-claude"),
-            )
+            val knownDirs = workingDirStore?.allDirs() ?: listOf("Home (~)" to service.bootstrap!!.homeDir)
             NewSessionDialog(
                 knownDirs = knownDirs,
+                homeDir = service.bootstrap!!.homeDir,
                 onDismiss = { showNewSessionDialog = false },
                 onCreate = { config ->
                     showNewSessionDialog = false
                     service.createSession(config.cwd, config.dangerousMode, null)
                 },
+                onAddDirectory = { dir ->
+                    workingDirStore?.add(
+                        com.destin.code.config.WorkingDir(label = dir.name, path = dir.absolutePath)
+                    )
+                },
             )
         }
     }
-}
 
-/** Shared header bar for Terminal and Shell modes. */
-@Composable
-private fun ModeHeader(
-    title: String,
-    leftIcon: androidx.compose.ui.graphics.vector.ImageVector,
-    onLeftClick: () -> Unit,
-    rightIcon: androidx.compose.ui.graphics.vector.ImageVector = com.destin.code.ui.theme.AppIcons.AppIcon,
-    onRightClick: (() -> Unit)? = null,
-) {
-    val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(MaterialTheme.colorScheme.background)
-            .padding(horizontal = 6.dp, vertical = 5.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterStart)
-                .height(34.dp)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                .clickable(onClick = onLeftClick)
-                .padding(horizontal = 10.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(leftIcon, contentDescription = "Back",
-                tint = MaterialTheme.colorScheme.onSurface, modifier = Modifier.size(18.dp))
-        }
-        Text(title, fontSize = 15.sp,
-            color = com.destin.code.ui.theme.DestinCodeTheme.extended.textSecondary,
-            modifier = Modifier.align(Alignment.Center))
-        Box(
-            modifier = Modifier
-                .align(Alignment.CenterEnd)
-                .height(34.dp)
-                .clip(androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                .background(MaterialTheme.colorScheme.surface)
-                .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
-                .then(if (onRightClick != null) Modifier.clickable(onClick = onRightClick) else Modifier)
-                .padding(horizontal = 10.dp),
-            contentAlignment = Alignment.Center,
-        ) {
-            Icon(rightIcon, contentDescription = title,
-                tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        }
+    if (showManageDirectories && workingDirStore != null) {
+        ManageDirectoriesScreen(
+            homeDir = service.bootstrap!!.homeDir,
+            workingDirStore = workingDirStore,
+            onBack = { showManageDirectories = false },
+        )
     }
-    HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 }
 
 /** Visible terminal input bar */

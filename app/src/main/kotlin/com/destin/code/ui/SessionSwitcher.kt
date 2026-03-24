@@ -1,6 +1,7 @@
 package com.destin.code.ui
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.CircleShape
@@ -31,11 +32,15 @@ fun SessionSwitcherPill(
     val name by currentSession?.name?.collectAsState() ?: remember { mutableStateOf("No Session") }
     val status by currentSession?.status?.collectAsState() ?: remember { mutableStateOf(SessionStatus.Dead) }
 
+    val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
     Row(
         modifier = modifier
+            .height(34.dp)
             .clip(RoundedCornerShape(6.dp))
+            .background(MaterialTheme.colorScheme.surface)
+            .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
             .clickable { onToggle() }
-            .padding(horizontal = 8.dp, vertical = 6.dp),
+            .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp),
     ) {
