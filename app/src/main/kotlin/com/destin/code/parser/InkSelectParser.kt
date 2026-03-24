@@ -12,7 +12,7 @@ object InkSelectParser {
     // Matches the selected line: optional leading whitespace + ❯, optionally followed by number
     private val SELECTED_LINE = Regex("""^\s*❯\s*(?:\d+\.\s+)?(.+)$""")
     // Strips ANSI escape sequences from terminal output
-    private val ANSI_ESCAPE = Regex("\u001b\\[[0-9;]*[a-zA-Z]")
+    private val ANSI_ESCAPE = Regex("""\u001B\[[0-9;]*[a-zA-Z]""")
     // Matches unselected lines: 2+ leading spaces (no ❯), optionally numbered
     private val UNSELECTED_LINE = Regex("""^\s{2,}(?:\d+\.\s+)?(.+)$""")
     // Detects a new option (has a number prefix like "1. " or "2. ")
@@ -149,8 +149,8 @@ object InkSelectParser {
      * Sends up-arrows for items above the selector and down-arrows for items below.
      */
     fun toPromptButtons(menu: ParsedMenu): List<com.destin.code.ui.PromptButton> {
-        val up = "\u001b[A"
-        val down = "\u001b[B"
+        val up = "^[[A"
+        val down = "^[[B"
         return menu.options.mapIndexed { index, label ->
             val offset = index - menu.selectedIndex
             val sequence = when {
