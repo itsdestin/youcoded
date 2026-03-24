@@ -866,8 +866,99 @@ class Bootstrap(private val context: Context) {
         }
         hooksObj.put(prEvent, prArray)
 
+        // Auto-title hook: deploy only if DestinClaude is not installed
+        val destinclaude = File(homeDir, ".claude/plugins/destinclaude/core/hooks/title-update.sh")
+        val mobileAutoTitleHook = File(mobileDir, "hooks/title-update.sh")
+        val mobileAutoTitleMarker = "title-update.sh"
+
+        if (destinclaude.exists()) {
+            // DestinClaude is installed — remove mobile hook if present
+            if (mobileAutoTitleHook.exists()) {
+                mobileAutoTitleHook.delete()
+                val ptArray = hooksObj.optJSONArray("PostToolUse")
+                if (ptArray != null) {
+                    val toRemove = mutableListOf<Int>()
+                    for (i in 0 until ptArray.length()) {
+                        val entry = ptArray.optJSONObject(i) ?: continue
+                        val hooksList = entry.optJSONArray("hooks") ?: continue
+                        for (j in 0 until hooksList.length()) {
+                            val h = hooksList.optJSONObject(j)
+                            if (h?.optString("command")?.contains(mobileAutoTitleMarker) == true) {
+                                toRemove.add(i); break
+                            }
+                        }
+                    }
+                    for (idx in toRemove.reversed()) { ptArray.remove(idx) }
+                }
+            }
+        } else {
+            // DestinClaude not installed — deploy mobile hook
+            mobileAutoTitleHook.parentFile?.mkdirs()
+            context.assets.open("title-update.sh").use { input ->
+                mobileAutoTitleHook.outputStream().use { output -> input.copyTo(output) }
+            }
+            mobileAutoTitleHook.setExecutable(true)
+
+            // Register as PostToolUse hook (check for duplicates)
+            val bashPath = File(usrDir, "bin/bash").absolutePath
+            val titleHookCommand = "$bashPath ${mobileAutoTitleHook.absolutePath}"
+            val postToolUseArray = hooksObj.optJSONArray("PostToolUse") ?: org.json.JSONArray()
+            var titleHookRegistered = false
+            for (i in 0 until postToolUseArray.length()) {
+                val entry = postToolUseArray.optJSONObject(i)
+                val hooks = entry?.optJSONArray("hooks")
+                if (hooks != null) {
+                    for (j in 0 until hooks.length()) {
+                        val h = hooks.optJSONObject(j)
+                        if (h?.optString("command")?.contains(mobileAutoTitleMarker) == true) {
+                            titleHookRegistered = true; break
+                        }
+                    }
+                }
+                if (titleHookRegistered) break
+            }
+            if (!titleHookRegistered) {
+                val hookEntry = org.json.JSONObject()
+                hookEntry.put("matcher", ".*")
+                val hooksList = org.json.JSONArray()
+                val hookDef = org.json.JSONObject()
+                hookDef.put("type", "command")
+                hookDef.put("command", titleHookCommand)
+                hooksList.put(hookDef)
+                hookEntry.put("hooks", hooksList)
+                postToolUseArray.put(hookEntry)
+                hooksObj.put("PostToolUse", postToolUseArray)
+            }
+
+            // Deploy CLAUDE.md instruction
+            deployAutoTitleInstruction()
+        }
+
+        // Single unified write — covers both relay hooks AND auto-title hook
         existingJson.put("hooks", hooksObj)
         settingsFile.writeText(existingJson.toString(2))
+    }
+
+    /**
+     * Deploy the Auto-Title instruction into CLAUDE.md if DestinClaude is not installed.
+     */
+    private fun deployAutoTitleInstruction() {
+        val claudeMd = File(homeDir, ".claude/CLAUDE.md")
+        val marker = "## Auto-Title"
+        val instruction = """
+## Auto-Title
+
+When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5 word Title Case topic summary to the file path specified. Use: `echo "Topic Here" > /path/to/file`. Do this BEFORE continuing with your response — do not skip or defer it.
+""".trimStart()
+
+        if (claudeMd.exists()) {
+            val content = claudeMd.readText()
+            if (content.contains(marker)) return // Already present
+            claudeMd.appendText("\n$instruction")
+        } else {
+            claudeMd.parentFile?.mkdirs()
+            claudeMd.writeText("# CLAUDE.md\n\n$instruction")
+        }
     }
 
     /**
