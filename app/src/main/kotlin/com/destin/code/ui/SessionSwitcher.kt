@@ -38,8 +38,10 @@ fun SessionSwitcherPill(
     val status by currentSession?.status?.collectAsState() ?: remember { mutableStateOf(SessionStatus.Dead) }
 
     val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
-    // Detect if name overflows a single line at full size to switch modes
-    var needsMultiLine by remember { mutableStateOf(false) }
+    // Detect if name overflows a single line at full size to switch modes.
+    // Reset when name changes; only transition single → multi, never back
+    // (prevents layout oscillation where 13sp overflows but 11sp fits).
+    var needsMultiLine by remember(name) { mutableStateOf(false) }
     val singleLineFontSize = 13.sp
     val multiLineFontSize = 11.sp
     val multiLineHeight = 14.sp
@@ -67,7 +69,7 @@ fun SessionSwitcherPill(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f, fill = false),
             onTextLayout = { result ->
-                needsMultiLine = result.hasVisualOverflow
+                if (result.hasVisualOverflow) needsMultiLine = true
             },
         )
         Text(
