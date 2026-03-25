@@ -192,7 +192,7 @@ fun SessionDropdown(
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        Icon(Icons.Default.Add, contentDescription = null, modifier = Modifier.size(16.dp))
+                        Icon(Icons.Default.Add, contentDescription = "New session", modifier = Modifier.size(16.dp))
                         Text("New Session", fontSize = 13.sp, fontFamily = CascadiaMono)
                     }
                 }

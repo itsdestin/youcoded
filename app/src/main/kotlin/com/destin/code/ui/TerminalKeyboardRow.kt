@@ -18,6 +18,8 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -113,7 +115,8 @@ private fun PermissionModePill(
             .clip(RoundedCornerShape(6.dp))
             .background(bg)
             .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .semantics { contentDescription = "Permission mode: $mode. Tap to cycle." },
         contentAlignment = Alignment.Center,
     ) {
         PermissionModeIcon(mode = mode, color = iconColor)
@@ -224,12 +227,16 @@ private fun SmallPill(
             .clip(RoundedCornerShape(6.dp))
             .background(bg)
             .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick),
+            .clickable(onClick = onClick)
+            .semantics {
+                contentDescription = if (isActive) "$label key, active" else "$label key"
+            },
         contentAlignment = Alignment.Center,
     ) {
         Text(
             label,
             fontSize = 11.sp,
+            fontFamily = com.destin.code.ui.theme.CascadiaMono,
             fontWeight = if (isActive || isPrimary) FontWeight.SemiBold else FontWeight.Normal,
             color = textColor,
         )

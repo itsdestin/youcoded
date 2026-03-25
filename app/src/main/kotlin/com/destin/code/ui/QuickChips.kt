@@ -34,6 +34,9 @@ fun QuickChips(
 ) {
     val borderColor = DestinCodeTheme.extended.surfaceBorder
     val bgColor = MaterialTheme.colorScheme.background
+    val scrollState = rememberScrollState()
+    val canScrollLeft = scrollState.value > 0
+    val canScrollRight = scrollState.value < scrollState.maxValue
 
     Box(
         modifier = modifier
@@ -42,31 +45,33 @@ fun QuickChips(
             .drawWithContent {
                 drawContent()
                 val fadeWidth = 24.dp.toPx()
-                // Left fade
-                drawRect(
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(bgColor, Color.Transparent),
-                        startX = 0f,
-                        endX = fadeWidth,
-                    ),
-                    size = Size(fadeWidth, size.height),
-                )
-                // Right fade
-                drawRect(
-                    brush = Brush.horizontalGradient(
-                        colors = listOf(Color.Transparent, bgColor),
-                        startX = size.width - fadeWidth,
-                        endX = size.width,
-                    ),
-                    topLeft = Offset(size.width - fadeWidth, 0f),
-                    size = Size(fadeWidth, size.height),
-                )
+                if (canScrollLeft) {
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(bgColor, Color.Transparent),
+                            startX = 0f,
+                            endX = fadeWidth,
+                        ),
+                        size = Size(fadeWidth, size.height),
+                    )
+                }
+                if (canScrollRight) {
+                    drawRect(
+                        brush = Brush.horizontalGradient(
+                            colors = listOf(Color.Transparent, bgColor),
+                            startX = size.width - fadeWidth,
+                            endX = size.width,
+                        ),
+                        topLeft = Offset(size.width - fadeWidth, 0f),
+                        size = Size(fadeWidth, size.height),
+                    )
+                }
             },
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .horizontalScroll(rememberScrollState())
+                .horizontalScroll(scrollState)
                 .padding(horizontal = 6.dp, vertical = 5.dp),
             horizontalArrangement = Arrangement.spacedBy(4.dp),
         ) {
@@ -84,6 +89,7 @@ fun QuickChips(
                     Text(
                         chip.label,
                         fontSize = 13.sp,
+                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
                         color = MaterialTheme.colorScheme.primary,
                     )
                 }

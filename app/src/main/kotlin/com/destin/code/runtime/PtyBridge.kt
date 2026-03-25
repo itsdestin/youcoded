@@ -137,7 +137,7 @@ class PtyBridge(
             cwd.absolutePath,
             arrayOf("sh", "-c", launchCmd),
             envArray,
-            200,
+            2000,
             sessionClient
         )
         // initializeEmulator forks the process and starts the PTY.

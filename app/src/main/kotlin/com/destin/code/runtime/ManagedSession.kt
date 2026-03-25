@@ -203,7 +203,9 @@ class ManagedSession(
                     lower.contains("could not read password") ||
                     lower.contains("terminal prompts disabled") ||
                     lower.contains("could not access") ||
-                    lower.contains("credential")
+                    lower.contains("credential") ||
+                    lower.contains("bypass permissions mode") ||
+                    lower.contains("bypass permission")
                 }
                 if (lines.isNotEmpty()) {
                     val notice = lines.joinToString("\n").take(300)

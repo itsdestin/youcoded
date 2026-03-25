@@ -40,7 +40,7 @@ class EventBridge(private val socketName: String) {
             while (retries > 0) {
                 try {
                     serverSocket = LocalServerSocket(socketName)
-                    android.util.Log.d("EventBridge", "Listening on abstract socket: $socketName")
+                    if (com.destin.code.BuildConfig.DEBUG) android.util.Log.d("EventBridge", "Listening on abstract socket: $socketName")
                     break
                 } catch (e: java.io.IOException) {
                     retries--
@@ -74,7 +74,7 @@ class EventBridge(private val socketName: String) {
         try {
             val reader = BufferedReader(InputStreamReader(client.inputStream))
             val line = reader.readLine() ?: run { client.close(); return }
-            android.util.Log.d("EventBridge", "Received: ${line.take(300)}")
+            if (com.destin.code.BuildConfig.DEBUG) android.util.Log.d("EventBridge", "Received: ${line.take(300)}")
 
             // Peek at event type to decide whether to hold the socket
             val json = try { JSONObject(line) } catch (_: Exception) { client.close(); return }
@@ -110,7 +110,7 @@ class EventBridge(private val socketName: String) {
                         android.util.Log.e("EventBridge", "Event buffer full, dropped: ${event::class.simpleName}")
                     }
                 } else {
-                    android.util.Log.w("EventBridge", "Failed to parse hook event: ${line.take(500)}")
+                    android.util.Log.w("EventBridge", "Failed to parse hook event")
                 }
                 client.close()
             }

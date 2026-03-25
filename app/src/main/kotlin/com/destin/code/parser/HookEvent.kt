@@ -94,7 +94,7 @@ sealed class HookEvent {
                             .ifBlank { obj.optString("response", "") }
                             .ifBlank { obj.optString("assistant_message", "") }
                         if (assistantMsg.isBlank()) {
-                            android.util.Log.w("HookEvent", "Stop event has no assistant message. Keys: ${obj.keys().asSequence().toList()}")
+                            android.util.Log.w("HookEvent", "Stop event has no assistant message")
                         }
                         Stop(
                             sessionId = sessionId,

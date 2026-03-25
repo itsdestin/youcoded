@@ -12,6 +12,11 @@ local.properties
 # DestinCode local settings
 .claude/
 
+# Release signing
+*.jks
+*.keystore
+keystore.properties
+
 # Drafts and temp files
 icon-drafts/
 tmp-screenshots/

@@ -1,8 +1,10 @@
 package com.destin.code.ui
 
+import androidx.compose.animation.*
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -12,8 +14,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.window.Popup
+import androidx.compose.ui.window.PopupProperties
 import com.destin.code.runtime.ManagedSession
 import com.destin.code.ui.theme.AppIcons
 import com.destin.code.ui.theme.CascadiaMono
@@ -66,12 +71,11 @@ fun UnifiedTopBar(
                     )
                 }
 
-                DropdownMenu(
-                    expanded = menuExpanded,
-                    onDismissRequest = { menuExpanded = false },
-                    containerColor = MaterialTheme.colorScheme.surface,
-                ) {
-                    settingsMenuContent { menuExpanded = false }
+                if (menuExpanded) {
+                    ExpandingSettingsMenu(
+                        onDismiss = { menuExpanded = false },
+                        content = { settingsMenuContent { menuExpanded = false } },
+                    )
                 }
             }
 
@@ -167,5 +171,57 @@ fun UnifiedTopBar(
         }
 
         HorizontalDivider(color = borderColor, thickness = 0.5.dp)
+    }
+}
+
+/**
+ * Settings menu that expands from the gear button location.
+ * Uses a Popup with animated Card instead of DropdownMenu.
+ */
+@Composable
+fun ExpandingSettingsMenu(
+    onDismiss: () -> Unit,
+    content: @Composable () -> Unit,
+) {
+    val borderColor = DestinCodeTheme.extended.surfaceBorder
+
+    Popup(
+        alignment = Alignment.TopStart,
+        onDismissRequest = onDismiss,
+        properties = PopupProperties(focusable = true),
+    ) {
+        // Full-screen scrim to catch outside taps
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() },
+                ) { onDismiss() },
+        ) {
+            AnimatedVisibility(
+                visible = true,
+                enter = expandVertically(expandFrom = Alignment.Top) + expandHorizontally(expandFrom = Alignment.Start) + fadeIn(),
+            ) {
+                Card(
+                    modifier = Modifier
+                        .padding(start = 6.dp, top = 5.dp)
+                        .widthIn(min = 180.dp, max = 240.dp)
+                        .shadow(4.dp, RoundedCornerShape(8.dp))
+                        .clickable(
+                            indication = null,
+                            interactionSource = remember { MutableInteractionSource() },
+                        ) { /* consume clicks */ },
+                    shape = RoundedCornerShape(8.dp),
+                    colors = CardDefaults.cardColors(
+                        containerColor = MaterialTheme.colorScheme.surface,
+                    ),
+                ) {
+                    Column(modifier = Modifier.padding(vertical = 4.dp)) {
+                        content()
+                    }
+                }
+            }
+        }
     }
 }

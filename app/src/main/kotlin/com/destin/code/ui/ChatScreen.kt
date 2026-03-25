@@ -1,7 +1,9 @@
 package com.destin.code.ui
 
+import android.content.Intent
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.net.Uri
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
@@ -19,6 +21,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material.icons.filled.KeyboardArrowDown
 import androidx.compose.ui.text.font.FontWeight
@@ -100,9 +103,28 @@ private fun applyTerminalColors(session: com.termux.terminal.TerminalSession?, i
         emulator.mColors.tryParseColor(257, "#0A0A0A") // background
         emulator.mColors.tryParseColor(258, "#E0E0E0") // cursor
     } else {
-        emulator.mColors.tryParseColor(256, "#1A1A1A") // foreground
-        emulator.mColors.tryParseColor(257, "#C8C8C8") // background
-        emulator.mColors.tryParseColor(258, "#1A1A1A") // cursor
+        // Medium-dark terminal in light mode — readable without being full black
+        emulator.mColors.tryParseColor(256, "#D8D8D8") // foreground (light gray on dark bg)
+        emulator.mColors.tryParseColor(257, "#2A2A2A") // background (charcoal, not pure black)
+        emulator.mColors.tryParseColor(258, "#D8D8D8") // cursor
+
+        // Override 16 ANSI colors for better contrast on charcoal bg
+        emulator.mColors.tryParseColor(0, "#3A3A3A")  // black (slightly visible)
+        emulator.mColors.tryParseColor(1, "#F07070")  // red
+        emulator.mColors.tryParseColor(2, "#70D070")  // green
+        emulator.mColors.tryParseColor(3, "#D0C060")  // yellow
+        emulator.mColors.tryParseColor(4, "#70A0E0")  // blue
+        emulator.mColors.tryParseColor(5, "#C080D0")  // magenta
+        emulator.mColors.tryParseColor(6, "#60C8C8")  // cyan
+        emulator.mColors.tryParseColor(7, "#C8C8C8")  // white
+        emulator.mColors.tryParseColor(8, "#606060")  // bright black (gray)
+        emulator.mColors.tryParseColor(9, "#FF8888")  // bright red
+        emulator.mColors.tryParseColor(10, "#88E888") // bright green
+        emulator.mColors.tryParseColor(11, "#E8D878") // bright yellow
+        emulator.mColors.tryParseColor(12, "#88B8F0") // bright blue
+        emulator.mColors.tryParseColor(13, "#D898E0") // bright magenta
+        emulator.mColors.tryParseColor(14, "#78D8D8") // bright cyan
+        emulator.mColors.tryParseColor(15, "#E8E8E8") // bright white
     }
 }
 
@@ -132,17 +154,18 @@ fun ChatScreen(service: SessionService) {
         service.bootstrap?.let { com.destin.code.config.WorkingDirStore(it.homeDir) }
     }
     var showManageDirectories by remember { mutableStateOf(false) }
+    var showAbout by remember { mutableStateOf(false) }
 
     // Session switcher state
     var switcherExpanded by remember { mutableStateOf(false) }
     var showNewSessionDialog by remember { mutableStateOf(false) }
 
     // Image attachment state
-    var attachmentPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var attachmentPaths by rememberSaveable { mutableStateOf(listOf<String>()) }
     var attachmentBitmap by remember { mutableStateOf<Bitmap?>(null) }
 
-    LaunchedEffect(attachmentPath) {
-        attachmentBitmap = attachmentPath?.let { path ->
+    LaunchedEffect(attachmentPaths) {
+        attachmentBitmap = attachmentPaths.firstOrNull()?.let { path ->
             try {
                 val opts = BitmapFactory.Options().apply { inSampleSize = 8 }
                 BitmapFactory.decodeFile(path, opts)
@@ -151,14 +174,15 @@ fun ChatScreen(service: SessionService) {
     }
 
     val filePickerLauncher = rememberLauncherForActivityResult(
-        ActivityResultContracts.GetContent()
-    ) { uri ->
-        uri?.let { selectedUri ->
-            coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
-                val homeDir = service.bootstrap?.homeDir ?: return@launch
-                val attachDir = File(homeDir, "attachments").also { it.mkdirs() }
+        ActivityResultContracts.GetMultipleContents()
+    ) { uris ->
+        if (uris.isEmpty()) return@rememberLauncherForActivityResult
+        coroutineScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+            val homeDir = service.bootstrap?.homeDir ?: return@launch
+            val attachDir = File(homeDir, "attachments").also { it.mkdirs() }
+            val newPaths = mutableListOf<String>()
+            for (selectedUri in uris) {
                 val timestamp = System.currentTimeMillis()
-                // Derive extension from MIME type or URI
                 val mime = context.contentResolver.getType(selectedUri)
                 val ext = when {
                     mime?.startsWith("image/png") == true -> "png"
@@ -171,10 +195,11 @@ fun ChatScreen(service: SessionService) {
                     context.contentResolver.openInputStream(selectedUri)?.use { input ->
                         destFile.outputStream().use { output -> input.copyTo(output) }
                     }
-                    kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
-                        attachmentPath = destFile.absolutePath
-                    }
+                    newPaths.add(destFile.absolutePath)
                 } catch (_: Exception) {}
+            }
+            kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.Main) {
+                attachmentPaths = attachmentPaths + newPaths
             }
         }
     }
@@ -187,7 +212,7 @@ fun ChatScreen(service: SessionService) {
     val isDark = com.destin.code.ui.theme.LocalIsDarkTheme.current
 
     Column(modifier = Modifier.fillMaxSize()) {
-        UnifiedTopBar(
+        if (currentSession != null) UnifiedTopBar(
             screenMode = screenMode,
             onModeChange = { newMode -> screenMode = newMode },
             currentSession = currentSession,
@@ -265,6 +290,32 @@ fun ChatScreen(service: SessionService) {
                         )
                     }
                 }
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "Donate",
+                            fontSize = 13.sp,
+                            fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                        )
+                    },
+                    onClick = {
+                        onDismiss()
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://buymeacoffee.com/itsdestin")))
+                    },
+                )
+                DropdownMenuItem(
+                    text = {
+                        Text(
+                            "About",
+                            fontSize = 13.sp,
+                            fontFamily = com.destin.code.ui.theme.CascadiaMono,
+                        )
+                    },
+                    onClick = {
+                        onDismiss()
+                        showAbout = true
+                    },
+                )
             },
             sessionDropdownContent = {
                 SessionDropdown(
@@ -286,29 +337,110 @@ fun ChatScreen(service: SessionService) {
 
         Box(modifier = Modifier.weight(1f).fillMaxSize()) {
         if (currentSession == null) {
-            // No session active — show empty state
-            Column(
-                modifier = Modifier.fillMaxSize(),
-                verticalArrangement = Arrangement.Center,
-                horizontalAlignment = Alignment.CenterHorizontally,
-            ) {
-                Text(
-                    "DestinCode",
-                    style = MaterialTheme.typography.headlineMedium,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-                Spacer(modifier = Modifier.height(8.dp))
-                Text(
-                    "No active sessions",
-                    fontSize = 14.sp,
-                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
-                )
-                Spacer(modifier = Modifier.height(24.dp))
-                Button(
-                    onClick = { showNewSessionDialog = true },
-                    shape = RoundedCornerShape(8.dp),
+            // No session active — show empty state with mascot
+            Box(modifier = Modifier.fillMaxSize()) {
+                // Settings gear — top left
+                Box(modifier = Modifier.align(Alignment.TopStart).padding(6.dp)) {
+                    var emptyMenuExpanded by remember { mutableStateOf(false) }
+                    val emptyBorderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
+
+                    Box(
+                        modifier = Modifier
+                            .height(34.dp)
+                            .clip(RoundedCornerShape(6.dp))
+                            .background(MaterialTheme.colorScheme.surface)
+                            .border(0.5.dp, emptyBorderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
+                            .clickable { emptyMenuExpanded = true }
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            Icons.Default.Settings,
+                            contentDescription = "Settings",
+                            tint = MaterialTheme.colorScheme.onSurface,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+
+                    if (emptyMenuExpanded) {
+                        ExpandingSettingsMenu(
+                            onDismiss = { emptyMenuExpanded = false },
+                        ) {
+                            var emptyThemeSubmenuExpanded by remember { mutableStateOf(false) }
+                            val currentThemeMode = com.destin.code.ui.theme.LocalThemeMode.current
+                            val setThemeMode = com.destin.code.ui.theme.LocalSetThemeMode.current
+
+                            DropdownMenuItem(
+                                text = { Text("Theme", fontSize = 13.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
+                                onClick = { emptyThemeSubmenuExpanded = !emptyThemeSubmenuExpanded },
+                            )
+                            if (emptyThemeSubmenuExpanded) {
+                                for (mode in com.destin.code.ui.theme.ThemeMode.entries) {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                Text(
+                                                    if (mode == currentThemeMode) "●" else "○",
+                                                    fontSize = 10.sp,
+                                                    color = if (mode == currentThemeMode) MaterialTheme.colorScheme.primary
+                                                    else MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
+                                                )
+                                                Text(mode.label, fontSize = 12.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono)
+                                            }
+                                        },
+                                        onClick = { setThemeMode(mode); emptyMenuExpanded = false },
+                                        modifier = Modifier.padding(start = 12.dp),
+                                    )
+                                }
+                            }
+                            DropdownMenuItem(
+                                text = { Text("Donate", fontSize = 13.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
+                                onClick = {
+                                    emptyMenuExpanded = false
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://buymeacoffee.com/itsdestin")))
+                                },
+                            )
+                            DropdownMenuItem(
+                                text = { Text("About", fontSize = 13.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
+                                onClick = { emptyMenuExpanded = false; showAbout = true },
+                            )
+                        }
+                    }
+                }
+
+                // Centered content
+                Column(
+                    modifier = Modifier.align(Alignment.Center),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Text("New Session")
+                    Icon(
+                        com.destin.code.ui.theme.AppIcons.AppIcon,
+                        contentDescription = "DestinCode mascot",
+                        modifier = Modifier.size(64.dp),
+                        tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.3f),
+                    )
+                    Spacer(modifier = Modifier.height(16.dp))
+                    Text(
+                        "DestinCode",
+                        style = MaterialTheme.typography.headlineMedium,
+                        color = MaterialTheme.colorScheme.primary,
+                    )
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        "No active sessions",
+                        fontSize = 14.sp,
+                        color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                    )
+                    Spacer(modifier = Modifier.height(24.dp))
+                    Button(
+                        onClick = { showNewSessionDialog = true },
+                        shape = RoundedCornerShape(8.dp),
+                    ) {
+                        Text("New Session")
+                    }
                 }
             }
         } else
@@ -353,6 +485,8 @@ fun ChatScreen(service: SessionService) {
                                 attachedSession = session
                             }
                             applyTerminalColors(session, isDark)
+                            val termBgColor = if (isDark) 0xFF0A0A0A.toInt() else 0xFF2A2A2A.toInt()
+                            view.setBackgroundColor(termBgColor)
                             @Suppress("UNUSED_EXPRESSION")
                             termScreenVersion
                             // Preserve user's scroll position when they've scrolled up into history.
@@ -387,13 +521,13 @@ fun ChatScreen(service: SessionService) {
                             icon = Icons.Filled.KeyboardArrowUp,
                             contentDescription = "Up",
                             borderColor = borderColor,
-                            onClick = { bridge?.writeInput("^[[A") },
+                            onClick = { bridge?.writeInput("\u001b[A") },
                         )
                         FloatingArrowButton(
                             icon = Icons.Filled.KeyboardArrowDown,
                             contentDescription = "Down",
                             borderColor = borderColor,
-                            onClick = { bridge?.writeInput("^[[B") },
+                            onClick = { bridge?.writeInput("\u001b[B") },
                         )
                     }
                 }
@@ -412,7 +546,7 @@ fun ChatScreen(service: SessionService) {
                     onAttachImage = {
                         filePickerLauncher.launch("*/*")
                     },
-                    attachmentPath = attachmentPath,
+                    hasAttachments = attachmentPaths.isNotEmpty(),
                     permissionMode = chatState.permissionMode,
                     hasBypassMode = currentSession?.dangerousMode == true,
                     onPermissionCycle = { chatState.permissionMode = it },
@@ -451,6 +585,8 @@ fun ChatScreen(service: SessionService) {
                             shellAttachedSession = session
                         }
                         applyTerminalColors(session, isDark)
+                        val shellTermBgColor = if (isDark) 0xFF0A0A0A.toInt() else 0xFF2A2A2A.toInt()
+                        view.setBackgroundColor(shellTermBgColor)
                         @Suppress("UNUSED_EXPRESSION")
                         shellScreenVersion
                         val wasScrolledUp = view.topRow < 0
@@ -480,7 +616,7 @@ fun ChatScreen(service: SessionService) {
                     onAttachImage = {
                         filePickerLauncher.launch("*/*")
                     },
-                    attachmentPath = attachmentPath,
+                    hasAttachments = attachmentPaths.isNotEmpty(),
                     permissionMode = chatState.permissionMode,
                     hasBypassMode = currentSession?.dangerousMode == true,
                     onPermissionCycle = { chatState.permissionMode = it },
@@ -604,7 +740,7 @@ fun ChatScreen(service: SessionService) {
                 HorizontalDivider(color = borderColor, thickness = 0.5.dp)
 
                 // Attachment thumbnail preview
-                if (attachmentBitmap != null) {
+                if (attachmentPaths.isNotEmpty()) {
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -621,17 +757,21 @@ fun ChatScreen(service: SessionService) {
                             )
                         }
                         Spacer(modifier = Modifier.width(8.dp))
-                        Text("File attached", fontSize = 12.sp,
-                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
+                        Text(
+                            if (attachmentPaths.size == 1) "File attached"
+                            else "${attachmentPaths.size} files attached",
+                            fontSize = 12.sp,
+                            color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
+                        )
                         Spacer(modifier = Modifier.weight(1f))
                         Icon(
                             Icons.Filled.Close,
-                            contentDescription = "Remove attachment",
+                            contentDescription = "Remove attachments",
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                             modifier = Modifier
                                 .size(20.dp)
                                 .clickable {
-                                    attachmentPath = null
+                                    attachmentPaths = emptyList()
                                     attachmentBitmap = null
                                 },
                         )
@@ -686,7 +826,7 @@ fun ChatScreen(service: SessionService) {
                                     Icon(
                                         com.destin.code.ui.theme.AppIcons.Attach,
                                         contentDescription = "Attach file",
-                                        tint = if (attachmentPath != null)
+                                        tint = if (attachmentPaths.isNotEmpty())
                                             Color(0xFFB0B0B0)
                                         else
                                             Color(0xFF555555),
@@ -710,23 +850,25 @@ fun ChatScreen(service: SessionService) {
                             .border(0.5.dp, borderColor.copy(alpha = 0.5f), androidx.compose.foundation.shape.RoundedCornerShape(6.dp))
                             .clickable {
                                 val text = chatState.inputDraft.text
-                                if (text.isNotBlank() || attachmentPath != null) {
+                                if (text.isNotBlank() || attachmentPaths.isNotEmpty()) {
                                     val messageText = buildString {
-                                        attachmentPath?.let { path ->
+                                        for (path in attachmentPaths) {
                                             appendLine("[File attached: $path]")
-                                            appendLine()
                                         }
+                                        if (attachmentPaths.isNotEmpty()) appendLine()
                                         append(text)
                                     }.trim()
+                                    val imageCount = attachmentPaths.size
                                     val displayText = when {
-                                        attachmentPath != null && text.isBlank() -> "[image]"
-                                        attachmentPath != null -> "[image] $text"
+                                        imageCount > 1 && text.isBlank() -> "[$imageCount images]"
+                                        imageCount == 1 && text.isBlank() -> "[image]"
+                                        imageCount > 0 -> "[$imageCount image${if (imageCount > 1) "s" else ""}] $text"
                                         else -> text
                                     }
                                     chatState.addUserMessage(displayText)
                                     bridge?.writeInput(messageText + "\r")
                                     chatState.clearDraft()
-                                    attachmentPath = null
+                                    attachmentPaths = emptyList()
                                     attachmentBitmap = null
                                 }
                             },
@@ -741,12 +883,7 @@ fun ChatScreen(service: SessionService) {
                 QuickChips(
                     tier = tierStore.selectedTier,
                     onChipTap = { chip ->
-                        if (chip.needsCompletion) {
-                            chatState.setDraftText(chip.prompt)
-                        } else {
-                            chatState.addUserMessage(chip.prompt)
-                            bridge?.writeInput(chip.prompt + "\r")
-                        }
+                        chatState.setDraftText(chip.prompt)
                     }
                 )
             }
@@ -764,25 +901,37 @@ fun ChatScreen(service: SessionService) {
         if (!showRestartConfirm) {
             AlertDialog(
                 onDismissRequest = { showTierDialog = false },
-                title = { Text("Package Tier") },
+                title = { Text("Package Tier", fontSize = 16.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
                 text = {
-                    Column {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         PackageTier.entries.forEach { tier ->
                             Row(
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .clip(RoundedCornerShape(6.dp))
+                                    .then(
+                                        if (dialogTier == tier)
+                                            Modifier.background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f))
+                                        else Modifier
+                                    )
                                     .clickable { dialogTier = tier }
-                                    .padding(vertical = 8.dp),
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
                                 verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
                             ) {
-                                RadioButton(
-                                    selected = dialogTier == tier,
-                                    onClick = { dialogTier = tier },
+                                Text(
+                                    if (dialogTier == tier) "●" else "○",
+                                    fontSize = 10.sp,
+                                    color = if (dialogTier == tier)
+                                        MaterialTheme.colorScheme.primary
+                                    else
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.4f),
                                 )
-                                Spacer(modifier = Modifier.width(8.dp))
                                 Column {
-                                    Text(tier.displayName, fontWeight = FontWeight.Bold, fontSize = 14.sp)
-                                    Text(tier.description, fontSize = 12.sp,
+                                    Text(tier.displayName, fontWeight = FontWeight.Bold, fontSize = 13.sp,
+                                        fontFamily = com.destin.code.ui.theme.CascadiaMono)
+                                    Text(tier.description, fontSize = 11.sp,
+                                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
                                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f))
                                 }
                             }
@@ -806,7 +955,7 @@ fun ChatScreen(service: SessionService) {
         } else {
             AlertDialog(
                 onDismissRequest = { showTierDialog = false },
-                title = { Text("Tier Updated") },
+                title = { Text("Tier Updated", fontSize = 16.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
                 text = {
                     Text("Package tier changed to ${dialogTier.displayName}. " +
                         "Restart now to install new packages.")
@@ -840,7 +989,7 @@ fun ChatScreen(service: SessionService) {
         if (service.sessionRegistry.sessionCount >= 5) {
             AlertDialog(
                 onDismissRequest = { showNewSessionDialog = false },
-                title = { Text("Session Limit") },
+                title = { Text("Session Limit", fontSize = 16.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
                 text = { Text("You have 5 active sessions. Close one before creating a new session.") },
                 confirmButton = {
                     TextButton(onClick = { showNewSessionDialog = false }) { Text("OK") }
@@ -852,6 +1001,7 @@ fun ChatScreen(service: SessionService) {
                 knownDirs = knownDirs,
                 homeDir = service.bootstrap!!.homeDir,
                 onDismiss = { showNewSessionDialog = false },
+                centered = currentSession == null,
                 onCreate = { config ->
                     showNewSessionDialog = false
                     if (config.shellMode) {
@@ -878,6 +1028,10 @@ fun ChatScreen(service: SessionService) {
             onBack = { showManageDirectories = false },
         )
     }
+
+    if (showAbout) {
+        AboutScreen(onBack = { showAbout = false })
+    }
 }
 
 /** Visible terminal input bar */
@@ -889,7 +1043,7 @@ private fun TerminalInputBar(
     onSend: (String) -> Unit,
     onKeyPress: (String) -> Unit,
     onAttachImage: (() -> Unit)? = null,
-    attachmentPath: String? = null,
+    hasAttachments: Boolean = false,
     permissionMode: String = "Normal",
     hasBypassMode: Boolean = false,
     onPermissionCycle: ((String) -> Unit)? = null,
@@ -953,7 +1107,7 @@ private fun TerminalInputBar(
                                 Icon(
                                     com.destin.code.ui.theme.AppIcons.Attach,
                                     contentDescription = "Attach file",
-                                    tint = if (attachmentPath != null)
+                                    tint = if (hasAttachments)
                                         Color(0xFFB0B0B0)
                                     else
                                         Color(0xFF555555),

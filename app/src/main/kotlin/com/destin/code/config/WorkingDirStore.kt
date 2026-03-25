@@ -54,7 +54,7 @@ class WorkingDirStore(private val homeDir: File) {
                 if (label.isNotBlank() && path.isNotBlank()) WorkingDir(label, path) else null
             }
         } catch (_: Exception) {
-            android.util.Log.w("WorkingDirStore", "Invalid JSON in ${file.absolutePath}, treating as empty")
+            android.util.Log.w("WorkingDirStore", "Invalid JSON in working dirs file, treating as empty")
             emptyList()
         }
     }

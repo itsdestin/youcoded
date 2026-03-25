@@ -31,7 +31,7 @@ fun ManageDirectoriesScreen(
 
     AlertDialog(
         onDismissRequest = onBack,
-        title = { Text("Working Directories", fontSize = 16.sp) },
+        title = { Text("Working Directories", fontSize = 16.sp, fontFamily = CascadiaMono) },
         text = {
             LazyColumn(
                 modifier = Modifier.heightIn(max = 400.dp),

@@ -43,7 +43,7 @@ fun ToolGroupCard(
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(8.dp))
-            .border(0.5.dp, borderColor, RoundedCornerShape(8.dp))
+            .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface)
             .clickable { onToggle() }
             .padding(10.dp)

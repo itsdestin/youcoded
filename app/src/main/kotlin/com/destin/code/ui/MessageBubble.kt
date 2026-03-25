@@ -86,7 +86,7 @@ fun LinkPills(text: String) {
                 modifier = Modifier
                     .clip(RoundedCornerShape(6.dp))
                     .background(LINK_COLOR.copy(alpha = 0.1f))
-                    .border(0.5.dp, LINK_COLOR.copy(alpha = 0.3f), RoundedCornerShape(6.dp))
+                    .border(0.5.dp, LINK_COLOR.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
                     .clickable { uriHandler.openUri(url) }
                     .padding(horizontal = 10.dp, vertical = 6.dp),
             ) {

@@ -42,7 +42,7 @@ fun DirectoryBrowserDialog(
         onDismissRequest = onDismiss,
         title = {
             Column {
-                Text(title, fontSize = 16.sp)
+                Text(title, fontSize = 16.sp, fontFamily = CascadiaMono)
                 Text(
                     currentDir.absolutePath.replace(root.absolutePath, pathPrefix)
                         .ifEmpty { pathPrefix },
@@ -98,7 +98,7 @@ fun DirectoryBrowserDialog(
                     ) {
                         Icon(
                             Icons.Default.Folder,
-                            contentDescription = null,
+                            contentDescription = "Folder",
                             modifier = Modifier.size(18.dp),
                             tint = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.6f),
                         )
@@ -108,8 +108,8 @@ fun DirectoryBrowserDialog(
             }
         },
         confirmButton = {
-            Button(onClick = { onSelect(currentDir) }) {
-                Text("Select This Directory")
+            TextButton(onClick = { onSelect(currentDir) }) {
+                Text("Select")
             }
         },
         dismissButton = {

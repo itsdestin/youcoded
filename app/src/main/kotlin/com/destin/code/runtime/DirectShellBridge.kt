@@ -59,7 +59,7 @@ class DirectShellBridge(private val bootstrap: Bootstrap) {
             bootstrap.homeDir.absolutePath,
             arrayOf("sh", "-c", launchCmd),
             envArray,
-            200,
+            2000,
             sessionClient
         )
         session?.initializeEmulator(60, 40)

@@ -35,6 +35,7 @@ fun NewSessionDialog(
     onDismiss: () -> Unit,
     onCreate: (NewSessionConfig) -> Unit,
     onAddDirectory: (File) -> Unit,
+    centered: Boolean = false,
 ) {
     var selectedDir by remember { mutableStateOf(knownDirs.firstOrNull()?.second) }
     var dangerousMode by remember { mutableStateOf(false) }
@@ -81,8 +82,10 @@ fun NewSessionDialog(
 
     val borderColor = DestinCodeTheme.extended.surfaceBorder
 
+    val popupAlignment = if (centered) Alignment.Center else Alignment.TopCenter
+
     Popup(
-        alignment = Alignment.TopCenter,
+        alignment = popupAlignment,
         onDismissRequest = onDismiss,
         properties = PopupProperties(focusable = true),
     ) {
@@ -93,7 +96,7 @@ fun NewSessionDialog(
                     indication = null,
                     interactionSource = remember { MutableInteractionSource() },
                 ) { onDismiss() },
-            contentAlignment = Alignment.TopCenter,
+            contentAlignment = popupAlignment,
         ) {
             Card(
                 modifier = Modifier
@@ -116,7 +119,7 @@ fun NewSessionDialog(
                     // Title
                     Text(
                         "New Session",
-                        fontSize = 18.sp,
+                        fontSize = 16.sp,
                         fontFamily = CascadiaMono,
                         color = MaterialTheme.colorScheme.onSurface,
                         fontWeight = androidx.compose.ui.text.font.FontWeight.Bold,
@@ -131,7 +134,7 @@ fun NewSessionDialog(
                     ) {
                         Text(
                             "PROJECT FOLDER",
-                            fontSize = 11.sp,
+                            fontSize = 12.sp,
                             fontFamily = CascadiaMono,
                             color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
                             letterSpacing = 1.sp,
@@ -144,7 +147,7 @@ fun NewSessionDialog(
                                 .background(MaterialTheme.colorScheme.surfaceVariant)
                                 .border(
                                     0.5.dp,
-                                    borderColor.copy(alpha = 0.3f),
+                                    borderColor.copy(alpha = 0.5f),
                                     RoundedCornerShape(8.dp),
                                 )
                                 .then(if (!shellMode) Modifier.clickable { showDirPicker = !showDirPicker } else Modifier)

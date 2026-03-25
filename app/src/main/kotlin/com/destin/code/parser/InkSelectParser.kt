@@ -23,8 +23,8 @@ object InkSelectParser {
         "trust" to "Trust This Folder?",
         "dark mode" to "Choose a Theme for the Terminal",
         "login method" to "Select Login Method",
-        "dangerously-skip-permissions" to "Skip Permissions Warning",
-        "skip all permission" to "Skip Permissions Warning",
+        "dangerously-skip-permissions" to "You are allowing Claude to bypass permission prompts, which can be dangerous. Proceed?",
+        "skip all permission" to "You are allowing Claude to bypass permission prompts, which can be dangerous. Proceed?",
     )
 
     /**
@@ -149,8 +149,8 @@ object InkSelectParser {
      * Sends up-arrows for items above the selector and down-arrows for items below.
      */
     fun toPromptButtons(menu: ParsedMenu): List<com.destin.code.ui.PromptButton> {
-        val up = "^[[A"
-        val down = "^[[B"
+        val up = "\u001b[A"
+        val down = "\u001b[B"
         return menu.options.mapIndexed { index, label ->
             val offset = index - menu.selectedIndex
             val sequence = when {

@@ -71,7 +71,7 @@ fun ToolCard(
             .fillMaxWidth()
             .padding(horizontal = 8.dp, vertical = 2.dp)
             .clip(RoundedCornerShape(8.dp))
-            .border(if (state == ToolCardState.Failed) 1.dp else 0.5.dp, borderColor, RoundedCornerShape(8.dp))
+            .border(if (state == ToolCardState.Failed) 1.dp else 0.5.dp, borderColor.copy(alpha = if (state == ToolCardState.Failed) 1f else 0.5f), RoundedCornerShape(8.dp))
             .background(MaterialTheme.colorScheme.surface)
             .clickable { onToggle(cardId) }
             .padding(10.dp)
