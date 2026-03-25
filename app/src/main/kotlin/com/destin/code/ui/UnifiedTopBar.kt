@@ -1,10 +1,8 @@
 package com.destin.code.ui
 
-import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -14,8 +12,6 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.hapticfeedback.HapticFeedbackType
-import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.destin.code.runtime.ManagedSession
@@ -25,7 +21,6 @@ import com.destin.code.ui.theme.DestinCodeTheme
 
 enum class ScreenMode { Chat, Terminal, Shell }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun UnifiedTopBar(
     screenMode: ScreenMode,
@@ -39,7 +34,6 @@ fun UnifiedTopBar(
     sessionDropdownContent: @Composable () -> Unit,
 ) {
     val borderColor = DestinCodeTheme.extended.surfaceBorder
-    val haptic = LocalHapticFeedback.current
     val pillShape = RoundedCornerShape(6.dp)
     val pillModifier = Modifier
         .height(34.dp)
@@ -91,76 +85,73 @@ fun UnifiedTopBar(
                 sessionDropdownContent()
             }
 
-            // RIGHT: Chat/Terminal segmented toggle
+            // RIGHT: Chat/Terminal segmented toggle — tap anywhere to switch
             Box(modifier = Modifier.align(Alignment.CenterEnd)) {
                 Row(
                     modifier = pillModifier
+                        .clickable {
+                            val next = when (screenMode) {
+                                ScreenMode.Chat -> ScreenMode.Terminal
+                                else -> ScreenMode.Chat
+                            }
+                            onModeChange(next)
+                        }
                         .padding(horizontal = 2.dp),
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
-                // Chat segment
-                Box(
-                    modifier = Modifier
-                        .height(30.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .then(
-                            if (screenMode == ScreenMode.Chat)
-                                Modifier.background(
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                                )
-                            else Modifier
+                    // Chat segment
+                    Box(
+                        modifier = Modifier
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .then(
+                                if (screenMode == ScreenMode.Chat)
+                                    Modifier.background(
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                                    )
+                                else Modifier
+                            )
+                            .padding(horizontal = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            AppIcons.Chat,
+                            contentDescription = "Chat",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(
+                                alpha = if (screenMode == ScreenMode.Chat) 1f else 0.4f
+                            ),
+                            modifier = Modifier.size(18.dp),
                         )
-                        .clickable { onModeChange(ScreenMode.Chat) }
-                        .padding(horizontal = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        AppIcons.Chat,
-                        contentDescription = "Chat",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(
-                            alpha = if (screenMode == ScreenMode.Chat) 1f else 0.4f
-                        ),
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                    }
 
-                // Terminal segment
-                Box(
-                    modifier = Modifier
-                        .height(30.dp)
-                        .clip(RoundedCornerShape(4.dp))
-                        .then(
-                            when (screenMode) {
-                                ScreenMode.Terminal -> Modifier.background(
-                                    MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
-                                )
-                                ScreenMode.Shell -> Modifier.background(
-                                    MaterialTheme.colorScheme.tertiaryContainer
-                                )
-                                else -> Modifier
-                            }
+                    // Terminal segment
+                    Box(
+                        modifier = Modifier
+                            .height(30.dp)
+                            .clip(RoundedCornerShape(4.dp))
+                            .then(
+                                when (screenMode) {
+                                    ScreenMode.Terminal -> Modifier.background(
+                                        MaterialTheme.colorScheme.onSurface.copy(alpha = 0.1f)
+                                    )
+                                    ScreenMode.Shell -> Modifier.background(
+                                        MaterialTheme.colorScheme.tertiaryContainer
+                                    )
+                                    else -> Modifier
+                                }
+                            )
+                            .padding(horizontal = 8.dp),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            AppIcons.Terminal,
+                            contentDescription = "Terminal",
+                            tint = MaterialTheme.colorScheme.onSurface.copy(
+                                alpha = if (screenMode != ScreenMode.Chat) 1f else 0.4f
+                            ),
+                            modifier = Modifier.size(18.dp),
                         )
-                        .combinedClickable(
-                            onClick = {
-                                onModeChange(ScreenMode.Terminal)
-                            },
-                            onLongClick = {
-                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
-                                onModeChange(ScreenMode.Shell)
-                            },
-                        )
-                        .padding(horizontal = 8.dp),
-                    contentAlignment = Alignment.Center,
-                ) {
-                    Icon(
-                        AppIcons.Terminal,
-                        contentDescription = "Terminal",
-                        tint = MaterialTheme.colorScheme.onSurface.copy(
-                            alpha = if (screenMode != ScreenMode.Chat) 1f else 0.4f
-                        ),
-                        modifier = Modifier.size(18.dp),
-                    )
-                }
+                    }
                 }
             }
         }

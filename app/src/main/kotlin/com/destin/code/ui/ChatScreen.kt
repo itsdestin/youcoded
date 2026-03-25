@@ -184,19 +184,7 @@ fun ChatScreen(service: SessionService) {
     Column(modifier = Modifier.fillMaxSize()) {
         UnifiedTopBar(
             screenMode = screenMode,
-            onModeChange = { newMode ->
-                when (newMode) {
-                    ScreenMode.Shell -> {
-                        if (directShellBridge == null) {
-                            service.bootstrap?.let { bs ->
-                                directShellBridge = service.sessionRegistry.createDirectShell(bs)
-                            }
-                        }
-                        screenMode = ScreenMode.Shell
-                    }
-                    else -> screenMode = newMode
-                }
-            },
+            onModeChange = { newMode -> screenMode = newMode },
             currentSession = currentSession,
             switcherExpanded = switcherExpanded,
             onSwitcherToggle = { switcherExpanded = !switcherExpanded },
@@ -292,6 +280,33 @@ fun ChatScreen(service: SessionService) {
         )
 
         Box(modifier = Modifier.weight(1f).fillMaxSize()) {
+        if (currentSession == null) {
+            // No session active — show empty state
+            Column(
+                modifier = Modifier.fillMaxSize(),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "DestinCode",
+                    style = MaterialTheme.typography.headlineMedium,
+                    color = MaterialTheme.colorScheme.primary,
+                )
+                Spacer(modifier = Modifier.height(8.dp))
+                Text(
+                    "No active sessions",
+                    fontSize = 14.sp,
+                    color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.5f),
+                )
+                Spacer(modifier = Modifier.height(24.dp))
+                Button(
+                    onClick = { showNewSessionDialog = true },
+                    shape = RoundedCornerShape(8.dp),
+                ) {
+                    Text("New Session")
+                }
+            }
+        } else
         when (screenMode) {
         ScreenMode.Terminal -> {
             val termFocusRequester = remember { FocusRequester() }
@@ -835,7 +850,14 @@ fun ChatScreen(service: SessionService) {
                 onDismiss = { showNewSessionDialog = false },
                 onCreate = { config ->
                     showNewSessionDialog = false
-                    service.createSession(config.cwd, config.dangerousMode, null)
+                    if (config.shellMode) {
+                        service.bootstrap?.let { bs ->
+                            directShellBridge = service.sessionRegistry.createDirectShell(bs)
+                            screenMode = ScreenMode.Shell
+                        }
+                    } else {
+                        service.createSession(config.cwd, config.dangerousMode, null)
+                    }
                 },
                 onAddDirectory = { dir ->
                     workingDirStore?.add(

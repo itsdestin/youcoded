@@ -1,10 +1,12 @@
 package com.destin.code.ui
 
+import android.view.WindowManager
 import androidx.compose.foundation.layout.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.buildAnnotatedString
@@ -45,6 +47,13 @@ private fun SetupSpinner() {
 
 @Composable
 fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
+    // Keep screen on during setup — release when composable leaves
+    val view = LocalView.current
+    DisposableEffect(Unit) {
+        view.keepScreenOn = true
+        onDispose { view.keepScreenOn = false }
+    }
+
     // Single smooth progress state that persists across Extracting → Installing transitions
     var displayProgress by remember { mutableFloatStateOf(0f) }
     val realPercent = when (progress) {

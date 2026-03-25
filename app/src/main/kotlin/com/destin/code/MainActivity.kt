@@ -128,12 +128,9 @@ class MainActivity : ComponentActivity() {
                                 is ServiceBinder.SessionState.Connected -> {
                                     val svc = (serviceState as ServiceBinder.SessionState.Connected).service
 
-                                    // Auto-create first session if none exist
+                                    // Initialize bootstrap but don't auto-create sessions
                                     LaunchedEffect(svc) {
-                                        if (svc.sessionRegistry.sessionCount == 0) {
-                                            svc.initBootstrap(bootstrap)
-                                            svc.createSession(bootstrap.homeDir, dangerousMode = false, apiKey = null)
-                                        }
+                                        svc.initBootstrap(bootstrap)
                                     }
 
                                     // Handle intent session_id from notification tap
