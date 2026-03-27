@@ -499,6 +499,18 @@ class Bootstrap(private val context: Context) {
         return File(usrDir, checkFile).exists()
     }
 
+    /**
+     * Choose parallel download worker count based on device resources.
+     * Downloads are I/O-bound so RAM and network matter more than CPU,
+     * but availableProcessors() is a good proxy for device tier on Android.
+     * Budget ~32MB heap per worker (download buffer + decompression).
+     */
+    private fun downloadConcurrency(): Int {
+        val cores = Runtime.getRuntime().availableProcessors()
+        val heapMB = (Runtime.getRuntime().maxMemory() / (1024 * 1024)).toInt()
+        return minOf(cores, heapMB / 32).coerceIn(2, 12)
+    }
+
     private fun installPackages(onProgress: (Progress) -> Unit) {
         // Invalidate prefix-rewrite sentinel so applyPostInstallFixups()
         // re-scans scripts after new packages are installed.
@@ -528,10 +540,13 @@ class Bootstrap(private val context: Context) {
         val totalBytes = toInstall.sumOf { it.second.size }.coerceAtLeast(1)
         val completedBytes = AtomicLong(0)
 
-        // Download and extract packages in parallel (6 concurrent workers).
-        // Each worker gets its own temp file. Extraction writes to different
-        // paths within $PREFIX so concurrent writes are safe (mkdirs is idempotent).
-        val executor = Executors.newFixedThreadPool(6)
+        // Download and extract packages in parallel. Worker count scales with
+        // device resources (2 on low-RAM, up to 12 on flagships). Each worker
+        // gets its own temp file; extraction writes to different paths within
+        // $PREFIX so concurrent writes are safe (mkdirs is idempotent).
+        val workers = downloadConcurrency()
+        Log.d("Bootstrap", "Installing ${toInstall.size} packages with $workers concurrent workers")
+        val executor = Executors.newFixedThreadPool(workers)
         val errors = java.util.concurrent.ConcurrentLinkedQueue<String>()
 
         val futures = toInstall.map { (name, pkg) ->
