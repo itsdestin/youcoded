@@ -475,7 +475,11 @@ class Bootstrap(private val context: Context) {
             "rhash" -> "lib/librhash.so"
             "cmake" -> "bin/cmake"
             "sqlite" -> "bin/sqlite3"
-            else -> return false
+            // Fallback for packages without a known check file:
+            // trust the installed-versions record. This prevents re-downloading
+            // every launch if a new transitive dep is added to the lists but
+            // not to this when() block.
+            else -> return true
         }
         return File(usrDir, checkFile).exists()
     }
