@@ -1081,7 +1081,7 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
         val wrapperBinaries = listOf(
             // Commonly used in fzf --preview / micro plugins
             "git", "bat", "cat", "head", "tail", "less",
-            "rg", "fd", "eza", "tree", "jq",
+            "rg", "fd", "eza", "tree", "jq", "find", "wc", "sort",
             // git helpers (exec'd by git internally — but termux-exec handles
             // these now; kept here for /system/bin/sh fallback completeness)
             "ssh", "ssh-keygen", "gpg", "gpg2", "curl", "wget",
@@ -1090,7 +1090,7 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
         )
         for (name in wrapperBinaries) {
             val realBin = File(usrDir, "bin/$name")
-            val targetPath = if (realBin.exists()) realBin.canonicalPath else continue
+            val targetPath = if (realBin.exists()) realBin.absolutePath else continue
             val wrapper = File(execWrappersDir, name)
             wrapper.writeText("#!/system/bin/sh\nexec /system/bin/linker64 \"$targetPath\" \"\$@\"\n")
             wrapper.setExecutable(true)
@@ -1355,6 +1355,16 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
         if (microBin.exists()) {
             sb.appendLine("""micro() { __fix_tmp "${'$'}@"; SHELL=/system/bin/sh /system/bin/linker64 "${microBin.absolutePath}" "${'$'}{__FT[@]}"; }""")
             functionNames.add("micro")
+        }
+
+        // Neovim wrapper — nvim has the Termux prefix compiled in for its runtime
+        // directory. VIMRUNTIME is already set globally for vim; override it
+        // per-invocation so neovim finds its own runtime (syntax, ftplugins, etc.)
+        // without affecting vim's global setting.
+        val nvimBin = File(binDir, "nvim")
+        if (nvimBin.exists()) {
+            sb.appendLine("""nvim() { __fix_tmp "${'$'}@"; VIMRUNTIME="$usrPath/share/nvim/runtime" /system/bin/linker64 "${nvimBin.absolutePath}" "${'$'}{__FT[@]}"; }""")
+            functionNames.add("nvim")
         }
 
         // Android filesystem fixes
