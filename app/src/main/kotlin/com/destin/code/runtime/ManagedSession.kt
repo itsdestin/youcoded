@@ -185,42 +185,9 @@ class ManagedSession(
             } catch (_: Exception) {}
         }
 
-        // 5. PTY output consumer — surfaces important terminal messages in chat view.
-        scope.launch {
-            val debounceMs = 500L
-            var pendingNotice: String? = null
-            var lastEmitTime = 0L
-            bridge.outputFlow.collect { delta ->
-                val lines = delta.lines().filter { line ->
-                    val lower = line.lowercase().trim()
-                    lower.isNotEmpty() &&
-                    (lower.startsWith("error") || lower.startsWith("warning") ||
-                     lower.contains("fatal:") || lower.contains("panic:") ||
-                     lower.contains("exception:") || lower.contains("segfault"))
-                }.filterNot { line ->
-                    val lower = line.lowercase().trim()
-                    lower.contains("could not read username") ||
-                    lower.contains("could not read password") ||
-                    lower.contains("terminal prompts disabled") ||
-                    lower.contains("could not access") ||
-                    lower.contains("credential") ||
-                    lower.contains("bypass permissions mode") ||
-                    lower.contains("bypass permission")
-                }
-                if (lines.isNotEmpty()) {
-                    val notice = lines.joinToString("\n").take(300)
-                    val now = System.currentTimeMillis()
-                    if (now - lastEmitTime > debounceMs) {
-                        lastEmitTime = now
-                        withContext(Dispatchers.Main) {
-                            chatState.addSystemNotice(notice)
-                        }
-                    } else {
-                        pendingNotice = notice
-                    }
-                }
-            }
-        }
+        // 5. PTY output consumer — previously surfaced error/warning lines from terminal
+        // output as chat notices, but the keyword filter was too broad and created noise.
+        // Removed: errors and warnings are visible in terminal view if needed.
     }
 
     // Track prompts that have been completed so we don't re-create them
@@ -255,7 +222,7 @@ class ManagedSession(
             absentPollCounts.remove("auth")
             if ("auth" !in activePrompts && "auth" !in completedPromptIds) {
                 activePrompts.add("auth")
-                val down = "^[[B"
+                val down = "\u001b[B"
                 chatState.showInteractivePrompt("auth", "Select Login Method", listOf(
                     PromptButton("Claude Account (Pro/Max/Team)", "\r"),
                     PromptButton("Anthropic Console (API)", "$down\r"),

@@ -353,7 +353,7 @@ class ChatState {
             (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId
         }
         if (idx >= 0) {
-            val prompt = messages[idx].content as MessageContent.InteractivePrompt
+            val prompt = messages[idx].content as? MessageContent.InteractivePrompt ?: return
             messages[idx] = messages[idx].copy(
                 content = MessageContent.CompletedPrompt(promptId, prompt.title, selection)
             )

@@ -717,8 +717,11 @@ fun ChatScreen(service: SessionService) {
                                     },
                                     onPromptAction = { promptId, input ->
                                         bridge?.writeInput(input)
-                                        val prompt = message.content as? MessageContent.InteractivePrompt
-                                        val label = prompt?.buttons?.find { it.input == input }?.label ?: ""
+                                        val currentMsg = chatState.messages.lastOrNull {
+                                            (it.content as? MessageContent.InteractivePrompt)?.promptId == promptId
+                                        }
+                                        val prompt = currentMsg?.content as? MessageContent.InteractivePrompt
+                                        val label = prompt?.buttons?.find { it.input == input }?.label ?: input
                                         chatState.completePrompt(promptId, label)
                                         currentSession?.markPromptCompleted(promptId)
                                     },

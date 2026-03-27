@@ -63,6 +63,22 @@ Tracked limitations in the DestinCode Android runtime that cannot be fully resol
 
 ---
 
+### 4. Stray `u` character at top-left of terminal on startup
+
+**Status:** Not fixable without forking terminal emulator
+**Severity:** Low — cosmetic only
+
+**Problem:** Claude Code sends `\e[>1u` at startup to enable the Kitty progressive keyboard enhancement protocol. The Termux terminal emulator library (`v0.118.1`) does not recognize this CSI sequence. When it encounters the unhandled sequence, it discards the escape/CSI prefix but renders the trailing `u` as a literal visible character at the cursor position.
+
+**User impact:** A stray `u` character appears at the top-left corner of the terminal when Claude Code starts. No functional impact — keyboard input and all other terminal features work normally.
+
+**Planned fix direction:**
+- Option A: Fork `com.github.termux.termux-app:terminal-emulator` and add a no-op handler for `CSI > Ps u` (Kitty keyboard protocol) sequences. Proper fix but adds dependency maintenance burden.
+- Option B: Intercept PTY output before it reaches the emulator and strip `\e[>...u` sequences. Avoids forking but is fragile.
+- Option C: Set an environment variable or terminal capability that tells Claude Code not to enable Kitty keyboard protocol (if such an option exists upstream).
+
+---
+
 ## Architecture Notes
 
 ### Exec routing layers (current)
