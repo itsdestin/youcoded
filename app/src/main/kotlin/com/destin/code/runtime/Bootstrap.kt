@@ -4,6 +4,9 @@ import android.content.Context
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import java.util.concurrent.Executors
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 import java.io.BufferedInputStream
 import java.io.File
 import java.io.IOException
@@ -63,6 +66,7 @@ class Bootstrap(private val context: Context) {
             // Termux packages rely on post-install scripts for these, which we
             // don't run. Placed here instead of installPackages() so symlinks
             // are created even when no new packages need installing.
+            onProgress(Progress.Installing("finalizing", 96))
             applyPostInstallFixups()
             onProgress(Progress.Complete)
         } catch (e: Exception) {
@@ -152,6 +156,15 @@ class Bootstrap(private val context: Context) {
 
     private fun extractBootstrap(onProgress: (Progress) -> Unit) {
         usrDir.mkdirs()
+        // First pass: count entries for accurate progress reporting.
+        // The zip is small enough (<20MB) that this adds negligible time.
+        val totalEntries = run {
+            var n = 0
+            val countStream = ZipInputStream(context.assets.open("bootstrap-aarch64.zip"))
+            while (countStream.nextEntry != null) { n++; countStream.closeEntry() }
+            countStream.close()
+            n.coerceAtLeast(1)
+        }
         val asset = context.assets.open("bootstrap-aarch64.zip")
         val zip = ZipInputStream(asset)
         var entry = zip.nextEntry
@@ -159,9 +172,9 @@ class Bootstrap(private val context: Context) {
         var symlinksContent: String? = null
         while (entry != null) {
             count++
-            if (count % 100 == 0) {
-                // Extraction = 0-30% of overall progress
-                onProgress(Progress.Extracting((count * 30) / 5000))
+            if (count % 50 == 0) {
+                // Extraction = 0-10% of overall progress
+                onProgress(Progress.Extracting((count * 10) / totalEntries))
             }
             if (entry.name == "SYMLINKS.txt") {
                 symlinksContent = zip.bufferedReader().readText()
@@ -206,7 +219,7 @@ class Bootstrap(private val context: Context) {
         // Configure apt sources for Termux package repos
         setupAptSources()
 
-        onProgress(Progress.Extracting(30))
+        onProgress(Progress.Extracting(10))
     }
 
     /**
@@ -259,7 +272,8 @@ class Bootstrap(private val context: Context) {
         val version: String,
         val filename: String,
         val sha256: String,
-        val depends: List<String>
+        val depends: List<String>,
+        val size: Long
     )
 
     /**
@@ -289,7 +303,8 @@ class Bootstrap(private val context: Context) {
                 ?.split(",")
                 ?.map { it.trim().split("\\s+".toRegex()).first() }
                 ?: emptyList()
-            packages[name] = PackageInfo(name, version, filename, sha256, depends)
+            val size = fields["Size"]?.toLongOrNull() ?: 0L
+            packages[name] = PackageInfo(name, version, filename, sha256, depends, size)
         }
         return packages
     }
@@ -492,27 +507,58 @@ class Bootstrap(private val context: Context) {
         val index = fetchPackagesIndex()
         val installed = loadInstalledVersions()
 
-        val packages = requiredPackagesForTier()
-        val total = packages.size
-        for ((i, name) in packages.withIndex()) {
+        // Collect packages that need installing
+        val toInstall = mutableListOf<Pair<String, PackageInfo>>()
+        for (name in requiredPackagesForTier()) {
             val pkg = index[name]
             if (pkg == null) {
                 Log.w("Bootstrap", "Package '$name' not found in Termux index — skipping")
                 continue
             }
-
             val fileExists = packageFileExists(name)
             val versionMatch = installed[name] == pkg.version
-
-            // Skip only if BOTH version matches AND binary exists (crash-safe)
             if (fileExists && versionMatch) continue
+            toInstall.add(name to pkg)
+        }
 
-            // Packages = 30-80% of overall progress
-            val overallPercent = 30 + (i * 50) / total
-            onProgress(Progress.Installing(name, overallPercent))
-            installDeb(pkg)
-            installed[name] = pkg.version
-            saveInstalledVersions(installed)
+        if (toInstall.isEmpty()) return
+
+        // Weight progress by download size so large packages (nodejs=10MB)
+        // take proportionally more of the bar than tiny libs (5KB).
+        val totalBytes = toInstall.sumOf { it.second.size }.coerceAtLeast(1)
+        val completedBytes = AtomicLong(0)
+
+        // Download and extract packages in parallel (6 concurrent workers).
+        // Each worker gets its own temp file. Extraction writes to different
+        // paths within $PREFIX so concurrent writes are safe (mkdirs is idempotent).
+        val executor = Executors.newFixedThreadPool(6)
+        val errors = java.util.concurrent.ConcurrentLinkedQueue<String>()
+
+        val futures = toInstall.map { (name, pkg) ->
+            executor.submit {
+                try {
+                    installDeb(pkg)
+                    synchronized(installed) {
+                        installed[name] = pkg.version
+                        saveInstalledVersions(installed)
+                    }
+                } catch (e: Exception) {
+                    Log.e("Bootstrap", "Failed to install $name: ${e.message}")
+                    errors.add("$name: ${e.message}")
+                }
+                val done = completedBytes.addAndGet(pkg.size)
+                // Packages = 10-90% of overall progress, weighted by bytes
+                val overallPercent = 10 + (done * 80 / totalBytes).toInt().coerceAtMost(80)
+                onProgress(Progress.Installing(name, overallPercent))
+            }
+        }
+
+        // Wait for all downloads to complete
+        futures.forEach { it.get() }
+        executor.shutdown()
+
+        if (errors.isNotEmpty()) {
+            throw IOException("Failed to install ${errors.size} package(s): ${errors.joinToString("; ")}")
         }
 
         // termux-exec postinst: always overwrite primary .so with linker variant.
@@ -538,7 +584,7 @@ class Bootstrap(private val context: Context) {
      */
     private fun installDeb(pkg: PackageInfo) {
         val url = "$termuxRepo/${pkg.filename}"
-        val tmpDeb = File(context.cacheDir, "tmp.deb")
+        val tmpDeb = File(context.cacheDir, "tmp-${pkg.name}-${Thread.currentThread().id}.deb")
         var connection: java.net.HttpURLConnection? = null
         try {
             // Download with HTTP error checking
@@ -548,22 +594,23 @@ class Bootstrap(private val context: Context) {
             if (connection.responseCode != 200) {
                 throw IOException("Failed to download ${pkg.name}: HTTP ${connection.responseCode} from $url")
             }
+            // Hash bytes inline while downloading — eliminates a second full read pass.
+            val digest = if (pkg.sha256.isNotEmpty()) MessageDigest.getInstance("SHA-256") else null
             connection.inputStream.use { input ->
-                tmpDeb.outputStream().use { output -> input.copyTo(output) }
+                tmpDeb.outputStream().use { output ->
+                    val buf = ByteArray(8192)
+                    var n: Int
+                    while (input.read(buf).also { n = it } != -1) {
+                        output.write(buf, 0, n)
+                        digest?.update(buf, 0, n)
+                    }
+                }
             }
             connection.disconnect()
             connection = null
 
-            // SHA256 verification
-            if (pkg.sha256.isNotEmpty()) {
-                val digest = MessageDigest.getInstance("SHA-256")
-                tmpDeb.inputStream().use { input ->
-                    val buf = ByteArray(8192)
-                    var n: Int
-                    while (input.read(buf).also { n = it } != -1) {
-                        digest.update(buf, 0, n)
-                    }
-                }
+            // Verify SHA256 from the inline hash
+            if (digest != null) {
                 val actualSha256 = digest.digest().joinToString("") { "%02x".format(it) }
                 if (actualSha256 != pkg.sha256) {
                     throw IOException(
@@ -641,7 +688,7 @@ class Bootstrap(private val context: Context) {
 
     private fun installClaudeCode(onProgress: (Progress) -> Unit) {
         if (File(usrDir, "lib/node_modules/@anthropic-ai/claude-code").exists()) return
-        onProgress(Progress.Installing("claude-code", 80))
+        onProgress(Progress.Installing("claude-code", 90))
         // npm is a JS script, not an ELF binary — run it via node + linker64.
         // node <npm-cli.js> install -g @anthropic-ai/claude-code
         val nodePath = File(usrDir, "bin/node").absolutePath
@@ -653,17 +700,24 @@ class Bootstrap(private val context: Context) {
             .redirectErrorStream(true)
         pb.environment().putAll(buildRuntimeEnv())
         val process = pb.start()
-        // Read stdout in a separate thread to avoid pipe buffer deadlock.
-        // npm install can produce >64KB of output, which fills the OS pipe buffer
-        // and blocks the process if the reader hasn't drained it.
-        val outputFuture = java.util.concurrent.CompletableFuture.supplyAsync {
-            process.inputStream.bufferedReader().readText()
+        // Stream stdout line-by-line to update progress during npm install.
+        // npm produces output as it resolves, downloads, and extracts packages.
+        val output = StringBuilder()
+        val reader = process.inputStream.bufferedReader()
+        var lineCount = 0
+        reader.forEachLine { line ->
+            output.appendLine(line)
+            lineCount++
+            // Increment progress gradually from 90% to 95% based on output lines.
+            // npm install typically produces 50-200 lines of output.
+            val npmPercent = 90 + (lineCount * 5 / 100).coerceAtMost(5)
+            onProgress(Progress.Installing("claude-code", npmPercent))
         }
         val exitCode = process.waitFor()
-        val output = outputFuture.get()
         if (exitCode != 0) {
             throw IOException("npm install claude-code failed (exit $exitCode): $output")
         }
+        onProgress(Progress.Installing("claude-code", 95))
     }
 
     data class SelfTestResult(
@@ -1375,13 +1429,13 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
             functionNames.add("micro")
         }
 
-        // Neovim wrapper — nvim has the Termux prefix compiled in for its runtime
-        // directory. VIMRUNTIME is already set globally for vim; override it
-        // per-invocation so neovim finds its own runtime (syntax, ftplugins, etc.)
-        // without affecting vim's global setting.
-        val nvimBin = File(binDir, "nvim")
-        if (nvimBin.exists()) {
-            sb.appendLine("""nvim() { __fix_tmp "${'$'}@"; VIMRUNTIME="$usrPath/share/nvim/runtime" /system/bin/linker64 "${nvimBin.absolutePath}" "${'$'}{__FT[@]}"; }""")
+        // Neovim wrapper — bin/nvim is a shell script that sets LD_PRELOAD for
+        // LuaJIT and execs the real ELF at libexec/nvim/nvim. We must point
+        // linker64 at the real ELF directly; routing it to bin/nvim causes
+        // "bad ELF magic" because linker64 can't load shell scripts.
+        val nvimElf = File(usrDir, "libexec/nvim/nvim")
+        if (nvimElf.exists()) {
+            sb.appendLine("""nvim() { __fix_tmp "${'$'}@"; VIMRUNTIME="$usrPath/share/nvim/runtime" LD_PRELOAD="${'$'}LD_PRELOAD:$usrPath/lib/libluajit.so" /system/bin/linker64 "${nvimElf.absolutePath}" "${'$'}{__FT[@]}"; }""")
             functionNames.add("nvim")
         }
 

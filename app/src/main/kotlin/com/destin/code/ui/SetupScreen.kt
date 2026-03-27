@@ -54,32 +54,39 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
         onDispose { view.keepScreenOn = false }
     }
 
-    // Single smooth progress state that persists across Extracting → Installing transitions
+    // Smooth progress: targetProgress tracks the backend; displayProgress animates toward it.
+    var targetProgress by remember { mutableFloatStateOf(0f) }
     var displayProgress by remember { mutableFloatStateOf(0f) }
     val realPercent = when (progress) {
         is Bootstrap.Progress.Extracting -> progress.percent
         is Bootstrap.Progress.Installing -> if (progress.overallPercent >= 0) progress.overallPercent else -1
         else -> -1
     }
-    val realTarget = if (realPercent >= 0) realPercent / 100f else -1f
 
-    // Snap forward when real progress jumps ahead
-    LaunchedEffect(realTarget) {
-        if (realTarget >= 0 && realTarget > displayProgress) {
-            displayProgress = realTarget
+    // Update target when backend reports higher progress
+    LaunchedEffect(realPercent) {
+        val t = if (realPercent >= 0) realPercent / 100f else -1f
+        if (t >= 0 && t > targetProgress) {
+            targetProgress = t
         }
     }
 
-    // Creep forward slowly between real updates — never exceeds 95%
+    // Smoothly animate displayProgress toward targetProgress at ~20fps.
+    // Between real updates, creep forward slowly so the bar never looks frozen.
     LaunchedEffect(Unit) {
         while (true) {
-            delay(500)
+            delay(50)
+            val target = targetProgress
             val current = displayProgress
-            val ceiling = 0.95f
-            if (current in 0.001f..ceiling) {
-                val remaining = ceiling - current
-                val increment = (remaining * 0.003f).coerceAtLeast(0.0005f)
-                displayProgress = (current + increment).coerceAtMost(ceiling)
+            if (current < target) {
+                // Close 12% of the remaining gap per tick (smooth ease-out)
+                val step = ((target - current) * 0.12f).coerceAtLeast(0.002f)
+                displayProgress = (current + step).coerceAtMost(target)
+            } else if (current in 0.001f..0.95f) {
+                // Creep forward between backend updates so the bar stays alive
+                val remaining = 0.95f - current
+                val creep = (remaining * 0.001f).coerceAtLeast(0.0002f)
+                displayProgress = (current + creep).coerceAtMost(0.95f)
             }
         }
     }
