@@ -5,6 +5,8 @@ import android.util.Log
 import kotlinx.coroutines.*
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.SharedFlow
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -55,6 +57,7 @@ class TranscriptWatcher(
         val seenUuids: MutableSet<String> = mutableSetOf(),
         var job: Job? = null,
         var fileObserver: FileObserver? = null,
+        val mutex: Mutex = Mutex(),
     )
 
     /**
@@ -108,12 +111,12 @@ class TranscriptWatcher(
     }
 
     /** Read new lines appended since last read, parse and emit events. */
-    private fun readNewLines(state: WatcherState) {
+    private suspend fun readNewLines(state: WatcherState) = state.mutex.withLock {
         val file = state.jsonlFile
-        if (!file.exists()) return
+        if (!file.exists()) return@withLock
 
         val fileLength = file.length()
-        if (fileLength <= state.fileOffset) return
+        if (fileLength <= state.fileOffset) return@withLock
 
         try {
             RandomAccessFile(file, "r").use { raf ->
@@ -276,15 +279,12 @@ class TranscriptWatcher(
     private fun extractTextFromContent(content: JSONArray): String {
         val parts = mutableListOf<String>()
         for (i in 0 until content.length()) {
-            val block = content.optJSONObject(i)
-            if (block != null && block.optString("type") == "text") {
-                parts.add(block.optString("text", ""))
-            }
-        }
-        // Also handle plain string items in the array
-        for (i in 0 until content.length()) {
             val item = content.opt(i)
-            if (item is String) parts.add(item)
+            when {
+                item is String -> parts.add(item)
+                item is JSONObject && item.optString("type") == "text" ->
+                    parts.add(item.optString("text", ""))
+            }
         }
         return parts.joinToString("\n")
     }
@@ -304,9 +304,4 @@ class TranscriptWatcher(
         state.job?.cancel()
     }
 
-    fun stopAll() {
-        for ((id, _) in watchers) {
-            stopWatching(id)
-        }
-    }
 }

@@ -48,7 +48,6 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.destin.code.config.chipsForTier
-import com.destin.code.ui.cards.ToolGroupCard
 import com.destin.code.runtime.BaseTerminalViewClient
 import com.destin.code.runtime.DirectShellBridge
 import com.destin.code.runtime.SessionService
@@ -56,44 +55,6 @@ import com.termux.view.TerminalView
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.io.File
-
-/** A display item in the chat list — either a single message or a collapsed group of tool calls. */
-private sealed class DisplayItem {
-    data class Single(val message: ChatMessage) : DisplayItem()
-    data class ToolGroup(val messages: List<ChatMessage>, val key: String) : DisplayItem()
-}
-
-/** Returns true if this message is a completed or failed tool call (should be grouped). */
-private fun ChatMessage.isFinishedTool(): Boolean =
-    content is MessageContent.ToolComplete || content is MessageContent.ToolFailed
-
-/**
- * Groups consecutive finished tool calls into [DisplayItem.ToolGroup]s.
- * Active tools (Running, AwaitingApproval) and all non-tool messages stay individual.
- * Only groups runs of 2+ consecutive finished tools; a single finished tool stays individual.
- */
-private fun groupMessages(messages: List<ChatMessage>): List<DisplayItem> {
-    val result = mutableListOf<DisplayItem>()
-    var i = 0
-    while (i < messages.size) {
-        if (messages[i].isFinishedTool()) {
-            // Collect the consecutive run of finished tools
-            val start = i
-            while (i < messages.size && messages[i].isFinishedTool()) i++
-            val group = messages.subList(start, i)
-            if (group.size >= 2) {
-                // Use first message's id as stable key for the group
-                result.add(DisplayItem.ToolGroup(group, "group_${group.first().id}"))
-            } else {
-                result.add(DisplayItem.Single(group.first()))
-            }
-        } else {
-            result.add(DisplayItem.Single(messages[i]))
-            i++
-        }
-    }
-    return result
-}
 
 /** Apply theme-appropriate foreground/background/cursor colors to a terminal emulator. */
 private fun applyTerminalColors(session: com.termux.terminal.TerminalSession?, isDark: Boolean) {
@@ -944,17 +905,8 @@ fun ChatScreen(service: SessionService) {
                             if (attachmentPaths.isNotEmpty()) appendLine()
                             append(text)
                         }.trim()
-                        val imageCount = attachmentPaths.size
-                        val displayText = when {
-                            imageCount > 1 && text.isBlank() -> "[$imageCount images]"
-                            imageCount == 1 && text.isBlank() -> "[image]"
-                            imageCount > 0 -> "[$imageCount image${if (imageCount > 1) "s" else ""}] $text"
-                            else -> text
-                        }
-                        chatState.addUserMessage(displayText)
                         bridge?.writeInput(messageText + "\r")
                         chatState.clearDraft()
-                        reducer.state.isThinking = true
                         attachmentPaths = emptyList()
                         attachmentBitmap = null
                     }

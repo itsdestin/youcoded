@@ -122,11 +122,6 @@ class ManagedSession(
         }
     }
 
-    /** Legacy compat — still used by old ChatState. */
-    private fun isAwaitingApproval(): Boolean {
-        return deriveStatus() == SessionStatus.AwaitingApproval
-    }
-
     /**
      * Start background collectors that run for the session's entire lifetime.
      * This includes: hook event collection, isRunning polling, approval notifications.
