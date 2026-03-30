@@ -89,6 +89,8 @@ class SessionChatState {
     val assistantTurns = androidx.compose.runtime.snapshots.SnapshotStateMap<String, AssistantTurn>()
     var isThinking by androidx.compose.runtime.mutableStateOf(false)
     var streamingText by androidx.compose.runtime.mutableStateOf("")
+    /** Optimistic echo — shown immediately on send, cleared when transcript confirms */
+    var pendingUserText by androidx.compose.runtime.mutableStateOf("")
     /** ID of the current tool group (tools accumulate here until next text/turn) */
     var currentGroupId: String? by androidx.compose.runtime.mutableStateOf(null)
     /** ID of the current assistant turn (text + tool groups accumulate here) */

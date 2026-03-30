@@ -912,6 +912,7 @@ fun ChatScreen(service: SessionService) {
                             append(text)
                         }.trim()
                         bridge?.writeInput(messageText + "\r")
+                        reducer.dispatch(com.destin.code.ui.state.ChatAction.MessageSent(messageText))
                         chatState.clearDraft()
                         attachmentPaths = emptyList()
                         attachmentBitmap = null

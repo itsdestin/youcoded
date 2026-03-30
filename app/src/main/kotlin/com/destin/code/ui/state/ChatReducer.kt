@@ -82,6 +82,9 @@ sealed class ChatAction {
     // ─── Thinking/activity ───────────────────────────────────────
     data object ThinkingTimeout : ChatAction()
     data object TerminalActivity : ChatAction()
+
+    // ─── Optimistic echo ────────────────────────────────────────
+    data class MessageSent(val text: String) : ChatAction()
 }
 
 /**
@@ -123,6 +126,7 @@ class ChatReducer {
             is ChatAction.DismissPrompt -> handleDismissPrompt(action)
             is ChatAction.ThinkingTimeout -> handleThinkingTimeout()
             is ChatAction.TerminalActivity -> handleTerminalActivity()
+            is ChatAction.MessageSent -> handleMessageSent(action)
         }
         version++
     }
@@ -136,6 +140,7 @@ class ChatReducer {
         state.currentTurnId = null
         state.currentGroupId = null
         state.isThinking = true
+        state.pendingUserText = ""
         state.streamingText = ""
         state.lastActivityAt = System.currentTimeMillis()
         state.activeToolName = null
@@ -313,6 +318,11 @@ class ChatReducer {
 
     private fun handleTerminalActivity() {
         state.lastActivityAt = System.currentTimeMillis()
+    }
+
+    private fun handleMessageSent(action: ChatAction.MessageSent) {
+        state.isThinking = true
+        state.pendingUserText = action.text
     }
 
     // ─── Helpers ─────────────────────────────────────────────────

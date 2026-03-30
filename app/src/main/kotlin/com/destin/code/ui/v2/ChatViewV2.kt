@@ -50,6 +50,11 @@ fun ChatViewV2(
         for (entry in state.timeline) {
             add(DisplayItem.Timeline(entry))
         }
+        // Optimistic user message echo — shown before transcript confirms
+        val pendingText = state.pendingUserText
+        if (pendingText.isNotBlank()) {
+            add(DisplayItem.PendingUser(pendingText))
+        }
         for (tool in awaitingApproval) {
             add(DisplayItem.ApprovalCard(tool))
         }
@@ -130,6 +135,16 @@ fun ChatViewV2(
                         )
                     }
                 }
+                is DisplayItem.PendingUser -> {
+                    UserMessageBubble(
+                        message = ChatMessage(
+                            id = "pending",
+                            role = ChatRole.User,
+                            content = item.text,
+                            timestamp = System.currentTimeMillis(),
+                        ),
+                    )
+                }
                 is DisplayItem.Thinking -> {
                     ThinkingIndicator()
                 }
@@ -152,6 +167,10 @@ private sealed class DisplayItem {
 
     data class ApprovalCard(val tool: ToolCallState) : DisplayItem() {
         override val key: String get() = "approval-${tool.toolUseId}"
+    }
+
+    data class PendingUser(val text: String) : DisplayItem() {
+        override val key: String = "pending-user"
     }
 
     data object Thinking : DisplayItem() {
