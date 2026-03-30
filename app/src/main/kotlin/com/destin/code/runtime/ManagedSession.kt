@@ -282,6 +282,15 @@ class ManagedSession(
                     PromptButton("Anthropic Console (API)", "$down\r"),
                     PromptButton("3rd-Party Platform", "$down$down\r"),
                 ))
+                chatReducer.dispatch(ChatAction.ShowPrompt(
+                    promptId = "auth",
+                    title = "Select Login Method",
+                    buttons = listOf(
+                        PromptButton("Claude Account (Pro/Max/Team)", "\r"),
+                        PromptButton("Anthropic Console (API)", "$down\r"),
+                        PromptButton("3rd-Party Platform", "$down$down\r"),
+                    ),
+                ))
             }
             return  // skip generic parser for this screen
         } else if ("auth" in activePrompts) {
@@ -290,6 +299,7 @@ class ManagedSession(
             if (count >= DISMISS_THRESHOLD) {
                 activePrompts.remove("auth")
                 chatState.dismissPrompt("auth")
+                chatReducer.dispatch(ChatAction.DismissPrompt("auth"))
                 absentPollCounts.remove("auth")
             }
         }
@@ -311,6 +321,7 @@ class ManagedSession(
                     activePrompts.remove(stale)
                     completedPromptIds.add(stale)
                     chatState.dismissPrompt(stale)
+                    chatReducer.dispatch(ChatAction.DismissPrompt(stale))
                     absentPollCounts.remove(stale)
                 }
                 activePrompts.add(parsed.id)
@@ -319,6 +330,11 @@ class ManagedSession(
                     parsed.title,
                     InkSelectParser.toPromptButtons(parsed),
                 )
+                chatReducer.dispatch(ChatAction.ShowPrompt(
+                    promptId = parsed.id,
+                    title = parsed.title,
+                    buttons = InkSelectParser.toPromptButtons(parsed),
+                ))
             }
         } else {
             // No menu detected — debounce dismissal of active generic menus
@@ -329,6 +345,7 @@ class ManagedSession(
                 if (count >= DISMISS_THRESHOLD) {
                     activePrompts.remove(stale)
                     chatState.dismissPrompt(stale)
+                    chatReducer.dispatch(ChatAction.DismissPrompt(stale))
                     absentPollCounts.remove(stale)
                 }
             }
@@ -343,6 +360,11 @@ class ManagedSession(
                 chatState.showInteractivePrompt("paste_code", "Complete Sign-In in Your Browser", listOf(
                     PromptButton("Browser opened — waiting for code...", ""),
                 ))
+                chatReducer.dispatch(ChatAction.ShowPrompt(
+                    promptId = "paste_code",
+                    title = "Complete Sign-In in Your Browser",
+                    buttons = listOf(PromptButton("Browser opened — waiting for code...", "")),
+                ))
             }
         } else if ("paste_code" in activePrompts) {
             val count = absentPollCounts.getOrDefault("paste_code", 0) + 1
@@ -350,6 +372,7 @@ class ManagedSession(
             if (count >= DISMISS_THRESHOLD) {
                 activePrompts.remove("paste_code")
                 chatState.dismissPrompt("paste_code")
+                chatReducer.dispatch(ChatAction.DismissPrompt("paste_code"))
                 absentPollCounts.remove("paste_code")
             }
         }
@@ -362,6 +385,7 @@ class ManagedSession(
                 activePrompts.remove("paste_code")
                 completedPromptIds.add("paste_code")
                 chatState.completePrompt("paste_code", "Signed in")
+                chatReducer.dispatch(ChatAction.CompletePrompt(promptId = "paste_code", selection = "Signed in"))
             }
             val continueKey = when {
                 "login successful" in lower -> "continue_login"
@@ -378,6 +402,11 @@ class ManagedSession(
                 chatState.showInteractivePrompt(continueKey, title, listOf(
                     PromptButton("Continue", "\r"),
                 ))
+                chatReducer.dispatch(ChatAction.ShowPrompt(
+                    promptId = continueKey,
+                    title = title,
+                    buttons = listOf(PromptButton("Continue", "\r")),
+                ))
             }
         } else {
             // Debounce dismissal of continue prompts
@@ -388,6 +417,7 @@ class ManagedSession(
                 if (count >= DISMISS_THRESHOLD) {
                     activePrompts.remove(stale)
                     chatState.dismissPrompt(stale)
+                    chatReducer.dispatch(ChatAction.DismissPrompt(stale))
                     absentPollCounts.remove(stale)
                 }
             }
