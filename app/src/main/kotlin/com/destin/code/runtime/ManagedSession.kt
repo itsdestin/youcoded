@@ -1,11 +1,15 @@
 package com.destin.code.runtime
 
 import android.os.FileObserver
+import com.destin.code.bridge.LocalBridgeServer
+import com.destin.code.bridge.TranscriptSerializer
+import com.destin.code.bridge.HookSerializer
 import com.destin.code.parser.HookEvent
 import com.destin.code.parser.InkSelectParser
 import com.destin.code.parser.TranscriptEvent
 import com.destin.code.parser.TranscriptWatcher
 import com.destin.code.ui.ChatState
+import org.json.JSONObject
 import com.destin.code.ui.state.PromptButton
 import com.destin.code.ui.state.ChatAction
 import com.destin.code.ui.state.ChatReducer
@@ -52,6 +56,8 @@ class ManagedSession(
     /** Callback when session leaves AwaitingApproval (for notification clearing). */
     var onApprovalCleared: ((sessionId: String) -> Unit)? = null,
 ) {
+    /** Bridge server for forwarding events to React UI. Set by SessionRegistry. */
+    var bridgeServer: LocalBridgeServer? = null
     /** Draft text in the input bar � shared across Chat/Terminal/Shell modes */
     var inputDraft by mutableStateOf(TextFieldValue())
 
@@ -180,6 +186,31 @@ class ManagedSession(
                     routeHookEvent(event)
                     routeHookEventToReducer(event)
                 }
+
+                // Forward to bridge server for React UI
+                bridgeServer?.let { server ->
+                    when (event) {
+                        is HookEvent.PermissionRequest -> {
+                            val suggestions = event.permissionSuggestions?.let { arr ->
+                                (0 until arr.length()).map { arr.optString(it) }
+                            } ?: emptyList()
+                            server.broadcast(HookSerializer.permissionRequest(
+                                sessionId = id,
+                                requestId = event.requestId,
+                                toolName = event.toolName,
+                                toolInput = event.toolInput,
+                                suggestions = suggestions
+                            ))
+                        }
+                        is HookEvent.Notification -> {
+                            server.broadcast(HookSerializer.notification(
+                                sessionId = id,
+                                message = event.message
+                            ))
+                        }
+                        else -> {}
+                    }
+                }
             }
         }
 
@@ -190,6 +221,22 @@ class ManagedSession(
             watcher.events.collect { event ->
                 withContext(Dispatchers.Main) {
                     routeTranscriptEvent(event)
+                }
+
+                // Forward to bridge server for React UI
+                bridgeServer?.let { server ->
+                    val serialized = when (event) {
+                        is TranscriptEvent.UserMessage -> TranscriptSerializer.userMessage(event.sessionId, event.uuid, event.timestamp, event.text)
+                        is TranscriptEvent.AssistantText -> TranscriptSerializer.assistantText(event.sessionId, event.uuid, event.timestamp, event.text)
+                        is TranscriptEvent.ToolUse -> TranscriptSerializer.toolUse(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.toolName, event.toolInput)
+                        is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError)
+                        is TranscriptEvent.TurnComplete -> TranscriptSerializer.turnComplete(event.sessionId, event.uuid, event.timestamp)
+                        is TranscriptEvent.StreamingText -> TranscriptSerializer.streamingText(event.sessionId, event.text)
+                    }
+                    server.broadcast(JSONObject().apply {
+                        put("type", "transcript:event")
+                        put("payload", serialized)
+                    })
                 }
             }
         }

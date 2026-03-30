@@ -14,11 +14,20 @@ import android.os.FileObserver
 import android.os.IBinder
 import android.os.PowerManager
 import com.destin.code.MainActivity
+import com.destin.code.bridge.*
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
+import org.json.JSONObject
 import java.io.File
 
 class SessionService : Service() {
     private val binder = LocalBinder()
     val sessionRegistry = SessionRegistry()
+    val bridgeServer = LocalBridgeServer()
+    var platformBridge: PlatformBridge? = null
+    private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private var wakeLock: PowerManager.WakeLock? = null
     private var urlObserver: FileObserver? = null
     var bootstrap: Bootstrap? = null
@@ -41,6 +50,16 @@ class SessionService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         startForeground(NOTIFICATION_ID, buildSessionNotification())
+
+        val homeDir = bootstrap?.homeDir ?: filesDir
+        platformBridge = PlatformBridge(applicationContext, homeDir)
+        sessionRegistry.bridgeServer = bridgeServer
+        bridgeServer.start { ws, msg ->
+            serviceScope.launch {
+                handleBridgeMessage(ws, msg)
+            }
+        }
+
         return START_STICKY
     }
 
@@ -222,11 +241,88 @@ class SessionService : Service() {
     }
 
     override fun onDestroy() {
+        bridgeServer.stop()
         urlObserver?.stopWatching()
         urlObserver = null
         sessionRegistry.destroyAll()
         releaseWakeLock()
         super.onDestroy()
+    }
+
+    private suspend fun handleBridgeMessage(
+        ws: org.java_websocket.WebSocket,
+        msg: MessageRouter.ParsedMessage
+    ) {
+        when (msg.type) {
+            "session:create" -> {
+                val cwd = msg.payload.optString("cwd", bootstrap?.homeDir?.absolutePath ?: "")
+                val dangerous = msg.payload.optBoolean("skipPermissions", false)
+                val session = createSession(File(cwd), dangerous, null)
+                val info = MessageRouter.buildSessionInfo(
+                    id = session.id, name = session.name.value,
+                    cwd = cwd, status = "running",
+                    permissionMode = "normal", dangerous = dangerous
+                )
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, info) }
+                bridgeServer.broadcast(JSONObject().apply {
+                    put("type", "session:created")
+                    put("payload", info)
+                })
+            }
+            "session:destroy" -> {
+                val sessionId = msg.payload.optString("sessionId", "")
+                destroySession(sessionId)
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            }
+            "session:list" -> {
+                val sessions = sessionRegistry.sessions.value.map { (id, session) ->
+                    MessageRouter.buildSessionInfo(
+                        id = id, name = session.name.value,
+                        cwd = session.cwd.absolutePath,
+                        status = session.status.value.name.lowercase(),
+                        permissionMode = session.chatReducer.state.permissionMode,
+                        dangerous = session.dangerousMode
+                    )
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildSessionListResponse(sessions)) }
+            }
+            "session:input" -> {
+                val sessionId = msg.payload.optString("sessionId", "")
+                val text = msg.payload.optString("text", "")
+                sessionRegistry.sessions.value[sessionId]?.writeInput(text)
+            }
+            "session:resize" -> {
+                val sessionId = msg.payload.optString("sessionId", "")
+                val cols = msg.payload.optInt("cols", 80)
+                val rows = msg.payload.optInt("rows", 24)
+                sessionRegistry.sessions.value[sessionId]?.getTerminalSession()?.updateSize(cols, rows)
+            }
+            "permission:respond" -> {
+                val requestId = msg.payload.optString("requestId", "")
+                val decision = msg.payload.optJSONObject("decision") ?: JSONObject()
+                sessionRegistry.sessions.value.values.forEach { session ->
+                    session.ptyBridge?.getEventBridge()?.respond(requestId, decision)
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            }
+            "skills:list" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("skills", org.json.JSONArray())) }
+            }
+            "get-home-path" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, platformBridge?.getHomePath() ?: "") }
+            }
+            "dialog:open-file" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("paths", org.json.JSONArray())) }
+            }
+            "clipboard:save-image" -> {
+                val result = platformBridge?.saveClipboardImage() ?: JSONObject().put("path", JSONObject.NULL)
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            else -> {
+                android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildErrorResponse("Unknown: ${msg.type}")) }
+            }
+        }
     }
 
     companion object {

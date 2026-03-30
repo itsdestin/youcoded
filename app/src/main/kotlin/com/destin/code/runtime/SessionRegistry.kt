@@ -1,5 +1,6 @@
 package com.destin.code.runtime
 
+import com.destin.code.bridge.LocalBridgeServer
 import com.destin.code.parser.TranscriptWatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -11,6 +12,7 @@ import kotlinx.coroutines.flow.update
 import java.io.File
 
 class SessionRegistry {
+    var bridgeServer: LocalBridgeServer? = null
     private val _sessions = MutableStateFlow<Map<String, ManagedSession>>(emptyMap())
     val sessions: StateFlow<Map<String, ManagedSession>> = _sessions
 
@@ -59,6 +61,9 @@ class SessionRegistry {
             titleFile = titleFile,
             scope = scope,
         )
+
+        // Wire bridge server for React UI forwarding
+        session.bridgeServer = bridgeServer
 
         // Start EventBridge BEFORE Claude Code — hooks fire immediately on launch
         bridge.startEventBridge(scope)
