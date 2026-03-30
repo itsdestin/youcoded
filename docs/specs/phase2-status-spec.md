@@ -74,8 +74,8 @@ A message-based view that receives structured events directly from Claude Code h
 - `EventBridge.kt` — `LocalServerSocket` that accepts hook-relay connections, parses JSON, emits `HookEvent` via `SharedFlow` (buffer: 1000). Started BEFORE Claude Code session (not after) to prevent early events being dropped. Logs unparseable payloads for debugging.
 - `HookEvent.kt` — sealed class with 5 variants: `PreToolUse`, `PostToolUse`, `PostToolUseFailure`, `Stop`, `Notification`
 - `InkSelectParser.kt` — Generic regex-based parser that detects Ink Select menus from visible terminal screen text. Strips ANSI escape codes, extracts options from `❯`-marked lines, generates position-aware arrow-key sequences (up for items above cursor, down for items below). Title override map for known prompts (theme, trust, login, permissions). Login method menu hardcoded in ManagedSession (multi-line options break generic parser).
-- `ChatState.kt` — 9 `MessageContent` variants (`Text`, `Response`, `ToolRunning`, `ToolAwaitingApproval`, `ToolComplete`, `ToolFailed`, `SystemNotice`, `InteractivePrompt`, `CompletedPrompt`) with tool state machine transitions. `permissionMode` state tracked from screen text polling. Insertion cursor ensures responses appear after their corresponding user message, not at the end. Messages sent while Claude is processing are marked `isQueued` and visually dimmed.
-- `ChatScreen.kt` — collects `EventBridge.events`, routes each hook type to the appropriate `ChatState` mutation
+- `ChatState.kt` — Minimal legacy wrapper: only `permissionMode` tracking and prompt dual-write methods (`showInteractivePrompt`, `completePrompt`, `dismissPrompt`). The v1 message pipeline (tool state machine, queue, insertPos) was stripped in v3.1 — the v2 `ChatReducer` is now the sole source of truth for chat state. `ChatReducer` receives events from both the `TranscriptWatcher` (JSONL) and `EventBridge` (hooks).
+- `ChatScreen.kt` — collects `EventBridge.events`, routes hook events to `ChatReducer` via `routeHookEventToReducer()`. Also routes transcript events to `ChatReducer` via `routeTranscriptEvent()`. The legacy `routeHookEvent()` is reduced to socket cleanup only.
 - `MessageBubble.kt` — routes content types to card composables (ToolCard, CodeCard, ErrorCard) or text bubbles. `LinkableText` composable detects URLs via `AnnotatedString` and makes them tappable. Queued messages render dimmed with "queued" label.
 
 **Event routing:**
@@ -93,7 +93,7 @@ A message-based view that receives structured events directly from Claude Code h
 
 **Activity indicator:**
 - `ActivityIndicator.kt` — animated dots with tool-specific labels (Read→"Reading", Edit→"Editing", Bash→"Running command", etc.)
-- Active when PTY output within last 2s OR `ChatState.activeToolName` is set
+- Active when PTY output within last 2s OR `ChatReducer.state.activeToolName` is set
 - Clears on `Stop` or tool completion
 
 **What works:**
@@ -433,71 +433,81 @@ Rename "DestinCode" to "Code Mobile" to avoid potential trademark/legal issues w
 
 ## File Inventory
 
-### New Files (Phase 2)
+### Active Files
 ```
-ui/TerminalPanel.kt            — Terminal canvas renderer
+ui/ChatScreen.kt               — Three-mode layout (Chat/Terminal/Shell), input bar, send handler
+ui/ChatState.kt                — Minimal: permissionMode + prompt dual-write methods only
+                                  (v1 message pipeline stripped in v3.1; v2 ChatReducer is source of truth)
+ui/QuickChips.kt               — Pill-styled chips matching keyboard row
+ui/SetupScreen.kt              — Bootstrap progress screen
+ui/TierPickerScreen.kt         — Package tier selection
+ui/ManageDirectoriesScreen.kt  — Working directory management
+ui/DirectoryBrowserDialog.kt   — Directory picker
+ui/NewSessionDialog.kt         — New session creation dialog
+ui/SessionSwitcher.kt          — Session list and switching
+ui/UnifiedTopBar.kt            — Top bar with session pill and menu
 ui/TerminalKeyboardRow.kt      — Special key buttons
-ui/ActivityIndicator.kt        — Tool-specific animated "Working..." indicator
 ui/SyntaxHighlighter.kt        — Token-based code highlighting
-ui/BtwSheet.kt                 — /btw bottom sheet
-ui/ApiKeyScreen.kt             — API key entry screen
-ui/cards/ToolCard.kt           — Tool call card (3 states: Running, AwaitingApproval, Complete)
-ui/cards/DiffCard.kt           — Diff display card (built, not routed from hooks pipeline)
+ui/MarkdownRenderer.kt         — CommonMark-based markdown rendering
 ui/cards/CodeCard.kt           — Code block card with syntax highlighting + copy
-ui/cards/ErrorCard.kt          — Error display card with expandable details
-ui/theme/AppIcons.kt           — Custom vector icons (Terminal, Chat, ClaudeMascot)
-parser/HookEvent.kt            — Sealed class: 5 hook event types with JSON deserialization
-runtime/DirectShellBridge.kt   — Standalone bash shell session (no Claude Code)
-assets/hook-relay.js           — Hook script: reads stdin JSON, writes to abstract-namespace socket
-assets/claude-wrapper.js       — Reference copy of SELinux exec bypass wrapper
-res/font/cascadia_mono_regular.ttf
-res/font/cascadia_mono_bold.ttf
+ui/theme/Theme.kt              — Color palette, CascadiaMono FontFamily, app Typography
+ui/theme/AppIcons.kt           — Custom vector icons (Terminal, Chat, Mascot, CheckCircle,
+                                  XCircle, ShieldAlert, SettingsGear, Compass, ArrowRight)
+ui/state/ChatReducer.kt        — v2 state machine: turn-based timeline, tool calls,
+                                  streaming text, prompts, system notices, permissions
+ui/state/ChatTypes.kt          — v2 types: TimelineEntry (User/Turn/Prompt/Notice),
+                                  ToolCallState, SessionChatState, InteractivePrompt
+ui/state/ToolInputFormatter.kt — Tool name formatting and input summarization
+ui/v2/ChatViewV2.kt            — Turn-based chat rendering with streaming + pending echo
+ui/v2/AssistantTurnBubble.kt   — Assistant turn with tool group collapsing
+ui/v2/ToolCardV2.kt            — Tool card with vector status icons and permission buttons
+ui/v2/PromptCardV2.kt          — Interactive prompt card (setup menus, auth, trust)
+ui/v2/UserMessageBubble.kt     — Neutral gray user message bubble
+ui/v2/BrailleSpinner.kt        — Animated braille spinner for running state
+ui/v2/ThinkingIndicator.kt     — Thinking/loading indicator
+ui/v2/DesktopColors.kt         — Desktop-matching neutral gray color palette
+ui/v2/RemoteDesktopScreen.kt   — Remote desktop/camera features
+parser/EventBridge.kt          — LocalServerSocket (abstract namespace), SharedFlow emitter
+parser/HookEvent.kt            — Sealed class: 6 hook event types with JSON deserialization
+parser/InkSelectParser.kt      — Generic Ink Select menu parser from terminal screen
+parser/TranscriptEvent.kt      — JSONL transcript event types (User/Assistant/Tool/Streaming)
+parser/TranscriptWatcher.kt    — JSONL transcript file watcher with safe partial-line handling
+runtime/ManagedSession.kt      — Session lifecycle, prompt detection, event routing, input draft
+runtime/SessionRegistry.kt     — Multi-session management
+runtime/SessionService.kt      — Foreground service for session persistence
+runtime/PtyBridge.kt           — PTY terminal bridge with screen reading
+runtime/DirectShellBridge.kt   — Standalone bash shell session
+runtime/Bootstrap.kt           — Rootfs extraction, package installation, hook deployment
+runtime/ServiceBinder.kt       — Service binding utilities
+runtime/TerminalViewClient.kt  — Terminal view input handling
+config/PackageTier.kt          — CORE/DEVELOPER/FULL_DEV tier definitions
+config/TierStore.kt            — Tier selection persistence
+config/WorkingDirStore.kt      — Working directory persistence
+config/ChipConfig.kt           — Quick chip configuration
 ```
 
-### Deleted Files (removed during hooks rebuild)
+### Deleted Files
 ```
-parser/ParsedEvent.kt          — 12 event types + DiffHunk (replaced by HookEvent.kt)
-assets/parser/parser.js        — Parser sidecar state machine (deleted — hooks replace parsing)
-assets/parser/patterns.js      — Pattern matching rules (deleted — hooks replace parsing)
-ui/cards/ApprovalCard.kt       — Approval prompt card (deleted v2.5 — superseded by ToolCard.AwaitingApproval)
-ui/cards/ProgressCard.kt       — Progress indicator (deleted v2.5 — superseded by ActivityIndicator)
-ui/cards/CardState.kt          — Expand/collapse state manager (deleted v2.5 — ChatState has own toggle)
-ui/InputBar.kt                 — Chat input bar (deleted v2.5 — ChatScreen builds inline input)
-ui/widgets/MenuWidget.kt       — Radio button menu selector (deleted v2.6 — no hook event drives it)
-ui/widgets/ConfirmationWidget.kt — Yes/No prompt (deleted v2.6 — no hook event drives it)
-ui/widgets/OAuthWidget.kt      — Sign-in button (deleted v2.6 — no hook event drives it)
-```
-
-### Modified Files
-```
-ui/theme/Theme.kt         — Color palette, CascadiaMono FontFamily, app Typography
-ui/ChatScreen.kt           — Three-mode layout (Chat/Terminal/Shell), hook event routing,
-                              approval detection (primary + fallback heuristic)
-ui/ChatState.kt            — 7 MessageContent variants, tool state machine transitions,
-                              activeToolName tracking for activity indicator,
-                              insertion cursor for correct message ordering (insertPos),
-                              queued message tracking (isQueued, queuedIds),
-                              isProcessing state for rapid message handling
-ui/MessageBubble.kt        — Routes content types to ToolCard/CodeCard/ErrorCard/text bubbles,
-                              LinkableText composable for clickable URLs via AnnotatedString,
-                              queued message visual treatment (dimmed bg + "queued" label)
-ui/QuickChips.kt           — Pill-styled chips matching keyboard row
-runtime/PtyBridge.kt       — screenVersion, session accessor, \r input,
-                              SELinux exec bypass (claude-wrapper.js deployment,
-                              WRAPPER_JS with stripLogin + injectEnv + spawnFix + fixExecShell,
-                              hook installation, DirectShellBridge factory, sendApproval())
-runtime/Bootstrap.kt       — installGit(), buildRuntimeEnv() (PATH includes ~/.local/bin),
-                              deployBashEnv() + buildBashEnvSh() (scans $PREFIX/bin + ~/.local/bin,
-                              ELF/script/JS detection, pkg manager wrappers, cd/pwd fixes, .bashrc setup),
-                              setupAptSources() with apt.conf dir overrides + dpkg state init,
-                              installHooks() with hook-relay.js deployment + settings.json merge
-runtime/SessionService.kt  — startSession() starts EventBridge BEFORE PtyBridge.start()
-parser/EventBridge.kt      — LocalServerSocket (abstract namespace), SharedFlow emitter,
-                              logs unparseable payloads for debugging
-parser/HookEvent.kt        — Stop event tries 4 field names for assistant message,
-                              logs payload keys when empty
-MainActivity.kt            — Edge-to-edge, system bar insets, IME padding
-app/build.gradle.kts       — material-icons-extended, version 0.2.0
+parser/ParsedEvent.kt           — (hooks rebuild) Replaced by HookEvent.kt
+assets/parser/parser.js          — (hooks rebuild) Replaced by hooks
+assets/parser/patterns.js        — (hooks rebuild) Replaced by hooks
+ui/cards/ApprovalCard.kt         — (v2.5) Superseded by ToolCardV2
+ui/cards/ProgressCard.kt         — (v2.5) Superseded by ThinkingIndicator
+ui/cards/CardState.kt            — (v2.5) Superseded by ChatReducer local state
+ui/InputBar.kt                   — (v2.5) ChatScreen builds inline input
+ui/widgets/MenuWidget.kt         — (v2.6) No hook event drives it
+ui/widgets/ConfirmationWidget.kt — (v2.6) No hook event drives it
+ui/widgets/OAuthWidget.kt        — (v2.6) No hook event drives it
+ui/ActivityIndicator.kt          — (v3.1) Replaced by v2 ThinkingIndicator
+ui/BtwSheet.kt                   — (v3.1) Zombie — no callers
+ui/MessageBubble.kt              — (v3.1) Replaced by v2 chat components
+ui/ApiKeyScreen.kt               — (v3.1) Superseded by OAuth flow
+config/ApiKeyStore.kt            — (v3.1) Companion to ApiKeyScreen
+ui/cards/ToolCard.kt             — (v3.1) Replaced by ToolCardV2
+ui/cards/DiffCard.kt             — (v3.1) Never routed from hooks pipeline
+ui/cards/ErrorCard.kt            — (v3.1) Replaced by ToolCardV2 failed state
+ui/cards/ToolGroupCard.kt        — (v3.1) Replaced by AssistantTurnBubble
+ui/v2/StatusBar.kt               — (v3.1) Defined but never rendered
 ```
 
 ## Change Log
@@ -516,4 +526,5 @@ app/build.gradle.kts       — material-icons-extended, version 0.2.0
 | 2026-03-16 | 2.4 | Major reliability + UX pass: (1) Hooks reliability — EventBridge starts before Claude Code, hook-relay.js retries 3x with backoff, ChatScreen retries EventBridge poll, Stop event tries 4 field names. (2) Exception catch widened to `Exception` (Termux throws `IllegalArgumentException`). (3) Chat message ordering — insertion cursor ensures responses appear after their user message, queued messages dimmed with label. (4) Clickable URLs in chat bubbles via `LinkableText`/`AnnotatedString`. (5) Terminal scrollback — `externalRow = rowIndex - scrollRows` with mobile-standard direction (swipe up = recent). (6) `~/.local/bin` added to PATH and `buildBashEnvSh` scans it for native installer binaries. Remove session persistence from planned (confirmed working), remove native installer fallback (resolved). Renumber priorities 1-20. | Update | Destin | Reliability + UX |
 | 2026-03-17 | 2.7 | Inbox processing: add 3 new known bugs (GitHub login timeout, missing 3-way prompts, terminal input issues). Add 9 new planned updates (Priorities 24-32): skip permissions button, OAuth auto-return, hide return on scroll, Gemini CLI switch, Android env prompt, UI overhaul, compact tool calls, Google sign-in, Code Mobile rename | Inbox | Destin | Inbox processing |
 | 2026-03-20 | 3.0 | **v1.0.0 release.** (1) Generic Ink Select menu parser (`InkSelectParser.kt`) — regex-based detection of `❯`-marked menus from screen text with ANSI stripping, title overrides, position-aware arrow-key generation. Login method hardcoded (multi-line options). Screen-only parsing (not raw buffer) prevents stale menu persistence. (2) Permission mode pill — canvas-drawn play/pause icons (▶/▶▶/▶▶▶/⏸) replacing ⇧Tab text. Optimistic cycling with screen-poll correction. `ChatState.permissionMode` tracked from visible screen only. Bypass excluded in non-dangerous sessions. (3) Floating up/down arrows — overlaid on terminal view via Box, separate from input bar. (4) Material You theming — `ThemeMode` enum (DARK/LIGHT/MATERIAL_DARK/MATERIAL_LIGHT), full `dynamicDarkColorScheme`/`dynamicLightColorScheme` for Material modes, theme submenu in app menu. (5) Adaptive icon scaled to safe zone for Samsung. (6) Consistent placeholder text across views. Mark Priorities 9, 20, 21, 22, 24 done. | Feature + Release | Destin | Generic menu parser |
+| 2026-03-29 | 3.1 | **v2 migration repair.** (1) Wire `detectPrompts()` to v2 ChatReducer — restores all setup menus (theme, sign-in, trust, permissions) broken since v2 UI rebuild. (2) Fix CompletePrompt to show button labels instead of escape sequences. (3) Fix TranscriptWatcher partial JSONL line loss — byte-level newline scanning. (4) Add optimistic user message echo with `pendingUserText` + `MessageSent` action. (5) Add streaming text display from transcript progress events. (6) Add `SystemNotice` timeline entry for hook notifications. (7) Migrate `hasActiveApproval` guard from v1 to v2 state. (8) Wire `ThinkingTimeout`, `TerminalActivity`, `PermissionExpired` — all 5 orphaned ChatActions now have callers. (9) Unify `PromptButton` to single v2 type. (10) Delete 17 dead/zombie files (1,656 lines): widgets/, old cards, MessageBubble, BtwSheet, ApiKeyScreen/Store, ActivityIndicator, StatusBar. (11) Clean deps: remove security-crypto, replace lifecycle-viewmodel-compose. (12) Move `inputDraft` from ChatState to ManagedSession. (13) Strip vestigial v1 hook routing — reduce `routeHookEvent` to socket cleanup, remove ~200 lines of v1 message pipeline from ChatState. (14) Neutral monochrome styling: Lucide-style vector icons (CheckCircle, XCircle, ShieldAlert), neutral gray icons/borders/buttons, force neutral user bubble colors. Net: -2,060 lines. | Migration repair + Cleanup | Destin | v2 migration repair |
 | 2026-03-17 | 2.6 | Code review + stability pass. **Dead code:** Deleted 3 remaining orphan widgets (MenuWidget, ConfirmationWidget, OAuthWidget) + `widgets/` dir. **OOM/ANR fixes:** (1) PtyBridge `_rawBuffer` capped at 512KB rolling window, changed to thread-safe `StringBuffer`. (2) Photo picker file copy moved off main thread. (3) TerminalPanel Paint objects hoisted to `remember` blocks (eliminates hundreds of per-frame allocations). (4) Bootstrap process stdout read via `CompletableFuture` to prevent pipe deadlock. (5) PTY input buffers capped at 1000 chars. **Race conditions:** (6) SessionManager `CompletableDeferred` replaced with `MutableStateFlow` for retry safety. (7) SessionService.startSession() cleans up previous scope/bridge. (8) EventBridge.serverSocket marked `@Volatile`. (9) Approval heuristic re-checks tool state; distinct `LaunchedEffect` keys. (10) ChatState.advanceQueue() handles missing messages. (11) DirectShellBridge cleanup via `DisposableEffect`. **Correctness:** (12) SyntaxHighlighter span priority reversed (strings > keywords). (13) CodeCard highlighting cached with `remember`. (14) MarkdownRenderer cardId uses block index (not content hash). (15) BtwSheet double-reversal removed. (16) SetupScreen retry button wired to callback. (17) Terminal/Shell duplicated headers extracted to `ModeHeader`/`PtyInputField`. **Bug fixes:** (18) Approval cards now revert to Running on Accept/Reject tap. (19) Hook permission denied investigated, root cause documented. Mark Priority 2 (Markdown) done, update Priority 6. | Review + Bugfix | Destin | Code review |
