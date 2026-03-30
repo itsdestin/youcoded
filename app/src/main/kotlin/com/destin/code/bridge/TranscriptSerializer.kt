@@ -3,31 +3,27 @@ package com.destin.code.bridge
 import org.json.JSONObject
 
 /**
- * Converts TranscriptEvent data into the JSON envelope format the desktop
+ * Converts TranscriptEvent data into the JSON payload the desktop
  * React app expects on its `transcript:event` WebSocket channel.
  *
- * Every method returns `{ type: String, payload: JSONObject }`.
+ * Every method returns the inner payload:
+ *   { type, sessionId, uuid, timestamp, data: { ... } }
+ *
+ * The outer `{ type: "transcript:event", payload: ... }` wrapper is added
+ * by the broadcast call in ManagedSession, NOT here.
  */
 object TranscriptSerializer {
 
     fun userMessage(sessionId: String, uuid: String, timestamp: Long, text: String): JSONObject {
-        val payload = JSONObject().apply {
-            put("sessionId", sessionId)
-            put("uuid", uuid)
-            put("timestamp", timestamp)
+        return build("user-message", sessionId, uuid, timestamp, JSONObject().apply {
             put("text", text)
-        }
-        return envelope("user-message", payload)
+        })
     }
 
     fun assistantText(sessionId: String, uuid: String, timestamp: Long, text: String): JSONObject {
-        val payload = JSONObject().apply {
-            put("sessionId", sessionId)
-            put("uuid", uuid)
-            put("timestamp", timestamp)
+        return build("assistant-text", sessionId, uuid, timestamp, JSONObject().apply {
             put("text", text)
-        }
-        return envelope("assistant-text", payload)
+        })
     }
 
     fun toolUse(
@@ -38,15 +34,11 @@ object TranscriptSerializer {
         toolName: String,
         toolInput: JSONObject,
     ): JSONObject {
-        val payload = JSONObject().apply {
-            put("sessionId", sessionId)
-            put("uuid", uuid)
-            put("timestamp", timestamp)
+        return build("tool-use", sessionId, uuid, timestamp, JSONObject().apply {
             put("toolUseId", toolUseId)
             put("toolName", toolName)
             put("toolInput", toolInput)
-        }
-        return envelope("tool-use", payload)
+        })
     }
 
     fun toolResult(
@@ -57,37 +49,36 @@ object TranscriptSerializer {
         result: String,
         isError: Boolean,
     ): JSONObject {
-        val payload = JSONObject().apply {
-            put("sessionId", sessionId)
-            put("uuid", uuid)
-            put("timestamp", timestamp)
+        return build("tool-result", sessionId, uuid, timestamp, JSONObject().apply {
             put("toolUseId", toolUseId)
-            put("result", result)
+            put("toolResult", result)
             put("isError", isError)
-        }
-        return envelope("tool-result", payload)
+        })
     }
 
     fun turnComplete(sessionId: String, uuid: String, timestamp: Long): JSONObject {
-        val payload = JSONObject().apply {
-            put("sessionId", sessionId)
-            put("uuid", uuid)
-            put("timestamp", timestamp)
-        }
-        return envelope("turn-complete", payload)
+        return build("turn-complete", sessionId, uuid, timestamp, JSONObject())
     }
 
-    fun streamingText(sessionId: String, text: String): JSONObject {
-        val payload = JSONObject().apply {
+    /** streamingText is a custom event — not part of the desktop protocol. Keep flat. */
+    fun streamingText(sessionId: String, text: String): JSONObject =
+        JSONObject().apply {
+            put("type", "streaming-text")
             put("sessionId", sessionId)
             put("text", text)
         }
-        return envelope("streaming-text", payload)
-    }
 
-    private fun envelope(type: String, payload: JSONObject): JSONObject =
-        JSONObject().apply {
-            put("type", type)
-            put("payload", payload)
-        }
+    private fun build(
+        type: String,
+        sessionId: String,
+        uuid: String,
+        timestamp: Long,
+        data: JSONObject,
+    ): JSONObject = JSONObject().apply {
+        put("type", type)
+        put("sessionId", sessionId)
+        put("uuid", uuid)
+        put("timestamp", timestamp)
+        put("data", data)
+    }
 }

@@ -106,7 +106,7 @@ class MessageRouterTest {
     fun `buildSessionInfo includes id field`() {
         val result = MessageRouter.buildSessionInfo(
             id = "sess-1", name = "Test", cwd = "/home",
-            status = "running", permissionMode = "default", dangerous = false
+            status = "active", permissionMode = "default", skipPermissions = false
         )
         assertEquals("sess-1", result.getString("id"))
     }
@@ -115,7 +115,7 @@ class MessageRouterTest {
     fun `buildSessionInfo includes name field`() {
         val result = MessageRouter.buildSessionInfo(
             id = "sess-1", name = "MySession", cwd = "/home",
-            status = "running", permissionMode = "default", dangerous = false
+            status = "active", permissionMode = "default", skipPermissions = false
         )
         assertEquals("MySession", result.getString("name"))
     }
@@ -124,7 +124,7 @@ class MessageRouterTest {
     fun `buildSessionInfo includes cwd field`() {
         val result = MessageRouter.buildSessionInfo(
             id = "sess-1", name = "Test", cwd = "/data/user/0",
-            status = "running", permissionMode = "default", dangerous = false
+            status = "active", permissionMode = "default", skipPermissions = false
         )
         assertEquals("/data/user/0", result.getString("cwd"))
     }
@@ -133,36 +133,46 @@ class MessageRouterTest {
     fun `buildSessionInfo includes status field`() {
         val result = MessageRouter.buildSessionInfo(
             id = "sess-1", name = "Test", cwd = "/home",
-            status = "stopped", permissionMode = "default", dangerous = false
+            status = "dead", permissionMode = "default", skipPermissions = false
         )
-        assertEquals("stopped", result.getString("status"))
+        assertEquals("dead", result.getString("status"))
     }
 
     @Test
     fun `buildSessionInfo includes permissionMode field`() {
         val result = MessageRouter.buildSessionInfo(
             id = "sess-1", name = "Test", cwd = "/home",
-            status = "running", permissionMode = "bypassPermissions", dangerous = true
+            status = "active", permissionMode = "bypassPermissions", skipPermissions = true
         )
         assertEquals("bypassPermissions", result.getString("permissionMode"))
     }
 
     @Test
-    fun `buildSessionInfo includes dangerous field as true`() {
+    fun `buildSessionInfo includes skipPermissions field as true`() {
         val result = MessageRouter.buildSessionInfo(
             id = "sess-1", name = "Test", cwd = "/home",
-            status = "running", permissionMode = "bypassPermissions", dangerous = true
+            status = "active", permissionMode = "bypassPermissions", skipPermissions = true
         )
-        assertTrue(result.getBoolean("dangerous"))
+        assertTrue(result.getBoolean("skipPermissions"))
     }
 
     @Test
-    fun `buildSessionInfo includes dangerous field as false`() {
+    fun `buildSessionInfo includes skipPermissions field as false`() {
         val result = MessageRouter.buildSessionInfo(
             id = "sess-1", name = "Test", cwd = "/home",
-            status = "running", permissionMode = "default", dangerous = false
+            status = "active", permissionMode = "default", skipPermissions = false
         )
-        assertFalse(result.getBoolean("dangerous"))
+        assertFalse(result.getBoolean("skipPermissions"))
+    }
+
+    @Test
+    fun `buildSessionInfo includes createdAt field`() {
+        val result = MessageRouter.buildSessionInfo(
+            id = "sess-1", name = "Test", cwd = "/home",
+            status = "active", permissionMode = "default", skipPermissions = false,
+            createdAt = 123456789L
+        )
+        assertEquals(123456789L, result.getLong("createdAt"))
     }
 
     // ── buildSessionListResponse ──────────────────────────────────────────────
@@ -170,10 +180,10 @@ class MessageRouterTest {
     @Test
     fun `buildSessionListResponse wraps sessions in a sessions JSONArray`() {
         val session1 = MessageRouter.buildSessionInfo(
-            "s1", "First", "/home", "running", "default", false
+            "s1", "First", "/home", "active", "default", false
         )
         val session2 = MessageRouter.buildSessionInfo(
-            "s2", "Second", "/tmp", "stopped", "default", false
+            "s2", "Second", "/tmp", "dead", "default", false
         )
         val result = MessageRouter.buildSessionListResponse(listOf(session1, session2))
         val sessions = result.getJSONArray("sessions")
@@ -183,7 +193,7 @@ class MessageRouterTest {
     @Test
     fun `buildSessionListResponse preserves session data`() {
         val session = MessageRouter.buildSessionInfo(
-            "s1", "Alpha", "/root", "running", "default", false
+            "s1", "Alpha", "/root", "active", "default", false
         )
         val result = MessageRouter.buildSessionListResponse(listOf(session))
         val first = result.getJSONArray("sessions").getJSONObject(0)

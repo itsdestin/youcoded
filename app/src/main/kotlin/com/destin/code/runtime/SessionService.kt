@@ -55,9 +55,11 @@ class SessionService : Service() {
         val homeDir = bootstrap?.homeDir ?: filesDir
         platformBridge = PlatformBridge(applicationContext, homeDir)
         sessionRegistry.bridgeServer = bridgeServer
-        bridgeServer.start { ws, msg ->
-            serviceScope.launch {
-                handleBridgeMessage(ws, msg)
+        if (!bridgeServer.isRunning) {
+            bridgeServer.start { ws, msg ->
+                serviceScope.launch {
+                    handleBridgeMessage(ws, msg)
+                }
             }
         }
 
@@ -266,8 +268,9 @@ class SessionService : Service() {
                 android.util.Log.i("SessionService", "Session created: id=${session.id} ptyBridge=${session.ptyBridge != null} termSession=${session.getTerminalSession() != null}")
                 val info = MessageRouter.buildSessionInfo(
                     id = session.id, name = session.name.value,
-                    cwd = cwd, status = "running",
-                    permissionMode = "normal", dangerous = dangerous
+                    cwd = cwd, status = "active",
+                    permissionMode = "normal", skipPermissions = dangerous,
+                    createdAt = session.createdAt
                 )
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, info) }
                 bridgeServer.broadcast(JSONObject().apply {
@@ -287,9 +290,10 @@ class SessionService : Service() {
                     MessageRouter.buildSessionInfo(
                         id = id, name = session.name.value,
                         cwd = session.cwd.absolutePath,
-                        status = session.status.value.name.lowercase(),
+                        status = if (session.status.value == SessionStatus.Dead) "dead" else "active",
                         permissionMode = session.permissionMode,
-                        dangerous = session.dangerousMode
+                        skipPermissions = session.dangerousMode,
+                        createdAt = session.createdAt
                     )
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray(sessions)) }
@@ -335,6 +339,51 @@ class SessionService : Service() {
             "clipboard:save-image" -> {
                 val result = platformBridge?.saveClipboardImage() ?: JSONObject().put("path", JSONObject.NULL)
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            "remote:get-client-count" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, 1) }
+            }
+            "remote:get-config" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("enabled", false)
+                        put("port", 9901)
+                        put("hasPassword", false)
+                        put("trustTailscale", false)
+                        put("keepAwakeHours", 0)
+                        put("clientCount", 1)
+                    })
+                }
+            }
+            "remote:detect-tailscale" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("installed", false)) }
+            }
+            "remote:get-client-list" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+            }
+            "remote:set-password" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            }
+            "remote:set-config" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
+            }
+            "remote:disconnect-client" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            }
+            "transcript:read-meta" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }
+            }
+            "session:terminal-ready" -> {
+                // fire-and-forget — no response needed
+            }
+            "session:browse" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+            }
+            "session:history" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+            }
+            "ui:action" -> {
+                // fire-and-forget — broadcast to other clients if any
             }
             else -> {
                 android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")

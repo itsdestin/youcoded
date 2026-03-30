@@ -7,8 +7,8 @@ import org.json.JSONObject
  * Converts HookEvent data into the JSON envelope format the desktop React app
  * expects on its `hook:event` WebSocket channel.
  *
- * Every method returns `{ type: "hook:event", payload: JSONObject }` where the
- * payload always includes a `hook_event_name` discriminator field.
+ * Every method returns:
+ *   { type: "hook:event", payload: { type, sessionId, payload: { ... } } }
  */
 object HookSerializer {
 
@@ -19,41 +19,39 @@ object HookSerializer {
         toolInput: JSONObject,
         suggestions: List<String>,
     ): JSONObject {
-        val suggestionsArray = JSONArray().apply {
-            suggestions.forEach { put(it) }
+        val inner = JSONObject().apply {
+            put("tool_name", toolName)
+            put("tool_input", toolInput)
+            put("_requestId", requestId)
+            put("permission_suggestions", JSONArray().apply {
+                suggestions.forEach { put(it) }
+            })
         }
-        val payload = JSONObject().apply {
-            put("hook_event_name", "PermissionRequest")
-            put("sessionId", sessionId)
-            put("requestId", requestId)
-            put("toolName", toolName)
-            put("toolInput", toolInput)
-            put("suggestions", suggestionsArray)
-        }
-        return envelope(payload)
+        return envelope("PermissionRequest", sessionId, inner)
     }
 
     fun permissionExpired(sessionId: String, requestId: String): JSONObject {
-        val payload = JSONObject().apply {
-            put("hook_event_name", "PermissionExpired")
-            put("sessionId", sessionId)
-            put("requestId", requestId)
+        val inner = JSONObject().apply {
+            put("_requestId", requestId)
         }
-        return envelope(payload)
+        return envelope("PermissionExpired", sessionId, inner)
     }
 
+    /** Notification — best-guess format; desktop may not send this. */
     fun notification(sessionId: String, message: String): JSONObject {
-        val payload = JSONObject().apply {
-            put("hook_event_name", "Notification")
-            put("sessionId", sessionId)
+        val inner = JSONObject().apply {
             put("message", message)
         }
-        return envelope(payload)
+        return envelope("Notification", sessionId, inner)
     }
 
-    private fun envelope(payload: JSONObject): JSONObject =
+    private fun envelope(type: String, sessionId: String, inner: JSONObject): JSONObject =
         JSONObject().apply {
             put("type", "hook:event")
-            put("payload", payload)
+            put("payload", JSONObject().apply {
+                put("type", type)
+                put("sessionId", sessionId)
+                put("payload", inner)
+            })
         }
 }

@@ -38,7 +38,8 @@ object MessageRouter {
         cwd: String,
         status: String,
         permissionMode: String,
-        dangerous: Boolean
+        skipPermissions: Boolean,
+        createdAt: Long = 0L,
     ): JSONObject {
         return JSONObject().apply {
             put("id", id)
@@ -46,7 +47,8 @@ object MessageRouter {
             put("cwd", cwd)
             put("status", status)
             put("permissionMode", permissionMode)
-            put("dangerous", dangerous)
+            put("skipPermissions", skipPermissions)
+            put("createdAt", createdAt)
         }
     }
 
