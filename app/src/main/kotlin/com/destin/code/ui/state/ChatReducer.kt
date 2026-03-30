@@ -85,6 +85,9 @@ sealed class ChatAction {
 
     // ─── Optimistic echo ────────────────────────────────────────
     data class MessageSent(val text: String) : ChatAction()
+
+    // ─── Streaming text ─────────────────────────────────────────────────────
+    data class StreamingText(val text: String) : ChatAction()
 }
 
 /**
@@ -127,6 +130,7 @@ class ChatReducer {
             is ChatAction.ThinkingTimeout -> handleThinkingTimeout()
             is ChatAction.TerminalActivity -> handleTerminalActivity()
             is ChatAction.MessageSent -> handleMessageSent(action)
+            is ChatAction.StreamingText -> handleStreamingText(action)
         }
         version++
     }
@@ -157,6 +161,7 @@ class ChatReducer {
     private fun handleAssistantText(action: ChatAction.TranscriptAssistantText) {
         if (!seenUuids.add(action.uuid)) return
 
+        state.streamingText = ""
         state.isThinking = false
         state.lastActivityAt = System.currentTimeMillis()
         state.activeToolName = null
@@ -323,6 +328,12 @@ class ChatReducer {
     private fun handleMessageSent(action: ChatAction.MessageSent) {
         state.isThinking = true
         state.pendingUserText = action.text
+    }
+
+    private fun handleStreamingText(action: ChatAction.StreamingText) {
+        state.streamingText = action.text
+        state.isThinking = false
+        state.lastActivityAt = System.currentTimeMillis()
     }
 
     // ─── Helpers ─────────────────────────────────────────────────

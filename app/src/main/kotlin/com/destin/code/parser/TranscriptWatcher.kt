@@ -58,6 +58,7 @@ class TranscriptWatcher(
         var job: Job? = null,
         var fileObserver: FileObserver? = null,
         val mutex: Mutex = Mutex(),
+        var accumulatedStreamingText: String = "",
     )
 
     /**
@@ -166,7 +167,8 @@ class TranscriptWatcher(
         when (type) {
             "user" -> parseUserLine(obj, sessionId, uuid, timestamp, state)
             "assistant" -> parseAssistantLine(obj, sessionId, uuid, timestamp)
-            // "progress", "file-history-snapshot" — skip
+            "progress" -> parseProgressLine(obj, sessionId, state)
+            // "file-history-snapshot" — skip
         }
     }
 
@@ -177,6 +179,7 @@ class TranscriptWatcher(
         timestamp: Long,
         state: WatcherState,
     ) {
+        state.accumulatedStreamingText = ""
         val message = obj.optJSONObject("message") ?: return
         val content = message.opt("content")
 
@@ -278,6 +281,22 @@ class TranscriptWatcher(
         // Emit turn-complete when stop_reason is end_turn
         if (stopReason == "end_turn") {
             _events.tryEmit(TranscriptEvent.TurnComplete(sessionId, uuid, timestamp))
+        }
+    }
+
+    private fun parseProgressLine(obj: JSONObject, sessionId: String, state: WatcherState) {
+        val content = obj.optJSONArray("content") ?: return
+        val text = buildString {
+            for (i in 0 until content.length()) {
+                val block = content.optJSONObject(i) ?: continue
+                if (block.optString("type") == "text") {
+                    append(block.optString("text", ""))
+                }
+            }
+        }
+        if (text.isNotEmpty()) {
+            state.accumulatedStreamingText += text
+            _events.tryEmit(TranscriptEvent.StreamingText(sessionId, state.accumulatedStreamingText))
         }
     }
 

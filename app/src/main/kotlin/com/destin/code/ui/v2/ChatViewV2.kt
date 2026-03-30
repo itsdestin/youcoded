@@ -5,9 +5,13 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.runtime.*
+import androidx.compose.material3.Text
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import com.destin.code.ui.state.*
+import com.destin.code.ui.theme.CascadiaMono
+import com.destin.code.ui.v2.DesktopColors as DC
 import kotlinx.coroutines.launch
 
 /**
@@ -54,6 +58,11 @@ fun ChatViewV2(
         val pendingText = state.pendingUserText
         if (pendingText.isNotBlank()) {
             add(DisplayItem.PendingUser(pendingText))
+        }
+        // Streaming text preview
+        val streamingText = state.streamingText
+        if (streamingText.isNotBlank()) {
+            add(DisplayItem.Streaming(streamingText))
         }
         for (tool in awaitingApproval) {
             add(DisplayItem.ApprovalCard(tool))
@@ -145,6 +154,17 @@ fun ChatViewV2(
                         ),
                     )
                 }
+                is DisplayItem.Streaming -> {
+                    Text(
+                        text = item.text,
+                        color = DC.gray300,
+                        fontSize = 13.sp,
+                        fontFamily = CascadiaMono,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 16.dp, vertical = 4.dp),
+                    )
+                }
                 is DisplayItem.Thinking -> {
                     ThinkingIndicator()
                 }
@@ -171,6 +191,10 @@ private sealed class DisplayItem {
 
     data class PendingUser(val text: String) : DisplayItem() {
         override val key: String = "pending-user"
+    }
+
+    data class Streaming(val text: String) : DisplayItem() {
+        override val key: String = "streaming"
     }
 
     data object Thinking : DisplayItem() {

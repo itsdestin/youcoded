@@ -59,4 +59,12 @@ sealed class TranscriptEvent {
         override val uuid: String,
         override val timestamp: Long,
     ) : TranscriptEvent()
+
+    /** Streaming assistant text from progress events */
+    data class StreamingText(
+        override val sessionId: String,
+        val text: String,
+        override val uuid: String = "",
+        override val timestamp: Long = 0L,
+    ) : TranscriptEvent()
 }

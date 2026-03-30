@@ -549,6 +549,9 @@ class ManagedSession(
                     hasBeenViewed = false
                 }
             }
+            is TranscriptEvent.StreamingText -> {
+                chatReducer.dispatch(ChatAction.StreamingText(event.text))
+            }
         }
     }
 
