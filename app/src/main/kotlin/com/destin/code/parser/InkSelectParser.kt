@@ -148,7 +148,7 @@ object InkSelectParser {
      * Generate PromptButtons from a parsed menu.
      * Sends up-arrows for items above the selector and down-arrows for items below.
      */
-    fun toPromptButtons(menu: ParsedMenu): List<com.destin.code.ui.PromptButton> {
+    fun toPromptButtons(menu: ParsedMenu): List<com.destin.code.ui.state.PromptButton> {
         val up = "\u001b[A"
         val down = "\u001b[B"
         return menu.options.mapIndexed { index, label ->
@@ -158,7 +158,7 @@ object InkSelectParser {
                 offset > 0 -> down.repeat(offset) + "\r"
                 else -> "\r"  // already selected
             }
-            com.destin.code.ui.PromptButton(label = label, input = sequence)
+            com.destin.code.ui.state.PromptButton(label = label, input = sequence)
         }
     }
 }

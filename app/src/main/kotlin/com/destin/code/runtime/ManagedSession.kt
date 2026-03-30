@@ -7,7 +7,7 @@ import com.destin.code.parser.TranscriptEvent
 import com.destin.code.parser.TranscriptWatcher
 import com.destin.code.ui.ChatState
 import com.destin.code.ui.MessageContent
-import com.destin.code.ui.PromptButton
+import com.destin.code.ui.state.PromptButton
 import com.destin.code.ui.state.ChatAction
 import com.destin.code.ui.state.ChatReducer
 import kotlinx.coroutines.CoroutineScope

@@ -8,6 +8,7 @@ import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import org.json.JSONObject
 import java.util.UUID
+import com.destin.code.ui.state.PromptButton
 
 enum class MessageRole { USER, CLAUDE, SYSTEM }
 
@@ -55,8 +56,6 @@ sealed class MessageContent {
         val selection: String,
     ) : MessageContent()
 }
-
-data class PromptButton(val label: String, val input: String)
 
 data class ChatMessage(
     val role: MessageRole,
