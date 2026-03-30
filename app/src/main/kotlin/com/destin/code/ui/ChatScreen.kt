@@ -92,27 +92,19 @@ fun ChatScreen(service: SessionService) {
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        if (currentSession == null) {
-            // ── No Active Session empty state ──────────────────────────
-            EmptySessionState(
-                service = service,
-                workingDirStore = workingDirStore,
-                context = context,
-                onShowAbout = { showAbout = true },
-            )
-        } else {
-            // ── Session active: WebView (chat) + terminal ──────────────
-            // WebView — always alive, hidden when terminal is shown
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .then(
-                        if (screenMode == ScreenMode.Chat) Modifier
-                        else Modifier.size(0.dp)
-                    )
-            ) {
-                WebViewHost(modifier = Modifier.fillMaxSize())
-            }
+        // WebView — always alive, React handles its own empty state
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .then(
+                    if (screenMode == ScreenMode.Chat) Modifier
+                    else Modifier.size(0.dp)
+                )
+        ) {
+            WebViewHost(modifier = Modifier.fillMaxSize())
+        }
+
+        if (currentSession != null) {
 
             // Terminal — shown when toggled or when session is a shell
             if (screenMode == ScreenMode.Terminal) {
@@ -255,224 +247,6 @@ private fun FloatingViewToggle(screenMode: ScreenMode, onToggle: () -> Unit) {
                 fontSize = 13.sp,
                 fontFamily = com.destin.code.ui.theme.CascadiaMono,
             )
-        }
-    }
-}
-
-// ─── Empty Session State ────────────────────────────────────────────────────
-
-@Composable
-private fun EmptySessionState(
-    service: SessionService,
-    workingDirStore: com.destin.code.config.WorkingDirStore?,
-    context: android.content.Context,
-    onShowAbout: () -> Unit,
-) {
-    var pickerMode by remember { mutableStateOf<String?>(null) }
-    val knownDirs = workingDirStore?.allDirs()
-        ?: listOf("Home (~)" to (service.bootstrap?.homeDir ?: File("/")))
-    var selectedDir by remember { mutableStateOf(knownDirs.firstOrNull()?.second) }
-
-    Box(modifier = Modifier.fillMaxSize().background(Color(0xFF111111))) {
-        // Settings gear — top left
-        Box(modifier = Modifier.align(Alignment.TopStart).padding(8.dp)) {
-            var emptyMenuExpanded by remember { mutableStateOf(false) }
-
-            Icon(
-                Icons.Filled.KeyboardArrowDown,
-                contentDescription = "Settings",
-                tint = Color(0xFF999999),
-                modifier = Modifier
-                    .size(16.dp)
-                    .clickable { emptyMenuExpanded = true },
-            )
-
-            if (emptyMenuExpanded) {
-                DropdownMenu(
-                    expanded = emptyMenuExpanded,
-                    onDismissRequest = { emptyMenuExpanded = false },
-                ) {
-                    DropdownMenuItem(
-                        text = { Text("Donate", fontSize = 13.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
-                        onClick = {
-                            emptyMenuExpanded = false
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://buymeacoffee.com/itsdestin")))
-                        },
-                    )
-                    DropdownMenuItem(
-                        text = { Text("About", fontSize = 13.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono) },
-                        onClick = { emptyMenuExpanded = false; onShowAbout() },
-                    )
-                }
-            }
-        }
-
-        // Centered content
-        Column(
-            modifier = Modifier.align(Alignment.Center),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            Text(
-                "No Active Session",
-                fontSize = 20.sp,
-                fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                color = Color(0xFF666666),
-            )
-
-            androidx.compose.foundation.Image(
-                painter = androidx.compose.ui.res.painterResource(com.destin.code.R.drawable.ic_welcome_mascot),
-                contentDescription = "DestinCode mascot",
-                modifier = Modifier.size(136.dp),
-            )
-
-            if (pickerMode == null) {
-                Column(
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .widthIn(min = 200.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFFB0B0B0))
-                            .clickable {
-                                if (knownDirs.size <= 1) {
-                                    service.createSession(knownDirs.first().second, false, null)
-                                } else {
-                                    pickerMode = "normal"
-                                }
-                            }
-                            .padding(horizontal = 20.dp, vertical = 12.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Text(
-                            "New Session",
-                            fontSize = 18.sp,
-                            fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                            color = Color(0xFF111111),
-                        )
-                    }
-
-                    Box(
-                        modifier = Modifier
-                            .clip(RoundedCornerShape(6.dp))
-                            .background(Color(0xFFDD4444).copy(alpha = 0.4f))
-                            .clickable {
-                                if (knownDirs.size <= 1) {
-                                    service.createSession(knownDirs.first().second, true, null)
-                                } else {
-                                    pickerMode = "dangerous"
-                                }
-                            }
-                            .padding(horizontal = 14.dp, vertical = 6.dp),
-                        contentAlignment = Alignment.Center,
-                    ) {
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                            Text(
-                                "New Session",
-                                fontSize = 18.sp,
-                                fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                fontWeight = FontWeight.Bold,
-                                color = Color(0xFFFCA5A5),
-                            )
-                            Text(
-                                "Dangerous Mode",
-                                fontSize = 10.sp,
-                                fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                color = Color(0xFFFCA5A5).copy(alpha = 0.7f),
-                            )
-                        }
-                    }
-                }
-            } else {
-                val isDangerous = pickerMode == "dangerous"
-                Column(
-                    modifier = Modifier
-                        .widthIn(max = 280.dp)
-                        .clip(RoundedCornerShape(8.dp))
-                        .background(Color(0xFF191919))
-                        .border(1.dp, Color(0xFF333333), RoundedCornerShape(8.dp))
-                        .padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        "PROJECT FOLDER",
-                        fontSize = 10.sp,
-                        fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                        color = Color(0xFF666666),
-                        letterSpacing = 1.sp,
-                    )
-
-                    knownDirs.forEach { (label, dir) ->
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(6.dp))
-                                .then(
-                                    if (selectedDir == dir) Modifier.background(Color(0xFF222222))
-                                    else Modifier
-                                )
-                                .clickable { selectedDir = dir }
-                                .padding(horizontal = 10.dp, vertical = 8.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Text(
-                                if (selectedDir == dir) "●" else "○",
-                                fontSize = 10.sp,
-                                color = if (selectedDir == dir) Color(0xFFB0B0B0) else Color(0xFF666666),
-                                modifier = Modifier.padding(end = 8.dp),
-                            )
-                            Text(
-                                label,
-                                fontSize = 13.sp,
-                                fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                color = Color(0xFFE0E0E0),
-                            )
-                        }
-                    }
-
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Box(
-                            modifier = Modifier
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(Color(0xFF333333))
-                                .clickable { pickerMode = null }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text("Back", fontSize = 13.sp, fontFamily = com.destin.code.ui.theme.CascadiaMono, color = Color(0xFFE0E0E0))
-                        }
-
-                        Box(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(6.dp))
-                                .background(
-                                    if (isDangerous) Color(0xFFDD4444).copy(alpha = 0.6f)
-                                    else Color(0xFFB0B0B0)
-                                )
-                                .clickable {
-                                    selectedDir?.let { dir ->
-                                        service.createSession(dir, isDangerous, null)
-                                    }
-                                }
-                                .padding(horizontal = 12.dp, vertical = 8.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                "Continue",
-                                fontSize = 13.sp,
-                                fontFamily = com.destin.code.ui.theme.CascadiaMono,
-                                color = if (isDangerous) Color(0xFFFCA5A5) else Color(0xFF111111),
-                            )
-                        }
-                    }
-                }
-            }
         }
     }
 }
