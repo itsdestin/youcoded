@@ -88,6 +88,9 @@ sealed class ChatAction {
 
     // ─── Streaming text ─────────────────────────────────────────────────────
     data class StreamingText(val text: String) : ChatAction()
+
+    // ─── System notices (hook notifications) ────────────────────────────────
+    data class SystemNotice(val id: String, val message: String) : ChatAction()
 }
 
 /**
@@ -131,6 +134,7 @@ class ChatReducer {
             is ChatAction.TerminalActivity -> handleTerminalActivity()
             is ChatAction.MessageSent -> handleMessageSent(action)
             is ChatAction.StreamingText -> handleStreamingText(action)
+            is ChatAction.SystemNotice -> handleSystemNotice(action)
         }
         version++
     }
@@ -334,6 +338,10 @@ class ChatReducer {
         state.streamingText = action.text
         state.isThinking = false
         state.lastActivityAt = System.currentTimeMillis()
+    }
+
+    private fun handleSystemNotice(action: ChatAction.SystemNotice) {
+        state.timeline.add(TimelineEntry.Notice(action.id, action.message))
     }
 
     // ─── Helpers ─────────────────────────────────────────────────

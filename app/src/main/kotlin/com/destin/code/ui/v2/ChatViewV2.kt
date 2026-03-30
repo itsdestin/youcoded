@@ -124,6 +124,18 @@ fun ChatViewV2(
                                 onAction = onPromptAction,
                             )
                         }
+                        is TimelineEntry.Notice -> {
+                            Text(
+                                text = entry.message,
+                                color = DC.gray400,
+                                fontSize = 12.sp,
+                                fontFamily = CascadiaMono,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 16.dp, vertical = 4.dp),
+                                fontStyle = androidx.compose.ui.text.font.FontStyle.Italic,
+                            )
+                        }
                     }
                 }
                 is DisplayItem.ApprovalCard -> {
@@ -182,6 +194,7 @@ private sealed class DisplayItem {
             is TimelineEntry.User -> "user-${entry.message.id}"
             is TimelineEntry.Turn -> "turn-${entry.turnId}"
             is TimelineEntry.Prompt -> "prompt-${entry.prompt.promptId}"
+            is TimelineEntry.Notice -> "notice-${entry.id}"
         }
     }
 

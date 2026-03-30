@@ -572,6 +572,14 @@ class ManagedSession(
                     permissionSuggestions = suggestions,
                 ))
             }
+            is HookEvent.Notification -> {
+                if (event.message.isNotBlank()) {
+                    chatReducer.dispatch(ChatAction.SystemNotice(
+                        id = java.util.UUID.randomUUID().toString(),
+                        message = event.message,
+                    ))
+                }
+            }
             // PostToolUse/PostToolUseFailure are handled by transcript watcher
             // via ToolResult events — no need to duplicate here.
             else -> {}

@@ -74,6 +74,7 @@ sealed class TimelineEntry {
     data class User(val message: ChatMessage) : TimelineEntry()
     data class Turn(val turnId: String) : TimelineEntry()
     data class Prompt(val prompt: InteractivePrompt) : TimelineEntry()
+    data class Notice(val id: String, val message: String) : TimelineEntry()
 }
 
 // ─── Session state ───────────────────────────────────────────────────
