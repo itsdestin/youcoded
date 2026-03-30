@@ -1,8 +1,9 @@
 package com.destin.code.bridge
 
+import org.json.JSONArray
 import org.json.JSONObject
 
-/** Minimal stub — full implementation in Task 3 */
+/** Protocol parser/builder for the WebSocket bridge. */
 object MessageRouter {
     data class ParsedMessage(
         val type: String,
@@ -28,6 +29,38 @@ object MessageRouter {
             put("type", "auth:ok")
             put("token", java.util.UUID.randomUUID().toString())
             put("platform", platform)
+        }
+    }
+
+    fun buildSessionInfo(
+        id: String,
+        name: String,
+        cwd: String,
+        status: String,
+        permissionMode: String,
+        dangerous: Boolean
+    ): JSONObject {
+        return JSONObject().apply {
+            put("id", id)
+            put("name", name)
+            put("cwd", cwd)
+            put("status", status)
+            put("permissionMode", permissionMode)
+            put("dangerous", dangerous)
+        }
+    }
+
+    fun buildSessionListResponse(sessions: List<JSONObject>): JSONObject {
+        val array = JSONArray()
+        sessions.forEach { array.put(it) }
+        return JSONObject().apply {
+            put("sessions", array)
+        }
+    }
+
+    fun buildErrorResponse(error: String): JSONObject {
+        return JSONObject().apply {
+            put("error", error)
         }
     }
 }
