@@ -41,14 +41,13 @@ class TranscriptWatcher(
 
         /**
          * Convert a working directory path to Claude Code's project slug.
-         * Mirrors desktop's cwdToProjectSlug(): replace \, :, / with - then strip leading -.
+         * Mirrors desktop's cwdToProjectSlug(): replace \, :, / with -. Leading dash is preserved.
          */
         fun cwdToProjectSlug(cwdPath: String): String {
             return cwdPath
                 .replace('\\', '-')
                 .replace(':', '-')
                 .replace('/', '-')
-                .trimStart('-')
         }
     }
 

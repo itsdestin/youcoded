@@ -189,8 +189,8 @@ object SessionBrowser {
             val rest = windowsDriveMatch.groupValues[2].replace('-', '/')
             return "$drive:/$rest"
         }
-        // Unix-style: leading segment is root, dashes are separators
-        return "/" + slug.replace('-', '/')
+        // Unix-style: leading dash is root /, all dashes are path separators
+        return slug.replace('-', '/')
     }
 
     /** Convert project slug to a File, falling back to homeDir if path doesn't exist. */
