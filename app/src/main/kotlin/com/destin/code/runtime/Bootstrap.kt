@@ -1021,6 +1021,12 @@ class Bootstrap(private val context: Context) {
             deployAutoTitleInstruction()
         }
 
+        // Deploy usage-fetch.js to ~/.claude-mobile/ for cache population
+        val usageFetchDest = File(mobileDir, "usage-fetch.js")
+        context.assets.open("usage-fetch.js").use { input ->
+            usageFetchDest.outputStream().use { output -> input.copyTo(output) }
+        }
+
         // Single unified write — covers both relay hooks AND auto-title hook
         existingJson.put("hooks", hooksObj)
         settingsFile.writeText(existingJson.toString(2))

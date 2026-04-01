@@ -21,6 +21,7 @@ class SessionService : Service() {
     val sessionRegistry = SessionRegistry()
     private var wakeLock: PowerManager.WakeLock? = null
     private var urlObserver: FileObserver? = null
+    private var usageRefreshTimer: java.util.Timer? = null
     var bootstrap: Bootstrap? = null
         private set
 
@@ -48,6 +49,7 @@ class SessionService : Service() {
         bootstrap = bs
         titlesDir.mkdirs()
         startUrlObserver(bs)
+        startUsageRefresh(bs)
     }
 
     /** Watch ~/.claude-mobile/open-url for URLs written by the JS wrapper.
@@ -74,6 +76,30 @@ class SessionService : Service() {
             }
         }
         urlObserver?.startWatching()
+    }
+
+    /** Periodically runs usage-fetch.js to keep .usage-cache.json fresh. */
+    private fun startUsageRefresh(bs: Bootstrap) {
+        usageRefreshTimer?.cancel()
+        val nodePath = File(bs.usrDir, "bin/node").absolutePath
+        val scriptPath = File(bs.homeDir, ".claude-mobile/usage-fetch.js").absolutePath
+        val env = bs.buildRuntimeEnv()
+
+        usageRefreshTimer = java.util.Timer("usage-refresh", true).apply {
+            scheduleAtFixedRate(object : java.util.TimerTask() {
+                override fun run() {
+                    try {
+                        val pb = ProcessBuilder(nodePath, scriptPath)
+                            .directory(bs.homeDir)
+                            .redirectErrorStream(true)
+                        pb.environment().putAll(env)
+                        val process = pb.start()
+                        process.waitFor(15, java.util.concurrent.TimeUnit.SECONDS)
+                        if (process.isAlive) process.destroyForcibly()
+                    } catch (_: Exception) {}
+                }
+            }, 10_000, 5 * 60 * 1000) // initial 10s delay, then every 5 min
+        }
     }
 
     val titlesDir: File get() = File(bootstrap?.homeDir ?: File("/"), ".claude-mobile/titles")
@@ -224,6 +250,8 @@ class SessionService : Service() {
     override fun onDestroy() {
         urlObserver?.stopWatching()
         urlObserver = null
+        usageRefreshTimer?.cancel()
+        usageRefreshTimer = null
         sessionRegistry.destroyAll()
         releaseWakeLock()
         super.onDestroy()
