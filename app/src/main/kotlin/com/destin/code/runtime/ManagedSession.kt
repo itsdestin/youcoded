@@ -310,6 +310,17 @@ class ManagedSession(
     private val absentPollCounts = mutableMapOf<String, Int>()
     private val DISMISS_THRESHOLD = 2
 
+    /** Titles of known setup prompts — only these are broadcast via prompt:show.
+     *  Matches InkSelectParser.TITLE_OVERRIDES values. Runtime permission prompts
+     *  (Yes/No/Always Allow) are handled by the hook system and must NOT be
+     *  broadcast here to avoid duplicate UI (PromptCard + ToolCard). */
+    private val SETUP_PROMPT_TITLES = setOf(
+        "Trust This Folder?",
+        "Choose a Theme for the Terminal",
+        "Select Login Method",
+        "You are allowing Claude to bypass permission prompts, which can be dangerous. Proceed?",
+    )
+
     /** Detect permission mode from visible screen only (not raw buffer). */
     private fun detectPermissionMode(screen: String) {
         val lower = screen.lowercase()
@@ -354,8 +365,15 @@ class ManagedSession(
         }
 
         // --- Generic Ink Select menu detection ---
+        // Only broadcast menus that are known setup prompts. Permission prompts
+        // (Yes/No/Always Allow) are handled exclusively by the hook system via
+        // EventBridge → HookSerializer → hook:event → React ToolCard.
+        // Broadcasting them here would create duplicate UI (PromptCard + ToolCard).
         val parsed = InkSelectParser.parse(screenText)
-        if (parsed != null) {
+        val isKnownSetupPrompt = parsed != null && SETUP_PROMPT_TITLES.any {
+            parsed.title.equals(it, ignoreCase = true)
+        }
+        if (parsed != null && isKnownSetupPrompt) {
             absentPollCounts.remove(parsed.id)
             if (parsed.id !in activePrompts && parsed.id !in completedPromptIds) {
                 val staleMenus = activePrompts.filter { it.startsWith("menu_") }
