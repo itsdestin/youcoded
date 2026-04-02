@@ -151,7 +151,18 @@ class PtyBridge(
     }
 
     fun writeInput(text: String) {
-        session?.write(text)
+        // If input combines an escape sequence with Enter, split them so the
+        // PTY doesn't deliver ESC as a standalone byte (which Ink interprets
+        // as the Escape key, cancelling the menu).
+        if (text.length > 2 && text.contains("\u001b[") && text.endsWith("\r")) {
+            val nav = text.dropLast(1)
+            session?.write(nav)
+            android.os.Handler(android.os.Looper.getMainLooper()).postDelayed({
+                session?.write("\r")
+            }, 80)
+        } else {
+            session?.write(text)
+        }
     }
 
     /** Send approval response to Claude Code's Ink Select permission prompt.

@@ -318,7 +318,6 @@ class ManagedSession(
         "Trust This Folder?",
         "Choose a Theme for the Terminal",
         "Select Login Method",
-        "You are allowing Claude to bypass permission prompts, which can be dangerous. Proceed?",
     )
 
     /** Detect permission mode from visible screen only (not raw buffer). */
@@ -361,6 +360,38 @@ class ManagedSession(
                 activePrompts.remove("auth")
                 broadcastPromptDismiss("auth")
                 absentPollCounts.remove("auth")
+            }
+        }
+
+        // --- Hardcoded: Bypass permissions warning ---
+        // Detect ❯ position to determine correct input. The prompt defaults ❯ to
+        // "No, exit" — accepting requires navigating DOWN to "Yes" first.
+        // PtyBridge.writeInput splits escape+Enter with a delay to prevent PTY
+        // buffering from causing ESC to be read as standalone Escape key.
+        if ("bypass permission" in screenLower && "enter to confirm" in screenLower) {
+            absentPollCounts.remove("bypass_warning")
+            if ("bypass_warning" !in activePrompts && "bypass_warning" !in completedPromptIds) {
+                activePrompts.add("bypass_warning")
+                // Check if ❯ is already on a "Yes"/"accept" option
+                val afterSelector = screenText.substringAfter("❯", "").lowercase().trim()
+                val selectorOnAccept = afterSelector.startsWith("yes") ||
+                    afterSelector.startsWith("2.") || afterSelector.startsWith("accept")
+                val acceptInput = if (selectorOnAccept) "\r" else "\u001b[B\r"
+                broadcastPrompt("bypass_warning",
+                    "Bypass Permissions Mode — Claude will run tools without asking for approval.",
+                    listOf(
+                        PromptButton("Accept the Risks", acceptInput),
+                        PromptButton("Exit", "\u001b"),
+                    ))
+            }
+            return
+        } else if ("bypass_warning" in activePrompts) {
+            val count = absentPollCounts.getOrDefault("bypass_warning", 0) + 1
+            absentPollCounts["bypass_warning"] = count
+            if (count >= DISMISS_THRESHOLD) {
+                activePrompts.remove("bypass_warning")
+                broadcastPromptDismiss("bypass_warning")
+                absentPollCounts.remove("bypass_warning")
             }
         }
 

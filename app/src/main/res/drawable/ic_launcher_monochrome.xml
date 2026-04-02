@@ -12,10 +12,10 @@
       android:scaleX="1.5"
       android:scaleY="1.5">
 
-  <!-- Rounded terminal window -->
+  <!-- Rounded terminal window (outline only — no fill) -->
   <path
       android:pathData="M8,1 L32,1 A7,7,0,0,1,39,8 L39,32 A7,7,0,0,1,32,39 L8,39 A7,7,0,0,1,1,32 L1,8 A7,7,0,0,1,8,1 Z"
-      android:fillColor="#FFFFFF"
+      android:fillColor="#00000000"
       android:strokeColor="#FFFFFF"
       android:strokeWidth="1.5"/>
 

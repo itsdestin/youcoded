@@ -1,5 +1,6 @@
-# Force LF line endings for shell scripts (prevents \r\n issues on Windows)
+# Force LF line endings for scripts that run on Android/Linux
 *.sh text eol=lf
+*.js text eol=lf
 gradlew text eol=lf
 
 # Windows batch files should keep CRLF

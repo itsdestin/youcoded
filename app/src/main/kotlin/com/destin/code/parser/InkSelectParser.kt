@@ -22,12 +22,12 @@ object InkSelectParser {
     private val NUMBERED_PREFIX = Regex("""^\s*\d+\.\s+""")
 
     // Title overrides for known prompts — keyed by lowercase keyword found in context
+    // Note: bypass permissions prompt is handled by a hardcoded handler in ManagedSession,
+    // not by the generic InkSelectParser, because it uses Enter/Esc (not arrow navigation).
     private val TITLE_OVERRIDES = mapOf(
         "trust" to "Trust This Folder?",
         "dark mode" to "Choose a Theme for the Terminal",
         "login method" to "Select Login Method",
-        "dangerously-skip-permissions" to "You are allowing Claude to bypass permission prompts, which can be dangerous. Proceed?",
-        "skip all permission" to "You are allowing Claude to bypass permission prompts, which can be dangerous. Proceed?",
     )
 
     /**
