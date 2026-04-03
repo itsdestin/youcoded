@@ -3,8 +3,7 @@
 # Mobile-bundled version — deployed by DestinCode when DestinClaude is not installed.
 # Defers to DestinClaude's version if both are present (Bootstrap handles this).
 
-INPUT=$(cat)
-SESSION_ID=$(echo "$INPUT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).session_id||'')}catch{console.log('')}})" 2>/dev/null)
+SESSION_ID=$(sed -n 's/.*"session_id" *: *"\([^"]*\)".*/\1/p' | head -1)
 
 if [ -z "$SESSION_ID" ]; then
     exit 0
