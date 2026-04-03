@@ -602,9 +602,9 @@ function AppInner() {
     (0, react_1.useEffect)(() => {
         if (!pendingModel) return;
         const handler = window.claude.on.transcriptEvent?.((event) => {
-            if (!event || event.type !== 'assistant_text' || !event.model) return;
+            if (!event || event.type !== 'assistant-text' || !event.data?.model) return;
             if (event.sessionId !== sessionId) return;
-            const actualModel = event.model;
+            const actualModel = event.data.model;
             const matches = actualModel.includes(pendingModel);
             if (matches) {
                 setPendingModel(null);

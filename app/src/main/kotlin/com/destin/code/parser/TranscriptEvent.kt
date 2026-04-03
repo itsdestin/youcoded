@@ -31,6 +31,7 @@ sealed class TranscriptEvent {
         override val uuid: String,
         override val timestamp: Long,
         val text: String,
+        val model: String? = null,
     ) : TranscriptEvent()
 
     /** Assistant invoked a tool */

@@ -20,9 +20,10 @@ object TranscriptSerializer {
         })
     }
 
-    fun assistantText(sessionId: String, uuid: String, timestamp: Long, text: String): JSONObject {
+    fun assistantText(sessionId: String, uuid: String, timestamp: Long, text: String, model: String? = null): JSONObject {
         return build("assistant-text", sessionId, uuid, timestamp, JSONObject().apply {
             put("text", text)
+            if (model != null) put("model", model)
         })
     }
 

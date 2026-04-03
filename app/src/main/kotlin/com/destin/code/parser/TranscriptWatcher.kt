@@ -256,6 +256,7 @@ class TranscriptWatcher(
         val message = obj.optJSONObject("message") ?: return
         val content = message.optJSONArray("content") ?: return
         val stopReason = message.optString("stop_reason", "")
+        val model = message.optString("model", null)
 
         // Process each content block in the message
         for (i in 0 until content.length()) {
@@ -266,7 +267,7 @@ class TranscriptWatcher(
                     val text = stripSystemTags(raw)
                     if (text.isNotBlank()) {
                         _events.tryEmit(TranscriptEvent.AssistantText(
-                            sessionId, uuid, timestamp, text,
+                            sessionId, uuid, timestamp, text, model,
                         ))
                     }
                 }
