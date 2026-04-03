@@ -286,8 +286,9 @@ class TranscriptWatcher(
             }
         }
 
-        // Emit turn-complete when stop_reason is end_turn
-        if (stopReason == "end_turn") {
+        // Emit turn-complete for any definitive stop reason except tool_use
+        // (tool_use means Claude is waiting for tool results, not actually done)
+        if (stopReason.isNotEmpty() && stopReason != "tool_use") {
             _events.tryEmit(TranscriptEvent.TurnComplete(sessionId, uuid, timestamp))
         }
     }
