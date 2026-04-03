@@ -31,6 +31,7 @@ class SessionRegistry {
         apiKey: String?,
         titlesDir: File,
         resumeSessionId: String? = null,
+        model: String? = null,
     ): ManagedSession {
         val sessionId = java.util.UUID.randomUUID().toString()
         val socketName = "parser-$sessionId"
@@ -46,6 +47,7 @@ class SessionRegistry {
             dangerousMode = dangerousMode,
             mobileSessionId = sessionId,
             resumeSessionId = resumeSessionId,
+            model = model,
         )
 
         val projectsDir = File(bootstrap.homeDir, ".claude/projects")
@@ -165,6 +167,7 @@ class SessionRegistry {
         bootstrap: Bootstrap,
         apiKey: String?,
         titlesDir: File,
+        model: String? = null,
     ): ManagedSession {
         // Derive CWD from the project slug — fall back to homeDir if path doesn't exist
         val cwd = SessionBrowser.slugToCwd(pastSession.projectSlug, bootstrap.homeDir)
@@ -177,6 +180,7 @@ class SessionRegistry {
             apiKey = apiKey,
             titlesDir = titlesDir,
             resumeSessionId = pastSession.sessionId,
+            model = model,
         )
 
         // History for resumed sessions is now handled entirely by the React UI

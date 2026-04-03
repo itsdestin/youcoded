@@ -18,6 +18,7 @@ class PtyBridge(
     private val dangerousMode: Boolean = false,
     val mobileSessionId: String? = null,
     private val resumeSessionId: String? = null,
+    private val model: String? = null,
 ) {
     private var session: TerminalSession? = null
     private var eventBridge: EventBridge? = null
@@ -126,7 +127,8 @@ class PtyBridge(
         // but can't exec them directly due to SELinux on app_data_file).
         val dangerousFlag = if (dangerousMode) " --dangerously-skip-permissions" else ""
         val resumeFlag = if (resumeSessionId != null) " --resume $resumeSessionId" else ""
-        val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPath.absolutePath} ${claudePath.absolutePath}$dangerousFlag$resumeFlag"
+        val modelFlag = if (model != null) " --model $model" else ""
+        val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPath.absolutePath} ${claudePath.absolutePath}$dangerousFlag$resumeFlag$modelFlag"
 
         File(bootstrap.homeDir, "tmp").mkdirs()
 
