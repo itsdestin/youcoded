@@ -628,6 +628,22 @@ class ManagedSession(
                 _name.value = currentTopic
             }
         }
+
+        // Polling fallback — FileObserver can miss events on Android FUSE filesystems.
+        // Same pattern as TranscriptWatcher (TranscriptWatcher.kt:113-117).
+        topicPollJob = scope.launch(Dispatchers.IO) {
+            while (isActive) {
+                delay(2000)
+                try {
+                    if (!topicFile.exists()) continue
+                    val newName = topicFile.readText().trim()
+                    if (newName.isNotBlank() && newName != "New Session" && newName != _name.value) {
+                        _name.value = newName
+                        try { titleFile.writeText(newName) } catch (_: Exception) {}
+                    }
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     fun destroy() {
