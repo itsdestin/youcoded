@@ -57,7 +57,8 @@ class SessionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var urlObserver: FileObserver? = null
     private var usageRefreshTimer: java.util.Timer? = null
-    private var skillProvider: LocalSkillProvider? = null
+    var skillProvider: LocalSkillProvider? = null
+        private set
     var bootstrap: Bootstrap? = null
         private set
 

@@ -24,6 +24,8 @@ import com.destin.code.ui.SetupScreen
 import com.destin.code.ui.TierPickerScreen
 import com.destin.code.ui.theme.DestinCodeTheme
 import com.destin.code.ui.theme.ThemeMode
+import android.net.Uri
+import android.widget.Toast
 import java.io.File
 
 class MainActivity : ComponentActivity() {
@@ -197,6 +199,7 @@ class MainActivity : ComponentActivity() {
                                             svc.sessionRegistry.switchTo(targetSessionId)
                                             intent?.removeExtra("session_id")
                                         }
+                                        handleDeepLink(intent)
                                     }
 
                                     Box(modifier = Modifier.fillMaxSize()) {
@@ -254,5 +257,31 @@ class MainActivity : ComponentActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         setIntent(intent)
+        handleDeepLink(intent)
+    }
+
+    private fun handleDeepLink(intent: Intent?) {
+        val uri = intent?.data ?: return
+        if (intent.action != Intent.ACTION_VIEW) return
+        if (uri.scheme != "destincode") return
+        val host = uri.host ?: return
+        if (host != "skill" && host != "plugin") return
+
+        val svc = boundService ?: return
+        val provider = svc.skillProvider ?: return
+
+        kotlinx.coroutines.MainScope().launch {
+            try {
+                val imported = withContext(Dispatchers.IO) {
+                    provider.importFromLink(uri.toString())
+                }
+                val name = imported.optString("displayName", "Skill")
+                Toast.makeText(this@MainActivity, "Imported: $name", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                Toast.makeText(this@MainActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+            }
+        }
+        // Clear the intent data so re-creation doesn't re-import
+        intent?.data = null
     }
 }
