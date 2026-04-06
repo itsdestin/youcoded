@@ -108,7 +108,8 @@ causing "Permission denied" when binaries fork+exec helpers.
 | `assets/claude-wrapper.js` | Node.js monkey-patch for SELinux bypass (CANONICAL SOURCE) |
 | `assets/hook-relay.js` | Unix socket event relay for structured hook events |
 | `skills/LocalSkillProvider.kt` | Skill marketplace backend (discovery, install, config, sharing) |
-| `skills/SkillConfigStore.kt` | Reads/writes `~/.claude/destincode-skills.json` (favorites, chips, overrides, private skills) |
+| `skills/PluginInstaller.kt` | Installs Claude Code plugins to `~/.claude/plugins/<name>/` via git clone/copy |
+| `skills/SkillConfigStore.kt` | Reads/writes `~/.claude/destincode-skills.json` (favorites, chips, overrides, installed plugins) |
 | `skills/MarketplaceFetcher.kt` | HTTP fetch + cache of GitHub marketplace registry |
 | `skills/SkillScanner.kt` | Discovers installed skills from `~/.claude/plugins/` |
 | `skills/SkillShareCodec.kt` | Base64url encode/decode for `destincode://` deep links |
