@@ -27,7 +27,7 @@ export class RemoteConfig {
 
   constructor() {
     const defaults: ConfigData = {
-      enabled: true,
+      enabled: false,
       port: 9900,
       passwordHash: null,
       passwordPlain: null,
@@ -88,11 +88,11 @@ export class RemoteConfig {
   save(): void {
     const configPath = CONFIG_PATH();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
+    // passwordPlain is kept in memory for the settings UI but never persisted to disk
     fs.writeFileSync(configPath, JSON.stringify({
       enabled: this.enabled,
       port: this.port,
       passwordHash: this.passwordHash,
-      passwordPlain: this.passwordPlain,
       trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,

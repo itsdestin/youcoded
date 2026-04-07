@@ -247,7 +247,12 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
         return SkillShareCodec.encode(payload)
     }
 
-    fun importFromLink(url: String): JSONObject {
+    /**
+     * Import a skill from a share link.
+     * @param confirm If false, returns a preview of the parsed skill without saving (for user confirmation).
+     *                If true (default), decodes and saves the skill immediately.
+     */
+    fun importFromLink(url: String, confirm: Boolean = true): JSONObject {
         val payload = SkillShareCodec.decode(url) ?: throw Exception("Invalid share link")
 
         if (payload.optString("type") == "prompt") {
@@ -269,6 +274,12 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
                 val author = payload.optString("author", "").take(100)
                 if (author.isNotEmpty()) put("author", author)
                 put("installedAt", nowIso())
+            }
+
+            if (!confirm) {
+                // Return preview without saving — caller should show confirmation UI
+                skill.put("requiresConfirmation", true)
+                return skill
             }
             return configStore.createPromptSkill(skill)!!
         } else {

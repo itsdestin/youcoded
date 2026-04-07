@@ -289,11 +289,31 @@ class MainActivity : ComponentActivity() {
 
         kotlinx.coroutines.MainScope().launch {
             try {
-                val imported = withContext(Dispatchers.IO) {
-                    provider.importFromLink(uri.toString())
+                // Preview the skill data without saving — show confirmation first
+                val preview = withContext(Dispatchers.IO) {
+                    provider.importFromLink(uri.toString(), confirm = false)
                 }
-                val name = imported.optString("displayName", "Skill")
-                Toast.makeText(this@MainActivity, "Imported: $name", Toast.LENGTH_SHORT).show()
+                val name = preview.optString("displayName", "Skill")
+                val author = preview.optString("author", "Unknown")
+
+                android.app.AlertDialog.Builder(this@MainActivity)
+                    .setTitle("Import Skill?")
+                    .setMessage("\"$name\" by $author\n\nDo you want to install this skill?")
+                    .setPositiveButton("Install") { _, _ ->
+                        kotlinx.coroutines.MainScope().launch {
+                            try {
+                                val imported = withContext(Dispatchers.IO) {
+                                    provider.importFromLink(uri.toString(), confirm = true)
+                                }
+                                val importedName = imported.optString("displayName", "Skill")
+                                Toast.makeText(this@MainActivity, "Imported: $importedName", Toast.LENGTH_SHORT).show()
+                            } catch (e: Exception) {
+                                Toast.makeText(this@MainActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
+                            }
+                        }
+                    }
+                    .setNegativeButton("Cancel", null)
+                    .show()
             } catch (e: Exception) {
                 Toast.makeText(this@MainActivity, "Import failed: ${e.message}", Toast.LENGTH_SHORT).show()
             }
