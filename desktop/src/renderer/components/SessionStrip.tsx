@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { SessionStatusColor } from './StatusDot';
 import { isAndroid } from '../platform';
 import { MODELS, type ModelAlias } from './StatusBar';
+import FolderSwitcher from './FolderSwitcher';
 
 /* ── Narrow viewport hook — mirrors Android's single-session behavior ── */
 const NARROW_BREAKPOINT = 640;
@@ -135,12 +136,7 @@ export default function SessionStrip({
   // Suppress the click that fires after a drag release
   const suppressClick = useRef(false);
 
-  // Resolve home path on mount
-  useEffect(() => {
-    (window as any).claude?.getHomePath?.()
-      .then((home: string) => { if (home) setNewCwd(home); })
-      .catch(() => {});
-  }, []);
+  // Home path is now auto-selected by FolderSwitcher on mount
 
   // Close menu on outside click (check both trigger area and portal dropdown)
   useEffect(() => {
@@ -239,12 +235,6 @@ export default function SessionStrip({
     leaveTimer.current = setTimeout(() => setHoveredId(null), 80);
   }, []);
 
-  const handleBrowse = useCallback(async () => {
-    try {
-      const folder = await (window as any).claude.dialog.openFolder();
-      if (folder) setNewCwd(folder);
-    } catch {}
-  }, []);
 
   const handleMenuToggle = useCallback(() => {
     setMenuOpen(prev => !prev);
@@ -462,7 +452,7 @@ export default function SessionStrip({
       {menuOpen && createPortal(
         <div
           ref={dropdownRef}
-          className="fixed w-72 bg-panel border border-edge rounded-lg shadow-lg overflow-hidden z-[9000]"
+          className="glass-overlay overlay-no-drag fixed w-72 bg-panel border border-edge rounded-lg shadow-lg overflow-hidden z-[9000]"
           style={(() => {
             const triggerRect = triggerBtnRef.current?.getBoundingClientRect();
             const pillRect = pillBarRef.current?.getBoundingClientRect();
@@ -551,12 +541,7 @@ export default function SessionStrip({
             <div className="p-3 flex flex-col gap-2">
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Project Folder</label>
-                <button
-                  onClick={handleBrowse}
-                  className="w-full text-left px-2.5 py-1.5 bg-inset border border-edge rounded-md text-xs text-fg-2 hover:border-edge transition-colors truncate"
-                >
-                  {newCwd || 'Select folder...'}
-                </button>
+                <FolderSwitcher value={newCwd} onChange={setNewCwd} />
               </div>
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Model</label>

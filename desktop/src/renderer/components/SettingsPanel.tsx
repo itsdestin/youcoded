@@ -69,7 +69,7 @@ export default function SettingsPanel({ open, onClose, onSendInput }: Props) {
 
       {/* Panel */}
       <div
-        className={`fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out ${
+        className={`glass-overlay fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -258,7 +258,7 @@ function ThemeButton({ onSendInput }: { onSendInput?: (text: string) => void }) 
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -556,7 +556,7 @@ function RemoteButton({
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -990,7 +990,7 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -1122,7 +1122,7 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
