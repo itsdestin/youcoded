@@ -63,12 +63,22 @@ describe('resolveAllAssetPaths', () => {
     expect(resolved.cursor).toBe('theme-asset://test/assets/cursor.svg');
   });
 
-  it('does not modify builtin themes (no basePath)', () => {
+  it('does not modify destinclaude themes', () => {
     const theme = {
-      name: 'Light', slug: 'light', dark: false, source: 'builtin' as const,
+      name: 'Light', slug: 'light', dark: false, source: 'destinclaude' as const,
       tokens: {} as any,
     };
     const resolved = resolveAllAssetPaths(theme);
     expect(resolved).toEqual(theme);
+  });
+
+  it('resolves asset paths for community themes', () => {
+    const theme = {
+      name: 'Community', slug: 'neon-tokyo', dark: true, source: 'community' as const,
+      tokens: {} as any,
+      background: { type: 'image' as const, value: 'assets/bg.png' },
+    };
+    const resolved = resolveAllAssetPaths(theme);
+    expect(resolved.background?.value).toBe('theme-asset://neon-tokyo/assets/bg.png');
   });
 });

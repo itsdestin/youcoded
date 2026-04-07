@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { validateTheme, computeOnAccent, luminance } from '../src/renderer/themes/theme-validator';
+import { validateTheme, computeOnAccent, luminance, sanitizeCSS, validateCommunityTheme } from '../src/renderer/themes/theme-validator';
 
 const MINIMAL_VALID = {
   name: 'Test Theme',
@@ -141,5 +141,76 @@ describe('validateTheme — new fields', () => {
       },
     };
     expect(() => validateTheme(theme)).toThrow('particle-shape');
+  });
+});
+
+describe('sanitizeCSS', () => {
+  it('strips @import rules', () => {
+    const css = '@import url("https://evil.com/style.css"); body { color: red; }';
+    expect(sanitizeCSS(css)).toBe(' body { color: red; }');
+  });
+
+  it('strips @IMPORT (case insensitive)', () => {
+    const css = '@IMPORT url("https://evil.com/style.css"); body {}';
+    expect(sanitizeCSS(css)).toBe(' body {}');
+  });
+
+  it('strips external url() references', () => {
+    const css = 'body { background: url(https://evil.com/img.png); }';
+    expect(sanitizeCSS(css)).toBe('body { background: url(/* blocked */); }');
+  });
+
+  it('strips protocol-relative url() references', () => {
+    const css = 'body { background: url(//evil.com/img.png); }';
+    expect(sanitizeCSS(css)).toBe('body { background: url(/* blocked */); }');
+  });
+
+  it('preserves theme-asset:// URLs', () => {
+    const css = 'body { background: url("theme-asset://slug/assets/bg.png"); }';
+    expect(sanitizeCSS(css)).toBe(css);
+  });
+
+  it('preserves data: URIs', () => {
+    const css = 'body { background: url("data:image/svg+xml,..."); }';
+    expect(sanitizeCSS(css)).toBe(css);
+  });
+
+  it('strips expression()', () => {
+    const css = 'div { width: expression(document.body.clientWidth); }';
+    expect(sanitizeCSS(css)).toBe('div { width: /* blocked */; }');
+  });
+
+  it('strips javascript: URIs', () => {
+    const css = 'body { background: url("javascript:alert(1)"); }';
+    expect(sanitizeCSS(css)).toContain('/* blocked */');
+    expect(sanitizeCSS(css)).not.toContain('javascript');
+  });
+
+  it('strips -moz-binding', () => {
+    const css = 'div { -moz-binding: url("xbl-evil.xml"); color: red; }';
+    expect(sanitizeCSS(css)).not.toContain('-moz-binding');
+    expect(sanitizeCSS(css)).toContain('color: red');
+  });
+
+  it('preserves valid CSS untouched', () => {
+    const css = '.panel { backdrop-filter: blur(12px); border-radius: 8px; color: var(--fg); }';
+    expect(sanitizeCSS(css)).toBe(css);
+  });
+});
+
+describe('validateCommunityTheme', () => {
+  it('sanitizes custom_css in community themes', () => {
+    const theme = {
+      ...MINIMAL_VALID,
+      custom_css: '@import url("https://evil.com/spy.css"); .safe { color: red; }',
+    };
+    const result = validateCommunityTheme(theme);
+    expect(result.custom_css).not.toContain('@import');
+    expect(result.custom_css).toContain('.safe { color: red; }');
+  });
+
+  it('passes through themes without custom_css unchanged', () => {
+    const result = validateCommunityTheme({ ...MINIMAL_VALID });
+    expect(result.custom_css).toBeUndefined();
   });
 });

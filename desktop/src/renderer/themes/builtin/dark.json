@@ -2,7 +2,7 @@
   "name": "Dark",
   "slug": "dark",
   "dark": true,
-  "source": "builtin",
+  "source": "destinclaude",
   "tokens": {
     "canvas": "#111111",
     "panel": "#191919",

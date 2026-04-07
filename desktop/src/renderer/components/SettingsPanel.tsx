@@ -4,7 +4,6 @@ import { createPortal } from 'react-dom';
 import { QRCodeSVG } from 'qrcode.react';
 import { isAndroid } from '../platform';
 import ThemeScreen from './ThemeScreen';
-import FolderSwitcher from './FolderSwitcher';
 import { useTheme } from '../state/theme-context';
 import { MODELS, type ModelAlias } from './StatusBar';
 
@@ -12,11 +11,9 @@ interface RemoteConfig {
   enabled: boolean;
   port: number;
   hasPassword: boolean;
-  password: string | null;
   trustTailscale: boolean;
   keepAwakeHours: number;
   clientCount: number;
-  everPaired: boolean;
 }
 
 const KEEP_AWAKE_OPTIONS = [
@@ -29,7 +26,6 @@ const KEEP_AWAKE_OPTIONS = [
 
 interface TailscaleInfo {
   installed: boolean;
-  connected: boolean;
   ip: string | null;
   hostname: string | null;
   url: string | null;
@@ -45,6 +41,9 @@ interface Props {
   open: boolean;
   onClose: () => void;
   onSendInput: (text: string) => void;
+  hasActiveSession: boolean;
+  onOpenThemeMarketplace?: () => void;
+  onPublishTheme?: (slug: string) => void;
 }
 
 function timeAgo(timestamp: number): string {
@@ -56,7 +55,7 @@ function timeAgo(timestamp: number): string {
   return `${hours}h ago`;
 }
 
-export default function SettingsPanel({ open, onClose, onSendInput }: Props) {
+export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme }: Props) {
   return (
     <>
       {/* Backdrop */}
@@ -69,7 +68,7 @@ export default function SettingsPanel({ open, onClose, onSendInput }: Props) {
 
       {/* Panel */}
       <div
-        className={`glass-overlay fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out ${
+        className={`fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
@@ -86,12 +85,15 @@ export default function SettingsPanel({ open, onClose, onSendInput }: Props) {
           </div>
 
           {isAndroid() ? (
-            <AndroidSettings open={open} onClose={onClose} onSendInput={onSendInput} />
+            <AndroidSettings open={open} onClose={onClose} onSendInput={onSendInput} onOpenThemeMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
           ) : (
             <DesktopSettings
               open={open}
               onClose={onClose}
               onSendInput={onSendInput}
+              hasActiveSession={hasActiveSession}
+              onOpenThemeMarketplace={onOpenThemeMarketplace}
+              onPublishTheme={onPublishTheme}
             />
           )}
         </div>
@@ -213,7 +215,7 @@ function SoundSettings() {
 // ─── Theme popup button ────────────────────────────────────────────────────
 
 /** Compact "Appearance" row — opens ThemeScreen in a centered popup modal */
-function ThemeButton({ onSendInput }: { onSendInput?: (text: string) => void }) {
+function ThemeButton({ onSendInput, onOpenMarketplace, onPublishTheme }: { onSendInput?: (text: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
   const { activeTheme, font } = useTheme();
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
@@ -258,7 +260,7 @@ function ThemeButton({ onSendInput }: { onSendInput?: (text: string) => void }) 
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -267,7 +269,7 @@ function ThemeButton({ onSendInput }: { onSendInput?: (text: string) => void }) 
               height: 'min(600px, 80vh)',
             }}
           >
-            <ThemeScreen onClose={() => setOpen(false)} onSendInput={onSendInput} />
+            <ThemeScreen onClose={() => setOpen(false)} onSendInput={onSendInput} onOpenMarketplace={onOpenMarketplace} onPublishTheme={(slug) => { setOpen(false); onPublishTheme?.(slug); }} />
           </div>
         </>,
         document.body,
@@ -276,90 +278,14 @@ function ThemeButton({ onSendInput }: { onSendInput?: (text: string) => void }) 
   );
 }
 
-// ─── Password section ─────────────────────────────────────────────────────
-
-function PasswordSection({ config, newPassword, passwordStatus, onSetNewPassword, onSetPassword }: {
-  config: RemoteConfig | null;
-  newPassword: string;
-  passwordStatus: 'idle' | 'saving' | 'saved';
-  onSetNewPassword: (v: string) => void;
-  onSetPassword: () => void;
-}) {
-  const [showPassword, setShowPassword] = useState(false);
-  const [changing, setChanging] = useState(false);
-
-  const hasPassword = config?.hasPassword;
-  const savedPassword = config?.password;
-
-  // If password is set and user isn't changing it, show the current password
-  if (hasPassword && savedPassword && !changing) {
-    return (
-      <div className="py-2">
-        <div className="flex items-center justify-between mb-1">
-          <span className="text-xs text-fg-2">Password</span>
-          <span className="text-[10px] text-green-400">Set</span>
-        </div>
-        <div className="flex gap-1 items-center">
-          <div className="flex-1 px-2 py-1 rounded-sm bg-well border border-edge-dim text-xs text-fg font-mono select-all">
-            {showPassword ? savedPassword : '\u2022'.repeat(savedPassword.length)}
-          </div>
-          <button
-            onClick={() => setShowPassword(v => !v)}
-            className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs text-fg-muted"
-            title={showPassword ? 'Hide' : 'Show'}
-          >
-            {showPassword ? 'Hide' : 'Show'}
-          </button>
-          <button
-            onClick={() => setChanging(true)}
-            className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs text-fg-muted"
-          >
-            Change
-          </button>
-        </div>
-      </div>
-    );
-  }
-
-  // Set or change password input
-  return (
-    <div className="py-2">
-      <div className="flex items-center justify-between mb-1">
-        <span className="text-xs text-fg-2">Password</span>
-        {changing && (
-          <button onClick={() => setChanging(false)} className="text-[10px] text-fg-muted hover:text-fg-2">Cancel</button>
-        )}
-      </div>
-      <div className="flex gap-1">
-        <input
-          type="password"
-          placeholder={hasPassword ? 'New password...' : 'Set password...'}
-          value={newPassword}
-          onChange={(e) => onSetNewPassword(e.target.value)}
-          onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
-          className="flex-1 px-2 py-1 rounded-sm bg-well border border-edge-dim text-xs text-fg focus:outline-none focus:border-fg-muted"
-        />
-        <button
-          onClick={() => { onSetPassword(); setChanging(false); }}
-          disabled={!newPassword.trim() || passwordStatus === 'saving'}
-          className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs disabled:opacity-50"
-        >
-          {passwordStatus === 'saved' ? '\u2713' : passwordStatus === 'saving' ? '...' : 'Set'}
-        </button>
-      </div>
-    </div>
-  );
-}
-
 // ─── Remote settings popup button ─────────────────────────────────────────
-
-type SetupStep = 'DETECT' | 'INSTALL' | 'AUTH' | 'PASSWORD' | 'COMPLETE';
 
 interface RemoteButtonProps {
   config: RemoteConfig | null;
   tailscale: TailscaleInfo | null;
   clients: ClientInfo[];
   loading: boolean;
+  hasActiveSession: boolean;
   newPassword: string;
   passwordStatus: 'idle' | 'saving' | 'saved';
   copied: boolean;
@@ -370,139 +296,22 @@ interface RemoteButtonProps {
   onToggleEnabled: () => void;
   onToggleTailscaleTrust: () => void;
   onSetKeepAwake: (hours: number) => void;
+  onRunSetup: () => void;
   onDisconnectClient: (id: string) => void;
   onCopyLink: () => void;
   onSetShowSetupQR: (v: boolean) => void;
   onSetShowAddDevice: (v: boolean) => void;
-  onRefreshState: () => void;
 }
 
 function RemoteButton({
-  config, tailscale, clients, loading,
+  config, tailscale, clients, loading, hasActiveSession,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
   onSetNewPassword, onSetPassword, onToggleEnabled, onToggleTailscaleTrust,
-  onSetKeepAwake, onDisconnectClient, onCopyLink,
-  onSetShowSetupQR, onSetShowAddDevice, onRefreshState,
+  onSetKeepAwake, onRunSetup, onDisconnectClient, onCopyLink,
+  onSetShowSetupQR, onSetShowAddDevice,
 }: RemoteButtonProps) {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
-
-  // ── Setup wizard state ──
-  const [wizardActive, setWizardActive] = useState(false);
-  const [wizardStep, setWizardStep] = useState<SetupStep>('DETECT');
-  const [wizardBusy, setWizardBusy] = useState(false);
-  const [wizardError, setWizardError] = useState<string | null>(null);
-  const [wizardPassword, setWizardPassword] = useState('');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  // Cleanup polling on unmount
-  useEffect(() => () => { if (pollRef.current) clearInterval(pollRef.current); }, []);
-
-  const detectAndRoute = useCallback(async () => {
-    setWizardBusy(true);
-    setWizardError(null);
-    try {
-      const claude = (window as any).claude;
-      const [ts, cfg] = await Promise.all([
-        claude.remote.detectTailscale(),
-        claude.remote.getConfig(),
-      ]);
-      if (!ts.installed) { setWizardStep('INSTALL'); }
-      else if (!ts.connected) { setWizardStep('AUTH'); }
-      else if (!cfg.hasPassword) { setWizardStep('PASSWORD'); }
-      else { setWizardStep('COMPLETE'); }
-    } catch {
-      setWizardError('Failed to check status. Try again.');
-      setWizardStep('INSTALL');
-    } finally {
-      setWizardBusy(false);
-    }
-  }, []);
-
-  const startWizard = useCallback(() => {
-    setWizardActive(true);
-    setWizardStep('DETECT');
-    setWizardError(null);
-    setWizardPassword('');
-    detectAndRoute();
-  }, [detectAndRoute]);
-
-  const handleInstall = useCallback(async () => {
-    setWizardBusy(true);
-    setWizardError(null);
-    try {
-      const result = await (window as any).claude.remote.installTailscale();
-      if (result.error === 'linux-manual') {
-        (window as any).claude.shell.openExternal('https://tailscale.com/download/linux');
-        setWizardError('Please install Tailscale manually, then click Next.');
-        setWizardBusy(false);
-        return;
-      }
-      if (!result.success) {
-        setWizardError(result.error || 'Installation failed.');
-        setWizardBusy(false);
-        return;
-      }
-      detectAndRoute();
-    } catch (err) {
-      setWizardError(String(err));
-      setWizardBusy(false);
-    }
-  }, [detectAndRoute]);
-
-  const handleAuth = useCallback(async () => {
-    setWizardBusy(true);
-    setWizardError(null);
-    try {
-      const result = await (window as any).claude.remote.authTailscale();
-      if (result.error) {
-        setWizardError(result.error);
-        setWizardBusy(false);
-        return;
-      }
-      // Poll for connection (tailscale up opened a browser)
-      pollRef.current = setInterval(async () => {
-        const ts = await (window as any).claude.remote.detectTailscale();
-        if (ts.connected) {
-          if (pollRef.current) clearInterval(pollRef.current);
-          pollRef.current = null;
-          detectAndRoute();
-        }
-      }, 2000);
-      // Timeout after 2 minutes
-      setTimeout(() => {
-        if (pollRef.current) {
-          clearInterval(pollRef.current);
-          pollRef.current = null;
-          setWizardBusy(false);
-          setWizardError('Sign-in timed out. Click Try Again to retry.');
-        }
-      }, 120000);
-    } catch (err) {
-      setWizardError(String(err));
-      setWizardBusy(false);
-    }
-  }, [detectAndRoute]);
-
-  const handleWizardSetPassword = useCallback(async () => {
-    if (!wizardPassword.trim()) return;
-    setWizardBusy(true);
-    setWizardError(null);
-    try {
-      await (window as any).claude.remote.setPassword(wizardPassword);
-      onRefreshState();
-      detectAndRoute();
-    } catch (err) {
-      setWizardError(String(err));
-      setWizardBusy(false);
-    }
-  }, [wizardPassword, detectAndRoute, onRefreshState]);
-
-  const closeWizard = useCallback(() => {
-    setWizardActive(false);
-    if (pollRef.current) { clearInterval(pollRef.current); pollRef.current = null; }
-    onRefreshState();
-  }, [onRefreshState]);
 
   useEffect(() => {
     if (!open) return;
@@ -528,12 +337,8 @@ function RemoteButton({
 
       <button
         onClick={() => setOpen(true)}
-        className="relative w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
       >
-        {/* Blue badge until first device pairs */}
-        {config && !config.everPaired && (
-          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-blue-500" />
-        )}
         {/* Status indicator dot */}
         <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
           <div className={`w-2.5 h-2.5 rounded-full ${
@@ -543,7 +348,7 @@ function RemoteButton({
         <div className="flex-1 min-w-0">
           <span className="text-xs text-fg font-medium">{statusText}</span>
           {tailscale?.installed && (
-            <span className={`text-[10px] ml-2 ${tailscale.connected ? 'text-fg-muted' : 'text-fg-muted/50'}`}>Tailscale{tailscale.connected ? '' : ' (off)'}</span>
+            <span className="text-[10px] text-fg-muted ml-2">Tailscale</span>
           )}
         </div>
         <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -556,7 +361,7 @@ function RemoteButton({
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -578,178 +383,14 @@ function RemoteButton({
                   <div className="flex items-center justify-center py-8 text-fg-muted text-sm">Loading...</div>
                 ) : (
                   <>
-                    {/* Setup wizard / banner */}
-                    {wizardActive ? (
-                      <div className="bg-blue-500/10 border border-blue-500/25 rounded-lg p-4">
-                        {/* Step indicator */}
-                        <div className="flex items-center gap-1.5 mb-3">
-                          {(['INSTALL', 'AUTH', 'PASSWORD', 'COMPLETE'] as const).map((s, i) => (
-                            <div key={s} className={`h-1 flex-1 rounded-full ${
-                              s === wizardStep ? 'bg-blue-500' :
-                              (['INSTALL','AUTH','PASSWORD','COMPLETE'].indexOf(wizardStep) > i) ? 'bg-blue-500/40' : 'bg-inset'
-                            }`} />
-                          ))}
-                        </div>
-
-                        {wizardStep === 'DETECT' && (
-                          <div className="flex items-center justify-center py-6">
-                            <span className="text-xs text-fg-muted animate-pulse">Checking setup status...</span>
-                          </div>
-                        )}
-
-                        {wizardStep === 'INSTALL' && (
-                          <div>
-                            <h4 className="text-xs font-medium text-fg mb-1">Install Tailscale</h4>
-                            <p className="text-[10px] text-fg-muted mb-3">
-                              Tailscale creates a private network between your devices — like a secure tunnel that only you can use. Free for personal use.
-                            </p>
-                            {wizardBusy ? (
-                              <div className="flex items-center gap-2 py-2">
-                                <span className="text-xs text-blue-400 animate-pulse">Installing Tailscale...</span>
-                              </div>
-                            ) : (
-                              <button
-                                onClick={handleInstall}
-                                className="w-full px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium"
-                              >
-                                Install Tailscale
-                              </button>
-                            )}
-                            {wizardError && (
-                              <div className="mt-2">
-                                <p className="text-[10px] text-red-400 mb-1">{wizardError}</p>
-                                {wizardError.includes('manually') && (
-                                  <button onClick={detectAndRoute} className="text-[10px] text-blue-400 hover:text-blue-300">
-                                    Next — I installed it
-                                  </button>
-                                )}
-                                {!wizardError.includes('manually') && !wizardBusy && (
-                                  <button onClick={handleInstall} className="text-[10px] text-blue-400 hover:text-blue-300">
-                                    Try Again
-                                  </button>
-                                )}
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {wizardStep === 'AUTH' && (
-                          <div>
-                            <h4 className="text-xs font-medium text-fg mb-1">Sign in to Tailscale</h4>
-                            {wizardBusy ? (
-                              <>
-                                <p className="text-[10px] text-fg-muted mb-2">
-                                  A browser window should have opened. Sign in with Google, Microsoft, GitHub, or Apple — whichever you prefer.
-                                </p>
-                                <div className="flex items-center gap-2 py-2">
-                                  <div className="w-2 h-2 rounded-full bg-blue-500 animate-pulse" />
-                                  <span className="text-[10px] text-blue-400">Waiting for sign-in...</span>
-                                </div>
-                              </>
-                            ) : (
-                              <>
-                                <p className="text-[10px] text-fg-muted mb-3">
-                                  Connect Tailscale to your account so your devices can find each other.
-                                </p>
-                                <button
-                                  onClick={handleAuth}
-                                  className="w-full px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium"
-                                >
-                                  Connect Tailscale
-                                </button>
-                              </>
-                            )}
-                            {wizardError && (
-                              <div className="mt-2">
-                                <p className="text-[10px] text-red-400 mb-1">{wizardError}</p>
-                                <button onClick={handleAuth} className="text-[10px] text-blue-400 hover:text-blue-300">
-                                  Try Again
-                                </button>
-                              </div>
-                            )}
-                          </div>
-                        )}
-
-                        {wizardStep === 'PASSWORD' && (
-                          <div>
-                            <h4 className="text-xs font-medium text-fg mb-1">Set a Password</h4>
-                            <p className="text-[10px] text-fg-muted mb-3">
-                              Choose a password for remote access. You'll type this when connecting from your phone.
-                            </p>
-                            <div className="flex gap-2">
-                              <input
-                                type="password"
-                                value={wizardPassword}
-                                onChange={e => setWizardPassword(e.target.value)}
-                                onKeyDown={e => e.key === 'Enter' && handleWizardSetPassword()}
-                                placeholder="Choose a password..."
-                                className="flex-1 px-2 py-1.5 rounded-sm bg-inset border border-edge text-xs text-fg placeholder:text-fg-faint focus:outline-none focus:border-blue-500"
-                                disabled={wizardBusy}
-                                autoFocus
-                              />
-                              <button
-                                onClick={handleWizardSetPassword}
-                                disabled={!wizardPassword.trim() || wizardBusy}
-                                className="px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium disabled:opacity-50"
-                              >
-                                {wizardBusy ? '...' : 'Set'}
-                              </button>
-                            </div>
-                            {wizardError && (
-                              <p className="text-[10px] text-red-400 mt-1">{wizardError}</p>
-                            )}
-                          </div>
-                        )}
-
-                        {wizardStep === 'COMPLETE' && (
-                          <div>
-                            <div className="flex items-center gap-2 mb-3">
-                              <div className="w-5 h-5 rounded-full bg-green-500/20 flex items-center justify-center">
-                                <svg className="w-3 h-3 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={3}>
-                                  <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
-                                </svg>
-                              </div>
-                              <h4 className="text-xs font-medium text-fg">Remote Access Ready</h4>
-                            </div>
-                            {tailscale?.url && (
-                              <>
-                                <p className="text-[10px] text-fg-muted mb-2">
-                                  Install Tailscale on your phone, sign in with the same account, then open this URL:
-                                </p>
-                                <div className="flex justify-center bg-white rounded-lg p-3 w-fit mx-auto">
-                                  <QRCodeSVG value={tailscale.url} size={140} />
-                                </div>
-                                <p className="text-[10px] text-fg-muted mt-2 text-center font-mono">{tailscale.url}</p>
-                                <button
-                                  onClick={onCopyLink}
-                                  className="w-full mt-2 px-3 py-1 rounded-sm bg-inset hover:bg-edge text-[10px] text-fg-dim"
-                                >
-                                  {copied ? 'Copied!' : 'Copy link'}
-                                </button>
-                              </>
-                            )}
-                            <button
-                              onClick={closeWizard}
-                              className="w-full mt-3 px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium"
-                            >
-                              Done
-                            </button>
-                          </div>
-                        )}
-
-                        {/* Cancel link */}
-                        {wizardStep !== 'COMPLETE' && !wizardBusy && (
-                          <button onClick={closeWizard} className="text-[10px] text-fg-faint hover:text-fg-muted mt-3 block">
-                            Cancel
-                          </button>
-                        )}
-                      </div>
-                    ) : !hasClients && (
+                    {/* Setup banner — shown when no clients connected */}
+                    {!hasClients && (
                       <div className="bg-blue-500/10 border border-blue-500/25 rounded-lg p-3">
                         <p className="text-xs text-blue-400 mb-2">
                           Remote access lets you use DestinCode from any device — phone, tablet, or another computer.
                         </p>
-                        {tailscale?.connected && tailscale.url && config?.hasPassword ? (
+
+                        {tailscale?.installed && tailscale.url && config?.hasPassword ? (
                           showSetupQR ? (
                             <div className="mt-2">
                               <p className="text-[10px] text-fg-muted mb-2">Scan to connect a device:</p>
@@ -773,12 +414,19 @@ function RemoteButton({
                             </button>
                           )
                         ) : (
-                          <button
-                            onClick={startWizard}
-                            className="w-full px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium"
-                          >
-                            Set Up Remote Access
-                          </button>
+                          <>
+                            <button
+                              onClick={onRunSetup}
+                              disabled={!hasActiveSession}
+                              className="w-full px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                              title={!hasActiveSession ? 'Create a session first' : ''}
+                            >
+                              Set Up Remote Access
+                            </button>
+                            {!hasActiveSession && (
+                              <p className="text-[10px] text-fg-muted mt-1 text-center">Create a session first to run setup</p>
+                            )}
+                          </>
                         )}
                       </div>
                     )}
@@ -792,13 +440,31 @@ function RemoteButton({
                         <Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} />
                       </label>
 
-                      <PasswordSection
-                        config={config}
-                        newPassword={newPassword}
-                        passwordStatus={passwordStatus}
-                        onSetNewPassword={onSetNewPassword}
-                        onSetPassword={onSetPassword}
-                      />
+                      <div className="py-2">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-xs text-fg-2">Password</span>
+                          {config?.hasPassword && (
+                            <span className="text-[10px] text-green-400">Set</span>
+                          )}
+                        </div>
+                        <div className="flex gap-1">
+                          <input
+                            type="password"
+                            placeholder={config?.hasPassword ? 'Change password...' : 'Set password...'}
+                            value={newPassword}
+                            onChange={(e) => onSetNewPassword(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
+                            className="flex-1 px-2 py-1 rounded-sm bg-well border border-edge-dim text-xs text-fg focus:outline-none focus:border-fg-muted"
+                          />
+                          <button
+                            onClick={onSetPassword}
+                            disabled={!newPassword.trim() || passwordStatus === 'saving'}
+                            className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs disabled:opacity-50"
+                          >
+                            {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
+                          </button>
+                        </div>
+                      </div>
 
                       <div className="py-2">
                         <div className="flex items-center justify-between mb-1">
@@ -856,7 +522,7 @@ function RemoteButton({
                     )}
 
                     {/* Add Device overlay */}
-                    {showAddDevice && tailscale?.connected && tailscale.url && (
+                    {showAddDevice && tailscale?.url && (
                       <section className="bg-inset/50 rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-xs font-medium text-fg-2">Add Device</h3>
@@ -889,18 +555,14 @@ function RemoteButton({
                         <>
                           <div className="py-2 flex items-center justify-between">
                             <span className="text-xs text-fg-2">Status</span>
-                            {tailscale.connected ? (
-                              <span className="text-[10px] text-green-400">
-                                Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-fg-muted">Disconnected</span>
-                            )}
+                            <span className="text-[10px] text-green-400">
+                              Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
+                            </span>
                           </div>
 
                           <div className="py-2 flex items-center justify-between">
                             <span className="text-xs text-fg-2">IP</span>
-                            <span className={`text-xs font-mono ${tailscale.connected ? 'text-fg-dim' : 'text-fg-muted/50'}`}>{tailscale.ip}</span>
+                            <span className="text-xs text-fg-dim font-mono">{tailscale.ip}</span>
                           </div>
 
                           <label className="flex items-center justify-between py-2 cursor-pointer">
@@ -914,10 +576,11 @@ function RemoteButton({
                             Tailscale is not installed. It creates a secure private network so you can access DestinCode from anywhere.
                           </p>
                           <button
-                            onClick={startWizard}
-                            className="px-3 py-1.5 rounded-sm bg-inset hover:bg-edge text-xs"
+                            onClick={onRunSetup}
+                            disabled={!hasActiveSession}
+                            className="px-3 py-1.5 rounded-sm bg-inset hover:bg-edge text-xs disabled:opacity-50"
                           >
-                            Set Up Tailscale
+                            Install with Setup Skill
                           </button>
                         </div>
                       )}
@@ -960,6 +623,13 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  const handleBrowseFolder = useCallback(async () => {
+    try {
+      const folder = await (window as any).claude.dialog.openFolder();
+      if (folder) onDefaultsChange({ projectFolder: folder });
+    } catch {}
+  }, [onDefaultsChange]);
+
   const summaryParts: string[] = [];
   summaryParts.push(MODEL_LABELS[defaults.model] || 'Sonnet');
   if (defaults.skipPermissions) summaryParts.push('Skip Perms');
@@ -990,7 +660,7 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -1048,11 +718,12 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
                 {/* Default Project Folder */}
                 <section>
                   <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Project Folder</h3>
-                  <FolderSwitcher
-                    value={defaults.projectFolder}
-                    onChange={(folder) => onDefaultsChange({ projectFolder: folder })}
-                    autoSelect={false}
-                  />
+                  <button
+                    onClick={handleBrowseFolder}
+                    className="w-full text-left px-2.5 py-1.5 bg-inset border border-edge-dim rounded-md text-xs text-fg-2 hover:border-edge transition-colors truncate"
+                  >
+                    {defaults.projectFolder || 'Home directory (default)'}
+                  </button>
                   {defaults.projectFolder && (
                     <button
                       onClick={() => onDefaultsChange({ projectFolder: '' })}
@@ -1122,7 +793,7 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
           <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="glass-overlay fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -1178,7 +849,7 @@ interface PairedDevice {
   password: string;
 }
 
-function AndroidSettings({ open, onClose, onSendInput }: { open: boolean; onClose: () => void; onSendInput: (text: string) => void }) {
+function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, onPublishTheme }: { open: boolean; onClose: () => void; onSendInput: (text: string) => void; onOpenThemeMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
   const [loading, setLoading] = useState(true);
   const [tier, setTier] = useState('CORE');
   const [directories, setDirectories] = useState<{ label: string; path: string }[]>([]);
@@ -1327,7 +998,7 @@ function AndroidSettings({ open, onClose, onSendInput }: { open: boolean; onClos
     <>
       <div className="flex-1 px-4 py-4 space-y-6">
 
-        <ThemeButton onSendInput={onSendInput} />
+        <ThemeButton onSendInput={onSendInput} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         {/* Tier & directories are local-only — hide when connected to remote desktop */}
         {!remoteConnected && (
@@ -1550,10 +1221,13 @@ function AndroidSettings({ open, onClose, onSendInput }: { open: boolean; onClos
 
 // ─── Desktop Settings (existing, unchanged) ─────────────────────────────────
 
-function DesktopSettings({ open, onClose, onSendInput }: {
+function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme }: {
   open: boolean;
   onClose: () => void;
   onSendInput: (text: string) => void;
+  hasActiveSession: boolean;
+  onOpenThemeMarketplace?: () => void;
+  onPublishTheme?: (slug: string) => void;
 }) {
   const [config, setConfig] = useState<RemoteConfig | null>(null);
   const [tailscale, setTailscale] = useState<TailscaleInfo | null>(null);
@@ -1592,7 +1266,7 @@ function DesktopSettings({ open, onClose, onSendInput }: {
     setPasswordStatus('saving');
     try {
       await (window as any).claude.remote.setPassword(newPassword);
-      setConfig(prev => prev ? { ...prev, hasPassword: true, password: newPassword } : prev);
+      setConfig(prev => prev ? { ...prev, hasPassword: true } : prev);
       setNewPassword('');
       setPasswordStatus('saved');
       setTimeout(() => setPasswordStatus('idle'), 2000);
@@ -1618,19 +1292,11 @@ function DesktopSettings({ open, onClose, onSendInput }: {
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
   }, []);
 
-  const handleRefreshState = useCallback(() => {
-    const claude = (window as any).claude;
-    if (!claude?.remote) return;
-    Promise.all([
-      claude.remote.getConfig(),
-      claude.remote.detectTailscale(),
-      claude.remote.getClientList(),
-    ]).then(([cfg, ts, cls]: [RemoteConfig, TailscaleInfo, ClientInfo[]]) => {
-      setConfig(cfg);
-      setTailscale(ts);
-      setClients(cls);
-    }).catch(() => {});
-  }, []);
+  const handleRunSetup = useCallback(() => {
+    if (!hasActiveSession) return;
+    onSendInput('/remote-setup');
+    onClose();
+  }, [hasActiveSession, onSendInput, onClose]);
 
   const handleDisconnectClient = useCallback(async (clientId: string) => {
     await (window as any).claude.remote.disconnectClient(clientId);
@@ -1656,7 +1322,7 @@ function DesktopSettings({ open, onClose, onSendInput }: {
     <>
       <div className="flex-1 px-4 py-4 space-y-6">
 
-        <ThemeButton onSendInput={onSendInput} />
+        <ThemeButton onSendInput={onSendInput} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         <SoundSettings />
 
@@ -1665,6 +1331,7 @@ function DesktopSettings({ open, onClose, onSendInput }: {
           tailscale={tailscale}
           clients={clients}
           loading={loading}
+          hasActiveSession={hasActiveSession}
           newPassword={newPassword}
           passwordStatus={passwordStatus}
           copied={copied}
@@ -1675,11 +1342,11 @@ function DesktopSettings({ open, onClose, onSendInput }: {
           onToggleEnabled={handleToggleEnabled}
           onToggleTailscaleTrust={handleToggleTailscaleTrust}
           onSetKeepAwake={handleSetKeepAwake}
+          onRunSetup={handleRunSetup}
           onDisconnectClient={handleDisconnectClient}
           onCopyLink={handleCopyLink}
           onSetShowSetupQR={setShowSetupQR}
           onSetShowAddDevice={setShowAddDevice}
-          onRefreshState={handleRefreshState}
         />
 
         {/* Other */}
