@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import type { SkillEntry, ChipConfig, MetadataOverride, SkillFilters, SkillDetailView } from '../../shared/types';
 
 interface SkillState {
@@ -103,7 +103,7 @@ export function SkillProvider({ children }: { children: ReactNode }) {
   }, [refreshInstalled]);
 
   // Compute drawer skills: favorites ∪ curated defaults, favorites sorted first
-  const drawerSkills = React.useMemo(() => {
+  const drawerSkills = useMemo(() => {
     const favSet = new Set(favorites);
     const ids = new Set([...favorites, ...curatedDefaults]);
     return installed
@@ -115,28 +115,24 @@ export function SkillProvider({ children }: { children: ReactNode }) {
       });
   }, [installed, favorites, curatedDefaults]);
 
-  const value: SkillContextValue = {
-    installed,
-    favorites,
-    chips,
-    curatedDefaults,
-    loading,
-    drawerSkills,
-    refreshInstalled,
-    setFavorite: setFavoriteAction,
-    setChips: setChipsAction,
-    setOverride: setOverrideAction,
-    createPrompt: createPromptAction,
-    deletePrompt: deletePromptAction,
-    install: installAction,
-    uninstall: uninstallAction,
-    listMarketplace: (filters) => window.claude.skills.listMarketplace(filters),
-    getDetail: (id) => window.claude.skills.getDetail(id),
-    search: (query) => window.claude.skills.search(query),
-    getShareLink: (id) => window.claude.skills.getShareLink(id),
-    importFromLink: (encoded) => window.claude.skills.importFromLink(encoded),
-    publish: (id) => window.claude.skills.publish(id),
-  };
+  // Stable references for pass-through IPC methods (no state dependencies)
+  const listMarketplace = useCallback((filters?: SkillFilters) => window.claude.skills.listMarketplace(filters), []);
+  const getDetail = useCallback((id: string) => window.claude.skills.getDetail(id), []);
+  const search = useCallback((query: string) => window.claude.skills.search(query), []);
+  const getShareLink = useCallback((id: string) => window.claude.skills.getShareLink(id), []);
+  const importFromLink = useCallback((encoded: string) => window.claude.skills.importFromLink(encoded), []);
+  const publish = useCallback((id: string) => window.claude.skills.publish(id), []);
+
+  const value = useMemo<SkillContextValue>(() => ({
+    installed, favorites, chips, curatedDefaults, loading, drawerSkills,
+    refreshInstalled, setFavorite: setFavoriteAction, setChips: setChipsAction,
+    setOverride: setOverrideAction, createPrompt: createPromptAction,
+    deletePrompt: deletePromptAction, install: installAction, uninstall: uninstallAction,
+    listMarketplace, getDetail, search, getShareLink, importFromLink, publish,
+  }), [installed, favorites, chips, curatedDefaults, loading, drawerSkills,
+       refreshInstalled, setFavoriteAction, setChipsAction, setOverrideAction,
+       createPromptAction, deletePromptAction, installAction, uninstallAction,
+       listMarketplace, getDetail, search, getShareLink, importFromLink, publish]);
 
   return <SkillContext.Provider value={value}>{children}</SkillContext.Provider>;
 }

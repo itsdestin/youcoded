@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
 // @ts-ignore — Vite inline CSS import
 import hljsDarkCss from 'highlight.js/styles/github-dark.css?inline';
 // @ts-ignore — Vite inline CSS import
@@ -84,11 +84,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
   const [userThemes, setUserThemes] = useState<LoadedTheme[]>([]);
 
-  // All themes including _preview (for engine lookup)
-  const allThemesInternal = [...BUILTIN_THEMES, ...userThemes];
+  // All themes including _preview (for engine lookup) — memoized to stabilize references
+  const allThemesInternal = useMemo(() => [...BUILTIN_THEMES, ...userThemes], [userThemes]);
   // Public list excludes _preview (UI pickers shouldn't show it)
-  const allThemes = allThemesInternal.filter(t => t.slug !== PREVIEW_SLUG);
-  const activeTheme = allThemesInternal.find(t => t.slug === activeSlug) ?? BUILTIN_THEMES[0];
+  const allThemes = useMemo(() => allThemesInternal.filter(t => t.slug !== PREVIEW_SLUG), [allThemesInternal]);
+  const activeTheme = useMemo(() => allThemesInternal.find(t => t.slug === activeSlug) ?? BUILTIN_THEMES[0], [allThemesInternal, activeSlug]);
 
   // Fallback if active theme was uninstalled (slug no longer in allThemes)
   useEffect(() => {
@@ -223,19 +223,25 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     });
   }, [allThemes, cycleList, prePreviewSlug]);
 
-  const bgStyle = buildBackgroundStyle(activeTheme.background) as Record<string, string> | null;
-  const patternStyle = buildPatternStyle(
-    activeTheme.background?.pattern,
-    activeTheme.background?.['pattern-opacity'],
-  ) as Record<string, string> | null;
+  const bgStyle = useMemo(
+    () => buildBackgroundStyle(activeTheme.background) as Record<string, string> | null,
+    [activeTheme.background],
+  );
+  const patternStyle = useMemo(
+    () => buildPatternStyle(activeTheme.background?.pattern, activeTheme.background?.['pattern-opacity']) as Record<string, string> | null,
+    [activeTheme.background?.pattern, activeTheme.background?.['pattern-opacity']],
+  );
+
+  const value = useMemo(() => ({
+    theme: activeSlug, setTheme, cycleTheme,
+    cycleList, setCycleList, font,
+    reducedEffects, setReducedEffects,
+    allThemes, activeTheme, bgStyle, patternStyle,
+  }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
+       reducedEffects, setReducedEffects, allThemes, activeTheme, bgStyle, patternStyle]);
 
   return (
-    <ThemeContext.Provider value={{
-      theme: activeSlug, setTheme, cycleTheme,
-      cycleList, setCycleList, font,
-      reducedEffects, setReducedEffects,
-      allThemes, activeTheme, bgStyle, patternStyle,
-    }}>
+    <ThemeContext.Provider value={value}>
       {children}
     </ThemeContext.Provider>
   );

@@ -134,11 +134,18 @@ export default function ThemeEffects() {
     const ctx = canvas.getContext('2d');
     if (!ctx) return;
 
+    let resizeRafId: number | null = null;
     const resize = () => {
-      canvas.width = window.innerWidth;
-      canvas.height = window.innerHeight;
+      if (resizeRafId !== null) return;
+      resizeRafId = requestAnimationFrame(() => {
+        resizeRafId = null;
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+      });
     };
-    resize();
+    // Initial size set synchronously (no throttle needed)
+    canvas.width = window.innerWidth;
+    canvas.height = window.innerHeight;
     window.addEventListener('resize', resize);
 
     // Initialize particles
@@ -152,7 +159,12 @@ export default function ThemeEffects() {
     }));
 
     const rainColor = accent + '40';
-    const draw = () => {
+    let lastFrame = 0;
+    const draw = (now: number) => {
+      animRef.current = requestAnimationFrame(draw);
+      // Cap at ~30fps — ambient particles don't need 60fps
+      if (now - lastFrame < 33) return;
+      lastFrame = now;
       const w = canvas.width;
       const h = canvas.height;
       if (preset === 'rain') drawRain(ctx, particlesRef.current, w, h, rainColor);
@@ -162,12 +174,12 @@ export default function ThemeEffects() {
       else if (preset === 'custom' && imgRef.current) {
         drawCustom(ctx, particlesRef.current, w, h, imgRef.current, particleDrift);
       }
-      animRef.current = requestAnimationFrame(draw);
     };
     animRef.current = requestAnimationFrame(draw);
 
     return () => {
       cancelAnimationFrame(animRef.current);
+      if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
       window.removeEventListener('resize', resize);
     };
   }, [preset, accent, particleCount, particleSpeed, particleDrift, sizeRange[0], sizeRange[1], reducedEffects]);

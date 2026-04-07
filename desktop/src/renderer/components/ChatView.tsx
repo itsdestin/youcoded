@@ -160,6 +160,25 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
 
+  // IntersectionObserver for backdrop-filter optimization: only apply blur
+  // to visible bubbles on wallpaper themes (reduces GPU compositing cost)
+  const bubbleObserverRef = useRef<IntersectionObserver | null>(null);
+  useEffect(() => {
+    bubbleObserverRef.current = new IntersectionObserver(
+      (entries) => {
+        for (const entry of entries) {
+          entry.target.classList.toggle('in-view', entry.isIntersecting);
+        }
+      },
+      { rootMargin: '200px 0px' },
+    );
+    return () => bubbleObserverRef.current?.disconnect();
+  }, []);
+
+  const observeEntry = useCallback((el: HTMLDivElement | null) => {
+    if (el) bubbleObserverRef.current?.observe(el);
+  }, []);
+
   // Arrow key scrolling with acceleration when not typing
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const scrollSpeed = useRef(0);
@@ -229,41 +248,50 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
         ) : (
           <>
             {state.timeline.map((entry) => {
+              let key: string;
+              let content: React.ReactNode;
               switch (entry.kind) {
                 case 'user':
-                  return <UserMessage key={entry.message.id} message={entry.message} />;
+                  key = entry.message.id;
+                  content = <UserMessage message={entry.message} />;
+                  break;
                 case 'assistant-turn': {
                   const turn = state.assistantTurns.get(entry.turnId);
                   if (!turn || turn.segments.length === 0) return null;
-                  return (
+                  key = entry.turnId;
+                  content = (
                     <AssistantTurnBubble
-                      key={entry.turnId}
                       turn={turn}
                       toolGroups={state.toolGroups}
                       toolCalls={state.toolCalls}
                       sessionId={sessionId}
                     />
                   );
+                  break;
                 }
                 case 'prompt':
                   if (entry.prompt.promptId === '_history_expand' && !entry.prompt.completed) {
                     return (
-                      <HistoryExpandButton
-                        key={entry.prompt.promptId}
-                        sessionId={sessionId}
-                        resumeInfo={resumeInfo}
-                      />
+                      <div key={entry.prompt.promptId} ref={observeEntry} className="timeline-entry">
+                        <HistoryExpandButton sessionId={sessionId} resumeInfo={resumeInfo} />
+                      </div>
                     );
                   }
-                  return (
+                  key = entry.prompt.promptId;
+                  content = (
                     <PromptCard
-                      key={entry.prompt.promptId}
                       prompt={entry.prompt}
                       sessionId={sessionId}
                       onSelect={(input, label) => handlePromptSelect(entry.prompt.promptId, input, label)}
                     />
                   );
+                  break;
               }
+              return (
+                <div key={key!} ref={observeEntry} className="timeline-entry in-view">
+                  {content}
+                </div>
+              );
             })}
             {/* Awaiting-approval tools pop out as standalone bubbles at the bottom */}
             {awaitingTools.map((tool) => (

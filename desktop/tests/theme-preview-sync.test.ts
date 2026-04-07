@@ -84,11 +84,9 @@ describe.skipIf(!previewExists)('theme-preview.css ↔ globals.css sync', () => 
     expect(preview).toContain('#theme-pattern');
   });
 
-  // Effect overlay selectors — globals.css uses IDs, preview uses classes
+  // Effect overlay — globals.css uses a consolidated overlay div, preview uses classes
   it('globals.css has effect overlay CSS', () => {
-    expect(globals).toContain('#effect-vignette');
-    expect(globals).toContain('#effect-noise');
-    expect(globals).toContain('#effect-scanlines');
+    expect(globals).toContain('#theme-effects-overlay');
   });
 
   it('preview has effect overlay CSS', () => {

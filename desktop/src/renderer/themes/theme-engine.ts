@@ -96,52 +96,59 @@ export function buildLayoutAttrs(layout: ThemeLayout | undefined): Record<string
   return result;
 }
 
-const EFFECT_IDS = ['effect-vignette', 'effect-noise', 'effect-scanlines'] as const;
+const EFFECTS_OVERLAY_ID = 'theme-effects-overlay';
+// Keep legacy IDs for clearThemeFromDom cleanup of previously-applied themes
+const LEGACY_EFFECT_IDS = ['effect-vignette', 'effect-noise', 'effect-scanlines'] as const;
 
-/** Creates or removes effect overlay divs based on theme effects config. */
+/** Builds a single consolidated overlay div with combined backgrounds for all effects.
+ *  Reduces compositor layers from 3 to 1 compared to the previous per-effect divs. */
 function applyEffects(effects: ThemeEffects | undefined): void {
-  const root = document.documentElement;
+  // Remove any legacy per-effect divs from previous theme applications
+  for (const id of LEGACY_EFFECT_IDS) document.getElementById(id)?.remove();
 
-  // Vignette
-  const vignetteVal = effects?.vignette ?? 0;
+  if (!effects) {
+    document.getElementById(EFFECTS_OVERLAY_ID)?.remove();
+    return;
+  }
+
+  const backgrounds: string[] = [];
+  const sizes: string[] = [];
+
+  // Vignette — opacity baked into radial gradient endpoint
+  const vignetteVal = effects.vignette ?? 0;
   if (vignetteVal > 0) {
-    root.style.setProperty('--vignette-opacity', String(vignetteVal));
-    ensureEffectDiv('effect-vignette');
-  } else {
-    root.style.removeProperty('--vignette-opacity');
-    removeEffectDiv('effect-vignette');
+    backgrounds.push(`radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0,${vignetteVal}) 100%)`);
+    sizes.push('100% 100%');
   }
 
-  // Noise
-  const noiseVal = effects?.noise ?? 0;
+  // Scanlines — opacity baked into gradient colors (0.08 base * line alpha)
+  if (effects['scan-lines']) {
+    backgrounds.push('repeating-linear-gradient(0deg, transparent, transparent 1px, rgba(0,0,0,0.012) 1px, rgba(0,0,0,0.012) 2px)');
+    sizes.push('100% 100%');
+  }
+
+  // Noise — opacity baked into SVG rect attribute
+  const noiseVal = effects.noise ?? 0;
   if (noiseVal > 0) {
-    root.style.setProperty('--noise-opacity', String(noiseVal));
-    ensureEffectDiv('effect-noise');
-  } else {
-    root.style.removeProperty('--noise-opacity');
-    removeEffectDiv('effect-noise');
+    const noiseSvg = `data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='${noiseVal}'/%3E%3C/svg%3E`;
+    backgrounds.push(`url("${noiseSvg}")`);
+    sizes.push('200px 200px');
   }
 
-  // Scan-lines
-  const scanlines = effects?.['scan-lines'] ?? false;
-  if (scanlines) {
-    root.style.setProperty('--scanline-opacity', '0.08');
-    ensureEffectDiv('effect-scanlines');
-  } else {
-    root.style.removeProperty('--scanline-opacity');
-    removeEffectDiv('effect-scanlines');
+  if (backgrounds.length === 0) {
+    document.getElementById(EFFECTS_OVERLAY_ID)?.remove();
+    return;
   }
-}
 
-function ensureEffectDiv(id: string): void {
-  if (document.getElementById(id)) return;
-  const div = document.createElement('div');
-  div.id = id;
-  document.body.appendChild(div);
-}
-
-function removeEffectDiv(id: string): void {
-  document.getElementById(id)?.remove();
+  let div = document.getElementById(EFFECTS_OVERLAY_ID);
+  if (!div) {
+    div = document.createElement('div');
+    div.id = EFFECTS_OVERLAY_ID;
+    document.body.appendChild(div);
+  }
+  div.style.backgroundImage = backgrounds.join(', ');
+  div.style.backgroundSize = sizes.join(', ');
+  div.style.backgroundRepeat = backgrounds.map(() => 'repeat').join(', ');
 }
 
 const LAYOUT_ATTRS = ['data-chrome-style', 'data-input-style', 'data-bubble-style', 'data-header-style', 'data-statusbar-style'] as const;
@@ -190,6 +197,7 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   // 5. Background wallpaper — set directly on <body> (bypasses z-index stacking issues)
   const bg = theme.background;
   if (bg?.type === 'image' && bg.value) {
+    root.setAttribute('data-wallpaper', '');
     body.style.backgroundImage = `url("${bg.value}")`;
     body.style.backgroundSize = 'cover';
     body.style.backgroundPosition = 'center';
@@ -199,6 +207,7 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
       // The slight dimming is handled by the vignette/overlay in custom_css if needed
     }
   } else {
+    root.removeAttribute('data-wallpaper');
     body.style.backgroundImage = '';
     body.style.backgroundSize = '';
     body.style.backgroundPosition = '';
@@ -245,6 +254,7 @@ export function clearThemeFromDom(): void {
   const root = document.documentElement;
   const body = document.body;
   root.removeAttribute('data-panels-blur');
+  root.removeAttribute('data-wallpaper');
   body.style.backgroundImage = '';
   body.style.backgroundSize = '';
   body.style.backgroundPosition = '';
@@ -258,8 +268,9 @@ export function clearThemeFromDom(): void {
   ];
   for (const p of propsToRemove) root.style.removeProperty(p);
   for (const a of LAYOUT_ATTRS) body.removeAttribute(a);
-  // Remove effect overlay divs
-  for (const id of EFFECT_IDS) removeEffectDiv(id);
+  // Remove consolidated effect overlay + any legacy per-effect divs
+  document.getElementById(EFFECTS_OVERLAY_ID)?.remove();
+  for (const id of LEGACY_EFFECT_IDS) document.getElementById(id)?.remove();
   const customEl = document.getElementById('theme-custom') as HTMLStyleElement | null;
   if (customEl) customEl.textContent = '';
   // Remove injected Google Font link

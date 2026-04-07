@@ -331,6 +331,14 @@ html, body, #root {
   padding-top: 3rem;
 }
 
+/* Lightweight virtualization — skip paint/layout for off-screen chat messages.
+   The browser caches measured heights via `auto` so the scrollbar stays accurate
+   after the first render. Keeps DOM intact (Ctrl+F and accessibility work). */
+.timeline-entry {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 80px;
+}
+
 /* Status bar — heavy frosted glass */
 [data-panels-blur] .status-bar {
   backdrop-filter: blur(24px) saturate(1.2);
@@ -368,15 +376,24 @@ html, body, #root {
   background-color: var(--accent);
 }
 
-/* Chat bubbles (assistant) — frosted glass, mostly opaque */
+/* Chat bubbles — semi-transparent by default (no blur = fast scroll).
+   Blur is only applied on wallpaper themes for visible bubbles (see below). */
 [data-panels-blur] .bg-inset {
+  background-color: color-mix(in srgb, var(--inset) 92%, transparent);
+}
+[data-panels-blur] .bg-accent {
+  background-color: color-mix(in srgb, var(--accent) 92%, transparent);
+}
+
+/* Wallpaper themes: restore frosted glass on VISIBLE bubbles only.
+   The .in-view class is toggled by IntersectionObserver in ChatView.
+   200px overscan ensures blur appears before the bubble scrolls into view. */
+[data-panels-blur][data-wallpaper] .in-view .bg-inset {
   backdrop-filter: blur(16px) saturate(1.1);
   -webkit-backdrop-filter: blur(16px) saturate(1.1);
   background-color: color-mix(in srgb, var(--inset) 90%, transparent);
 }
-
-/* User message bubble — frosted accent, mostly opaque */
-[data-panels-blur] .bg-accent {
+[data-panels-blur][data-wallpaper] .in-view .bg-accent {
   backdrop-filter: blur(16px) saturate(1.1);
   -webkit-backdrop-filter: blur(16px) saturate(1.1);
   background-color: color-mix(in srgb, var(--accent) 90%, transparent);
@@ -417,40 +434,16 @@ html, body, #root {
 
 
 /* ═══════════════════════════════════════════════════════════════════════════
-   Visual effects — managed overlay divs created by theme-engine.ts
+   Visual effects — single consolidated overlay managed by theme-engine.ts.
+   Vignette, noise, and scanlines are combined as multiple backgrounds on one
+   div to reduce GPU compositor layers (1 instead of 3).
    ═══════════════════════════════════════════════════════════════════════════ */
 
-#effect-vignette {
+#theme-effects-overlay {
   position: fixed;
   inset: 0;
   z-index: 1;
   pointer-events: none;
-  background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0, var(--vignette-opacity, 0)) 100%);
-}
-
-#effect-noise {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  opacity: var(--noise-opacity, 0);
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
-  background-size: 200px 200px;
-}
-
-#effect-scanlines {
-  position: fixed;
-  inset: 0;
-  z-index: 1;
-  pointer-events: none;
-  opacity: var(--scanline-opacity, 0);
-  background: repeating-linear-gradient(
-    0deg,
-    transparent,
-    transparent 1px,
-    rgba(0, 0, 0, 0.15) 1px,
-    rgba(0, 0, 0, 0.15) 2px
-  );
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════

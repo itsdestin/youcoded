@@ -27,7 +27,7 @@ const intentStyles = {
 /**
  * Parser-detected prompt card — styled to match ToolCard layout.
  */
-export default function PromptCard({ prompt, sessionId, onSelect }: Props) {
+export default React.memo(function PromptCard({ prompt, sessionId, onSelect }: Props) {
   if (prompt.completed) {
     return (
       <div className="flex justify-start px-4 py-0.5">
@@ -68,4 +68,4 @@ export default function PromptCard({ prompt, sessionId, onSelect }: Props) {
       </div>
     </div>
   );
-}
+});

@@ -99,7 +99,7 @@ function splitIntoBubbles(turn: AssistantTurn): VisualBubble[] {
   return bubbles;
 }
 
-export default function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId }: Props) {
+export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId }: Props) {
   const bubbles = splitIntoBubbles(turn);
 
   return (
@@ -132,7 +132,7 @@ export default function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessi
       })}
     </>
   );
-}
+});
 
 /** Renders a tool group inline within the assistant bubble. */
 function ToolGroupInline({
