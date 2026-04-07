@@ -58,3 +58,44 @@ export function validateTheme(raw: unknown): ThemeDefinition {
 
   return raw as ThemeDefinition;
 }
+
+/**
+ * Sanitizes a CSS string by stripping dangerous patterns that could
+ * load external resources or execute code. Safe patterns like
+ * theme-asset:// and data: URIs are preserved.
+ */
+export function sanitizeCSS(css: string): string {
+  let result = css;
+
+  // Strip @import rules (could load external stylesheets that change over time)
+  result = result.replace(/@import\s+[^;]+;?/gi, '');
+
+  // Strip url() with external protocols — keep theme-asset:// and data: URIs
+  result = result.replace(
+    /url\(\s*['"]?\s*(https?:\/\/|\/\/|ftp:\/\/)[^)]*\)/gi,
+    'url(/* blocked */)',
+  );
+
+  // Strip expression() — IE-era CSS expression injection
+  result = result.replace(/expression\s*\([^)]*\)/gi, '/* blocked */');
+
+  // Strip javascript: URIs anywhere in the CSS
+  result = result.replace(/javascript\s*:/gi, '/* blocked */');
+
+  // Strip -moz-binding — XBL binding injection (Firefox legacy)
+  result = result.replace(/-moz-binding\s*:[^;]+;?/gi, '/* blocked */');
+
+  return result;
+}
+
+/**
+ * Validates and sanitizes a community-submitted theme.
+ * Runs the standard validation plus CSS sanitization on custom_css.
+ */
+export function validateCommunityTheme(raw: unknown): ThemeDefinition {
+  const theme = validateTheme(raw);
+  if (theme.custom_css) {
+    theme.custom_css = sanitizeCSS(theme.custom_css);
+  }
+  return theme;
+}

@@ -19,10 +19,10 @@ export function resolveAssetPath(value: string | undefined, slug: string): strin
 
 /**
  * Deep-resolves all asset paths in a theme to theme-asset:// URIs.
- * Only applies to user themes. Built-in themes are returned unchanged.
+ * Only applies to user and community themes. Official (destinclaude) themes are returned unchanged.
  */
 export function resolveAllAssetPaths<T extends ThemeDefinition | LoadedTheme>(theme: T): T {
-  if ('source' in theme && (theme as LoadedTheme).source === 'builtin') return theme;
+  if ('source' in theme && (theme as LoadedTheme).source === 'destinclaude') return theme;
 
   const resolved = { ...theme };
   const slug = theme.slug;

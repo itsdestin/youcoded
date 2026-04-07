@@ -20,6 +20,8 @@ import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
 import Marketplace from './components/Marketplace';
+import ThemeMarketplace from './components/ThemeMarketplace';
+import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillManager from './components/SkillManager';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
@@ -31,7 +33,6 @@ import type { SessionStatusColor } from './components/StatusDot';
 import { ThemeProvider, useTheme } from './state/theme-context';
 import { SkillProvider } from './state/skill-context';
 import ThemeEffects from './components/ThemeEffects';
-import { useVisualViewport } from './hooks/useVisualViewport';
 
 type ViewMode = 'chat' | 'terminal';
 
@@ -87,9 +88,6 @@ interface StatusDataState {
 }
 
 function AppInner() {
-  // On mobile browsers, track the visual viewport to keep input above the keyboard
-  useVisualViewport();
-
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [viewModes, setViewModes] = useState<Map<string, ViewMode>>(new Map());
@@ -118,6 +116,8 @@ function AppInner() {
   const [resumeRequested, setResumeRequested] = useState(false);
   const [managerOpen, setManagerOpen] = useState(false);
   const [marketplaceOpen, setMarketplaceOpen] = useState(false);
+  const [themeMarketplaceOpen, setThemeMarketplaceOpen] = useState(false);
+  const [publishThemeSlug, setPublishThemeSlug] = useState<string | null>(null);
   const [editorSkillId, setEditorSkillId] = useState<string | null>(null);
   const [shareSkillId, setShareSkillId] = useState<string | null>(null);
   const [createPromptOpen, setCreatePromptOpen] = useState(false);
@@ -393,19 +393,15 @@ function AppInner() {
     });
 
     const statusHandler = window.claude.on.statusData((data) => {
-      setStatusData((prev) => {
-        // Shallow-compare to avoid re-rendering when nothing changed
-        const nextContextMap = data.contextMap || prev.contextMap;
-        if (prev.usage === data.usage
-          && prev.announcement === data.announcement
-          && prev.updateStatus === data.updateStatus
-          && prev.syncStatus === data.syncStatus
-          && prev.syncWarnings === data.syncWarnings
-          && prev.contextMap === nextContextMap) return prev;
-        return { ...prev, usage: data.usage, announcement: data.announcement,
-          updateStatus: data.updateStatus, syncStatus: data.syncStatus,
-          syncWarnings: data.syncWarnings, contextMap: nextContextMap };
-      });
+      setStatusData((prev) => ({
+        ...prev,
+        usage: data.usage,
+        announcement: data.announcement,
+        updateStatus: data.updateStatus,
+        syncStatus: data.syncStatus,
+        syncWarnings: data.syncWarnings,
+        contextMap: data.contextMap || prev.contextMap,
+      }));
     });
 
     // UI action sync — receive actions broadcast from other devices
@@ -596,13 +592,20 @@ function AppInner() {
     }
   }, [sessions, chatStateMap]);
 
-  // Show blue badge on settings gear until a device has been paired at least once
+  // Check if remote setup banner is active (show badge on gear icon)
+  // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
+  // in the settings panel — i.e., no remote clients are connected
   useEffect(() => {
     const claude = (window as any).claude;
     if (!claude?.remote) return;
-    claude.remote.getConfig().then((cfg: any) => {
-      setSettingsBadge(!cfg?.everPaired);
-    }).catch(() => {});
+    const check = () => {
+      claude.remote.getClientCount().then((count: number) => {
+        setSettingsBadge(count === 0);
+      }).catch(() => {});
+    };
+    check();
+    const interval = setInterval(check, 10000);
+    return () => clearInterval(interval);
   }, []);
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {
@@ -696,36 +699,22 @@ function AppInner() {
     });
   }, [model]);
 
-  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPathOrModel?: string, resumeModelOrDangerous?: string | boolean, resumeDangerous?: boolean) => {
-    // When called from ResumeBrowser: (id, slug, resolvedPath, model, dangerous)
-    // When called from SessionStrip/HeaderBar: (id, slug) — only 2 args
-    let cwd: string;
-    let m: string;
-    let dangerous: boolean;
-    if (projectPathOrModel && (projectPathOrModel.includes('/') || projectPathOrModel.includes('\\'))) {
-      // ResumeBrowser path: third arg is filesystem path
-      cwd = projectPathOrModel;
-      m = (typeof resumeModelOrDangerous === 'string' ? resumeModelOrDangerous : undefined) || model;
-      dangerous = typeof resumeDangerous === 'boolean' ? resumeDangerous : false;
-    } else {
-      // Legacy path: third arg is model (or undefined)
-      const slugToPath = (s: string) => {
-        if (/^[A-Z]--/.test(s)) return s.replace(/^([A-Z])--/, '$1:\\').replace(/-/g, '\\');
-        return s.replace(/-/g, '/');
-      };
-      cwd = slugToPath(projectSlug);
-      m = (typeof projectPathOrModel === 'string' ? projectPathOrModel : undefined) || model;
-      dangerous = typeof resumeModelOrDangerous === 'boolean' ? resumeModelOrDangerous : false;
-    }
-    if (MODELS.includes(m as any)) {
-      setModel(m as ModelAlias);
+  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, resumeModel?: string, resumeDangerous?: boolean) => {
+    const slugToPath = (s: string) => {
+      if (/^[A-Z]--/.test(s)) return s.replace(/^([A-Z])--/, '$1:\\').replace(/-/g, '\\');
+      return s.replace(/-/g, '/');
+    };
+    const cwd = slugToPath(projectSlug);
+    const m = resumeModel || model;
+    if (resumeModel && MODELS.includes(resumeModel as any)) {
+      setModel(resumeModel as ModelAlias);
     }
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
     const newSession = await (window.claude.session.create as any)({
       name: 'Resuming...',
       cwd,
-      skipPermissions: dangerous,
+      skipPermissions: resumeDangerous || false,
       resumeSessionId: claudeSessionId,
       model: m,
     });
@@ -940,6 +929,7 @@ function AppInner() {
                 {isTerminalTouch && sessionId && (
                   <TerminalToolbar sessionId={sessionId} />
                 )}
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} />
                 <StatusBar
                   statusData={{
                     usage: statusData.usage,
@@ -957,7 +947,6 @@ function AppInner() {
                   permissionMode={currentPermissionMode}
                   onCyclePermission={cyclePermission}
                 />
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} />
               </div>
             )}
           </>
@@ -999,6 +988,9 @@ function AppInner() {
             claude.session.sendInput(sessionId, text + '\r');
           }
         }}
+        hasActiveSession={!!sessionId}
+        onOpenThemeMarketplace={() => { setSettingsOpen(false); setThemeMarketplaceOpen(true); }}
+        onPublishTheme={(slug) => { setSettingsOpen(false); setPublishThemeSlug(slug); }}
       />
       <ResumeBrowser
         open={resumeRequested}
@@ -1009,6 +1001,12 @@ function AppInner() {
       />
       {marketplaceOpen && (
         <Marketplace onClose={() => setMarketplaceOpen(false)} />
+      )}
+      {themeMarketplaceOpen && (
+        <ThemeMarketplace onClose={() => setThemeMarketplaceOpen(false)} />
+      )}
+      {publishThemeSlug && (
+        <ThemeShareSheet themeSlug={publishThemeSlug} onClose={() => setPublishThemeSlug(null)} />
       )}
       {managerOpen && (
         <SkillManager

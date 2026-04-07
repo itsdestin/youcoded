@@ -22,10 +22,10 @@ function roundnessToShape(value: number) {
   return { 'radius-sm': `${sm}px`, 'radius-md': `${md}px`, 'radius-lg': `${lg}px`, 'radius-xl': `${xl}px`, 'radius-2xl': `${xxl}px`, 'radius-full': '9999px' };
 }
 
-interface Props { onClose: () => void; onSendInput?: (text: string) => void; }
+interface Props { onClose: () => void; onSendInput?: (text: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void; }
 
-export default function ThemeScreen({ onClose, onSendInput }: Props) {
-  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, setFont, activeTheme, reducedEffects, setReducedEffects } = useTheme();
+export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, onPublishTheme }: Props) {
+  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, setFont, activeTheme } = useTheme();
   const [fonts, setFonts] = useState<string[] | null>(null);
   const [fontSearch, setFontSearch] = useState('');
   const [view, setView] = useState<'grid' | 'fonts'>('grid');
@@ -197,6 +197,17 @@ export default function ThemeScreen({ onClose, onSendInput }: Props) {
                   {PARTICLE_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
+              {onPublishTheme && (
+                <button
+                  onClick={() => {
+                    onPublishTheme(activeTheme.slug);
+                    onClose();
+                  }}
+                  className="w-full py-1.5 rounded-lg border border-edge-dim text-fg-2 text-[10px] font-medium hover:bg-inset transition-colors mt-1"
+                >
+                  Publish to Marketplace
+                </button>
+              )}
             </div>
           </div>
         )}
@@ -213,24 +224,18 @@ export default function ThemeScreen({ onClose, onSendInput }: Props) {
           </button>
         </div>
 
-        {/* Reduce Visual Effects */}
-        <div>
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-[9px] text-fg-faint uppercase tracking-wider">Performance</p>
-              <p className="text-xs text-fg-2 mt-1">Reduce visual effects</p>
-            </div>
-            <button
-              onClick={() => setReducedEffects(!reducedEffects)}
-              className={`relative w-8 h-[18px] rounded-full transition-colors ${reducedEffects ? 'bg-accent' : 'bg-well'}`}
-            >
-              <span
-                className={`absolute top-[2px] w-[14px] h-[14px] rounded-full bg-white shadow-sm transition-transform ${reducedEffects ? 'left-[16px]' : 'left-[2px]'}`}
-              />
-            </button>
-          </div>
-          <p className="text-[10px] text-fg-faint mt-1">Disables glassmorphism, particles, and overlay effects</p>
-        </div>
+        {/* Browse marketplace */}
+        {onOpenMarketplace && (
+          <button
+            onClick={() => {
+              onOpenMarketplace();
+              onClose();
+            }}
+            className="w-full py-2 rounded-lg border border-edge-dim bg-panel text-fg-2 text-xs font-medium hover:bg-inset transition-colors"
+          >
+            Browse Theme Marketplace
+          </button>
+        )}
 
         {/* Build with Claude */}
         <button

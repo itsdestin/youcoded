@@ -102,9 +102,16 @@ export interface ThemeDefinition {
   custom_css?: string;
 }
 
-/** A loaded theme — same as ThemeDefinition but guaranteed slug is kebab-case */
+/**
+ * A loaded theme — same as ThemeDefinition but guaranteed slug is kebab-case.
+ *
+ * source values:
+ *   'destinclaude' — ships natively with the app (official themes)
+ *   'community'    — installed from the theme marketplace (user-submitted, approved)
+ *   'user'         — created locally by the user on their machine
+ */
 export type LoadedTheme = ThemeDefinition & {
-  source: 'builtin' | 'user';
-  /** Absolute path to the theme folder on disk (user themes only) */
+  source: 'destinclaude' | 'community' | 'user';
+  /** Absolute path to the theme folder on disk (community and user themes) */
   basePath?: string;
 };

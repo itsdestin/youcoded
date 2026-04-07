@@ -35,6 +35,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
+  const webglRef = useRef<WebglAddon | null>(null);
   const { theme, font, activeTheme } = useTheme();
 
   // Sync xterm theme when app theme changes (activeTheme changes on hot-reload too,
@@ -43,8 +44,26 @@ export default function TerminalView({ sessionId, visible }: Props) {
     if (!terminalRef.current) return;
     // Microtask delay: CSS variables may not be painted yet when this effect fires
     requestAnimationFrame(() => {
-      if (terminalRef.current) {
-        terminalRef.current.options.theme = getXtermTheme();
+      if (!terminalRef.current) return;
+      terminalRef.current.options.theme = getXtermTheme();
+
+      // WebGL addon renders on an opaque canvas that blocks body background-image
+      // (wallpaper) from showing through. Dispose it when glassmorphism is active
+      // so the DOM renderer is used (which handles transparent backgrounds via CSS).
+      // Re-attach when glassmorphism is off for better rendering performance.
+      const glass = hasGlassmorphism();
+      if (glass && webglRef.current) {
+        webglRef.current.dispose();
+        webglRef.current = null;
+      } else if (!glass && !webglRef.current) {
+        try {
+          const webgl = new WebglAddon();
+          webgl.onContextLoss(() => webgl.dispose());
+          terminalRef.current.loadAddon(webgl);
+          webglRef.current = webgl;
+        } catch {
+          // Falls back to DOM renderer if WebGL unavailable
+        }
       }
     });
   }, [activeTheme]);
@@ -77,13 +96,18 @@ export default function TerminalView({ sessionId, visible }: Props) {
     terminal.open(containerRef.current);
 
     // WebGL renderer must be loaded after open() — eliminates grid-line
-    // artifacts from the DOM renderer's sub-pixel rounding issues
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
-      terminal.loadAddon(webgl);
-    } catch {
-      // Falls back to DOM renderer if WebGL unavailable
+    // artifacts from the DOM renderer's sub-pixel rounding issues.
+    // Skip when glassmorphism is active — the WebGL canvas is opaque
+    // and blocks the wallpaper from showing through.
+    if (!hasGlassmorphism()) {
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => webgl.dispose());
+        terminal.loadAddon(webgl);
+        webglRef.current = webgl;
+      } catch {
+        // Falls back to DOM renderer if WebGL unavailable
+      }
     }
 
     terminalRef.current = terminal;

@@ -2,7 +2,7 @@
   "name": "Crème",
   "slug": "creme",
   "dark": false,
-  "source": "builtin",
+  "source": "destinclaude",
   "tokens": {
     "canvas": "#F0E6D6",
     "panel": "#EBE1D1",

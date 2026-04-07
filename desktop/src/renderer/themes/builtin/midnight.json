@@ -2,7 +2,7 @@
   "name": "Midnight",
   "slug": "midnight",
   "dark": true,
-  "source": "builtin",
+  "source": "destinclaude",
   "tokens": {
     "canvas": "#0D1117",
     "panel": "#161B22",

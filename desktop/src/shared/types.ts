@@ -244,6 +244,13 @@ export const IPC = {
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
+  // Theme marketplace
+  THEME_MARKETPLACE_LIST: 'theme-marketplace:list',
+  THEME_MARKETPLACE_DETAIL: 'theme-marketplace:detail',
+  THEME_MARKETPLACE_INSTALL: 'theme-marketplace:install',
+  THEME_MARKETPLACE_UNINSTALL: 'theme-marketplace:uninstall',
+  THEME_MARKETPLACE_PUBLISH: 'theme-marketplace:publish',
+  THEME_MARKETPLACE_GENERATE_PREVIEW: 'theme-marketplace:generate-preview',
   // First-run
   FIRST_RUN_STATE: 'first-run:state',
   FIRST_RUN_RETRY: 'first-run:retry',

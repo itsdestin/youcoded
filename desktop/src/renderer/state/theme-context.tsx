@@ -16,10 +16,10 @@ import midnightJson from '../themes/builtin/midnight.json';
 import cremeJson from '../themes/builtin/creme.json';
 
 const BUILTIN_THEMES: LoadedTheme[] = [
-  { ...(lightJson as unknown as ThemeDefinition), source: 'builtin' },
-  { ...(darkJson as unknown as ThemeDefinition), source: 'builtin' },
-  { ...(midnightJson as unknown as ThemeDefinition), source: 'builtin' },
-  { ...(cremeJson as unknown as ThemeDefinition), source: 'builtin' },
+  { ...(lightJson as unknown as ThemeDefinition), source: 'destinclaude' },
+  { ...(darkJson as unknown as ThemeDefinition), source: 'destinclaude' },
+  { ...(midnightJson as unknown as ThemeDefinition), source: 'destinclaude' },
+  { ...(cremeJson as unknown as ThemeDefinition), source: 'destinclaude' },
 ];
 
 // Keep backward-compat exports
@@ -92,6 +92,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const allThemes = allThemesInternal.filter(t => t.slug !== PREVIEW_SLUG);
   const activeTheme = allThemesInternal.find(t => t.slug === activeSlug) ?? BUILTIN_THEMES[0];
 
+  // Fallback if active theme was uninstalled (slug no longer in allThemes)
+  useEffect(() => {
+    if (!allThemes.find(t => t.slug === activeSlug)) {
+      setActiveSlug(DEFAULT_THEME);
+      try { localStorage.setItem(STORAGE_KEY, DEFAULT_THEME); } catch {}
+    }
+  }, [allThemes, activeSlug]);
+
   // Load user themes from disk on mount
   useEffect(() => {
     const loadUserThemes = async () => {
@@ -104,7 +112,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           try {
             const raw = await claude.theme.readFile(slug);
             const theme = validateTheme(JSON.parse(raw));
-            loaded.push(resolveAllAssetPaths({ ...theme, source: 'user' }));
+            const source = (theme as any).source === 'community' ? 'community' as const : 'user' as const;
+            loaded.push(resolveAllAssetPaths({ ...theme, source }));
           } catch (e) {
             console.warn(`[ThemeProvider] Failed to load user theme "${slug}":`, e);
           }
@@ -126,7 +135,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       claude.theme.readFile(slug).then((raw: string) => {
         try {
           const theme = validateTheme(JSON.parse(raw));
-          const loaded: LoadedTheme = resolveAllAssetPaths({ ...theme, source: 'user' });
+          const source = (theme as any).source === 'community' ? 'community' as const : 'user' as const;
+          const loaded: LoadedTheme = resolveAllAssetPaths({ ...theme, source });
           setUserThemes(prev => {
             const idx = prev.findIndex(t => t.slug === slug);
             if (idx >= 0) { const next = [...prev]; next[idx] = loaded; return next; }

@@ -468,13 +468,24 @@ html, body, #root {
 
 [data-input-style="minimal"] .input-bar-container {
   border-top: none;
-  background: transparent;
+  background: transparent !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
 }
 
 [data-input-style="terminal"] .input-bar-container {
-  border-radius: 0;
+  border-radius: 0 !important;
   font-family: var(--font-mono);
-  border-top: 1px solid var(--edge);
+  border-top: 1px solid var(--accent, var(--edge));
+}
+
+/* Glassmorphism + input style combinations */
+[data-panels-blur][data-input-style="floating"] .input-bar-container {
+  border-top: none;
+}
+
+[data-panels-blur][data-input-style="terminal"] .input-bar-container {
+  border-top: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
 }
 
 /* Bubble styles — "pill" uses the largest non-infinite radius so the shape
