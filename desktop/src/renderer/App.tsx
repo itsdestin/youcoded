@@ -196,13 +196,15 @@ function AppInner() {
       const chatState = chatStateMap.get(s.id);
       if (!chatState) { newStatuses.set(s.id, 'gray'); }
       else {
-        // Single pass, no temporary array allocation — hot path during streaming
+        // Only check tools in the active turn — stale tools from old turns are invisible
         let hasAwaiting = false;
         let hasRunning = false;
-        for (const t of chatState.toolCalls.values()) {
+        for (const id of chatState.activeTurnToolIds) {
+          const t = chatState.toolCalls.get(id);
+          if (!t) continue;
           if (t.status === 'awaiting-approval') hasAwaiting = true;
           else if (t.status === 'running') hasRunning = true;
-          if (hasAwaiting) break; // awaiting takes priority in the status logic
+          if (hasAwaiting) break;
         }
 
         const status: SessionStatusColor = hasAwaiting

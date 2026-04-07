@@ -62,9 +62,9 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
   const [atBottom, setAtBottom] = useState(true);
   const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Thinking timeout — if isThinking stays true with no activity for 60s, auto-clear.
+  // Thinking timeout — if isThinking stays true with no activity for 30s, auto-clear.
   // lastActivityAt resets the clock whenever hook events or streaming updates arrive,
-  // so the warning only fires after 60s of complete silence from Claude.
+  // so the warning only fires after 30s of complete silence from Claude.
   const mountedRef = useRef(true);
   useEffect(() => {
     return () => { mountedRef.current = false; };
@@ -76,7 +76,9 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
     let hasAwaiting = false;
     let hasRunning = false;
     const awaiting: any[] = [];
-    for (const t of state.toolCalls.values()) {
+    for (const id of state.activeTurnToolIds) {
+      const t = state.toolCalls.get(id);
+      if (!t) continue;
       if (t.status === 'awaiting-approval') {
         hasAwaiting = true;
         awaiting.push(t);
@@ -85,12 +87,12 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
       }
     }
     return { hasAwaitingApproval: hasAwaiting, hasRunningTools: hasRunning, awaitingTools: awaiting };
-  }, [state.toolCalls]);
+  }, [state.toolCalls, state.activeTurnToolIds]);
 
   useEffect(() => {
     // Don't start the timeout when a tool is awaiting permission approval —
     // Claude is waiting for the user, not the other way around.
-    if (state.isThinking && !hasAwaitingApproval) {
+    if (state.isThinking && !hasAwaitingApproval && !hasRunningTools) {
       thinkingTimerRef.current = setTimeout(() => {
         if (mountedRef.current) {
           dispatch({ type: 'THINKING_TIMEOUT', sessionId });
@@ -105,7 +107,7 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
     return () => {
       if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
     };
-  }, [state.isThinking, state.lastActivityAt, hasAwaitingApproval, sessionId, dispatch]);
+  }, [state.isThinking, state.lastActivityAt, hasAwaitingApproval, hasRunningTools, sessionId, dispatch]);
 
   // Reset the thinking timer when the terminal buffer receives output.
   // During extended thinking, Claude's CLI renders a spinner/timer in the PTY
@@ -279,6 +281,15 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
               && !hasAwaitingApproval
               && !hasRunningTools
               && <ThinkingIndicator />}
+            {state.thinkingTimedOut && !state.isThinking && (
+              <div className="flex items-center gap-2 px-4 py-1.5">
+                <div className="bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5">
+                  <span className="text-sm text-fg-muted italic">
+                    Response may have arrived — check the Terminal view.
+                  </span>
+                </div>
+              </div>
+            )}
           </>
         )}
         <div ref={bottomRef} className="h-1" />
