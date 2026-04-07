@@ -10,24 +10,30 @@ interface ConfigData {
   enabled: boolean;
   port: number;
   passwordHash: string | null;
+  passwordPlain: string | null;
   trustTailscale: boolean;
   keepAwakeHours: number; // 0 = off
+  everPaired: boolean;
 }
 
 export class RemoteConfig {
   enabled: boolean;
   port: number;
   passwordHash: string | null;
+  passwordPlain: string | null;
   trustTailscale: boolean;
   keepAwakeHours: number;
+  everPaired: boolean;
 
   constructor() {
     const defaults: ConfigData = {
       enabled: true,
       port: 9900,
       passwordHash: null,
+      passwordPlain: null,
       trustTailscale: false,
       keepAwakeHours: 0,
+      everPaired: false,
     };
 
     const configPath = CONFIG_PATH();
@@ -37,8 +43,10 @@ export class RemoteConfig {
         this.enabled = data.enabled ?? defaults.enabled;
         this.port = data.port ?? defaults.port;
         this.passwordHash = data.passwordHash ?? defaults.passwordHash;
+        this.passwordPlain = data.passwordPlain ?? defaults.passwordPlain;
         this.trustTailscale = data.trustTailscale ?? defaults.trustTailscale;
         this.keepAwakeHours = data.keepAwakeHours ?? defaults.keepAwakeHours;
+        this.everPaired = data.everPaired ?? defaults.everPaired;
         return;
       } catch {
         // Fall through to defaults
@@ -48,12 +56,15 @@ export class RemoteConfig {
     this.enabled = defaults.enabled;
     this.port = defaults.port;
     this.passwordHash = defaults.passwordHash;
+    this.passwordPlain = defaults.passwordPlain;
     this.trustTailscale = defaults.trustTailscale;
     this.keepAwakeHours = defaults.keepAwakeHours;
+    this.everPaired = defaults.everPaired;
   }
 
   async setPassword(plaintext: string): Promise<void> {
     this.passwordHash = await bcrypt.hash(plaintext, BCRYPT_ROUNDS);
+    this.passwordPlain = plaintext;
     this.save();
   }
 
@@ -81,20 +92,31 @@ export class RemoteConfig {
       enabled: this.enabled,
       port: this.port,
       passwordHash: this.passwordHash,
+      passwordPlain: this.passwordPlain,
       trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
+      everPaired: this.everPaired,
     }, null, 2));
   }
 
   /** Return config data safe for the renderer (no password hash). */
-  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; trustTailscale: boolean; keepAwakeHours: number } {
+  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: string | null; trustTailscale: boolean; keepAwakeHours: number; everPaired: boolean } {
     return {
       enabled: this.enabled,
       port: this.port,
       hasPassword: !!this.passwordHash,
+      password: this.passwordPlain,
       trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
+      everPaired: this.everPaired,
     };
+  }
+
+  /** Mark that at least one device has paired. */
+  markPaired(): void {
+    if (this.everPaired) return;
+    this.everPaired = true;
+    this.save();
   }
 
   /** Detect Tailscale installation and connection status. */

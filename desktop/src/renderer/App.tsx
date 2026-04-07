@@ -588,20 +588,13 @@ function AppInner() {
     }
   }, [sessions, chatStateMap]);
 
-  // Check if remote setup banner is active (show badge on gear icon)
-  // Badge shows whenever the blue "Set Up Remote Access" banner would be visible
-  // in the settings panel — i.e., no remote clients are connected
+  // Show blue badge on settings gear until a device has been paired at least once
   useEffect(() => {
     const claude = (window as any).claude;
     if (!claude?.remote) return;
-    const check = () => {
-      claude.remote.getClientCount().then((count: number) => {
-        setSettingsBadge(count === 0);
-      }).catch(() => {});
-    };
-    check();
-    const interval = setInterval(check, 10000);
-    return () => clearInterval(interval);
+    claude.remote.getConfig().then((cfg: any) => {
+      setSettingsBadge(!cfg?.everPaired);
+    }).catch(() => {});
   }, []);
 
   const handleOpenDrawer = useCallback((searchMode: boolean) => {

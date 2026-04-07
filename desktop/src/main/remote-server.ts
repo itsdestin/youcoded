@@ -379,6 +379,7 @@ export class RemoteServer {
       const token = randomUUID();
       this.tokens.set(token, true);
       this.saveTokens();
+      this.config.markPaired();
       this.addClient(ws, token, ip);
       ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
       this.replayBuffers(ws);
@@ -423,6 +424,7 @@ export class RemoteServer {
           const token = msg.token && this.tokens.has(msg.token) ? msg.token : randomUUID();
           this.tokens.set(token, true);
           this.saveTokens();
+          this.config.markPaired();
           this.addClient(ws, token, ip);
           ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
           this.replayBuffers(ws);

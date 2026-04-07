@@ -11,9 +11,11 @@ interface RemoteConfig {
   enabled: boolean;
   port: number;
   hasPassword: boolean;
+  password: string | null;
   trustTailscale: boolean;
   keepAwakeHours: number;
   clientCount: number;
+  everPaired: boolean;
 }
 
 const KEEP_AWAKE_OPTIONS = [
@@ -275,6 +277,81 @@ function ThemeButton({ onSendInput }: { onSendInput?: (text: string) => void }) 
   );
 }
 
+// ─── Password section ─────────────────────────────────────────────────────
+
+function PasswordSection({ config, newPassword, passwordStatus, onSetNewPassword, onSetPassword }: {
+  config: RemoteConfig | null;
+  newPassword: string;
+  passwordStatus: 'idle' | 'saving' | 'saved';
+  onSetNewPassword: (v: string) => void;
+  onSetPassword: () => void;
+}) {
+  const [showPassword, setShowPassword] = useState(false);
+  const [changing, setChanging] = useState(false);
+
+  const hasPassword = config?.hasPassword;
+  const savedPassword = config?.password;
+
+  // If password is set and user isn't changing it, show the current password
+  if (hasPassword && savedPassword && !changing) {
+    return (
+      <div className="py-2">
+        <div className="flex items-center justify-between mb-1">
+          <span className="text-xs text-fg-2">Password</span>
+          <span className="text-[10px] text-green-400">Set</span>
+        </div>
+        <div className="flex gap-1 items-center">
+          <div className="flex-1 px-2 py-1 rounded-sm bg-well border border-edge-dim text-xs text-fg font-mono select-all">
+            {showPassword ? savedPassword : '\u2022'.repeat(savedPassword.length)}
+          </div>
+          <button
+            onClick={() => setShowPassword(v => !v)}
+            className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs text-fg-muted"
+            title={showPassword ? 'Hide' : 'Show'}
+          >
+            {showPassword ? 'Hide' : 'Show'}
+          </button>
+          <button
+            onClick={() => setChanging(true)}
+            className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs text-fg-muted"
+          >
+            Change
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Set or change password input
+  return (
+    <div className="py-2">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-xs text-fg-2">Password</span>
+        {changing && (
+          <button onClick={() => setChanging(false)} className="text-[10px] text-fg-muted hover:text-fg-2">Cancel</button>
+        )}
+      </div>
+      <div className="flex gap-1">
+        <input
+          type="password"
+          placeholder={hasPassword ? 'New password...' : 'Set password...'}
+          value={newPassword}
+          onChange={(e) => onSetNewPassword(e.target.value)}
+          onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
+          className="flex-1 px-2 py-1 rounded-sm bg-well border border-edge-dim text-xs text-fg focus:outline-none focus:border-fg-muted"
+        />
+        <button
+          onClick={() => { onSetPassword(); setChanging(false); }}
+          disabled={!newPassword.trim() || passwordStatus === 'saving'}
+          className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs disabled:opacity-50"
+        >
+          {passwordStatus === 'saved' ? '\u2713' : passwordStatus === 'saving' ? '...' : 'Set'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Remote settings popup button ─────────────────────────────────────────
 
 interface RemoteButtonProps {
@@ -334,8 +411,12 @@ function RemoteButton({
 
       <button
         onClick={() => setOpen(true)}
-        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+        className="relative w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
       >
+        {/* Blue badge until first device pairs */}
+        {config && !config.everPaired && (
+          <span className="absolute -top-1 -right-1 w-2 h-2 rounded-full bg-blue-500" />
+        )}
         {/* Status indicator dot */}
         <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
           <div className={`w-2.5 h-2.5 rounded-full ${
@@ -437,31 +518,13 @@ function RemoteButton({
                         <Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} />
                       </label>
 
-                      <div className="py-2">
-                        <div className="flex items-center justify-between mb-1">
-                          <span className="text-xs text-fg-2">Password</span>
-                          {config?.hasPassword && (
-                            <span className="text-[10px] text-green-400">Set</span>
-                          )}
-                        </div>
-                        <div className="flex gap-1">
-                          <input
-                            type="password"
-                            placeholder={config?.hasPassword ? 'Change password...' : 'Set password...'}
-                            value={newPassword}
-                            onChange={(e) => onSetNewPassword(e.target.value)}
-                            onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
-                            className="flex-1 px-2 py-1 rounded-sm bg-well border border-edge-dim text-xs text-fg focus:outline-none focus:border-fg-muted"
-                          />
-                          <button
-                            onClick={onSetPassword}
-                            disabled={!newPassword.trim() || passwordStatus === 'saving'}
-                            className="px-2 py-1 rounded-sm bg-inset hover:bg-edge text-xs disabled:opacity-50"
-                          >
-                            {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
-                          </button>
-                        </div>
-                      </div>
+                      <PasswordSection
+                        config={config}
+                        newPassword={newPassword}
+                        passwordStatus={passwordStatus}
+                        onSetNewPassword={onSetNewPassword}
+                        onSetPassword={onSetPassword}
+                      />
 
                       <div className="py-2">
                         <div className="flex items-center justify-between mb-1">
@@ -1265,7 +1328,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession }: {
     setPasswordStatus('saving');
     try {
       await (window as any).claude.remote.setPassword(newPassword);
-      setConfig(prev => prev ? { ...prev, hasPassword: true } : prev);
+      setConfig(prev => prev ? { ...prev, hasPassword: true, password: newPassword } : prev);
       setNewPassword('');
       setPasswordStatus('saved');
       setTimeout(() => setPasswordStatus('idle'), 2000);
