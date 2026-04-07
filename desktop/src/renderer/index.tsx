@@ -3,14 +3,9 @@ import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
 import App from './App';
 
-// Apply theme + font before React mounts to prevent FOUC (flash of unstyled content)
+// Apply theme before React mounts to prevent FOUC (flash of unstyled content)
 const storedTheme = localStorage.getItem('destincode-theme') || 'midnight';
 document.documentElement.setAttribute('data-theme', storedTheme);
-const storedFont = localStorage.getItem('destincode-font');
-if (storedFont) {
-  document.documentElement.style.setProperty('--font-sans', storedFont);
-  document.documentElement.style.setProperty('--font-mono', storedFont);
-}
 
 // macOS traffic lights need left padding on the header bar
 if (navigator.platform === 'MacIntel' || navigator.platform === 'MacPPC') {

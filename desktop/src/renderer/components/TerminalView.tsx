@@ -8,6 +8,11 @@ import { usePtyOutput } from '../hooks/useIpc';
 import { registerTerminal, unregisterTerminal, notifyBufferReady } from '../hooks/terminal-registry';
 import { useTheme } from '../state/theme-context';
 
+/** Ensure the font string always falls back to monospace for the terminal grid. */
+function safeTerminalFont(font: string): string {
+  return font.includes('monospace') ? font : `${font}, monospace`;
+}
+
 /** Read the current theme CSS variables and return an xterm ITheme. */
 function getXtermTheme(): { background: string; foreground: string; cursor: string; selectionBackground: string } {
   const s = getComputedStyle(document.documentElement);
@@ -68,13 +73,23 @@ export default function TerminalView({ sessionId, visible }: Props) {
     });
   }, [activeTheme]);
 
-  // Sync xterm font when app font changes
+  // Sync xterm font when app font changes — wait for the font to load before
+  // applying so xterm measures character cells against the real glyphs, not a
+  // fallback font that happens to be rendered while the real one downloads.
   useEffect(() => {
-    if (terminalRef.current) {
-      terminalRef.current.options.fontFamily = font;
-      // Re-fit after font change since glyph widths may differ
-      try { fitAddonRef.current?.fit(); } catch {}
-    }
+    if (!terminalRef.current) return;
+    let cancelled = false;
+    const safe = safeTerminalFont(font);
+
+    document.fonts.ready
+      .then(() => document.fonts.load(`14px ${font}`))
+      .then(() => {
+        if (cancelled || !terminalRef.current) return;
+        terminalRef.current.options.fontFamily = safe;
+        try { fitAddonRef.current?.fit(); } catch {}
+      });
+
+    return () => { cancelled = true; };
   }, [font]);
 
   useEffect(() => {
@@ -84,7 +99,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
       allowProposedApi: true,
       cursorBlink: true,
       fontSize: 14,
-      fontFamily: font,
+      fontFamily: 'monospace', // Start with monospace; real font applied after load via effect
       theme: getXtermTheme(),
     });
 

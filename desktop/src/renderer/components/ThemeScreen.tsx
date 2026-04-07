@@ -1,15 +1,6 @@
-import React, { useState, useEffect, useCallback, useRef } from 'react';
+import React, { useCallback, useRef } from 'react';
 import { useTheme } from '../state/theme-context';
 import { computeOnAccent } from '../themes/theme-validator';
-
-declare function queryLocalFonts(): Promise<{ family: string }[]>;
-
-const FALLBACK_FONTS = [
-  'Arial', 'Cascadia Mono', 'Cascadia Code', 'Consolas', 'Courier New',
-  'Fira Code', 'Georgia', 'Helvetica', 'Inter', 'JetBrains Mono',
-  'Menlo', 'Monaco', 'Roboto', 'Segoe UI', 'SF Mono',
-  'Source Code Pro', 'System UI', 'Times New Roman', 'Verdana',
-];
 
 const PARTICLE_OPTIONS = ['none', 'rain', 'dust', 'ember', 'snow', 'custom'] as const;
 
@@ -25,30 +16,10 @@ function roundnessToShape(value: number) {
 interface Props { onClose: () => void; onSendInput?: (text: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void; }
 
 export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, onPublishTheme }: Props) {
-  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, setFont, activeTheme } = useTheme();
-  const [fonts, setFonts] = useState<string[] | null>(null);
-  const [fontSearch, setFontSearch] = useState('');
-  const [view, setView] = useState<'grid' | 'fonts'>('grid');
-  const searchRef = useRef<HTMLInputElement>(null);
+  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, activeTheme } = useTheme();
   const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  useEffect(() => {
-    if (fonts !== null) return;
-    if (typeof queryLocalFonts === 'function') {
-      queryLocalFonts()
-        .then(f => { const s = new Set(f.map(x => x.family)); setFonts([...s].sort()); })
-        .catch(() => setFonts(FALLBACK_FONTS));
-    } else {
-      setFonts(FALLBACK_FONTS);
-    }
-  }, [fonts]);
-
-  useEffect(() => {
-    if (view === 'fonts') setTimeout(() => searchRef.current?.focus(), 50);
-  }, [view]);
-
   const currentFontName = font.split(',')[0].trim().replace(/^['"]|['"]$/g, '');
-  const filteredFonts = (fonts ?? []).filter(f => f.toLowerCase().includes(fontSearch.toLowerCase()));
 
   const updateAccent = useCallback((hex: string) => {
     if (!activeTheme || activeTheme.source !== 'user') return;
@@ -78,35 +49,6 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
     if (!md) return 0.5;
     return Math.min(parseInt(md) / 16, 1);
   })();
-
-  if (view === 'fonts') {
-    return (
-      <div className="flex flex-col h-full">
-        <div className="flex items-center gap-2 px-4 py-3 border-b border-edge shrink-0">
-          <button onClick={() => setView('grid')} className="text-fg-muted hover:text-fg-2">←</button>
-          <input
-            ref={searchRef}
-            value={fontSearch}
-            onChange={e => setFontSearch(e.target.value)}
-            placeholder="Search fonts..."
-            className="flex-1 bg-transparent text-xs text-fg outline-none"
-          />
-        </div>
-        <div className="flex-1 overflow-y-auto">
-          {filteredFonts.map(f => (
-            <button
-              key={f}
-              onClick={() => { setFont(`'${f}', monospace`); setView('grid'); }}
-              className={`w-full px-4 py-2 text-left text-xs hover:bg-inset transition-colors ${f === currentFontName ? 'text-fg font-medium' : 'text-fg-2'}`}
-              style={{ fontFamily: `'${f}', monospace` }}
-            >
-              {f}
-            </button>
-          ))}
-        </div>
-      </div>
-    );
-  }
 
   return (
     <div className="flex flex-col h-full">
@@ -211,18 +153,6 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
             </div>
           </div>
         )}
-
-        {/* Font */}
-        <div>
-          <p className="text-[9px] text-fg-faint uppercase tracking-wider mb-2">Font</p>
-          <button
-            onClick={() => setView('fonts')}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg border border-edge-dim hover:border-edge transition-colors"
-          >
-            <span className="text-xs text-fg-2" style={{ fontFamily: font }}>{currentFontName}</span>
-            <span className="text-fg-muted text-xs">›</span>
-          </button>
-        </div>
 
         {/* Browse marketplace */}
         {onOpenMarketplace && (

@@ -29,7 +29,6 @@ export const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code
 
 const STORAGE_KEY = 'destincode-theme';
 const CYCLE_KEY = 'destincode-theme-cycle';
-const FONT_KEY = 'destincode-font';
 const REDUCED_EFFECTS_KEY = 'destincode-reduced-effects';
 const DEFAULT_THEME = 'midnight';
 const DEFAULT_CYCLE = ['midnight', 'dark'];
@@ -43,7 +42,6 @@ interface ThemeContextValue {
   cycleList: string[];
   setCycleList: (list: string[]) => void;
   font: string;
-  setFont: (font: string) => void;
   reducedEffects: boolean;
   setReducedEffects: (v: boolean) => void;
   allThemes: LoadedTheme[];
@@ -55,7 +53,7 @@ interface ThemeContextValue {
 const ThemeContext = createContext<ThemeContextValue>({
   theme: DEFAULT_THEME, setTheme: () => {}, cycleTheme: () => {},
   cycleList: DEFAULT_CYCLE, setCycleList: () => {},
-  font: DEFAULT_FONT_FAMILY, setFont: () => {},
+  font: DEFAULT_FONT_FAMILY,
   reducedEffects: false, setReducedEffects: () => {},
   allThemes: BUILTIN_THEMES, activeTheme: BUILTIN_THEMES[0], bgStyle: null, patternStyle: null,
 });
@@ -82,7 +80,7 @@ function applyHighlightTheme(dark: boolean) {
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [activeSlug, setActiveSlug] = useState(() => getStored(STORAGE_KEY, DEFAULT_THEME));
   const [cycleList, setCycleListState] = useState<string[]>(() => getStoredJSON(CYCLE_KEY, DEFAULT_CYCLE));
-  const [font, setFontState] = useState(() => getStored(FONT_KEY, DEFAULT_FONT_FAMILY));
+  const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
   const [userThemes, setUserThemes] = useState<LoadedTheme[]>([]);
 
@@ -183,22 +181,14 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     applyThemeToDom(activeTheme, reducedEffects);
     applyHighlightTheme(activeTheme.dark);
 
-    // If the theme declares a font, adopt it as the active font.
-    // This syncs React state so the font picker reflects the theme's choice.
-    // If no theme font, restore the user's manually-chosen font.
+    // Sync font state: use theme's declared font, or fall back to default
     if (activeTheme.font?.family) {
       setFontState(activeTheme.font.family);
-      // applyThemeToDom already called applyThemeFont, so CSS vars are set
     } else {
-      // Theme has no font preference — apply user's stored font
-      const userFont = getStored(FONT_KEY, DEFAULT_FONT_FAMILY);
-      setFontState(userFont);
-      applyFont(userFont);
+      setFontState(DEFAULT_FONT_FAMILY);
+      applyFont(DEFAULT_FONT_FAMILY);
     }
   }, [activeTheme, reducedEffects]);
-
-  // Apply font on manual change (user picks from font picker)
-  useEffect(() => { applyFont(font); }, [font]);
 
   const setTheme = useCallback((slug: string) => {
     setActiveSlug(slug);
@@ -209,11 +199,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const safe = list.length > 0 ? list : DEFAULT_CYCLE;
     setCycleListState(safe);
     try { localStorage.setItem(CYCLE_KEY, JSON.stringify(safe)); } catch {}
-  }, []);
-
-  const setFont = useCallback((f: string) => {
-    setFontState(f); applyFont(f);
-    try { localStorage.setItem(FONT_KEY, f); } catch {}
   }, []);
 
   const setReducedEffects = useCallback((v: boolean) => {
@@ -247,7 +232,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   return (
     <ThemeContext.Provider value={{
       theme: activeSlug, setTheme, cycleTheme,
-      cycleList, setCycleList, font, setFont,
+      cycleList, setCycleList, font,
       reducedEffects, setReducedEffects,
       allThemes, activeTheme, bgStyle, patternStyle,
     }}>
