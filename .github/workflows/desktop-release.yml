@@ -3,7 +3,7 @@ name: Desktop Release
 on:
   push:
     tags:
-      - 'desktop-v*'
+      - 'v*'
   workflow_dispatch:
 
 jobs:
@@ -38,10 +38,10 @@ jobs:
           cache-dependency-path: desktop/package-lock.json
 
       - name: Sync version from tag
-        if: startsWith(github.ref, 'refs/tags/desktop-v')
+        if: startsWith(github.ref, 'refs/tags/v')
         shell: bash
         run: |
-          TAG_VERSION="${GITHUB_REF_NAME#desktop-v}"
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
           node -e "var p=require('path').resolve('package.json'),pkg=JSON.parse(require('fs').readFileSync(p,'utf8'));pkg.version=process.argv[1];require('fs').writeFileSync(p,JSON.stringify(pkg,null,2)+'\n')" "$TAG_VERSION"
           echo "Set desktop/package.json version to $TAG_VERSION"
 
@@ -62,21 +62,20 @@ jobs:
 
   upload:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/desktop-v')
+    if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
 
       - name: Upload installers to release
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          for f in artifacts/**/*; do
-            [ -f "$f" ] && gh release upload "$GITHUB_REF_NAME" "$f" --repo "$GITHUB_REPOSITORY" --clobber || true
-          done
+        uses: softprops/action-gh-release@v2
+        with:
+          files: artifacts/**/*
