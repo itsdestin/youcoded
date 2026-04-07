@@ -45,7 +45,7 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
     setPublishError(null);
     try {
       const claude = (window as any).claude;
-      const result = await claude.theme.marketplace.publish(themeSlug);
+      const result = await claude?.theme?.marketplace?.publish(themeSlug);
       setPrUrl(result.prUrl);
     } catch (err: any) {
       setPublishError(err?.message || 'Failed to publish');

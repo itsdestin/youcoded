@@ -530,6 +530,7 @@ export function installShim(): void {
     model: {
       getPreference: () => invoke('model:get-preference'),
       setPreference: (model: string) => invoke('model:set-preference', { model }),
+      readLastModel: async () => null,
     },
     defaults: {
       get: () => invoke('defaults:get'),

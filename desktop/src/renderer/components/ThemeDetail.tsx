@@ -78,7 +78,7 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
     setError(null);
     try {
       const claude = (window as any).claude;
-      const result = await claude.theme.marketplace.install(entry.slug);
+      const result = await claude?.theme?.marketplace?.install(entry.slug);
       if (result.status === 'failed') {
         setError(result.error || 'Installation failed');
       } else {
@@ -102,7 +102,7 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
     setError(null);
     try {
       const claude = (window as any).claude;
-      const result = await claude.theme.marketplace.uninstall(entry.slug);
+      const result = await claude?.theme?.marketplace?.uninstall(entry.slug);
       if (result.status === 'failed') {
         setError(result.error || 'Uninstall failed');
       } else {

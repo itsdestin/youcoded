@@ -370,7 +370,7 @@ class SessionService : Service() {
                     MessageRouter.buildSessionInfo(
                         id = id, name = session.name.value,
                         cwd = session.cwd.absolutePath,
-                        status = if (session.status.value == SessionStatus.Dead) "dead" else "active",
+                        status = if (session.status.value == SessionStatus.Dead) "destroyed" else "active",
                         permissionMode = session.permissionMode,
                         skipPermissions = session.dangerousMode,
                         createdAt = session.createdAt

@@ -518,6 +518,11 @@ export class RemoteServer {
         this.respond(client.ws, type, id, sessions);
         break;
       }
+      case 'session:switch': {
+        // Session switching is client-side state — acknowledge so the request doesn't time out
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
       case 'session:browse': {
         const activeIds = new Set(this.sessionManager.listSessions().map(s => s.id));
         const sessions = await listPastSessions(activeIds);
