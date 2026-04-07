@@ -98,7 +98,7 @@ export class RemoteConfig {
   }
 
   /** Detect Tailscale installation and connection status. */
-  static async detectTailscale(port: number): Promise<{ installed: boolean; ip: string | null; hostname: string | null; url: string | null }> {
+  static async detectTailscale(port: number): Promise<{ installed: boolean; connected: boolean; ip: string | null; hostname: string | null; url: string | null }> {
     try {
       const { execFile } = require('child_process');
       const { promisify } = require('util');
@@ -122,15 +122,17 @@ export class RemoteConfig {
       const tailscaleIp = ip.trim();
 
       let hostname = '';
+      let connected = false;
       try {
         const { stdout: statusJson } = await execFileAsync(tsPath, ['status', '--json']);
         const status = JSON.parse(statusJson);
         hostname = status.Self?.HostName || '';
+        connected = status.BackendState === 'Running';
       } catch {}
 
-      return { installed: true, ip: tailscaleIp, hostname, url: `http://${tailscaleIp}:${port}` };
+      return { installed: true, connected, ip: tailscaleIp, hostname, url: `http://${tailscaleIp}:${port}` };
     } catch {
-      return { installed: false, ip: null, hostname: null, url: null };
+      return { installed: false, connected: false, ip: null, hostname: null, url: null };
     }
   }
 }
