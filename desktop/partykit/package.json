@@ -1,0 +1,15 @@
+{
+  "name": "destinclaude-games",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "npx partykit dev",
+    "deploy": "npx partykit deploy"
+  },
+  "dependencies": {
+    "partykit": "latest"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.2"
+  }
+}

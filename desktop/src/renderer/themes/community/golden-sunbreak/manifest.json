@@ -1,0 +1,65 @@
+{
+  "name": "Golden Sunbreak",
+  "slug": "golden-sunbreak",
+  "dark": true,
+  "description": "Weathering With You — Tokyo bathed in god-ray light. Deep violet-black panels, warm amber gold, soft dust-mote particles.",
+  "tokens": {
+    "canvas": "#08080e",
+    "panel": "#140e1a",
+    "inset": "#1c1428",
+    "well": "#050408",
+    "accent": "#ffc030",
+    "on-accent": "#000000",
+    "fg": "#f8e8c8",
+    "fg-2": "#dcc898",
+    "fg-dim": "#b09060",
+    "fg-muted": "#806840",
+    "fg-faint": "#504028",
+    "edge": "#281e10",
+    "edge-dim": "#281e1080",
+    "scrollbar-thumb": "#c89020",
+    "scrollbar-hover": "#ffc030"
+  },
+  "shape": {
+    "radius": "8px",
+    "radius-sm": "8px",
+    "radius-md": "16px",
+    "radius-lg": "24px",
+    "radius-xl": "32px",
+    "radius-2xl": "36px",
+    "radius-full": "9999px"
+  },
+  "background": {
+    "type": "image",
+    "value": "assets/wallpaper.jpg",
+    "opacity": 0.98,
+    "panels-blur": 18,
+    "panels-opacity": 0.72,
+    "pattern": "assets/pattern.svg",
+    "pattern-opacity": 0.06
+  },
+  "layout": {
+    "input-style": "floating",
+    "bubble-style": "default",
+    "header-style": "default",
+    "statusbar-style": "default"
+  },
+  "effects": {
+    "particles": "custom",
+    "particle-shape": "assets/dust.svg",
+    "particle-count": 35,
+    "particle-speed": 0.5,
+    "particle-drift": 0.3,
+    "particle-size-range": [6, 18],
+    "vignette": 0.3
+  },
+  "icons": {
+    "send": "assets/icon-send.svg"
+  },
+  "mascot": {
+    "idle": "assets/mascot-idle.svg",
+    "welcome": "assets/mascot-welcome.svg",
+    "inquisitive": "assets/mascot-inquisitive.svg"
+  },
+  "custom_css": "[data-panels-blur] .app-shell { background-color: transparent !important; } [data-panels-blur] .header-bar { position: absolute; top: 0; left: 0; right: 0; z-index: 20; backdrop-filter: blur(24px) saturate(1.2); -webkit-backdrop-filter: blur(24px) saturate(1.2); background-color: color-mix(in srgb, var(--panel) 82%, transparent); } [data-panels-blur] .chat-scroll { padding-top: 3rem; } [data-panels-blur] .status-bar { backdrop-filter: blur(24px) saturate(1.2); -webkit-backdrop-filter: blur(24px) saturate(1.2); background-color: color-mix(in srgb, var(--panel) 82%, transparent); } [data-panels-blur] .border-t.shrink-0:has(form) { backdrop-filter: blur(24px) saturate(1.2); -webkit-backdrop-filter: blur(24px) saturate(1.2); background-color: color-mix(in srgb, var(--panel) 82%, transparent); } [data-panels-blur] .bg-inset { backdrop-filter: blur(16px) saturate(1.1); -webkit-backdrop-filter: blur(16px) saturate(1.1); background-color: color-mix(in srgb, var(--inset) 85%, transparent); } [data-panels-blur] .bg-accent { backdrop-filter: blur(16px) saturate(1.1); -webkit-backdrop-filter: blur(16px) saturate(1.1); background-color: color-mix(in srgb, var(--accent) 55%, transparent); } ::selection { background: rgba(255, 192, 48, 0.35); color: #f8e8c8; } ::-webkit-scrollbar { width: 6px; height: 6px; } ::-webkit-scrollbar-track { background: transparent; } ::-webkit-scrollbar-thumb { background: #c89020; border-radius: 4px; } ::-webkit-scrollbar-thumb:hover { background: #ffc030; }"
+}

@@ -1,0 +1,23 @@
+{
+  "name": "Crème",
+  "slug": "creme",
+  "dark": false,
+  "source": "builtin",
+  "tokens": {
+    "canvas": "#F0E6D6",
+    "panel": "#EBE1D1",
+    "inset": "#DDD1BE",
+    "well": "#F5ECDE",
+    "accent": "#3D3229",
+    "on-accent": "#F0E6D6",
+    "fg": "#2C2418",
+    "fg-2": "#5C4F3E",
+    "fg-dim": "#7A6E5D",
+    "fg-muted": "#9E9283",
+    "fg-faint": "#BEB3A4",
+    "edge": "#CBBFAD",
+    "edge-dim": "#D4C8B580",
+    "scrollbar-thumb": "#CBBFB0",
+    "scrollbar-hover": "#A89A8A"
+  }
+}

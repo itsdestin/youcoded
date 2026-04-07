@@ -1,0 +1,9 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40">
+  <!-- God-ray streak tile — diagonal light shafts, seamlessly repeating -->
+  <line x1="0"  y1="40" x2="20" y2="0"  stroke="#ffc030" stroke-width="0.8" stroke-linecap="round" opacity="0.6"/>
+  <line x1="10" y1="40" x2="30" y2="0"  stroke="#ffc030" stroke-width="0.4" stroke-linecap="round" opacity="0.35"/>
+  <line x1="20" y1="40" x2="40" y2="0"  stroke="#ffc030" stroke-width="0.8" stroke-linecap="round" opacity="0.6"/>
+  <line x1="30" y1="40" x2="50" y2="0"  stroke="#ffc030" stroke-width="0.4" stroke-linecap="round" opacity="0.35"/>
+  <!-- Offset repeat to fill gaps -->
+  <line x1="-20" y1="40" x2="0" y2="0"  stroke="#ffc030" stroke-width="0.4" stroke-linecap="round" opacity="0.35"/>
+</svg>

@@ -1,0 +1,205 @@
+{
+  "journaling-assistant": {
+    "displayName": "Journal",
+    "description": "Write about your day in a guided conversation",
+    "category": "personal",
+    "prompt": "let's journal",
+    "source": "destinclaude"
+  },
+  "claudes-inbox": {
+    "displayName": "Inbox",
+    "description": "Process notes and screenshots from Todoist, Drive, Gmail, and more",
+    "category": "personal",
+    "prompt": "check my inbox",
+    "source": "destinclaude"
+  },
+  "encyclopedia-librarian": {
+    "displayName": "Briefing",
+    "description": "Get a briefing or deep-search your journal and encyclopedia",
+    "category": "personal",
+    "prompt": "brief me on",
+    "source": "destinclaude"
+  },
+  "encyclopedia-update": {
+    "displayName": "Encyclopedia Update",
+    "description": "Sync journal entries into your encyclopedia source files",
+    "category": "personal",
+    "prompt": "update my encyclopedia",
+    "source": "destinclaude"
+  },
+  "encyclopedia-compile": {
+    "displayName": "Encyclopedia Compile",
+    "description": "Build the full Encyclopedia from source files",
+    "category": "personal",
+    "prompt": "compile my encyclopedia",
+    "source": "destinclaude"
+  },
+  "encyclopedia-interviewer": {
+    "displayName": "Encyclopedia Interview",
+    "description": "Fill gaps in your encyclopedia through guided questions",
+    "category": "personal",
+    "prompt": "interview me",
+    "source": "destinclaude"
+  },
+  "fork-file": {
+    "displayName": "Food Tracker",
+    "description": "Track groceries, pantry inventory, and fast food spending",
+    "category": "personal",
+    "prompt": "check my food inventory",
+    "source": "destinclaude"
+  },
+  "google-drive": {
+    "displayName": "Google Drive",
+    "description": "Upload, download, and manage files on Google Drive",
+    "category": "work",
+    "prompt": "/google-drive",
+    "source": "destinclaude"
+  },
+  "google-workspace": {
+    "displayName": "Google Workspace",
+    "description": "Slides, Sheets, Gmail, Calendar, and Docs via API",
+    "category": "work",
+    "prompt": "/google-workspace",
+    "source": "destinclaude"
+  },
+  "code-review:code-review": {
+    "displayName": "Code Review",
+    "description": "Review a pull request with specialized agents",
+    "category": "development",
+    "prompt": "/code-review",
+    "source": "plugin"
+  },
+  "feature-dev:feature-dev": {
+    "displayName": "Feature Dev",
+    "description": "Guided feature development with architecture focus",
+    "category": "development",
+    "prompt": "/feature-dev",
+    "source": "plugin"
+  },
+  "commit-commands:commit": {
+    "displayName": "Commit",
+    "description": "Create a git commit with a well-crafted message",
+    "category": "development",
+    "prompt": "/commit",
+    "source": "plugin"
+  },
+  "commit-commands:commit-push-pr": {
+    "displayName": "Commit & PR",
+    "description": "Commit, push, and open a pull request",
+    "category": "development",
+    "prompt": "/commit-push-pr",
+    "source": "plugin"
+  },
+  "commit-commands:clean_gone": {
+    "displayName": "Clean Branches",
+    "description": "Remove local branches deleted on remote",
+    "category": "development",
+    "prompt": "/clean_gone",
+    "source": "plugin"
+  },
+  "frontend-design:frontend-design": {
+    "displayName": "Frontend Design",
+    "description": "Build polished, distinctive frontend interfaces",
+    "category": "development",
+    "prompt": "/frontend-design",
+    "source": "plugin"
+  },
+  "plugin-dev:create-plugin": {
+    "displayName": "Create Plugin",
+    "description": "Guided end-to-end plugin creation workflow",
+    "category": "development",
+    "prompt": "/create-plugin",
+    "source": "plugin"
+  },
+  "claude-md-management:revise-claude-md": {
+    "displayName": "Revise CLAUDE.md",
+    "description": "Update CLAUDE.md with learnings from this session",
+    "category": "development",
+    "prompt": "/revise-claude-md",
+    "source": "plugin"
+  },
+  "claude-md-management:claude-md-improver": {
+    "displayName": "Audit CLAUDE.md",
+    "description": "Scan and improve CLAUDE.md files across repos",
+    "category": "development",
+    "prompt": "/claude-md-improver",
+    "source": "plugin"
+  },
+  "skill-creator": {
+    "displayName": "Teach Workflow",
+    "description": "Create a new skill from a workflow you describe",
+    "category": "admin",
+    "prompt": "I want to teach you a new workflow — use the skill creator to ask me questions and build a skill for it",
+    "source": "destinclaude"
+  },
+  "skill-creator:skill-creator": {
+    "displayName": "Skill Creator",
+    "description": "Create, modify, eval, and benchmark skills",
+    "category": "admin",
+    "prompt": "/skill-creator",
+    "source": "plugin"
+  },
+  "sync": {
+    "displayName": "Sync",
+    "description": "Check project sync status and onboard new projects",
+    "category": "admin",
+    "prompt": "/sync",
+    "source": "destinclaude"
+  },
+  "update": {
+    "displayName": "Update",
+    "description": "Check for toolkit updates and install the latest version",
+    "category": "admin",
+    "prompt": "/update",
+    "source": "destinclaude"
+  },
+  "health": {
+    "displayName": "Health Check",
+    "description": "Verify all toolkit components are working",
+    "category": "admin",
+    "prompt": "/health",
+    "source": "destinclaude"
+  },
+  "setup-wizard": {
+    "displayName": "Setup Wizard",
+    "description": "Install dependencies and configure the toolkit",
+    "category": "admin",
+    "prompt": "/setup-wizard",
+    "source": "destinclaude"
+  },
+  "toolkit": {
+    "displayName": "Toolkit Overview",
+    "description": "See all features, commands, and useful phrases",
+    "category": "admin",
+    "prompt": "/toolkit",
+    "source": "destinclaude"
+  },
+  "simplify": {
+    "displayName": "Simplify Code",
+    "description": "Review changed code for reuse, quality, and efficiency",
+    "category": "development",
+    "prompt": "/simplify",
+    "source": "plugin"
+  },
+  "hookify:hookify": {
+    "displayName": "Create Hook Rule",
+    "description": "Create hooks to prevent unwanted behaviors",
+    "category": "development",
+    "prompt": "/hookify",
+    "source": "plugin"
+  },
+  "firecrawl:firecrawl-cli": {
+    "displayName": "Web Search",
+    "description": "Search the web, scrape pages, and research topics",
+    "category": "work",
+    "prompt": "search the web for",
+    "source": "plugin"
+  },
+  "remote-setup": {
+    "displayName": "Remote Setup",
+    "description": "Set up remote access — installs Tailscale, configures your password, and gets your phone connected",
+    "category": "admin",
+    "prompt": "/remote-setup",
+    "source": "destinclaude"
+  }
+}

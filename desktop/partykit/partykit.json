@@ -1,0 +1,8 @@
+{
+  "name": "destinclaude-games",
+  "main": "src/lobby-room.ts",
+  "compatibilityDate": "2026-03-27",
+  "parties": {
+    "connectfour": "src/connect-four-room.ts"
+  }
+}

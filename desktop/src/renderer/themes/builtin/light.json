@@ -1,0 +1,23 @@
+{
+  "name": "Light",
+  "slug": "light",
+  "dark": false,
+  "source": "builtin",
+  "tokens": {
+    "canvas": "#F2F2F2",
+    "panel": "#EAEAEA",
+    "inset": "#E0E0E0",
+    "well": "#F7F7F7",
+    "accent": "#1A1A1A",
+    "on-accent": "#F2F2F2",
+    "fg": "#1A1A1A",
+    "fg-2": "#444444",
+    "fg-dim": "#666666",
+    "fg-muted": "#888888",
+    "fg-faint": "#AAAAAA",
+    "edge": "#CFCFCF",
+    "edge-dim": "#DCDCDC80",
+    "scrollbar-thumb": "#C0C0C0",
+    "scrollbar-hover": "#999999"
+  }
+}

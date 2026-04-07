@@ -1,0 +1,566 @@
+@import "tailwindcss";
+
+@source "../../";
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Theme System — 4 themes via data-theme attribute on <html>
+   Each theme defines the same set of CSS custom properties.
+   Tailwind @theme maps these to utility classes (bg-canvas, text-fg, etc.)
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* ─── Light (default) ─── */
+[data-theme="light"], :root {
+  --canvas: #F2F2F2;
+  --panel: #EAEAEA;
+  --inset: #E0E0E0;
+  --well: #F7F7F7;
+  --accent: #1A1A1A;
+  --on-accent: #F2F2F2;
+  --fg: #1A1A1A;
+  --fg-2: #444444;
+  --fg-dim: #666666;
+  --fg-muted: #888888;
+  --fg-faint: #AAAAAA;
+  --edge: #CFCFCF;
+  --edge-dim: #DCDCDC80;
+  --scrollbar-thumb: #C0C0C0;
+  --scrollbar-hover: #999999;
+  --code: #8B6914;
+  --link: #2563EB;
+  --link-hover: #1D4ED8;
+  --hl-theme: light;
+  color-scheme: light;
+  --radius: 4px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+  --radius-toggle: calc(var(--radius-md) - 2px);
+}
+
+/* ─── Dark ─── */
+[data-theme="dark"] {
+  --canvas: #111111;
+  --panel: #191919;
+  --inset: #222222;
+  --well: #1C1C1C;
+  --accent: #D4D4D4;
+  --on-accent: #111111;
+  --fg: #E0E0E0;
+  --fg-2: #B0B0B0;
+  --fg-dim: #999999;
+  --fg-muted: #666666;
+  --fg-faint: #444444;
+  --edge: #2E2E2E;
+  --edge-dim: #37373780;
+  --scrollbar-thumb: #333333;
+  --scrollbar-hover: #555555;
+  --code: #D4A843;
+  --link: #66AAFF;
+  --link-hover: #88CCFF;
+  --hl-theme: dark;
+  color-scheme: dark;
+  --radius: 4px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+  --radius-toggle: calc(var(--radius-md) - 2px);
+}
+
+/* ─── Midnight ─── */
+[data-theme="midnight"] {
+  --canvas: #0D1117;
+  --panel: #161B22;
+  --inset: #21262D;
+  --well: #0D1117;
+  --accent: #B1BAC4;
+  --on-accent: #0D1117;
+  --fg: #C9D1D9;
+  --fg-2: #A0AAB4;
+  --fg-dim: #8B949E;
+  --fg-muted: #6E7681;
+  --fg-faint: #484F58;
+  --edge: #30363D;
+  --edge-dim: #30363D80;
+  --scrollbar-thumb: #30363D;
+  --scrollbar-hover: #484F58;
+  --code: #C9A84C;
+  --link: #58A6FF;
+  --link-hover: #79C0FF;
+  --hl-theme: dark;
+  color-scheme: dark;
+  --radius: 4px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+  --radius-toggle: calc(var(--radius-md) - 2px);
+}
+
+/* ─── Crème ─── */
+[data-theme="creme"] {
+  --canvas: #F0E6D6;
+  --panel: #EBE1D1;
+  --inset: #DDD1BE;
+  --well: #F5ECDE;
+  --accent: #3D3229;
+  --on-accent: #F0E6D6;
+  --fg: #2C2418;
+  --fg-2: #5C4F3E;
+  --fg-dim: #7A6E5D;
+  --fg-muted: #9E9283;
+  --fg-faint: #BEB3A4;
+  --edge: #CBBFAD;
+  --edge-dim: #D4C8B580;
+  --scrollbar-thumb: #CBBFB0;
+  --scrollbar-hover: #A89A8A;
+  --code: #7A5D2E;
+  --link: #5B4A1E;
+  --link-hover: #3D3219;
+  --hl-theme: light;
+  color-scheme: light;
+  --radius: 4px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-xl: 16px;
+  --radius-2xl: 24px;
+  --radius-full: 9999px;
+  --radius-toggle: calc(var(--radius-md) - 2px);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Tailwind @theme — maps CSS variables to utility classes
+   Usage: bg-canvas, text-fg, border-edge, etc.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+@theme {
+  /* Surfaces */
+  --color-canvas: var(--canvas);
+  --color-panel: var(--panel);
+  --color-inset: var(--inset);
+  --color-well: var(--well);
+  --color-accent: var(--accent);
+  --color-on-accent: var(--on-accent);
+
+  /* Text */
+  --color-fg: var(--fg);
+  --color-fg-2: var(--fg-2);
+  --color-fg-dim: var(--fg-dim);
+  --color-fg-muted: var(--fg-muted);
+  --color-fg-faint: var(--fg-faint);
+
+  /* Borders */
+  --color-edge: var(--edge);
+  --color-edge-dim: var(--edge-dim);
+
+  /* Border radius scale — maps Tailwind rounded-* utilities to theme variables */
+  --radius: var(--radius);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-2xl: var(--radius-2xl);
+  --radius-full: var(--radius-full);
+
+  /* Inline code text color */
+  --color-code: var(--code);
+
+  /* Link colors */
+  --color-link: var(--link);
+  --color-link-hover: var(--link-hover);
+
+  /* Status colors — constant across all themes */
+  --color-green-400: #4CAF50;
+  --color-red-400: #DD4444;
+  --color-red-500: #DD4444;
+  --color-amber-700: #FF9800;
+
+  /* All-monospace typography (matches DestinCode's Cascadia Mono everywhere) */
+  --font-sans: 'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace;
+  --font-mono: 'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Global styles
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Use dynamic viewport height on mobile — prevents content from scrolling behind browser chrome */
+html, body, #root {
+  height: 100dvh;
+  overflow: hidden;
+}
+
+/* xterm.js needs explicit height to fill its container */
+.xterm {
+  height: 100%;
+}
+
+.xterm-viewport {
+  height: 100% !important;
+}
+
+.xterm-screen {
+  height: 100%;
+}
+
+/* Hide xterm scrollbar when terminal is not the active view.
+   Without this, xterm's scrollbar can bleed through and overlap ChatView's
+   because TerminalView uses visibility:hidden (not display:none) to keep
+   xterm's buffer alive. */
+.terminal-hidden .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+.terminal-hidden .xterm-viewport {
+  scrollbar-width: none;
+}
+
+/* Hide scrollbars on pure-horizontal scroll containers (quick chips, session strip) */
+.scrollbar-none::-webkit-scrollbar,
+.overflow-x-auto:not(.overflow-y-auto)::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none,
+.overflow-x-auto:not(.overflow-y-auto) {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
+/* Custom scrollbars — uses theme variables */
+::-webkit-scrollbar {
+  width: 4px;
+  height: 4px;
+}
+
+@media (min-width: 640px) {
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-hover);
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Theme background layer — sits behind all panels
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#theme-bg {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background: var(--canvas);
+  opacity: 1;
+}
+
+#theme-pattern {
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Glassmorphism panels — active when data-panels-blur is set on <html> */
+[data-panels-blur] .bg-panel {
+  backdrop-filter: blur(var(--panels-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px));
+  background-color: var(--panel-glass, var(--panel));
+}
+
+/* When glassmorphism is active, make the app shell and chrome wrappers
+   transparent so the body wallpaper shows through frosted-glass panels.
+   .chrome-wrapper = header/bottom bar wrappers in App.tsx that would
+   otherwise block the wallpaper with opaque bg-canvas */
+[data-panels-blur] .app-shell,
+[data-panels-blur] .chrome-wrapper {
+  background-color: transparent !important;
+}
+
+/* Header bar — heavy frosted glass overlay, content scrolls underneath */
+[data-panels-blur] .header-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+/* Chat scroll area extends behind header — extra top padding so
+   content starts below the header but scrolls up behind it */
+[data-panels-blur] .chat-scroll {
+  padding-top: 3rem;
+}
+
+/* Status bar — heavy frosted glass */
+[data-panels-blur] .status-bar {
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+/* Input bar wrapper — heavy frosted glass */
+[data-panels-blur] .input-bar-container {
+  backdrop-filter: blur(24px) saturate(1.2);
+  -webkit-backdrop-filter: blur(24px) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+}
+
+/* Chat bubbles (assistant) — frosted glass, mostly opaque */
+[data-panels-blur] .bg-inset {
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  background-color: color-mix(in srgb, var(--inset) 90%, transparent);
+}
+
+/* User message bubble — frosted accent, mostly opaque */
+[data-panels-blur] .bg-accent {
+  backdrop-filter: blur(16px) saturate(1.1);
+  -webkit-backdrop-filter: blur(16px) saturate(1.1);
+  background-color: color-mix(in srgb, var(--accent) 90%, transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Window chrome — title bar integration
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* HeaderBar is the window drag region (macOS hiddenInset + Windows overlay).
+   All interactive children must opt out so clicks work normally. */
+.header-bar button,
+.header-bar a,
+.header-bar input,
+.header-bar [role="button"],
+.header-bar select {
+  -webkit-app-region: no-drag;
+}
+
+/* SessionStrip is a complex interactive component — exclude the whole thing */
+.header-bar .session-strip {
+  -webkit-app-region: no-drag;
+}
+
+/* macOS traffic lights need space — add left padding when title bar is hidden */
+.mac-titlebar-inset .header-bar {
+  padding-left: 78px;
+}
+
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Visual effects — managed overlay divs created by theme-engine.ts
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+#effect-vignette {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0,0,0, var(--vignette-opacity, 0)) 100%);
+}
+
+#effect-noise {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: var(--noise-opacity, 0);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='1'/%3E%3C/svg%3E");
+  background-size: 200px 200px;
+}
+
+#effect-scanlines {
+  position: fixed;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  opacity: var(--scanline-opacity, 0);
+  background: repeating-linear-gradient(
+    0deg,
+    transparent,
+    transparent 1px,
+    rgba(0, 0, 0, 0.15) 1px,
+    rgba(0, 0, 0, 0.15) 2px
+  );
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Layout presets — applied via data attributes on <body>
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Input styles */
+[data-input-style="floating"] .input-bar-container {
+  margin: 8px 12px;
+  border-radius: var(--radius-2xl);
+  box-shadow: 0 2px 16px rgba(0,0,0,0.2);
+  overflow: hidden;
+  padding: 4px 8px;
+}
+
+[data-input-style="minimal"] .input-bar-container {
+  border-top: none;
+  background: transparent;
+}
+
+[data-input-style="terminal"] .input-bar-container {
+  border-radius: 0;
+  font-family: var(--font-mono);
+  border-top: 1px solid var(--edge);
+}
+
+/* Bubble styles — "pill" uses the largest non-infinite radius so the shape
+   stays rounded without creating semicircular caps that eat into content.
+   radius-full (9999px) is NOT safe for multi-line content. */
+[data-bubble-style="pill"] .assistant-bubble,
+[data-bubble-style="pill"] .user-bubble {
+  border-radius: var(--radius-2xl);
+  padding-left: 24px;
+  padding-right: 24px;
+  padding-top: 16px;
+  padding-bottom: 16px;
+}
+
+[data-bubble-style="flat"] .assistant-bubble,
+[data-bubble-style="flat"] .user-bubble {
+  border-radius: 0;
+  border-left: 2px solid var(--edge);
+}
+
+[data-bubble-style="bordered"] .assistant-bubble,
+[data-bubble-style="bordered"] .user-bubble {
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-md);
+}
+
+/* Header styles */
+[data-header-style="minimal"] .header-bar {
+  background: transparent;
+  border-bottom: none;
+}
+
+[data-header-style="hidden"] .header-bar {
+  display: none;
+}
+
+/* Status bar styles */
+[data-statusbar-style="minimal"] .status-bar {
+  background: transparent;
+  border-top: none;
+  font-size: 9px;
+}
+
+/* Floating chrome — elevate all chrome bars into detached, rounded cards.
+   Activated by layout.chrome-style: "floating" in a theme manifest.
+   Individual element *-style overrides still take precedence (later in cascade). */
+[data-chrome-style="floating"] .chrome-wrapper {
+  background-color: transparent !important;
+}
+
+[data-chrome-style="floating"] .header-bar {
+  margin: 6px 8px 0;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--edge);
+  border-bottom: 1px solid var(--edge);
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+}
+
+[data-chrome-style="floating"] .input-bar-container {
+  margin: 0 8px;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--edge);
+  border-top: 1px solid var(--edge);
+  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.15);
+}
+
+[data-chrome-style="floating"] .status-bar {
+  align-self: center;
+  width: fit-content;
+  max-width: 95%;
+  border-radius: var(--radius-full);
+  background: var(--panel);
+  border: 1px solid var(--edge);
+  border-top: 1px solid var(--edge);
+  padding: 2px 12px;
+  margin: 4px auto;
+}
+
+@keyframes breathe {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* Session strip dropdown — enter */
+@keyframes dropdown-in {
+  from {
+    opacity: 0;
+    transform: translateX(-50%) scale(0.96) translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(-50%) scale(1) translateY(0);
+  }
+}
+
+/* Session strip dropdown — row stagger entrance */
+@keyframes row-fade-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes challenge-pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+@keyframes braille-burst {
+  0% {
+    transform: translate(-50%, -50%) translate(0, 0);
+    opacity: 0.9;
+  }
+  60% {
+    opacity: 0.7;
+  }
+  100% {
+    transform: translate(-50%, -50%) translate(var(--burst-x), var(--burst-y));
+    opacity: 0;
+  }
+}
+
+/* Android safe area handling */
+@supports (padding-top: env(safe-area-inset-top)) {
+  .safe-area-top { padding-top: env(safe-area-inset-top); }
+  .safe-area-bottom { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* Touch device: make hover-revealed elements always visible */
+@media (pointer: coarse) {
+  .group:hover .hover-reveal,
+  .group\/row:hover .hover-reveal {
+    opacity: 1;
+  }
+}
+

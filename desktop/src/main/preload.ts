@@ -1,0 +1,245 @@
+import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+
+// IPC channel names inlined here because Electron's sandboxed preload
+// cannot resolve relative imports to other modules
+const IPC = {
+  SESSION_CREATE: 'session:create',
+  SESSION_DESTROY: 'session:destroy',
+  SESSION_INPUT: 'session:input',
+  SESSION_RESIZE: 'session:resize',
+  SESSION_LIST: 'session:list',
+  SESSION_CREATED: 'session:created',
+  SESSION_DESTROYED: 'session:destroyed',
+  PTY_OUTPUT: 'pty:output',
+  HOOK_EVENT: 'hook:event',
+  SESSION_RENAMED: 'session:renamed',
+  DIALOG_OPEN_FILE: 'dialog:open-file',
+  DIALOG_OPEN_FOLDER: 'dialog:open-folder',
+  CLIPBOARD_SAVE_IMAGE: 'clipboard:save-image',
+  STATUS_DATA: 'status:data',
+  READ_TRANSCRIPT_META: 'transcript:read-meta',
+  SKILLS_LIST: 'skills:list',
+  SKILLS_LIST_MARKETPLACE: 'skills:list-marketplace',
+  SKILLS_GET_DETAIL: 'skills:get-detail',
+  SKILLS_SEARCH: 'skills:search',
+  SKILLS_INSTALL: 'skills:install',
+  SKILLS_UNINSTALL: 'skills:uninstall',
+  SKILLS_GET_FAVORITES: 'skills:get-favorites',
+  SKILLS_SET_FAVORITE: 'skills:set-favorite',
+  SKILLS_GET_CHIPS: 'skills:get-chips',
+  SKILLS_SET_CHIPS: 'skills:set-chips',
+  SKILLS_GET_OVERRIDE: 'skills:get-override',
+  SKILLS_SET_OVERRIDE: 'skills:set-override',
+  SKILLS_CREATE_PROMPT: 'skills:create-prompt',
+  SKILLS_DELETE_PROMPT: 'skills:delete-prompt',
+  SKILLS_PUBLISH: 'skills:publish',
+  SKILLS_GET_SHARE_LINK: 'skills:get-share-link',
+  SKILLS_IMPORT_FROM_LINK: 'skills:import-from-link',
+  SKILLS_GET_CURATED_DEFAULTS: 'skills:get-curated-defaults',
+  OPEN_CHANGELOG: 'shell:open-changelog',
+  OPEN_EXTERNAL: 'shell:open-external',
+  TERMINAL_READY: 'session:terminal-ready',
+  PERMISSION_RESPOND: 'permission:respond',
+  REMOTE_GET_CONFIG: 'remote:get-config',
+  REMOTE_SET_PASSWORD: 'remote:set-password',
+  REMOTE_SET_CONFIG: 'remote:set-config',
+  REMOTE_DETECT_TAILSCALE: 'remote:detect-tailscale',
+  REMOTE_GET_CLIENT_COUNT: 'remote:get-client-count',
+  REMOTE_GET_CLIENT_LIST: 'remote:get-client-list',
+  REMOTE_DISCONNECT_CLIENT: 'remote:disconnect-client',
+  UI_ACTION_BROADCAST: 'ui:action:broadcast',
+  UI_ACTION_RECEIVED: 'ui:action:received',
+  TRANSCRIPT_EVENT: 'transcript:event',
+  SESSION_BROWSE: 'session:browse',
+  SESSION_HISTORY: 'session:history',
+  // Theme system
+  THEME_RELOAD: 'theme:reload',   // Main -> Renderer: a theme file changed
+  THEME_LIST: 'theme:list',       // Renderer -> Main: get list of user theme slugs
+  THEME_READ_FILE: 'theme:read-file', // Renderer -> Main: read a user theme JSON by slug
+  THEME_WRITE_FILE: 'theme:write-file',
+  THEME_READ_ASSET: 'theme:read-asset',
+  WINDOW_MINIMIZE: 'window:minimize',
+  WINDOW_MAXIMIZE: 'window:maximize',
+  WINDOW_CLOSE: 'window:close',
+  FIRST_RUN_STATE: 'first-run:state',
+  FIRST_RUN_RETRY: 'first-run:retry',
+  FIRST_RUN_START_AUTH: 'first-run:start-auth',
+  FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
+  FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
+  FIRST_RUN_SKIP: 'first-run:skip',
+  MODEL_GET_PREFERENCE: 'model:get-preference',
+  MODEL_SET_PREFERENCE: 'model:set-preference',
+  MODEL_READ_LAST: 'model:read-last',
+  DEFAULTS_GET: 'defaults:get',
+  DEFAULTS_SET: 'defaults:set',
+} as const;
+
+contextBridge.exposeInMainWorld('claude', {
+  session: {
+    create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string }) =>
+      ipcRenderer.invoke(IPC.SESSION_CREATE, opts),
+    destroy: (sessionId: string) =>
+      ipcRenderer.invoke(IPC.SESSION_DESTROY, sessionId),
+    list: () => ipcRenderer.invoke(IPC.SESSION_LIST),
+    sendInput: (sessionId: string, text: string) =>
+      ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
+    resize: (sessionId: string, cols: number, rows: number) =>
+      ipcRenderer.send(IPC.SESSION_RESIZE, sessionId, cols, rows),
+    signalReady: (sessionId: string) =>
+      ipcRenderer.send(IPC.TERMINAL_READY, sessionId),
+    respondToPermission: (requestId: string, decision: object) =>
+      ipcRenderer.invoke(IPC.PERMISSION_RESPOND, requestId, decision),
+    browse: (): Promise<any[]> =>
+      ipcRenderer.invoke(IPC.SESSION_BROWSE),
+    loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean): Promise<any[]> =>
+      ipcRenderer.invoke(IPC.SESSION_HISTORY, sessionId, projectSlug, count || 10, all || false),
+  },
+  on: {
+    sessionCreated: (cb: (info: any) => void) => {
+      const handler = (_e: IpcRendererEvent, info: any) => cb(info);
+      ipcRenderer.on(IPC.SESSION_CREATED, handler);
+      return handler;
+    },
+    sessionDestroyed: (cb: (id: string) => void) => {
+      const handler = (_e: IpcRendererEvent, id: string) => cb(id);
+      ipcRenderer.on(IPC.SESSION_DESTROYED, handler);
+      return handler;
+    },
+    ptyOutput: (cb: (sessionId: string, data: string) => void) => {
+      const handler = (_e: IpcRendererEvent, sid: string, data: string) => cb(sid, data);
+      ipcRenderer.on(IPC.PTY_OUTPUT, handler);
+      return handler;
+    },
+    ptyOutputForSession: (sessionId: string, cb: (data: string) => void) => {
+      const channel = `pty:output:${sessionId}`;
+      const handler = (_event: IpcRendererEvent, data: string) => cb(data);
+      ipcRenderer.on(channel, handler);
+      return () => ipcRenderer.removeListener(channel, handler);
+    },
+    hookEvent: (cb: (event: any) => void) => {
+      const handler = (_e: IpcRendererEvent, event: any) => cb(event);
+      ipcRenderer.on(IPC.HOOK_EVENT, handler);
+      return handler;
+    },
+    statusData: (cb: (data: any) => void) => {
+      const handler = (_e: IpcRendererEvent, data: any) => cb(data);
+      ipcRenderer.on(IPC.STATUS_DATA, handler);
+      return handler;
+    },
+    sessionRenamed: (cb: (sessionId: string, name: string) => void) => {
+      const handler = (_e: IpcRendererEvent, sid: string, name: string) => cb(sid, name);
+      ipcRenderer.on(IPC.SESSION_RENAMED, handler);
+      return handler;
+    },
+    uiAction: (cb: (action: any) => void) => {
+      const handler = (_e: IpcRendererEvent, action: any) => cb(action);
+      ipcRenderer.on(IPC.UI_ACTION_RECEIVED, handler);
+      return handler;
+    },
+    transcriptEvent: (cb: (event: any) => void) => {
+      const handler = (_e: IpcRendererEvent, event: any) => cb(event);
+      ipcRenderer.on(IPC.TRANSCRIPT_EVENT, handler);
+      return handler;
+    },
+  },
+  skills: {
+    list: (): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_LIST),
+    listMarketplace: (filters?: any): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_LIST_MARKETPLACE, filters),
+    getDetail: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_DETAIL, id),
+    search: (query: string): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_SEARCH, query),
+    install: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_INSTALL, id),
+    uninstall: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_UNINSTALL, id),
+    getFavorites: (): Promise<string[]> => ipcRenderer.invoke(IPC.SKILLS_GET_FAVORITES),
+    setFavorite: (id: string, favorited: boolean): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_FAVORITE, id, favorited),
+    getChips: (): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_GET_CHIPS),
+    setChips: (chips: any[]): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_CHIPS, chips),
+    getOverride: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_GET_OVERRIDE, id),
+    setOverride: (id: string, override: any): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_SET_OVERRIDE, id, override),
+    createPrompt: (skill: any): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_CREATE_PROMPT, skill),
+    deletePrompt: (id: string): Promise<void> => ipcRenderer.invoke(IPC.SKILLS_DELETE_PROMPT, id),
+    publish: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_PUBLISH, id),
+    getShareLink: (id: string): Promise<string> => ipcRenderer.invoke(IPC.SKILLS_GET_SHARE_LINK, id),
+    importFromLink: (encoded: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_IMPORT_FROM_LINK, encoded),
+    getCuratedDefaults: (): Promise<string[]> => ipcRenderer.invoke(IPC.SKILLS_GET_CURATED_DEFAULTS),
+  },
+  dialog: {
+    openFile: (): Promise<string[]> =>
+      ipcRenderer.invoke(IPC.DIALOG_OPEN_FILE),
+    openFolder: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.DIALOG_OPEN_FOLDER),
+    readTranscriptMeta: (transcriptPath: string): Promise<{ model: string; contextPercent: number } | null> =>
+      ipcRenderer.invoke(IPC.READ_TRANSCRIPT_META, transcriptPath),
+    saveClipboardImage: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.CLIPBOARD_SAVE_IMAGE),
+  },
+  shell: {
+    openChangelog: (): Promise<void> =>
+      ipcRenderer.invoke(IPC.OPEN_CHANGELOG),
+    openExternal: (url: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.OPEN_EXTERNAL, url),
+  },
+  remote: {
+    getConfig: () => ipcRenderer.invoke(IPC.REMOTE_GET_CONFIG),
+    setPassword: (password: string) => ipcRenderer.invoke(IPC.REMOTE_SET_PASSWORD, password),
+    setConfig: (updates: { enabled?: boolean; trustTailscale?: boolean }) =>
+      ipcRenderer.invoke(IPC.REMOTE_SET_CONFIG, updates),
+    detectTailscale: () => ipcRenderer.invoke(IPC.REMOTE_DETECT_TAILSCALE),
+    getClientCount: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_COUNT),
+    getClientList: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_LIST),
+    disconnectClient: (clientId: string) => ipcRenderer.invoke(IPC.REMOTE_DISCONNECT_CLIENT, clientId),
+    broadcastAction: (action: any) => ipcRenderer.send(IPC.UI_ACTION_BROADCAST, action),
+  },
+  model: {
+    getPreference: (): Promise<string> => ipcRenderer.invoke(IPC.MODEL_GET_PREFERENCE),
+    setPreference: (model: string): Promise<boolean> => ipcRenderer.invoke(IPC.MODEL_SET_PREFERENCE, model),
+    readLastModel: (transcriptPath: string): Promise<string | null> => ipcRenderer.invoke(IPC.MODEL_READ_LAST, transcriptPath),
+  },
+  defaults: {
+    get: (): Promise<{ skipPermissions: boolean; model: string; projectFolder: string }> =>
+      ipcRenderer.invoke(IPC.DEFAULTS_GET),
+    set: (updates: Partial<{ skipPermissions: boolean; model: string; projectFolder: string }>): Promise<any> =>
+      ipcRenderer.invoke(IPC.DEFAULTS_SET, updates),
+  },
+  off: (channel: string, handler: (...args: any[]) => void) =>
+    ipcRenderer.removeListener(channel, handler),
+  removeAllListeners: (channel: string) =>
+    ipcRenderer.removeAllListeners(channel),
+  getFavorites: () => ipcRenderer.invoke('favorites:get'),
+  setFavorites: (favorites: string[]) => ipcRenderer.invoke('favorites:set', favorites),
+  getIncognito: () => ipcRenderer.invoke('game:getIncognito'),
+  setIncognito: (incognito: boolean) => ipcRenderer.invoke('game:setIncognito', incognito),
+  getGitHubAuth: () => ipcRenderer.invoke('github:auth'),
+  // Async IPC — renderer must await this (was sendSync before v2.2.0)
+  getHomePath: (): Promise<string> => ipcRenderer.invoke('get-home-path'),
+  window: {
+    minimize: () => ipcRenderer.invoke(IPC.WINDOW_MINIMIZE),
+    maximize: () => ipcRenderer.invoke(IPC.WINDOW_MAXIMIZE),
+    close: () => ipcRenderer.invoke(IPC.WINDOW_CLOSE),
+  },
+  theme: {
+    list: () => ipcRenderer.invoke(IPC.THEME_LIST),
+    readFile: (slug: string) => ipcRenderer.invoke(IPC.THEME_READ_FILE, slug),
+    writeFile: (slug: string, content: string) => ipcRenderer.invoke(IPC.THEME_WRITE_FILE, slug, content),
+    onReload: (handler: (slug: string) => void) => {
+      const wrapped = (_event: IpcRendererEvent, slug: string) => handler(slug);
+      ipcRenderer.on(IPC.THEME_RELOAD, wrapped);
+      return () => ipcRenderer.removeListener(IPC.THEME_RELOAD, wrapped);
+    },
+    setTitleBarColors: (_bg: string, _fg: string) => Promise.resolve(), // deprecated — kept for compat
+  },
+  firstRun: {
+    getState: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_STATE),
+    retry: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_RETRY),
+    startAuth: (mode: 'oauth' | 'apikey'): Promise<void> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_START_AUTH, mode),
+    submitApiKey: (key: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, key),
+    devModeDone: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_DEV_MODE_DONE),
+    skip: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_SKIP),
+    onStateChanged: (cb: (state: any) => void) => {
+      const handler = (_e: IpcRendererEvent, state: any) => cb(state);
+      ipcRenderer.on(IPC.FIRST_RUN_STATE, handler);
+      return handler;
+    },
+  },
+});

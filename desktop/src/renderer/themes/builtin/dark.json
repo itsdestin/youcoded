@@ -1,0 +1,23 @@
+{
+  "name": "Dark",
+  "slug": "dark",
+  "dark": true,
+  "source": "builtin",
+  "tokens": {
+    "canvas": "#111111",
+    "panel": "#191919",
+    "inset": "#222222",
+    "well": "#1C1C1C",
+    "accent": "#D4D4D4",
+    "on-accent": "#111111",
+    "fg": "#E0E0E0",
+    "fg-2": "#B0B0B0",
+    "fg-dim": "#999999",
+    "fg-muted": "#666666",
+    "fg-faint": "#444444",
+    "edge": "#2E2E2E",
+    "edge-dim": "#37373780",
+    "scrollbar-thumb": "#333333",
+    "scrollbar-hover": "#555555"
+  }
+}
