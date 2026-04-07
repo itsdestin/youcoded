@@ -26,6 +26,7 @@ const KEEP_AWAKE_OPTIONS = [
 
 interface TailscaleInfo {
   installed: boolean;
+  connected: boolean;
   ip: string | null;
   hostname: string | null;
   url: string | null;
@@ -344,7 +345,7 @@ function RemoteButton({
         <div className="flex-1 min-w-0">
           <span className="text-xs text-fg font-medium">{statusText}</span>
           {tailscale?.installed && (
-            <span className="text-[10px] text-fg-muted ml-2">Tailscale</span>
+            <span className={`text-[10px] ml-2 ${tailscale.connected ? 'text-fg-muted' : 'text-fg-muted/50'}`}>Tailscale{tailscale.connected ? '' : ' (off)'}</span>
           )}
         </div>
         <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -386,7 +387,7 @@ function RemoteButton({
                           Remote access lets you use DestinCode from any device — phone, tablet, or another computer.
                         </p>
 
-                        {tailscale?.installed && tailscale.url && config?.hasPassword ? (
+                        {tailscale?.connected && tailscale.url && config?.hasPassword ? (
                           showSetupQR ? (
                             <div className="mt-2">
                               <p className="text-[10px] text-fg-muted mb-2">Scan to connect a device:</p>
@@ -518,7 +519,7 @@ function RemoteButton({
                     )}
 
                     {/* Add Device overlay */}
-                    {showAddDevice && tailscale?.url && (
+                    {showAddDevice && tailscale?.connected && tailscale.url && (
                       <section className="bg-inset/50 rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-xs font-medium text-fg-2">Add Device</h3>
@@ -551,14 +552,18 @@ function RemoteButton({
                         <>
                           <div className="py-2 flex items-center justify-between">
                             <span className="text-xs text-fg-2">Status</span>
-                            <span className="text-[10px] text-green-400">
-                              Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
-                            </span>
+                            {tailscale.connected ? (
+                              <span className="text-[10px] text-green-400">
+                                Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-fg-muted">Disconnected</span>
+                            )}
                           </div>
 
                           <div className="py-2 flex items-center justify-between">
                             <span className="text-xs text-fg-2">IP</span>
-                            <span className="text-xs text-fg-dim font-mono">{tailscale.ip}</span>
+                            <span className={`text-xs font-mono ${tailscale.connected ? 'text-fg-dim' : 'text-fg-muted/50'}`}>{tailscale.ip}</span>
                           </div>
 
                           <label className="flex items-center justify-between py-2 cursor-pointer">
