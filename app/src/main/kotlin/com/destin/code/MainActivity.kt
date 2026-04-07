@@ -19,6 +19,7 @@ import com.destin.code.config.TierStore
 import com.destin.code.runtime.Bootstrap
 import com.destin.code.runtime.ServiceBinder
 import com.destin.code.ui.ChatScreen
+import com.destin.code.ui.FolderPickerDialog
 import com.destin.code.ui.QrScannerOverlay
 import com.destin.code.ui.SetupScreen
 import com.destin.code.ui.TierPickerScreen
@@ -69,6 +70,9 @@ class MainActivity : ComponentActivity() {
 
     /** Compose-observable state for showing the QR scanner overlay. */
     private val _showQrScanner = mutableStateOf(false)
+
+    /** Compose-observable state for showing the folder picker dialog. */
+    private val _showFolderPicker = mutableStateOf(false)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -182,6 +186,9 @@ class MainActivity : ComponentActivity() {
                                         svc.onFilePickerRequested = {
                                             filePickerLauncher.launch("*/*")
                                         }
+                                        svc.onFolderPickerRequested = {
+                                            _showFolderPicker.value = true
+                                        }
                                         svc.onQrScanRequested = {
                                             _showQrScanner.value = true
                                         }
@@ -199,6 +206,21 @@ class MainActivity : ComponentActivity() {
 
                                     Box(modifier = Modifier.fillMaxSize()) {
                                         ChatScreen(svc)
+
+                                        // Folder picker dialog
+                                        if (_showFolderPicker.value) {
+                                            FolderPickerDialog(
+                                                startDir = bootstrap.homeDir,
+                                                onSelect = { path ->
+                                                    _showFolderPicker.value = false
+                                                    boundService?.pendingFolderPicker?.complete(path)
+                                                },
+                                                onDismiss = {
+                                                    _showFolderPicker.value = false
+                                                    boundService?.pendingFolderPicker?.complete(null)
+                                                },
+                                            )
+                                        }
 
                                         // QR scanner overlay — rendered on top of ChatScreen
                                         if (_showQrScanner.value) {

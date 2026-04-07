@@ -505,12 +505,10 @@ export function installShim(): void {
     dialog: {
       openFile: () => targetUrl
         ? pickAndUploadFiles()                   // Remote — pick on device, upload to desktop
-        : invoke('android:pick-file')            // Local Android — native file picker
+        : invoke('dialog:open-file')             // Local Android — native file picker
+            .then((r: any) => r?.paths ?? r ?? [])
             .catch(() => [] as string[]),
-      openFolder: () => targetUrl
-        ? invoke('dialog:open-folder')
-        : invoke('android:pick-folder')
-            .catch(() => null),
+      openFolder: () => invoke('dialog:open-folder').catch(() => null),
       readTranscriptMeta: (p: string) => invoke('transcript:read-meta', { path: p }),
       saveClipboardImage: async () => null,
     },
@@ -537,6 +535,12 @@ export function installShim(): void {
       get: () => invoke('defaults:get'),
       set: (updates: Record<string, any>) => invoke('defaults:set', updates),
     },
+    folders: {
+      list: () => invoke('folders:list'),
+      add: (folderPath: string, nickname?: string) => invoke('folders:add', { folderPath, nickname }),
+      remove: (folderPath: string) => invoke('folders:remove', { folderPath }),
+      rename: (folderPath: string, nickname: string) => invoke('folders:rename', { folderPath, nickname }),
+    },
     // First-run is desktop-only — return COMPLETE so the renderer never enters first-run mode
     firstRun: {
       getState: () => Promise.resolve({ currentStep: 'COMPLETE' }),
@@ -552,9 +556,6 @@ export function installShim(): void {
     android: {
       getTier: () => targetUrl ? Promise.resolve('CORE') : invoke('android:get-tier'),
       setTier: (tier: string) => targetUrl ? Promise.resolve() : invoke('android:set-tier', { tier }),
-      getDirectories: () => targetUrl ? Promise.resolve([]) : invoke('android:get-directories'),
-      addDirectory: (path: string, label: string) => targetUrl ? Promise.resolve() : invoke('android:add-directory', { path, label }),
-      removeDirectory: (path: string) => targetUrl ? Promise.resolve() : invoke('android:remove-directory', { path }),
       getAbout: () => targetUrl ? Promise.resolve({ version: '', build: '' }) : invoke('android:get-about'),
       getPairedDevices: () => targetUrl ? Promise.resolve([]) : invoke('android:get-paired-devices'),
       savePairedDevice: (device: { name: string; host: string; port: number; password: string }) =>

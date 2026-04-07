@@ -850,7 +850,6 @@ interface PairedDevice {
 function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, onPublishTheme }: { open: boolean; onClose: () => void; onSendInput: (text: string) => void; onOpenThemeMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
   const [loading, setLoading] = useState(true);
   const [tier, setTier] = useState('CORE');
-  const [directories, setDirectories] = useState<{ label: string; path: string }[]>([]);
   const [aboutInfo, setAboutInfo] = useState<{ version: string; build: string } | null>(null);
   const [defaults, setDefaults] = useState({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
   const [pairedDevices, setPairedDevices] = useState<PairedDevice[]>([]);
@@ -884,13 +883,11 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
     setShowConnectForm(false);
     Promise.all([
       claude.android?.getTier?.() ?? 'CORE',
-      claude.android?.getDirectories?.() ?? [],
       claude.android?.getAbout?.() ?? { version: 'unknown', build: '' },
       claude.android?.getPairedDevices?.() ?? [],
       claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
-    ]).then(([t, dirs, about, devices, defs]) => {
+    ]).then(([t, about, devices, defs]) => {
       setTier(t?.tier || t || 'CORE');
-      setDirectories(dirs?.directories || dirs || []);
       setAboutInfo(about);
       setPairedDevices(devices?.devices || devices || []);
       setDefaults(defs);
@@ -904,11 +901,6 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
     if (result?.restartRequired) {
       // The bridge handles restart prompt natively
     }
-  }, []);
-
-  const handleRemoveDirectory = useCallback(async (path: string) => {
-    await claude.android?.removeDirectory?.(path);
-    setDirectories(prev => prev.filter(d => d.path !== path));
   }, []);
 
   const doConnect = useCallback(async (device: PairedDevice) => {
@@ -1003,31 +995,6 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
         {!remoteConnected && (
           <>
             <TierSelector tier={tier} onSetTier={handleSetTier} />
-
-            {/* Project Directories */}
-            <section>
-              <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Project Directories</h3>
-              {directories.length > 0 ? (
-                <div className="space-y-1">
-                  {directories.map(dir => (
-                    <div key={dir.path} className="flex items-center justify-between py-1.5 px-2 rounded-sm bg-inset/50">
-                      <div className="min-w-0 flex-1">
-                        <span className="text-xs text-fg-2 block truncate">{dir.label}</span>
-                        <span className="text-[10px] text-fg-faint block truncate font-mono">{dir.path}</span>
-                      </div>
-                      <button
-                        onClick={() => handleRemoveDirectory(dir.path)}
-                        className="text-fg-faint hover:text-red-400 text-sm leading-none px-1 shrink-0 ml-2"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-[10px] text-fg-faint">No custom directories. Home (~) is always available.</p>
-              )}
-            </section>
           </>
         )}
 

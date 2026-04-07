@@ -34,6 +34,16 @@ class WorkingDirStore(private val homeDir: File) {
         writeToDisk(current)
     }
 
+    fun rename(path: String, newLabel: String) {
+        val current = _dirs.value.toMutableList()
+        val idx = current.indexOfFirst { it.path == path }
+        if (idx >= 0) {
+            current[idx] = current[idx].copy(label = newLabel)
+            _dirs.value = current
+            writeToDisk(current)
+        }
+    }
+
     /** All dirs including implicit Home (~) as first entry. */
     fun allDirs(): List<Pair<String, File>> {
         val list = mutableListOf("Home (~)" to homeDir)

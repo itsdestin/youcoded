@@ -55,6 +55,11 @@ class SessionService : Service() {
     /** Callback for Activity to know when to launch the file picker. */
     var onFilePickerRequested: (() -> Unit)? = null
 
+    /** Folder picker bridge: Service sets the deferred, Activity completes it with path. */
+    var pendingFolderPicker: CompletableDeferred<String?>? = null
+    /** Callback for Activity to know when to launch the folder picker. */
+    var onFolderPickerRequested: (() -> Unit)? = null
+
     /** QR scanner bridge: Service sets the deferred, Activity completes it with scanned URL. */
     var pendingQrScanner: CompletableDeferred<String?>? = null
     /** Callback for Activity to know when to launch the QR scanner. */
@@ -568,6 +573,89 @@ class SessionService : Service() {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("paths", org.json.JSONArray())) }
                 }
             }
+            "dialog:open-folder" -> {
+                // Route through Activity — same deferred pattern as file picker
+                val deferred = CompletableDeferred<String?>()
+                pendingFolderPicker = deferred
+                withContext(Dispatchers.Main) {
+                    onFolderPickerRequested?.invoke()
+                }
+                try {
+                    val path = deferred.await()
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, path ?: JSONObject.NULL) }
+                } catch (_: Exception) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }
+                }
+            }
+
+            // ── Folders API (shared with desktop FolderSwitcher) ───────
+            "folders:list" -> {
+                val homeDir = bootstrap?.homeDir ?: filesDir
+                val store = com.destin.code.config.WorkingDirStore(homeDir)
+                val arr = org.json.JSONArray()
+                // Always include home as first entry
+                val home = JSONObject().apply {
+                    put("path", homeDir.absolutePath)
+                    put("nickname", "Home")
+                    put("addedAt", 0)
+                    put("exists", true)
+                }
+                arr.put(home)
+                store.dirs.value.forEach { wd ->
+                    arr.put(JSONObject().apply {
+                        put("path", wd.path)
+                        put("nickname", wd.label)
+                        put("addedAt", 0)
+                        put("exists", File(wd.path).isDirectory)
+                    })
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
+            }
+            "folders:add" -> {
+                val folderPath = msg.payload.optString("folderPath", "")
+                val nickname = msg.payload.optString("nickname", "")
+                if (folderPath.isNotEmpty()) {
+                    val homeDir = bootstrap?.homeDir ?: filesDir
+                    val store = com.destin.code.config.WorkingDirStore(homeDir)
+                    val label = nickname.ifEmpty { File(folderPath).name }
+                    store.add(com.destin.code.config.WorkingDir(label = label, path = folderPath))
+                    msg.id?.let {
+                        bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                            put("path", folderPath)
+                            put("nickname", label)
+                            put("addedAt", System.currentTimeMillis())
+                            put("exists", File(folderPath).isDirectory)
+                        })
+                    }
+                } else {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }
+                }
+            }
+            "folders:remove" -> {
+                val folderPath = msg.payload.optString("folderPath", "")
+                if (folderPath.isNotEmpty()) {
+                    val homeDir = bootstrap?.homeDir ?: filesDir
+                    val store = com.destin.code.config.WorkingDirStore(homeDir)
+                    store.remove(folderPath)
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, folderPath.isNotEmpty()) }
+            }
+            "folders:rename" -> {
+                val folderPath = msg.payload.optString("folderPath", "")
+                val nickname = msg.payload.optString("nickname", "")
+                var renamed = false
+                if (folderPath.isNotEmpty() && nickname.isNotEmpty()) {
+                    val homeDir = bootstrap?.homeDir ?: filesDir
+                    val store = com.destin.code.config.WorkingDirStore(homeDir)
+                    val existing = store.dirs.value.find { it.path == folderPath }
+                    if (existing != null) {
+                        store.rename(folderPath, nickname)
+                        renamed = true
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, renamed) }
+            }
+
             "clipboard:save-image" -> {
                 val result = platformBridge?.saveClipboardImage() ?: JSONObject().put("path", JSONObject.NULL)
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
@@ -724,34 +812,6 @@ class SessionService : Service() {
                 val changed = newTier != tierStore.selectedTier
                 tierStore.selectedTier = newTier
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("restartRequired", changed)) }
-            }
-            "android:get-directories" -> {
-                val homeDir = bootstrap?.homeDir ?: filesDir
-                val store = com.destin.code.config.WorkingDirStore(homeDir)
-                val dirs = org.json.JSONArray()
-                store.allDirs().forEach { (label, dir) ->
-                    dirs.put(JSONObject().put("label", label).put("path", dir.absolutePath))
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("directories", dirs)) }
-            }
-            "android:add-directory" -> {
-                val path = msg.payload.optString("path", "")
-                val label = msg.payload.optString("label", "")
-                if (path.isNotEmpty()) {
-                    val homeDir = bootstrap?.homeDir ?: filesDir
-                    val store = com.destin.code.config.WorkingDirStore(homeDir)
-                    store.add(com.destin.code.config.WorkingDir(label = label.ifEmpty { File(path).name }, path = path))
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
-            }
-            "android:remove-directory" -> {
-                val path = msg.payload.optString("path", "")
-                if (path.isNotEmpty()) {
-                    val homeDir = bootstrap?.homeDir ?: filesDir
-                    val store = com.destin.code.config.WorkingDirStore(homeDir)
-                    store.remove(path)
-                }
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
             }
             "android:get-about" -> {
                 val pm = applicationContext.packageManager
