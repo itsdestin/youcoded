@@ -14,7 +14,6 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.destin.code.runtime.Bootstrap
-import com.destin.code.ui.theme.DestinCodeTheme
 import kotlinx.coroutines.delay
 
 private val spinnerFrames = charArrayOf('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
@@ -115,7 +114,7 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                     Text(
                         "Setting up environment",
                         fontSize = 14.sp,
-                        color = DestinCodeTheme.extended.textSecondary,
+                        color = Color(0xFF999999),
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -127,7 +126,7 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                 Text(
                     "${(displayProgress * 100).toInt()}%",
                     style = MaterialTheme.typography.bodySmall,
-                    color = DestinCodeTheme.extended.textSecondary,
+                    color = Color(0xFF999999),
                 )
             }
             is Bootstrap.Progress.Installing -> {
@@ -139,7 +138,7 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                     Text(
                         progress.packageName,
                         fontSize = 14.sp,
-                        color = DestinCodeTheme.extended.textSecondary,
+                        color = Color(0xFF999999),
                     )
                 }
                 Spacer(modifier = Modifier.height(16.dp))
@@ -152,7 +151,7 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                     Text(
                         "${(displayProgress * 100).toInt()}%",
                         style = MaterialTheme.typography.bodySmall,
-                        color = DestinCodeTheme.extended.textSecondary,
+                        color = Color(0xFF999999),
                     )
                 } else {
                     LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
@@ -179,7 +178,7 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                 Text(
                     "${progress.tierName} tier is ready",
                     fontSize = 14.sp,
-                    color = DestinCodeTheme.extended.textSecondary,
+                    color = Color(0xFF999999),
                 )
             }
             is Bootstrap.Progress.Complete -> {
@@ -191,7 +190,7 @@ fun SetupScreen(progress: Bootstrap.Progress?, onRetry: (() -> Unit)? = null) {
                 Text(
                     "Checking environment",
                     fontSize = 14.sp,
-                    color = DestinCodeTheme.extended.textSecondary,
+                    color = Color(0xFF999999),
                 )
             }
         }

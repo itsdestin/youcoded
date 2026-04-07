@@ -1,16 +1,9 @@
 package com.destin.code.ui.theme
 
-import android.os.Build
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.darkColorScheme
-import androidx.compose.material3.dynamicDarkColorScheme
-import androidx.compose.material3.dynamicLightColorScheme
-import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.ReadOnlyComposable
-import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.platform.LocalContext
 import androidx.compose.material3.Typography
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.Font
@@ -19,40 +12,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import com.destin.code.R
 
-enum class ThemeMode(val label: String) {
-    DARK("Default Dark"),
-    LIGHT("Default Light"),
-    MATERIAL_DARK("Material Dark"),
-    MATERIAL_LIGHT("Material Light"),
-}
-
-data class ExtendedColors(
-    val surfaceBorder: Color = Color(0xFF333333),
-    val textSecondary: Color = Color(0xFF999999),
-    val terminalBg: Color = Color(0xFF0A0A0A),
-    /** Dynamic accent color — from device wallpaper on Material themes, gray on default. */
-    val accent: Color = Color(0xFFB0B0B0),
-    /** Whether this theme uses dynamic/material colors. */
-    val isMaterial: Boolean = false,
-)
-
-val LocalExtendedColors = staticCompositionLocalOf { ExtendedColors() }
-
-/** Whether the app is currently using dark theme. */
-val LocalIsDarkTheme = staticCompositionLocalOf { true }
-
-/** Current theme mode. */
-val LocalThemeMode = staticCompositionLocalOf { ThemeMode.DARK }
-
-/** Callback to set theme mode. */
-val LocalSetThemeMode = staticCompositionLocalOf<(ThemeMode) -> Unit> { {} }
-
 val CascadiaMono = FontFamily(
     Font(R.font.cascadia_mono_regular, FontWeight.Normal),
     Font(R.font.cascadia_mono_bold, FontWeight.Bold),
 )
-
-// ─── Default dark (DestinCode neutral grays) ─────────────────────
 
 private val DarkColorScheme = darkColorScheme(
     primary = Color(0xFFB0B0B0),
@@ -64,36 +27,6 @@ private val DarkColorScheme = darkColorScheme(
     onSurface = Color(0xFFE0E0E0),
     error = Color(0xFFDD4444),
     onError = Color.White,
-)
-
-private val DarkExtendedColors = ExtendedColors(
-    surfaceBorder = Color(0xFF333333),
-    textSecondary = Color(0xFF999999),
-    terminalBg = Color(0xFF0A0A0A),
-    accent = Color(0xFFB0B0B0),
-    isMaterial = false,
-)
-
-// ─── Default light ───────────────────────────────────────────────
-
-private val LightColorScheme = lightColorScheme(
-    primary = Color(0xFF4A4A4A),
-    onPrimary = Color.White,
-    secondary = Color(0xFF4A4A4A),
-    background = Color(0xFFAAAAAA),
-    surface = Color(0xFFB8B8B8),
-    onBackground = Color(0xFF1A1A1A),
-    onSurface = Color(0xFF1A1A1A),
-    error = Color(0xFFCC3333),
-    onError = Color.White,
-)
-
-private val LightExtendedColors = ExtendedColors(
-    surfaceBorder = Color(0xFF909090),
-    textSecondary = Color(0xFF555555),
-    terminalBg = Color(0xFF2A2A2A),
-    accent = Color(0xFF4A4A4A),
-    isMaterial = false,
 )
 
 // App-wide typography using Cascadia Mono
@@ -116,61 +49,10 @@ private val AppTypography = Typography(
 )
 
 @Composable
-fun DestinCodeTheme(
-    themeMode: ThemeMode = ThemeMode.DARK,
-    onSetThemeMode: (ThemeMode) -> Unit = {},
-    content: @Composable () -> Unit,
-) {
-    val darkTheme = themeMode == ThemeMode.DARK || themeMode == ThemeMode.MATERIAL_DARK
-    val useMaterial = themeMode == ThemeMode.MATERIAL_DARK || themeMode == ThemeMode.MATERIAL_LIGHT
-
-    // Get dynamic color scheme if available (Android 12+)
-    val dynamicScheme = if (useMaterial && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
-        val context = LocalContext.current
-        if (darkTheme) dynamicDarkColorScheme(context) else dynamicLightColorScheme(context)
-    } else null
-
-    // Build the actual color scheme:
-    // Material themes use the FULL dynamic color scheme from the device wallpaper.
-    // Default themes use our neutral gray palette.
-    val colorScheme = when {
-        dynamicScheme != null -> dynamicScheme
-        darkTheme -> DarkColorScheme
-        else -> LightColorScheme
-    }
-
-    // Extended colors — Material mode derives borders/text from dynamic scheme
-    val extendedColors = if (dynamicScheme != null) {
-        ExtendedColors(
-            surfaceBorder = dynamicScheme.outlineVariant,
-            textSecondary = dynamicScheme.onSurfaceVariant,
-            terminalBg = if (darkTheme) Color(0xFF0A0A0A) else Color(0xFF2A2A2A),
-            accent = dynamicScheme.primary,
-            isMaterial = true,
-        )
-    } else if (darkTheme) {
-        DarkExtendedColors
-    } else {
-        LightExtendedColors
-    }
-
-    androidx.compose.runtime.CompositionLocalProvider(
-        LocalExtendedColors provides extendedColors,
-        LocalIsDarkTheme provides darkTheme,
-        LocalThemeMode provides themeMode,
-        LocalSetThemeMode provides onSetThemeMode,
-    ) {
-        MaterialTheme(
-            colorScheme = colorScheme,
-            typography = AppTypography,
-            content = content
-        )
-    }
-}
-
-object DestinCodeTheme {
-    val extended: ExtendedColors
-        @Composable
-        @ReadOnlyComposable
-        get() = LocalExtendedColors.current
+fun AppTheme(content: @Composable () -> Unit) {
+    MaterialTheme(
+        colorScheme = DarkColorScheme,
+        typography = AppTypography,
+        content = content,
+    )
 }

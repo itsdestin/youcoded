@@ -3,20 +3,16 @@ package com.destin.code.ui
 import android.content.Intent
 import android.net.Uri
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.KeyboardArrowDown
-import androidx.compose.material.icons.filled.KeyboardArrowUp
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -25,35 +21,14 @@ import com.destin.code.runtime.BaseTerminalViewClient
 import com.destin.code.runtime.SessionService
 import com.termux.view.TerminalView
 import java.io.File
+import androidx.compose.ui.Alignment
 
-/** Apply theme-appropriate foreground/background/cursor colors to a terminal emulator. */
-private fun applyTerminalColors(session: com.termux.terminal.TerminalSession?, isDark: Boolean) {
+/** Apply dark terminal colors to a terminal emulator. */
+private fun applyTerminalColors(session: com.termux.terminal.TerminalSession?) {
     val emulator = session?.emulator ?: return
-    if (isDark) {
-        emulator.mColors.tryParseColor(256, "#E0E0E0") // foreground
-        emulator.mColors.tryParseColor(257, "#0A0A0A") // background
-        emulator.mColors.tryParseColor(258, "#E0E0E0") // cursor
-    } else {
-        emulator.mColors.tryParseColor(256, "#D8D8D8")
-        emulator.mColors.tryParseColor(257, "#2A2A2A")
-        emulator.mColors.tryParseColor(258, "#D8D8D8")
-        emulator.mColors.tryParseColor(0, "#3A3A3A")
-        emulator.mColors.tryParseColor(1, "#F07070")
-        emulator.mColors.tryParseColor(2, "#70D070")
-        emulator.mColors.tryParseColor(3, "#D0C060")
-        emulator.mColors.tryParseColor(4, "#70A0E0")
-        emulator.mColors.tryParseColor(5, "#C080D0")
-        emulator.mColors.tryParseColor(6, "#60C8C8")
-        emulator.mColors.tryParseColor(7, "#C8C8C8")
-        emulator.mColors.tryParseColor(8, "#606060")
-        emulator.mColors.tryParseColor(9, "#FF8888")
-        emulator.mColors.tryParseColor(10, "#88E888")
-        emulator.mColors.tryParseColor(11, "#E8D878")
-        emulator.mColors.tryParseColor(12, "#88B8F0")
-        emulator.mColors.tryParseColor(13, "#D898E0")
-        emulator.mColors.tryParseColor(14, "#78D8D8")
-        emulator.mColors.tryParseColor(15, "#E8E8E8")
-    }
+    emulator.mColors.tryParseColor(256, "#E0E0E0") // foreground
+    emulator.mColors.tryParseColor(257, "#0A0A0A") // background
+    emulator.mColors.tryParseColor(258, "#E0E0E0") // cursor
 }
 
 enum class ScreenMode { Chat, Terminal }
@@ -83,8 +58,22 @@ fun ChatScreen(service: SessionService) {
         }
     }
 
+    // Layout insets from React UI (header and bottom bar heights in px)
+    var headerHeightPx by remember { mutableIntStateOf(0) }
+    var bottomBarHeightPx by remember { mutableIntStateOf(0) }
+
+    LaunchedEffect(Unit) {
+        service.layoutInsets.collect { insets ->
+            headerHeightPx = insets.headerPx
+            bottomBarHeightPx = insets.bottomPx
+        }
+    }
+
+    val density = LocalDensity.current
+    val headerHeightDp = with(density) { headerHeightPx.toDp() }
+    val bottomBarHeightDp = with(density) { bottomBarHeightPx.toDp() }
+
     val context = LocalContext.current
-    val isDark = com.destin.code.ui.theme.LocalIsDarkTheme.current
 
     var showTierDialog by remember { mutableStateOf(false) }
     var showManageDirectories by remember { mutableStateOf(false) }
@@ -102,123 +91,66 @@ fun ChatScreen(service: SessionService) {
             .statusBarsPadding()
             .navigationBarsPadding()
     ) {
-        // WebView — always alive, React handles its own empty state
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .then(
-                    if (screenMode == ScreenMode.Chat) Modifier
-                    else Modifier.size(0.dp)
-                )
-        ) {
-            WebViewHost(modifier = Modifier.fillMaxSize())
-        }
-
-        if (currentSession != null) {
-
-            // Terminal — shown when toggled or when session is a shell.
-            // key(currentSessionId) forces full recreation when session changes,
-            // preventing the terminal from showing the wrong session's PTY.
-            if (screenMode == ScreenMode.Terminal) {
-                key(currentSessionId) {
+        // Layer 1 (behind): Native terminal — padded to fit the React UI "hole"
+        if (currentSession != null && screenMode == ScreenMode.Terminal) {
+            key(currentSessionId) {
                 val termViewClient = remember { BaseTerminalViewClient() }
                 val termScreenVersion by currentSession.screenVersion.collectAsState()
                 var userScrolledUp by remember { mutableStateOf(false) }
                 var attachedSession by remember { mutableStateOf<com.termux.terminal.TerminalSession?>(null) }
-                val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
 
-                Column(modifier = Modifier.fillMaxSize()) {
-                    Box(modifier = Modifier.weight(1f).fillMaxWidth()) {
-                        AndroidView(
-                            factory = { ctx ->
-                                val termSession = currentSession.getTerminalSession()
-                                TerminalView(ctx, null).apply {
-                                    setTextSize((12 * resources.displayMetrics.scaledDensity).toInt())
-                                    setTerminalViewClient(termViewClient)
-                                    isFocusable = true
-                                    isFocusableInTouchMode = true
-                                    termSession?.let {
-                                        attachSession(it)
-                                        attachedSession = it
-                                    }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .padding(top = headerHeightDp, bottom = bottomBarHeightDp)
+                ) {
+                    AndroidView(
+                        factory = { ctx ->
+                            val termSession = currentSession.getTerminalSession()
+                            TerminalView(ctx, null).apply {
+                                setTextSize((12 * resources.displayMetrics.scaledDensity).toInt())
+                                setTerminalViewClient(termViewClient)
+                                isFocusable = true
+                                isFocusableInTouchMode = true
+                                termSession?.let {
+                                    attachSession(it)
+                                    attachedSession = it
                                 }
-                            },
-                            update = { view ->
-                                val session = currentSession.getTerminalSession()
-                                if (session != null && session !== attachedSession) {
-                                    view.attachSession(session)
-                                    attachedSession = session
-                                }
-                                applyTerminalColors(session, isDark)
-                                val termBgColor = if (isDark) 0xFF0A0A0A.toInt() else 0xFF2A2A2A.toInt()
-                                view.setBackgroundColor(termBgColor)
-                                @Suppress("UNUSED_EXPRESSION")
-                                termScreenVersion
-                                try {
-                                    val wasScrolledUp = view.topRow < 0
-                                    if (wasScrolledUp) userScrolledUp = true
-                                    if (userScrolledUp && wasScrolledUp) {
-                                        val saved = view.topRow
-                                        view.onScreenUpdated()
-                                        view.topRow = saved
-                                    } else {
-                                        userScrolledUp = false
-                                        view.onScreenUpdated()
-                                    }
-                                } catch (_: Exception) {
-                                    // Termux TerminalBuffer throws during resize race — safe to ignore
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize(),
-                        )
-
-                        // Floating up/down arrows — overlaid on terminal, bottom-right
-                        Column(
-                            modifier = Modifier
-                                .align(Alignment.BottomEnd)
-                                .padding(end = 8.dp, bottom = 8.dp),
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                        ) {
-                            FloatingArrowButton(
-                                icon = Icons.Filled.KeyboardArrowUp,
-                                contentDescription = "Up",
-                                borderColor = borderColor,
-                                onClick = { currentSession.writeInput("\u001b[A") },
-                            )
-                            FloatingArrowButton(
-                                icon = Icons.Filled.KeyboardArrowDown,
-                                contentDescription = "Down",
-                                borderColor = borderColor,
-                                onClick = { currentSession.writeInput("\u001b[B") },
-                            )
-                        }
-                    }
-
-                    HorizontalDivider(color = borderColor, thickness = 0.5.dp)
-                    TerminalKeyboardRow(
-                        onKeyPress = { key -> currentSession.writeInput(key) },
-                        permissionMode = currentSession.permissionMode,
-                        hasBypassMode = currentSession.dangerousMode,
-                        onPermissionCycle = { currentSession.writeInput("\u001b[Z") },
-                        onSwitchToChat = {
-                            // Route through SharedFlow so Kotlin and React stay in sync
-                            service.requestViewMode("chat")
-                            service.bridgeServer.broadcast(org.json.JSONObject().apply {
-                                put("type", "ui:action")
-                                put("payload", org.json.JSONObject().apply {
-                                    put("action", "switch-view")
-                                    put("mode", "chat")
-                                })
-                            })
+                            }
                         },
+                        update = { view ->
+                            val session = currentSession.getTerminalSession()
+                            if (session != null && session !== attachedSession) {
+                                view.attachSession(session)
+                                attachedSession = session
+                            }
+                            applyTerminalColors(session)
+                            view.setBackgroundColor(0xFF0A0A0A.toInt())
+                            @Suppress("UNUSED_EXPRESSION")
+                            termScreenVersion
+                            try {
+                                val wasScrolledUp = view.topRow < 0
+                                if (wasScrolledUp) userScrolledUp = true
+                                if (userScrolledUp && wasScrolledUp) {
+                                    val saved = view.topRow
+                                    view.onScreenUpdated()
+                                    view.topRow = saved
+                                } else {
+                                    userScrolledUp = false
+                                    view.onScreenUpdated()
+                                }
+                            } catch (_: Exception) {
+                                // Termux TerminalBuffer throws during resize race — safe to ignore
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize(),
                     )
                 }
-                } // key(currentSessionId)
-            }
-
-            // View switching handled by React header toggle (sends ui:action via bridge)
+            } // key(currentSessionId)
         }
+
+        // Layer 2 (on top): WebView — ALWAYS full size, transparent middle lets terminal show through
+        WebViewHost(modifier = Modifier.fillMaxSize())
     }
 
     // ── Overlay screens ────────────────────────────────────────────────
@@ -240,119 +172,6 @@ fun ChatScreen(service: SessionService) {
 
     if (showAbout) {
         AboutScreen(onBack = { showAbout = false })
-    }
-}
-
-// ─── Floating View Toggle ───────────────────────────────────────────────────
-
-@Composable
-private fun FloatingViewToggle(screenMode: ScreenMode, onToggle: () -> Unit) {
-    Box(
-        modifier = Modifier
-            .fillMaxSize()
-            .padding(top = 6.dp, end = 6.dp),
-        contentAlignment = Alignment.TopEnd,
-    ) {
-        Row(
-            modifier = Modifier
-                .clip(RoundedCornerShape(6.dp))
-                .background(Color(0xFF222222))
-                .border(0.5.dp, Color(0xFF333333).copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-                .padding(2.dp),
-            horizontalArrangement = Arrangement.spacedBy(2.dp),
-        ) {
-            // Chat button
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (screenMode == ScreenMode.Chat) Color(0xFFB0B0B0) else Color.Transparent)
-                    .clickable { if (screenMode != ScreenMode.Chat) onToggle() }
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                ChatModeIcon(
-                    tint = if (screenMode == ScreenMode.Chat) Color(0xFF111111) else Color(0xFF999999),
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-            // Terminal button
-            Box(
-                modifier = Modifier
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(if (screenMode == ScreenMode.Terminal) Color(0xFFB0B0B0) else Color.Transparent)
-                    .clickable { if (screenMode != ScreenMode.Terminal) onToggle() }
-                    .padding(horizontal = 6.dp, vertical = 4.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                TerminalModeIcon(
-                    tint = if (screenMode == ScreenMode.Terminal) Color(0xFF111111) else Color(0xFF999999),
-                    modifier = Modifier.size(14.dp),
-                )
-            }
-        }
-    }
-}
-
-/** Chat icon — speech bubble with three dots, matching desktop's ChatIcon SVG */
-@Composable
-private fun ChatModeIcon(tint: Color, modifier: Modifier = Modifier) {
-    androidx.compose.foundation.Canvas(modifier = modifier) {
-        val w = size.width; val h = size.height
-        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = w * 0.08f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-        // Speech bubble outline
-        val path = androidx.compose.ui.graphics.Path().apply {
-            moveTo(w * 0.17f, h * 0.21f) // top-left
-            lineTo(w * 0.83f, h * 0.21f) // top-right
-            cubicTo(w * 0.92f, h * 0.21f, w * 0.92f, h * 0.21f, w * 0.92f, h * 0.29f)
-            lineTo(w * 0.92f, h * 0.625f)
-            cubicTo(w * 0.92f, h * 0.71f, w * 0.92f, h * 0.71f, w * 0.83f, h * 0.71f)
-            lineTo(w * 0.42f, h * 0.71f)
-            lineTo(w * 0.25f, h * 0.83f) // tail point
-            lineTo(w * 0.29f, h * 0.71f)
-            lineTo(w * 0.17f, h * 0.71f)
-            cubicTo(w * 0.08f, h * 0.71f, w * 0.08f, h * 0.71f, w * 0.08f, h * 0.625f)
-            lineTo(w * 0.08f, h * 0.29f)
-            cubicTo(w * 0.08f, h * 0.21f, w * 0.08f, h * 0.21f, w * 0.17f, h * 0.21f)
-            close()
-        }
-        drawPath(path, color = tint, style = stroke)
-        // Three dots
-        val dotR = w * 0.04f
-        drawCircle(color = tint, radius = dotR, center = androidx.compose.ui.geometry.Offset(w * 0.35f, h * 0.46f))
-        drawCircle(color = tint, radius = dotR, center = androidx.compose.ui.geometry.Offset(w * 0.50f, h * 0.46f))
-        drawCircle(color = tint, radius = dotR, center = androidx.compose.ui.geometry.Offset(w * 0.65f, h * 0.46f))
-    }
-}
-
-/** Terminal icon — rounded rect with >_ prompt, matching desktop's TerminalIcon SVG */
-@Composable
-private fun TerminalModeIcon(tint: Color, modifier: Modifier = Modifier) {
-    androidx.compose.foundation.Canvas(modifier = modifier) {
-        val w = size.width; val h = size.height
-        val stroke = androidx.compose.ui.graphics.drawscope.Stroke(width = w * 0.08f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round)
-        // Rounded rectangle
-        val rect = androidx.compose.ui.graphics.Path().apply {
-            moveTo(w * 0.17f, h * 0.17f)
-            lineTo(w * 0.83f, h * 0.17f)
-            cubicTo(w * 0.92f, h * 0.17f, w * 0.92f, h * 0.17f, w * 0.92f, h * 0.25f)
-            lineTo(w * 0.92f, h * 0.75f)
-            cubicTo(w * 0.92f, h * 0.83f, w * 0.92f, h * 0.83f, w * 0.83f, h * 0.83f)
-            lineTo(w * 0.17f, h * 0.83f)
-            cubicTo(w * 0.08f, h * 0.83f, w * 0.08f, h * 0.83f, w * 0.08f, h * 0.75f)
-            lineTo(w * 0.08f, h * 0.25f)
-            cubicTo(w * 0.08f, h * 0.17f, w * 0.08f, h * 0.17f, w * 0.17f, h * 0.17f)
-            close()
-        }
-        drawPath(rect, color = tint, style = stroke)
-        // Chevron >
-        val chevron = androidx.compose.ui.graphics.Path().apply {
-            moveTo(w * 0.25f, h * 0.375f)
-            lineTo(w * 0.42f, h * 0.50f)
-            lineTo(w * 0.25f, h * 0.625f)
-        }
-        drawPath(chevron, color = tint, style = androidx.compose.ui.graphics.drawscope.Stroke(width = w * 0.09f, cap = androidx.compose.ui.graphics.StrokeCap.Round, join = androidx.compose.ui.graphics.StrokeJoin.Round))
-        // Underscore _
-        drawLine(color = tint, start = androidx.compose.ui.geometry.Offset(w * 0.50f, h * 0.625f), end = androidx.compose.ui.geometry.Offset(w * 0.71f, h * 0.625f), strokeWidth = w * 0.09f, cap = androidx.compose.ui.graphics.StrokeCap.Round)
     }
 }
 
@@ -440,33 +259,6 @@ private fun TierPickerDialog(
             dismissButton = {
                 TextButton(onClick = onDismiss) { Text("Later") }
             },
-        )
-    }
-}
-
-// ─── Floating Arrow Button ──────────────────────────────────────────────────
-
-@Composable
-private fun FloatingArrowButton(
-    icon: androidx.compose.ui.graphics.vector.ImageVector,
-    contentDescription: String,
-    borderColor: androidx.compose.ui.graphics.Color,
-    onClick: () -> Unit,
-) {
-    Box(
-        modifier = Modifier
-            .size(32.dp)
-            .clip(RoundedCornerShape(6.dp))
-            .background(MaterialTheme.colorScheme.surface.copy(alpha = 0.9f))
-            .border(0.5.dp, borderColor.copy(alpha = 0.5f), RoundedCornerShape(6.dp))
-            .clickable(onClick = onClick),
-        contentAlignment = Alignment.Center,
-    ) {
-        Icon(
-            icon,
-            contentDescription = contentDescription,
-            tint = MaterialTheme.colorScheme.onSurface,
-            modifier = Modifier.size(20.dp),
         )
     }
 }

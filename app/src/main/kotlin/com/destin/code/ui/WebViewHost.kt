@@ -31,7 +31,7 @@ fun WebViewHost(
                     ViewGroup.LayoutParams.MATCH_PARENT
                 )
 
-                setBackgroundColor(Color.parseColor("#111111"))
+                setBackgroundColor(Color.TRANSPARENT)
 
                 settings.apply {
                     javaScriptEnabled = true

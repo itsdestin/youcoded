@@ -40,10 +40,15 @@ class SessionService : Service() {
     private val _viewModeRequest = kotlinx.coroutines.flow.MutableSharedFlow<String>(extraBufferCapacity = 1)
     val viewModeRequest: kotlinx.coroutines.flow.SharedFlow<String> = _viewModeRequest
 
-    /** Emit a view mode change from native code (e.g., TerminalKeyboardRow "Chat" button). */
+    /** Emit a view mode change from native code. */
     fun requestViewMode(mode: String) {
         _viewModeRequest.tryEmit(mode)
     }
+
+    /** Layout insets reported by React UI (header and bottom bar pixel heights). */
+    data class LayoutInsets(val headerPx: Int, val bottomPx: Int)
+    private val _layoutInsets = kotlinx.coroutines.flow.MutableSharedFlow<LayoutInsets>(replay = 1)
+    val layoutInsets: kotlinx.coroutines.flow.SharedFlow<LayoutInsets> = _layoutInsets
 
     /** File picker bridge: Service sets the deferred, Activity completes it with paths. */
     var pendingFilePicker: CompletableDeferred<List<String>>? = null
@@ -687,11 +692,17 @@ class SessionService : Service() {
                 }
             }
             "ui:action" -> {
-                // Handle view switching from React UI
                 val action = msg.payload.optString("action", "")
-                if (action == "switch-view") {
-                    val mode = msg.payload.optString("mode", "chat")
-                    _viewModeRequest.tryEmit(mode)
+                when (action) {
+                    "switch-view" -> {
+                        val mode = msg.payload.optString("mode", "chat")
+                        _viewModeRequest.tryEmit(mode)
+                    }
+                    "layout-update" -> {
+                        val headerPx = msg.payload.optInt("headerHeight", 0)
+                        val bottomPx = msg.payload.optInt("bottomHeight", 0)
+                        _layoutInsets.tryEmit(LayoutInsets(headerPx, bottomPx))
+                    }
                 }
             }
 

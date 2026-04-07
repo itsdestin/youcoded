@@ -22,8 +22,7 @@ import com.destin.code.ui.ChatScreen
 import com.destin.code.ui.QrScannerOverlay
 import com.destin.code.ui.SetupScreen
 import com.destin.code.ui.TierPickerScreen
-import com.destin.code.ui.theme.DestinCodeTheme
-import com.destin.code.ui.theme.ThemeMode
+import com.destin.code.ui.theme.AppTheme
 import android.net.Uri
 import android.widget.Toast
 import java.io.File
@@ -83,11 +82,7 @@ class MainActivity : ComponentActivity() {
         val tierStore = TierStore(applicationContext)
 
         setContent {
-            var themeMode by remember { mutableStateOf(ThemeMode.DARK) }
-            DestinCodeTheme(
-                themeMode = themeMode,
-                onSetThemeMode = { themeMode = it },
-            ) {
+            AppTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background,
