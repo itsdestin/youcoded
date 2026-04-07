@@ -38,10 +38,6 @@ The Chat View timeline is built from three event sources:
 
 **Permission race:** The hook relay is faster than the file watcher. If `PERMISSION_REQUEST` arrives before `TRANSCRIPT_TOOL_USE`, the reducer creates a synthetic tool entry from the permission payload. See spec for details.
 
-**Tool activity scoping:** `toolCalls` is a session-lifetime Map (never cleared — ToolCards need old results for display). To prevent stale `running`/`awaiting-approval` entries from old turns affecting status indicators, `activeTurnToolIds` tracks which tools belong to the current turn. All status checks (StatusDot color, ThinkingIndicator visibility, thinking timeout) scan only this Set, not the full Map. The shared `endTurn()` helper clears the Set and marks orphaned tools as failed — always use it when adding a new turn-ending code path.
-
-**Thinking timeout:** A 30s watchdog fires only when `isThinking && !hasRunningTools && !hasAwaitingApproval` (true silence). It sets an ephemeral `thinkingTimedOut` flag rather than injecting permanent text — the flag auto-clears on `TRANSCRIPT_TURN_COMPLETE`.
-
 ## Node.js vs Browser Boundary
 
 `src/main/` runs in Node.js. `src/renderer/` runs in a browser sandbox (via Vite).
