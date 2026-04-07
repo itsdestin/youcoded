@@ -110,6 +110,17 @@ export default function SkillManager({
     [chipList, setChips],
   );
 
+  const addCustomChip = useCallback(
+    (label: string, prompt: string) => {
+      if (chipList.length >= 10) return;
+      const next = [...chipList, { label, prompt }];
+      setChipList(next);
+      setChips(next);
+      setShowChipPicker(false);
+    },
+    [chipList, setChips],
+  );
+
   return (
     <div className="fixed inset-0 z-50 bg-canvas flex flex-col">
       {/* Header */}
@@ -167,6 +178,7 @@ export default function SkillManager({
             onMove={moveChip}
             onRemove={removeChip}
             onAddChip={addChip}
+            onAddCustomChip={addCustomChip}
           />
         )}
       </div>
@@ -359,6 +371,7 @@ function QuickChipsContent({
   onMove,
   onRemove,
   onAddChip,
+  onAddCustomChip,
 }: {
   chipList: ChipConfig[];
   installed: SkillEntry[];
@@ -367,8 +380,21 @@ function QuickChipsContent({
   onMove: (index: number, direction: -1 | 1) => void;
   onRemove: (index: number) => void;
   onAddChip: (skill: SkillEntry) => void;
+  onAddCustomChip: (label: string, prompt: string) => void;
 }) {
   const chipSkillIds = useMemo(() => new Set(chipList.map((c) => c.skillId).filter(Boolean)), [chipList]);
+  const [pickerMode, setPickerMode] = useState<'skill' | 'custom'>('custom');
+  const [customLabel, setCustomLabel] = useState('');
+  const [customPrompt, setCustomPrompt] = useState('');
+
+  const handleAddCustom = useCallback(() => {
+    const label = customLabel.trim();
+    const prompt = customPrompt.trim();
+    if (!label || !prompt) return;
+    onAddCustomChip(label, prompt);
+    setCustomLabel('');
+    setCustomPrompt('');
+  }, [customLabel, customPrompt, onAddCustomChip]);
 
   return (
     <>
@@ -455,24 +481,80 @@ function QuickChipsContent({
       {/* Chip picker */}
       {showPicker && (
         <div className="mt-3 border border-edge-dim rounded-lg bg-well p-3">
-          <p className="text-[10px] font-medium text-fg-muted tracking-wider mb-2">SELECT A SKILL</p>
-          <div className="max-h-48 overflow-y-auto flex flex-col gap-1">
-            {installed
-              .filter((s) => !chipSkillIds.has(s.id))
-              .map((skill) => (
-                <button
-                  key={skill.id}
-                  onClick={() => onAddChip(skill)}
-                  className="flex items-center gap-2 py-2 px-2 rounded-sm hover:bg-inset text-left transition-colors"
-                >
-                  <span className="text-xs font-medium text-fg truncate">{skill.displayName}</span>
-                  <span className="text-[10px] text-fg-muted truncate">{skill.description}</span>
-                </button>
-              ))}
-            {installed.filter((s) => !chipSkillIds.has(s.id)).length === 0 && (
-              <p className="text-xs text-fg-muted text-center py-2">All skills are already added</p>
-            )}
+          {/* Mode toggle */}
+          <div className="flex gap-1 mb-3 bg-inset rounded-md p-0.5">
+            <button
+              onClick={() => setPickerMode('custom')}
+              className={`flex-1 text-[11px] font-medium py-1 rounded-sm transition-colors ${
+                pickerMode === 'custom' ? 'bg-panel text-fg shadow-sm' : 'text-fg-muted hover:text-fg-2'
+              }`}
+            >
+              Custom
+            </button>
+            <button
+              onClick={() => setPickerMode('skill')}
+              className={`flex-1 text-[11px] font-medium py-1 rounded-sm transition-colors ${
+                pickerMode === 'skill' ? 'bg-panel text-fg shadow-sm' : 'text-fg-muted hover:text-fg-2'
+              }`}
+            >
+              From Skill
+            </button>
           </div>
+
+          {pickerMode === 'custom' ? (
+            <div className="flex flex-col gap-2">
+              <div>
+                <label className="text-[10px] font-medium text-fg-muted tracking-wider block mb-1">LABEL</label>
+                <input
+                  type="text"
+                  value={customLabel}
+                  onChange={(e) => setCustomLabel(e.target.value.slice(0, 20))}
+                  placeholder="e.g. Summarize"
+                  maxLength={20}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-md bg-panel border border-edge-dim text-fg placeholder:text-fg-faint focus:outline-none focus:border-accent"
+                />
+              </div>
+              <div>
+                <label className="text-[10px] font-medium text-fg-muted tracking-wider block mb-1">PROMPT</label>
+                <textarea
+                  value={customPrompt}
+                  onChange={(e) => setCustomPrompt(e.target.value.slice(0, 500))}
+                  placeholder="e.g. summarize the last 3 messages"
+                  maxLength={500}
+                  rows={2}
+                  className="w-full px-2.5 py-1.5 text-xs rounded-md bg-panel border border-edge-dim text-fg placeholder:text-fg-faint focus:outline-none focus:border-accent resize-none"
+                />
+              </div>
+              <button
+                onClick={handleAddCustom}
+                disabled={!customLabel.trim() || !customPrompt.trim()}
+                className="w-full text-xs font-medium py-2 rounded-lg bg-accent text-on-accent hover:brightness-110 disabled:opacity-40 disabled:hover:brightness-100 transition-colors"
+              >
+                Add Chip
+              </button>
+            </div>
+          ) : (
+            <>
+              <p className="text-[10px] font-medium text-fg-muted tracking-wider mb-2">SELECT A SKILL</p>
+              <div className="max-h-48 overflow-y-auto flex flex-col gap-1">
+                {installed
+                  .filter((s) => !chipSkillIds.has(s.id))
+                  .map((skill) => (
+                    <button
+                      key={skill.id}
+                      onClick={() => onAddChip(skill)}
+                      className="flex items-center gap-2 py-2 px-2 rounded-sm hover:bg-inset text-left transition-colors"
+                    >
+                      <span className="text-xs font-medium text-fg truncate">{skill.displayName}</span>
+                      <span className="text-[10px] text-fg-muted truncate">{skill.description}</span>
+                    </button>
+                  ))}
+                {installed.filter((s) => !chipSkillIds.has(s.id)).length === 0 && (
+                  <p className="text-xs text-fg-muted text-center py-2">All skills are already added</p>
+                )}
+              </div>
+            </>
+          )}
         </div>
       )}
     </>

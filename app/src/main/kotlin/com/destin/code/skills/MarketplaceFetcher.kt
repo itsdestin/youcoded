@@ -6,7 +6,10 @@ import org.json.JSONObject
 import java.io.File
 import java.net.URL
 
-class MarketplaceFetcher(private val homeDir: File) {
+class MarketplaceFetcher(
+    private val homeDir: File,
+    private val bundledIndexProvider: (() -> JSONArray)? = null,
+) {
 
     private val cacheDir = File(homeDir, ".claude/destincode-marketplace-cache")
     private val registryBase = "https://raw.githubusercontent.com/itsdestin/destincode-marketplace/main"
@@ -31,7 +34,7 @@ class MarketplaceFetcher(private val homeDir: File) {
             Log.w("MarketplaceFetcher", "Failed to fetch index", e)
             readCache(cacheFile, Long.MAX_VALUE)?.let {
                 try { JSONArray(it) } catch (_: Exception) { JSONArray() }
-            } ?: JSONArray()
+            } ?: bundledIndexProvider?.invoke() ?: JSONArray()
         }
     }
 
@@ -67,7 +70,9 @@ class MarketplaceFetcher(private val homeDir: File) {
             defaults
         } catch (e: Exception) {
             Log.w("MarketplaceFetcher", "Failed to fetch curated defaults", e)
-            JSONArray()
+            readCache(cacheFile, Long.MAX_VALUE)?.let {
+                try { JSONArray(it) } catch (_: Exception) { JSONArray() }
+            } ?: JSONArray()
         }
     }
 

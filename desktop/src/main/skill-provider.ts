@@ -329,12 +329,28 @@ export class LocalSkillProvider implements SkillProvider {
     if (cached) return cached;
     try {
       const resp = await fetch(`${REGISTRY_BASE}/index.json`);
-      if (!resp.ok) return [];
+      if (!resp.ok) return this.readCache<SkillEntry[]>(INDEX_CACHE, Infinity) || this.getBundledIndex();
       const data = await resp.json() as SkillEntry[];
       this.writeCache(INDEX_CACHE, data);
       return data;
     } catch {
-      return this.readCache<SkillEntry[]>(INDEX_CACHE, Infinity) || [];
+      return this.readCache<SkillEntry[]>(INDEX_CACHE, Infinity) || this.getBundledIndex();
+    }
+  }
+
+  /** Convert bundled skill-registry.json into SkillEntry[] for offline marketplace fallback */
+  private getBundledIndex(): SkillEntry[] {
+    try {
+      const registryPath = path.join(__dirname, '..', 'renderer', 'data', 'skill-registry.json');
+      const registry: Record<string, Omit<SkillEntry, 'id'>> = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+      return Object.entries(registry).map(([id, meta]) => ({
+        id,
+        ...meta,
+        type: (meta as any).type || 'plugin',
+        visibility: (meta as any).visibility || 'published',
+      } as SkillEntry));
+    } catch {
+      return [];
     }
   }
 
