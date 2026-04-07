@@ -62,15 +62,21 @@ describe('TRANSCRIPT_* reducer actions', () => {
 
     const session = state.get(SESSION)!;
     expect(session.timeline).toHaveLength(2);
-    expect(session.timeline[1].kind).toBe('assistant');
-    if (session.timeline[1].kind === 'assistant') {
-      expect(session.timeline[1].message.content).toBe('Hi there!');
+    expect(session.timeline[1].kind).toBe('assistant-turn');
+    if (session.timeline[1].kind === 'assistant-turn') {
+      const turn = session.assistantTurns.get(session.timeline[1].turnId);
+      expect(turn).toBeDefined();
+      expect(turn!.segments).toHaveLength(1);
+      expect(turn!.segments[0].type).toBe('text');
+      if (turn!.segments[0].type === 'text') {
+        expect(turn!.segments[0].content).toBe('Hi there!');
+      }
     }
     // isThinking should remain true — turn hasn't completed
     expect(session.isThinking).toBe(true);
   });
 
-  // --- Test 3: TRANSCRIPT_TOOL_USE creates a tool group with a running tool ---
+  // --- Test 3: TRANSCRIPT_TOOL_USE creates a tool group within an assistant turn ---
   it('TRANSCRIPT_TOOL_USE creates a tool group with a running tool', () => {
     state = dispatch(state, {
       type: 'TRANSCRIPT_USER_MESSAGE',
@@ -90,9 +96,9 @@ describe('TRANSCRIPT_* reducer actions', () => {
     });
 
     const session = state.get(SESSION)!;
-    // Timeline should have user message + tool group
+    // Timeline should have user message + assistant-turn (containing the tool group)
     expect(session.timeline).toHaveLength(2);
-    expect(session.timeline[1].kind).toBe('tool-group');
+    expect(session.timeline[1].kind).toBe('assistant-turn');
 
     // Tool should be in toolCalls map with status running
     const tool = session.toolCalls.get('tool-1');
@@ -101,11 +107,17 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(tool!.status).toBe('running');
     expect(tool!.input).toEqual({ file_path: '/tmp/test.ts' });
 
-    // Tool group should exist and contain the tool
-    if (session.timeline[1].kind === 'tool-group') {
-      const group = session.toolGroups.get(session.timeline[1].groupId);
-      expect(group).toBeDefined();
-      expect(group!.toolIds).toContain('tool-1');
+    // The assistant turn should contain a tool-group segment
+    if (session.timeline[1].kind === 'assistant-turn') {
+      const turn = session.assistantTurns.get(session.timeline[1].turnId);
+      expect(turn).toBeDefined();
+      const toolGroupSeg = turn!.segments.find(s => s.type === 'tool-group');
+      expect(toolGroupSeg).toBeDefined();
+      if (toolGroupSeg?.type === 'tool-group') {
+        const group = session.toolGroups.get(toolGroupSeg.groupId);
+        expect(group).toBeDefined();
+        expect(group!.toolIds).toContain('tool-1');
+      }
     }
   });
 
@@ -264,16 +276,21 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(groupId2).not.toBeNull();
     expect(groupId2).not.toBe(groupId1);
 
-    // Timeline should have: user, group1, assistant, group2
-    expect(session.timeline).toHaveLength(4);
+    // Timeline should have: user, assistant-turn (all segments inside the turn)
+    expect(session.timeline).toHaveLength(2);
     expect(session.timeline[0].kind).toBe('user');
-    expect(session.timeline[1].kind).toBe('tool-group');
-    expect(session.timeline[2].kind).toBe('assistant');
-    expect(session.timeline[3].kind).toBe('tool-group');
+    expect(session.timeline[1].kind).toBe('assistant-turn');
 
-    // The two groups should be different
-    if (session.timeline[1].kind === 'tool-group' && session.timeline[3].kind === 'tool-group') {
-      expect(session.timeline[1].groupId).not.toBe(session.timeline[3].groupId);
+    // The assistant turn should contain: tool-group, text, tool-group segments
+    if (session.timeline[1].kind === 'assistant-turn') {
+      const turn = session.assistantTurns.get(session.timeline[1].turnId);
+      expect(turn).toBeDefined();
+      const toolGroupSegs = turn!.segments.filter(s => s.type === 'tool-group');
+      expect(toolGroupSegs).toHaveLength(2);
+      // The two tool groups should be different
+      if (toolGroupSegs[0].type === 'tool-group' && toolGroupSegs[1].type === 'tool-group') {
+        expect(toolGroupSegs[0].groupId).not.toBe(toolGroupSegs[1].groupId);
+      }
     }
   });
 

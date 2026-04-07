@@ -14,6 +14,10 @@ vi.mock('child_process', () => ({
   spawn: vi.fn(() => mockWorker),
 }));
 
+vi.mock('electron', () => ({
+  app: { isPackaged: false, getPath: vi.fn(() => '/tmp') },
+}));
+
 describe('SessionManager', () => {
   let manager: SessionManager;
 

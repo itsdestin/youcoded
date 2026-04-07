@@ -338,9 +338,10 @@ describe('TranscriptWatcher', () => {
     watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
 
     watcher.startWatching(desktopSessionId, claudeSessionId, cwd);
-    watcher.readNewLinesForSession(desktopSessionId);
+    // readNewLines is async — wait for the initial read triggered by startWatching
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
-    // Only the first occurrence should be emitted
+    // Only the first occurrence should be emitted (second uuid-dup is deduplicated)
     expect(events).toHaveLength(1);
     expect(events[0].data.text).toBe('first');
   });
@@ -362,7 +363,7 @@ describe('TranscriptWatcher', () => {
     watcher.stopWatching(desktopSessionId);
   });
 
-  it('handles partial lines across reads', () => {
+  it('handles partial lines across reads', async () => {
     const desktopSessionId = 'desktop-4';
     const claudeSessionId = 'claude-session-partial';
     const cwd = '/home/user/project';
@@ -371,14 +372,7 @@ describe('TranscriptWatcher', () => {
     const projectDir = path.join(tmpDir, slug);
     fs.mkdirSync(projectDir, { recursive: true });
     const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
-    fs.writeFileSync(jsonlPath, '');
 
-    const events: TranscriptEvent[] = [];
-    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
-
-    watcher.startWatching(desktopSessionId, claudeSessionId, cwd);
-
-    // Write a partial line (no trailing newline)
     const fullLine = JSON.stringify({
       type: 'assistant',
       uuid: 'uuid-partial',
@@ -389,19 +383,25 @@ describe('TranscriptWatcher', () => {
       },
     });
 
-    // Write first half without newline
+    // Write partial line (no newline) — should not emit events
     fs.writeFileSync(jsonlPath, fullLine.substring(0, 50));
-    watcher.readNewLinesForSession(desktopSessionId);
+
+    const events: TranscriptEvent[] = [];
+    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
+
+    watcher.startWatching(desktopSessionId, claudeSessionId, cwd);
+    await new Promise((resolve) => setTimeout(resolve, 200));
     expect(events).toHaveLength(0); // Incomplete line, no events
 
-    // Write the rest with newline
-    fs.writeFileSync(jsonlPath, fullLine + '\n');
-    watcher.readNewLinesForSession(desktopSessionId);
+    // Append the rest with newline — now the full line is parseable
+    fs.appendFileSync(jsonlPath, fullLine.substring(50) + '\n');
+    // Wait for fs.watch or polling to pick up the change
+    await new Promise((resolve) => setTimeout(resolve, 2500));
     expect(events).toHaveLength(1);
     expect(events[0].data.text).toBe('partial test');
   });
 
-  it('emits all events from a single line (dedup is per-line, not per-event)', () => {
+  it('emits all events from a single line (dedup is per-line, not per-event)', async () => {
     const desktopSessionId = 'desktop-6';
     const claudeSessionId = 'claude-session-multi';
     const cwd = '/home/user/project';
@@ -427,7 +427,8 @@ describe('TranscriptWatcher', () => {
     watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
 
     watcher.startWatching(desktopSessionId, claudeSessionId, cwd);
-    watcher.readNewLinesForSession(desktopSessionId);
+    // readNewLines is async — wait for the initial read triggered by startWatching
+    await new Promise((resolve) => setTimeout(resolve, 100));
 
     expect(events).toHaveLength(2);
     expect(events[0].type).toBe('assistant-text');
