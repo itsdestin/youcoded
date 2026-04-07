@@ -31,6 +31,7 @@ import type { SessionStatusColor } from './components/StatusDot';
 import { ThemeProvider, useTheme } from './state/theme-context';
 import { SkillProvider } from './state/skill-context';
 import ThemeEffects from './components/ThemeEffects';
+import { useVisualViewport } from './hooks/useVisualViewport';
 
 type ViewMode = 'chat' | 'terminal';
 
@@ -86,6 +87,9 @@ interface StatusDataState {
 }
 
 function AppInner() {
+  // On mobile browsers, track the visual viewport to keep input above the keyboard
+  useVisualViewport();
+
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
   const [viewModes, setViewModes] = useState<Map<string, ViewMode>>(new Map());
@@ -922,7 +926,6 @@ function AppInner() {
                 {isTerminalTouch && sessionId && (
                   <TerminalToolbar sessionId={sessionId} />
                 )}
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} />
                 <StatusBar
                   statusData={{
                     usage: statusData.usage,
@@ -940,6 +943,7 @@ function AppInner() {
                   permissionMode={currentPermissionMode}
                   onCyclePermission={cyclePermission}
                 />
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} />
               </div>
             )}
           </>
