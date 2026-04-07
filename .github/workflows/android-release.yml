@@ -1,4 +1,4 @@
-name: Build Release APK
+name: Android Release
 
 on:
   push:
@@ -21,8 +21,18 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
+
+      - name: Build React UI
+        run: ./scripts/build-web-ui.sh
 
       - name: Create keystore.properties
         run: |
@@ -33,6 +43,9 @@ jobs:
 
       - name: Decode keystore
         run: echo "${{ secrets.KEYSTORE_BASE64 }}" | base64 -d > app/release-keystore.jks
+
+      - name: Run unit tests
+        run: ./gradlew test
 
       - name: Build release APK and AAB
         run: ./gradlew assembleRelease bundleRelease
