@@ -716,6 +716,80 @@ export class RemoteServer {
         this.respond(client.ws, type, id, os.homedir());
         break;
       }
+      case 'folders:list': {
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        try {
+          const raw = await fs.promises.readFile(foldersPrefPath, 'utf8');
+          let folders = JSON.parse(raw);
+          if (!Array.isArray(folders)) folders = [];
+          if (folders.length === 0) {
+            const home = os.homedir();
+            folders = [{ path: home, nickname: 'Home', addedAt: Date.now() }];
+            await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
+          }
+          const annotated = folders.map((f: any) => ({ ...f, exists: fs.existsSync(f.path) }));
+          this.respond(client.ws, type, id, annotated);
+        } catch {
+          const home = os.homedir();
+          const folders = [{ path: home, nickname: 'Home', addedAt: Date.now(), exists: true }];
+          this.respond(client.ws, type, id, folders);
+        }
+        break;
+      }
+      case 'folders:add': {
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        try {
+          let folders: any[] = [];
+          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
+          if (!Array.isArray(folders)) folders = [];
+          const normalized = path.resolve(payload.folderPath);
+          if (folders.some((f: any) => path.resolve(f.path) === normalized)) {
+            this.respond(client.ws, type, id, folders.find((f: any) => path.resolve(f.path) === normalized));
+            break;
+          }
+          const entry = { path: normalized, nickname: payload.nickname || path.basename(normalized), addedAt: Date.now() };
+          folders.unshift(entry);
+          await fs.promises.mkdir(path.dirname(foldersPrefPath), { recursive: true });
+          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
+          this.respond(client.ws, type, id, entry);
+        } catch {
+          this.respond(client.ws, type, id, null);
+        }
+        break;
+      }
+      case 'folders:remove': {
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        try {
+          let folders: any[] = [];
+          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
+          if (!Array.isArray(folders)) folders = [];
+          const normalized = path.resolve(payload.folderPath);
+          const filtered = folders.filter((f: any) => path.resolve(f.path) !== normalized);
+          if (filtered.length === folders.length) { this.respond(client.ws, type, id, false); break; }
+          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(filtered, null, 2));
+          this.respond(client.ws, type, id, true);
+        } catch {
+          this.respond(client.ws, type, id, false);
+        }
+        break;
+      }
+      case 'folders:rename': {
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        try {
+          let folders: any[] = [];
+          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
+          if (!Array.isArray(folders)) folders = [];
+          const normalized = path.resolve(payload.folderPath);
+          const entry = folders.find((f: any) => path.resolve(f.path) === normalized);
+          if (!entry) { this.respond(client.ws, type, id, false); break; }
+          entry.nickname = payload.nickname;
+          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
+          this.respond(client.ws, type, id, true);
+        } catch {
+          this.respond(client.ws, type, id, false);
+        }
+        break;
+      }
       case 'favorites:get': {
         const favPath = path.join(os.homedir(), '.claude', 'destinclaude-favorites.json');
         try {
