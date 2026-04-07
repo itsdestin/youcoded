@@ -192,7 +192,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
   const handleChip = useCallback(
     (chip: QuickChip) => {
-      sendMessage(chip.prompt);
+      // If prompt ends with a space, it's a template — insert into input for the user to complete
+      if (chip.prompt.endsWith(' ')) {
+        setText(chip.prompt);
+        requestAnimationFrame(() => {
+          if (inputRef.current) {
+            inputRef.current.focus();
+            inputRef.current.setSelectionRange(chip.prompt.length, chip.prompt.length);
+          }
+        });
+      } else {
+        sendMessage(chip.prompt);
+      }
     },
     [sendMessage],
   );

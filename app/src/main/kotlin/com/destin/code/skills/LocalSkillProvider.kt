@@ -12,7 +12,7 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
 
     val configStore = SkillConfigStore(homeDir)
     private val scanner = SkillScanner(homeDir, context)
-    private val fetcher = MarketplaceFetcher(homeDir)
+    private val fetcher = MarketplaceFetcher(homeDir) { getBundledIndex() }
     private var installedCache: JSONArray? = null
 
     private fun nowIso(): String =
@@ -293,6 +293,29 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
             val result = JSONArray()
             val keys = registry.keys()
             while (keys.hasNext()) result.put(keys.next())
+            result
+        } catch (_: Exception) {
+            JSONArray()
+        }
+    }
+
+    /** Convert bundled skill-registry.json into SkillEntry JSONArray for offline marketplace fallback */
+    private fun getBundledIndex(): JSONArray {
+        return try {
+            val input = context.assets.open("web/data/skill-registry.json")
+            val json = input.bufferedReader().use { it.readText() }
+            val registry = JSONObject(json)
+            val result = JSONArray()
+            val keys = registry.keys()
+            while (keys.hasNext()) {
+                val id = keys.next()
+                val meta = registry.getJSONObject(id)
+                val entry = JSONObject(meta.toString())
+                entry.put("id", id)
+                if (!entry.has("type")) entry.put("type", "plugin")
+                if (!entry.has("visibility")) entry.put("visibility", "published")
+                result.put(entry)
+            }
             result
         } catch (_: Exception) {
             JSONArray()
