@@ -36,6 +36,10 @@ export interface SessionChatState {
   currentTurnId: string | null;
   /** Timestamp of last activity from Claude — used to reset the thinking timeout */
   lastActivityAt: number;
+  /** Tool IDs belonging to the current active turn — cleared on turn end */
+  activeTurnToolIds: Set<string>;
+  /** True when the thinking timeout fired — ephemeral, cleared on turn-complete */
+  thinkingTimedOut: boolean;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -49,6 +53,8 @@ export function createSessionChatState(): SessionChatState {
     currentGroupId: null,
     currentTurnId: null,
     lastActivityAt: 0,
+    activeTurnToolIds: new Set(),
+    thinkingTimedOut: false,
   };
 }
 

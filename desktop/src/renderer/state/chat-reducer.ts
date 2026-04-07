@@ -45,6 +45,29 @@ function getOrCreateTurn(session: SessionChatState): {
   return { assistantTurns, timeline, currentTurnId };
 }
 
+/**
+ * Shared cleanup for turn endings (both normal completion and timeout).
+ * Marks orphaned running/awaiting tools as failed and clears turn tracking.
+ */
+function endTurn(session: SessionChatState): Partial<SessionChatState> {
+  const toolCalls = new Map(session.toolCalls);
+  for (const id of session.activeTurnToolIds) {
+    const tool = toolCalls.get(id);
+    if (tool && (tool.status === 'running' || tool.status === 'awaiting-approval')) {
+      toolCalls.set(id, { ...tool, status: 'failed', error: 'Turn ended' });
+    }
+  }
+  return {
+    toolCalls,
+    isThinking: false,
+    streamingText: '',
+    currentGroupId: null,
+    currentTurnId: null,
+    activeTurnToolIds: new Set(),
+    thinkingTimedOut: false,
+  };
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   // Fast path: the two highest-frequency no-op patterns exit before cloning.
   // TERMINAL_ACTIVITY fires on every rAF during output; default catches unknown types.
@@ -170,23 +193,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'THINKING_TIMEOUT': {
       const session = next.get(action.sessionId);
       if (!session || !session.isThinking) return state;
-
-      const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
-      const turn = assistantTurns.get(currentTurnId)!;
-      assistantTurns.set(currentTurnId, {
-        ...turn,
-        segments: [
-          ...turn.segments,
-          { type: 'text', content: '_Response may have arrived — check the Terminal view._', messageId: nextMessageId() },
-        ],
-      });
-
       next.set(action.sessionId, {
-        ...session, assistantTurns, timeline,
-        isThinking: false,
-        streamingText: '',
-        currentGroupId: null,
-        currentTurnId: null,
+        ...session,
+        ...endTurn(session),
+        thinkingTimedOut: true,
       });
       return next;
     }
@@ -293,8 +303,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               break;
             }
           }
+          const activeTurnToolIds = new Set(session.activeTurnToolIds);
+          activeTurnToolIds.delete(synId);
+          activeTurnToolIds.add(action.toolUseId);
           next.set(action.sessionId, {
             ...session, toolCalls, toolGroups,
+            activeTurnToolIds,
             lastActivityAt: Date.now(),
           });
           mergedSynthetic = true;
@@ -333,9 +347,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         });
       }
 
+      const activeTurnToolIds = new Set(session.activeTurnToolIds);
+      activeTurnToolIds.add(action.toolUseId);
       next.set(action.sessionId, {
         ...session, toolCalls, toolGroups, assistantTurns, timeline,
         currentGroupId, currentTurnId,
+        activeTurnToolIds,
         lastActivityAt: Date.now(),
       });
       return next;
@@ -368,14 +385,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'TRANSCRIPT_TURN_COMPLETE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-
-      next.set(action.sessionId, {
-        ...session,
-        isThinking: false,
-        streamingText: '',
-        currentGroupId: null,
-        currentTurnId: null,
-      });
+      next.set(action.sessionId, { ...session, ...endTurn(session) });
       return next;
     }
 
@@ -458,9 +468,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           segments: [...turn.segments, { type: 'tool-group', groupId }],
         });
 
+        const activeTurnToolIds = new Set(session.activeTurnToolIds);
+        activeTurnToolIds.add(syntheticId);
         next.set(action.sessionId, {
           ...session, toolCalls, toolGroups, assistantTurns,
-          timeline, currentTurnId,
+          timeline, currentTurnId, activeTurnToolIds,
         });
         return next;
       }
