@@ -8,7 +8,7 @@
 
 set -e
 
-REPO="itsdestin/destinclaude"
+REPO="itsdestin/destincode"
 TOOLKIT_ROOT="${TOOLKIT_ROOT:-$HOME/.claude/plugins/destinclaude}"
 VERSION=""
 UNATTENDED=false
@@ -32,7 +32,7 @@ if [[ -z "$VERSION" ]]; then
   exit 1
 fi
 
-TAG="v$VERSION"
+TAG="desktop-v$VERSION"
 
 # Detect platform
 detect_platform() {
@@ -180,14 +180,21 @@ case "$PLATFORM" in
     cp "$APPIMAGE" "$HOME/.local/bin/DestinCode.AppImage"
     chmod +x "$HOME/.local/bin/DestinCode.AppImage"
 
+    # Copy icon for app launcher
+    mkdir -p "$HOME/.local/share/icons"
+    # Extract icon from AppImage if possible, otherwise skip
+    if command -v wrestool &>/dev/null; then
+      wrestool -x -t 14 "$HOME/.local/bin/DestinCode.AppImage" > "$HOME/.local/share/icons/destincode.png" 2>/dev/null || true
+    fi
+
     # Create .desktop file for app launcher
     mkdir -p "$HOME/.local/share/applications"
     cat > "$HOME/.local/share/applications/destincode.desktop" << DESKTOP
 [Desktop Entry]
 Name=DestinCode
-Comment=Desktop GUI for Claude Code with DestinClaude
+Comment=Claude Code on every device
 Exec=$HOME/.local/bin/DestinCode.AppImage
-Icon=$TOOLKIT_ROOT/desktop/assets/icon.png
+Icon=$HOME/.local/share/icons/destincode.png
 Type=Application
 Categories=Development;
 DESKTOP
