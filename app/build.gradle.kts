@@ -20,8 +20,8 @@ android {
         applicationId = "com.destin.code"
         minSdk = 28
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.0.0"
+        versionCode = 4
+        versionName = "2.2.2"
     }
 
     signingConfigs {
