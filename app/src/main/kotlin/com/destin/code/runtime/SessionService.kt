@@ -326,11 +326,15 @@ class SessionService : Service() {
             "session:create" -> {
                 val cwd = msg.payload.optString("cwd", bootstrap?.homeDir?.absolutePath ?: "")
                 val dangerous = msg.payload.optBoolean("skipPermissions", false)
-                val prefFile = File(bootstrap!!.homeDir, ".claude-mobile/model-preference.json")
-                val model = try {
-                    val json = org.json.JSONObject(prefFile.readText())
-                    json.optString("model", "sonnet")
-                } catch (_: Exception) { "sonnet" }
+                // Use model from payload (sent by React) if provided, else fall back to preference file
+                val payloadModel = msg.payload.optString("model", "")
+                val model = if (payloadModel.isNotEmpty()) payloadModel else {
+                    val prefFile = File(bootstrap!!.homeDir, ".claude-mobile/model-preference.json")
+                    try {
+                        val json = org.json.JSONObject(prefFile.readText())
+                        json.optString("model", "sonnet")
+                    } catch (_: Exception) { "sonnet" }
+                }
                 android.util.Log.i("SessionService", "Bridge session:create cwd=$cwd dangerous=$dangerous")
                 // TerminalSession requires the main thread (Looper)
                 val session = withContext(Dispatchers.Main) {
