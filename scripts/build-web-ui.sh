@@ -15,6 +15,12 @@ cd "$DESKTOP_DIR"
 npm ci
 npm run build
 
+if [ ! -d "$DESKTOP_DIR/dist/renderer" ]; then
+  echo "ERROR: Build output not found at $DESKTOP_DIR/dist/renderer"
+  echo "       The desktop build may have failed. Check npm run build output above."
+  exit 1
+fi
+
 echo "Copying build output to $ASSETS_DIR..."
 rm -rf "$ASSETS_DIR"
 mkdir -p "$ASSETS_DIR"
