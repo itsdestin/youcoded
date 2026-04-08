@@ -764,6 +764,18 @@ function AppInner() {
     [sessionId],
   );
 
+  // Ctrl+` toggles between chat and terminal view
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.ctrlKey && e.key === '`') {
+        e.preventDefault();
+        handleToggleView(currentViewMode === 'chat' ? 'terminal' : 'chat');
+      }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, [handleToggleView, currentViewMode]);
+
   const currentSession = sessions.find((s) => s.id === sessionId);
   const canBypass = currentSession?.skipPermissions ?? false;
   const currentPermissionMode = sessionId ? (permissionModes.get(sessionId) || 'normal') : 'normal';

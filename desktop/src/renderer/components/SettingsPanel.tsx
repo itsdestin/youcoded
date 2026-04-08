@@ -56,7 +56,54 @@ function timeAgo(timestamp: number): string {
   return `${hours}h ago`;
 }
 
-export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme }: Props) {
+// ─── Keyboard Shortcuts reference popup ──────────────────────────────────────
+
+const SHORTCUTS: { keys: string; description: string }[] = [
+  { keys: 'Ctrl + `', description: 'Toggle between chat and terminal view' },
+  { keys: 'Shift (hold)', description: 'Open session switcher' },
+  { keys: 'Shift + Arrow Up/Down', description: 'Navigate between sessions' },
+  { keys: 'Shift (release)', description: 'Switch to highlighted session' },
+  { keys: 'Arrow Up/Down', description: 'Scroll chat view' },
+  { keys: 'Shift + Tab', description: 'Cycle permission mode' },
+  { keys: 'Shift + Enter', description: 'Insert newline in input' },
+  { keys: 'Enter', description: 'Send message' },
+  { keys: '/', description: 'Open skill/command drawer' },
+  { keys: 'Escape', description: 'Close drawer or modal' },
+  { keys: 'Arrow Left/Right', description: 'Cycle permission prompt buttons' },
+];
+
+function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
+  if (!open) return null;
+  return createPortal(
+    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
+      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+      <div
+        className="relative bg-panel border border-edge-dim rounded-xl p-5 max-w-sm w-full mx-4 shadow-xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex items-center justify-between mb-4">
+          <h3 className="text-sm font-semibold text-fg">Keyboard Shortcuts</h3>
+          <button onClick={onClose} className="text-fg-muted hover:text-fg transition-colors">
+            <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+        <div className="space-y-1.5">
+          {SHORTCUTS.map(({ keys, description }) => (
+            <div key={keys} className="flex items-center justify-between gap-3 py-1.5">
+              <span className="text-[11px] text-fg-dim">{description}</span>
+              <kbd className="shrink-0 text-[10px] font-mono text-fg-2 bg-inset border border-edge-dim rounded px-1.5 py-0.5">{keys}</kbd>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>,
+    document.body
+  );
+}
+
+export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme, syncAutoOpen, onSyncAutoOpenHandled }: Props) {
   return (
     <>
       {/* Backdrop */}
@@ -901,6 +948,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
   const [connectError, setConnectError] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   const claude = (window as any).claude;
 
@@ -1181,6 +1229,27 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
           <div className="space-y-2">
             <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
 
+            {/* Keyboard Shortcuts */}
+            <button
+              onClick={() => setShowShortcuts(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+            >
+              <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
+                <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M8 16h8" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-fg font-medium">Keyboard Shortcuts</span>
+                <p className="text-[10px] text-fg-muted">View all hotkeys</p>
+              </div>
+              <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <ShortcutsPopup open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+
             <button
               onClick={() => setShowDonateConfirm(true)}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
@@ -1351,6 +1420,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
   const [setupStatus, setSetupStatus] = useState<'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error'>('idle');
   const [setupError, setSetupError] = useState('');
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
+  const [showShortcuts, setShowShortcuts] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -1507,6 +1577,27 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
           <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Other</h3>
           <div className="space-y-2">
             <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
+
+            {/* Keyboard Shortcuts */}
+            <button
+              onClick={() => setShowShortcuts(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+            >
+              <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
+                <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                  <rect x="2" y="4" width="20" height="16" rx="2" />
+                  <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M8 16h8" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-fg font-medium">Keyboard Shortcuts</span>
+                <p className="text-[10px] text-fg-muted">View all hotkeys</p>
+              </div>
+              <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <ShortcutsPopup open={showShortcuts} onClose={() => setShowShortcuts(false)} />
 
             <button
               onClick={() => setShowDonateConfirm(true)}

@@ -34,7 +34,7 @@ The Chat View timeline is built from three event sources:
 
 1. **TranscriptWatcher** (primary) — `transcript:event` IPC → `TRANSCRIPT_*` reducer actions. Provides user messages, assistant text, tool calls, tool results, turn completion. Intermediate assistant messages (text between tool calls) appear as chat bubbles in real-time.
 2. **HookRelay** (permissions only) — `hook:event` IPC → `PERMISSION_REQUEST`/`PERMISSION_EXPIRED` reducer actions. Transitions tool cards to approval state with Yes/No buttons.
-3. **InputBar** (optimistic) — `USER_PROMPT` reducer action dispatched immediately when user sends a message, before the transcript watcher catches up. The `TRANSCRIPT_USER_MESSAGE` action deduplicates against this.
+3. **InputBar** (optimistic) — `USER_PROMPT` reducer action dispatched immediately when user sends a message (marked `optimistic: true`), before the transcript watcher catches up. `TRANSCRIPT_USER_MESSAGE` claims the optimistic entry by flipping the flag to false — this prevents duplicates without suppressing intentionally repeated messages.
 
 **Permission race:** The hook relay is faster than the file watcher. If `PERMISSION_REQUEST` arrives before `TRANSCRIPT_TOOL_USE`, the reducer creates a synthetic tool entry from the permission payload. See spec for details.
 
@@ -113,6 +113,7 @@ The desktop app uses a layered keyboard system. The text input auto-focuses when
 | **Shift + Arrow Up/Down** | Shift held, dropdown open | Navigate between sessions |
 | **Shift (release)** | Dropdown open | Switch to highlighted session |
 | **Arrow Up/Down** | Not typing | Scroll chat view (accelerates with held press) |
+| **Ctrl+`** | Any | Toggle between chat and terminal view |
 | **Shift+Tab** | Any | Cycle permission mode (normal → auto-accept → plan → bypass) |
 | **Shift+Enter** | Text input focused | Insert newline |
 | **Enter** | Text input focused | Send message |
