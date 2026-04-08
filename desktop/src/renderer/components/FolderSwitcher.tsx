@@ -136,8 +136,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
       {open && (
         <div
           className="absolute top-full mt-1 left-1/2 w-72 bg-panel border border-edge rounded-lg shadow-lg overflow-hidden z-50"
-          style={{ transform: 'translateX(-50%)' }}
-          style={{ animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
+          style={{ transform: 'translateX(-50%)', animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
         >
           {/* Saved folders list */}
           {folders.length > 0 && (
