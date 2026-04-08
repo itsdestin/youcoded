@@ -2,7 +2,7 @@ appId: com.destinclaude.desktop
 productName: DestinCode
 directories:
   output: release
-  buildResources: build
+  buildResources: assets
 win:
   target: nsis
 mac:
