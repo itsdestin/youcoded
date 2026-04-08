@@ -143,12 +143,29 @@ export interface MetadataOverride {
   category?: SkillEntry['category'];
 }
 
+// Component of an installed marketplace package (plugin, theme, etc.)
+export interface PackageComponent {
+  type: 'plugin' | 'theme';
+  path: string;
+}
+
+// Tracked marketplace package — records what the marketplace installed
+export interface PackageInfo {
+  version: string;
+  source: 'marketplace' | 'user';
+  installedAt: string;
+  removable: boolean;
+  components: PackageComponent[];
+}
+
 export interface UserSkillConfig {
-  version: 1;
+  version: 1 | 2;
   favorites: string[];
   chips: ChipConfig[];
   overrides: Record<string, MetadataOverride>;
   privateSkills: SkillEntry[];
+  // v2: unified package tracking (replaces installed_plugins)
+  packages?: Record<string, PackageInfo>;
 }
 
 export interface SkillProvider {

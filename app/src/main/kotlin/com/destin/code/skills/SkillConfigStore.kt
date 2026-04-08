@@ -33,12 +33,49 @@ class SkillConfigStore(private val homeDir: File) {
         try {
             val text = configFile.readText()
             config = JSONObject(text)
+            // Auto-migrate v1 → v2: convert installed_plugins to packages
+            val version = config.optInt("version", 1)
+            if (version < 2) {
+                migrateV1toV2()
+            }
+            // Ensure packages field exists
+            if (!config.has("packages")) {
+                config.put("packages", JSONObject())
+            }
         } catch (_: Exception) {
             // Back up corrupt file
             val bak = File(configFile.absolutePath + ".bak")
             try { configFile.copyTo(bak, overwrite = true) } catch (_: Exception) {}
             migrate(JSONArray())
         }
+    }
+
+    // Migrate v1 → v2: convert installed_plugins to packages format
+    private fun migrateV1toV2() {
+        val oldPlugins = config.optJSONObject("installed_plugins") ?: JSONObject()
+        val packages = JSONObject()
+
+        val keys = oldPlugins.keys()
+        while (keys.hasNext()) {
+            val id = keys.next()
+            val meta = oldPlugins.optJSONObject(id) ?: continue
+            val pluginsDir = File(homeDir, ".claude/plugins/$id")
+            packages.put(id, JSONObject().apply {
+                put("version", "1.0.0")
+                put("source", "marketplace")
+                put("installedAt", meta.optString("installedAt", ""))
+                put("removable", true)
+                put("components", JSONArray().put(JSONObject().apply {
+                    put("type", "plugin")
+                    put("path", meta.optString("installPath", pluginsDir.absolutePath))
+                }))
+            })
+        }
+
+        config.remove("installed_plugins")
+        config.put("version", 2)
+        config.put("packages", packages)
+        save()
     }
 
     fun reload() {
@@ -123,22 +160,25 @@ class SkillConfigStore(private val homeDir: File) {
         return skill
     }
 
-    // ── Installed Plugins (marketplace) ──────────────────────────
+    // ── Packages (unified marketplace tracking, replaces installed_plugins) ──
 
-    fun getInstalledPlugins(): JSONObject =
-        config.optJSONObject("installed_plugins") ?: JSONObject()
+    fun getPackages(): JSONObject =
+        config.optJSONObject("packages") ?: JSONObject()
 
-    fun recordPluginInstall(id: String, meta: JSONObject) {
-        val plugins = getInstalledPlugins()
-        plugins.put(id, meta)
-        config.put("installed_plugins", plugins)
+    fun getPackage(id: String): JSONObject? =
+        getPackages().optJSONObject(id)
+
+    fun recordPackageInstall(id: String, pkg: JSONObject) {
+        val packages = getPackages()
+        packages.put(id, pkg)
+        config.put("packages", packages)
         save()
     }
 
-    fun removePluginInstall(id: String) {
-        val plugins = getInstalledPlugins()
-        plugins.remove(id)
-        config.put("installed_plugins", plugins)
+    fun removePackage(id: String) {
+        val packages = getPackages()
+        packages.remove(id)
+        config.put("packages", packages)
 
         // Cascade: remove from favorites, chips, overrides
         val favs = getFavorites()
@@ -162,6 +202,51 @@ class SkillConfigStore(private val homeDir: File) {
         config.put("overrides", overrides)
 
         save()
+    }
+
+    // ── Legacy API (wraps packages for backwards compat with callers) ──
+
+    fun getInstalledPlugins(): JSONObject {
+        // Return packages that have a plugin component, shaped like old API
+        val packages = getPackages()
+        val result = JSONObject()
+        val keys = packages.keys()
+        while (keys.hasNext()) {
+            val id = keys.next()
+            val pkg = packages.optJSONObject(id) ?: continue
+            val components = pkg.optJSONArray("components") ?: continue
+            for (i in 0 until components.length()) {
+                val comp = components.optJSONObject(i) ?: continue
+                if (comp.optString("type") == "plugin") {
+                    result.put(id, JSONObject().apply {
+                        put("installedAt", pkg.optString("installedAt"))
+                        put("installPath", comp.optString("path"))
+                    })
+                    break
+                }
+            }
+        }
+        return result
+    }
+
+    fun recordPluginInstall(id: String, meta: JSONObject) {
+        // Bridge to packages API
+        val pluginsDir = File(homeDir, ".claude/plugins/$id")
+        val pkg = JSONObject().apply {
+            put("version", "1.0.0")
+            put("source", "marketplace")
+            put("installedAt", meta.optString("installedAt", ""))
+            put("removable", true)
+            put("components", JSONArray().put(JSONObject().apply {
+                put("type", "plugin")
+                put("path", meta.optString("installPath", pluginsDir.absolutePath))
+            }))
+        }
+        recordPackageInstall(id, pkg)
+    }
+
+    fun removePluginInstall(id: String) {
+        removePackage(id)
     }
 
     // ── Prompt Skills ─────────────────────────────────────────────

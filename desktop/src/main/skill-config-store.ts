@@ -1,7 +1,7 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import type { UserSkillConfig, ChipConfig, MetadataOverride, SkillEntry } from '../shared/types';
+import type { UserSkillConfig, ChipConfig, MetadataOverride, SkillEntry, PackageInfo } from '../shared/types';
 
 const CONFIG_PATH = path.join(os.homedir(), '.claude', 'destincode-skills.json');
 
@@ -17,12 +17,39 @@ const DEFAULT_CHIPS: ChipConfig[] = [
 
 function createDefaultConfig(existingSkillIds: string[]): UserSkillConfig {
   return {
-    version: 1,
+    version: 2,
     favorites: existingSkillIds,
     chips: DEFAULT_CHIPS,
     overrides: {},
     privateSkills: [],
+    packages: {},
   };
+}
+
+// Migrate v1 config to v2: convert installed_plugins to packages
+function migrateV1toV2(config: any): UserSkillConfig {
+  const installed = config.installed_plugins || {};
+  const packages: Record<string, PackageInfo> = {};
+
+  for (const [id, meta] of Object.entries(installed)) {
+    const m = meta as any;
+    packages[id] = {
+      version: '1.0.0',
+      source: 'marketplace',
+      installedAt: m.installedAt || new Date().toISOString(),
+      removable: true,
+      components: [{
+        type: 'plugin',
+        path: m.installPath || path.join(os.homedir(), '.claude', 'plugins', id),
+      }],
+    };
+  }
+
+  // Remove old field, set new version
+  delete config.installed_plugins;
+  config.version = 2;
+  config.packages = packages;
+  return config as UserSkillConfig;
 }
 
 export class SkillConfigStore {
@@ -32,7 +59,19 @@ export class SkillConfigStore {
     if (this.config) return this.config;
     try {
       const raw = fs.readFileSync(CONFIG_PATH, 'utf8');
-      this.config = JSON.parse(raw) as UserSkillConfig;
+      let parsed = JSON.parse(raw);
+
+      // Auto-migrate v1 → v2: convert installed_plugins to packages
+      if (!parsed.version || parsed.version === 1) {
+        parsed = migrateV1toV2(parsed);
+        this.config = parsed as UserSkillConfig;
+        this.save(); // Persist the migration
+        return this.config;
+      }
+
+      this.config = parsed as UserSkillConfig;
+      // Ensure packages field exists even on v2 configs created before this field
+      if (!this.config.packages) this.config.packages = {};
       return this.config;
     } catch (err) {
       // If file exists but is corrupt, back it up before resetting
@@ -128,30 +167,69 @@ export class SkillConfigStore {
     this.save();
   }
 
-  // --- Installed Plugins (marketplace) ---
+  // --- Packages (unified marketplace tracking, replaces installed_plugins) ---
+
+  getPackages(): Record<string, PackageInfo> {
+    return this.load().packages || {};
+  }
+
+  getPackage(id: string): PackageInfo | null {
+    return this.getPackages()[id] || null;
+  }
+
+  recordPackageInstall(id: string, pkg: PackageInfo): void {
+    const config = this.load();
+    if (!config.packages) config.packages = {};
+    config.packages[id] = pkg;
+    this.save();
+  }
+
+  removePackage(id: string): void {
+    const config = this.load();
+    if (config.packages) {
+      delete config.packages[id];
+    }
+    // Cascade cleanup — remove from favorites, chips, overrides
+    config.favorites = config.favorites.filter(f => f !== id);
+    config.chips = config.chips.filter(c => c.skillId !== id);
+    delete config.overrides[id];
+    this.save();
+  }
+
+  // --- Legacy API (wraps packages for backwards compat with callers) ---
 
   getInstalledPlugins(): Record<string, any> {
-    const config = this.load() as any;
-    return config.installed_plugins || {};
+    // Return packages that have a plugin component, shaped like old installed_plugins
+    const packages = this.getPackages();
+    const result: Record<string, any> = {};
+    for (const [id, pkg] of Object.entries(packages)) {
+      const pluginComponent = pkg.components.find(c => c.type === 'plugin');
+      if (pluginComponent) {
+        result[id] = {
+          ...pkg,
+          installPath: pluginComponent.path,
+        };
+      }
+    }
+    return result;
   }
 
   recordPluginInstall(id: string, meta: Record<string, any>): void {
-    const config = this.load() as any;
-    if (!config.installed_plugins) config.installed_plugins = {};
-    config.installed_plugins[id] = meta;
-    this.save();
+    // Bridge old callers to new packages API
+    this.recordPackageInstall(id, {
+      version: '1.0.0',
+      source: 'marketplace',
+      installedAt: meta.installedAt || new Date().toISOString(),
+      removable: true,
+      components: [{
+        type: 'plugin',
+        path: meta.installPath || path.join(os.homedir(), '.claude', 'plugins', id),
+      }],
+    });
   }
 
   removePluginInstall(id: string): void {
-    const config = this.load() as any;
-    if (config.installed_plugins) {
-      delete config.installed_plugins[id];
-    }
-    // Cascade cleanup
-    config.favorites = config.favorites.filter((f: string) => f !== id);
-    config.chips = config.chips.filter((c: any) => c.skillId !== id);
-    delete config.overrides[id];
-    this.save();
+    this.removePackage(id);
   }
 
   /** Force reload from disk (useful after external changes) */
