@@ -32,6 +32,8 @@ export default function TerminalView({ sessionId, visible }: Props) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
+  const visibleRef = useRef(visible);
+  visibleRef.current = visible;
   const { activeTheme, reducedEffects } = useTheme();
 
   // Detect if the theme has a visual background (wallpaper image, gradient, or glassmorphism)
@@ -116,8 +118,14 @@ export default function TerminalView({ sessionId, visible }: Props) {
     // Initial fit with delay to ensure container is laid out
     const timer = setTimeout(fitAndSync, 100);
 
-    // Send user keyboard input to PTY
+    // Send user keyboard input to PTY — only when terminal is the active view.
+    // xterm.js registers a paste listener on its container element that fires
+    // even when the terminal is hidden/collapsed. Without this gate, pasting
+    // into the chat InputBar can also trigger xterm's bracketed paste handler,
+    // sending the raw multi-line text (wrapped in ESC[200~/ESC[201~) to the
+    // PTY alongside the chat InputBar's sanitized single-line send.
     terminal.onData((data) => {
+      if (!visibleRef.current) return;
       window.claude.session.sendInput(sessionId, data);
     });
 
