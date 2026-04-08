@@ -28,9 +28,7 @@ import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
 import Marketplace from './components/Marketplace';
-import ThemeMarketplace from './components/ThemeMarketplace';
 import ThemeShareSheet from './components/ThemeShareSheet';
-import SkillManager from './components/SkillManager';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
 import CreatePromptSheet from './components/CreatePromptSheet';
@@ -90,9 +88,8 @@ function AppInner() {
   const [viewedSessions, setViewedSessions] = useState<Set<string>>(new Set());
   const [resumeInfo, setResumeInfo] = useState<Map<string, { claudeSessionId: string; projectSlug: string }>>(new Map());
   const [resumeRequested, setResumeRequested] = useState(false);
-  const [managerOpen, setManagerOpen] = useState(false);
-  const [marketplaceOpen, setMarketplaceOpen] = useState(false);
-  const [themeMarketplaceOpen, setThemeMarketplaceOpen] = useState(false);
+  // Unified marketplace modal — null means closed, string selects initial tab
+  const [marketplaceTab, setMarketplaceTab] = useState<'installed' | 'skills' | 'themes' | null>(null);
   const [publishThemeSlug, setPublishThemeSlug] = useState<string | null>(null);
   const [editorSkillId, setEditorSkillId] = useState<string | null>(null);
   const [shareSkillId, setShareSkillId] = useState<string | null>(null);
@@ -985,8 +982,8 @@ function AppInner() {
                   searchMode={drawerSearchMode}
                   onSelect={handleSelectSkill}
                   onClose={handleCloseDrawer}
-                  onOpenManager={() => setManagerOpen(true)}
-                  onOpenMarketplace={() => setMarketplaceOpen(true)}
+                  onOpenManager={() => setMarketplaceTab('installed')}
+                  onOpenMarketplace={() => setMarketplaceTab('skills')}
                 />
               )}
               {isTerminalTouch && sessionId && (
@@ -1136,7 +1133,7 @@ function AppInner() {
           }
         }}
         hasActiveSession={!!sessionId}
-        onOpenThemeMarketplace={() => { setSettingsOpen(false); setThemeMarketplaceOpen(true); }}
+        onOpenThemeMarketplace={() => { setSettingsOpen(false); setMarketplaceTab('themes'); }}
         onPublishTheme={(slug) => { setSettingsOpen(false); setPublishThemeSlug(slug); }}
         syncAutoOpen={syncAutoOpen}
         onSyncAutoOpenHandled={() => setSyncAutoOpen(false)}
@@ -1148,23 +1145,18 @@ function AppInner() {
         defaultModel={sessionDefaults.model}
         defaultSkipPermissions={sessionDefaults.skipPermissions}
       />
-      {marketplaceOpen && (
-        <Marketplace onClose={() => setMarketplaceOpen(false)} />
-      )}
-      {themeMarketplaceOpen && (
-        <ThemeMarketplace onClose={() => setThemeMarketplaceOpen(false)} />
-      )}
-      {publishThemeSlug && (
-        <ThemeShareSheet themeSlug={publishThemeSlug} onClose={() => setPublishThemeSlug(null)} />
-      )}
-      {managerOpen && (
-        <SkillManager
-          onClose={() => setManagerOpen(false)}
-          onOpenMarketplace={() => { setManagerOpen(false); setMarketplaceOpen(true); }}
+      {/* Unified marketplace modal — replaces old Marketplace + ThemeMarketplace + SkillManager */}
+      {marketplaceTab && (
+        <Marketplace
+          onClose={() => setMarketplaceTab(null)}
+          initialTab={marketplaceTab}
           onOpenShareSheet={(id) => setShareSkillId(id)}
           onOpenEditor={(id) => setEditorSkillId(id)}
           onOpenCreatePrompt={() => setCreatePromptOpen(true)}
         />
+      )}
+      {publishThemeSlug && (
+        <ThemeShareSheet themeSlug={publishThemeSlug} onClose={() => setPublishThemeSlug(null)} />
       )}
       {editorSkillId && (
         <SkillEditor skillId={editorSkillId} onClose={() => setEditorSkillId(null)} />
