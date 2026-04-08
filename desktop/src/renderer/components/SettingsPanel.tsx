@@ -68,7 +68,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
 
       {/* Panel */}
       <div
-        className={`fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out ${
+        className={`fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out overlay-no-drag ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
       >
