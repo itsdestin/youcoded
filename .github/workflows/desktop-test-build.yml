@@ -1,0 +1,50 @@
+name: Desktop Test Build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            artifact: desktop/release/*.exe
+            name: windows
+          - os: macos-latest
+            artifact: desktop/release/*.dmg
+            name: macos
+          - os: ubuntu-latest
+            artifact: desktop/release/*.AppImage
+            name: linux
+
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: desktop
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run tests
+        run: npm test
+
+      - name: Build
+        run: npm run build
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: destincode-desktop-${{ matrix.name }}
+          path: ${{ matrix.artifact }}
+          retention-days: 7
