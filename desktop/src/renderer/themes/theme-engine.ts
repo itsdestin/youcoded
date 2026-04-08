@@ -180,16 +180,15 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   if (blur && blur > 0 && !reducedEffects) {
     root.setAttribute('data-panels-blur', String(blur));
     root.style.setProperty('--panels-blur', `${blur}px`);
-    // Compute semi-transparent panel color for glassmorphism
-    if (panelsOpacity !== undefined && panelsOpacity < 1) {
-      const hex = theme.tokens.panel.replace(/^#/, '');
-      const r = parseInt(hex.slice(0, 2), 16);
-      const g = parseInt(hex.slice(2, 4), 16);
-      const b = parseInt(hex.slice(4, 6), 16);
-      root.style.setProperty('--panel-glass', `rgba(${r}, ${g}, ${b}, ${panelsOpacity})`);
-    } else {
-      root.style.removeProperty('--panel-glass');
-    }
+    // Compute semi-transparent panel color for glassmorphism.
+    // Always set --panel-glass so the slider value is always reflected,
+    // even at 100% opacity (prevents fallback to hardcoded color-mix).
+    const opacity = panelsOpacity ?? 0.88;
+    const hex = theme.tokens.panel.replace(/^#/, '');
+    const r = parseInt(hex.slice(0, 2), 16);
+    const g = parseInt(hex.slice(2, 4), 16);
+    const b = parseInt(hex.slice(4, 6), 16);
+    root.style.setProperty('--panel-glass', `rgba(${r}, ${g}, ${b}, ${opacity})`);
     // Bubble glassmorphism — separate blur/opacity for chat bubbles
     root.style.setProperty('--bubble-blur', `${bubbleBlur ?? 16}px`);
     root.style.setProperty('--bubble-opacity', String(bubbleOpacity ?? 0.88));
@@ -207,7 +206,6 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   const bg = theme.background;
   if (bg?.type === 'image' && bg.value) {
     root.setAttribute('data-wallpaper', '');
-    root.style.setProperty('--wallpaper-url', `url("${bg.value}")`);
     body.style.backgroundImage = `url("${bg.value}")`;
     body.style.backgroundSize = 'cover';
     body.style.backgroundPosition = 'center';
@@ -218,7 +216,6 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     }
   } else {
     root.removeAttribute('data-wallpaper');
-    root.style.removeProperty('--wallpaper-url');
     body.style.backgroundImage = '';
     body.style.backgroundSize = '';
     body.style.backgroundPosition = '';
@@ -259,8 +256,29 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
       document.head.appendChild(overridesEl);
     }
     // These rules mirror globals.css but are injected after theme custom_css
-    // so they override any hardcoded bubble blur/opacity in the theme
+    // so they override any hardcoded blur/opacity in the theme.
+    // Covers both panel chrome (header, status, input) and chat bubbles.
     overridesEl.textContent = `
+[data-panels-blur] .header-bar {
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+}
+[data-panels-blur] .status-bar {
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+}
+[data-panels-blur] .input-bar-container {
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+}
+[data-panels-blur] .glass-overlay {
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+}
 [data-panels-blur] .bg-inset {
   background-color: color-mix(in srgb, var(--inset) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
 }
@@ -306,8 +324,7 @@ export function clearThemeFromDom(): void {
   body.style.backgroundRepeat = '';
   const propsToRemove = [
     ...TOKEN_CSS_PROPS,
-    '--panels-blur', '--panel-glass', '--bubble-blur', '--bubble-opacity', '--wallpaper-url',
-    '--radius', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-2xl', '--radius-full',
+    '--panels-blur', '--panel-glass', '--bubble-blur', '--bubble-opacity',     '--radius', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-2xl', '--radius-full',
     '--font-sans', '--font-mono',
     '--vignette-opacity', '--noise-opacity', '--scanline-opacity',
   ];

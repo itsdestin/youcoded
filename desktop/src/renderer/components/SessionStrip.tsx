@@ -472,7 +472,7 @@ export default function SessionStrip({
           })()}
         >
           {sessions.length > 0 && (
-            <div className="py-1">
+            <div className="py-1 rounded-t-lg overflow-hidden">
               {sessions.map((s, idx) => {
                 const color = sessionStatuses?.get(s.id) || 'gray';
                 const isBeingDragged = dragIdx === idx && isDragging.current;
@@ -539,7 +539,7 @@ export default function SessionStrip({
           <div className="border-t border-edge" />
 
           {showNewForm ? (
-            <div className="p-3 flex flex-col gap-2">
+            <div className="p-3 flex flex-col gap-2 rounded-b-lg overflow-hidden">
               <div>
                 <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Project Folder</label>
                 <FolderSwitcher value={newCwd} onChange={setNewCwd} />
@@ -586,7 +586,7 @@ export default function SessionStrip({
               </button>
             </div>
           ) : (
-            <div className="flex">
+            <div className="flex rounded-b-lg overflow-hidden">
               <button
                 onClick={() => { setMenuOpen(false); onOpenResumeBrowser(); }}
                 className="flex-1 px-3 py-2 text-sm text-fg-dim hover:bg-inset hover:text-fg transition-colors flex items-center justify-center gap-1.5"
@@ -613,7 +613,8 @@ export default function SessionStrip({
             </div>
           )}
         </div>,
-        document.body
+        document.getElementById('root')! // Portal to #root (not body) so
+        // backdrop-filter can sample the compositing tree for live content blur
       )}
 
       {/* ── Insertion indicator — shows where the pill will land ── */}

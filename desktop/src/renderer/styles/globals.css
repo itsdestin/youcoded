@@ -329,16 +329,18 @@ html, body, #root {
   background-color: transparent !important;
 }
 
-/* Header bar — heavy frosted glass overlay, content scrolls underneath */
+/* Header bar — frosted glass overlay, content scrolls underneath.
+   Uses --panels-blur and --panel-glass CSS variables set by the theme
+   engine so the Panel Blur and Panel Opacity sliders work in real-time. */
 [data-panels-blur] .header-bar {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   z-index: 20;
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
-  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
 }
 
 /* Chat scroll area extends behind header and bottom chrome —
@@ -377,48 +379,28 @@ html, body, #root {
   contain-intrinsic-size: auto 80px;
 }
 
-/* Status bar — heavy frosted glass */
+/* Status bar — frosted glass (slider-controlled) */
 [data-panels-blur] .status-bar {
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
-  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
 }
 
-/* Input bar wrapper — heavy frosted glass */
+/* Input bar wrapper — frosted glass (slider-controlled) */
 [data-panels-blur] .input-bar-container {
-  backdrop-filter: blur(24px) saturate(1.2);
-  -webkit-backdrop-filter: blur(24px) saturate(1.2);
-  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
 }
 
 /* Floating overlays (portaled menus/popups) — frosted glass.
-   Uses a ::before pseudo-element with filter: blur() instead of
-   backdrop-filter, because Chromium can't backdrop-filter elements
-   portaled to <body> (they can't sample the root compositing layer).
-   The pseudo-element renders a blurred copy of the wallpaper.
-   NOTE: no overflow:hidden here — child dropdowns (FolderSwitcher)
-   extend beyond the container and must not be clipped. */
+   Portaled to #root (not body) so backdrop-filter can sample live
+   content from the compositing tree. position: fixed escapes #root's
+   overflow:hidden since #root has no transform/filter/will-change. */
 [data-panels-blur] .glass-overlay {
-  position: relative;
-  background-color: color-mix(in srgb, var(--panel) 88%, transparent);
-}
-
-/* Blurred wallpaper layer — only on wallpaper themes.
-   Oversized by 40px in each direction for blur quality, then clipped
-   back to the parent bounds via clip-path (avoids overflow:hidden on
-   the parent, which would clip child dropdowns). */
-[data-panels-blur][data-wallpaper] .glass-overlay::before {
-  content: '';
-  position: absolute;
-  inset: -40px;
-  clip-path: inset(40px round var(--radius-lg, 0.5rem));
-  background-image: var(--wallpaper-url, none);
-  background-size: cover;
-  background-position: center;
-  background-attachment: fixed; /* continuous with body wallpaper */
-  filter: blur(24px) saturate(1.2);
-  z-index: -1;
-  pointer-events: none;
+  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
+  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
 }
 
 /* Inside glass overlays, children use opaque backgrounds so the
