@@ -85,6 +85,9 @@ interface StatusDataState {
   contextMap: Record<string, number>;
   syncStatus: string | null;
   syncWarnings: string | null;
+  lastSyncEpoch: number | null;
+  syncInProgress: boolean;
+  backupMeta: any;
 }
 
 function AppInner() {
@@ -95,6 +98,7 @@ function AppInner() {
     usage: null, announcement: null, updateStatus: null,
     model: null, contextMap: {},
     syncStatus: null, syncWarnings: null,
+    lastSyncEpoch: null, syncInProgress: false, backupMeta: null,
   });
 
   const [permissionModes, setPermissionModes] = useState<Map<string, PermissionMode>>(new Map());
@@ -403,6 +407,9 @@ function AppInner() {
         updateStatus: data.updateStatus,
         syncStatus: data.syncStatus,
         syncWarnings: data.syncWarnings,
+        lastSyncEpoch: data.lastSyncEpoch ?? prev.lastSyncEpoch,
+        syncInProgress: data.syncInProgress ?? prev.syncInProgress,
+        backupMeta: data.backupMeta ?? prev.backupMeta,
         contextMap: data.contextMap || prev.contextMap,
       }));
     });

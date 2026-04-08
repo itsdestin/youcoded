@@ -670,6 +670,14 @@ export function registerIpcHandlers(
     const syncStatus = readTextFile(syncStatusPath);
     const syncWarnings = readTextFile(syncWarningsPath);
 
+    // Sync state for live updates — SyncPanel also fetches via IPC,
+    // but these fields let the compact section row update in real-time.
+    const syncMarkerRaw = readTextFile(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-marker'));
+    const lastSyncEpoch = syncMarkerRaw ? parseInt(syncMarkerRaw, 10) || null : null;
+    let syncInProgress = false;
+    try { syncInProgress = fs.statSync(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-lock')).isDirectory(); } catch {}
+    const backupMeta = readJsonFile(path.join(os.homedir(), '.claude', 'backup-meta.json'));
+
     // Read per-session context remaining % (written by statusline.sh)
     const contextMap: Record<string, number> = {};
     for (const [desktopId, claudeId] of sessionIdMap) {
@@ -680,7 +688,7 @@ export function registerIpcHandlers(
       }
     }
 
-    return { usage, announcement, updateStatus, syncStatus, syncWarnings, contextMap };
+    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap };
   }
 
   // Push status data every 10s — store handle so it can be cleared on shutdown
