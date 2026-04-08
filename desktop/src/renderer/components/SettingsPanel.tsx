@@ -63,6 +63,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
         <div
           className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
           onClick={onClose}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />
       )}
 
@@ -71,6 +72,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
         className={`fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out overlay-no-drag ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
+        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
         <div className="flex flex-col h-full overflow-y-auto">
           {/* Header */}
@@ -78,7 +80,8 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
             <h2 className="text-sm font-bold text-fg">Settings</h2>
             <button
               onClick={onClose}
-              className="text-fg-muted hover:text-fg-2 text-lg leading-none"
+              className="text-fg-muted hover:text-fg-2 text-lg leading-none w-8 h-8 flex items-center justify-center rounded-sm hover:bg-inset"
+              style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
             >
               ✕
             </button>
