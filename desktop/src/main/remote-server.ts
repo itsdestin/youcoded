@@ -11,6 +11,7 @@ import type { RemoteConfig } from './remote-config';
 import type { LocalSkillProvider } from './skill-provider';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory } from './session-browser';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning } from './sync-state';
 
 const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
 const HOOK_BUFFER_SIZE = 10_000; // ~10MB max, covers full conversations without excessive memory
@@ -925,6 +926,38 @@ export class RemoteServer {
       case 'remote:disconnect-client': {
         const result = this.disconnectClient(payload.clientId || payload);
         this.respond(client.ws, type, id, result);
+        break;
+      }
+
+      // --- Sync management ---
+      case 'sync:get-status': {
+        const syncStatus = await getSyncStatus();
+        this.respond(client.ws, type, id, syncStatus);
+        break;
+      }
+      case 'sync:get-config': {
+        const syncConfig = await getSyncConfig();
+        this.respond(client.ws, type, id, syncConfig);
+        break;
+      }
+      case 'sync:set-config': {
+        const updatedConfig = await setSyncConfig(payload.updates || payload);
+        this.respond(client.ws, type, id, updatedConfig);
+        break;
+      }
+      case 'sync:force': {
+        const syncResult = await forceSync();
+        this.respond(client.ws, type, id, syncResult);
+        break;
+      }
+      case 'sync:get-log': {
+        const logLines = await getSyncLog(payload?.lines);
+        this.respond(client.ws, type, id, logLines);
+        break;
+      }
+      case 'sync:dismiss-warning': {
+        await dismissWarning(payload.warning || payload);
+        this.respond(client.ws, type, id, { ok: true });
         break;
       }
 

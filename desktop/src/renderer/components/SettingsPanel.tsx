@@ -45,6 +45,8 @@ interface Props {
   hasActiveSession: boolean;
   onOpenThemeMarketplace?: () => void;
   onPublishTheme?: (slug: string) => void;
+  syncAutoOpen?: boolean;
+  onSyncAutoOpenHandled?: () => void;
 }
 
 function timeAgo(timestamp: number): string {

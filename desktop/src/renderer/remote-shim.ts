@@ -540,6 +540,14 @@ export function installShim(): void {
       get: () => invoke('defaults:get'),
       set: (updates: Record<string, any>) => invoke('defaults:set', updates),
     },
+    sync: {
+      getStatus: () => invoke('sync:get-status'),
+      getConfig: () => invoke('sync:get-config'),
+      setConfig: (updates: any) => invoke('sync:set-config', { updates }),
+      force: () => invoke('sync:force'),
+      getLog: (lines?: number) => invoke('sync:get-log', { lines }),
+      dismissWarning: (warning: string) => invoke('sync:dismiss-warning', { warning }),
+    },
     folders: {
       list: () => invoke('folders:list'),
       add: (folderPath: string, nickname?: string) => invoke('folders:add', { folderPath, nickname }),

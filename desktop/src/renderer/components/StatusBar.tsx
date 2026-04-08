@@ -76,6 +76,7 @@ function format7dReset(iso: string): string {
 interface Props {
   statusData: StatusData;
   onRunSync?: () => void;
+  onOpenSync?: () => void;
   model?: ModelAlias;
   onCycleModel?: () => void;
   permissionMode?: PermissionMode;
@@ -168,7 +169,7 @@ function PencilIcon() {
   );
 }
 
-export default function StatusBar({ statusData, onRunSync, model, onCycleModel, permissionMode, onCyclePermission }: Props) {
+export default function StatusBar({ statusData, onRunSync, onOpenSync, model, onCycleModel, permissionMode, onCyclePermission }: Props) {
   const { usage, updateStatus, contextPercent, syncStatus, syncWarnings } = statusData;
   const warnings = parseSyncWarnings(syncWarnings);
   const { activeTheme, cycleTheme } = useTheme();
@@ -265,15 +266,19 @@ export default function StatusBar({ statusData, onRunSync, model, onCycleModel, 
       )}
 
       {/* Sync warnings */}
-      {show('sync-warnings') && warnings.map((w, i) => (
-        <button
-          key={i}
-          onClick={onRunSync}
-          className={`px-1.5 py-0.5 rounded-sm border text-[9px] sm:text-[10px] ${warnStyles[w.level]} ${onRunSync ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}
-        >
-          {w.text}
-        </button>
-      ))}
+      {/* Sync warning pills — open Sync UI panel if available, fall back to /sync command */}
+      {show('sync-warnings') && warnings.map((w, i) => {
+        const handler = onOpenSync || onRunSync;
+        return (
+          <button
+            key={i}
+            onClick={handler}
+            className={`px-1.5 py-0.5 rounded-sm border text-[9px] sm:text-[10px] ${warnStyles[w.level]} ${handler ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}
+          >
+            {w.text}
+          </button>
+        );
+      })}
 
       {/* Theme pill */}
       {show('theme') && (

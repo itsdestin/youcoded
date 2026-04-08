@@ -982,6 +982,145 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, current) }
             }
 
+            // --- Sync management ---
+            // Reads toolkit state files from ~/.claude/ for the Sync Management UI.
+            // Force sync shells out to the toolkit's sync.sh script.
+            "sync:get-status" -> {
+                val claudeDir = File(bootstrap!!.homeDir, ".claude")
+                val configFile = File(claudeDir, "toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+
+                val backendStr = config.optString("PERSONAL_SYNC_BACKEND", "none")
+                val driveRoot = config.optString("DRIVE_ROOT", "Claude")
+                val syncRepo = config.optString("PERSONAL_SYNC_REPO", "")
+                val icloudPath = config.optString("ICLOUD_PATH", "")
+                val activeBackends = backendStr.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() && it != "none" }
+
+                val backends = org.json.JSONArray().apply {
+                    put(JSONObject().put("name", "drive").put("configured", activeBackends.contains("drive"))
+                        .put("detail", if (activeBackends.contains("drive")) "gdrive:$driveRoot/Backup/personal" else "Not configured"))
+                    put(JSONObject().put("name", "github").put("configured", activeBackends.contains("github"))
+                        .put("detail", if (activeBackends.contains("github") && syncRepo.isNotEmpty()) syncRepo else "Not configured"))
+                    put(JSONObject().put("name", "icloud").put("configured", activeBackends.contains("icloud"))
+                        .put("detail", if (activeBackends.contains("icloud") && icloudPath.isNotEmpty()) icloudPath else "Not configured"))
+                }
+
+                val markerFile = File(claudeDir, "toolkit-state/.sync-marker")
+                val lastSyncEpoch = try { markerFile.readText().trim().toLong() } catch (_: Exception) { 0L }
+
+                val metaFile = File(claudeDir, "backup-meta.json")
+                val backupMeta: Any = try { org.json.JSONObject(metaFile.readText()) } catch (_: Exception) { org.json.JSONObject.NULL }
+
+                val warningsFile = File(claudeDir, ".sync-warnings")
+                val warnings = org.json.JSONArray().apply {
+                    try { warningsFile.readText().lines().filter { it.isNotBlank() }.forEach { put(it) } } catch (_: Exception) {}
+                }
+
+                val lockDir = File(claudeDir, "toolkit-state/.sync-lock")
+
+                val result = JSONObject().apply {
+                    put("backends", backends)
+                    put("lastSyncEpoch", if (lastSyncEpoch > 0) lastSyncEpoch else org.json.JSONObject.NULL)
+                    put("backupMeta", backupMeta)
+                    put("warnings", warnings)
+                    put("syncInProgress", lockDir.isDirectory)
+                    put("syncedCategories", org.json.JSONArray().apply {
+                        if (File(claudeDir, "projects").isDirectory) { put("memory"); put("conversations") }
+                        if (File(claudeDir, "encyclopedia").isDirectory) put("encyclopedia")
+                        if (File(claudeDir, "skills").isDirectory) put("skills")
+                        if (File(claudeDir, "settings.json").exists()) put("system-config")
+                    })
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            "sync:get-config" -> {
+                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val result = JSONObject().apply {
+                    put("PERSONAL_SYNC_BACKEND", config.optString("PERSONAL_SYNC_BACKEND", "none"))
+                    put("DRIVE_ROOT", config.optString("DRIVE_ROOT", "Claude"))
+                    put("PERSONAL_SYNC_REPO", config.optString("PERSONAL_SYNC_REPO", ""))
+                    put("ICLOUD_PATH", config.optString("ICLOUD_PATH", ""))
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            "sync:set-config" -> {
+                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
+                configFile.parentFile?.mkdirs()
+                val existing = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val updates = msg.payload.optJSONObject("updates") ?: msg.payload
+                updates.keys().forEach { key -> existing.put(key, updates.get(key)) }
+                configFile.writeText(existing.toString(2))
+                val result = JSONObject().apply {
+                    put("PERSONAL_SYNC_BACKEND", existing.optString("PERSONAL_SYNC_BACKEND", "none"))
+                    put("DRIVE_ROOT", existing.optString("DRIVE_ROOT", "Claude"))
+                    put("PERSONAL_SYNC_REPO", existing.optString("PERSONAL_SYNC_REPO", ""))
+                    put("ICLOUD_PATH", existing.optString("ICLOUD_PATH", ""))
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            "sync:force" -> {
+                // Clear debounce marker and run sync.sh via shell
+                val claudeDir = File(bootstrap!!.homeDir, ".claude")
+                val markerFile = File(claudeDir, "toolkit-state/.sync-marker")
+                try { markerFile.delete() } catch (_: Exception) {}
+
+                val configFile = File(claudeDir, "toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val toolkitRoot = config.optString("toolkit_root", "")
+
+                if (toolkitRoot.isEmpty()) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                        .put("success", false).put("output", "").put("error", "Toolkit not installed")) }
+                } else {
+                    val syncScript = "$toolkitRoot/core/hooks/sync.sh"
+                    try {
+                        val env = bootstrap!!.buildRuntimeEnv().toMutableMap()
+                        env["CLAUDE_DIR"] = claudeDir.absolutePath
+                        val envArray = env.map { "${it.key}=${it.value}" }.toTypedArray()
+                        val process = Runtime.getRuntime().exec(
+                            arrayOf("bash", syncScript),
+                            envArray,
+                            claudeDir
+                        )
+                        // Write synthetic stdin JSON to trigger personal data path
+                        process.outputStream.write("{\"tool_input\":{\"file_path\":\"${claudeDir.absolutePath}/CLAUDE.md\"}}".toByteArray())
+                        process.outputStream.close()
+                        val stdout = process.inputStream.bufferedReader().readText()
+                        val stderr = process.errorStream.bufferedReader().readText()
+                        val exitCode = process.waitFor()
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                            .put("success", exitCode == 0).put("output", stdout).put("error", stderr)) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                            .put("success", false).put("output", "").put("error", e.message ?: "Unknown error")) }
+                    }
+                }
+            }
+            "sync:get-log" -> {
+                val logFile = File(bootstrap!!.homeDir, ".claude/backup.log")
+                val lines = msg.payload.optInt("lines", 30)
+                val result = org.json.JSONArray().apply {
+                    try {
+                        logFile.readLines().takeLast(lines).forEach { put(it) }
+                    } catch (_: Exception) {}
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            "sync:dismiss-warning" -> {
+                val warningsFile = File(bootstrap!!.homeDir, ".claude/.sync-warnings")
+                val warning = msg.payload.optString("warning", "")
+                if (warning.isNotEmpty() && warningsFile.exists()) {
+                    val remaining = warningsFile.readLines().filter { it.trim() != warning.trim() }
+                    if (remaining.isEmpty()) {
+                        warningsFile.delete()
+                    } else {
+                        warningsFile.writeText(remaining.joinToString("\n") + "\n")
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+            }
+
             else -> {
                 android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildErrorResponse("Unknown: ${msg.type}")) }

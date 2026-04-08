@@ -89,6 +89,13 @@ const IPC = {
   DEFAULTS_GET: 'defaults:get',
   DEFAULTS_SET: 'defaults:set',
   SESSION_SWITCH: 'session:switch',
+  // Sync management
+  SYNC_GET_STATUS: 'sync:get-status',
+  SYNC_GET_CONFIG: 'sync:get-config',
+  SYNC_SET_CONFIG: 'sync:set-config',
+  SYNC_FORCE: 'sync:force',
+  SYNC_GET_LOG: 'sync:get-log',
+  SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
 } as const;
 
 contextBridge.exposeInMainWorld('claude', {
@@ -237,6 +244,14 @@ contextBridge.exposeInMainWorld('claude', {
     ipcRenderer.removeListener(channel, handler),
   removeAllListeners: (channel: string) =>
     ipcRenderer.removeAllListeners(channel),
+  sync: {
+    getStatus: () => ipcRenderer.invoke(IPC.SYNC_GET_STATUS),
+    getConfig: () => ipcRenderer.invoke(IPC.SYNC_GET_CONFIG),
+    setConfig: (updates: any) => ipcRenderer.invoke(IPC.SYNC_SET_CONFIG, updates),
+    force: () => ipcRenderer.invoke(IPC.SYNC_FORCE),
+    getLog: (lines?: number) => ipcRenderer.invoke(IPC.SYNC_GET_LOG, lines),
+    dismissWarning: (warning: string) => ipcRenderer.invoke(IPC.SYNC_DISMISS_WARNING, warning),
+  },
   getFavorites: () => ipcRenderer.invoke('favorites:get'),
   setFavorites: (favorites: string[]) => ipcRenderer.invoke('favorites:set', favorites),
   getIncognito: () => ipcRenderer.invoke('game:getIncognito'),

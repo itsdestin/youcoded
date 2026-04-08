@@ -6,6 +6,9 @@ import os from 'os';
 export interface StatusData {
 	syncStatus: string;
 	syncWarnings: string;
+	lastSyncEpoch: number | null;
+	syncInProgress: boolean;
+	backupMeta: any;
 	usage: any;
 	announcement: any;
 	updateStatus: any;
@@ -37,6 +40,9 @@ export class StatusPoller extends EventEmitter {
 		const data: StatusData = {
 			syncStatus: await this.readText('.sync-status'),
 			syncWarnings: await this.readText('.sync-warnings'),
+			lastSyncEpoch: await this.readEpoch('toolkit-state/.sync-marker'),
+			syncInProgress: await this.dirExists('toolkit-state/.sync-lock'),
+			backupMeta: await this.readJson('backup-meta.json'),
 			usage: await this.readJson('.usage-cache.json'),
 			announcement: await this.readJson('.announcement-cache.json'),
 			updateStatus: await this.readJson('toolkit-state/update-status.json'),
@@ -56,5 +62,21 @@ export class StatusPoller extends EventEmitter {
 		const text = await this.readText(relativePath);
 		if (!text) return null;
 		try { return JSON.parse(text); } catch { return null; }
+	}
+
+	private async readEpoch(relativePath: string): Promise<number | null> {
+		const text = await this.readText(relativePath);
+		if (!text) return null;
+		const num = parseInt(text, 10);
+		return isNaN(num) ? null : num;
+	}
+
+	private async dirExists(relativePath: string): Promise<boolean> {
+		try {
+			const stat = await fs.promises.stat(path.join(this.claudeDir, relativePath));
+			return stat.isDirectory();
+		} catch {
+			return false;
+		}
 	}
 }

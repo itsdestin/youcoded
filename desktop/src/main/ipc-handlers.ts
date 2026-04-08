@@ -15,6 +15,7 @@ import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning } from './sync-state';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -669,6 +670,14 @@ export function registerIpcHandlers(
     const syncStatus = readTextFile(syncStatusPath);
     const syncWarnings = readTextFile(syncWarningsPath);
 
+    // Sync state for live updates — SyncPanel also fetches via IPC,
+    // but these fields let the compact section row update in real-time.
+    const syncMarkerRaw = readTextFile(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-marker'));
+    const lastSyncEpoch = syncMarkerRaw ? parseInt(syncMarkerRaw, 10) || null : null;
+    let syncInProgress = false;
+    try { syncInProgress = fs.statSync(path.join(os.homedir(), '.claude', 'toolkit-state', '.sync-lock')).isDirectory(); } catch {}
+    const backupMeta = readJsonFile(path.join(os.homedir(), '.claude', 'backup-meta.json'));
+
     // Read per-session context remaining % (written by statusline.sh)
     const contextMap: Record<string, number> = {};
     for (const [desktopId, claudeId] of sessionIdMap) {
@@ -679,7 +688,7 @@ export function registerIpcHandlers(
       }
     }
 
-    return { usage, announcement, updateStatus, syncStatus, syncWarnings, contextMap };
+    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap };
   }
 
   // Push status data every 10s — store handle so it can be cleared on shutdown
@@ -866,6 +875,16 @@ export function registerIpcHandlers(
     }
     sessionIdMap.delete(sessionId);
   });
+
+  // --- Sync management ---
+  // Control plane for DestinClaude toolkit sync — reads state files written
+  // by sync.sh / session-start.sh and triggers sync via the existing scripts.
+  ipcMain.handle(IPC.SYNC_GET_STATUS, () => getSyncStatus());
+  ipcMain.handle(IPC.SYNC_GET_CONFIG, () => getSyncConfig());
+  ipcMain.handle(IPC.SYNC_SET_CONFIG, (_e, updates) => setSyncConfig(updates));
+  ipcMain.handle(IPC.SYNC_FORCE, () => forceSync());
+  ipcMain.handle(IPC.SYNC_GET_LOG, (_e, lines) => getSyncLog(lines));
+  ipcMain.handle(IPC.SYNC_DISMISS_WARNING, (_e, warning) => dismissWarning(warning));
 
   // --- Permission response (blocking hooks) ---
   if (hookRelay) {

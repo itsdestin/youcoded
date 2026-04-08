@@ -259,4 +259,11 @@ export const IPC = {
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
   FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
   FIRST_RUN_SKIP: 'first-run:skip',
+  // Sync management
+  SYNC_GET_STATUS: 'sync:get-status',
+  SYNC_GET_CONFIG: 'sync:get-config',
+  SYNC_SET_CONFIG: 'sync:set-config',
+  SYNC_FORCE: 'sync:force',
+  SYNC_GET_LOG: 'sync:get-log',
+  SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
 } as const;
