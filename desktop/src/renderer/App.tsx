@@ -834,10 +834,10 @@ function AppInner() {
   return (
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
       {/* Main area */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
+      <div className="flex-1 flex flex-col overflow-hidden">
         {sessions.length > 0 && sessionId && currentSession ? (
           <>
-            <div ref={headerRef} className="chrome-wrapper bg-canvas">
+            <div ref={headerRef} className="chrome-wrapper bg-canvas relative">
               <HeaderBar
                 sessions={sessions}
                 activeSessionId={sessionId}
