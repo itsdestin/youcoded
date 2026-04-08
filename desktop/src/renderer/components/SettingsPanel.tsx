@@ -888,6 +888,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
   const [connecting, setConnecting] = useState(false);
   const [connectError, setConnectError] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
+  const [showDonateConfirm, setShowDonateConfirm] = useState(false);
 
   const claude = (window as any).claude;
 
@@ -1168,10 +1169,8 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
           <div className="space-y-2">
             <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
 
-            <a
-              href="https://buymeacoffee.com/itsdestin"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={() => setShowDonateConfirm(true)}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
             >
               <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
@@ -1186,7 +1185,45 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
               <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
               </svg>
-            </a>
+            </button>
+
+            {/* Donate confirmation modal */}
+            {showDonateConfirm && createPortal(
+              <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={() => setShowDonateConfirm(false)}>
+                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                <div
+                  className="relative bg-panel border border-edge-dim rounded-xl p-6 max-w-xs w-full mx-4 shadow-xl text-center"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <p className="text-xs text-fg-muted mb-1">Donations supported via</p>
+                  <div className="flex items-center justify-center gap-2 mb-5">
+                    <svg className="w-5 h-5 text-[#FFDD00]" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M20.216 6.415l-.132-.666c-.119-.598-.388-1.163-1.001-1.379-.197-.069-.42-.098-.57-.241-.152-.143-.196-.366-.231-.572-.065-.378-.125-.756-.192-1.133-.057-.325-.102-.69-.25-.987-.195-.4-.597-.634-.996-.788a5.723 5.723 0 00-.626-.194c-1-.263-2.05-.36-3.077-.416a25.834 25.834 0 00-3.7.062c-.915.083-1.88.184-2.75.5-.318.116-.646.256-.888.501-.297.302-.393.77-.177 1.146.154.267.415.456.692.58.36.162.737.284 1.123.366 1.075.238 2.189.331 3.287.37 1.218.05 2.437.01 3.65-.118.299-.033.598-.073.896-.119.352-.054.578-.513.474-.834-.124-.383-.457-.531-.834-.473-.466.074-.96.108-1.382.146-1.177.08-2.358.082-3.536.006a22.228 22.228 0 01-1.157-.107c.067-.158.135-.315.236-.455.193-.271.5-.397.825-.459a9.563 9.563 0 013.735-.018c.263.045.525.113.766.221.1.046.197.1.283.169a.507.507 0 01.167.244c.038.107.044.22.068.332.077.352.15.706.224 1.06.081.378.162.757.243 1.136.071.334.139.671.218 1.003.034.14.082.277.134.412.052.136.115.273.181.406l.017.032c-.038.018-.077.035-.115.053a5.89 5.89 0 00-1.618 1.073c-.474.436-.844.984-1.108 1.586-.332.76-.478 1.578-.584 2.398-.06.458-.088.919-.085 1.38.003.423.018.846.063 1.267.046.418.116.833.217 1.24.202.818.554 1.6 1.065 2.267.475.62 1.097 1.125 1.803 1.46.705.336 1.48.498 2.256.481.775-.017 1.54-.2 2.225-.568.687-.369 1.277-.898 1.728-1.533.452-.636.756-1.37.914-2.14.158-.77.17-1.564.044-2.34-.126-.776-.39-1.53-.779-2.213a5.362 5.362 0 00-.664-.886c-.253-.27-.536-.513-.84-.726z" />
+                    </svg>
+                    <span className="text-sm font-bold text-fg">Buy Me a Coffee</span>
+                  </div>
+                  <p className="text-[11px] text-fg-dim mb-5">Okay to open donation link?</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowDonateConfirm(false)}
+                      className="flex-1 text-xs font-medium py-2.5 rounded-lg border border-edge-dim text-fg-2 hover:bg-inset transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        window.open('https://buymeacoffee.com/itsdestin', '_blank');
+                        setShowDonateConfirm(false);
+                      }}
+                      className="flex-1 text-xs font-medium py-2.5 rounded-lg bg-accent text-on-accent hover:brightness-110 transition-all"
+                    >
+                      Open
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
 
             {aboutInfo && (
               <div>
@@ -1301,6 +1338,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
   const [defaults, setDefaults] = useState({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
   const [setupStatus, setSetupStatus] = useState<'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error'>('idle');
   const [setupError, setSetupError] = useState('');
+  const [showDonateConfirm, setShowDonateConfirm] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -1458,10 +1496,8 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
           <div className="space-y-2">
             <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
 
-            <a
-              href="https://buymeacoffee.com/itsdestin"
-              target="_blank"
-              rel="noopener noreferrer"
+            <button
+              onClick={() => setShowDonateConfirm(true)}
               className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
             >
               <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
@@ -1476,7 +1512,45 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
               <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
               </svg>
-            </a>
+            </button>
+
+            {/* Donate confirmation modal */}
+            {showDonateConfirm && createPortal(
+              <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={() => setShowDonateConfirm(false)}>
+                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                <div
+                  className="relative bg-panel border border-edge-dim rounded-xl p-6 max-w-xs w-full mx-4 shadow-xl text-center"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <p className="text-xs text-fg-muted mb-1">Donations supported via</p>
+                  <div className="flex items-center justify-center gap-2 mb-5">
+                    <svg className="w-5 h-5 text-[#FFDD00]" viewBox="0 0 24 24" fill="currentColor">
+                      <path d="M20.216 6.415l-.132-.666c-.119-.598-.388-1.163-1.001-1.379-.197-.069-.42-.098-.57-.241-.152-.143-.196-.366-.231-.572-.065-.378-.125-.756-.192-1.133-.057-.325-.102-.69-.25-.987-.195-.4-.597-.634-.996-.788a5.723 5.723 0 00-.626-.194c-1-.263-2.05-.36-3.077-.416a25.834 25.834 0 00-3.7.062c-.915.083-1.88.184-2.75.5-.318.116-.646.256-.888.501-.297.302-.393.77-.177 1.146.154.267.415.456.692.58.36.162.737.284 1.123.366 1.075.238 2.189.331 3.287.37 1.218.05 2.437.01 3.65-.118.299-.033.598-.073.896-.119.352-.054.578-.513.474-.834-.124-.383-.457-.531-.834-.473-.466.074-.96.108-1.382.146-1.177.08-2.358.082-3.536.006a22.228 22.228 0 01-1.157-.107c.067-.158.135-.315.236-.455.193-.271.5-.397.825-.459a9.563 9.563 0 013.735-.018c.263.045.525.113.766.221.1.046.197.1.283.169a.507.507 0 01.167.244c.038.107.044.22.068.332.077.352.15.706.224 1.06.081.378.162.757.243 1.136.071.334.139.671.218 1.003.034.14.082.277.134.412.052.136.115.273.181.406l.017.032c-.038.018-.077.035-.115.053a5.89 5.89 0 00-1.618 1.073c-.474.436-.844.984-1.108 1.586-.332.76-.478 1.578-.584 2.398-.06.458-.088.919-.085 1.38.003.423.018.846.063 1.267.046.418.116.833.217 1.24.202.818.554 1.6 1.065 2.267.475.62 1.097 1.125 1.803 1.46.705.336 1.48.498 2.256.481.775-.017 1.54-.2 2.225-.568.687-.369 1.277-.898 1.728-1.533.452-.636.756-1.37.914-2.14.158-.77.17-1.564.044-2.34-.126-.776-.39-1.53-.779-2.213a5.362 5.362 0 00-.664-.886c-.253-.27-.536-.513-.84-.726z" />
+                    </svg>
+                    <span className="text-sm font-bold text-fg">Buy Me a Coffee</span>
+                  </div>
+                  <p className="text-[11px] text-fg-dim mb-5">Okay to open donation link?</p>
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setShowDonateConfirm(false)}
+                      className="flex-1 text-xs font-medium py-2.5 rounded-lg border border-edge-dim text-fg-2 hover:bg-inset transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        window.open('https://buymeacoffee.com/itsdestin', '_blank');
+                        setShowDonateConfirm(false);
+                      }}
+                      className="flex-1 text-xs font-medium py-2.5 rounded-lg bg-accent text-on-accent hover:brightness-110 transition-all"
+                    >
+                      Open
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
 
             <div className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 text-left">
               <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
