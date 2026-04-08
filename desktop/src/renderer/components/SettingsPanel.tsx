@@ -1079,6 +1079,8 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
 
         <ThemeButton onSendInput={onSendInput} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
+        <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
+
         {/* Tier & directories are local-only — hide when connected to remote desktop */}
         {!remoteConnected && (
           <>
@@ -1401,13 +1403,15 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
 
 // ─── Desktop Settings (existing, unchanged) ─────────────────────────────────
 
-function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme }: {
+function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme, syncAutoOpen, onSyncAutoOpenHandled }: {
   open: boolean;
   onClose: () => void;
   onSendInput: (text: string) => void;
   hasActiveSession: boolean;
   onOpenThemeMarketplace?: () => void;
   onPublishTheme?: (slug: string) => void;
+  syncAutoOpen?: boolean;
+  onSyncAutoOpenHandled?: () => void;
 }) {
   const [config, setConfig] = useState<RemoteConfig | null>(null);
   const [tailscale, setTailscale] = useState<TailscaleInfo | null>(null);
@@ -1546,6 +1550,8 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
         <ThemeButton onSendInput={onSendInput} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         <SoundSettings />
+
+        <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 
         <RemoteButton
           config={config}
