@@ -180,6 +180,7 @@ export const IPC = {
   SESSION_INPUT: 'session:input',
   SESSION_RESIZE: 'session:resize',
   SESSION_LIST: 'session:list',
+  SESSION_SWITCH: 'session:switch',
   SKILLS_LIST: 'skills:list',
   SKILLS_LIST_MARKETPLACE: 'skills:list-marketplace',
   SKILLS_GET_DETAIL: 'skills:get-detail',
