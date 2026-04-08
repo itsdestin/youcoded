@@ -300,10 +300,15 @@ describe('TranscriptWatcher', () => {
     });
     fs.appendFileSync(jsonlPath, line + '\n');
 
-    // Give fs.watch / polling time to pick up the change
-    await new Promise((resolve) => setTimeout(resolve, 300));
-    // Trigger a manual read in case fs.watch hasn't fired yet
-    watcher.readNewLinesForSession(desktopSessionId);
+    // Wait for fs.watch or polling to pick up the change.
+    // readNewLinesForSession triggers an async read, so retry
+    // until events arrive or timeout.
+    for (let i = 0; i < 20; i++) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      watcher.readNewLinesForSession(desktopSessionId);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      if (events.length > 0) break;
+    }
 
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[0].type).toBe('assistant-text');
