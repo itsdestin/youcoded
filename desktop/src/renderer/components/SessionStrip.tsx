@@ -460,12 +460,13 @@ export default function SessionStrip({
               ? pillRect.left + pillRect.width / 2
               : undefined;
             const halfDropdown = 144; // w-72 = 288px / 2
+            // Compute left-edge directly (no transform: translateX(-50%))
+            // so backdrop-filter isn't broken by a persistent transform
             return {
               top: triggerRect ? triggerRect.bottom + 4 : 0,
               left: pillCenter != null
-                ? Math.min(Math.max(halfDropdown, pillCenter), window.innerWidth - halfDropdown)
-                : '50%',
-              transform: 'translateX(-50%)',
+                ? Math.min(Math.max(0, pillCenter - halfDropdown), window.innerWidth - halfDropdown * 2)
+                : `calc(50% - ${halfDropdown}px)`,
               animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both',
             };
           })()}

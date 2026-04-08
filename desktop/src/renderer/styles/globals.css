@@ -341,10 +341,24 @@ html, body, #root {
   background-color: color-mix(in srgb, var(--panel) 88%, transparent);
 }
 
-/* Chat scroll area extends behind header — extra top padding so
-   content starts below the header but scrolls up behind it */
+/* Chat scroll area extends behind header and bottom chrome —
+   extra padding so content starts below the header / above the
+   input bar, but scrolls behind frosted glass in both directions */
 [data-panels-blur] .chat-scroll {
   padding-top: 3rem;
+  padding-bottom: var(--bottom-chrome-height, 5rem);
+}
+
+/* Bottom chrome (input + status bars) — mirrors header pattern.
+   Absolutely positioned so chat messages scroll behind the
+   frosted glass. Only when glassmorphism + chat view are active
+   (React toggles .bottom-float based on view mode). */
+[data-panels-blur] .bottom-float {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 20;
 }
 
 /* Lightweight virtualization — skip paint/layout for off-screen chat messages.
@@ -577,22 +591,28 @@ html, body, #root {
   50% { opacity: 1; }
 }
 
-/* Session strip dropdown — enter */
+/* Session strip dropdown — enter.
+   Uses opacity + margin-top only (no transform) so that
+   backdrop-filter on .glass-overlay isn't broken by a
+   persistent compositing layer from fill-mode: both. */
 @keyframes dropdown-in {
   from {
     opacity: 0;
-    transform: translateX(-50%) scale(0.96) translateY(-4px);
+    margin-top: -4px;
   }
   to {
     opacity: 1;
-    transform: translateX(-50%) scale(1) translateY(0);
+    margin-top: 0;
   }
 }
 
-/* Session strip dropdown — row stagger entrance */
+/* Session strip dropdown — row stagger entrance.
+   Uses transform: none in `to` (not translateY(0)) so fill-mode: both
+   doesn't leave a persistent compositing layer on each row.
+   Rows don't have backdrop-filter, so transform during animation is safe. */
 @keyframes row-fade-in {
   from { opacity: 0; transform: translateY(-4px); }
-  to   { opacity: 1; transform: translateY(0); }
+  to   { opacity: 1; transform: none; }
 }
 
 @keyframes challenge-pulse {

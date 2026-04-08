@@ -799,6 +799,25 @@ function AppInner() {
   // Terminal mode on touch/remote platforms — show minimal input with special keys
   const isTerminalTouch = currentViewMode === 'terminal' && getPlatform() !== 'electron';
 
+  // Track bottom chrome height for glassmorphism scroll-behind.
+  // Sets --bottom-chrome-height CSS variable so .chat-scroll can add matching
+  // padding-bottom, allowing messages to scroll behind the frosted input/status bars.
+  useEffect(() => {
+    const bottom = bottomBarRef.current;
+    if (!bottom) return;
+    const update = () => {
+      const h = Math.ceil(bottom.getBoundingClientRect().height);
+      document.documentElement.style.setProperty('--bottom-chrome-height', `${h}px`);
+    };
+    const observer = new ResizeObserver(update);
+    observer.observe(bottom);
+    update();
+    return () => {
+      observer.disconnect();
+      document.documentElement.style.removeProperty('--bottom-chrome-height');
+    };
+  }, [sessionId, currentViewMode]);
+
   // Report header/bottom bar heights to native Android side for terminal overlay sizing.
   // Must be before early returns to maintain consistent hook ordering across renders.
   useEffect(() => {
@@ -841,8 +860,8 @@ function AppInner() {
 
   return (
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
-      {/* Main area */}
-      <div className="flex-1 flex flex-col overflow-hidden">
+      {/* Main area — relative so bottom-float chrome can position against it */}
+      <div className="flex-1 flex flex-col overflow-hidden relative">
         {sessions.length > 0 && sessionId && currentSession ? (
           <>
             <div ref={headerRef} className="chrome-wrapper bg-canvas relative">
@@ -931,7 +950,7 @@ function AppInner() {
               )}
             </div>
             {(currentViewMode === 'chat' || getPlatform() !== 'electron') && (
-              <div ref={bottomBarRef} className="chrome-wrapper bg-canvas">
+              <div ref={bottomBarRef} className={`chrome-wrapper bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`}>
                 {isTerminalTouch && sessionId && (
                   <TerminalToolbar sessionId={sessionId} />
                 )}
