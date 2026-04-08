@@ -304,12 +304,14 @@ html, body, #root {
   background-color: var(--panel-glass, var(--panel));
 }
 
-/* When glassmorphism is active, make the app shell and chrome wrappers
-   transparent so the body wallpaper shows through frosted-glass panels.
+/* When a wallpaper or glassmorphism is active, make the app shell and
+   chrome wrappers transparent so the background shows through.
    .chrome-wrapper = header/bottom bar wrappers in App.tsx that would
    otherwise block the wallpaper with opaque bg-canvas */
 [data-panels-blur] .app-shell,
-[data-panels-blur] .chrome-wrapper {
+[data-panels-blur] .chrome-wrapper,
+[data-wallpaper] .app-shell,
+[data-wallpaper] .chrome-wrapper {
   background-color: transparent !important;
 }
 

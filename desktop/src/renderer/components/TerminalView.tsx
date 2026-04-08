@@ -34,37 +34,35 @@ export default function TerminalView({ sessionId, visible }: Props) {
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
   const { theme, font, activeTheme, reducedEffects } = useTheme();
-  const glass = !!(activeTheme?.background?.['panels-blur'] && activeTheme.background['panels-blur'] > 0 && !reducedEffects);
 
-  // Sync xterm theme and WebGL state when app theme or glassmorphism changes.
-  // Depends on glass (derived from activeTheme + reducedEffects) so it re-runs
-  // when transparency state changes, not just when the theme slug changes.
+  // Detect if the theme has a visual background (wallpaper image, gradient, or glassmorphism)
+  const bg = activeTheme?.background;
+  const hasWallpaper = bg?.type === 'image' && !!bg.value;
+  const hasGradient = bg?.type === 'gradient' && !!bg.value;
+  const hasBlur = !!(bg?.['panels-blur'] && bg['panels-blur'] > 0 && !reducedEffects);
+  // Terminal needs to be see-through when any visual background is active
+  const seeThrough = hasWallpaper || hasGradient || hasBlur;
+
+  // Sync xterm theme when app theme changes. Always keep WebGL for performance.
   useEffect(() => {
     if (!terminalRef.current) return;
-    // Microtask delay: CSS variables may not be painted yet when this effect fires
     requestAnimationFrame(() => {
       if (!terminalRef.current) return;
-      terminalRef.current.options.theme = getXtermTheme(glass);
+      // Always use opaque xterm background — transparency is handled by the
+      // container overlay, not by xterm itself. WebGL requires opaque backgrounds.
+      terminalRef.current.options.theme = getXtermTheme(false);
 
-      // WebGL addon renders on an opaque canvas that blocks body background-image
-      // (wallpaper) from showing through. Dispose it when glassmorphism is active
-      // so the DOM renderer is used (which handles transparent backgrounds via CSS).
-      // Re-attach when glassmorphism is off for better rendering performance.
-      if (glass && webglRef.current) {
-        webglRef.current.dispose();
-        webglRef.current = null;
-      } else if (!glass && !webglRef.current) {
+      // Ensure WebGL is attached (may have been disposed by a previous version)
+      if (!webglRef.current) {
         try {
           const webgl = new WebglAddon();
           webgl.onContextLoss(() => webgl.dispose());
           terminalRef.current.loadAddon(webgl);
           webglRef.current = webgl;
-        } catch {
-          // Falls back to DOM renderer if WebGL unavailable
-        }
+        } catch {}
       }
     });
-  }, [activeTheme, glass]);
+  }, [activeTheme]);
 
   // Sync xterm font when app font changes — wait for the font to load before
   // applying so xterm measures character cells against the real glyphs, not a
@@ -93,7 +91,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
       cursorBlink: true,
       fontSize: 14,
       fontFamily: 'monospace', // Start with monospace; real font applied after load via effect
-      theme: getXtermTheme(glass),
+      theme: getXtermTheme(false),
     });
 
     const fitAddon = new FitAddon();
@@ -103,19 +101,15 @@ export default function TerminalView({ sessionId, visible }: Props) {
     terminal.unicode.activeVersion = '11';
     terminal.open(containerRef.current);
 
-    // WebGL renderer must be loaded after open() — eliminates grid-line
-    // artifacts from the DOM renderer's sub-pixel rounding issues.
-    // Skip when glassmorphism is active — the WebGL canvas is opaque
-    // and blocks the wallpaper from showing through.
-    if (!glass) {
-      try {
-        const webgl = new WebglAddon();
-        webgl.onContextLoss(() => webgl.dispose());
-        terminal.loadAddon(webgl);
-        webglRef.current = webgl;
-      } catch {
-        // Falls back to DOM renderer if WebGL unavailable
-      }
+    // WebGL renderer — always load for performance. Wallpaper visibility is
+    // handled by the container's opacity, not by xterm transparency.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      terminal.loadAddon(webgl);
+      webglRef.current = webgl;
+    } catch {
+      // Falls back to DOM renderer if WebGL unavailable
     }
 
     terminalRef.current = terminal;
@@ -207,11 +201,12 @@ export default function TerminalView({ sessionId, visible }: Props) {
         left: 0,
         right: 0,
         bottom: 0,
-        background: glass ? 'transparent' : 'var(--canvas)',
-        backdropFilter: glass ? 'blur(24px) saturate(1.2)' : undefined,
-        WebkitBackdropFilter: glass ? 'blur(24px) saturate(1.2)' : undefined,
         borderRadius: 'var(--radius-md)',
         overflow: 'hidden',
+        // When a wallpaper/gradient is active, reduce terminal opacity so
+        // the background peeks through. WebGL stays loaded (no lag), and
+        // the text remains readable at 88% opacity.
+        opacity: seeThrough ? 0.88 : 1,
         // Use visibility:hidden instead of display:none so xterm.js can
         // measure fonts and maintain its screen buffer while the terminal
         // tab is not active. display:none causes a 0x0 container, which
