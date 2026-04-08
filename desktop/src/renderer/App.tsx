@@ -5,6 +5,14 @@ import HeaderBar from './components/HeaderBar';
 import InputBar, { type InputBarHandle } from './components/InputBar';
 import StatusBar from './components/StatusBar';
 import { MODELS, type ModelAlias } from './components/StatusBar';
+import FolderSwitcher from './components/FolderSwitcher';
+
+// Labels for the welcome-screen model picker (mirrors SessionStrip)
+const WELCOME_MODEL_LABELS: Record<string, string> = {
+  sonnet: 'Sonnet',
+  'opus[1m]': 'Opus 1M',
+  haiku: 'Haiku',
+};
 import ErrorBoundary from './components/ErrorBoundary';
 import GamePanel from './components/game/GamePanel';
 import { ChatProvider, useChatDispatch, useChatState, useChatStateMap } from './state/chat-context';
@@ -123,6 +131,12 @@ function AppInner() {
   const [createPromptOpen, setCreatePromptOpen] = useState(false);
   const [isFirstRun, setIsFirstRun] = useState<boolean | null>(null); // null = loading
   const handleFirstRunComplete = useCallback(() => setIsFirstRun(false), []);
+
+  // Welcome screen "New Session" expansion form state
+  const [welcomeFormOpen, setWelcomeFormOpen] = useState(false);
+  const [welcomeCwd, setWelcomeCwd] = useState('');
+  const [welcomeModel, setWelcomeModel] = useState('sonnet');
+  const [welcomeDangerous, setWelcomeDangerous] = useState(false);
 
   const [model, setModel] = useState<ModelAlias>('sonnet');
   const [pendingModel, setPendingModel] = useState<ModelAlias | null>(null);
@@ -972,20 +986,92 @@ function AppInner() {
           <div className="flex-1 flex flex-col items-center justify-center gap-3">
             <p className="text-xl text-fg-muted">No Active Session</p>
             <ThemeMascot variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" />
-            <div className="flex flex-col items-center gap-2 mt-1">
-              <button
-                onClick={() => createSession('', false)}
-                className="px-8 py-2 text-base font-medium rounded-lg bg-accent text-on-accent hover:brightness-110 transition-colors"
-              >
-                New Session
-              </button>
-              <button
-                onClick={() => createSession('', true)}
-                className="px-6 py-1 rounded-lg bg-red-600/40 hover:bg-red-600/60 text-red-200 transition-colors flex flex-col items-center"
-              >
-                <span className="text-sm font-medium leading-none">New Session</span>
-                <span className="text-[10px] text-red-300/70 font-normal leading-tight">Dangerous Mode</span>
-              </button>
+            {/* Welcome screen: New Session (expandable) + Resume Session */}
+            <div className="flex flex-col items-center gap-2 mt-1 w-64">
+              {welcomeFormOpen ? (
+                /* Expanded new-session form with toggles */
+                <div className="w-full rounded-lg bg-panel border border-edge p-3 flex flex-col gap-2">
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Project Folder</label>
+                    <FolderSwitcher value={welcomeCwd} onChange={setWelcomeCwd} />
+                  </div>
+                  <div>
+                    <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Model</label>
+                    <div className="flex gap-1">
+                      {MODELS.map((m) => (
+                        <button
+                          key={m}
+                          onClick={() => setWelcomeModel(m)}
+                          className={`flex-1 px-1 py-1 rounded-sm text-[10px] transition-colors ${
+                            welcomeModel === m
+                              ? 'bg-accent text-on-accent font-medium'
+                              : 'bg-inset text-fg-dim hover:bg-edge'
+                          }`}
+                        >
+                          {WELCOME_MODEL_LABELS[m] || m}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <label className="text-[10px] uppercase tracking-wider text-fg-muted">Skip Permissions</label>
+                    <button
+                      onClick={() => setWelcomeDangerous(!welcomeDangerous)}
+                      className={`w-8 h-4.5 rounded-full relative transition-colors ${welcomeDangerous ? 'bg-[#DD4444]' : 'bg-inset'}`}
+                    >
+                      <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${welcomeDangerous ? 'left-[calc(100%-16px)]' : 'left-0.5'}`} />
+                    </button>
+                  </div>
+                  {welcomeDangerous && (
+                    <p className="text-[10px] text-[#DD4444]">Claude will execute tools without asking for approval.</p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => setWelcomeFormOpen(false)}
+                      className="px-3 py-1.5 text-sm rounded-md bg-inset text-fg-dim hover:bg-edge transition-colors"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      onClick={() => {
+                        createSession(welcomeCwd, welcomeDangerous, welcomeModel);
+                        setWelcomeFormOpen(false);
+                      }}
+                      className={`flex-1 text-sm font-medium rounded-md py-1.5 transition-colors ${
+                        welcomeDangerous
+                          ? 'bg-[#DD4444] hover:bg-[#E55555] text-white'
+                          : 'bg-accent hover:bg-accent text-on-accent'
+                      }`}
+                    >
+                      {welcomeDangerous ? 'Create (Dangerous)' : 'Create Session'}
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* Collapsed state: two side-by-side buttons */
+                <>
+                  <button
+                    onClick={() => {
+                      setWelcomeCwd(sessionDefaults.projectFolder || '');
+                      setWelcomeDangerous(sessionDefaults.skipPermissions || false);
+                      setWelcomeModel(sessionDefaults.model || 'sonnet');
+                      setWelcomeFormOpen(true);
+                    }}
+                    className="w-full px-8 py-2 text-base font-medium rounded-lg bg-accent text-on-accent hover:brightness-110 transition-colors"
+                  >
+                    New Session
+                  </button>
+                  <button
+                    onClick={() => setResumeRequested(true)}
+                    className="w-full px-6 py-2 rounded-lg bg-inset hover:bg-edge text-fg-dim hover:text-fg transition-colors flex items-center justify-center gap-1.5"
+                  >
+                    <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    <span className="text-sm font-medium">Resume Session</span>
+                  </button>
+                </>
+              )}
             </div>
           </div>
         )}
