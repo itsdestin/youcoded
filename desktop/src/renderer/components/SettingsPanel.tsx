@@ -26,6 +26,7 @@ const KEEP_AWAKE_OPTIONS = [
 
 interface TailscaleInfo {
   installed: boolean;
+  connected: boolean;
   ip: string | null;
   hostname: string | null;
   url: string | null;
@@ -328,13 +329,19 @@ function RemoteButton({
   }, [open]);
 
   const hasClients = clients.length > 0;
+  // Green: enabled + Tailscale installed + VPN active. Gray otherwise (disabled, or VPN not connected).
+  const isFullyConnected = config?.enabled && tailscale?.installed && tailscale?.connected;
   const statusText = loading
     ? 'Loading...'
     : !config?.enabled
       ? 'Disabled'
-      : hasClients
-        ? `${clients.length} client${clients.length > 1 ? 's' : ''} connected`
-        : 'Enabled · No clients';
+      : isFullyConnected
+        ? hasClients
+          ? `Connected · ${clients.length} client${clients.length > 1 ? 's' : ''}`
+          : 'Connected'
+        : tailscale?.installed
+          ? 'Tailscale VPN not active'
+          : 'Enabled · No Tailscale';
 
   return (
     <section>
@@ -344,10 +351,10 @@ function RemoteButton({
         onClick={() => setOpen(true)}
         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
       >
-        {/* Status indicator dot */}
+        {/* Status indicator dot — green when remote + Tailscale VPN fully active, gray otherwise */}
         <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
           <div className={`w-2.5 h-2.5 rounded-full ${
-            !config?.enabled ? 'bg-fg-muted/40' : hasClients ? 'bg-green-500' : 'bg-amber-500'
+            isFullyConnected ? 'bg-green-500' : 'bg-fg-muted/40'
           }`} />
         </div>
         <div className="flex-1 min-w-0">
