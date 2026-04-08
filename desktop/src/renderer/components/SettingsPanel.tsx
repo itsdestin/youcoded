@@ -1365,14 +1365,25 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
   }, []);
 
   const handleConfirmSetup = useCallback(async () => {
-    setSetupStatus('installing');
     try {
-      const result = await (window as any).claude.remote.installTailscale();
-      if (result?.success || result?.installed || result?.alreadyInstalled) {
+      // Check if already installed before trying to install
+      const check = await (window as any).claude.remote.detectTailscale();
+      if (check?.installed) {
+        // Already installed — skip to auth
         setSetupStatus('authenticating');
         await (window as any).claude.remote.authTailscale();
         setSetupStatus('done');
-        // Refresh tailscale status
+        setTailscale(check);
+        setTimeout(() => setSetupStatus('idle'), 3000);
+        return;
+      }
+
+      setSetupStatus('installing');
+      const result = await (window as any).claude.remote.installTailscale();
+      if (result?.success) {
+        setSetupStatus('authenticating');
+        await (window as any).claude.remote.authTailscale();
+        setSetupStatus('done');
         const ts = await (window as any).claude.remote.detectTailscale();
         setTailscale(ts);
         setTimeout(() => setSetupStatus('idle'), 3000);

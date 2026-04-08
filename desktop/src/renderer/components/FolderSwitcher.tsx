@@ -122,7 +122,12 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
         onClick={() => {
           if (!open && triggerRef.current) {
             const rect = triggerRef.current.getBoundingClientRect();
-            setDropdownPos({ top: rect.bottom + 4, left: rect.left, width: Math.max(rect.width, 320) });
+            const dropdownWidth = Math.max(rect.width, 320);
+            // Center the dropdown horizontally relative to the trigger button
+            const centerLeft = rect.left + (rect.width / 2) - (dropdownWidth / 2);
+            // Clamp to viewport so it doesn't overflow off-screen
+            const clampedLeft = Math.max(8, Math.min(centerLeft, window.innerWidth - dropdownWidth - 8));
+            setDropdownPos({ top: rect.bottom + 4, left: clampedLeft, width: dropdownWidth });
           }
           setOpen(!open);
         }}
