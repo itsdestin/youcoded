@@ -9,22 +9,25 @@ export function usePartyLobby() {
   const clientRef = useRef<PartyClient | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const [incognito, setIncognitoState] = useState(false);
-  const incognitoLoadedRef = useRef(false);
+  // State (not ref) so the connection effect re-runs when the preference loads
+  const [incognitoLoaded, setIncognitoLoaded] = useState(false);
 
   // Load incognito preference on mount
   useEffect(() => {
     (window as any).claude?.getIncognito?.().then((val: boolean) => {
       setIncognitoState(val ?? false);
-      incognitoLoadedRef.current = true;
+      setIncognitoLoaded(true);
     }).catch(() => {
-      incognitoLoadedRef.current = true;
+      setIncognitoLoaded(true);
     });
   }, []);
 
   // Connect/disconnect lobby based on incognito state
   useEffect(() => {
-    // Don't act until we've loaded the preference
-    if (!incognitoLoadedRef.current) return;
+    // Don't act until we've loaded the preference — incognitoLoaded is state
+    // so this effect re-runs when it flips to true (fixes missing username on
+    // first load when stored preference is already false)
+    if (!incognitoLoaded) return;
 
     if (incognito) {
       // Disconnect from lobby if connected
@@ -105,7 +108,7 @@ export function usePartyLobby() {
       clientRef.current?.close();
       clientRef.current = null;
     };
-  }, [dispatch, incognito]);
+  }, [dispatch, incognito, incognitoLoaded]);
 
   const updateStatus = useCallback((status: 'idle' | 'in-game') => {
     clientRef.current?.send({ type: 'status', status });

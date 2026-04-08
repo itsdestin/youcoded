@@ -65,7 +65,8 @@ function LobbyScreen({ connection, incognito, onToggleIncognito }: Props) {
       {/* Player info bar */}
       <div className="px-3 py-2 border-b border-edge flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <div className={`w-2 h-2 rounded-full ${incognito ? 'bg-fg-faint' : 'bg-green-400'}`} />
+          {/* Show green only when actually connected — not just non-incognito */}
+          <div className={`w-2 h-2 rounded-full ${incognito || !state.connected ? 'bg-fg-faint' : 'bg-green-400'}`} />
           <span className="text-sm font-medium text-fg">{state.username}</span>
           {incognito && <span className="text-[10px] text-fg-muted">Incognito</span>}
         </div>
@@ -309,5 +310,14 @@ export default function GameLobby({ connection, incognito, onToggleIncognito }: 
   if (state.partyError && !incognito) return <ErrorScreen />;
   if (state.screen === 'joining') return <JoiningScreen connection={connection} />;
   if (state.screen === 'waiting') return <WaitingScreen connection={connection} />;
+  // Show connecting spinner while waiting for PartyKit (setup screen, not incognito)
+  if (!state.connected && !incognito) {
+    return (
+      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4 py-8">
+        <BrailleSpinner size="lg" />
+        <p className="text-sm text-fg-dim">Connecting...</p>
+      </div>
+    );
+  }
   return <LobbyScreen connection={connection} incognito={incognito} onToggleIncognito={onToggleIncognito} />;
 }
