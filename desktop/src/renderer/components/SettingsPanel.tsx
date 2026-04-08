@@ -412,19 +412,12 @@ function RemoteButton({
                             </button>
                           )
                         ) : (
-                          <>
-                            <button
-                              onClick={onRunSetup}
-                              disabled={!hasActiveSession}
-                              className="w-full px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium disabled:opacity-50 disabled:cursor-not-allowed"
-                              title={!hasActiveSession ? 'Create a session first' : ''}
-                            >
-                              Set Up Remote Access
-                            </button>
-                            {!hasActiveSession && (
-                              <p className="text-[10px] text-fg-muted mt-1 text-center">Create a session first to run setup</p>
-                            )}
-                          </>
+                          <button
+                            onClick={onRunSetup}
+                            className="w-full px-3 py-1.5 rounded-sm bg-blue-600 hover:bg-blue-500 text-xs font-medium"
+                          >
+                            Set Up Remote Access
+                          </button>
                         )}
                       </div>
                     )}
@@ -575,10 +568,9 @@ function RemoteButton({
                           </p>
                           <button
                             onClick={onRunSetup}
-                            disabled={!hasActiveSession}
-                            className="px-3 py-1.5 rounded-sm bg-inset hover:bg-edge text-xs disabled:opacity-50"
+                            className="px-3 py-1.5 rounded-sm bg-inset hover:bg-edge text-xs"
                           >
-                            Install with Setup Skill
+                            Install Tailscale
                           </button>
                         </div>
                       )}
@@ -1327,11 +1319,16 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
   }, []);
 
-  const handleRunSetup = useCallback(() => {
-    if (!hasActiveSession) return;
-    onSendInput('/remote-setup');
-    onClose();
-  }, [hasActiveSession, onSendInput, onClose]);
+  const handleRunSetup = useCallback(async () => {
+    try {
+      const result = await (window as any).claude.remote.installTailscale();
+      if (result?.installed || result?.alreadyInstalled) {
+        await (window as any).claude.remote.authTailscale();
+      }
+    } catch (err) {
+      console.error('Remote setup failed:', err);
+    }
+  }, []);
 
   const handleDisconnectClient = useCallback(async (clientId: string) => {
     await (window as any).claude.remote.disconnectClient(clientId);

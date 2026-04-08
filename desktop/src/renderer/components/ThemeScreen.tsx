@@ -16,7 +16,7 @@ function roundnessToShape(value: number) {
 interface Props { onClose: () => void; onSendInput?: (text: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void; }
 
 export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, onPublishTheme }: Props) {
-  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, activeTheme } = useTheme();
+  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, activeTheme, reducedEffects, setReducedEffects } = useTheme();
   const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentFontName = font.split(',')[0].trim().replace(/^['"]|['"]$/g, '');
@@ -166,6 +166,20 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
             Browse Theme Marketplace
           </button>
         )}
+
+        {/* Visual effects toggle */}
+        <div className="flex items-center justify-between">
+          <div>
+            <p className="text-xs text-fg-2">Reduce Visual Effects</p>
+            <p className="text-[10px] text-fg-faint">Disables particles, glassmorphism, and animations</p>
+          </div>
+          <button
+            onClick={() => setReducedEffects(!reducedEffects)}
+            className={`w-9 h-5 rounded-full transition-colors relative ${reducedEffects ? 'bg-accent' : 'bg-edge'}`}
+          >
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-transform ${reducedEffects ? 'left-[18px]' : 'left-0.5'}`} />
+          </button>
+        </div>
 
         {/* Build with Claude */}
         <button
