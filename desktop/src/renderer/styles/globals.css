@@ -223,16 +223,30 @@ html, body, #root {
    Without this, xterm's scrollbar can bleed through and overlap ChatView's
    because TerminalView uses visibility:hidden (not display:none) to keep
    xterm's buffer alive.
-   We must force overflow:hidden to kill the scrollbar gutter entirely —
+   We must force overflow:hidden at BOTH the container and viewport levels —
    just hiding the thumb/track via ::-webkit-scrollbar is not enough because
    xterm.js sets overflow-y:scroll as an inline style, and Chromium can
    still reserve gutter space for visibility:hidden elements. */
-.terminal-hidden .xterm-viewport::-webkit-scrollbar {
-  display: none;
+/* Kill hidden terminal scrollbars completely.
+   TerminalView uses visibility:hidden (not display:none) so xterm.js can
+   keep its screen buffer alive. But visibility:hidden still paints scrollbar
+   gutters — Chromium reserves the space even though the content is invisible.
+   With multiple sessions, you get overlapping scrollbar tracks.
+   Fix: collapse the container to 0x0 AND hide visibility. xterm's buffer
+   survives because the Terminal object stays mounted in React — the 0x0 size
+   just prevents any visual output. A re-fit runs when the terminal becomes
+   visible again (TerminalView useEffect on visible). */
+.terminal-hidden {
+  width: 0 !important;
+  height: 0 !important;
+  overflow: hidden !important;
 }
 .terminal-hidden .xterm-viewport {
   overflow-y: hidden !important;
   scrollbar-width: none;
+}
+.terminal-hidden .xterm-viewport::-webkit-scrollbar {
+  display: none;
 }
 
 /* Hide scrollbars on pure-horizontal scroll containers (quick chips, session strip) */
