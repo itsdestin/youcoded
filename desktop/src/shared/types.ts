@@ -160,7 +160,7 @@ export interface SkillProvider {
   getChips(): Promise<ChipConfig[]>;
   getOverrides(): Promise<Record<string, MetadataOverride>>;
   install(id: string): Promise<any>;
-  uninstall(id: string): Promise<void>;
+  uninstall(id: string): Promise<void | { type: 'plugin' | 'prompt' }>;
   setFavorite(id: string, favorited: boolean): Promise<void>;
   setChips(chips: ChipConfig[]): Promise<void>;
   setOverride(id: string, override: MetadataOverride): Promise<void>;

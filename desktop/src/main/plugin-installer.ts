@@ -38,10 +38,10 @@ interface InstallMeta {
 }
 
 export type InstallResult =
-  | { status: 'installed' }
-  | { status: 'already_installed'; via: string }
-  | { status: 'failed'; error: string }
-  | { status: 'installing' };
+  | { status: 'installed'; type?: 'plugin' | 'prompt' }
+  | { status: 'already_installed'; via: string; type?: 'plugin' | 'prompt' }
+  | { status: 'failed'; error: string; type?: 'plugin' | 'prompt' }
+  | { status: 'installing'; type?: 'plugin' | 'prompt' };
 
 interface MarketplaceEntry {
   id: string;

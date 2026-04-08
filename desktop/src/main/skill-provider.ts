@@ -157,7 +157,7 @@ export class LocalSkillProvider implements SkillProvider {
         installedAt: new Date().toISOString(),
       });
       this.installedCache = null;
-      return { status: 'installed' };
+      return { status: 'installed', type: 'prompt' };
     }
 
     // Plugin install — delegate to PluginInstaller
@@ -184,19 +184,23 @@ export class LocalSkillProvider implements SkillProvider {
       this.installedCache = null;
     }
 
-    return result;
+    // Tag result so callers know a plugin (not prompt) was installed
+    return { ...result, type: 'plugin' };
   }
 
-  async uninstall(id: string): Promise<void> {
+  async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt' }> {
     // Check if this is a marketplace-installed plugin
     const installed = this.configStore.getInstalledPlugins();
     if (installed[id]) {
       await uninstallPlugin(id);
       this.configStore.removePluginInstall(id);
+      this.installedCache = null;
+      return { type: 'plugin' };
     } else {
       this.configStore.deletePromptSkill(id);
+      this.installedCache = null;
+      return { type: 'prompt' };
     }
-    this.installedCache = null;
   }
 
   async setFavorite(id: string, favorited: boolean): Promise<void> {

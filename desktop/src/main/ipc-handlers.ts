@@ -448,11 +448,27 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IPC.SKILLS_INSTALL, async (_event, id: string) => {
-    return skillProvider.install(id);
+    const result = await skillProvider.install(id);
+    // Reload plugins in all active Claude Code sessions so the new plugin is
+    // discovered immediately — matches Android behavior (SessionService.kt:458)
+    if (result.status === 'installed' && result.type === 'plugin') {
+      for (const s of sessionManager.listSessions()) {
+        if (s.status === 'active') sessionManager.sendInput(s.id, '/reload-plugins\r');
+      }
+    }
+    return result;
   });
 
   ipcMain.handle(IPC.SKILLS_UNINSTALL, async (_event, id: string) => {
-    return skillProvider.uninstall(id);
+    const result = await skillProvider.uninstall(id);
+    // Reload plugins so Claude Code drops the uninstalled plugin — matches
+    // Android behavior (SessionService.kt:490)
+    if (result.type === 'plugin') {
+      for (const s of sessionManager.listSessions()) {
+        if (s.status === 'active') sessionManager.sendInput(s.id, '/reload-plugins\r');
+      }
+    }
+    return result;
   });
 
   ipcMain.handle(IPC.SKILLS_GET_FAVORITES, async () => {
