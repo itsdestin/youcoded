@@ -999,10 +999,12 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
 
 // ─── Tier selector popup ───────────────────────────────────────────────────
 
+// Mirrors PackageTier.kt — descriptions list the actual packages each tier
+// installs, matching the native first-run TierPickerScreen labels.
 const TIER_OPTIONS = [
-  { id: 'CORE', name: 'Core', desc: 'Personal assistant — journal, inbox, briefings' },
-  { id: 'DEVELOPER', name: 'Developer', desc: 'Core + git, tests, code review' },
-  { id: 'FULL_DEV', name: 'Full Dev', desc: 'Everything — all dev tools included' },
+  { id: 'CORE', name: 'Core', desc: 'Everything needed for basic Claude Code functionality' },
+  { id: 'DEVELOPER', name: 'Developer Essentials', desc: 'fd, fzf, jq, bat, tmux, nano, micro' },
+  { id: 'FULL_DEV', name: 'Full Dev Environment', desc: 'neovim, vim, make, cmake, sqlite' },
 ];
 
 function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string) => void }) {
@@ -1120,7 +1122,6 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
   const [connectError, setConnectError] = useState<string | null>(null);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
-  const [showShortcuts, setShowShortcuts] = useState(false);
 
   const claude = (window as any).claude;
 
@@ -1139,6 +1140,9 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
     if (!open) return;
     setLoading(true);
     setShowConnectForm(false);
+    // Fix: defer IPC calls until after the 300ms slide-in animation. Firing
+    // four parallel bridge calls synchronously visibly stutters the panel.
+    const _deferTimer = setTimeout(() => {
     Promise.all([
       claude.android?.getTier?.() ?? 'CORE',
       claude.android?.getAbout?.() ?? { version: 'unknown', build: '' },
@@ -1151,6 +1155,8 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
       setDefaults(defs);
       setLoading(false);
     }).catch(() => setLoading(false));
+    }, 350);
+    return () => clearTimeout(_deferTimer);
   }, [open]);
 
   const handleSetTier = useCallback(async (newTier: string) => {
@@ -1403,26 +1409,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
           <div className="space-y-2">
             <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
 
-            {/* Keyboard Shortcuts */}
-            <button
-              onClick={() => setShowShortcuts(true)}
-              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
-            >
-              <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
-                <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                  <rect x="2" y="4" width="20" height="16" rx="2" />
-                  <path d="M6 8h.01M10 8h.01M14 8h.01M18 8h.01M8 12h.01M12 12h.01M16 12h.01M8 16h8" />
-                </svg>
-              </div>
-              <div className="flex-1 min-w-0">
-                <span className="text-xs text-fg font-medium">Keyboard Shortcuts</span>
-                <p className="text-[10px] text-fg-muted">View all hotkeys</p>
-              </div>
-              <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-            <ShortcutsPopup open={showShortcuts} onClose={() => setShowShortcuts(false)} />
+            {/* Keyboard shortcuts intentionally omitted on Android — no physical keyboard. */}
 
             <button
               onClick={() => setShowDonateConfirm(true)}
@@ -1605,6 +1592,9 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
     setShowSetupQR(false);
     const claude = (window as any).claude;
     if (!claude?.remote) { setLoading(false); return; }
+    // Fix: defer IPC calls until after the 300ms slide-in animation. detectTailscale
+    // in particular blocks the main thread long enough to visibly stutter the panel.
+    const _deferTimer = setTimeout(() => {
     Promise.all([
       claude.remote.getConfig(),
       claude.remote.detectTailscale(),
@@ -1617,6 +1607,8 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
       setDefaults(defs);
       setLoading(false);
     }).catch(() => setLoading(false));
+    }, 350);
+    return () => clearTimeout(_deferTimer);
   }, [open]);
 
   const handleSetPassword = useCallback(async () => {

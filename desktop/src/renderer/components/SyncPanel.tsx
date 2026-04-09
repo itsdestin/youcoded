@@ -129,7 +129,13 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
     setLoading(false);
   }, []);
 
-  useEffect(() => { loadStatus(); }, [loadStatus]);
+  // Fix: defer the initial sync status fetch until after the SettingsPanel
+  // slide-in animation finishes. SyncSection mounts as part of the parent
+  // panel and would otherwise block the main thread mid-transition.
+  useEffect(() => {
+    const timer = setTimeout(() => { loadStatus(); }, 350);
+    return () => clearTimeout(timer);
+  }, [loadStatus]);
 
   // Handle autoOpen from StatusBar warning click
   useEffect(() => {
