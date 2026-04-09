@@ -248,6 +248,12 @@ contextBridge.exposeInMainWorld('claude', {
     minimize: () => ipcRenderer.invoke(IPC.WINDOW_MINIMIZE),
     maximize: () => ipcRenderer.invoke(IPC.WINDOW_MAXIMIZE),
     close: () => ipcRenderer.invoke(IPC.WINDOW_CLOSE),
+    // Fullscreen state relay — used by renderer to adjust macOS traffic light padding
+    onFullscreenChanged: (handler: (isFullscreen: boolean) => void) => {
+      const wrapped = (_event: IpcRendererEvent, isFullscreen: boolean) => handler(isFullscreen);
+      ipcRenderer.on('window:fullscreen-changed', wrapped);
+      return () => ipcRenderer.removeListener('window:fullscreen-changed', wrapped);
+    },
   },
   theme: {
     list: () => ipcRenderer.invoke(IPC.THEME_LIST),

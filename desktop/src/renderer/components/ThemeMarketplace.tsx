@@ -70,6 +70,21 @@ export default function ThemeMarketplace({ onClose }: ThemeMarketplaceProps) {
   useEffect(() => { fetchThemes(); }, [fetchThemes]);
   useEffect(() => { searchRef.current?.focus(); }, []);
 
+  // ESC key exits the marketplace (or detail view if open)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        if (selectedSlug) {
+          setSelectedSlug(null); // back to marketplace list
+        } else {
+          onClose(); // exit marketplace entirely
+        }
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [selectedSlug, onClose]);
+
   const toggleFeature = (feature: string) => {
     setActiveFeatures(prev =>
       prev.includes(feature) ? prev.filter(f => f !== feature) : [...prev, feature],
@@ -99,8 +114,8 @@ export default function ThemeMarketplace({ onClose }: ThemeMarketplaceProps) {
 
   return (
     <div className="fixed inset-0 z-50 bg-canvas flex flex-col">
-      {/* Header */}
-      <div className="flex items-center px-4 py-3 border-b border-edge shrink-0">
+      {/* Header — overlay-header class adds macOS traffic light padding */}
+      <div className="overlay-header flex items-center px-4 py-3 border-b border-edge shrink-0">
         <button onClick={onClose} className="text-fg-muted hover:text-fg mr-3 text-lg">&larr;</button>
         <h2 className="text-sm font-bold text-fg">Theme Marketplace</h2>
       </div>

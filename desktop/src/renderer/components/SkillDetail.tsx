@@ -83,7 +83,7 @@ export default function SkillDetail({ skillId, onBack }: Props) {
   if (loading) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center px-4 py-3 border-b border-edge">
+        <div className="overlay-header flex items-center px-4 py-3 border-b border-edge">
           <button onClick={onBack} className="text-fg-muted hover:text-fg mr-3 text-lg">&larr;</button>
           <h2 className="text-sm font-bold text-fg">Skill Details</h2>
         </div>
@@ -97,7 +97,7 @@ export default function SkillDetail({ skillId, onBack }: Props) {
   if (error || !detail) {
     return (
       <div className="flex flex-col h-full">
-        <div className="flex items-center px-4 py-3 border-b border-edge">
+        <div className="overlay-header flex items-center px-4 py-3 border-b border-edge">
           <button onClick={onBack} className="text-fg-muted hover:text-fg mr-3 text-lg">&larr;</button>
           <h2 className="text-sm font-bold text-fg">Skill Details</h2>
         </div>
@@ -111,7 +111,7 @@ export default function SkillDetail({ skillId, onBack }: Props) {
   return (
     <div className="flex flex-col h-full">
       {/* Header */}
-      <div className="flex items-center px-4 py-3 border-b border-edge">
+      <div className="overlay-header flex items-center px-4 py-3 border-b border-edge">
         <button onClick={onBack} className="text-fg-muted hover:text-fg mr-3 text-lg">&larr;</button>
         <h2 className="text-sm font-bold text-fg">Skill Details</h2>
       </div>

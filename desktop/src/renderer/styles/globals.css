@@ -466,8 +466,11 @@ html, body, #root {
   -webkit-app-region: no-drag;
 }
 
-/* macOS traffic lights need space — add left padding when title bar is hidden */
-.mac-titlebar-inset .header-bar {
+/* macOS traffic lights need space — add left padding when title bar is hidden.
+   Applies to the main header bar AND full-screen overlay headers (e.g., theme
+   marketplace/detail) whose back buttons would otherwise sit under the traffic lights. */
+.mac-titlebar-inset .header-bar,
+.mac-titlebar-inset .overlay-header {
   padding-left: 78px;
 }
 

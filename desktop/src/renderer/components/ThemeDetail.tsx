@@ -73,6 +73,15 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
     onBack();
   }, [onBack]);
 
+  // ESC key exits the detail view (failsafe for macOS where back button may be obscured)
+  useEffect(() => {
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') handleBack();
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [handleBack]);
+
   const handleInstall = useCallback(async () => {
     setInstalling(true);
     setError(null);
@@ -126,8 +135,8 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="flex items-center px-4 py-3 border-b border-edge shrink-0">
+      {/* Header — overlay-header class adds macOS traffic light padding */}
+      <div className="overlay-header flex items-center px-4 py-3 border-b border-edge shrink-0">
         <button onClick={handleBack} className="text-fg-muted hover:text-fg mr-3 text-lg">&larr;</button>
         <h2 className="text-sm font-bold text-fg truncate">{entry.name}</h2>
         {trying && (

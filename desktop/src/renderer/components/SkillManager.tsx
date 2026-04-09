@@ -123,8 +123,8 @@ export default function SkillManager({
 
   return (
     <div className="fixed inset-0 z-50 bg-canvas flex flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
+      {/* Header — overlay-header class adds macOS traffic light padding */}
+      <div className="overlay-header flex items-center justify-between px-4 py-3 border-b border-edge">
         <button onClick={onClose} className="text-fg-muted hover:text-fg transition-colors text-sm">
           <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
             <path d="M15 19l-7-7 7-7" strokeLinecap="round" strokeLinejoin="round" />
