@@ -496,7 +496,8 @@ html, body, #root {
 [data-input-style="floating"] .input-bar-container {
   margin: 8px 12px;
   border-radius: var(--radius-2xl);
-  box-shadow: 0 2px 16px rgba(0,0,0,0.2);
+  /* Perf: blur radius kept small — large blur is expensive on Android WebView. */
+  box-shadow: 0 2px 6px rgba(0,0,0,0.2);
   overflow: hidden;
   padding: 4px 8px;
 }
@@ -576,7 +577,8 @@ html, body, #root {
   border-radius: var(--radius-lg);
   border: 1px solid var(--edge);
   border-bottom: 1px solid var(--edge);
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
+  /* Perf: blur radius kept small — large blur is expensive on Android WebView. */
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.15);
 }
 
 [data-chrome-style="floating"] .status-bar {
@@ -595,7 +597,8 @@ html, body, #root {
   border-radius: var(--radius-lg);
   border: 1px solid var(--edge);
   border-top: 1px solid var(--edge);
-  box-shadow: 0 -2px 12px rgba(0, 0, 0, 0.15);
+  /* Perf: blur radius kept small — large blur is expensive on Android WebView. */
+  box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.15);
 }
 
 @keyframes breathe {
