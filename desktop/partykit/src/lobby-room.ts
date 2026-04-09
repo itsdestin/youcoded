@@ -76,7 +76,12 @@ export default class LobbyRoom implements Party.Server {
 
     switch (data.type) {
       case "ping":
-        // Heartbeat — lastSeen already updated above, nothing else to do
+        // Heartbeat — respond with full presence list so clients self-correct
+        // any missed user-joined/user-left events (fixes asymmetric visibility)
+        sender.send(JSON.stringify({
+          type: "pong",
+          users: this.getUserList(),
+        }));
         break;
 
       case "status": {
@@ -97,6 +102,12 @@ export default class LobbyRoom implements Party.Server {
             from: senderInfo.username,
             gameType: data.gameType,
             code: data.code,
+          }));
+        } else {
+          // Target not found — tell challenger so they aren't stuck waiting
+          sender.send(JSON.stringify({
+            type: "challenge-failed",
+            target: data.target,
           }));
         }
         break;

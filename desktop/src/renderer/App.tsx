@@ -44,46 +44,8 @@ import ThemeEffects from './components/ThemeEffects';
 
 type ViewMode = 'chat' | 'terminal';
 
-// --- Completion sound (Web Audio API) ---
-const SOUND_STORAGE_KEY = 'destincode-sound-muted';
-const SOUND_VOLUME_KEY = 'destincode-sound-volume';
-
-function isSoundMuted(): boolean {
-  try { return localStorage.getItem(SOUND_STORAGE_KEY) === '1'; } catch { return false; }
-}
-
-function getSoundVolume(): number {
-  try {
-    const v = parseFloat(localStorage.getItem(SOUND_VOLUME_KEY) || '0.3');
-    return isNaN(v) ? 0.3 : Math.max(0, Math.min(1, v));
-  } catch { return 0.3; }
-}
-
-function playCompletionSound() {
-  if (isSoundMuted()) return;
-  try {
-    const ctx = new AudioContext();
-    const vol = getSoundVolume();
-    const gain = ctx.createGain();
-    gain.connect(ctx.destination);
-    gain.gain.setValueAtTime(vol, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-
-    // Two-tone chime: C5 then E5
-    const freqs = [523.25, 659.25];
-    freqs.forEach((freq, i) => {
-      const osc = ctx.createOscillator();
-      osc.type = 'sine';
-      osc.frequency.value = freq;
-      osc.connect(gain);
-      osc.start(ctx.currentTime + i * 0.12);
-      osc.stop(ctx.currentTime + i * 0.12 + 0.3);
-    });
-
-    // Clean up after playback
-    setTimeout(() => ctx.close(), 1000);
-  } catch { /* audio not available */ }
-}
+// --- Sound notifications (shared engine) ---
+import { playSound } from './utils/sounds';
 
 interface StatusDataState {
   usage: any;
@@ -247,6 +209,20 @@ function AppInner() {
     return newStatuses;
   }, [sessions, chatStateMap, viewedSessions, sessionId]);
 
+  // Play sounds when session status transitions to red (attention) or blue (ready).
+  // Uses a separate ref so we only fire once per transition, not on every render.
+  const prevStatusSoundRef = useRef<Map<string, SessionStatusColor>>(new Map());
+  useEffect(() => {
+    const prev = prevStatusSoundRef.current;
+    for (const [id, color] of sessionStatuses) {
+      const was = prev.get(id);
+      if (was === color) continue; // no change
+      if (color === 'red' && was !== 'red') playSound('attention');
+      if (color === 'blue' && was !== 'blue') playSound('ready');
+    }
+    prevStatusSoundRef.current = new Map(sessionStatuses);
+  }, [sessionStatuses]);
+
   useEffect(() => {
     const createdHandler = window.claude.on.sessionCreated((info) => {
       setSessions((prev) => {
@@ -297,7 +273,7 @@ function AppInner() {
       }
       // Play completion sound on Stop events
       if (event.type === 'Stop') {
-        playCompletionSound();
+        playSound('completion');
       }
       // First hook event for a session = Claude is initialized
       if (event.sessionId) {

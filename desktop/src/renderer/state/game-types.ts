@@ -60,7 +60,9 @@ export type GameAction =
   | { type: 'RETURN_TO_LOBBY' }
   | { type: 'RESET' }
   | { type: 'CHALLENGE_RECEIVED'; from: string; code: string }
+  | { type: 'CHALLENGE_ACCEPTED'; by: string }
   | { type: 'CHALLENGE_DECLINED'; by: string }
+  | { type: 'CHALLENGE_FAILED'; target: string }
   | { type: 'CLEAR_CHALLENGE' }
   | { type: 'REMATCH_REQUESTED' };
 

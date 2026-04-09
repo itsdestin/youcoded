@@ -6,8 +6,10 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, connected: true, username: action.username, screen: 'lobby', partyError: null };
 
     case 'PARTY_DISCONNECTED':
-      // Clear username so stale identity doesn't survive reconnect
-      return { ...state, connected: false, username: null, partyError: 'Disconnected from game server — reconnecting...' };
+      // Keep username — game actions guard on it, and PARTY_CONNECTED refreshes
+      // it on reconnect anyway. Clear onlineUsers so incognito self-filter works
+      // and stale entries don't linger.
+      return { ...state, connected: false, onlineUsers: [], partyError: 'Disconnected from game server — reconnecting...' };
 
     case 'PARTY_ERROR':
       return { ...state, connected: false, partyError: action.message };
@@ -126,6 +128,11 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'CHALLENGE_RECEIVED':
       return { ...state, challengeFrom: action.from, challengeCode: action.code, panelOpen: true };
 
+    case 'CHALLENGE_ACCEPTED':
+      // Informational — the game starts when opponent joins the room.
+      // No screen transition needed; just clear the "waiting" uncertainty.
+      return state;
+
     case 'CHALLENGE_DECLINED':
       // If challenger is on the waiting screen, return them to lobby
       if (state.screen === 'waiting') {
@@ -138,6 +145,19 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
         };
       }
       return { ...state, challengeDeclinedBy: action.by };
+
+    case 'CHALLENGE_FAILED':
+      // Target wasn't reachable — return challenger to lobby with feedback
+      if (state.screen === 'waiting') {
+        return {
+          ...state,
+          screen: 'lobby',
+          roomCode: null,
+          myColor: null,
+          partyError: `${action.target} is no longer online.`,
+        };
+      }
+      return state;
 
     case 'CLEAR_CHALLENGE':
       return { ...state, challengeFrom: null, challengeCode: null, challengeDeclinedBy: null, partyError: null };

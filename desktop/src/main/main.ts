@@ -160,6 +160,18 @@ function createWindow(firstRunManager?: FirstRunManager) {
     mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
   }
 
+  // Relay fullscreen state to renderer so CSS can adjust (e.g., macOS traffic light padding)
+  mainWindow.on('enter-full-screen', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:fullscreen-changed', true);
+    }
+  });
+  mainWindow.on('leave-full-screen', () => {
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send('window:fullscreen-changed', false);
+    }
+  });
+
   cleanupIpcHandlers = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, hookRelay, remoteConfig, remoteServer);
 
   if (firstRunManager) {

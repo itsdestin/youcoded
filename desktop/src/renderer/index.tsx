@@ -7,9 +7,20 @@ import App from './App';
 const storedTheme = localStorage.getItem('destincode-theme') || 'midnight';
 document.documentElement.setAttribute('data-theme', storedTheme);
 
-// macOS traffic lights need left padding on the header bar
+// macOS traffic lights need left padding on the header bar.
+// In fullscreen the traffic lights disappear, so we remove the inset.
 if (navigator.platform === 'MacIntel' || navigator.platform === 'MacPPC') {
   document.body.classList.add('mac-titlebar-inset');
+  const claude = (window as any).claude;
+  if (claude?.window?.onFullscreenChanged) {
+    claude.window.onFullscreenChanged((isFullscreen: boolean) => {
+      if (isFullscreen) {
+        document.body.classList.remove('mac-titlebar-inset');
+      } else {
+        document.body.classList.add('mac-titlebar-inset');
+      }
+    });
+  }
 }
 
 /** Minimal login screen for remote browser access. */

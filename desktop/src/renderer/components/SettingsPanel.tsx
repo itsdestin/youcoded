@@ -177,12 +177,88 @@ function Toggle({ enabled, onToggle, color = 'green' }: { enabled: boolean; onTo
 }
 
 
-// ─── Sound settings ───────────────────────────────────────────────────────
+// ─── Sound settings popout ────────────────────────────────────────────────
 
-const SOUND_MUTED_KEY = 'destincode-sound-muted';
-const SOUND_VOLUME_KEY = 'destincode-sound-volume';
+import {
+  SOUND_MUTED_KEY, SOUND_VOLUME_KEY,
+  COMPLETION_PRESETS, ATTENTION_PRESETS, READY_PRESETS,
+  getSelectedPresetId, setSelectedPresetId, playPreview,
+  isCategoryEnabled, setCategoryEnabled,
+  type SoundCategory,
+} from '../utils/sounds';
 
-function SoundSettings() {
+/** Compact preset selector row — shows buttons for each preset, plays on click */
+function PresetSelector({ category, selectedId, onSelect }: {
+  category: SoundCategory;
+  selectedId: string;
+  onSelect: (id: string) => void;
+}) {
+  const presets = category === 'completion' ? COMPLETION_PRESETS
+    : category === 'attention' ? ATTENTION_PRESETS : READY_PRESETS;
+
+  return (
+    <div className="flex flex-wrap gap-1">
+      {presets.map((p) => (
+        <button
+          key={p.id}
+          onClick={() => { onSelect(p.id); playPreview(category, p.id); }}
+          className={`px-2 py-1 rounded text-[10px] transition-colors ${
+            selectedId === p.id
+              ? 'bg-accent text-on-accent font-medium'
+              : 'bg-inset text-fg-dim hover:bg-edge'
+          }`}
+        >
+          {p.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A single sound category section within the popout */
+function SoundCategorySection({ category, label, description, dotColor }: {
+  category: SoundCategory;
+  label: string;
+  description: string;
+  dotColor?: string; // Tailwind bg class for the status dot indicator
+}) {
+  const [enabled, setEnabled] = useState(() => isCategoryEnabled(category));
+  const [presetId, setPresetId] = useState(() => getSelectedPresetId(category));
+
+  const handleToggle = useCallback(() => {
+    setEnabled((prev) => {
+      const next = !prev;
+      setCategoryEnabled(category, next);
+      return next;
+    });
+  }, [category]);
+
+  const handleSelect = useCallback((id: string) => {
+    setPresetId(id);
+    setSelectedPresetId(category, id);
+  }, [category]);
+
+  return (
+    <section>
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          {dotColor && <span className={`w-1.5 h-1.5 rounded-full ${dotColor}`} />}
+          <span className="text-xs text-fg font-medium">{label}</span>
+        </div>
+        <Toggle enabled={enabled} onToggle={handleToggle} />
+      </div>
+      <p className="text-[10px] text-fg-muted mb-2">{description}</p>
+      {enabled && (
+        <PresetSelector category={category} selectedId={presetId} onSelect={handleSelect} />
+      )}
+    </section>
+  );
+}
+
+/** Sound settings — compact row that opens a popout modal (matches ThemeButton pattern) */
+function SoundButton() {
+  const [open, setOpen] = useState(false);
+  const popupRef = useRef<HTMLDivElement>(null);
   const [muted, setMuted] = useState(() => {
     try { return localStorage.getItem(SOUND_MUTED_KEY) === '1'; } catch { return false; }
   });
@@ -192,6 +268,16 @@ function SoundSettings() {
       return isNaN(v) ? 0.3 : Math.max(0, Math.min(1, v));
     } catch { return 0.3; }
   });
+
+  // Close on outside click
+  useEffect(() => {
+    if (!open) return;
+    const handler = (e: MouseEvent) => {
+      if (popupRef.current && !popupRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [open]);
 
   const handleToggleMute = useCallback(() => {
     setMuted((prev) => {
@@ -207,61 +293,136 @@ function SoundSettings() {
     try { localStorage.setItem(SOUND_VOLUME_KEY, String(v)); } catch {}
   }, []);
 
-  const handleTestSound = useCallback(() => {
-    try {
-      const ctx = new AudioContext();
-      const gain = ctx.createGain();
-      gain.connect(ctx.destination);
-      gain.gain.setValueAtTime(volume, ctx.currentTime);
-      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.4);
-      [523.25, 659.25].forEach((freq, i) => {
-        const osc = ctx.createOscillator();
-        osc.type = 'sine';
-        osc.frequency.value = freq;
-        osc.connect(gain);
-        osc.start(ctx.currentTime + i * 0.12);
-        osc.stop(ctx.currentTime + i * 0.12 + 0.3);
-      });
-      setTimeout(() => ctx.close(), 1000);
-    } catch {}
-  }, [volume]);
+  // Summary text for the compact row
+  const summaryParts: string[] = [];
+  if (muted) { summaryParts.push('Muted'); }
+  else { summaryParts.push(`${Math.round(volume * 100)}%`); }
 
   return (
     <section>
       <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Sound</h3>
-      <div className="space-y-3 px-3 py-3 rounded-lg bg-inset/50">
-        <div className="flex items-center justify-between">
-          <div>
-            <span className="text-xs text-fg font-medium">Completion Sound</span>
-            <p className="text-[10px] text-fg-muted">Play a chime when Claude finishes</p>
-          </div>
-          <Toggle enabled={!muted} onToggle={handleToggleMute} />
-        </div>
 
-        {!muted && (
-          <>
-            <div className="flex items-center gap-3">
-              <span className="text-[10px] text-fg-muted w-10 shrink-0">Volume</span>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.05"
-                value={volume}
-                onChange={handleVolumeChange}
-                className="flex-1 h-1 accent-accent"
-              />
-              <span className="text-[10px] text-fg-muted w-8 text-right">{Math.round(volume * 100)}%</span>
+      <button
+        onClick={() => setOpen(true)}
+        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+      >
+        {/* Speaker icon */}
+        <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
+          <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+            {muted ? (
+              <>
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <line x1="23" y1="9" x2="17" y2="15" />
+                <line x1="17" y1="9" x2="23" y2="15" />
+              </>
+            ) : (
+              <>
+                <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                {volume > 0.5 && <path d="M19.07 4.93a10 10 0 0 1 0 14.14" />}
+              </>
+            )}
+          </svg>
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className="text-xs text-fg font-medium">Notifications</span>
+          <p className="text-[10px] text-fg-muted">{summaryParts.join(' · ')}</p>
+        </div>
+        <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+
+      {open && createPortal(
+        <>
+          <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
+          <div
+            ref={popupRef}
+            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            style={{
+              top: '50%',
+              left: '50%',
+              transform: 'translate(-50%, -50%)',
+              width: 'min(380px, 88vw)',
+              maxHeight: '80vh',
+            }}
+          >
+            <div className="flex flex-col h-full">
+              {/* Header */}
+              <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+                <h2 className="text-sm font-bold text-fg">Sound & Notifications</h2>
+                <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
+              </div>
+
+              <div className="px-4 py-4 space-y-5 overflow-y-auto">
+                {/* Master volume */}
+                <section>
+                  <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Volume</h3>
+                  <div className="flex items-center gap-3">
+                    {/* Mute toggle */}
+                    <button onClick={handleToggleMute} className="text-fg-muted hover:text-fg shrink-0">
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                        {muted ? (
+                          <>
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                            <line x1="23" y1="9" x2="17" y2="15" />
+                            <line x1="17" y1="9" x2="23" y2="15" />
+                          </>
+                        ) : (
+                          <>
+                            <polygon points="11 5 6 9 2 9 2 15 6 15 11 19 11 5" />
+                            <path d="M15.54 8.46a5 5 0 0 1 0 7.07" />
+                          </>
+                        )}
+                      </svg>
+                    </button>
+                    <input
+                      type="range"
+                      min="0"
+                      max="1"
+                      step="0.05"
+                      value={volume}
+                      onChange={handleVolumeChange}
+                      className="flex-1 h-1 accent-accent"
+                    />
+                    <span className="text-[10px] text-fg-muted w-8 text-right">{Math.round(volume * 100)}%</span>
+                  </div>
+                </section>
+
+                <div className="border-t border-edge-dim" />
+
+                {/* Completion sound */}
+                <SoundCategorySection
+                  category="completion"
+                  label="Completion"
+                  description="Plays when Claude finishes responding"
+                />
+
+                <div className="border-t border-edge-dim" />
+
+                {/* Attention sound — red status dot */}
+                <SoundCategorySection
+                  category="attention"
+                  label="Needs Attention"
+                  description="Plays when a session needs approval"
+                  dotColor="bg-red-400"
+                />
+
+                <div className="border-t border-edge-dim" />
+
+                {/* Ready sound — blue status dot */}
+                <SoundCategorySection
+                  category="ready"
+                  label="Response Ready"
+                  description="Plays when a background session has a new response"
+                  dotColor="bg-blue-400"
+                />
+              </div>
             </div>
-            <button
-              onClick={handleTestSound}
-              className="text-[10px] text-accent hover:underline"
-            >
-              Test Sound
-            </button>
-          </>
-        )}
-      </div>
+          </div>
+        </>,
+        document.body,
+      )}
     </section>
   );
 }
@@ -1552,7 +1713,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
 
         <ThemeButton onSendInput={onSendInput} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
-        <SoundSettings />
+        <SoundButton />
 
         <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 

@@ -35,6 +35,22 @@ export function usePartyGame(
     };
   }, []);
 
+  // Auto-cleanup game room connection when forced back to lobby
+  // (e.g., CHALLENGE_FAILED, CHALLENGE_DECLINED while on waiting screen)
+  useEffect(() => {
+    if (state.screen === 'lobby' && clientRef.current) {
+      clientRef.current.close();
+      clientRef.current = null;
+      gameCodeRef.current = null;
+      myColorRef.current = null;
+      boardRef.current = [];
+      turnRef.current = 'red';
+      rematchRequestedRef.current = false;
+      opponentRef.current = null;
+      lobbyStatusUpdate('idle');
+    }
+  }, [state.screen, lobbyStatusUpdate]);
+
   const connectToRoom = useCallback((code: string, username: string) => {
     clientRef.current?.close();
 

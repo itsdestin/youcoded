@@ -100,8 +100,8 @@ export default function Marketplace({ onClose }: MarketplaceProps) {
 
   return (
     <div className="fixed inset-0 z-50 bg-canvas flex flex-col">
-      {/* Header */}
-      <div className="flex items-center px-4 py-3 border-b border-edge">
+      {/* Header — overlay-header class adds macOS traffic light padding */}
+      <div className="overlay-header flex items-center px-4 py-3 border-b border-edge">
         <button
           onClick={onClose}
           className="text-fg-muted hover:text-fg mr-3 text-lg"

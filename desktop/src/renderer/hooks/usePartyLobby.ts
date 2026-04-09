@@ -56,6 +56,9 @@ export function usePartyLobby() {
           onMessage: (data) => {
             switch (data.type) {
               case 'presence':
+              case 'pong':
+                // Both carry a full user list — 'presence' on first connect,
+                // 'pong' every 30s so clients self-correct missed events
                 dispatch({ type: 'PRESENCE_UPDATE', online: data.users });
                 break;
               case 'user-joined':
@@ -71,9 +74,15 @@ export function usePartyLobby() {
                 dispatch({ type: 'CHALLENGE_RECEIVED', from: data.from, code: data.code });
                 break;
               case 'challenge-response':
-                if (!data.accept) {
+                if (data.accept) {
+                  dispatch({ type: 'CHALLENGE_ACCEPTED', by: data.from });
+                } else {
                   dispatch({ type: 'CHALLENGE_DECLINED', by: data.from });
                 }
+                break;
+              case 'challenge-failed':
+                // Target wasn't reachable on the server
+                dispatch({ type: 'CHALLENGE_FAILED', target: data.target });
                 break;
             }
           },
