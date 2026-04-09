@@ -89,8 +89,11 @@ export function usePartyLobby() {
           onOpen: () => {
             dispatch({ type: 'PARTY_CONNECTED', username: auth.username });
           },
-          onClose: () => {
-            dispatch({ type: 'PARTY_DISCONNECTED' });
+          onClose: (info) => {
+            // Forward the close code so the UI can show *why* (DevTools is
+            // unavailable in some environments — this is the only way for
+            // a non-developer to see the reason behind a flicker loop)
+            dispatch({ type: 'PARTY_DISCONNECTED', code: info.code, reason: info.reason });
           },
           onError: () => {
             dispatch({ type: 'PARTY_ERROR', message: 'Lost connection to game server' });

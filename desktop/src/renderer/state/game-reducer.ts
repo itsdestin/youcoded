@@ -5,11 +5,24 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
     case 'PARTY_CONNECTED':
       return { ...state, connected: true, username: action.username, screen: 'lobby', partyError: null };
 
-    case 'PARTY_DISCONNECTED':
+    case 'PARTY_DISCONNECTED': {
       // Keep username — game actions guard on it, and PARTY_CONNECTED refreshes
       // it on reconnect anyway. Clear onlineUsers so incognito self-filter works
       // and stale entries don't linger.
-      return { ...state, connected: false, onlineUsers: [], partyError: 'Disconnected from game server — reconnecting...' };
+      //
+      // Surface the close code in the UI so a user without DevTools can see
+      // *why* the lobby keeps dropping. Useful codes: 1006 abnormal/network,
+      // 4001 superseded, 4003 heartbeat timeout, 1000 normal close.
+      const codeInfo = action.code !== undefined
+        ? ` (code ${action.code}${action.reason ? `: ${action.reason}` : ''})`
+        : '';
+      return {
+        ...state,
+        connected: false,
+        onlineUsers: [],
+        partyError: `Disconnected from game server${codeInfo} — reconnecting...`,
+      };
+    }
 
     case 'PARTY_ERROR':
       return { ...state, connected: false, partyError: action.message };

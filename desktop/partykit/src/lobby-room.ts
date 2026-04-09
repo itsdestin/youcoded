@@ -24,33 +24,33 @@ export default class LobbyRoom implements Party.Server {
       return;
     }
 
-    // Evict stale connections for the same username (reconnect / duplicate tab)
-    for (const [connId, info] of this.users) {
-      if (info.username === username && connId !== connection.id) {
-        this.users.delete(connId);
-        // Close the stale socket so the other end knows
-        for (const conn of this.room.getConnections()) {
-          if (conn.id === connId) {
-            conn.close(4001, "Superseded by new connection");
-            break;
-          }
-        }
-      }
-    }
+    // Multi-connection per username is allowed: a single GitHub user can
+    // legitimately be in the lobby from Mac + Windows + remote browser at
+    // the same time. The previous version forcibly evicted older connections
+    // with code 4001, which created a supersede war when two real clients
+    // held the same username — each new connection kicked the other and they
+    // ping-pong reconnected forever (the lobby flicker bug). Heartbeat sweep
+    // (65s) cleans up genuinely-dead duplicates instead.
+    const alreadyPresent = this.hasUsername(username);
 
     this.users.set(connection.id, { username, status: "idle", lastSeen: Date.now() });
+    console.log(`[lobby] connect ${username} (${this.users.size} conns, alreadyPresent=${alreadyPresent})`);
 
-    // Send full user list to the new connection
+    // Send the deduplicated presence list to the new connection
     connection.send(JSON.stringify({
       type: "presence",
       users: this.getUserList(),
     }));
 
-    // Broadcast join to everyone else
-    this.room.broadcast(
-      JSON.stringify({ type: "user-joined", username, status: "idle" }),
-      [connection.id],
-    );
+    // Only broadcast user-joined when this is a brand-new user — additional
+    // connections from an already-present user are silent so the UI doesn't
+    // churn when the user is signed in on multiple devices.
+    if (!alreadyPresent) {
+      this.room.broadcast(
+        JSON.stringify({ type: "user-joined", username, status: "idle" }),
+        [connection.id],
+      );
+    }
 
     // Start heartbeat sweep if not already running
     if (!this.sweepTimer) {
@@ -95,15 +95,19 @@ export default class LobbyRoom implements Party.Server {
       }
 
       case "challenge": {
-        const targetConn = this.findConnectionByUsername(data.target);
-        if (targetConn) {
-          targetConn.send(JSON.stringify({
+        const targetConns = this.findConnectionsByUsername(data.target);
+        if (targetConns.length > 0) {
+          // Fan out to every connection for this user — they may be on
+          // multiple devices and we want all of them to see the challenge
+          const msg = JSON.stringify({
             type: "challenge",
             from: senderInfo.username,
             gameType: data.gameType,
             code: data.code,
-          }));
+          });
+          for (const conn of targetConns) conn.send(msg);
         } else {
+          console.log(`[lobby] challenge ${senderInfo.username} → ${data.target} (no target)`);
           // Target not found — tell challenger so they aren't stuck waiting
           sender.send(JSON.stringify({
             type: "challenge-failed",
@@ -114,14 +118,13 @@ export default class LobbyRoom implements Party.Server {
       }
 
       case "challenge-response": {
-        const challengerConn = this.findConnectionByUsername(data.from);
-        if (challengerConn) {
-          challengerConn.send(JSON.stringify({
-            type: "challenge-response",
-            from: senderInfo.username,
-            accept: data.accept,
-          }));
-        }
+        const challengerConns = this.findConnectionsByUsername(data.from);
+        const msg = JSON.stringify({
+          type: "challenge-response",
+          from: senderInfo.username,
+          accept: data.accept,
+        });
+        for (const conn of challengerConns) conn.send(msg);
         break;
       }
     }
@@ -131,10 +134,16 @@ export default class LobbyRoom implements Party.Server {
     const info = this.users.get(connection.id);
     if (info) {
       this.users.delete(connection.id);
-      this.room.broadcast(JSON.stringify({
-        type: "user-left",
-        username: info.username,
-      }));
+      const stillPresent = this.hasUsername(info.username);
+      console.log(`[lobby] disconnect ${info.username} (${this.users.size} conns, stillPresent=${stillPresent})`);
+      // Only broadcast user-left when this was the user's LAST connection.
+      // Multi-connection support — see onConnect for the rationale.
+      if (!stillPresent) {
+        this.room.broadcast(JSON.stringify({
+          type: "user-left",
+          username: info.username,
+        }));
+      }
     }
     this.stopSweepIfEmpty();
   }
@@ -148,10 +157,15 @@ export default class LobbyRoom implements Party.Server {
     for (const [connId, info] of this.users) {
       if (now - info.lastSeen > HEARTBEAT_TIMEOUT) {
         this.users.delete(connId);
-        this.room.broadcast(JSON.stringify({
-          type: "user-left",
-          username: info.username,
-        }));
+        console.log(`[lobby] sweep evict ${info.username} (idle ${Math.round((now - info.lastSeen) / 1000)}s)`);
+        // Same multi-connection logic as onClose: only broadcast user-left
+        // when no other live connections remain for this username
+        if (!this.hasUsername(info.username)) {
+          this.room.broadcast(JSON.stringify({
+            type: "user-left",
+            username: info.username,
+          }));
+        }
         // Also close the dead socket
         for (const conn of this.room.getConnections()) {
           if (conn.id === connId) {
@@ -171,15 +185,36 @@ export default class LobbyRoom implements Party.Server {
     }
   }
 
-  private getUserList(): Array<{ username: string; status: string }> {
-    return Array.from(this.users.values()).map(({ username, status }) => ({ username, status }));
+  private hasUsername(username: string): boolean {
+    for (const info of this.users.values()) {
+      if (info.username === username) return true;
+    }
+    return false;
   }
 
-  private findConnectionByUsername(username: string): Party.Connection | null {
-    for (const conn of this.room.getConnections()) {
-      const info = this.users.get(conn.id);
-      if (info && info.username === username) return conn;
+  private getUserList(): Array<{ username: string; status: string }> {
+    // Dedupe by username (multi-connection support). 'in-game' wins over
+    // 'idle' so the lobby reflects the most-occupied state when a user
+    // is signed in on multiple devices.
+    const seen = new Map<string, string>();
+    for (const info of this.users.values()) {
+      const existing = seen.get(info.username);
+      if (!existing || (existing === "idle" && info.status === "in-game")) {
+        seen.set(info.username, info.status);
+      }
     }
-    return null;
+    return Array.from(seen.entries()).map(([username, status]) => ({ username, status }));
+  }
+
+  private findConnectionsByUsername(username: string): Party.Connection[] {
+    const targetIds = new Set<string>();
+    for (const [connId, info] of this.users) {
+      if (info.username === username) targetIds.add(connId);
+    }
+    const result: Party.Connection[] = [];
+    for (const conn of this.room.getConnections()) {
+      if (targetIds.has(conn.id)) result.push(conn);
+    }
+    return result;
   }
 }

@@ -9,6 +9,13 @@ export const PARTYKIT_HOST =
 
 export type MessageHandler = (data: any) => void;
 
+// Close info forwarded to onClose so callers can surface the reason a socket
+// dropped (e.g., 4001 superseded, 4003 heartbeat timeout, 1006 abnormal).
+export interface CloseInfo {
+  code: number;
+  reason: string;
+}
+
 export interface PartyClientOptions {
   host?: string;
   party?: string;
@@ -16,7 +23,7 @@ export interface PartyClientOptions {
   username: string;
   onMessage: MessageHandler;
   onOpen?: () => void;
-  onClose?: () => void;
+  onClose?: (info: CloseInfo) => void;
   onError?: (error: Event) => void;
 }
 
@@ -44,7 +51,10 @@ export class PartyClient {
       this.socket.addEventListener("open", options.onOpen);
     }
     if (options.onClose) {
-      this.socket.addEventListener("close", options.onClose);
+      // Forward code/reason so the caller can show *why* the socket dropped
+      this.socket.addEventListener("close", (event: CloseEvent) => {
+        options.onClose!({ code: event.code, reason: event.reason });
+      });
     }
     if (options.onError) {
       this.socket.addEventListener("error", options.onError);

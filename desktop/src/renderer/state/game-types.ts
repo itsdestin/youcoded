@@ -42,7 +42,7 @@ export interface GameState {
 
 export type GameAction =
   | { type: 'PARTY_CONNECTED'; username: string }
-  | { type: 'PARTY_DISCONNECTED' }
+  | { type: 'PARTY_DISCONNECTED'; code?: number; reason?: string }
   | { type: 'PARTY_ERROR'; message: string }
   | { type: 'PRESENCE_UPDATE'; online: OnlineUser[] }
   | { type: 'USER_JOINED'; username: string; status: string }
