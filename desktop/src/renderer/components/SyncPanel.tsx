@@ -11,6 +11,53 @@
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
+
+// Plain-language explainer for the Sync popup. Shown when the user taps the
+// (i) icon in the popup header — see SyncPopup's `showInfo` state.
+const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
+  intro:
+    "Sync saves your DestinClaude data — journal entries, encyclopedia, conversations, custom skills, and settings — to a cloud service. It's both a backup (so nothing is lost if your computer dies) and a way to pick up exactly where you left off on a different device.",
+  sections: [
+    {
+      heading: 'What gets synced',
+      paragraphs: [
+        "Your journal, encyclopedia, conversations, custom skills, system config, plans, and specs — basically everything personal that DestinClaude stores in your hidden .claude folder.",
+        'Your project code is NOT synced here — that\'s what GitHub is for. Sync is just for the personal AI stuff.',
+      ],
+    },
+    {
+      heading: 'Pick where to store it',
+      bullets: [
+        { term: 'Google Drive', text: 'The simplest option. Stores everything in a folder of your choice in your Google Drive account.' },
+        { term: 'GitHub', text: "Stores it in a private GitHub repository. Best if you're comfortable with git and want full version history of every change." },
+        { term: 'iCloud', text: 'For Mac users. Stores it in your iCloud Drive.' },
+        { term: 'You can pick more than one', text: "They all sync at the same time, so if one breaks or you lose access, you still have the others as backups." },
+      ],
+    },
+    {
+      heading: 'What the buttons do',
+      bullets: [
+        { term: 'Sync Now', text: "Forces a sync right now instead of waiting for the next automatic one. Good after you've made a lot of changes." },
+        { term: 'Configuration', text: 'Expand this to choose which backends are active and fill in their details (folder name, repo URL, etc).' },
+        { term: 'Sync Log', text: 'Shows the last 30 sync attempts and any errors. Useful when something\'s not working and you want to know why.' },
+        { term: 'Dismiss (on warnings)', text: 'Hides a warning. The underlying issue still exists — dismiss only if you understand and accept it.' },
+      ],
+    },
+    {
+      heading: 'Common issues',
+      bullets: [
+        { term: '"No Internet Connection"', text: 'Sync needs internet to talk to Google/GitHub/iCloud. Check your WiFi or cellular and try again.' },
+        { term: '"No Sync Backend Configured"', text: "You haven't picked a place to store backups yet. Open Configuration and check at least one backend (Drive/GitHub/iCloud)." },
+        { term: '"No Recent Sync (>24h)"', text: "It's been more than a day since your last successful sync. Tap Sync Now to catch up." },
+        { term: '"Pull Failed on Last Start"', text: 'DestinCode tried to pull your latest data when it started but couldn\'t. Usually a temporary network blip — tap Sync Now and it should clear.' },
+        { term: '"Unrouted Skills"', text: "Some custom skills aren't being saved anywhere. Open Configuration and make sure at least one backend is active." },
+        { term: 'Sync seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines — they usually tell you exactly what went wrong (wrong folder, missing permission, etc).' },
+        { term: "Connected the wrong account", text: 'Just change the folder name or repo URL in Configuration and tap Save. The next sync uses the new location.' },
+      ],
+    },
+  ],
+};
 
 // --- Types (mirror sync-state.ts) ---
 
@@ -230,6 +277,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const [configDraft, setConfigDraft] = useState<Partial<SyncConfig>>({});
   const [configSaving, setConfigSaving] = useState(false);
   const [configSaved, setConfigSaved] = useState(false);
+  // Flips the popup body to the plain-language explainer view via the (i) icon.
+  const [showInfo, setShowInfo] = useState(false);
 
   const claude = (window as any).claude;
 
@@ -341,13 +390,25 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           height: 'min(640px, 85vh)',
         }}
       >
+        {showInfo ? (
+          <SettingsExplainer
+            title="Sync"
+            intro={SYNC_EXPLAINER.intro}
+            sections={SYNC_EXPLAINER.sections}
+            onBack={() => setShowInfo(false)}
+            onClose={onClose}
+          />
+        ) : (
         <div className="flex flex-col h-full">
-          {/* Header */}
+          {/* Header — info icon (left of close) reveals the explainer view */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
             <h2 className="text-sm font-bold text-fg">Sync Management</h2>
-            <button onClick={onClose} className="text-fg-muted hover:text-fg-2 text-lg leading-none w-8 h-8 flex items-center justify-center rounded-sm hover:bg-inset">
-              ✕
-            </button>
+            <div className="flex items-center gap-1">
+              <InfoIconButton onClick={() => setShowInfo(true)} />
+              <button onClick={onClose} className="text-fg-muted hover:text-fg-2 text-lg leading-none w-8 h-8 flex items-center justify-center rounded-sm hover:bg-inset">
+                ✕
+              </button>
+            </div>
           </div>
 
           {/* Scrollable content */}
@@ -612,6 +673,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             )}
           </div>
         </div>
+        )}
       </div>
     </>
   );

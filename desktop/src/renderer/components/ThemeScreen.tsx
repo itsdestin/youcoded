@@ -1,6 +1,49 @@
-import React, { useCallback, useRef } from 'react';
+import React, { useCallback, useRef, useState } from 'react';
 import { useTheme } from '../state/theme-context';
 import { computeOnAccent } from '../themes/theme-validator';
+import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
+
+// Plain-language explainer for the Appearance popup. Shown when the user taps
+// the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
+const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
+  intro:
+    "Appearance lets you customize how DestinCode looks — colors, fonts, animations, and visual effects. You can use a built-in theme, download one from the marketplace, or build your own just by describing it to Claude.",
+  sections: [
+    {
+      heading: "What's a theme?",
+      paragraphs: [
+        "A theme is a set of colors and styles that change the whole look of the app. It includes the background, text colors, accent color (used for buttons and highlights), how round the corners are, and decorative effects like falling particles or blurred glass panels.",
+      ],
+    },
+    {
+      heading: 'What the settings do',
+      bullets: [
+        { term: 'Your Themes', text: 'Every theme installed on your device. Tap one to use it right away.' },
+        { term: 'The little checkmark', text: 'Adds a theme to your "cycle". Themes in the cycle rotate when you tap the theme pill in the bottom status bar — handy if you like switching looks throughout the day.' },
+        { term: 'Edit (only for themes you made)', text: "Built-in themes are locked. To customize colors and shape, make a copy first by tapping 'Build New Theme with Claude'." },
+        { term: 'Accent', text: 'The main highlight color used for buttons, links, and active items.' },
+        { term: 'Roundness', text: 'How curved the corners of buttons and panels are. Drag left for sharp/square, right for round/pill-shaped.' },
+        { term: 'Particles', text: 'Optional floating effects on the background — rain, snow, dust, or ember. Set to "none" to turn them off.' },
+        { term: 'Glass (Blur and Opacity)', text: 'Only appears for themes with a wallpaper or gradient background. Controls how see-through and blurry the panels and chat bubbles look on top of the background.' },
+        { term: 'Browse Theme Marketplace', text: 'Open the gallery of themes other people have made and shared. Free to install.' },
+        { term: 'Reduce Visual Effects', text: 'Turns off particles, glass blur, and animations. Use this if the app feels slow or if movement bothers you.' },
+        { term: 'Message Timestamps', text: 'Shows the time each chat message was sent inside the bubble.' },
+        { term: 'Build New Theme with Claude', text: "Asks Claude to create a brand-new theme just by describing what you want in plain English (e.g. 'a soft sage green theme with rounded corners')." },
+      ],
+    },
+    {
+      heading: 'Common issues',
+      bullets: [
+        { term: 'Theme looks broken or colors are missing', text: "The theme file may be corrupted. Switch back to a built-in theme (Light/Dark/Midnight/Crème) first, then try the broken one again." },
+        { term: 'App feels slow or laggy', text: 'Turn on "Reduce Visual Effects". Particles and glass blur use the most power — disabling them usually fixes it instantly.' },
+        { term: "Can't edit a theme", text: "You can only edit themes you made yourself. Built-in themes are read-only. Tap 'Build New Theme with Claude' to make your own copy you can change." },
+        { term: "Theme cycle isn't switching", text: 'Make sure you\'ve added at least 2 themes to the cycle (the little checkmark in the corner of each theme card).' },
+        { term: 'Custom font not showing', text: "DestinCode reads fonts installed on your computer. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
+        { term: 'Published theme not appearing in marketplace', text: 'Theme submissions are reviewed before they go live. Yours should appear within a day or two if it passes the safety checks.' },
+      ],
+    },
+  ],
+};
 
 const PARTICLE_OPTIONS = ['none', 'rain', 'dust', 'ember', 'snow', 'custom'] as const;
 
@@ -18,6 +61,20 @@ interface Props { onClose: () => void; onSendInput?: (text: string) => void; onO
 export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, onPublishTheme }: Props) {
   const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, activeTheme, reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps } = useTheme();
   const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Flips the popup body to the plain-language explainer view via the (i) icon.
+  const [showInfo, setShowInfo] = useState(false);
+
+  if (showInfo) {
+    return (
+      <SettingsExplainer
+        title="Appearance"
+        intro={APPEARANCE_EXPLAINER.intro}
+        sections={APPEARANCE_EXPLAINER.sections}
+        onBack={() => setShowInfo(false)}
+        onClose={onClose}
+      />
+    );
+  }
 
   const currentFontName = font.split(',')[0].trim().replace(/^['"]|['"]$/g, '');
 
@@ -61,7 +118,11 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
         <h2 className="text-sm font-bold text-fg">Themes</h2>
-        <button onClick={onClose} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
+        {/* Info icon — reveals the plain-language explainer view */}
+        <div className="flex items-center gap-1">
+          <InfoIconButton onClick={() => setShowInfo(true)} />
+          <button onClick={onClose} className="text-fg-muted hover:text-fg-2 text-lg leading-none w-6 h-6 flex items-center justify-center">✕</button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto p-3 space-y-4">

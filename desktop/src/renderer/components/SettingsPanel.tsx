@@ -5,8 +5,45 @@ import { QRCodeSVG } from 'qrcode.react';
 import { isAndroid } from '../platform';
 import ThemeScreen from './ThemeScreen';
 import SyncSection from './SyncPanel';
+import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { useTheme } from '../state/theme-context';
 import { MODELS, type ModelAlias } from './StatusBar';
+
+// Plain-language explainer for the Remote Access popup. Shown when the user
+// taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
+const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
+  intro:
+    "Remote Access lets you use DestinCode from any phone, tablet, or other computer — even when you're across the world. Your main computer keeps doing all the actual work; the other device just shows you what's happening and lets you type.",
+  sections: [
+    {
+      heading: 'What is Tailscale?',
+      paragraphs: [
+        "Tailscale is a free, secure tunnel that connects your devices like they're on the same WiFi, even when they're far apart. We use it because it's much safer than opening your computer to the open internet.",
+        'You install it once on your main computer (that\'s what the "Set Up Remote Access" button does), then sign in with Google or GitHub. After that, you can scan a QR code on your phone to connect.',
+      ],
+    },
+    {
+      heading: 'What the settings do',
+      bullets: [
+        { term: 'Enabled', text: 'Turns the remote server on or off. When off, no other device can connect to this computer.' },
+        { term: 'Password', text: "A short word or phrase you'll type on your phone or tablet to prove it's really you. Required by default." },
+        { term: 'Keep awake', text: "Stops your computer from going to sleep so it stays ready to respond. Set to a few hours during a session, or 'Off' to let it sleep normally." },
+        { term: 'Skip password on Tailscale', text: 'If a device is already on your private Tailscale network, you trust it and skip the password. Convenient, but only turn on if you trust everyone on your Tailscale.' },
+      ],
+    },
+    {
+      heading: 'Common issues',
+      bullets: [
+        { term: '"Tailscale not installed"', text: 'Click "Set Up Remote Access" and follow the prompts. It downloads about 50MB and asks you to sign in through a browser.' },
+        { term: '"VPN not active"', text: 'Tailscale is installed but turned off. Open the Tailscale app on your computer and switch it on.' },
+        { term: "Phone can't connect", text: 'Make sure Tailscale is also installed on your phone and signed in to the same account. Both devices need it running at the same time.' },
+        { term: "QR code won't scan", text: 'Tap "Copy link" instead, send the link to your phone (text it to yourself), and open it in your phone\'s browser.' },
+        { term: 'Forgot the password', text: 'Just type a new one into the password box and hit "Set". The old one is replaced — there\'s nothing to recover.' },
+        { term: 'Connected device should be removed', text: 'Use the ✕ next to a device under "Connected Devices" to disconnect it. They\'ll need the password again to reconnect.' },
+      ],
+    },
+  ],
+};
 
 interface RemoteConfig {
   enabled: boolean;
@@ -530,7 +567,15 @@ function RemoteButton({
   onSetShowSetupQR, onSetShowAddDevice,
 }: RemoteButtonProps) {
   const [open, setOpen] = useState(false);
+  // showInfo flips the popup body to the plain-language explainer view.
+  // Reset to false whenever the popup re-opens so users always start on the
+  // main settings, not whichever screen they last viewed.
+  const [showInfo, setShowInfo] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) setShowInfo(false);
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -595,11 +640,23 @@ function RemoteButton({
               height: 'min(600px, 80vh)',
             }}
           >
+            {showInfo ? (
+              <SettingsExplainer
+                title="Remote Access"
+                intro={REMOTE_ACCESS_EXPLAINER.intro}
+                sections={REMOTE_ACCESS_EXPLAINER.sections}
+                onBack={() => setShowInfo(false)}
+                onClose={() => setOpen(false)}
+              />
+            ) : (
             <div className="flex flex-col h-full">
-              {/* Header */}
+              {/* Header — info icon (left of close) reveals the explainer view */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
                 <h2 className="text-sm font-bold text-fg">Remote Access</h2>
-                <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
+                <div className="flex items-center gap-1">
+                  <InfoIconButton onClick={() => setShowInfo(true)} />
+                  <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none w-6 h-6 flex items-center justify-center">✕</button>
+                </div>
               </div>
 
               {/* Scrollable content */}
@@ -843,6 +900,7 @@ function RemoteButton({
                 )}
               </div>
             </div>
+            )}
           </div>
         </>,
         document.body,
