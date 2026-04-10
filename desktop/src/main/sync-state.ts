@@ -1,14 +1,9 @@
 /**
  * sync-state.ts — Shared sync state reader for the Sync Management UI.
  *
- * Reads state files written by DestinClaude toolkit hooks (sync.sh,
- * session-start.sh, session-end-sync.sh) and exposes them as typed objects.
- * Also provides config writes and force-sync triggering.
- *
- * This module is the bridge between the toolkit (bash hooks = sync engine)
- * and the app (React UI = control plane). It does NOT reimplement sync
- * logic — it reads the same files the /sync skill reads and triggers
- * the same scripts.
+ * Reads state files written by the native SyncService and toolkit hooks,
+ * and exposes them as typed objects. Also provides config writes and
+ * force-sync triggering (delegates to SyncService).
  *
  * Used by: ipc-handlers.ts, remote-server.ts
  */
@@ -16,7 +11,6 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
-import { execFile } from 'child_process';
 import type { SyncService } from './sync-service';
 
 // --- SyncService delegation ---
@@ -255,77 +249,29 @@ export async function setSyncConfig(
 }
 
 /**
- * Trigger a force sync. Delegates to SyncService when running (app-native),
- * falls back to shelling out to sync.sh (legacy/toolkit-only).
+ * Trigger a force sync. Delegates to the native SyncService.
+ * The legacy fallback to sync.sh was removed — sync.sh no longer exists
+ * after the toolkit sync decoupling (backup-system-spec.md v6.0).
  */
 export async function forceSync(): Promise<{
   success: boolean;
   output: string;
   error: string;
 }> {
-  // Delegate to SyncService if running — native push with force flag
-  if (syncServiceInstance) {
-    try {
-      const result = await syncServiceInstance.push({ force: true });
-      return {
-        success: result.success,
-        output: result.backends.join(', ') || 'No backends configured',
-        error: result.errors > 0 ? `${result.errors} backend(s) had errors` : '',
-      };
-    } catch (e: any) {
-      return { success: false, output: '', error: e.message || 'SyncService push failed' };
-    }
+  if (!syncServiceInstance) {
+    return { success: false, output: '', error: 'SyncService not initialized' };
   }
 
-  // Fallback: shell out to sync.sh (when SyncService not available)
-  return legacyForceSync();
-}
-
-/** Legacy force sync — shells out to toolkit's sync.sh script. */
-async function legacyForceSync(): Promise<{
-  success: boolean;
-  output: string;
-  error: string;
-}> {
-  // Clear debounce marker so sync.sh proceeds immediately
   try {
-    await fs.promises.unlink(syncMarkerPath);
-  } catch {}
-
-  const config = (await readJson(configPath)) || {};
-  const toolkitRoot: string = config.toolkit_root || '';
-
-  if (!toolkitRoot) {
-    return { success: false, output: '', error: 'Toolkit not installed' };
+    const result = await syncServiceInstance.push({ force: true });
+    return {
+      success: result.success,
+      output: result.backends.join(', ') || 'No backends configured',
+      error: result.errors > 0 ? `${result.errors} backend(s) had errors` : '',
+    };
+  } catch (e: any) {
+    return { success: false, output: '', error: e.message || 'SyncService push failed' };
   }
-
-  const syncScript = path.join(toolkitRoot, 'core', 'hooks', 'sync.sh');
-  if (!(await fileExists(syncScript))) {
-    return { success: false, output: '', error: `sync.sh not found at ${syncScript}` };
-  }
-
-  return new Promise((resolve) => {
-    const child = execFile(
-      'bash',
-      [syncScript],
-      {
-        timeout: 120_000,
-        env: { ...process.env, CLAUDE_DIR: claudeDir },
-      },
-      (err, stdout, stderr) => {
-        resolve({
-          success: !err,
-          output: stdout || '',
-          error: stderr || (err ? err.message : ''),
-        });
-      }
-    );
-    const stdinPayload = JSON.stringify({
-      tool_input: { file_path: path.join(claudeDir, 'CLAUDE.md') },
-    });
-    child.stdin?.write(stdinPayload);
-    child.stdin?.end();
-  });
 }
 
 /**

@@ -81,6 +81,7 @@ interface SyncConfig {
   DRIVE_ROOT: string;
   PERSONAL_SYNC_REPO: string;
   ICLOUD_PATH: string;
+  SYNC_WIFI_ONLY?: string; // Android only — "true"/"false", defaults to "true"
 }
 
 // --- Warning display map (same codes as StatusBar + /sync skill) ---
@@ -554,6 +555,27 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       </label>
                     ))}
                   </div>
+
+                  {/* Wi-Fi only toggle — Android only */}
+                  {location.protocol === 'file:' && (
+                    <div className="pt-1">
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={(configDraft.SYNC_WIFI_ONLY ?? config?.SYNC_WIFI_ONLY ?? 'true') === 'true'}
+                          onChange={(e) => setConfigDraft(prev => ({
+                            ...prev,
+                            SYNC_WIFI_ONLY: e.target.checked ? 'true' : 'false',
+                          }))}
+                          className="rounded border-edge-dim accent-accent"
+                        />
+                        <span className="text-xs text-fg">Sync only on Wi-Fi</span>
+                      </label>
+                      <div className="text-[10px] text-fg-faint mt-0.5 ml-5">
+                        When off, sync runs on cellular data too
+                      </div>
+                    </div>
+                  )}
 
                   {/* Config fields */}
                   {CONFIG_FIELDS.map(field => {

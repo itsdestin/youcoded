@@ -74,6 +74,10 @@ class SessionService : Service() {
         private set
     var bootstrap: Bootstrap? = null
         private set
+    // Native sync engine — owns push/pull lifecycle, background timer.
+    // Replaces bash sync.sh hooks when the app is running.
+    var syncService: SyncService? = null
+        private set
 
     // Legacy single-session API — kept for ServiceBinder compatibility during migration
     var ptyBridge: PtyBridge? = null
@@ -115,6 +119,9 @@ class SessionService : Service() {
         skillProvider = LocalSkillProvider(bs.homeDir, applicationContext)
         skillProvider?.ensureMigrated()
         pluginInstaller = PluginInstaller(bs.homeDir, bs, skillProvider!!.configStore)
+
+        // Start native sync engine — pulls on launch, pushes every 15 min
+        syncService = SyncService(applicationContext, bs).also { it.start() }
     }
 
     /** Watch ~/.claude-mobile/open-url for URLs written by the JS wrapper.
@@ -209,6 +216,17 @@ class SessionService : Service() {
     }
 
     fun destroySession(sessionId: String) {
+        // Push this session's JSONL to all backends before destroying
+        // (mirrors desktop main.ts session-exit → syncService.pushSession)
+        syncService?.let { sync ->
+            serviceScope.launch {
+                try {
+                    sync.pushSession(sessionId)
+                } catch (e: Exception) {
+                    android.util.Log.w("SessionService", "Session-end sync failed for $sessionId: $e")
+                }
+            }
+        }
         sessionRegistry.destroySession(sessionId)
         if (sessionRegistry.sessionCount == 0) {
             releaseWakeLock()
@@ -313,6 +331,9 @@ class SessionService : Service() {
     }
 
     override fun onDestroy() {
+        // Stop sync service — cancels timer, releases locks, removes .app-sync-active marker
+        try { syncService?.stop() } catch (_: Exception) {}
+        syncService = null
         bridgeServer.stop()
         urlObserver?.stopWatching()
         urlObserver = null
@@ -983,26 +1004,25 @@ class SessionService : Service() {
             }
 
             // --- Sync management ---
-            // Reads toolkit state files from ~/.claude/ for the Sync Management UI.
-            // Force sync shells out to the toolkit's sync.sh script.
+            // Delegates to native SyncService for push/pull/status.
+            // Reads state files from ~/.claude/ for status queries.
             "sync:get-status" -> {
                 val claudeDir = File(bootstrap!!.homeDir, ".claude")
-                val configFile = File(claudeDir, "toolkit-state/config.json")
-                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
-
-                val backendStr = config.optString("PERSONAL_SYNC_BACKEND", "none")
-                val driveRoot = config.optString("DRIVE_ROOT", "Claude")
-                val syncRepo = config.optString("PERSONAL_SYNC_REPO", "")
-                val icloudPath = config.optString("ICLOUD_PATH", "")
+                val sync = syncService
+                // Read config via SyncService if available, else read files directly
+                val backendStr = sync?.configGet("PERSONAL_SYNC_BACKEND", "none") ?: "none"
+                val driveRoot = sync?.configGet("DRIVE_ROOT", "Claude") ?: "Claude"
+                val syncRepo = sync?.configGet("PERSONAL_SYNC_REPO", "") ?: ""
                 val activeBackends = backendStr.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() && it != "none" }
 
+                // Note: iCloud backend always shows "Not configured" on Android (not supported)
                 val backends = org.json.JSONArray().apply {
                     put(JSONObject().put("name", "drive").put("configured", activeBackends.contains("drive"))
                         .put("detail", if (activeBackends.contains("drive")) "gdrive:$driveRoot/Backup/personal" else "Not configured"))
                     put(JSONObject().put("name", "github").put("configured", activeBackends.contains("github"))
                         .put("detail", if (activeBackends.contains("github") && syncRepo.isNotEmpty()) syncRepo else "Not configured"))
-                    put(JSONObject().put("name", "icloud").put("configured", activeBackends.contains("icloud"))
-                        .put("detail", if (activeBackends.contains("icloud") && icloudPath.isNotEmpty()) icloudPath else "Not configured"))
+                    put(JSONObject().put("name", "icloud").put("configured", false)
+                        .put("detail", "Not available on Android"))
                 }
 
                 val markerFile = File(claudeDir, "toolkit-state/.sync-marker")
@@ -1034,13 +1054,13 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "sync:get-config" -> {
-                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
-                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val sync = syncService
                 val result = JSONObject().apply {
-                    put("PERSONAL_SYNC_BACKEND", config.optString("PERSONAL_SYNC_BACKEND", "none"))
-                    put("DRIVE_ROOT", config.optString("DRIVE_ROOT", "Claude"))
-                    put("PERSONAL_SYNC_REPO", config.optString("PERSONAL_SYNC_REPO", ""))
-                    put("ICLOUD_PATH", config.optString("ICLOUD_PATH", ""))
+                    put("PERSONAL_SYNC_BACKEND", sync?.configGet("PERSONAL_SYNC_BACKEND", "none") ?: "none")
+                    put("DRIVE_ROOT", sync?.configGet("DRIVE_ROOT", "Claude") ?: "Claude")
+                    put("PERSONAL_SYNC_REPO", sync?.configGet("PERSONAL_SYNC_REPO", "") ?: "")
+                    put("ICLOUD_PATH", "") // Not supported on Android
+                    put("SYNC_WIFI_ONLY", sync?.configGet("SYNC_WIFI_ONLY", "true") ?: "true")
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
@@ -1056,44 +1076,26 @@ class SessionService : Service() {
                     put("DRIVE_ROOT", existing.optString("DRIVE_ROOT", "Claude"))
                     put("PERSONAL_SYNC_REPO", existing.optString("PERSONAL_SYNC_REPO", ""))
                     put("ICLOUD_PATH", existing.optString("ICLOUD_PATH", ""))
+                    put("SYNC_WIFI_ONLY", existing.optString("SYNC_WIFI_ONLY", "true"))
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "sync:force" -> {
-                // Clear debounce marker and run sync.sh via shell
-                val claudeDir = File(bootstrap!!.homeDir, ".claude")
-                val markerFile = File(claudeDir, "toolkit-state/.sync-marker")
-                try { markerFile.delete() } catch (_: Exception) {}
-
-                val configFile = File(claudeDir, "toolkit-state/config.json")
-                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
-                val toolkitRoot = config.optString("toolkit_root", "")
-
-                if (toolkitRoot.isEmpty()) {
+                // Delegate to native SyncService — no more shelling out to sync.sh
+                val sync = syncService
+                if (sync == null) {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
-                        .put("success", false).put("output", "").put("error", "Toolkit not installed")) }
+                        .put("success", false).put("output", "").put("error", "SyncService not initialized")) }
                 } else {
-                    val syncScript = "$toolkitRoot/core/hooks/sync.sh"
                     try {
-                        val env = bootstrap!!.buildRuntimeEnv().toMutableMap()
-                        env["CLAUDE_DIR"] = claudeDir.absolutePath
-                        val envArray = env.map { "${it.key}=${it.value}" }.toTypedArray()
-                        val process = Runtime.getRuntime().exec(
-                            arrayOf("bash", syncScript),
-                            envArray,
-                            claudeDir
-                        )
-                        // Write synthetic stdin JSON to trigger personal data path
-                        process.outputStream.write("{\"tool_input\":{\"file_path\":\"${claudeDir.absolutePath}/CLAUDE.md\"}}".toByteArray())
-                        process.outputStream.close()
-                        val stdout = process.inputStream.bufferedReader().readText()
-                        val stderr = process.errorStream.bufferedReader().readText()
-                        val exitCode = process.waitFor()
+                        val result = sync.push(force = true)
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
-                            .put("success", exitCode == 0).put("output", stdout).put("error", stderr)) }
+                            .put("success", result.success)
+                            .put("output", result.backends.joinToString(", ").ifEmpty { "No backends configured" })
+                            .put("error", if (result.errors > 0) "${result.errors} backend(s) had errors" else "")) }
                     } catch (e: Exception) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
-                            .put("success", false).put("output", "").put("error", e.message ?: "Unknown error")) }
+                            .put("success", false).put("output", "").put("error", e.message ?: "SyncService push failed")) }
                     }
                 }
             }
