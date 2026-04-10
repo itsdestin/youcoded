@@ -68,6 +68,8 @@ class SessionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var urlObserver: FileObserver? = null
     private var usageRefreshTimer: java.util.Timer? = null
+    // Phase 5d: FileObserver for theme hot-reload
+    private var themeWatcher: FileObserver? = null
     var skillProvider: LocalSkillProvider? = null
         private set
     var pluginInstaller: PluginInstaller? = null
@@ -127,6 +129,8 @@ class SessionService : Service() {
                 ?.takeIf { !it.shellMode && it.isRunning }
                 ?.writeInput("/reload-plugins\r")
         }
+        // Phase 5d: start watching themes directory for hot-reload
+        startThemeWatcher(bs)
 
         // Start native sync engine — pulls on launch, pushes every 15 min
         syncService = SyncService(applicationContext, bs).also { it.start() }
@@ -180,6 +184,60 @@ class SessionService : Service() {
                 }
             }, 10_000, 5 * 60 * 1000) // initial 10s delay, then every 5 min
         }
+    }
+
+    /**
+     * Phase 5d: Watch ~/.claude/destinclaude-themes/ for changes.
+     * Sends theme:reload push events via WebSocket when theme files change,
+     * matching desktop's theme-watcher.ts behavior with per-slug debouncing.
+     */
+    private fun startThemeWatcher(bs: Bootstrap) {
+        val watchDir = File(bs.homeDir, ".claude/destinclaude-themes")
+        watchDir.mkdirs()
+
+        themeWatcher?.stopWatching()
+
+        // Debounce map: slug → pending runnable
+        val debounceMap = java.util.concurrent.ConcurrentHashMap<String, Runnable>()
+        val handler = android.os.Handler(android.os.Looper.getMainLooper())
+
+        // FileObserver watches CREATE, MODIFY, DELETE events on the themes dir.
+        // Android's FileObserver is non-recursive, so we watch the root dir and
+        // parse slug from subdirectory paths.
+        @Suppress("DEPRECATION") // FileObserver(String) deprecated in API 29 but still works
+        themeWatcher = object : FileObserver(
+            watchDir.absolutePath,
+            CREATE or MODIFY or DELETE or MOVED_TO or MOVED_FROM
+        ) {
+            override fun onEvent(event: Int, path: String?) {
+                if (path == null) return
+                // Extract slug from path (first component of relative path)
+                val normalized = path.replace("\\", "/")
+                val slug = normalized.split("/").firstOrNull() ?: return
+
+                // Only trigger on relevant file types
+                val ext = normalized.substringAfterLast(".", "").lowercase()
+                if (ext !in listOf("json", "svg", "png", "jpg", "jpeg", "webp", "css")) return
+
+                // Debounce per slug (~100ms, matching desktop)
+                val existing = debounceMap[slug]
+                if (existing != null) handler.removeCallbacks(existing)
+
+                val runnable = Runnable {
+                    debounceMap.remove(slug)
+                    // Send theme:reload push event (no id — it's a broadcast)
+                    bridgeServer.broadcast(JSONObject().apply {
+                        put("type", "theme:reload")
+                        put("payload", JSONObject().apply {
+                            put("slug", slug)
+                        })
+                    })
+                }
+                debounceMap[slug] = runnable
+                handler.postDelayed(runnable, 100)
+            }
+        }
+        themeWatcher?.startWatching()
     }
 
     val titlesDir: File get() = File(bootstrap?.homeDir ?: File("/"), ".claude-mobile/titles")
@@ -352,6 +410,9 @@ class SessionService : Service() {
         bridgeServer.stop()
         urlObserver?.stopWatching()
         urlObserver = null
+        // Phase 5d: stop theme watcher
+        themeWatcher?.stopWatching()
+        themeWatcher = null
         usageRefreshTimer?.cancel()
         usageRefreshTimer = null
         sessionRegistry.destroyAll()
