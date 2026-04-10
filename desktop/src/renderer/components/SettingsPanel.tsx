@@ -219,27 +219,26 @@ function Toggle({ enabled, onToggle, color = 'green' }: { enabled: boolean; onTo
 
 import {
   SOUND_MUTED_KEY, SOUND_VOLUME_KEY,
-  COMPLETION_PRESETS, ATTENTION_PRESETS, READY_PRESETS,
+  STOCK_PRESETS, CUSTOM_SOUND_ID,
   getSelectedPresetId, setSelectedPresetId, playPreview,
+  getCustomSoundPath, setCustomSoundPath, getCustomSoundDisplayName,
   isCategoryEnabled, setCategoryEnabled,
   type SoundCategory,
 } from '../utils/sounds';
 
-/** Compact preset selector row — shows buttons for each preset, plays on click */
-function PresetSelector({ category, selectedId, onSelect }: {
+/** Preset selector — stock sounds + custom sound file option */
+function PresetSelector({ category, selectedId, onSelect, customName }: {
   category: SoundCategory;
   selectedId: string;
   onSelect: (id: string) => void;
+  customName: string | null; // display name of the custom sound file, if set
 }) {
-  const presets = category === 'completion' ? COMPLETION_PRESETS
-    : category === 'attention' ? ATTENTION_PRESETS : READY_PRESETS;
-
   return (
     <div className="flex flex-wrap gap-1">
-      {presets.map((p) => (
+      {STOCK_PRESETS.map((p) => (
         <button
           key={p.id}
-          onClick={() => { onSelect(p.id); playPreview(category, p.id); }}
+          onClick={() => { onSelect(p.id); playPreview(p.id); }}
           className={`px-2 py-1 rounded text-[10px] transition-colors ${
             selectedId === p.id
               ? 'bg-accent text-on-accent font-medium'
@@ -249,6 +248,20 @@ function PresetSelector({ category, selectedId, onSelect }: {
           {p.label}
         </button>
       ))}
+      {/* Custom sound — shown as a button when set, or as a "+" to pick one */}
+      {customName ? (
+        <button
+          onClick={() => { onSelect(CUSTOM_SOUND_ID); playPreview(CUSTOM_SOUND_ID, category); }}
+          className={`px-2 py-1 rounded text-[10px] transition-colors ${
+            selectedId === CUSTOM_SOUND_ID
+              ? 'bg-accent text-on-accent font-medium'
+              : 'bg-inset text-fg-dim hover:bg-edge'
+          }`}
+          title={customName}
+        >
+          {customName}
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -262,6 +275,7 @@ function SoundCategorySection({ category, label, description, dotColor }: {
 }) {
   const [enabled, setEnabled] = useState(() => isCategoryEnabled(category));
   const [presetId, setPresetId] = useState(() => getSelectedPresetId(category));
+  const [customPath, setCustomPath] = useState(() => getCustomSoundPath(category));
 
   const handleToggle = useCallback(() => {
     setEnabled((prev) => {
@@ -276,6 +290,35 @@ function SoundCategorySection({ category, label, description, dotColor }: {
     setSelectedPresetId(category, id);
   }, [category]);
 
+  // Pick a custom sound file via the system file picker
+  const handlePickCustom = useCallback(async () => {
+    try {
+      const path = await window.claude.dialog.openSound();
+      if (!path) return;
+      setCustomSoundPath(category, path);
+      setCustomPath(path);
+      // Auto-select the custom sound after picking it
+      setPresetId(CUSTOM_SOUND_ID);
+      setSelectedPresetId(category, CUSTOM_SOUND_ID);
+      // Preview it
+      playPreview(CUSTOM_SOUND_ID, category);
+    } catch { /* dialog cancelled or not available */ }
+  }, [category]);
+
+  // Clear custom sound
+  const handleClearCustom = useCallback(() => {
+    setCustomSoundPath(category, null);
+    setCustomPath(null);
+    // If custom was selected, fall back to first stock preset
+    if (presetId === CUSTOM_SOUND_ID) {
+      const fallback = STOCK_PRESETS[0].id;
+      setPresetId(fallback);
+      setSelectedPresetId(category, fallback);
+    }
+  }, [category, presetId]);
+
+  const customName = customPath ? getCustomSoundDisplayName(customPath) : null;
+
   return (
     <section>
       <div className="flex items-center justify-between mb-2">
@@ -287,7 +330,37 @@ function SoundCategorySection({ category, label, description, dotColor }: {
       </div>
       <p className="text-[10px] text-fg-muted mb-2">{description}</p>
       {enabled && (
-        <PresetSelector category={category} selectedId={presetId} onSelect={handleSelect} />
+        <>
+          <PresetSelector
+            category={category}
+            selectedId={presetId}
+            onSelect={handleSelect}
+            customName={customName}
+          />
+          {/* Custom sound controls */}
+          <div className="flex items-center gap-2 mt-2">
+            <button
+              onClick={handlePickCustom}
+              className="px-2 py-1 rounded text-[10px] bg-inset text-fg-dim hover:bg-edge transition-colors flex items-center gap-1"
+            >
+              <svg className="w-3 h-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              {customName ? 'Change file' : 'Custom sound'}
+            </button>
+            {customName && (
+              <button
+                onClick={handleClearCustom}
+                className="px-2 py-1 rounded text-[10px] text-fg-muted hover:text-fg hover:bg-edge transition-colors"
+                title="Remove custom sound"
+              >
+                Remove
+              </button>
+            )}
+          </div>
+        </>
       )}
     </section>
   );
@@ -426,15 +499,6 @@ function SoundButton() {
                     <span className="text-[10px] text-fg-muted w-8 text-right">{Math.round(volume * 100)}%</span>
                   </div>
                 </section>
-
-                <div className="border-t border-edge-dim" />
-
-                {/* Completion sound */}
-                <SoundCategorySection
-                  category="completion"
-                  label="Completion"
-                  description="Plays when Claude finishes responding"
-                />
 
                 <div className="border-t border-edge-dim" />
 

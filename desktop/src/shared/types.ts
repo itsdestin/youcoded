@@ -228,6 +228,7 @@ export const IPC = {
   SESSION_RENAMED: 'session:renamed',
   DIALOG_OPEN_FILE: 'dialog:open-file',
   DIALOG_OPEN_FOLDER: 'dialog:open-folder',
+  DIALOG_OPEN_SOUND: 'dialog:open-sound',
   CLIPBOARD_SAVE_IMAGE: 'clipboard:save-image',
   STATUS_DATA: 'status:data',
   READ_TRANSCRIPT_META: 'transcript:read-meta',

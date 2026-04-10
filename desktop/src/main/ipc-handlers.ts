@@ -152,6 +152,18 @@ export function registerIpcHandlers(
     return result.canceled ? [] : result.filePaths;
   });
 
+  // Sound file picker dialog — for custom notification sounds
+  ipcMain.handle(IPC.DIALOG_OPEN_SOUND, async () => {
+    const result = await dialog.showOpenDialog(mainWindow, {
+      properties: ['openFile'],
+      filters: [
+        { name: 'Audio Files', extensions: ['mp3', 'wav', 'ogg', 'aac', 'm4a', 'flac', 'webm'] },
+        { name: 'All Files', extensions: ['*'] },
+      ],
+    });
+    return result.canceled ? null : result.filePaths[0] ?? null;
+  });
+
   // Folder picker dialog
   ipcMain.handle(IPC.DIALOG_OPEN_FOLDER, async () => {
     const result = await dialog.showOpenDialog(mainWindow, {

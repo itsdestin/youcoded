@@ -48,6 +48,7 @@ declare global {
       dialog: {
         openFile: () => Promise<string[]>;
         openFolder: () => Promise<string | null>;
+        openSound: () => Promise<string | null>;
         readTranscriptMeta: (path: string) => Promise<{ model: string; contextPercent: number } | null>;
         saveClipboardImage: () => Promise<string | null>;
       };

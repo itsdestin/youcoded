@@ -1,21 +1,22 @@
 /**
- * Sound engine — synthesized notification sounds via Web Audio API.
+ * Sound engine — synthesized + custom notification sounds via Web Audio API.
  *
- * Three sound categories, each with selectable presets:
- * - completion: played when Claude finishes a response
- * - attention:  played when a session turns red (awaiting approval)
- * - ready:      played when a session turns blue (response ready, unseen)
+ * Two sound categories, each with selectable presets (shared stock list)
+ * plus optional custom sound files:
+ * - attention: played when a session turns red (awaiting approval)
+ * - ready:     played when a session turns blue (response ready, unseen)
  */
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
 
 export const SOUND_MUTED_KEY     = 'destincode-sound-muted';
 export const SOUND_VOLUME_KEY    = 'destincode-sound-volume';
-export const SOUND_PRESET_KEY    = 'destincode-sound-preset';       // completion preset
 export const SOUND_ATTENTION_KEY = 'destincode-sound-attention';    // red status preset
 export const SOUND_READY_KEY     = 'destincode-sound-ready';        // blue status preset
 export const SOUND_ATTENTION_ENABLED_KEY = 'destincode-sound-attention-enabled';
 export const SOUND_READY_ENABLED_KEY     = 'destincode-sound-ready-enabled';
+// Custom sound file paths per category
+export const SOUND_CUSTOM_PATH_PREFIX = 'destincode-sound-custom-path-'; // + category
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -26,7 +27,7 @@ export interface SoundPreset {
   play: (volume: number) => void;
 }
 
-export type SoundCategory = 'completion' | 'attention' | 'ready';
+export type SoundCategory = 'attention' | 'ready';
 
 // ── Synthesizer helpers ──────────────────────────────────────────────────────
 
@@ -117,56 +118,110 @@ function doubleTap(freq: number, type: OscillatorType = 'sine') {
   }, volume);
 }
 
-// ── Preset definitions ───────────────────────────────────────────────────────
+// ── Stock preset definitions (shared across both categories) ────────────────
 
-// Completion presets — played when Claude finishes
-export const COMPLETION_PRESETS: SoundPreset[] = [
-  { id: 'chime',     label: 'Chime',     play: twoTone([523.25, 659.25]) },           // C5 → E5
+export const STOCK_PRESETS: SoundPreset[] = [
+  { id: 'chime',     label: 'Chime',     play: twoTone([523.25, 659.25]) },             // C5 → E5
   { id: 'bell',      label: 'Bell',      play: twoTone([659.25, 783.99], 'triangle') }, // E5 → G5
-  { id: 'arpeggio',  label: 'Arpeggio',  play: triTone([523.25, 659.25, 783.99]) },   // C5 → E5 → G5
-  { id: 'soft',      label: 'Soft',      play: pulse(440, 'sine', 0.25) },             // A4 gentle
+  { id: 'arpeggio',  label: 'Arpeggio',  play: triTone([523.25, 659.25, 783.99]) },     // C5 → E5 → G5
+  { id: 'soft',      label: 'Soft',      play: pulse(440, 'sine', 0.25) },               // A4 gentle
   { id: 'sparkle',   label: 'Sparkle',   play: triTone([783.99, 987.77, 1174.66], 'triangle') }, // G5 → B5 → D6
-  { id: 'drop',      label: 'Drop',      play: descending([783.99, 523.25]) },          // G5 → C5
+  { id: 'drop',      label: 'Drop',      play: descending([783.99, 523.25]) },            // G5 → C5
+  { id: 'nudge',     label: 'Nudge',     play: doubleTap(440) },                          // A4 double tap
+  { id: 'alert',     label: 'Alert',     play: descending([880, 659.25]) },               // A5 → E5
+  { id: 'ping',      label: 'Ping',      play: pulse(880, 'triangle', 0.12) },            // A5 short
+  { id: 'knock',     label: 'Knock',     play: doubleTap(330, 'triangle') },              // E4 soft knock
+  { id: 'pop',       label: 'Pop',       play: pulse(587.33, 'sine', 0.1) },              // D5 short pop
+  { id: 'blip',      label: 'Blip',      play: pulse(698.46, 'triangle', 0.08) },         // F5 blip
+  { id: 'rise',      label: 'Rise',      play: twoTone([392, 523.25]) },                  // G4 → C5
+  { id: 'bubble',    label: 'Bubble',    play: twoTone([493.88, 587.33], 'triangle') },   // B4 → D5
+  { id: 'ding',      label: 'Ding',      play: pulse(1046.5, 'sine', 0.15) },             // C6 ding
 ];
 
-// Attention presets — played when status turns red (needs approval)
-export const ATTENTION_PRESETS: SoundPreset[] = [
-  { id: 'nudge',     label: 'Nudge',     play: doubleTap(440) },                        // A4 double tap
-  { id: 'alert',     label: 'Alert',     play: descending([880, 659.25]) },             // A5 → E5
-  { id: 'ping',      label: 'Ping',      play: pulse(880, 'triangle', 0.12) },          // A5 short
-  { id: 'knock',     label: 'Knock',     play: doubleTap(330, 'triangle') },            // E4 soft knock
-  { id: 'urgent',    label: 'Urgent',    play: triTone([880, 698.46, 880], 'square') }, // A5 → F5 → A5
-];
+// Special ID indicating user chose a custom sound file
+export const CUSTOM_SOUND_ID = '__custom__';
 
-// Ready presets — played when status turns blue (response ready)
-export const READY_PRESETS: SoundPreset[] = [
-  { id: 'pop',       label: 'Pop',       play: pulse(587.33, 'sine', 0.1) },            // D5 short pop
-  { id: 'blip',      label: 'Blip',      play: pulse(698.46, 'triangle', 0.08) },       // F5 blip
-  { id: 'rise',      label: 'Rise',      play: twoTone([392, 523.25]) },                // G4 → C5
-  { id: 'bubble',    label: 'Bubble',    play: twoTone([493.88, 587.33], 'triangle') }, // B4 → D5
-  { id: 'ding',      label: 'Ding',      play: pulse(1046.5, 'sine', 0.15) },           // C6 ding
-];
+// ── Custom sound file playback ──────────────────────────────────────────────
+
+/** Cache of decoded audio buffers keyed by file path, avoids re-fetching */
+const audioBufferCache = new Map<string, AudioBuffer>();
+
+/**
+ * Play a custom audio file at the given volume.
+ * Uses fetch + Web Audio API decodeAudioData for broad format support.
+ * Falls back to HTMLAudioElement for formats AudioContext can't decode.
+ */
+async function playCustomFile(filePath: string, volume: number) {
+  try {
+    // Build a file:// URL from the path
+    const fileUrl = filePath.startsWith('file://') ? filePath : `file://${filePath}`;
+    const ctx = new AudioContext();
+
+    let buffer = audioBufferCache.get(filePath);
+    if (!buffer) {
+      const response = await fetch(fileUrl);
+      const arrayBuffer = await response.arrayBuffer();
+      buffer = await ctx.decodeAudioData(arrayBuffer);
+      audioBufferCache.set(filePath, buffer);
+    }
+
+    const source = ctx.createBufferSource();
+    source.buffer = buffer;
+    const gain = ctx.createGain();
+    gain.gain.setValueAtTime(volume, ctx.currentTime);
+    source.connect(gain);
+    gain.connect(ctx.destination);
+    source.start();
+    // Clean up after playback finishes
+    source.onended = () => ctx.close();
+  } catch {
+    // Fallback: use HTMLAudioElement (handles more formats on some platforms)
+    try {
+      const audio = new Audio(filePath.startsWith('file://') ? filePath : `file://${filePath}`);
+      audio.volume = volume;
+      await audio.play();
+    } catch { /* audio not available or file missing */ }
+  }
+}
+
+/** Get the stored custom sound file path for a category */
+export function getCustomSoundPath(cat: SoundCategory): string | null {
+  try {
+    return localStorage.getItem(SOUND_CUSTOM_PATH_PREFIX + cat);
+  } catch { return null; }
+}
+
+/** Set the custom sound file path for a category */
+export function setCustomSoundPath(cat: SoundCategory, path: string | null) {
+  try {
+    if (path) {
+      localStorage.setItem(SOUND_CUSTOM_PATH_PREFIX + cat, path);
+    } else {
+      localStorage.removeItem(SOUND_CUSTOM_PATH_PREFIX + cat);
+    }
+  } catch {}
+}
+
+/** Extract a display name from a file path (just the filename without extension) */
+export function getCustomSoundDisplayName(path: string): string {
+  const name = path.replace(/\\/g, '/').split('/').pop() || path;
+  return name.replace(/\.[^.]+$/, '');
+}
 
 // ── Lookup helpers ───────────────────────────────────────────────────────────
 
-const PRESETS_BY_CATEGORY: Record<SoundCategory, SoundPreset[]> = {
-  completion: COMPLETION_PRESETS,
-  attention:  ATTENTION_PRESETS,
-  ready:      READY_PRESETS,
-};
-
 const STORAGE_KEYS: Record<SoundCategory, string> = {
-  completion: SOUND_PRESET_KEY,
-  attention:  SOUND_ATTENTION_KEY,
-  ready:      SOUND_READY_KEY,
+  attention: SOUND_ATTENTION_KEY,
+  ready:     SOUND_READY_KEY,
 };
 
 export function getSelectedPresetId(cat: SoundCategory): string {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS[cat]);
-    if (stored && PRESETS_BY_CATEGORY[cat].some((p) => p.id === stored)) return stored;
+    if (stored === CUSTOM_SOUND_ID) return CUSTOM_SOUND_ID;
+    if (stored && STOCK_PRESETS.some((p) => p.id === stored)) return stored;
   } catch {}
-  return PRESETS_BY_CATEGORY[cat][0].id; // default to first
+  return STOCK_PRESETS[0].id; // default to first
 }
 
 export function setSelectedPresetId(cat: SoundCategory, id: string) {
@@ -187,20 +242,14 @@ export function getSoundVolume(): number {
 }
 
 export function isCategoryEnabled(cat: SoundCategory): boolean {
-  if (cat === 'completion') return !isSoundMuted(); // completion uses the main mute toggle
   const key = cat === 'attention' ? SOUND_ATTENTION_ENABLED_KEY : SOUND_READY_ENABLED_KEY;
   try {
     const v = localStorage.getItem(key);
-    // Default: enabled for attention, enabled for ready
-    return v === null ? true : v === '1';
+    return v === null ? true : v === '1'; // default: enabled
   } catch { return true; }
 }
 
 export function setCategoryEnabled(cat: SoundCategory, enabled: boolean) {
-  if (cat === 'completion') {
-    try { localStorage.setItem(SOUND_MUTED_KEY, enabled ? '0' : '1'); } catch {}
-    return;
-  }
   const key = cat === 'attention' ? SOUND_ATTENTION_ENABLED_KEY : SOUND_READY_ENABLED_KEY;
   try { localStorage.setItem(key, enabled ? '1' : '0'); } catch {}
 }
@@ -209,17 +258,33 @@ export function setCategoryEnabled(cat: SoundCategory, enabled: boolean) {
 
 /** Play the user's selected sound for a category, respecting mute & volume */
 export function playSound(cat: SoundCategory) {
-  if (isSoundMuted() && cat === 'completion') return;
+  if (isSoundMuted()) return;
   if (!isCategoryEnabled(cat)) return;
   const vol = getSoundVolume();
   const presetId = getSelectedPresetId(cat);
-  const preset = PRESETS_BY_CATEGORY[cat].find((p) => p.id === presetId) || PRESETS_BY_CATEGORY[cat][0];
+
+  // Custom sound file
+  if (presetId === CUSTOM_SOUND_ID) {
+    const path = getCustomSoundPath(cat);
+    if (path) playCustomFile(path, vol);
+    return;
+  }
+
+  const preset = STOCK_PRESETS.find((p) => p.id === presetId) || STOCK_PRESETS[0];
   preset.play(vol);
 }
 
 /** Play a specific preset at current volume (for preview/test) */
-export function playPreview(cat: SoundCategory, presetId: string) {
+export function playPreview(presetId: string, cat?: SoundCategory) {
   const vol = getSoundVolume();
-  const preset = PRESETS_BY_CATEGORY[cat].find((p) => p.id === presetId) || PRESETS_BY_CATEGORY[cat][0];
+
+  // Custom sound preview
+  if (presetId === CUSTOM_SOUND_ID && cat) {
+    const path = getCustomSoundPath(cat);
+    if (path) playCustomFile(path, vol);
+    return;
+  }
+
+  const preset = STOCK_PRESETS.find((p) => p.id === presetId) || STOCK_PRESETS[0];
   preset.play(vol);
 }

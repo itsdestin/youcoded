@@ -517,6 +517,7 @@ export function installShim(): void {
             .then((r: any) => r?.paths ?? r ?? [])
             .catch(() => [] as string[]),
       openFolder: () => invoke('dialog:open-folder').catch(() => null),
+      openSound: () => invoke('dialog:open-sound').catch(() => null),
       readTranscriptMeta: (p: string) => invoke('transcript:read-meta', { path: p }),
       saveClipboardImage: async () => null,
     },
