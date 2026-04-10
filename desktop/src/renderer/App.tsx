@@ -53,6 +53,7 @@ interface StatusDataState {
   updateStatus: any;
   model: string | null;
   contextMap: Record<string, number>;
+  gitBranchMap: Record<string, string>;
   syncStatus: string | null;
   syncWarnings: string | null;
   lastSyncEpoch: number | null;
@@ -66,7 +67,7 @@ function AppInner() {
   const [viewModes, setViewModes] = useState<Map<string, ViewMode>>(new Map());
   const [statusData, setStatusData] = useState<StatusDataState>({
     usage: null, announcement: null, updateStatus: null,
-    model: null, contextMap: {},
+    model: null, contextMap: {}, gitBranchMap: {},
     syncStatus: null, syncWarnings: null,
     lastSyncEpoch: null, syncInProgress: false, backupMeta: null,
   });
@@ -397,6 +398,7 @@ function AppInner() {
         syncInProgress: data.syncInProgress ?? prev.syncInProgress,
         backupMeta: data.backupMeta ?? prev.backupMeta,
         contextMap: data.contextMap || prev.contextMap,
+        gitBranchMap: data.gitBranchMap || prev.gitBranchMap,
       }));
     });
 
@@ -1002,6 +1004,7 @@ function AppInner() {
                     usage: statusData.usage,
                     updateStatus: statusData.updateStatus,
                     contextPercent: sessionId ? (statusData.contextMap[sessionId] ?? null) : null,
+                    gitBranch: sessionId ? (statusData.gitBranchMap[sessionId] ?? null) : null,
                     syncStatus: statusData.syncStatus,
                     syncWarnings: statusData.syncWarnings,
                   }}

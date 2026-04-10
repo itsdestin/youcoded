@@ -829,7 +829,14 @@ export function registerIpcHandlers(
       }
     }
 
-    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap };
+    // Read per-session git branch (written by statusline.sh, same pattern as context %)
+    const gitBranchMap: Record<string, string> = {};
+    for (const [desktopId, claudeId] of sessionIdMap) {
+      const raw = readTextFile(path.join(os.homedir(), '.claude', `.gitbranch-${claudeId}`));
+      if (raw) gitBranchMap[desktopId] = raw;
+    }
+
+    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap };
   }
 
   // Push status data every 10s — store handle so it can be cleared on shutdown

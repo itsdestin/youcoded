@@ -69,6 +69,9 @@ if command -v git &>/dev/null; then
     fi
 fi
 
+# Persist git branch for desktop app status bar (chat view widget)
+[[ -n "$SESSION_ID" ]] && printf '%s' "$GIT_INFO" > "$HOME/.claude/.gitbranch-${SESSION_ID}" 2>/dev/null
+
 # --- Sync status (computed first) ---
 SYNC=""
 if [ -f "$STATUS_FILE" ]; then
