@@ -371,11 +371,11 @@ html, body, #root {
   z-index: 20;
 }
 
-/* Lightweight virtualization — skip paint/layout for off-screen chat messages.
-   The browser caches measured heights via `auto` so the scrollbar stays accurate
-   after the first render. Keeps DOM intact (Ctrl+F and accessibility work). */
+/* Lightweight containment — skip layout/style for off-screen chat messages.
+   Uses layout+style containment (not paint) so box-shadow glows from community
+   themes can overflow without being clipped at the entry edges. */
 .timeline-entry {
-  content-visibility: auto;
+  contain: layout style;
   contain-intrinsic-size: auto 80px;
 }
 
