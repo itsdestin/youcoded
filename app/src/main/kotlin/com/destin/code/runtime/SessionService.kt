@@ -1259,6 +1259,22 @@ class SessionService : Service() {
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
+            // Phase 5b: publish user theme to destinclaude-themes registry via gh CLI
+            "theme-marketplace:publish" -> {
+                val slug = msg.payload.optString("slug", "")
+                val result = withContext(Dispatchers.IO) {
+                    publishThemeViaGh(slug)
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            // Phase 5b: generate theme preview — not supported on Android (no headless browser)
+            "theme-marketplace:generate-preview" -> {
+                android.util.Log.i("SessionService", "generate-preview not supported on Android")
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it,
+                        JSONObject().put("path", JSONObject.NULL))
+                }
+            }
 
             else -> {
                 android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")
@@ -1323,6 +1339,7 @@ class SessionService : Service() {
             Regex("secrets?\\.(json|ya?ml|toml)$", RegexOption.IGNORE_CASE),
             Regex("\\.pem$", RegexOption.IGNORE_CASE),
             Regex("\\.key$", RegexOption.IGNORE_CASE),
+            Regex("tokens?\\.(json|txt)$", RegexOption.IGNORE_CASE),
         )
         val uploadedFiles = mutableListOf<String>()
 
@@ -1367,6 +1384,110 @@ class SessionService : Service() {
                 "--head", "$username:$branchName", "--title", prTitle, "--body", prBody)
         } catch (e: Exception) {
             // PR may already exist
+            val existing = runGh("pr", "list", "--repo", upstreamRepo,
+                "--head", "$username:$branchName", "--json", "url", "--jq", ".[0].url")
+            if (existing.isNotBlank()) existing
+            else throw RuntimeException("Failed to create PR: ${e.message}")
+        }
+
+        JSONObject().put("prUrl", prUrl)
+    }
+
+    /**
+     * Phase 5b: Publish a user-created theme to destinclaude-themes registry via `gh` CLI.
+     * Mirrors publishPluginViaGh but targets the theme registry repo.
+     */
+    private suspend fun publishThemeViaGh(slug: String): JSONObject = withContext(Dispatchers.IO) {
+        val bs = bootstrap ?: throw IllegalStateException("Bootstrap not initialized")
+        val env = bs.buildRuntimeEnv().toMutableMap()
+        val themeDir = File(themesDir, slug)
+        if (!themeDir.exists()) throw IllegalStateException("Theme directory not found: $slug")
+
+        val ghBin = File(bs.usrDir, "bin/gh").absolutePath
+
+        // Helper: run a gh command and return stdout (routes through linker64 for SELinux)
+        fun runGh(vararg args: String): String {
+            val envArray = env.map { "${it.key}=${it.value}" }.toTypedArray()
+            val cmd = arrayOf("/system/bin/linker64", ghBin, *args)
+            val process = Runtime.getRuntime().exec(cmd, envArray, bs.homeDir)
+            val stdout = process.inputStream.bufferedReader().readText()
+            val stderr = process.errorStream.bufferedReader().readText()
+            val exitCode = process.waitFor()
+            if (exitCode != 0 && !stderr.contains("already exists")) {
+                throw RuntimeException("gh ${args.firstOrNull()} failed: $stderr")
+            }
+            return stdout.trim()
+        }
+
+        val username = runGh("api", "user", "--jq", ".login")
+        if (username.isBlank()) throw IllegalStateException("GitHub CLI not authenticated")
+
+        val upstreamRepo = "itsdestin/destinclaude-themes"
+        val forkRepo = "$username/destinclaude-themes"
+        val branchName = "theme/$slug"
+
+        // Fork (idempotent)
+        try { runGh("repo", "fork", upstreamRepo, "--clone=false") } catch (_: Exception) {}
+
+        // Create branch from upstream main
+        val baseSha = runGh("api", "repos/$upstreamRepo/git/ref/heads/main", "--jq", ".object.sha")
+        try {
+            runGh("api", "repos/$forkRepo/git/refs", "-X", "POST",
+                "-f", "ref=refs/heads/$branchName", "-f", "sha=$baseSha")
+        } catch (_: Exception) {
+            runGh("api", "repos/$forkRepo/git/refs/heads/$branchName", "-X", "PATCH",
+                "-f", "sha=$baseSha", "-f", "force=true")
+        }
+
+        // Upload theme files (skip sensitive files, .git, node_modules)
+        val sensitivePatterns = listOf(
+            Regex("\\.env$", RegexOption.IGNORE_CASE),
+            Regex("\\.env\\..*", RegexOption.IGNORE_CASE),
+            Regex("\\.pem$", RegexOption.IGNORE_CASE),
+            Regex("\\.key$", RegexOption.IGNORE_CASE),
+            Regex("tokens?\\.(json|txt)$", RegexOption.IGNORE_CASE),
+        )
+        val uploadedFiles = mutableListOf<String>()
+
+        fun uploadRecursive(dir: File, prefix: String) {
+            dir.listFiles()?.sortedBy { it.name }?.forEach { file ->
+                val relPath = if (prefix.isEmpty()) file.name else "$prefix/${file.name}"
+                if (file.isDirectory) {
+                    if (file.name != ".git" && file.name != "node_modules") {
+                        uploadRecursive(file, relPath)
+                    }
+                } else {
+                    if (sensitivePatterns.any { it.containsMatchIn(relPath) }) return@forEach
+                    val repoPath = "themes/$slug/$relPath"
+                    val content = android.util.Base64.encodeToString(file.readBytes(), android.util.Base64.NO_WRAP)
+                    try {
+                        runGh("api", "repos/$forkRepo/contents/$repoPath", "-X", "PUT",
+                            "-f", "message=Add $repoPath", "-f", "content=$content", "-f", "branch=$branchName")
+                    } catch (_: Exception) {
+                        val sha = runGh("api", "repos/$forkRepo/contents/$repoPath",
+                            "-q", ".sha", "-H", "Accept: application/vnd.github.v3+json",
+                            "--method", "GET", "-f", "ref=$branchName")
+                        runGh("api", "repos/$forkRepo/contents/$repoPath", "-X", "PUT",
+                            "-f", "message=Update $repoPath", "-f", "content=$content",
+                            "-f", "sha=$sha", "-f", "branch=$branchName")
+                    }
+                    uploadedFiles.add(repoPath)
+                }
+            }
+        }
+        uploadRecursive(themeDir, "")
+
+        if (uploadedFiles.isEmpty()) throw IllegalStateException("No files to upload")
+
+        // Create PR
+        val prTitle = "[Theme] $slug"
+        val prBody = "## New Theme: $slug\n\nSubmitted via DestinCode (Android)\n\n" +
+            "### Files\n" + uploadedFiles.joinToString("\n") { "- `$it`" }
+
+        val prUrl = try {
+            runGh("pr", "create", "--repo", upstreamRepo,
+                "--head", "$username:$branchName", "--title", prTitle, "--body", prBody)
+        } catch (e: Exception) {
             val existing = runGh("pr", "list", "--repo", upstreamRepo,
                 "--head", "$username:$branchName", "--json", "url", "--jq", ".[0].url")
             if (existing.isNotBlank()) existing

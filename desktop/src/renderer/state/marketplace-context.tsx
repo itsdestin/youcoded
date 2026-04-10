@@ -9,7 +9,7 @@
  * This context is only mounted when the marketplace modal is open.
  */
 
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import type { SkillEntry, ChipConfig, PackageInfo } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 
@@ -124,9 +124,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [favorites, setFavoritesState] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // Guard against stale fetchAll responses when rapid install/uninstall triggers concurrent fetches
+  const fetchGeneration = useRef(0);
 
   // Fetch all marketplace data in parallel on mount
   const fetchAll = useCallback(async () => {
+    const gen = ++fetchGeneration.current;
     setLoading(true);
     setError(null);
     try {
@@ -148,6 +151,9 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         marketplaceApi?.getPackages?.().catch(() => ({})) ?? Promise.resolve({}),
       ]);
 
+      // Discard stale response — a newer fetchAll was triggered while we were awaiting
+      if (gen !== fetchGeneration.current) return;
+
       setSkillEntries(marketplaceSkills || []);
       setThemeEntries(themes || []);
       setInstalledSkills(installed || []);
@@ -161,9 +167,10 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       );
       setPrivateSkills(priv);
     } catch (err: any) {
+      if (gen !== fetchGeneration.current) return;
       setError(err?.message || 'Failed to load marketplace data');
     } finally {
-      setLoading(false);
+      if (gen === fetchGeneration.current) setLoading(false);
     }
   }, []);
 
