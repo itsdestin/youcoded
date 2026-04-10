@@ -16,8 +16,30 @@ describe('IPC Handlers', () => {
       on: vi.fn(),
     };
     const mockWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false };
+    // Fix: registerIpcHandlers now requires a skillProvider with a configStore
+    const mockSkillProvider = {
+      configStore: { getPackages: vi.fn(() => ({})) },
+      getInstalled: vi.fn(() => []),
+      listMarketplace: vi.fn(() => []),
+      getSkillDetail: vi.fn(),
+      search: vi.fn(() => []),
+      install: vi.fn(),
+      uninstall: vi.fn(),
+      getFavorites: vi.fn(() => []),
+      setFavorite: vi.fn(),
+      getChips: vi.fn(() => []),
+      setChips: vi.fn(),
+      getOverrides: vi.fn(() => ({})),
+      setOverride: vi.fn(),
+      createPromptSkill: vi.fn(),
+      deletePromptSkill: vi.fn(),
+      publish: vi.fn(),
+      generateShareLink: vi.fn(),
+      importFromLink: vi.fn(),
+      getCuratedDefaults: vi.fn(() => []),
+    };
 
-    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any);
+    registerIpcHandlers(mockIpcMain as any, mockSessionManager as any, mockWindow as any, mockSkillProvider as any);
 
     const registeredChannels = mockIpcMain.handle.mock.calls.map((c: any) => c[0]);
     expect(registeredChannels).toContain('session:create');
