@@ -778,6 +778,9 @@ function AppInner() {
   const canBypass = currentSession?.skipPermissions ?? false;
   const currentPermissionMode = sessionId ? (permissionModes.get(sessionId) || 'normal') : 'normal';
 
+  // Shift+Tab cycles permission mode in chat view
+  // (In terminal view, the raw escape code reaches the PTY directly)
+  const cyclePermissionRef = useRef<(() => void) | null>(null);
   const cyclePermission = useCallback(() => {
     if (!sessionId) return;
     const cycle: PermissionMode[] = canBypass
@@ -789,6 +792,18 @@ function AppInner() {
     // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
     window.claude.session.sendInput(sessionId, '\x1b[Z');
   }, [sessionId, canBypass, currentPermissionMode]);
+  cyclePermissionRef.current = cyclePermission;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.shiftKey && e.key === 'Tab') {
+        e.preventDefault();
+        cyclePermissionRef.current?.();
+      }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, []);
 
   const trustGateActive = useTrustGateActive(sessionId);
 
