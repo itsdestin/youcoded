@@ -166,18 +166,35 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
       // Replace newlines with spaces so multi-line pastes don't get split
       // into separate PTY inputs (each \n would act as Enter).
-      // Send text and Enter as two separate PTY writes so Claude Code's Ink
-      // framework processes them in distinct stdin read cycles — a single bulk
-      // write ("text\r") can cause Ink to swallow the trailing \r.
-      // Delay must be >100ms: Claude Code's TextInput has a length-based paste
-      // heuristic (threshold: 800 chars). Messages exceeding it enter a paste
-      // accumulation mode with a 100ms finalization timeout that latches a
-      // "pasting" flag. Any input arriving while the flag is set (including \r)
-      // is absorbed into the paste instead of triggering submission. 200ms
-      // ensures the timeout has fired and the flag is cleared before \r arrives.
       const sanitized = combined.replace(/[\r\n]+/g, ' ');
-      window.claude.session.sendInput(sessionId, sanitized);
-      setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 200);
+
+      // Claude Code's TextInput has a length-based paste heuristic: any single
+      // stdin read >800 chars triggers paste accumulation mode, showing
+      // "[Pasted N lines]" and requiring manual Enter. To avoid this, chunk
+      // long messages so each PTY write stays under the threshold. Delays
+      // between chunks prevent the OS/ConPTY from batching multiple writes
+      // into a single read that would exceed 800 chars.
+      const CHUNK_SIZE = 700; // Well under the 800-char paste threshold
+      if (sanitized.length <= CHUNK_SIZE) {
+        // Short message — no paste detection risk, send text then Enter
+        window.claude.session.sendInput(sessionId, sanitized);
+        setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 50);
+      } else {
+        // Long message — send in chunks to avoid paste detection
+        const chunks: string[] = [];
+        for (let i = 0; i < sanitized.length; i += CHUNK_SIZE) {
+          chunks.push(sanitized.slice(i, i + CHUNK_SIZE));
+        }
+        chunks.forEach((chunk, idx) => {
+          setTimeout(() => {
+            window.claude.session.sendInput(sessionId, chunk);
+            // After the last chunk, send Enter to submit
+            if (idx === chunks.length - 1) {
+              setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 100);
+            }
+          }, idx * 100); // 100ms between chunks prevents OS batching
+        });
+      }
     },
     [sessionId, disabled, dispatch],
   );
