@@ -101,6 +101,48 @@ function DragGrip() {
   );
 }
 
+/* ── Adaptive session name — shrinks font / adds lines to fit ── */
+
+function SessionName({ name }: { name: string }) {
+  const ref = useRef<HTMLSpanElement>(null);
+  const [fontSize, setFontSize] = useState(13);
+
+  // After mount (and on name change), check if the text overflows at
+  // the default 13px size.  If so, step down to 11px so the full name
+  // is always readable.  Three lines at 11px comfortably fits names up
+  // to ~60 chars in the available width.
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    // Reset to default size before measuring
+    setFontSize(13);
+    // Measure after the browser paints at 13px
+    requestAnimationFrame(() => {
+      if (!el) return;
+      if (el.scrollHeight > el.clientHeight) {
+        setFontSize(11);
+      }
+    });
+  }, [name]);
+
+  return (
+    <span
+      ref={ref}
+      className="leading-snug flex-1 min-w-0"
+      style={{
+        fontSize: `${fontSize}px`,
+        display: '-webkit-box',
+        WebkitLineClamp: 3,
+        WebkitBoxOrient: 'vertical',
+        overflow: 'hidden',
+        wordBreak: 'break-word',
+      }}
+    >
+      {name}
+    </span>
+  );
+}
+
 /* ── Main component ──────────────────────────────────────── */
 
 export default function SessionStrip({
@@ -505,11 +547,13 @@ export default function SessionStrip({
                     </span>
                     <button
                       onClick={() => { if (!suppressClick.current) { onSelectSession(s.id); setMenuOpen(false); } }}
-                      className="flex-1 text-left pl-1 pr-3 py-2 flex items-center gap-2 min-w-0"
+                      className="flex-1 text-left pl-1 pr-1.5 py-2 flex items-center gap-2 min-w-0"
                     >
                       <SessionDot color={color} isActive={s.id === activeSessionId} />
-                      <span className="text-[13px] leading-snug flex-1 min-w-0 line-clamp-2">{s.name}</span>
-                      <span className="shrink-0 flex items-center gap-1.5 ml-auto">
+                      {/* Session name — shrinks font and allows up to 3 lines to
+                          ensure the full name is always visible */}
+                      <SessionName name={s.name} />
+                      <span className="shrink-0 flex flex-col items-end gap-0.5 ml-auto">
                         {s.permissionMode === 'bypass' && (
                           <span className="text-[9px] font-medium px-1 py-0.5 rounded-sm bg-[#DD4444]/20 text-[#DD4444]">
                             DANGER
