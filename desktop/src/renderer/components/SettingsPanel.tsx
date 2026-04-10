@@ -105,6 +105,7 @@ const SHORTCUTS: { keys: string; description: string }[] = [
   { keys: 'Shift (release)', description: 'Switch to highlighted session' },
   { keys: 'Arrow Up/Down', description: 'Scroll chat view' },
   { keys: 'Shift + Tab', description: 'Cycle permission mode' },
+  { keys: 'Shift + Space', description: 'Cycle model' },
   { keys: 'Shift + Enter', description: 'Insert newline in input' },
   { keys: 'Enter', description: 'Send message' },
   { keys: '/', description: 'Open skill/command drawer' },

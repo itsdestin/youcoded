@@ -635,6 +635,8 @@ function AppInner() {
     setDrawerFilter(undefined);
   }, []);
 
+  // Shift+Space cycles model in chat view
+  const cycleModelRef = useRef<(() => void) | null>(null);
   const cycleModel = useCallback(() => {
     const idx = MODELS.indexOf(model);
     const next = MODELS[(idx + 1) % MODELS.length];
@@ -644,6 +646,18 @@ function AppInner() {
       window.claude.session.sendInput(sessionId, `/model ${next}\r`);
     }
   }, [model, sessionId]);
+  cycleModelRef.current = cycleModel;
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.shiftKey && e.key === ' ') {
+        e.preventDefault();
+        cycleModelRef.current?.();
+      }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
+  }, []);
 
   // Verify model switch via transcript events
   useEffect(() => {
