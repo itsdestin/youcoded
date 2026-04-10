@@ -1,13 +1,13 @@
 import { describe, it, expect, vi } from 'vitest';
 
 // Mock electron before importing ipc-handlers, which transitively imports
-// main.ts (for setPermissionOverrides). main.ts calls
-// protocol.registerSchemesAsPrivileged at module scope, which crashes
-// without this mock.
+// main.ts (for setPermissionOverrides). main.ts uses protocol.registerSchemesAsPrivileged
+// and Menu.setApplicationMenu at module scope, both of which crash without this mock.
 vi.mock('electron', () => ({
   app: { isPackaged: false, getPath: vi.fn(() => '/tmp'), whenReady: vi.fn(() => Promise.resolve()), on: vi.fn(), quit: vi.fn() },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
   BrowserWindow: vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } })),
+  Menu: { setApplicationMenu: vi.fn() },
   protocol: { registerSchemesAsPrivileged: vi.fn(), handle: vi.fn() },
   dialog: { showOpenDialog: vi.fn() },
   clipboard: { readImage: vi.fn(() => ({ isEmpty: () => true })) },
