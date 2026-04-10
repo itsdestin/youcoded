@@ -181,9 +181,17 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 50);
       } else {
         // Long message — send in chunks to avoid paste detection
+        // Split into chunks, snapping boundaries to avoid splitting UTF-16
+        // surrogate pairs (emoji, some CJK) which would send malformed chars
         const chunks: string[] = [];
-        for (let i = 0; i < sanitized.length; i += CHUNK_SIZE) {
-          chunks.push(sanitized.slice(i, i + CHUNK_SIZE));
+        for (let i = 0; i < sanitized.length; ) {
+          let end = Math.min(i + CHUNK_SIZE, sanitized.length);
+          if (end < sanitized.length) {
+            const code = sanitized.charCodeAt(end - 1);
+            if (code >= 0xD800 && code <= 0xDBFF) end--; // Don't split a surrogate pair
+          }
+          chunks.push(sanitized.slice(i, end));
+          i = end;
         }
         chunks.forEach((chunk, idx) => {
           setTimeout(() => {
