@@ -500,7 +500,7 @@ export default function SessionStrip({
       {menuOpen && createPortal(
         <div
           ref={dropdownRef}
-          className="glass-overlay overlay-no-drag fixed w-72 bg-panel border border-edge rounded-lg shadow-lg z-[9000]"
+          className="glass-overlay overlay-no-drag fixed w-72 bg-panel border border-edge rounded-lg shadow-lg z-[9000] overflow-hidden"
           style={(() => {
             const triggerRect = triggerBtnRef.current?.getBoundingClientRect();
             const pillRect = pillBarRef.current?.getBoundingClientRect();
@@ -520,7 +520,7 @@ export default function SessionStrip({
           })()}
         >
           {sessions.length > 0 && (
-            <div className="py-1 rounded-t-lg overflow-hidden">
+            <div className="py-1 overflow-y-auto" style={{ maxHeight: 'min(336px, 50vh)' }}>
               {sessions.map((s, idx) => {
                 const color = sessionStatuses?.get(s.id) || 'gray';
                 const isBeingDragged = dragIdx === idx && isDragging.current;
