@@ -127,6 +127,10 @@ function AppInner() {
   const [model, setModel] = useState<ModelAlias>('sonnet');
   const [pendingModel, setPendingModel] = useState<ModelAlias | null>(null);
   const consecutiveFailures = useRef(0);
+  // Fix: track whether a new user turn has started after the model switch.
+  // Events from the in-flight turn (before the switch takes effect) use the
+  // old model and would cause false "failed to switch" errors.
+  const postSwitchTurnReady = useRef(false);
   const [toast, setToast] = useState<string | null>(null);
   const [sessionDefaults, setSessionDefaults] = useState({ skipPermissions: false, model: 'sonnet', projectFolder: '', geminiEnabled: false });
 
@@ -659,6 +663,13 @@ function AppInner() {
     const next = MODELS[(idx + 1) % MODELS.length];
     setModel(next);
     setPendingModel(next);
+    // Fix: don't verify against in-flight events from the current turn —
+    // wait until a new user turn starts so we know Claude is using the new model.
+    postSwitchTurnReady.current = false;
+    // Persist preference optimistically — the /model command is reliable,
+    // verification is just a safety net. If verification later shows a
+    // mismatch, the failure handler overwrites with the actual model.
+    (window.claude as any).model?.setPreference(next);
     if (sessionId) {
       window.claude.session.sendInput(sessionId, `/model ${next}\r`);
     }
@@ -676,12 +687,27 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler, true);
   }, []);
 
-  // Verify model switch via transcript events
+  // Verify model switch via transcript events.
+  // Fix: (1) properly remove the listener on cleanup to prevent leaked handlers
+  // that fire stale closures and cause repeated false "failed to switch" errors.
+  // (2) Wait for a new user turn after the switch before verifying — events
+  // from the in-flight turn still carry the old model and would false-alarm.
   useEffect(() => {
     if (!pendingModel) return;
+
     const handler = (window.claude.on as any).transcriptEvent?.((event: any) => {
-      if (!event || event.type !== 'assistant-text' || !event.data?.model) return;
-      if (event.sessionId !== sessionId) return;
+      if (!event || event.sessionId !== sessionId) return;
+
+      // A user-message after the switch means the next assistant response
+      // will reflect the new model — safe to verify from here on.
+      if (event.type === 'user-message') {
+        postSwitchTurnReady.current = true;
+        return;
+      }
+
+      if (event.type !== 'assistant-text' || !event.data?.model) return;
+      // Skip events from the turn that was already in-flight when we switched
+      if (!postSwitchTurnReady.current) return;
 
       const actualModel = event.data.model as string;
       const baseKey = (k: string) => k.replace(/\[.*\]/, '');
@@ -689,10 +715,14 @@ function AppInner() {
       if (matches) {
         setPendingModel(null);
         consecutiveFailures.current = 0;
-        (window.claude as any).model?.setPreference(pendingModel);
+        // Preference already persisted optimistically in cycleModel
       } else {
         const actual = MODELS.find(m => actualModel.includes(baseKey(m)));
-        if (actual) setModel(actual);
+        // Revert both UI and persisted preference to what Claude is actually using
+        if (actual) {
+          setModel(actual);
+          (window.claude as any).model?.setPreference(actual);
+        }
         const failures = consecutiveFailures.current + 1;
         consecutiveFailures.current = failures;
         setPendingModel(null);
@@ -704,7 +734,14 @@ function AppInner() {
         setTimeout(() => setToast(null), 4000);
       }
     });
-    return handler;
+
+    // Fix: properly remove the IPC/WebSocket listener on cleanup so stale
+    // closures don't accumulate and fire on future transcript events.
+    return () => {
+      if (handler) {
+        (window.claude as any).off?.('transcript:event', handler);
+      }
+    };
   }, [pendingModel, sessionId]);
 
   const handleSelectSkill = useCallback(
