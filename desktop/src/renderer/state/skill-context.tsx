@@ -48,10 +48,10 @@ export function SkillProvider({ children }: { children: ReactNode }) {
       window.claude.skills.getChips(),
       window.claude.skills.getCuratedDefaults(),
     ]).then(([inst, favs, ch, defaults]) => {
-      setInstalled(inst);
-      setFavorites(favs);
-      setChipsState(ch);
-      setCuratedDefaults(defaults);
+      setInstalled(inst ?? []);
+      setFavorites(favs ?? []);
+      setChipsState(ch ?? []);
+      setCuratedDefaults(defaults ?? []); // Guard: IPC may return undefined if registry key mismatches
       setLoading(false);
     }).catch((err) => {
       console.error('[SkillContext] Failed to load:', err);

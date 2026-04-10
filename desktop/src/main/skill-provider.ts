@@ -304,9 +304,11 @@ export class LocalSkillProvider implements SkillProvider {
       if (cached) return cached;
       const resp = await fetch(`${REGISTRY_BASE}/curated-defaults.json`);
       if (!resp.ok) return this.getFallbackDefaults();
-      const data = await resp.json() as { defaults: string[] };
-      this.writeCache(DEFAULTS_CACHE, data.defaults);
-      return data.defaults;
+      // Registry uses "skills" key (not "defaults") — see curated-defaults.json
+      const data = await resp.json() as { skills: string[] };
+      const list = data.skills ?? [];
+      this.writeCache(DEFAULTS_CACHE, list);
+      return list;
     } catch {
       return this.getFallbackDefaults();
     }
