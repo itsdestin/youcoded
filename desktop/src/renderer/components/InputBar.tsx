@@ -41,6 +41,27 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   const inputRef = useRef<HTMLTextAreaElement>(null);
   const dispatch = useChatDispatch();
 
+  // Per-session draft store — keeps input text and attachments separate
+  // across sessions so switching away and back preserves your draft.
+  const draftsRef = useRef<Map<string, { text: string; attachments: Attachment[] }>>(new Map());
+  const prevSessionRef = useRef<string>(sessionId);
+  useEffect(() => {
+    const prev = prevSessionRef.current;
+    if (prev === sessionId) return;
+    // Save outgoing session's draft (read DOM directly to avoid stale closure)
+    const outgoingText = inputRef.current?.value ?? text;
+    if (outgoingText || attachments.length > 0) {
+      draftsRef.current.set(prev, { text: outgoingText, attachments });
+    } else {
+      draftsRef.current.delete(prev);
+    }
+    // Restore incoming session's draft (or blank)
+    const restored = draftsRef.current.get(sessionId);
+    setText(restored?.text ?? '');
+    setAttachments(restored?.attachments ?? []);
+    prevSessionRef.current = sessionId;
+  }, [sessionId]); // eslint-disable-line react-hooks/exhaustive-deps — intentionally reads text/attachments from refs
+
   // Ref to always-current send function so the global keydown handler
   // (which only depends on [disabled]) can call it without stale closures
   const sendRef = useRef<() => void>(() => {});
@@ -179,10 +200,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     sendMessage(currentText, attachments);
     setText('');
     setAttachments([]);
+    draftsRef.current.delete(sessionId); // Clear stored draft after sending
     onCloseDrawer?.();
     // Reset height after clearing
     if (inputRef.current) inputRef.current.style.height = 'auto';
-  }, [text, attachments, sendMessage, onCloseDrawer]);
+  }, [text, attachments, sendMessage, onCloseDrawer, sessionId]);
 
   // Keep sendRef pointing at the latest send so the global keydown handler
   // (which can't depend on send without thrashing the listener) stays current
