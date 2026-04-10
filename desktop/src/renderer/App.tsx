@@ -47,6 +47,23 @@ type ViewMode = 'chat' | 'terminal';
 // --- Sound notifications (shared engine) ---
 import { playSound } from './utils/sounds';
 
+interface SessionStats {
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  contextTokens: number | null;
+  duration: number | null;
+  apiDuration: number | null;
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  commits: number | null;
+  pullRequests: number | null;
+  toolsAccepted: number | null;
+  toolsRejected: number | null;
+}
+
 interface StatusDataState {
   usage: any;
   announcement: any;
@@ -54,6 +71,7 @@ interface StatusDataState {
   model: string | null;
   contextMap: Record<string, number>;
   gitBranchMap: Record<string, string>;
+  sessionStatsMap: Record<string, SessionStats>;
   syncStatus: string | null;
   syncWarnings: string | null;
   lastSyncEpoch: number | null;
@@ -67,7 +85,7 @@ function AppInner() {
   const [viewModes, setViewModes] = useState<Map<string, ViewMode>>(new Map());
   const [statusData, setStatusData] = useState<StatusDataState>({
     usage: null, announcement: null, updateStatus: null,
-    model: null, contextMap: {}, gitBranchMap: {},
+    model: null, contextMap: {}, gitBranchMap: {}, sessionStatsMap: {},
     syncStatus: null, syncWarnings: null,
     lastSyncEpoch: null, syncInProgress: false, backupMeta: null,
   });
@@ -399,6 +417,7 @@ function AppInner() {
         backupMeta: data.backupMeta ?? prev.backupMeta,
         contextMap: data.contextMap || prev.contextMap,
         gitBranchMap: data.gitBranchMap || prev.gitBranchMap,
+        sessionStatsMap: data.sessionStatsMap || prev.sessionStatsMap,
       }));
     });
 
@@ -995,8 +1014,10 @@ function AppInner() {
                 <TerminalScrollButtons sessionId={sessionId} />
               )}
             </div>
-            {(currentViewMode === 'chat' || getPlatform() !== 'electron') && (
-              <div ref={bottomBarRef} className={`chrome-wrapper bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`}>
+            {/* Always mounted so draft text survives chat↔terminal switches.
+               inert disables focus/keyboard/paste when hidden so keystrokes
+               reach xterm instead of the buried textarea. */}
+              <div ref={bottomBarRef} className={`chrome-wrapper bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
                 {isTerminalTouch && sessionId && (
                   <TerminalToolbar sessionId={sessionId} />
                 )}
@@ -1007,6 +1028,7 @@ function AppInner() {
                     updateStatus: statusData.updateStatus,
                     contextPercent: sessionId ? (statusData.contextMap[sessionId] ?? null) : null,
                     gitBranch: sessionId ? (statusData.gitBranchMap[sessionId] ?? null) : null,
+                    sessionStats: sessionId ? (statusData.sessionStatsMap[sessionId] ?? null) : null,
                     syncStatus: statusData.syncStatus,
                     syncWarnings: statusData.syncWarnings,
                   }}
@@ -1025,7 +1047,6 @@ function AppInner() {
                   onCyclePermission={cyclePermission}
                 />
               </div>
-            )}
           </>
         ) : (
           <div className="flex-1 flex flex-col items-center justify-center gap-3">

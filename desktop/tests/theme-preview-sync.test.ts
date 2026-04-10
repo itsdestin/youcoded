@@ -107,9 +107,9 @@ describe.skipIf(!previewExists)('theme-preview.css ↔ globals.css sync', () => 
     const globalsBody = globalsHeaderMatch![1];
     const previewBody = previewHeaderMatch![1];
 
-    // Both should have blur(24px) and saturate(1.2)
-    expect(globalsBody).toContain('blur(24px)');
-    expect(previewBody).toContain('blur(24px)');
+    // Both should have blur (via CSS variable with 24px fallback) and saturate(1.2)
+    expect(globalsBody).toContain('blur(var(--panels-blur, 24px))');
+    expect(previewBody).toContain('blur(var(--panels-blur, 24px))');
     expect(globalsBody).toContain('saturate(1.2)');
     expect(previewBody).toContain('saturate(1.2)');
 
