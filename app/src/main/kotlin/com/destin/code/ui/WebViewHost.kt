@@ -7,12 +7,14 @@ import android.webkit.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
+import com.destin.code.BuildConfig
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun WebViewHost(
     modifier: Modifier = Modifier,
-    devUrl: String? = null
+    devUrl: String? = null,
+    bridgeAuthToken: String? = null
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
 
@@ -21,6 +23,9 @@ fun WebViewHost(
             webView?.destroy()
         }
     }
+
+    // Security: only enable WebView debugging in debug builds
+    WebView.setWebContentsDebuggingEnabled(BuildConfig.DEBUG)
 
     AndroidView(
         modifier = modifier,
@@ -56,6 +61,18 @@ fun WebViewHost(
                             return true
                         }
                         return false
+                    }
+
+                    override fun onPageFinished(view: WebView, url: String?) {
+                        super.onPageFinished(view, url)
+                        // Security: inject bridge auth token so remote-shim.ts can
+                        // authenticate with LocalBridgeServer on WebSocket connect
+                        if (bridgeAuthToken != null) {
+                            view.evaluateJavascript(
+                                "window.__BRIDGE_TOKEN='$bridgeAuthToken';",
+                                null
+                            )
+                        }
                     }
                 }
 

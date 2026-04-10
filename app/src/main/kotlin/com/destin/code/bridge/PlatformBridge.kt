@@ -140,10 +140,18 @@ class PlatformBridge(
 
     /**
      * Launches an Intent.ACTION_VIEW with the given URL in the system browser.
+     * Security: only allows http, https, and mailto schemes to prevent
+     * intent:// URI injection that could launch arbitrary Activities.
      */
     fun openUrl(url: String) {
         try {
-            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+            val uri = Uri.parse(url)
+            val scheme = uri.scheme?.lowercase()
+            if (scheme !in listOf("http", "https", "mailto")) {
+                Log.w(TAG, "openUrl blocked — disallowed scheme '$scheme' in '$url'")
+                return
+            }
+            val intent = Intent(Intent.ACTION_VIEW, uri).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
             context.startActivity(intent)

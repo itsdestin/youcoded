@@ -129,6 +129,10 @@ fun ChatScreen(service: SessionService) {
         }
 
         // Layer 2 (on top): WebView — ALWAYS full size, transparent middle lets terminal show through
-        WebViewHost(modifier = Modifier.fillMaxSize())
+        // Security: pass bridge auth token so WebView can authenticate with LocalBridgeServer
+        WebViewHost(
+            modifier = Modifier.fillMaxSize(),
+            bridgeAuthToken = service.bridgeServer.authToken
+        )
     }
 }

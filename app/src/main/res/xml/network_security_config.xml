@@ -5,7 +5,12 @@
         <domain includeSubdomains="false">127.0.0.1</domain>
         <domain includeSubdomains="false">localhost</domain>
     </domain-config>
-    <!-- Tailscale MagicDNS: remote desktop connects over Tailscale's WireGuard tunnel -->
+    <!--
+      Tailscale MagicDNS: remote desktop connects over Tailscale's WireGuard tunnel.
+      Although cleartextTrafficPermitted=true, the transport is WireGuard-encrypted
+      end-to-end by Tailscale — HTTP here rides inside the encrypted tunnel.
+      Scoped to *.ts.net only (Tailscale MagicDNS domains).
+    -->
     <domain-config cleartextTrafficPermitted="true">
         <domain includeSubdomains="true">ts.net</domain>
     </domain-config>

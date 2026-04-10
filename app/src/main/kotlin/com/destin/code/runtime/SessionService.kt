@@ -24,6 +24,9 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
+import java.util.concurrent.ConcurrentHashMap
+import androidx.security.crypto.EncryptedSharedPreferences
+import androidx.security.crypto.MasterKeys
 import com.destin.code.skills.LocalSkillProvider
 import com.destin.code.skills.PluginInstaller
 
@@ -32,6 +35,32 @@ class SessionService : Service() {
     val sessionRegistry = SessionRegistry()
     val bridgeServer = LocalBridgeServer()
     var platformBridge: PlatformBridge? = null
+
+    // Security: track which WebSocket connection created each session, so
+    // session:input can only be sent by the connection that owns the session.
+    // This prevents cross-session command injection from other bridge clients.
+    private val sessionOwnership = ConcurrentHashMap<String, org.java_websocket.WebSocket>()
+
+    /**
+     * Security: use EncryptedSharedPreferences for paired device storage so
+     * passwords are encrypted at rest. Falls back to regular SharedPreferences
+     * if the Android Keystore is unavailable (e.g. corrupted key on some devices).
+     */
+    private fun getEncryptedPrefs(): android.content.SharedPreferences {
+        return try {
+            val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
+            EncryptedSharedPreferences.create(
+                "remote_devices_encrypted",
+                masterKeyAlias,
+                applicationContext,
+                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+            )
+        } catch (e: Exception) {
+            android.util.Log.w("SessionService", "EncryptedSharedPreferences unavailable, using fallback: ${e.message}")
+            applicationContext.getSharedPreferences("remote_devices", android.content.Context.MODE_PRIVATE)
+        }
+    }
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /** View mode requested by React UI — ChatScreen observes this.
@@ -137,7 +166,8 @@ class SessionService : Service() {
                 if (path != "open-url") return
                 try {
                     val url = urlFile.readText().trim()
-                    if (url.startsWith("http")) {
+                    // Security: only allow http/https schemes — prevents intent:// injection
+                    if (url.startsWith("http://") || url.startsWith("https://")) {
                         urlFile.delete()
                         val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
                             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
@@ -358,8 +388,9 @@ class SessionService : Service() {
         when (msg.type) {
             "session:create" -> {
                 val cwd = msg.payload.optString("cwd", bootstrap?.homeDir?.absolutePath ?: "")
-                val dangerous = msg.payload.optBoolean("skipPermissions", false)
-                // Use model from payload (sent by React) if provided, else fall back to preference file
+                // Security: skipPermissions only via native Kotlin code path (e.g. Tasker intent),
+                // never from the WebSocket bridge — prevents privilege escalation from React UI
+                val dangerous = false
                 val payloadModel = msg.payload.optString("model", "")
                 val model = if (payloadModel.isNotEmpty()) payloadModel else {
                     val prefFile = File(bootstrap!!.homeDir, ".claude-mobile/model-preference.json")
@@ -380,6 +411,8 @@ class SessionService : Service() {
                     permissionMode = "normal", skipPermissions = dangerous,
                     createdAt = session.createdAt
                 )
+                // Security: record which WebSocket connection owns this session
+                sessionOwnership[session.id] = ws
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, info) }
                 bridgeServer.broadcast(JSONObject().apply {
                     put("type", "session:created")
@@ -388,6 +421,7 @@ class SessionService : Service() {
             }
             "session:destroy" -> {
                 val sessionId = msg.payload.optString("sessionId", "")
+                sessionOwnership.remove(sessionId) // Clean up ownership tracking
                 withContext(Dispatchers.Main) {
                     destroySession(sessionId)
                 }
@@ -424,7 +458,12 @@ class SessionService : Service() {
             "session:input" -> {
                 val sessionId = msg.payload.optString("sessionId", "")
                 val text = msg.payload.optString("text", "")
-                if (text.isNotEmpty()) {
+                // Security: validate that this WebSocket connection owns the target session
+                // and cap input length to 1MB to prevent memory exhaustion
+                val owner = sessionOwnership[sessionId]
+                if (owner != null && owner !== ws) {
+                    android.util.Log.w("SessionService", "session:input rejected — connection does not own session $sessionId")
+                } else if (text.isNotEmpty() && text.length <= 1_048_576) {
                     sessionRegistry.sessions.value[sessionId]?.writeInput(text)
                 }
             }
@@ -866,15 +905,27 @@ class SessionService : Service() {
                 }
             }
             "android:get-paired-devices" -> {
-                val prefs = applicationContext.getSharedPreferences("remote_devices", android.content.Context.MODE_PRIVATE)
-                val json = prefs.getString("paired_devices", null)
+                // Security: use encrypted storage for paired device credentials
+                val prefs = getEncryptedPrefs()
+                var json = prefs.getString("paired_devices", null)
+                // Migration: if no data in encrypted prefs, check old unencrypted prefs
+                if (json == null) {
+                    val oldPrefs = applicationContext.getSharedPreferences("remote_devices", android.content.Context.MODE_PRIVATE)
+                    val oldJson = oldPrefs.getString("paired_devices", null)
+                    if (oldJson != null) {
+                        prefs.edit().putString("paired_devices", oldJson).apply()
+                        oldPrefs.edit().remove("paired_devices").apply() // Remove plaintext copy
+                        json = oldJson
+                    }
+                }
                 val devices = if (json != null) {
                     try { org.json.JSONArray(json) } catch (_: Exception) { org.json.JSONArray() }
                 } else org.json.JSONArray()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("devices", devices)) }
             }
             "android:save-paired-device" -> {
-                val prefs = applicationContext.getSharedPreferences("remote_devices", android.content.Context.MODE_PRIVATE)
+                // Security: use encrypted storage for paired device credentials
+                val prefs = getEncryptedPrefs()
                 val existing = try {
                     org.json.JSONArray(prefs.getString("paired_devices", "[]"))
                 } catch (_: Exception) { org.json.JSONArray() }
@@ -898,7 +949,8 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
             }
             "android:remove-paired-device" -> {
-                val prefs = applicationContext.getSharedPreferences("remote_devices", android.content.Context.MODE_PRIVATE)
+                // Security: use encrypted storage for paired device credentials
+                val prefs = getEncryptedPrefs()
                 val existing = try {
                     org.json.JSONArray(prefs.getString("paired_devices", "[]"))
                 } catch (_: Exception) { org.json.JSONArray() }

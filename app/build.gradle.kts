@@ -88,6 +88,9 @@ dependencies {
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     implementation("org.java-websocket:Java-WebSocket:1.5.6")
 
+    // Security: encrypted credential storage for paired device passwords
+    implementation("androidx.security:security-crypto:1.1.0-alpha06")
+
     // QR code scanning for remote desktop pairing
     implementation("com.google.mlkit:barcode-scanning:17.3.0")
     implementation("androidx.camera:camera-core:1.4.1")
