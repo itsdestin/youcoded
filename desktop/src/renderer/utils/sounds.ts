@@ -161,10 +161,6 @@ const STORAGE_KEYS: Record<SoundCategory, string> = {
   ready:      SOUND_READY_KEY,
 };
 
-export function getPresetsForCategory(cat: SoundCategory): SoundPreset[] {
-  return PRESETS_BY_CATEGORY[cat];
-}
-
 export function getSelectedPresetId(cat: SoundCategory): string {
   try {
     const stored = localStorage.getItem(STORAGE_KEYS[cat]);

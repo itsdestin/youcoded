@@ -22,9 +22,6 @@ const BUILTIN_THEMES: LoadedTheme[] = [
   { ...(cremeJson as unknown as ThemeDefinition), source: 'destinclaude' },
 ];
 
-// Keep backward-compat exports
-export type ThemeName = string;
-export const THEMES = BUILTIN_THEMES.map(t => t.slug);
 export const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace";
 
 const STORAGE_KEY = 'destincode-theme';

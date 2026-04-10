@@ -97,7 +97,7 @@ export function buildLayoutAttrs(layout: ThemeLayout | undefined): Record<string
 }
 
 const EFFECTS_OVERLAY_ID = 'theme-effects-overlay';
-// Keep legacy IDs for clearThemeFromDom cleanup of previously-applied themes
+// Legacy per-effect divs that need cleanup when applying a new theme
 const LEGACY_EFFECT_IDS = ['effect-vignette', 'effect-noise', 'effect-scanlines'] as const;
 
 /** Builds a single consolidated overlay div with combined backgrounds for all effects.
@@ -312,31 +312,3 @@ const TOKEN_CSS_PROPS = [
   '--edge', '--edge-dim', '--scrollbar-thumb', '--scrollbar-hover',
 ] as const;
 
-/** Clears all theme-engine-applied DOM mutations. */
-export function clearThemeFromDom(): void {
-  const root = document.documentElement;
-  const body = document.body;
-  root.removeAttribute('data-panels-blur');
-  root.removeAttribute('data-wallpaper');
-  body.style.backgroundImage = '';
-  body.style.backgroundSize = '';
-  body.style.backgroundPosition = '';
-  body.style.backgroundRepeat = '';
-  const propsToRemove = [
-    ...TOKEN_CSS_PROPS,
-    '--panels-blur', '--panel-glass', '--bubble-blur', '--bubble-opacity',     '--radius', '--radius-sm', '--radius-md', '--radius-lg', '--radius-xl', '--radius-2xl', '--radius-full',
-    '--font-sans', '--font-mono',
-    '--vignette-opacity', '--noise-opacity', '--scanline-opacity',
-  ];
-  for (const p of propsToRemove) root.style.removeProperty(p);
-  for (const a of LAYOUT_ATTRS) body.removeAttribute(a);
-  // Remove consolidated effect overlay + any legacy per-effect divs
-  document.getElementById(EFFECTS_OVERLAY_ID)?.remove();
-  for (const id of LEGACY_EFFECT_IDS) document.getElementById(id)?.remove();
-  const customEl = document.getElementById('theme-custom') as HTMLStyleElement | null;
-  if (customEl) customEl.textContent = '';
-  const overridesEl = document.getElementById('theme-engine-overrides') as HTMLStyleElement | null;
-  if (overridesEl) overridesEl.textContent = '';
-  // Remove injected Google Font link
-  document.getElementById(GOOGLE_FONT_LINK_ID)?.remove();
-}

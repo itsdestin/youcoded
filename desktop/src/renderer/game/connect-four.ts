@@ -73,8 +73,3 @@ export function checkDraw(board: Board): boolean {
   return board.every((col) => col.every((cell) => cell !== 0));
 }
 
-export function getValidColumns(board: Board): number[] {
-  return board
-    .map((col, i) => (col[ROWS - 1] === 0 ? i : -1))
-    .filter((i) => i !== -1);
-}

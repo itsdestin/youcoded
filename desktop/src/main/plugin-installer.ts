@@ -18,7 +18,7 @@ const CACHE_DIR = path.join(os.homedir(), '.claude', 'destincode-marketplace-cac
 const MARKETPLACE_REPO = 'https://github.com/anthropics/claude-plugins-official.git';
 const GIT_TIMEOUT = 120_000; // 2 minutes
 
-export interface InstallMeta {
+interface InstallMeta {
   installedAt: string;
   installedFrom: string;
   installPath: string;

@@ -16,7 +16,7 @@ const STATS_CACHE = path.join(CACHE_DIR, 'stats.json');
 const DEFAULTS_CACHE = path.join(CACHE_DIR, 'curated-defaults.json');
 
 // GitHub raw content base URL — set this to your marketplace repo
-const REGISTRY_BASE = 'https://raw.githubusercontent.com/itsdestin/destincode-marketplace/main';
+const REGISTRY_BASE = 'https://raw.githubusercontent.com/itsdestin/destincode-marketplace/master';
 
 const STATS_TTL = 60 * 60 * 1000;    // 1 hour
 const INDEX_TTL = 24 * 60 * 60 * 1000; // 24 hours

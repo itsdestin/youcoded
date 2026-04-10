@@ -35,17 +35,6 @@ export function ChatIcon({ className = 'w-4 h-4' }: IconProps) {
   );
 }
 
-/** Menu icon — three horizontal dots */
-export function MenuIcon({ className = 'w-4 h-4' }: IconProps) {
-  return (
-    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      <circle cx="6" cy="12" r="1.5" />
-      <circle cx="12" cy="12" r="1.5" />
-      <circle cx="18" cy="12" r="1.5" />
-    </svg>
-  );
-}
-
 /** Paperclip attachment icon */
 export function AttachIcon({ className = 'w-4 h-4' }: IconProps) {
   return (
@@ -136,25 +125,45 @@ export function ChevronIcon({ className = 'w-3.5 h-3.5', expanded = false }: Ico
   );
 }
 
-/** App mascot variant — inquisitive expression with wide round eyes */
-export function InquisitiveAppIcon({ className = 'w-6 h-6' }: IconProps) {
+/** App mascot variant — tall oval eyes, O mouth, arms raised out (surprised/whoa) */
+export function ShockedAppIcon({ className = 'w-6 h-6' }: IconProps) {
   return (
     <svg className={className} viewBox="0 0 24 24" fill="currentColor">
-      {/* Body with round eye cutouts */}
+      {/* Body with tall oval eye cutouts — wide-eyed surprise */}
       <path
         fillRule="evenodd"
-        d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z M9.8 8.2 A2 2 0 1 0 9.8 12.2 A2 2 0 1 0 9.8 8.2 Z M14.2 8.2 A2 2 0 1 0 14.2 12.2 A2 2 0 1 0 14.2 8.2 Z"
+        d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z M9.5 7.8 A1.2 2.2 0 1 0 9.5 12.2 A1.2 2.2 0 1 0 9.5 7.8 Z M14.5 7.8 A1.2 2.2 0 1 0 14.5 12.2 A1.2 2.2 0 1 0 14.5 7.8 Z"
       />
-      {/* Pupils — small dots inside the round eyes */}
-      <circle cx="10.3" cy="10.2" r="0.7" />
-      <circle cx="14.7" cy="10.2" r="0.7" />
-      {/* Left arm */}
-      <path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" />
-      {/* Right arm */}
-      <path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" />
-      {/* Left leg */}
+      {/* O-shaped mouth */}
+      <ellipse cx="12" cy="13.8" rx="0.9" ry="1.1" fill="#222030" />
+      {/* Left arm — raised outward */}
+      <g transform="rotate(20 2.5 11)"><path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" /></g>
+      {/* Right arm — raised outward */}
+      <g transform="rotate(-20 21.5 11)"><path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" /></g>
+      {/* Legs */}
       <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" />
-      {/* Right leg */}
+      <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" />
+    </svg>
+  );
+}
+
+/** App mascot variant — X-X eyes, zigzag mouth, drooped arms (dazed/crashed) */
+export function DizzyAppIcon({ className = 'w-6 h-6' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="currentColor">
+      {/* Body with X-X eye cutouts — dazed/glitched expression */}
+      <path
+        fillRule="evenodd"
+        d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z M8.5 8.5 L9 8.5 L9.8 9.6 L10.6 8.5 L11.1 8.5 L10.1 9.9 L11.1 11.3 L10.6 11.3 L9.8 10.2 L9 11.3 L8.5 11.3 L9.5 9.9 Z M12.9 8.5 L13.4 8.5 L14.2 9.6 L15 8.5 L15.5 8.5 L14.5 9.9 L15.5 11.3 L15 11.3 L14.2 10.2 L13.4 11.3 L12.9 11.3 L13.9 9.9 Z"
+      />
+      {/* Zigzag squiggle mouth — disoriented */}
+      <path d="M10.2 13.3 L11 12.8 L11.8 13.3 L12.6 12.8 L13.4 13.3 L13.8 13.3 L12.8 13.8 L12 13.3 L11.2 13.8 L10.4 13.3 Z" fill="#222030" />
+      {/* Left arm — drooped down */}
+      <g transform="rotate(-10 2.5 11)"><path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" /></g>
+      {/* Right arm — drooped down */}
+      <g transform="rotate(10 21.5 11)"><path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" /></g>
+      {/* Legs */}
+      <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" />
       <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" />
     </svg>
   );

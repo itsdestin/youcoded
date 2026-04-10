@@ -44,15 +44,6 @@ class WorkingDirStore(private val homeDir: File) {
         }
     }
 
-    /** All dirs including implicit Home (~) as first entry. */
-    fun allDirs(): List<Pair<String, File>> {
-        val list = mutableListOf("Home (~)" to homeDir)
-        for (wd in _dirs.value) {
-            list.add(wd.label to File(wd.path))
-        }
-        return list
-    }
-
     private fun readFromDisk(): List<WorkingDir> {
         if (!file.exists()) return emptyList()
         return try {
