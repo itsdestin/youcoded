@@ -1,0 +1,38 @@
+name: PartyKit Deploy
+
+# Deploy the game server (lobby + connect-four rooms) to Cloudflare via PartyKit.
+# Runs automatically when partykit source changes land on master, or on manual dispatch.
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'desktop/partykit/**'
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop/partykit
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: desktop/partykit/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Type-check
+        run: npx tsc --noEmit
+
+      - name: Deploy to PartyKit
+        run: npx partykit deploy
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
