@@ -42,12 +42,137 @@ class SkillConfigStore(private val homeDir: File) {
             if (!config.has("packages")) {
                 config.put("packages", JSONObject())
             }
+            // Phase 6: one-time migration of toolkit layers + community themes
+            if (!config.optBoolean("migrated", false)) {
+                migrateExistingInstalls()
+            }
         } catch (_: Exception) {
             // Back up corrupt file
             val bak = File(configFile.absolutePath + ".bak")
             try { configFile.copyTo(bak, overwrite = true) } catch (_: Exception) {}
             migrate(JSONArray())
         }
+    }
+
+    /**
+     * Phase 6: Migrate existing toolkit layer installs and community themes
+     * into the unified packages map. Runs once, guarded by `migrated` flag.
+     * Non-destructive — only adds entries, never deletes files or overwrites
+     * existing package entries.
+     */
+    private fun migrateExistingInstalls() {
+        val packages = config.optJSONObject("packages") ?: JSONObject()
+        val now = java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'", java.util.Locale.US)
+            .apply { timeZone = java.util.TimeZone.getTimeZone("UTC") }
+            .format(java.util.Date())
+
+        // --- Toolkit layers ---
+        try {
+            val toolkitConfigFile = File(homeDir, ".claude/toolkit-state/config.json")
+            if (toolkitConfigFile.exists()) {
+                val toolkitConfig = JSONObject(toolkitConfigFile.readText())
+                val installedLayers = toolkitConfig.optJSONArray("installed_layers") ?: JSONArray()
+                val toolkitRoot = toolkitConfig.optString("toolkit_root", "")
+
+                for (i in 0 until installedLayers.length()) {
+                    val layer = installedLayers.optString(i) ?: continue
+                    val layerName = "destinclaude-$layer"
+
+                    // Don't overwrite existing package entries (idempotent)
+                    if (packages.has(layerName)) continue
+
+                    // Determine layer directory path from toolkit root
+                    val layerDir = if (toolkitRoot.isNotEmpty()) {
+                        File(toolkitRoot, layer)
+                    } else {
+                        File(homeDir, ".claude/plugins/destinclaude/$layer")
+                    }
+
+                    // Verify the layer directory actually exists
+                    if (!layerDir.exists()) {
+                        android.util.Log.w("SkillConfigStore", "Migration: skipping layer \"$layer\" — directory not found at ${layerDir.absolutePath}")
+                        continue
+                    }
+
+                    // Try to read version from the layer's plugin.json
+                    var version = "0.1.0"
+                    try {
+                        val pluginJson = JSONObject(File(layerDir, "plugin.json").readText())
+                        val v = pluginJson.optString("version", "")
+                        if (v.isNotEmpty()) version = v
+                    } catch (_: Exception) {
+                        // Fallback to default version
+                    }
+
+                    // Core layer is not removable; other layers are
+                    val removable = layer != "core"
+
+                    packages.put(layerName, JSONObject().apply {
+                        put("version", version)
+                        put("source", "marketplace")
+                        put("installedAt", now)
+                        put("removable", removable)
+                        put("components", JSONArray().put(JSONObject().apply {
+                            put("type", "plugin")
+                            put("path", layerDir.absolutePath)
+                        }))
+                    })
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("SkillConfigStore", "Migration: failed to read toolkit config, skipping layers", e)
+        }
+
+        // --- Community themes ---
+        try {
+            val themesDir = File(homeDir, ".claude/destinclaude-themes")
+            if (themesDir.exists() && themesDir.isDirectory) {
+                val themeDirs = themesDir.listFiles()?.filter { it.isDirectory } ?: emptyList()
+                for (themeDir in themeDirs) {
+                    val slug = themeDir.name
+                    val packageKey = "theme:$slug"
+
+                    // Don't overwrite existing package entries (idempotent)
+                    if (packages.has(packageKey)) continue
+
+                    val manifestFile = File(themeDir, "manifest.json")
+                    if (!manifestFile.exists()) continue
+
+                    try {
+                        val manifest = JSONObject(manifestFile.readText())
+                        val source = manifest.optString("source", "")
+
+                        // Skip built-in themes (destinclaude or missing source)
+                        if (source.isEmpty() || source == "destinclaude") continue
+
+                        // Map manifest source to package source
+                        val pkgSource = if (source == "community") "marketplace"
+                            else if (source == "user") "user"
+                            else "marketplace"
+
+                        packages.put(packageKey, JSONObject().apply {
+                            put("version", manifest.optString("version", "1.0.0"))
+                            put("source", pkgSource)
+                            put("installedAt", now)
+                            put("removable", true)
+                            put("components", JSONArray().put(JSONObject().apply {
+                                put("type", "theme")
+                                put("path", themeDir.absolutePath)
+                            }))
+                        })
+                    } catch (e: Exception) {
+                        android.util.Log.w("SkillConfigStore", "Migration: skipping theme \"$slug\" — corrupt manifest", e)
+                    }
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.w("SkillConfigStore", "Migration: failed to scan themes directory, skipping themes", e)
+        }
+
+        // Mark migration complete and persist
+        config.put("packages", packages)
+        config.put("migrated", true)
+        save()
     }
 
     // Migrate v1 → v2: convert installed_plugins to packages format

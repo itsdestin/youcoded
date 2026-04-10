@@ -170,6 +170,8 @@ export interface UserSkillConfig {
   privateSkills: SkillEntry[];
   // v2: unified package tracking (replaces installed_plugins)
   packages?: Record<string, PackageInfo>;
+  // Phase 6: set after one-time migration of toolkit layers + community themes
+  migrated?: boolean;
 }
 
 export interface SkillProvider {
