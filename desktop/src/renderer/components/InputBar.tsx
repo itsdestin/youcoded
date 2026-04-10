@@ -169,9 +169,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // Send text and Enter as two separate PTY writes so Claude Code's Ink
       // framework processes them in distinct stdin read cycles — a single bulk
       // write ("text\r") can cause Ink to swallow the trailing \r.
+      // Delay must be >100ms: Claude Code's TextInput has a length-based paste
+      // heuristic (threshold: 800 chars). Messages exceeding it enter a paste
+      // accumulation mode with a 100ms finalization timeout that latches a
+      // "pasting" flag. Any input arriving while the flag is set (including \r)
+      // is absorbed into the paste instead of triggering submission. 200ms
+      // ensures the timeout has fired and the flag is cleared before \r arrives.
       const sanitized = combined.replace(/[\r\n]+/g, ' ');
       window.claude.session.sendInput(sessionId, sanitized);
-      setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 50);
+      setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 200);
     },
     [sessionId, disabled, dispatch],
   );
