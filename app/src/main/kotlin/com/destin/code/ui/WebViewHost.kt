@@ -36,9 +36,9 @@ fun WebViewHost(
                 settings.apply {
                     javaScriptEnabled = true
                     domStorageEnabled = true
-                    allowFileAccess = true
-                    allowFileAccessFromFileURLs = true
-                    allowUniversalAccessFromFileURLs = true
+                    allowFileAccess = true // needed for file:///android_asset/ bundled UI
+                    allowFileAccessFromFileURLs = false // Security: block cross-origin file reads
+                    allowUniversalAccessFromFileURLs = false // Security: enforce same-origin policy for file:// URLs
                     mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
                     useWideViewPort = true

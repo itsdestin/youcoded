@@ -43,13 +43,18 @@ export function registerIpcHandlers(
     return listUserThemes();
   });
 
+  // Security: strict slug format to prevent path traversal before path.resolve
+  const SAFE_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+
   ipcMain.handle(IPC.THEME_READ_FILE, async (_event, slug: string) => {
+    if (!SAFE_SLUG_RE.test(slug)) throw new Error('Invalid theme slug');
     const manifestPath = path.resolve(userThemeManifest(slug));
     if (!manifestPath.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
     return fs.promises.readFile(manifestPath, 'utf-8');
   });
 
   ipcMain.handle(IPC.THEME_WRITE_FILE, async (_event, slug: string, content: string) => {
+    if (!SAFE_SLUG_RE.test(slug)) throw new Error('Invalid theme slug');
     const themeDir = path.resolve(userThemeDir(slug));
     if (!themeDir.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
     await fs.promises.mkdir(path.join(themeDir, 'assets'), { recursive: true });
@@ -262,6 +267,11 @@ export function registerIpcHandlers(
   // --- Transcript model verification ---
   ipcMain.handle('model:read-last', async (_event, transcriptPath: string) => {
     try {
+      // Security: validate path stays within Claude projects directory (prevents arbitrary file read)
+      const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
+      const resolved = path.resolve(transcriptPath);
+      if (!resolved.startsWith(claudeProjects + path.sep)) return null;
+
       const content = fs.readFileSync(transcriptPath, 'utf-8');
       const lines = content.trim().split('\n');
       for (let i = lines.length - 1; i >= 0; i--) {

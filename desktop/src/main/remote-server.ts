@@ -71,7 +71,8 @@ export class RemoteServer {
   private saveTokens(): void {
     try {
       fs.mkdirSync(path.dirname(this.tokensPath), { recursive: true });
-      fs.writeFileSync(this.tokensPath, JSON.stringify(Array.from(this.tokens.keys())));
+      // Security: restrict file permissions to owner-only (prevents other users reading tokens)
+      fs.writeFileSync(this.tokensPath, JSON.stringify(Array.from(this.tokens.keys())), { mode: 0o600 });
     } catch { /* best effort */ }
   }
 
@@ -101,7 +102,8 @@ export class RemoteServer {
       }
     });
 
-    this.wss = new WebSocketServer({ server: this.httpServer, path: '/ws' });
+    // Security: limit message size to 50MB to prevent memory exhaustion attacks
+    this.wss = new WebSocketServer({ server: this.httpServer, path: '/ws', maxPayload: 52428800 });
     this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
 
     // Dev mode: proxy WebSocket upgrades (non-/ws) to Vite for HMR
@@ -896,6 +898,12 @@ export class RemoteServer {
         break;
       }
       case 'remote:set-password': {
+        // Security: only allow password changes from local connections (not remote clients)
+        const isLocal = client.ip === '127.0.0.1' || client.ip === '::1' || client.ip === '::ffff:127.0.0.1';
+        if (!isLocal) {
+          this.respond(client.ws, type, id, { error: 'Password change only allowed from local connection' });
+          break;
+        }
         await this.config.setPassword(payload);
         this.invalidateTokens();
         this.respond(client.ws, type, id, true);

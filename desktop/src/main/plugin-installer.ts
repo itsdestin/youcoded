@@ -18,6 +18,16 @@ const CACHE_DIR = path.join(os.homedir(), '.claude', 'destincode-marketplace-cac
 const MARKETPLACE_REPO = 'https://github.com/anthropics/claude-plugins-official.git';
 const GIT_TIMEOUT = 120_000; // 2 minutes
 
+// Security: only allow safe characters in plugin IDs to prevent path traversal
+const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/;
+
+/** Validate that a resolved path stays within an expected base directory. */
+function isContainedIn(child: string, parent: string): boolean {
+  const resolvedChild = path.resolve(child);
+  const resolvedParent = path.resolve(parent);
+  return resolvedChild.startsWith(resolvedParent + path.sep) || resolvedChild === resolvedParent;
+}
+
 interface InstallMeta {
   installedAt: string;
   installedFrom: string;
@@ -114,6 +124,10 @@ async function installFromLocal(id: string, sourceRef: string): Promise<InstallR
   }
 
   const sourceDir = path.join(cacheRepo, sourceRef);
+  // Security: prevent sourceRef from escaping the cache directory (e.g. "../../.ssh")
+  if (!isContainedIn(sourceDir, cacheRepo)) {
+    return { status: 'failed', error: 'Invalid source ref (path traversal blocked)' };
+  }
   if (!fs.existsSync(sourceDir) || !fs.statSync(sourceDir).isDirectory()) {
     return { status: 'failed', error: `Source not found in cache: ${sourceRef}` };
   }
@@ -125,6 +139,10 @@ async function installFromLocal(id: string, sourceRef: string): Promise<InstallR
 }
 
 async function installFromUrl(id: string, url: string): Promise<InstallResult> {
+  // Security: only allow HTTPS git URLs to prevent ext::, file://, ssh:// attacks
+  if (!url.startsWith('https://')) {
+    return { status: 'failed', error: 'Only HTTPS git URLs are supported' };
+  }
   const targetDir = path.join(PLUGINS_DIR, id);
   if (fs.existsSync(targetDir)) fs.rmSync(targetDir, { recursive: true, force: true });
 
@@ -135,6 +153,10 @@ async function installFromUrl(id: string, url: string): Promise<InstallResult> {
 
 async function installFromGitSubdir(id: string, repoUrl: string, subdir: string): Promise<InstallResult> {
   if (!subdir) return { status: 'failed', error: 'Missing sourceSubdir for git-subdir source' };
+  // Security: only allow HTTPS git URLs
+  if (!repoUrl.startsWith('https://')) {
+    return { status: 'failed', error: 'Only HTTPS git URLs are supported' };
+  }
 
   const tmpDir = path.join(os.tmpdir(), `plugin-staging-${id}-${Date.now()}`);
   try {
@@ -161,6 +183,8 @@ async function installFromGitSubdir(id: string, repoUrl: string, subdir: string)
 export async function installPlugin(entry: MarketplaceEntry): Promise<InstallResult> {
   const { id, sourceType, sourceRef } = entry;
   if (!id) return { status: 'failed', error: 'Missing plugin id' };
+  // Security: validate plugin ID to prevent path traversal (e.g. "../../.ssh")
+  if (!SAFE_ID_RE.test(id)) return { status: 'failed', error: 'Invalid plugin id' };
 
   // Guard: already in progress
   if (installsInProgress.has(id)) return { status: 'installing' };
@@ -205,8 +229,12 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
 }
 
 export async function uninstallPlugin(id: string): Promise<boolean> {
+  // Security: validate plugin ID to prevent path traversal → arbitrary directory deletion
+  if (!SAFE_ID_RE.test(id)) return false;
   try {
     const targetDir = path.join(PLUGINS_DIR, id);
+    // Double-check: resolved path must stay within plugins directory
+    if (!isContainedIn(targetDir, PLUGINS_DIR)) return false;
     if (fs.existsSync(targetDir)) {
       fs.rmSync(targetDir, { recursive: true, force: true });
     }
@@ -217,6 +245,7 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
 }
 
 export function isPluginInstalled(id: string): boolean {
+  if (!SAFE_ID_RE.test(id)) return false; // Security: reject invalid IDs
   const targetDir = path.join(PLUGINS_DIR, id);
   return fs.existsSync(targetDir) && (
     fs.existsSync(path.join(targetDir, '.claude-plugin', 'plugin.json')) ||

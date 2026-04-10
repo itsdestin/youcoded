@@ -92,7 +92,7 @@ export class RemoteConfig {
   save(): void {
     const configPath = CONFIG_PATH();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
-    // passwordPlain is kept in memory for the settings UI but never persisted to disk
+    // Security: restrict file permissions to owner-only (contains password hash)
     fs.writeFileSync(configPath, JSON.stringify({
       enabled: this.enabled,
       port: this.port,
@@ -100,16 +100,16 @@ export class RemoteConfig {
       trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,
-    }, null, 2));
+    }, null, 2), { mode: 0o600 });
   }
 
-  /** Return config data safe for the renderer (no password hash). */
-  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: string | null; trustTailscale: boolean; keepAwakeHours: number; everPaired: boolean } {
+  /** Return config data safe for the renderer (no password hash, no plaintext password). */
+  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: null; trustTailscale: boolean; keepAwakeHours: number; everPaired: boolean } {
     return {
       enabled: this.enabled,
       port: this.port,
       hasPassword: !!this.passwordHash,
-      password: this.passwordPlain,
+      password: null, // Security: never expose plaintext password over IPC or WebSocket
       trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,

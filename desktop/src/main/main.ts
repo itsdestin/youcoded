@@ -162,8 +162,19 @@ function createWindow(firstRunManager?: FirstRunManager) {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: true, // Security: OS-level process isolation for renderer
     },
   });
+
+  // Security: block navigation to external origins (prevents preload API exposure)
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    const isAppOrigin = url.startsWith('file://') || url.startsWith(DEV_SERVER_URL);
+    if (!isAppOrigin) {
+      event.preventDefault();
+    }
+  });
+  // Security: deny all window.open() calls from renderer
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' as const }));
 
   if (!app.isPackaged) {
     mainWindow.loadURL(DEV_SERVER_URL);
