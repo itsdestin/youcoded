@@ -19,6 +19,7 @@ import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
+import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -74,6 +75,42 @@ export function registerIpcHandlers(
   });
   ipcMain.handle(IPC.WINDOW_CLOSE, () => {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  });
+
+  // Zoom controls — each returns the new zoom percentage for the overlay UI
+  const ZOOM_STEP = 0.5; // ~12% per step (Electron uses logarithmic scale)
+  const ZOOM_MIN = -3;   // ~50%
+  const ZOOM_MAX = 5;    // ~300%
+
+  function zoomLevelToPercent(level: number): number {
+    return Math.round(Math.pow(1.2, level) * 100);
+  }
+
+  ipcMain.handle(IPC.ZOOM_IN, () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return 100;
+    const current = mainWindow.webContents.getZoomLevel();
+    const next = Math.min(current + ZOOM_STEP, ZOOM_MAX);
+    mainWindow.webContents.setZoomLevel(next);
+    return zoomLevelToPercent(next);
+  });
+
+  ipcMain.handle(IPC.ZOOM_OUT, () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return 100;
+    const current = mainWindow.webContents.getZoomLevel();
+    const next = Math.max(current - ZOOM_STEP, ZOOM_MIN);
+    mainWindow.webContents.setZoomLevel(next);
+    return zoomLevelToPercent(next);
+  });
+
+  ipcMain.handle(IPC.ZOOM_RESET, () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return 100;
+    mainWindow.webContents.setZoomLevel(0);
+    return 100;
+  });
+
+  ipcMain.handle(IPC.ZOOM_GET, () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return 100;
+    return zoomLevelToPercent(mainWindow.webContents.getZoomLevel());
   });
 
   // --- Theme marketplace ---
@@ -1132,6 +1169,15 @@ export function registerIpcHandlers(
       }
     }
   });
+
+  // Guided setup wizard: prerequisite detection, tool installation, OAuth, repo creation.
+  // Each handler runs one specific command — no generic shell exec.
+  ipcMain.handle('sync:setup:check-prereqs', (_e, backend) => checkSyncPrereqs(backend));
+  ipcMain.handle('sync:setup:install-rclone', () => installRclone());
+  ipcMain.handle('sync:setup:check-gdrive', () => checkGdriveRemote());
+  ipcMain.handle('sync:setup:auth-gdrive', () => authGdrive());
+  ipcMain.handle('sync:setup:auth-github', () => authGithub());
+  ipcMain.handle('sync:setup:create-repo', (_e, repoName) => createGithubRepo(repoName));
 
   // --- Permission response (blocking hooks) ---
   if (hookRelay) {

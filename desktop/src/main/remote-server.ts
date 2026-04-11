@@ -12,6 +12,7 @@ import type { LocalSkillProvider } from './skill-provider';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory } from './session-browser';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
+import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 
 const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
 const HOOK_BUFFER_SIZE = 10_000; // ~10MB max, covers full conversations without excessive memory
@@ -1019,6 +1020,38 @@ export class RemoteServer {
         if (backend?.type === 'drive') url = 'https://drive.google.com';
         else if (backend?.type === 'github') url = backend.config?.PERSONAL_SYNC_REPO || '';
         this.respond(client.ws, type, id, { url });
+        break;
+      }
+
+      // Guided setup wizard (prerequisite detection, install, OAuth, repo creation)
+      case 'sync:setup:check-prereqs': {
+        const prereqs = await checkSyncPrereqs(payload.backend || payload);
+        this.respond(client.ws, type, id, prereqs);
+        break;
+      }
+      case 'sync:setup:install-rclone': {
+        const installResult = await installRclone();
+        this.respond(client.ws, type, id, installResult);
+        break;
+      }
+      case 'sync:setup:check-gdrive': {
+        const gdriveCheck = await checkGdriveRemote();
+        this.respond(client.ws, type, id, gdriveCheck);
+        break;
+      }
+      case 'sync:setup:auth-gdrive': {
+        const gdriveAuth = await authGdrive();
+        this.respond(client.ws, type, id, gdriveAuth);
+        break;
+      }
+      case 'sync:setup:auth-github': {
+        const ghAuth = await authGithub();
+        this.respond(client.ws, type, id, ghAuth);
+        break;
+      }
+      case 'sync:setup:create-repo': {
+        const repoResult = await createGithubRepo(payload.repoName || payload);
+        this.respond(client.ws, type, id, repoResult);
         break;
       }
 

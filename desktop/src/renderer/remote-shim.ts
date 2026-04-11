@@ -597,6 +597,15 @@ export function installShim(): void {
       pushBackend: (id: string) => invoke('sync:push-backend', { id }),
       pullBackend: (id: string) => invoke('sync:pull-backend', { id }),
       openFolder: (id: string) => invoke('sync:open-folder', { id }),
+      // Guided setup wizard
+      setup: {
+        checkPrereqs: (backend: string) => invoke('sync:setup:check-prereqs', { backend }),
+        installRclone: () => invoke('sync:setup:install-rclone'),
+        checkGdrive: () => invoke('sync:setup:check-gdrive'),
+        authGdrive: () => invoke('sync:setup:auth-gdrive'),
+        authGithub: () => invoke('sync:setup:auth-github'),
+        createRepo: (repoName: string) => invoke('sync:setup:create-repo', { repoName }),
+      },
     },
     folders: {
       list: () => invoke('folders:list'),

@@ -282,6 +282,15 @@ contextBridge.exposeInMainWorld('claude', {
     pushBackend: (id: string) => ipcRenderer.invoke('sync:push-backend', id),
     pullBackend: (id: string) => ipcRenderer.invoke('sync:pull-backend', id),
     openFolder: (id: string) => ipcRenderer.invoke('sync:open-folder', id),
+    // Guided setup wizard
+    setup: {
+      checkPrereqs: (backend: string) => ipcRenderer.invoke('sync:setup:check-prereqs', backend),
+      installRclone: () => ipcRenderer.invoke('sync:setup:install-rclone'),
+      checkGdrive: () => ipcRenderer.invoke('sync:setup:check-gdrive'),
+      authGdrive: () => ipcRenderer.invoke('sync:setup:auth-gdrive'),
+      authGithub: () => ipcRenderer.invoke('sync:setup:auth-github'),
+      createRepo: (repoName: string) => ipcRenderer.invoke('sync:setup:create-repo', repoName),
+    },
   },
   getFavorites: () => ipcRenderer.invoke('favorites:get'),
   setFavorites: (favorites: string[]) => ipcRenderer.invoke('favorites:set', favorites),

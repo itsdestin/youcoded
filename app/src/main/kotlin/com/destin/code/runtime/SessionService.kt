@@ -1495,9 +1495,6 @@ class SessionService : Service() {
             }
 
             // ── Phase 5a: Theme marketplace browsing ─────────────────
-            // Fetches theme registry from destinclaude-themes repo (same URL
-            // as desktop's theme-marketplace-provider.ts) and annotates each
-            // entry with installed status by scanning the local themes dir.
             "theme-marketplace:list" -> {
                 val result = withContext(Dispatchers.IO) {
                     themeMarketplaceList(msg.payload)
@@ -1511,9 +1508,6 @@ class SessionService : Service() {
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
-            // Phase 5b: Token-only theme install — downloads manifest.json,
-            // validates required token fields, writes to themes dir. Assets
-            // are NOT downloaded yet (added in 5c).
             "theme-marketplace:install" -> {
                 val slug = msg.payload.optString("slug", "")
                 val result = withContext(Dispatchers.IO) {
@@ -1521,8 +1515,6 @@ class SessionService : Service() {
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
-            // Phase 5b: Uninstall — deletes the theme directory. Only allows
-            // community-source themes (prevents removing user-created themes).
             "theme-marketplace:uninstall" -> {
                 val slug = msg.payload.optString("slug", "")
                 val result = withContext(Dispatchers.IO) {
@@ -1530,7 +1522,6 @@ class SessionService : Service() {
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
-            // Phase 5b: update is a re-install (same as desktop)
             "theme-marketplace:update" -> {
                 val slug = msg.payload.optString("slug", "")
                 val result = withContext(Dispatchers.IO) {
@@ -1538,7 +1529,6 @@ class SessionService : Service() {
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
-            // Phase 5b: publish user theme to destinclaude-themes registry via gh CLI
             "theme-marketplace:publish" -> {
                 val slug = msg.payload.optString("slug", "")
                 val result = withContext(Dispatchers.IO) {
@@ -1546,12 +1536,158 @@ class SessionService : Service() {
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
-            // Phase 5b: generate theme preview — not supported on Android (no headless browser)
             "theme-marketplace:generate-preview" -> {
                 android.util.Log.i("SessionService", "generate-preview not supported on Android")
                 msg.id?.let {
                     bridgeServer.respond(ws, msg.type, it,
                         JSONObject().put("path", JSONObject.NULL))
+                }
+            }
+            // --- Guided setup wizard: prereq detection, install, OAuth, repo creation ---
+            "sync:setup:check-prereqs" -> {
+                val backend = msg.payload.optString("backend", "")
+                val boot = bootstrap!!
+                val result = JSONObject()
+
+                // rclone is bundled in Android Bootstrap — always installed
+                val rcloneBin = File(boot.usrDir, "bin/rclone")
+                result.put("rcloneInstalled", rcloneBin.exists())
+
+                // Check if a Google Drive rclone remote exists
+                var gdriveConfigured = false
+                var gdriveRemoteName: String? = null
+                if (rcloneBin.exists()) {
+                    val listResult = syncService?.execCommand(listOf("rclone", "listremotes"))
+                    if (listResult != null && listResult.code == 0) {
+                        val remotes = listResult.stdout.lines().map { it.trim().trimEnd(':') }.filter { it.isNotEmpty() }
+                        for (remote in remotes) {
+                            val showResult = syncService?.execCommand(listOf("rclone", "config", "show", remote))
+                            if (showResult != null && showResult.code == 0 && showResult.stdout.contains("type = drive")) {
+                                gdriveConfigured = true
+                                gdriveRemoteName = remote
+                                break
+                            }
+                        }
+                    }
+                }
+                result.put("gdriveConfigured", gdriveConfigured)
+                result.put("gdriveRemoteName", gdriveRemoteName ?: org.json.JSONObject.NULL)
+
+                // Check gh CLI
+                val ghBin = File(boot.usrDir, "bin/gh")
+                result.put("ghInstalled", ghBin.exists())
+                var ghAuthenticated = false
+                var ghUsername: String? = null
+                if (ghBin.exists()) {
+                    val authResult = syncService?.execCommand(listOf("gh", "auth", "status"))
+                    ghAuthenticated = authResult != null && authResult.code == 0
+                    if (ghAuthenticated) {
+                        val userResult = syncService?.execCommand(listOf("gh", "api", "user", "--jq", ".login"))
+                        if (userResult != null && userResult.code == 0) ghUsername = userResult.stdout.trim().ifEmpty { null }
+                    }
+                }
+                result.put("ghAuthenticated", ghAuthenticated)
+                result.put("ghUsername", ghUsername ?: org.json.JSONObject.NULL)
+
+                // iCloud not available on Android
+                result.put("icloudPath", org.json.JSONObject.NULL)
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            "sync:setup:install-rclone" -> {
+                // No-op on Android — rclone is bundled in Bootstrap CORE tier
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", true)) }
+            }
+            "sync:setup:check-gdrive" -> {
+                var configured = false
+                var remoteName: String? = null
+                val listResult = syncService?.execCommand(listOf("rclone", "listremotes"))
+                if (listResult != null && listResult.code == 0) {
+                    val remotes = listResult.stdout.lines().map { it.trim().trimEnd(':') }.filter { it.isNotEmpty() }
+                    for (remote in remotes) {
+                        val showResult = syncService?.execCommand(listOf("rclone", "config", "show", remote))
+                        if (showResult != null && showResult.code == 0 && showResult.stdout.contains("type = drive")) {
+                            configured = true
+                            remoteName = remote
+                            break
+                        }
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                    .put("configured", configured).put("remoteName", remoteName ?: org.json.JSONObject.NULL)) }
+            }
+            "sync:setup:auth-gdrive" -> {
+                // Run rclone config create — BROWSER env var routes OAuth to Android browser
+                val sync = syncService
+                if (sync == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                        .put("success", false).put("remoteName", "gdrive").put("error", "SyncService not initialized")) }
+                } else {
+                    try {
+                        val result = sync.execCommand(listOf("rclone", "config", "create", "gdrive", "drive"), timeoutSeconds = 120)
+                        if (result.code == 0) {
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                                .put("success", true).put("remoteName", "gdrive")) }
+                        } else {
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                                .put("success", false).put("remoteName", "gdrive").put("error", result.stderr.ifEmpty { "Google sign-in failed" })) }
+                        }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                            .put("success", false).put("remoteName", "gdrive").put("error", e.message ?: "Sign-in failed")) }
+                    }
+                }
+            }
+            "sync:setup:auth-github" -> {
+                val sync = syncService
+                if (sync == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                        .put("success", false).put("username", org.json.JSONObject.NULL).put("error", "SyncService not initialized")) }
+                } else {
+                    try {
+                        val result = sync.execCommand(listOf("gh", "auth", "login", "--hostname", "github.com", "--git-protocol", "https", "--web"), timeoutSeconds = 120)
+                        if (result.code == 0) {
+                            val userResult = sync.execCommand(listOf("gh", "api", "user", "--jq", ".login"))
+                            val username = if (userResult.code == 0) userResult.stdout.trim().ifEmpty { null } else null
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                                .put("success", true).put("username", username ?: org.json.JSONObject.NULL)) }
+                        } else {
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                                .put("success", false).put("username", org.json.JSONObject.NULL).put("error", result.stderr.ifEmpty { "GitHub sign-in failed" })) }
+                        }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                            .put("success", false).put("username", org.json.JSONObject.NULL).put("error", e.message ?: "Sign-in failed")) }
+                    }
+                }
+            }
+            "sync:setup:create-repo" -> {
+                val repoName = msg.payload.optString("repoName", "")
+                if (!repoName.matches(Regex("^[a-zA-Z0-9._-]+$")) || repoName.length > 100) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                        .put("success", false).put("repoUrl", org.json.JSONObject.NULL).put("error", "Invalid repository name")) }
+                } else {
+                    val sync = syncService
+                    if (sync == null) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                            .put("success", false).put("repoUrl", org.json.JSONObject.NULL).put("error", "SyncService not initialized")) }
+                    } else {
+                        val userResult = sync.execCommand(listOf("gh", "api", "user", "--jq", ".login"))
+                        val username = if (userResult.code == 0) userResult.stdout.trim() else ""
+                        if (username.isEmpty()) {
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                                .put("success", false).put("repoUrl", org.json.JSONObject.NULL).put("error", "Not signed in to GitHub")) }
+                        } else {
+                            val result = sync.execCommand(listOf("gh", "repo", "create", "$username/$repoName", "--private",
+                                "--description", "Personal Claude data backup (managed by DestinCode)"))
+                            if (result.code == 0 || result.stderr.contains("already exists")) {
+                                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                                    .put("success", true).put("repoUrl", "https://github.com/$username/$repoName")) }
+                            } else {
+                                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                                    .put("success", false).put("repoUrl", org.json.JSONObject.NULL).put("error", result.stderr.ifEmpty { "Failed to create repository" })) }
+                            }
+                        }
+                    }
                 }
             }
 

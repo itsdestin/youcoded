@@ -12,6 +12,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
+import SyncSetupWizard from './SyncSetupWizard';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -401,26 +402,24 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             onBack={() => setShowInfo(false)}
             onClose={onClose}
           />
-        ) : view === 'add-type' ? (
-          <AddBackendTypePicker
-            backends={status?.backends ?? []}
-            onSelect={(type) => { setAddType(type); setView('add-config'); }}
-            onBack={() => setView('main')}
-            onClose={onClose}
-          />
-        ) : view === 'add-config' && addType ? (
-          <AddBackendConfigForm
-            type={addType}
-            onAdd={async (instance) => {
+        ) : (view === 'add-type' || view === 'add-config') ? (
+          // Guided setup wizard handles type selection, prereq check, OAuth, and config
+          <SyncSetupWizard
+            initialType={addType ?? undefined}
+            existingCounts={{
+              drive: (status?.backends ?? []).filter(b => b.type === 'drive').length,
+              github: (status?.backends ?? []).filter(b => b.type === 'github').length,
+              icloud: (status?.backends ?? []).filter(b => b.type === 'icloud').length,
+            }}
+            onComplete={async (instance) => {
               try {
                 await claude.sync.addBackend(instance);
+                // Trigger first sync immediately
+                await claude.sync.force();
                 await refreshStatus();
               } catch {}
-              setView('main');
-              setAddType(null);
             }}
-            onBack={() => setView('add-type')}
-            onClose={onClose}
+            onClose={() => { setView('main'); setAddType(null); }}
           />
         ) : view === 'edit' && editingId ? (
           <EditBackendForm
