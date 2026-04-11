@@ -152,7 +152,8 @@ const warnStyles = {
 
 type WidgetId =
   | 'usage-5h' | 'usage-7d' | 'context' | 'git-branch' | 'sync-warnings' | 'theme' | 'version'
-  | 'session-cost' | 'tokens-in' | 'tokens-out' | 'cache-stats' | 'code-changes' | 'session-time';
+  | 'session-cost' | 'tokens-in' | 'tokens-out' | 'cache-stats' | 'code-changes' | 'session-time'
+  | 'cache-hit-rate' | 'active-ratio' | 'output-speed';
 
 // Widget categories and definitions with info tooltips
 // defaultVisible: true = shown for new installs, false = opt-in only
@@ -213,6 +214,13 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         description: 'Total session time and how much of it Claude spent thinking (API time). Helps you understand your workflow pace.',
         bestFor: 'Power users who want to see how much of a session is active Claude work vs your own thinking/typing time.',
       },
+      {
+        id: 'active-ratio',
+        label: 'Active Ratio',
+        defaultVisible: false,
+        description: 'What percentage of the session was Claude actively thinking (API time / wall time). Low means you\'re mostly reading; high means Claude is doing heavy lifting.',
+        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means Claude is cranking.',
+      },
     ],
   },
   {
@@ -238,6 +246,20 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: false,
         description: 'Tokens read from the prompt cache vs created. Higher cached reads mean faster, cheaper requests.',
         bestFor: 'API users and power users. Shows how effectively prompt caching is working in your conversation.',
+      },
+      {
+        id: 'cache-hit-rate',
+        label: 'Cache Hit Rate',
+        defaultVisible: false,
+        description: 'Percentage of cached tokens that were reads (hits) vs new creations. 90%+ means the cache is warm and working well.',
+        bestFor: 'Power users optimizing cost. Low hit rates mean your prompts are changing too much for the cache to help.',
+      },
+      {
+        id: 'output-speed',
+        label: 'Output Speed',
+        defaultVisible: false,
+        description: 'Average output tokens per second across the session. Varies by model — Haiku is fastest, Opus is slowest.',
+        bestFor: 'Comparing model performance. Useful when deciding whether to switch models for faster iteration.',
       },
     ],
   },
@@ -602,6 +624,54 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
         >
           <span className="text-fg-faint">Cached:</span>
           <span className="text-[#4CAF50]">{ss?.cacheReadTokens != null ? formatTokens(ss.cacheReadTokens) : '--'}</span>
+        </span>
+      )}
+
+      {/* Cache hit rate — derived: cacheRead / (cacheRead + cacheCreation) */}
+      {show('cache-hit-rate') && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={ss?.cacheReadTokens != null ? `${ss.cacheReadTokens.toLocaleString()} reads / ${((ss.cacheReadTokens ?? 0) + (ss.cacheCreationTokens ?? 0)).toLocaleString()} total cached tokens` : 'Cache hit rate'}
+        >
+          <span className="text-fg-faint">Hit:</span>
+          {(() => {
+            if (ss?.cacheReadTokens == null) return <span className="text-fg-2">--</span>;
+            const total = (ss.cacheReadTokens ?? 0) + (ss.cacheCreationTokens ?? 0);
+            if (total === 0) return <span className="text-fg-faint">N/A</span>;
+            const pct = Math.round((ss.cacheReadTokens / total) * 100);
+            const color = pct >= 80 ? 'text-[#4CAF50]' : pct >= 50 ? 'text-[#FF9800]' : 'text-[#DD4444]';
+            return <span className={color}>{pct}%</span>;
+          })()}
+        </span>
+      )}
+
+      {/* Active ratio — derived: apiDuration / duration */}
+      {show('active-ratio') && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={ss?.duration != null && ss?.apiDuration != null ? `Claude thinking: ${formatDuration(ss.apiDuration)} of ${formatDuration(ss.duration)} total` : 'Active ratio'}
+        >
+          <span className="text-fg-faint">Active:</span>
+          <span className="text-fg-2">
+            {ss?.duration != null && ss?.apiDuration != null && ss.duration > 0
+              ? `${Math.round((ss.apiDuration / ss.duration) * 100)}%`
+              : '--'}
+          </span>
+        </span>
+      )}
+
+      {/* Output speed — derived: outputTokens / apiDuration */}
+      {show('output-speed') && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={ss?.outputTokens != null && ss?.apiDuration != null ? `${ss.outputTokens.toLocaleString()} tokens in ${formatDuration(ss.apiDuration)}` : 'Output speed'}
+        >
+          <span className="text-fg-faint">Speed:</span>
+          <span className="text-fg-2">
+            {ss?.outputTokens != null && ss?.apiDuration != null && ss.apiDuration > 0
+              ? `${Math.round(ss.outputTokens / ss.apiDuration)} tok/s`
+              : '--'}
+          </span>
         </span>
       )}
 
