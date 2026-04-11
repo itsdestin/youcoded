@@ -7,13 +7,13 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
-import { useSkills } from '../state/skill-context';
+
 import { MarketplaceProvider, useMarketplace, type MarketplaceTab } from '../state/marketplace-context';
 import SkillCard from './SkillCard';
 import SkillDetail from './SkillDetail';
 import ThemeCard from './ThemeCard';
 import ThemeDetail from './ThemeDetail';
-import type { SkillEntry, SkillFilters, ChipConfig } from '../../shared/types';
+import type { SkillEntry, SkillFilters } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 
 // ── Props ────────────────────────────────────────────────────────────────────
@@ -24,7 +24,6 @@ interface MarketplaceProps {
   // Callbacks for actions that need parent handling (editors, share sheets)
   onOpenShareSheet?: (skillId: string) => void;
   onOpenEditor?: (skillId: string) => void;
-  onOpenCreatePrompt?: () => void;
 }
 
 // Re-export MarketplaceTab for App.tsx
@@ -42,7 +41,7 @@ export default function Marketplace(props: MarketplaceProps) {
 
 // ── Main component ───────────────────────────────────────────────────────────
 
-function MarketplaceInner({ onClose, initialTab = 'skills', onOpenShareSheet, onOpenEditor, onOpenCreatePrompt }: MarketplaceProps) {
+function MarketplaceInner({ onClose, initialTab = 'skills', onOpenShareSheet, onOpenEditor }: MarketplaceProps) {
   const [activeTab, setActiveTab] = useState<MarketplaceTab>(initialTab);
 
   // Detail view state — when set, detail replaces the tab content
@@ -116,7 +115,6 @@ function MarketplaceInner({ onClose, initialTab = 'skills', onOpenShareSheet, on
             onSelectTheme={setSelectedTheme}
             onOpenShareSheet={onOpenShareSheet}
             onOpenEditor={onOpenEditor}
-            onOpenCreatePrompt={onOpenCreatePrompt}
           />
         )}
         {activeTab === 'skills' && (
@@ -137,37 +135,27 @@ function InstalledTab({
   onSelectTheme,
   onOpenShareSheet,
   onOpenEditor,
-  onOpenCreatePrompt,
 }: {
   onSelectSkill: (id: string) => void;
   onSelectTheme: (theme: ThemeRegistryEntryWithStatus) => void;
   onOpenShareSheet?: (id: string) => void;
   onOpenEditor?: (id: string) => void;
-  onOpenCreatePrompt?: () => void;
 }) {
-  const { installedSkills, favorites, chips, loading, setFavorite, setChips, deletePrompt, updateAvailable, update, uninstallSkill, packages, publishSkill } = useMarketplace();
+  const { installedSkills, favorites, loading, setFavorite, updateAvailable, update, uninstallSkill, packages, publishSkill } = useMarketplace();
   const [updatingId, setUpdatingId] = useState<string | null>(null);
   // Phase 4a: track publish-in-progress state per skill id
   const [publishingId, setPublishingId] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<{ id: string; prUrl?: string; error?: string } | null>(null);
-  const [filter, setFilter] = useState<'all' | 'favorites' | 'private'>('all');
-  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  const [chipsExpanded, setChipsExpanded] = useState(false);
+  const [filter, setFilter] = useState<'all' | 'favorites'>('all');
 
   const favSet = useMemo(() => new Set(favorites), [favorites]);
 
   const filtered = useMemo(() => {
     switch (filter) {
       case 'favorites': return installedSkills.filter(s => favSet.has(s.id));
-      case 'private': return installedSkills.filter(s => s.visibility === 'private' || s.source === 'self');
       default: return installedSkills;
     }
   }, [installedSkills, filter, favSet]);
-
-  const handleDelete = useCallback(async (id: string) => {
-    await deletePrompt(id);
-    setConfirmDelete(null);
-  }, [deletePrompt]);
 
   if (loading) {
     return <div className="flex items-center justify-center py-12"><p className="text-fg-muted text-sm">Loading...</p></div>;
@@ -177,7 +165,7 @@ function InstalledTab({
     <div className="flex-1 overflow-y-auto">
       {/* Filter pills */}
       <div className="px-4 pt-3 pb-2 flex gap-1.5">
-        {(['all', 'favorites', 'private'] as const).map(f => (
+        {(['all', 'favorites'] as const).map(f => (
           <button
             key={f}
             onClick={() => setFilter(f)}
@@ -187,21 +175,9 @@ function InstalledTab({
                 : 'bg-panel text-fg-muted border-edge-dim hover:border-edge'
             }`}
           >
-            {f === 'all' ? `All (${installedSkills.length})` : f === 'favorites' ? 'Favorites' : 'My Creations'}
+            {f === 'all' ? `All (${installedSkills.length})` : 'Favorites'}
           </button>
         ))}
-      </div>
-
-      {/* Action buttons */}
-      <div className="px-4 pb-2 flex gap-2">
-        {onOpenCreatePrompt && (
-          <button
-            onClick={onOpenCreatePrompt}
-            className="px-3 py-1.5 text-[11px] font-medium rounded-lg border border-edge-dim text-fg-muted hover:text-fg hover:border-edge transition-colors"
-          >
-            + Create Prompt
-          </button>
-        )}
       </div>
 
       {/* Installed skills list */}
@@ -229,12 +205,8 @@ function InstalledTab({
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-medium text-fg truncate">{skill.displayName || skill.id}</span>
                 {/* Type badge */}
-                <span className={`px-1.5 py-0.5 text-[8px] font-medium rounded-sm ${
-                  skill.type === 'prompt'
-                    ? 'bg-[#f0ad4e]/15 text-[#f0ad4e] border border-[#f0ad4e]/25'
-                    : 'bg-inset/50 text-fg-dim border border-edge/25'
-                }`}>
-                  {skill.type === 'prompt' ? 'Prompt' : 'Plugin'}
+                <span className="px-1.5 py-0.5 text-[8px] font-medium rounded-sm bg-inset/50 text-fg-dim border border-edge/25">
+                  Plugin
                 </span>
               </div>
               <p className="text-[11px] text-fg-muted truncate">{skill.description}</p>
@@ -277,9 +249,6 @@ function InstalledTab({
                   &#10005;
                 </button>
               )}
-              {onOpenEditor && skill.type === 'prompt' && (skill.source === 'self' || skill.visibility === 'private') && (
-                <button onClick={(e) => { e.stopPropagation(); onOpenEditor(skill.id); }} className="p-1 text-fg-muted hover:text-fg text-xs" title="Edit">&#9998;</button>
-              )}
               {onOpenShareSheet && (
                 <button onClick={(e) => { e.stopPropagation(); onOpenShareSheet(skill.id); }} className="p-1 text-fg-muted hover:text-fg text-xs" title="Share">&#8599;</button>
               )}
@@ -306,40 +275,10 @@ function InstalledTab({
                   {publishingId === skill.id ? '...' : '\u2191 Publish'}
                 </button>
               )}
-              {(skill.source === 'self' || skill.visibility === 'private') && skill.type === 'prompt' && (
-                <button onClick={(e) => { e.stopPropagation(); setConfirmDelete(skill.id); }} className="p-1 text-fg-muted hover:text-red-400 text-xs" title="Delete">&times;</button>
-              )}
             </div>
           </div>
         ))}
       </div>
-
-      {/* Quick Chips section (collapsible) */}
-      <div className="px-4 mt-4 pb-4">
-        <button
-          onClick={() => setChipsExpanded(!chipsExpanded)}
-          className="flex items-center gap-1.5 text-[11px] font-medium text-fg-muted hover:text-fg transition-colors"
-        >
-          <span className={`transition-transform ${chipsExpanded ? 'rotate-90' : ''}`}>&#9656;</span>
-          Quick Chips ({chips.length})
-        </button>
-        {chipsExpanded && (
-          <QuickChipsSection chips={chips} setChips={setChips} installedSkills={installedSkills} />
-        )}
-      </div>
-
-      {/* Delete confirmation modal */}
-      {confirmDelete && (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50">
-          <div className="bg-panel border border-edge rounded-lg p-4 max-w-xs mx-4">
-            <p className="text-sm text-fg mb-3">Delete this prompt? This can't be undone.</p>
-            <div className="flex gap-2 justify-end">
-              <button onClick={() => setConfirmDelete(null)} className="px-3 py-1.5 text-[11px] bg-well text-fg-muted rounded-md hover:text-fg">Cancel</button>
-              <button onClick={() => handleDelete(confirmDelete)} className="px-3 py-1.5 text-[11px] bg-red-500/20 text-red-400 rounded-md hover:bg-red-500/30">Delete</button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Phase 4a: Publish result banner — shows PR URL on success or error message */}
       {publishResult && (
@@ -379,128 +318,10 @@ function InstalledTab({
 
 // ── Quick Chips (sub-section of Installed tab) ───────────────────────────────
 
-function QuickChipsSection({ chips, setChips, installedSkills }: {
-  chips: ChipConfig[];
-  setChips: (chips: ChipConfig[]) => void;
-  installedSkills: SkillEntry[];
-}) {
-  const [showPicker, setShowPicker] = useState(false);
-  const [customLabel, setCustomLabel] = useState('');
-  const [customPrompt, setCustomPrompt] = useState('');
-  const chipSkillIds = useMemo(() => new Set(chips.map(c => c.skillId).filter(Boolean)), [chips]);
-
-  const move = (index: number, dir: -1 | 1) => {
-    const target = index + dir;
-    if (target < 0 || target >= chips.length) return;
-    const next = [...chips];
-    [next[index], next[target]] = [next[target], next[index]];
-    setChips(next);
-  };
-
-  const remove = (index: number) => {
-    setChips(chips.filter((_, i) => i !== index));
-  };
-
-  const addFromSkill = (skill: SkillEntry) => {
-    if (chips.length >= 10) return;
-    setChips([...chips, { skillId: skill.id, label: skill.displayName || skill.id, prompt: skill.prompt || `/${skill.id}` }]);
-    setShowPicker(false);
-  };
-
-  const addCustom = () => {
-    if (chips.length >= 10 || !customLabel.trim() || !customPrompt.trim()) return;
-    setChips([...chips, { label: customLabel.trim(), prompt: customPrompt.trim() }]);
-    setCustomLabel('');
-    setCustomPrompt('');
-    setShowPicker(false);
-  };
-
-  return (
-    <div className="mt-2 space-y-1.5">
-      {/* Chip list */}
-      {chips.map((chip, i) => (
-        <div key={i} className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-well border border-edge-dim text-[11px]">
-          <span className="font-medium text-fg truncate flex-1">{chip.label}</span>
-          <span className="text-fg-faint truncate max-w-[120px]">{chip.prompt}</span>
-          <div className="flex gap-0.5 shrink-0">
-            <button onClick={() => move(i, -1)} disabled={i === 0} className="px-1 text-fg-muted disabled:opacity-30">&uarr;</button>
-            <button onClick={() => move(i, 1)} disabled={i === chips.length - 1} className="px-1 text-fg-muted disabled:opacity-30">&darr;</button>
-            <button onClick={() => remove(i)} className="px-1 text-fg-muted hover:text-red-400">&times;</button>
-          </div>
-        </div>
-      ))}
-
-      {/* Add chip button */}
-      {chips.length < 10 && !showPicker && (
-        <button
-          onClick={() => setShowPicker(true)}
-          className="w-full py-1.5 text-[11px] text-fg-muted border border-dashed border-edge-dim rounded-md hover:border-edge hover:text-fg transition-colors"
-        >
-          + Add Chip
-        </button>
-      )}
-
-      {/* Chip picker */}
-      {showPicker && (
-        <div className="bg-panel border border-edge rounded-lg p-3 space-y-2">
-          {/* Custom chip form */}
-          <div className="space-y-1.5">
-            <input
-              value={customLabel}
-              onChange={(e) => setCustomLabel(e.target.value.slice(0, 20))}
-              placeholder="Label (max 20 chars)"
-              className="w-full px-2 py-1 text-[11px] bg-well border border-edge-dim rounded-md text-fg placeholder:text-fg-faint focus:outline-none focus:border-accent"
-            />
-            <textarea
-              value={customPrompt}
-              onChange={(e) => setCustomPrompt(e.target.value.slice(0, 500))}
-              placeholder="Prompt text"
-              rows={2}
-              className="w-full px-2 py-1 text-[11px] bg-well border border-edge-dim rounded-md text-fg placeholder:text-fg-faint focus:outline-none focus:border-accent resize-none"
-            />
-            <div className="flex gap-2">
-              <button
-                onClick={addCustom}
-                disabled={!customLabel.trim() || !customPrompt.trim()}
-                className="px-2 py-1 text-[10px] bg-accent text-on-accent rounded-md disabled:opacity-40"
-              >
-                Add Custom
-              </button>
-              <button onClick={() => setShowPicker(false)} className="px-2 py-1 text-[10px] text-fg-muted hover:text-fg">Cancel</button>
-            </div>
-          </div>
-          {/* Divider */}
-          <div className="border-t border-edge-dim" />
-          {/* From installed skills */}
-          <p className="text-[10px] text-fg-faint font-medium">Or pick from installed skills:</p>
-          <div className="max-h-32 overflow-y-auto space-y-0.5">
-            {installedSkills.filter(s => !chipSkillIds.has(s.id)).map(skill => (
-              <button
-                key={skill.id}
-                onClick={() => addFromSkill(skill)}
-                className="w-full text-left px-2 py-1 text-[11px] text-fg-muted hover:text-fg hover:bg-well rounded-sm transition-colors"
-              >
-                {skill.displayName || skill.id}
-              </button>
-            ))}
-          </div>
-        </div>
-      )}
-    </div>
-  );
-}
-
 // ── Skills Tab ───────────────────────────────────────────────────────────────
 
-type TypeFilter = 'all' | 'prompt' | 'plugin';
 type CategoryFilter = SkillEntry['category'] | 'all';
 type SortOption = 'popular' | 'newest' | 'rating' | 'name';
-
-const TYPE_PILLS: { label: string; value: TypeFilter }[] = [
-  { label: 'All', value: 'all' },
-  { label: 'Prompts', value: 'prompt' },
-  { label: 'Plugins', value: 'plugin' },
-];
 
 const CATEGORY_PILLS: { label: string; value: CategoryFilter }[] = [
   { label: 'Personal', value: 'personal' },
@@ -520,7 +341,6 @@ const SORT_OPTIONS: { label: string; value: SortOption }[] = [
 function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
   const { skillEntries, installedSkills, installSkill, loading, updateAvailable } = useMarketplace();
   const [query, setQuery] = useState('');
-  const [typeFilter, setTypeFilter] = useState<TypeFilter>('all');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [sort, setSort] = useState<SortOption>('popular');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -530,7 +350,6 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
   // Use the marketplace index directly with client-side filtering
   const filtered = useMemo(() => {
     let result = skillEntries;
-    if (typeFilter !== 'all') result = result.filter(s => s.type === typeFilter);
     if (categoryFilter !== 'all') result = result.filter(s => s.category === categoryFilter);
     if (query.trim()) {
       const q = query.trim().toLowerCase();
@@ -545,7 +364,7 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
       case 'newest': return [...result].sort((a, b) => (b.updatedAt || b.installedAt || '').localeCompare(a.updatedAt || a.installedAt || ''));
       default: return result; // Server-side default ordering (popular/rating)
     }
-  }, [skillEntries, typeFilter, categoryFilter, query, sort]);
+  }, [skillEntries, categoryFilter, query, sort]);
 
   // Focus search on mount
   useEffect(() => { searchRef.current?.focus(); }, []);
@@ -571,20 +390,6 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
       {/* Filter pills */}
       <div className="px-4 pb-2 overflow-x-auto">
         <div className="flex gap-1.5 items-center flex-nowrap">
-          {TYPE_PILLS.map(pill => (
-            <button
-              key={pill.value}
-              onClick={() => setTypeFilter(pill.value)}
-              className={`px-2.5 py-1 text-[11px] font-medium rounded-full border whitespace-nowrap transition-colors ${
-                typeFilter === pill.value
-                  ? 'bg-accent text-on-accent border-accent'
-                  : 'bg-panel text-fg-muted border-edge-dim hover:border-edge'
-              }`}
-            >
-              {pill.label}
-            </button>
-          ))}
-          <div className="w-px h-4 bg-edge-dim shrink-0" />
           {CATEGORY_PILLS.map(pill => (
             <button
               key={pill.value}
