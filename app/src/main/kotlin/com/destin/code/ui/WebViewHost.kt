@@ -62,18 +62,6 @@ fun WebViewHost(
                         }
                         return false
                     }
-
-                    override fun onPageFinished(view: WebView, url: String?) {
-                        super.onPageFinished(view, url)
-                        // Security: inject bridge auth token so remote-shim.ts can
-                        // authenticate with LocalBridgeServer on WebSocket connect
-                        if (bridgeAuthToken != null) {
-                            view.evaluateJavascript(
-                                "window.__BRIDGE_TOKEN='$bridgeAuthToken';",
-                                null
-                            )
-                        }
-                    }
                 }
 
                 webChromeClient = object : WebChromeClient() {
@@ -87,7 +75,10 @@ fun WebViewHost(
                     }
                 }
 
-                val url = devUrl ?: "file:///android_asset/web/index.html"
+                // Security: pass bridge auth token as query param so it's available
+                // before any JS runs — avoids race with remote-shim.ts connect()
+                val baseUrl = devUrl ?: "file:///android_asset/web/index.html"
+                val url = if (bridgeAuthToken != null) "$baseUrl?bridgeToken=$bridgeAuthToken" else baseUrl
                 loadUrl(url)
 
                 webView = this

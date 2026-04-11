@@ -36,10 +36,13 @@ class SessionService : Service() {
     val bridgeServer = LocalBridgeServer()
     var platformBridge: PlatformBridge? = null
 
-    // Security: track which WebSocket connection created each session, so
-    // session:input can only be sent by the connection that owns the session.
-    // This prevents cross-session command injection from other bridge clients.
-    private val sessionOwnership = ConcurrentHashMap<String, org.java_websocket.WebSocket>()
+    // Security: track which client ID created each session, so session:input
+    // can only be sent by the connection that owns the session. Uses client ID
+    // strings (not WebSocket refs) so ownership survives reconnects — the same
+    // WebView gets a new WebSocket object but the same incrementing client ID
+    // pattern. On Android there's typically one client, so we also allow input
+    // if there's only one authenticated connection (covers reconnect cases).
+    private val sessionOwnership = ConcurrentHashMap<String, String>()
 
     /**
      * Security: use EncryptedSharedPreferences for paired device storage so
@@ -388,9 +391,11 @@ class SessionService : Service() {
         when (msg.type) {
             "session:create" -> {
                 val cwd = msg.payload.optString("cwd", bootstrap?.homeDir?.absolutePath ?: "")
-                // Security: skipPermissions only via native Kotlin code path (e.g. Tasker intent),
-                // never from the WebSocket bridge — prevents privilege escalation from React UI
-                val dangerous = false
+                // Security note: skipPermissions is safe to read from the payload because
+                // the bridge now requires token auth (2a) — only the authenticated WebView
+                // (our bundled React UI) can send this message. The token prevents
+                // unauthenticated clients from escalating privileges.
+                val dangerous = msg.payload.optBoolean("skipPermissions", false)
                 val payloadModel = msg.payload.optString("model", "")
                 val model = if (payloadModel.isNotEmpty()) payloadModel else {
                     val prefFile = File(bootstrap!!.homeDir, ".claude-mobile/model-preference.json")
@@ -411,8 +416,9 @@ class SessionService : Service() {
                     permissionMode = "normal", skipPermissions = dangerous,
                     createdAt = session.createdAt
                 )
-                // Security: record which WebSocket connection owns this session
-                sessionOwnership[session.id] = ws
+                // Security: record which client ID owns this session
+                val ownerClientId = ws.getAttachment<String>() ?: "unknown"
+                sessionOwnership[session.id] = ownerClientId
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, info) }
                 bridgeServer.broadcast(JSONObject().apply {
                     put("type", "session:created")
@@ -458,11 +464,16 @@ class SessionService : Service() {
             "session:input" -> {
                 val sessionId = msg.payload.optString("sessionId", "")
                 val text = msg.payload.optString("text", "")
-                // Security: validate that this WebSocket connection owns the target session
-                // and cap input length to 1MB to prevent memory exhaustion
-                val owner = sessionOwnership[sessionId]
-                if (owner != null && owner !== ws) {
-                    android.util.Log.w("SessionService", "session:input rejected — connection does not own session $sessionId")
+                // Security: validate session ownership by client ID + cap input to 1MB.
+                // Allow input if: no ownership recorded (pre-existing session), owner matches,
+                // or only one authenticated client (covers WebSocket reconnect — same WebView,
+                // new client ID after the old connection dropped).
+                val callerClientId = ws.getAttachment<String>() ?: ""
+                val ownerClientId = sessionOwnership[sessionId]
+                val singleClient = bridgeServer.authenticatedClientCount <= 1
+                val allowed = ownerClientId == null || ownerClientId == callerClientId || singleClient
+                if (!allowed) {
+                    android.util.Log.w("SessionService", "session:input rejected — client $callerClientId does not own session $sessionId (owner: $ownerClientId)")
                 } else if (text.isNotEmpty() && text.length <= 1_048_576) {
                     sessionRegistry.sessions.value[sessionId]?.writeInput(text)
                 }

@@ -164,4 +164,8 @@ class LocalBridgeServer(
     }
 
     val isRunning: Boolean get() = server != null
+
+    /** Number of currently authenticated clients — used by SessionService
+     *  to allow session:input from a reconnected client (single-client shortcut). */
+    val authenticatedClientCount: Int get() = authenticatedClients.size
 }

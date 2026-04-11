@@ -192,9 +192,9 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       clearTimeout(connectTimeout);
       setConnectionState('authenticating');
       // Security: when connecting to the local Android bridge (file:// protocol),
-      // use the auth token injected by WebViewHost instead of a password.
-      // This prevents other apps on the device from connecting to the bridge.
-      const bridgeToken = (window as any).__BRIDGE_TOKEN;
+      // use the auth token passed via URL query param by WebViewHost.
+      // The token is in the URL so it's available before any JS runs (no race).
+      const bridgeToken = new URLSearchParams(location.search).get('bridgeToken');
       const isLocalBridge = location.protocol === 'file:' && !targetUrl;
       const authMsg = isLocalBridge && bridgeToken
         ? { type: 'auth', token: bridgeToken }
@@ -448,8 +448,7 @@ async function pickAndUploadFiles(): Promise<string[]> {
 /** Install the window.claude shim. Call once on app startup in browser mode. */
 export function installShim(): void {
   // Android WebView (file://) always starts in local mode — clear any stale remote target
-  // that could redirect connect('android-local') to a dead remote server.
-  // Security: use the bridge auth token injected by WebViewHost for local authentication
+  // that could redirect connect('android-local') to a dead remote server
   if (location.protocol === 'file:') {
     localStorage.removeItem('destincode-remote-target');
     localStorage.removeItem('destincode-remote-token');
