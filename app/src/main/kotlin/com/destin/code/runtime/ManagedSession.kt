@@ -381,6 +381,7 @@ class ManagedSession(
         "Trust This Folder?",
         "Choose a Theme for the Terminal",
         "Select Login Method",
+        "Resume Session", // Stale session resume — lets user choose summary vs full resume
     )
 
     /** Detect permission mode from visible screen only (not raw buffer).
@@ -493,7 +494,7 @@ class ManagedSession(
                 }
                 activePrompts.add(parsed.id)
                 broadcastPrompt(parsed.id, parsed.title,
-                    InkSelectParser.toPromptButtons(parsed))
+                    InkSelectParser.toPromptButtons(parsed), parsed.description)
             }
         } else {
             val staleMenus = activePrompts.filter { it.startsWith("menu_") }
@@ -563,13 +564,15 @@ class ManagedSession(
     }
 
     /** Broadcast a prompt event to the React UI via bridge server. */
-    private fun broadcastPrompt(promptId: String, title: String, buttons: List<PromptButton>) {
+    private fun broadcastPrompt(promptId: String, title: String, buttons: List<PromptButton>, description: String? = null) {
         bridgeServer?.broadcast(JSONObject().apply {
             put("type", "prompt:show")
             put("payload", JSONObject().apply {
                 put("sessionId", id)
                 put("promptId", promptId)
                 put("title", title)
+                // Include description when present (e.g., resume session trade-off text)
+                if (description != null) put("description", description)
                 put("buttons", org.json.JSONArray().also { arr ->
                     buttons.forEach { btn ->
                         arr.put(JSONObject().apply {

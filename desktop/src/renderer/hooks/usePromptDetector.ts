@@ -18,6 +18,7 @@ const SETUP_PROMPT_TITLES = new Set([
   'Choose a Theme',
   'Select Login Method',
   'Skip Permissions Warning',
+  'Resume Session', // Stale session resume — lets user choose summary vs full resume
 ]);
 
 // After a permission response (PERMISSION_RESPONDED/EXPIRED clears
@@ -138,6 +139,7 @@ export function usePromptDetector() {
               sessionId: sid,
               promptId: menu.id,
               title: menu.title,
+              description: menu.description,
               buttons: buttons.map((b) => ({ label: b.label, input: b.input })),
             });
           }, PROMPT_DEBOUNCE_MS);

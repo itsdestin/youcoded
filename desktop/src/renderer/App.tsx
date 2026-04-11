@@ -466,6 +466,7 @@ function AppInner() {
         sessionId: payload.sessionId,
         promptId: payload.promptId,
         title: payload.title,
+        description: payload.description,
         buttons: payload.buttons || [],
       });
     });

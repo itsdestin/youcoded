@@ -3,6 +3,7 @@ import { ChatMessage, ToolCallState, ToolGroupState } from '../../shared/types';
 export interface InteractivePrompt {
   promptId: string;
   title: string;
+  description?: string; // Contextual text explaining the prompt (e.g., resume trade-offs)
   buttons: { label: string; input: string }[];
   completed?: string; // label of the selected option, if completed
 }
@@ -75,6 +76,7 @@ export type ChatAction =
       sessionId: string;
       promptId: string;
       title: string;
+      description?: string;
       buttons: { label: string; input: string }[];
     }
   | {

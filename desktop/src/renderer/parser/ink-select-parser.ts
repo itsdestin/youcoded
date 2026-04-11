@@ -6,6 +6,8 @@ const TITLE_OVERRIDES: Record<string, string> = {
   'login method': 'Select Login Method',
   'dangerously-skip-permissions': 'Skip Permissions Warning',
   'skip all permission': 'Skip Permissions Warning',
+  // Resume session prompt — shown when resuming a stale/large session
+  'resuming from a summary': 'Resume Session',
 };
 
 export interface ParsedMenu {
@@ -13,6 +15,7 @@ export interface ParsedMenu {
   title: string;
   options: string[];
   selectedIndex: number;
+  description?: string; // Contextual text above the menu (e.g., resume trade-off explanation)
 }
 
 export interface PromptButton {
@@ -28,7 +31,8 @@ function stripAnsi(line: string): string {
  * Strip leading numbering ("1. ", "2. ") from an option label if present.
  */
 function stripNumbering(text: string): string {
-  return text.replace(/^\d+\.\s+/, '');
+  // Match both period ("1. ") and colon ("1: ") numbered formats
+  return text.replace(/^\d+[.:]\s+/, '');
 }
 
 /**
@@ -56,7 +60,9 @@ function isOptionLine(line: string, referenceIndent: number): boolean {
   const trimmed = line.trim();
   if (!trimmed) return false;
   if (/^[─┌┐└┘│╭╮╯╰┬┴├┤┼╔╗╚╝║═]+$/.test(trimmed)) return false;
-  if (!/^\d+\.\s+/.test(trimmed)) return false;
+  // Match both period ("1. ") and colon ("1: ") numbered formats — the resume
+  // session prompt uses colon-numbered options while other Ink menus use periods
+  if (!/^\d+[.:]\s+/.test(trimmed)) return false;
   const indent = indentOf(line);
   return Math.abs(indent - referenceIndent) <= 2;
 }
@@ -105,7 +111,7 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
     if (!trimmed) break;
     if (!isOptionLine(lines[i], referenceIndent)) break;
     // Don't include lines that look like titles (end with ? or :)
-    if (/[?:]$/.test(trimmed) && !/^\d+\.\s+/.test(trimmed)) break;
+    if (/[?:]$/.test(trimmed) && !/^\d+[.:]\s+/.test(trimmed)) break;
     options.unshift(stripNumbering(trimmed));
   }
 
@@ -131,7 +137,11 @@ export function parseInkSelect(screenText: string): ParsedMenu | null {
   const id = 'menu_' + options.map((o) => o.slice(0, 10)).join('_')
     .toLowerCase().replace(/[^a-z0-9_]/g, '');
 
-  return { id, title, options, selectedIndex };
+  // Extract contextual description from lines above the menu (e.g., resume
+  // session trade-off text: session age, token count, usage warning)
+  const description = extractDescription(lines, Math.max(0, firstOptionLine), title);
+
+  return { id, title, options, selectedIndex, description };
 }
 
 /**
@@ -158,6 +168,32 @@ function extractTitle(lines: string[], firstOptionLine: number): string {
   }
 
   return 'Select an Option';
+}
+
+/**
+ * Extract descriptive text from lines above the menu options, between the
+ * title region and the first option. Used to surface contextual info like
+ * the resume prompt's session-age and usage-limit trade-off explanation.
+ * Skips box-drawing, empty lines, and lines that match the extracted title.
+ */
+function extractDescription(lines: string[], firstOptionLine: number, title: string): string | undefined {
+  const searchStart = Math.max(0, firstOptionLine - 15);
+  const descLines: string[] = [];
+
+  for (let i = searchStart; i < firstOptionLine; i++) {
+    const clean = stripAnsi(lines[i]).trim();
+    if (!clean) continue;
+    // Skip box-drawing / decorative lines
+    if (/^[─┌┐└┘│╭╮╯╰┬┴├┤┼╔╗╚╝║═━]+$/.test(clean)) continue;
+    // Skip the line that became the title (avoid duplication)
+    if (clean.replace(/[:?]$/, '').trim() === title.replace(/[:?]$/, '').trim()) continue;
+    // Skip footer instructions (e.g., "Enter to confirm - Esc to cancel")
+    if (/enter to confirm/i.test(clean)) continue;
+    descLines.push(clean);
+  }
+
+  if (descLines.length === 0) return undefined;
+  return descLines.join(' ');
 }
 
 export function menuToButtons(menu: ParsedMenu): PromptButton[] {
