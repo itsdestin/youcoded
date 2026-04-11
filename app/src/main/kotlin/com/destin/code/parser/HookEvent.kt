@@ -56,6 +56,16 @@ sealed class HookEvent {
         val requestId: String,
     ) : HookEvent()
 
+    /** Emitted when a held PermissionRequest socket closes before a response
+     *  was sent — e.g., hook-relay-blocking.js timed out (120s) or Claude Code
+     *  killed the hook process. React uses this to clear stale approval cards.
+     *  Desktop equivalent: hook-relay.ts socket.on('close') → 'permission-expired'. */
+    data class PermissionExpired(
+        override val sessionId: String,
+        override val hookEventName: String,
+        val requestId: String,
+    ) : HookEvent()
+
     companion object {
         fun fromJson(json: String): HookEvent? {
             return try {

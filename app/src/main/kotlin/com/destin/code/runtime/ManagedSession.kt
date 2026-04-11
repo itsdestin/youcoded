@@ -253,6 +253,16 @@ class ManagedSession(
                                 suggestions = suggestions
                             ))
                         }
+                        is HookEvent.PermissionExpired -> {
+                            // Socket closed before user responded — relay timed out
+                            // or Claude Code killed the hook. Clear the stale approval
+                            // card in React UI. Desktop equivalent: main.ts
+                            // hookRelay.on('permission-expired') handler.
+                            server.broadcast(HookSerializer.permissionExpired(
+                                sessionId = id,
+                                requestId = event.requestId,
+                            ))
+                        }
                         is HookEvent.Notification -> {
                             server.broadcast(HookSerializer.notification(
                                 sessionId = id,
@@ -611,18 +621,12 @@ class ManagedSession(
      * Must be called on Main dispatcher.
      */
     private fun routeHookEvent(event: HookEvent) {
-        when (event) {
-            is HookEvent.PostToolUse -> cleanupOrphanedSocket(event.toolUseId)
-            is HookEvent.PostToolUseFailure -> cleanupOrphanedSocket(event.toolUseId)
-            else -> {}
-        }
-    }
-
-    /** Close an orphaned PermissionRequest socket if the tool completes via another path. */
-    private fun cleanupOrphanedSocket(toolUseId: String) {
-        // With React UI, permission state lives on the bridge/React side.
-        // We just ensure the socket is closed so the hook process can exit.
-        ptyBridge?.getEventBridge()?.closeSocket(toolUseId)
+        // Previously attempted to close orphaned permission sockets here on
+        // PostToolUse/PostToolUseFailure, but the code passed toolUseId to
+        // closeSocket() which expects a requestId — the two IDs are unrelated,
+        // so cleanup never matched anything. Socket closure is now handled by
+        // EventBridge.monitorSocketClosure() which detects when the relay
+        // process exits and emits PermissionExpired to clear the React UI.
     }
 
     /** Mark a prompt as completed so the detector won't re-create it. */
