@@ -10,7 +10,7 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { SkillEntry, ChipConfig, PackageInfo } from '../../shared/types';
+import type { SkillEntry, PackageInfo } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 
 // window.claude is typed for skills but not for theme.marketplace — cast via any
@@ -71,9 +71,6 @@ interface MarketplaceState {
   updateAvailable: Record<string, boolean>;
   // Installed content (merged from all sources)
   installedSkills: SkillEntry[];
-  // User content
-  privateSkills: SkillEntry[];
-  chips: ChipConfig[];
   favorites: string[];
   // Loading/error state
   loading: boolean;
@@ -88,14 +85,10 @@ interface MarketplaceActions {
   uninstallTheme: (slug: string) => Promise<void>;
   // Phase 3b: update an installed entry to the latest marketplace version
   update: (id: string, type: 'skill' | 'theme') => Promise<any>;
-  // Favorites & chips
+  // Favorites
   setFavorite: (id: string, favorited: boolean) => Promise<void>;
-  setChips: (chips: ChipConfig[]) => Promise<void>;
   // Refresh data
   refresh: () => Promise<void>;
-  // Prompt skill management
-  createPrompt: (skill: Omit<SkillEntry, 'id'>) => Promise<SkillEntry>;
-  deletePrompt: (id: string) => Promise<void>;
   // Phase 4a: publish a user-created skill to the community marketplace via PR
   publishSkill: (id: string) => Promise<{ prUrl: string }>;
 }
@@ -119,8 +112,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [themeEntries, setThemeEntries] = useState<ThemeRegistryEntryWithStatus[]>([]);
   const [packages, setPackages] = useState<Record<string, PackageInfo>>({});
   const [installedSkills, setInstalledSkills] = useState<SkillEntry[]>([]);
-  const [privateSkills, setPrivateSkills] = useState<SkillEntry[]>([]);
-  const [chips, setChipsState] = useState<ChipConfig[]>([]);
   const [favorites, setFavoritesState] = useState<string[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -140,14 +131,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         themes,
         installed,
         favs,
-        chipList,
         pkgs,
       ] = await Promise.all([
         window.claude.skills.listMarketplace(),
         claude().theme.marketplace.list().catch(() => []),
         window.claude.skills.list(),
         window.claude.skills.getFavorites(),
-        window.claude.skills.getChips(),
         marketplaceApi?.getPackages?.().catch(() => ({})) ?? Promise.resolve({}),
       ]);
 
@@ -158,14 +147,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       setThemeEntries(themes || []);
       setInstalledSkills(installed || []);
       setFavoritesState(favs || []);
-      setChipsState(chipList || []);
       setPackages((pkgs as Record<string, PackageInfo>) || {});
-
-      // Extract private skills from installed list
-      const priv = (installed || []).filter((s: SkillEntry) =>
-        s.visibility === 'private' || s.source === 'self'
-      );
-      setPrivateSkills(priv);
     } catch (err: any) {
       if (gen !== fetchGeneration.current) return;
       setError(err?.message || 'Failed to load marketplace data');
@@ -220,22 +202,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     );
   }, []);
 
-  const setChips = useCallback(async (newChips: ChipConfig[]) => {
-    await window.claude.skills.setChips(newChips);
-    setChipsState(newChips);
-  }, []);
-
-  const createPrompt = useCallback(async (skill: Omit<SkillEntry, 'id'>) => {
-    const result = await window.claude.skills.createPrompt(skill);
-    await fetchAll();
-    return result;
-  }, [fetchAll]);
-
-  const deletePrompt = useCallback(async (id: string) => {
-    await window.claude.skills.deletePrompt(id);
-    await fetchAll();
-  }, [fetchAll]);
-
   // Phase 4a: publish a user-created skill to the community marketplace.
   // Calls the skills:publish IPC which forks the marketplace repo, uploads
   // files, and opens a PR via `gh` CLI.
@@ -274,8 +240,6 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     packages,
     updateAvailable,
     installedSkills,
-    privateSkills,
-    chips,
     favorites,
     loading,
     error,
@@ -285,16 +249,13 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     uninstallTheme,
     update,
     setFavorite,
-    setChips,
     refresh: fetchAll,
-    createPrompt,
-    deletePrompt,
     publishSkill,
   }), [
-    skillEntries, themeEntries, packages, updateAvailable, installedSkills, privateSkills,
-    chips, favorites, loading, error,
+    skillEntries, themeEntries, packages, updateAvailable, installedSkills,
+    favorites, loading, error,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,
-    setFavorite, setChips, fetchAll, createPrompt, deletePrompt, publishSkill,
+    setFavorite, fetchAll, publishSkill,
   ]);
 
   return (

@@ -31,7 +31,7 @@ import Marketplace from './components/Marketplace';
 import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
-import CreatePromptSheet from './components/CreatePromptSheet';
+
 import type { SkillEntry, PermissionMode } from '../shared/types';
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
@@ -108,7 +108,7 @@ function AppInner() {
   const [publishThemeSlug, setPublishThemeSlug] = useState<string | null>(null);
   const [editorSkillId, setEditorSkillId] = useState<string | null>(null);
   const [shareSkillId, setShareSkillId] = useState<string | null>(null);
-  const [createPromptOpen, setCreatePromptOpen] = useState(false);
+
   const [isFirstRun, setIsFirstRun] = useState<boolean | null>(null); // null = loading
   const handleFirstRunComplete = useCallback(() => setIsFirstRun(false), []);
 
@@ -1321,7 +1321,6 @@ function AppInner() {
           initialTab={marketplaceTab}
           onOpenShareSheet={(id) => setShareSkillId(id)}
           onOpenEditor={(id) => setEditorSkillId(id)}
-          onOpenCreatePrompt={() => setCreatePromptOpen(true)}
         />
       )}
       {publishThemeSlug && (
@@ -1332,9 +1331,6 @@ function AppInner() {
       )}
       {shareSkillId && (
         <ShareSheet skillId={shareSkillId} onClose={() => setShareSkillId(null)} />
-      )}
-      {createPromptOpen && (
-        <CreatePromptSheet onClose={() => setCreatePromptOpen(false)} />
       )}
       {toast && (
         <div className="fixed bottom-16 left-1/2 -translate-x-1/2 z-50 px-4 py-2 rounded-lg bg-panel border border-edge text-sm text-fg shadow-lg">
