@@ -43,7 +43,15 @@ fun WebViewHost(
                     javaScriptEnabled = true
                     domStorageEnabled = true
                     allowFileAccess = true // needed for file:///android_asset/ bundled UI
-                    allowFileAccessFromFileURLs = false // Security: block cross-origin file reads
+                    // ES modules (<script type="module">) use fetch-like loading semantics.
+                    // With allowFileAccessFromFileURLs=false, the WebView blocks the bundled
+                    // JS chunks from loading via the module system, silently preventing React
+                    // from mounting. Must be true for our own bundled assets to work.
+                    // Security note: this only allows file:// pages to read other file:// URLs —
+                    // since we control all content loaded into this WebView (bundled assets +
+                    // theme-asset:// intercepts), there is no cross-origin risk.
+                    @Suppress("DEPRECATION")
+                    allowFileAccessFromFileURLs = true
                     allowUniversalAccessFromFileURLs = false // Security: enforce same-origin policy for file:// URLs
                     mixedContentMode = WebSettings.MIXED_CONTENT_NEVER_ALLOW
                     setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
