@@ -680,7 +680,8 @@ export function registerIpcHandlers(
     const claudeDir = path.join(os.homedir(), '.claude');
     const entries = fs.readdirSync(claudeDir);
     for (const entry of entries) {
-      if (entry.startsWith('.context-')) {
+      // Prune orphaned context + session-stats files from crashed sessions
+      if (entry.startsWith('.context-') || entry.startsWith('.session-stats-')) {
         fs.unlink(path.join(claudeDir, entry), () => {});
       }
     }
@@ -837,7 +838,14 @@ export function registerIpcHandlers(
       if (raw) gitBranchMap[desktopId] = raw;
     }
 
-    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap };
+    // Read per-session stats (cost, tokens, code changes — written by statusline.sh)
+    const sessionStatsMap: Record<string, any> = {};
+    for (const [desktopId, claudeId] of sessionIdMap) {
+      const stats = readJsonFile(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`));
+      if (stats) sessionStatsMap[desktopId] = stats;
+    }
+
+    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap, sessionStatsMap };
   }
 
   // Push status data every 10s — store handle so it can be cleared on shutdown
@@ -1017,10 +1025,11 @@ export function registerIpcHandlers(
       topicWatchers.delete(sessionId);
       lastTopics.delete(sessionId);
     }
-    // Clean up context cache file
+    // Clean up context + session stats cache files
     const claudeId = sessionIdMap.get(sessionId);
     if (claudeId) {
       fs.unlink(path.join(os.homedir(), '.claude', `.context-${claudeId}`), () => {});
+      fs.unlink(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`), () => {});
     }
     sessionIdMap.delete(sessionId);
   });

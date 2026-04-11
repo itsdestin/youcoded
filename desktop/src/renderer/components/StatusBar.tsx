@@ -1,6 +1,26 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import type { PermissionMode } from '../../shared/types';
+
+// --- Session stats shape (written by statusline.sh to .session-stats-{id}.json) ---
+
+interface SessionStats {
+  costUsd: number | null;
+  inputTokens: number | null;
+  outputTokens: number | null;
+  cacheReadTokens: number | null;
+  cacheCreationTokens: number | null;
+  contextTokens: number | null;
+  duration: number | null;
+  apiDuration: number | null;
+  linesAdded: number | null;
+  linesRemoved: number | null;
+  commits: number | null;
+  pullRequests: number | null;
+  toolsAccepted: number | null;
+  toolsRejected: number | null;
+}
 
 interface StatusData {
   usage: {
@@ -15,6 +35,7 @@ interface StatusData {
   } | null;
   contextPercent: number | null;
   gitBranch: string | null;
+  sessionStats: SessionStats | null;
   syncStatus: string | null;
   syncWarnings: string | null;
 }
@@ -75,6 +96,24 @@ function format7dReset(iso: string): string {
   }
 }
 
+/** Format token count as human-readable (e.g. 1234 -> "1.2k", 1234567 -> "1.2M") */
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return `${n}`;
+}
+
+/** Format seconds as human-readable duration (e.g. 125 -> "2m 5s", 3700 -> "1h 1m") */
+function formatDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  const m = Math.floor(seconds / 60);
+  const s = Math.round(seconds % 60);
+  if (m < 60) return s > 0 ? `${m}m ${s}s` : `${m}m`;
+  const h = Math.floor(m / 60);
+  const rm = m % 60;
+  return rm > 0 ? `${h}h ${rm}m` : `${h}h`;
+}
+
 interface Props {
   statusData: StatusData;
   onRunSync?: () => void;
@@ -113,32 +152,163 @@ const warnStyles = {
   warn: 'bg-[#FF9800]/15 text-[#FF9800] border-[#FF9800]/25',
 };
 
-// --- Widget visibility customizer ---
+// --- Widget visibility system ---
 
-type WidgetId = 'usage-5h' | 'usage-7d' | 'context' | 'git-branch' | 'sync-warnings' | 'theme' | 'version';
+type WidgetId =
+  | 'usage-5h' | 'usage-7d' | 'context' | 'git-branch' | 'sync-warnings' | 'theme' | 'version'
+  | 'session-cost' | 'tokens-in' | 'tokens-out' | 'cache-stats' | 'code-changes' | 'session-time';
 
-const WIDGET_DEFS: { id: WidgetId; label: string }[] = [
-  { id: 'usage-5h', label: '5h Usage' },
-  { id: 'usage-7d', label: '7d Usage' },
-  { id: 'context', label: 'Context %' },
-  { id: 'git-branch', label: 'Git Branch' },
-  { id: 'sync-warnings', label: 'Sync Warnings' },
-  { id: 'theme', label: 'Theme' },
-  { id: 'version', label: 'Version' },
+// Widget categories and definitions with info tooltips
+// defaultVisible: true = shown for new installs, false = opt-in only
+interface WidgetDef {
+  id: WidgetId;
+  label: string;
+  defaultVisible: boolean;
+  description: string;  // Shown in (i) tooltip in config popup
+  bestFor: string;      // Who benefits most from this widget
+}
+
+interface WidgetCategory {
+  name: string;
+  widgets: WidgetDef[];
+}
+
+const WIDGET_CATEGORIES: WidgetCategory[] = [
+  {
+    name: 'Rate Limits',
+    widgets: [
+      {
+        id: 'usage-5h',
+        label: '5h Usage',
+        defaultVisible: true,
+        description: 'Shows how much of your 5-hour rate limit you\'ve used. Resets on a rolling window.',
+        bestFor: 'Everyone. Helps you pace usage and avoid hitting rate limits during heavy sessions.',
+      },
+      {
+        id: 'usage-7d',
+        label: '7d Usage',
+        defaultVisible: true,
+        description: 'Shows how much of your 7-day rate limit you\'ve used. Resets on a rolling window.',
+        bestFor: 'Everyone. Track your weekly usage pattern so you don\'t run out mid-week.',
+      },
+    ],
+  },
+  {
+    name: 'Session',
+    widgets: [
+      {
+        id: 'context',
+        label: 'Context %',
+        defaultVisible: true,
+        description: 'How much of Claude\'s conversation memory remains. Lower means Claude may forget earlier context.',
+        bestFor: 'Everyone. When this drops below 20%, consider starting a new session to avoid lost context.',
+      },
+      {
+        id: 'session-cost',
+        label: 'Session Cost',
+        defaultVisible: false,
+        description: 'Estimated cost of this session in USD. For Pro/Max subscribers this is informational only (you\'re not billed per-token).',
+        bestFor: 'API users tracking spend. Also useful for Pro/Max users curious about what their session would cost on the API.',
+      },
+      {
+        id: 'session-time',
+        label: 'Session Duration',
+        defaultVisible: false,
+        description: 'Total session time and how much of it Claude spent thinking (API time). Helps you understand your workflow pace.',
+        bestFor: 'Power users who want to see how much of a session is active Claude work vs your own thinking/typing time.',
+      },
+    ],
+  },
+  {
+    name: 'Tokens',
+    widgets: [
+      {
+        id: 'tokens-in',
+        label: 'Input Tokens',
+        defaultVisible: false,
+        description: 'Cumulative input tokens sent to Claude this session. Includes your messages, files, and system context.',
+        bestFor: 'Power users monitoring how much context is being sent. Helpful for optimizing large-file workflows.',
+      },
+      {
+        id: 'tokens-out',
+        label: 'Output Tokens',
+        defaultVisible: false,
+        description: 'Cumulative output tokens Claude has generated this session. Higher means more verbose responses.',
+        bestFor: 'Users who want to understand how much Claude is writing. Useful for gauging response verbosity.',
+      },
+      {
+        id: 'cache-stats',
+        label: 'Cache Efficiency',
+        defaultVisible: false,
+        description: 'Tokens read from the prompt cache vs created. Higher cached reads mean faster, cheaper requests.',
+        bestFor: 'API users and power users. Shows how effectively prompt caching is working in your conversation.',
+      },
+    ],
+  },
+  {
+    name: 'Code',
+    widgets: [
+      {
+        id: 'code-changes',
+        label: 'Code Changes',
+        defaultVisible: false,
+        description: 'Lines of code added and removed this session. A quick productivity snapshot.',
+        bestFor: 'Developers using Claude for coding tasks. See at a glance how much code Claude has written.',
+      },
+      {
+        id: 'git-branch',
+        label: 'Git Branch',
+        defaultVisible: true,
+        description: 'The current git repository and branch for your working directory.',
+        bestFor: 'Developers working across multiple branches or repos.',
+      },
+    ],
+  },
+  {
+    name: 'App',
+    widgets: [
+      {
+        id: 'sync-warnings',
+        label: 'Sync Warnings',
+        defaultVisible: true,
+        description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
+        bestFor: 'DestinClaude toolkit users. Keeps you aware of sync issues that could cause data loss.',
+      },
+      {
+        id: 'theme',
+        label: 'Theme',
+        defaultVisible: true,
+        description: 'Shows the active theme. Click to cycle through your configured themes.',
+        bestFor: 'Anyone who uses multiple themes or wants quick access to theme switching.',
+      },
+      {
+        id: 'version',
+        label: 'Version',
+        defaultVisible: true,
+        description: 'Current DestinCode version. Glows when an update is available.',
+        bestFor: 'Everyone. Stay up to date with the latest features and fixes.',
+      },
+    ],
+  },
 ];
 
+// Flat list for iteration
+const ALL_WIDGET_DEFS = WIDGET_CATEGORIES.flatMap((c) => c.widgets);
+const DEFAULT_VISIBLE = new Set<WidgetId>(ALL_WIDGET_DEFS.filter((w) => w.defaultVisible).map((w) => w.id));
+
 const STORAGE_KEY = 'destincode-statusbar-widgets';
-const ALL_VISIBLE = new Set<WidgetId>(WIDGET_DEFS.map((w) => w.id));
 
 function loadVisibility(): Set<WidgetId> {
   try {
     const stored = localStorage.getItem(STORAGE_KEY);
     if (stored) {
       const arr = JSON.parse(stored) as WidgetId[];
-      return new Set(arr.filter((id) => WIDGET_DEFS.some((w) => w.id === id)));
+      // Only keep IDs that still exist in our definitions
+      return new Set(arr.filter((id) => ALL_WIDGET_DEFS.some((w) => w.id === id)));
     }
   } catch { /* ignore */ }
-  return new Set(ALL_VISIBLE);
+  // Fresh install — use defaultVisible flags, not ALL
+  return new Set(DEFAULT_VISIBLE);
 }
 
 function saveVisibility(visible: Set<WidgetId>) {
@@ -163,6 +333,8 @@ function useWidgetVisibility() {
   return { visible, toggle };
 }
 
+// --- Icons ---
+
 // Pencil SVG icon (inline to avoid extra dependencies)
 function PencilIcon() {
   return (
@@ -172,27 +344,137 @@ function PencilIcon() {
   );
 }
 
+// Info (i) icon for widget descriptions
+function InfoIcon({ className }: { className?: string }) {
+  return (
+    <svg className={className} width="12" height="12" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+      <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+    </svg>
+  );
+}
+
+// --- Config Popup ---
+// Centered modal (matches SettingsPanel popup style) for customizing status bar widgets
+
+function WidgetConfigPopup({ open, onClose, visible, toggle }: {
+  open: boolean;
+  onClose: () => void;
+  visible: Set<WidgetId>;
+  toggle: (id: WidgetId) => void;
+}) {
+  // Track which widget's (i) tooltip is expanded
+  const [expandedInfo, setExpandedInfo] = useState<WidgetId | null>(null);
+
+  if (!open) return null;
+
+  return createPortal(
+    <>
+      <div className="fixed inset-0 bg-black/30 z-[60]" onClick={onClose} />
+      <div
+        className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+        style={{
+          top: '50%',
+          left: '50%',
+          transform: 'translate(-50%, -50%)',
+          width: 'min(420px, 90vw)',
+          maxHeight: '80vh',
+        }}
+      >
+        <div className="flex flex-col h-full">
+          {/* Header */}
+          <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+            <h2 className="text-sm font-bold text-fg">Status Bar Widgets</h2>
+            <button
+              onClick={onClose}
+              className="text-fg-muted hover:text-fg-2 text-lg leading-none w-7 h-7 flex items-center justify-center rounded-sm hover:bg-inset"
+            >
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+
+          {/* Scrollable widget list grouped by category */}
+          <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
+            {WIDGET_CATEGORIES.map((cat) => (
+              <section key={cat.name}>
+                <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">
+                  {cat.name}
+                </h3>
+                <div className="space-y-0.5">
+                  {cat.widgets.map((w) => {
+                    const isExpanded = expandedInfo === w.id;
+                    return (
+                      <div key={w.id}>
+                        <div className="flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-inset transition-colors">
+                          {/* Toggle checkbox */}
+                          <button
+                            onClick={() => toggle(w.id)}
+                            className="flex items-center gap-2 flex-1 text-left"
+                          >
+                            <span
+                              className={`w-3.5 h-3.5 rounded-sm border flex-shrink-0 flex items-center justify-center transition-colors ${
+                                visible.has(w.id)
+                                  ? 'bg-accent border-accent text-on-accent'
+                                  : 'border-edge-dim'
+                              }`}
+                            >
+                              {visible.has(w.id) && (
+                                <svg width="9" height="9" viewBox="0 0 16 16" fill="currentColor">
+                                  <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
+                                </svg>
+                              )}
+                            </span>
+                            <span className="text-[11px] text-fg">{w.label}</span>
+                          </button>
+
+                          {/* (i) info toggle */}
+                          <button
+                            onClick={() => setExpandedInfo(isExpanded ? null : w.id)}
+                            className={`flex-shrink-0 p-0.5 rounded-sm transition-colors ${
+                              isExpanded ? 'text-accent' : 'text-fg-faint hover:text-fg-muted'
+                            }`}
+                            title="More info"
+                          >
+                            <InfoIcon />
+                          </button>
+                        </div>
+
+                        {/* Expanded info panel */}
+                        {isExpanded && (
+                          <div className="ml-7 mr-2 mb-1.5 px-2.5 py-2 rounded-md bg-inset border border-edge-dim text-[10px] space-y-1.5">
+                            <p className="text-fg-dim leading-relaxed">{w.description}</p>
+                            <p className="text-fg-faint leading-relaxed">
+                              <span className="font-medium text-fg-muted">Best for:</span> {w.bestFor}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </section>
+            ))}
+          </div>
+        </div>
+      </div>
+    </>,
+    document.body
+  );
+}
+
+// --- Main StatusBar component ---
+
 export default function StatusBar({ statusData, onRunSync, onOpenSync, model, onCycleModel, permissionMode, onCyclePermission }: Props) {
-  const { usage, updateStatus, contextPercent, gitBranch, syncStatus, syncWarnings } = statusData;
+  const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncStatus, syncWarnings } = statusData;
   const warnings = parseSyncWarnings(syncWarnings);
   const { activeTheme, cycleTheme } = useTheme();
   const { visible, toggle } = useWidgetVisibility();
-  const [menuOpen, setMenuOpen] = useState(false);
-  const menuRef = useRef<HTMLDivElement>(null);
-
-  // Close menu on outside click
-  useEffect(() => {
-    if (!menuOpen) return;
-    const handler = (e: MouseEvent) => {
-      if (menuRef.current && !menuRef.current.contains(e.target as Node)) {
-        setMenuOpen(false);
-      }
-    };
-    document.addEventListener('mousedown', handler);
-    return () => document.removeEventListener('mousedown', handler);
-  }, [menuOpen]);
+  const [popupOpen, setPopupOpen] = useState(false);
 
   const show = (id: WidgetId) => visible.has(id);
+  const ss = sessionStats; // shorthand
 
   return (
     <div className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-[10px] text-fg-muted border-t border-edge-dim">
@@ -268,7 +550,76 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
         </span>
       )}
 
-      {/* Git branch — reads from statusline.sh's .gitbranch-{sessionId} file, same live-cwd source as the terminal display */}
+      {/* Session cost — estimated USD cost for this session */}
+      {show('session-cost') && ss?.costUsd != null && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title="Estimated session cost (informational for Pro/Max subscribers)"
+        >
+          <span>Cost:</span>
+          <span className="text-fg-2">${ss.costUsd < 0.01 ? '<0.01' : ss.costUsd.toFixed(2)}</span>
+        </span>
+      )}
+
+      {/* Session duration — wall time and API thinking time */}
+      {show('session-time') && ss?.duration != null && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={ss.apiDuration != null ? `Wall: ${formatDuration(ss.duration)} | API: ${formatDuration(ss.apiDuration)}` : `Session duration: ${formatDuration(ss.duration)}`}
+        >
+          <span>{formatDuration(ss.duration)}</span>
+          {ss.apiDuration != null && (
+            <span className="text-fg-faint hidden sm:inline">({formatDuration(ss.apiDuration)} API)</span>
+          )}
+        </span>
+      )}
+
+      {/* Input tokens */}
+      {show('tokens-in') && ss?.inputTokens != null && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={`Input tokens: ${ss.inputTokens.toLocaleString()}`}
+        >
+          <span className="text-fg-faint">In:</span>
+          <span className="text-fg-2">{formatTokens(ss.inputTokens)}</span>
+        </span>
+      )}
+
+      {/* Output tokens */}
+      {show('tokens-out') && ss?.outputTokens != null && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={`Output tokens: ${ss.outputTokens.toLocaleString()}`}
+        >
+          <span className="text-fg-faint">Out:</span>
+          <span className="text-fg-2">{formatTokens(ss.outputTokens)}</span>
+        </span>
+      )}
+
+      {/* Cache efficiency */}
+      {show('cache-stats') && ss?.cacheReadTokens != null && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={`Cache read: ${(ss.cacheReadTokens ?? 0).toLocaleString()} | Cache created: ${(ss.cacheCreationTokens ?? 0).toLocaleString()}`}
+        >
+          <span className="text-fg-faint">Cached:</span>
+          <span className="text-[#4CAF50]">{formatTokens(ss.cacheReadTokens)}</span>
+        </span>
+      )}
+
+      {/* Code changes — lines added/removed */}
+      {show('code-changes') && ss != null && (ss.linesAdded != null || ss.linesRemoved != null) && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
+          title={`Lines added: ${ss.linesAdded ?? 0} | Lines removed: ${ss.linesRemoved ?? 0}`}
+        >
+          {ss.linesAdded != null && <span className="text-[#4CAF50]">+{ss.linesAdded}</span>}
+          {ss.linesRemoved != null && <span className="text-[#DD4444]">-{ss.linesRemoved}</span>}
+          <span className="text-fg-faint hidden sm:inline">lines</span>
+        </span>
+      )}
+
+      {/* Git branch — reads from statusline.sh's .gitbranch-{sessionId} file */}
       {show('git-branch') && gitBranch && (
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border"
@@ -284,7 +635,6 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
       )}
 
       {/* Sync warnings */}
-      {/* Sync warning pills — open Sync UI panel if available, fall back to /sync command */}
       {show('sync-warnings') && warnings.map((w, i) => {
         const handler = onOpenSync || onRunSync;
         return (
@@ -313,7 +663,6 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
       {show('version') && updateStatus && (
         <button
           onClick={() => {
-            // When update available with a download URL, open the installer download directly
             if (updateStatus.update_available && updateStatus.download_url) {
               window.claude.shell.openExternal(updateStatus.download_url);
             } else {
@@ -337,45 +686,22 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
         </button>
       )}
 
-      {/* Customize widget — pencil icon, always last */}
-      <div className="relative ml-auto" ref={menuRef}>
-        <button
-          onClick={() => setMenuOpen((v) => !v)}
-          className="flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
-          title="Customize Status Bar"
-        >
-          <PencilIcon />
-        </button>
-        {menuOpen && (
-          <div className="absolute bottom-full right-0 mb-1 w-44 rounded-md border border-edge-dim bg-panel shadow-lg z-50 py-1 text-[11px]">
-            <div className="px-2 py-1 text-fg-faint font-semibold border-b border-edge-dim text-[10px] uppercase tracking-wide">
-              Status Bar Widgets
-            </div>
-            {WIDGET_DEFS.map((w) => (
-              <button
-                key={w.id}
-                onClick={() => toggle(w.id)}
-                className="flex items-center gap-2 w-full px-2 py-1 hover:bg-inset transition-colors text-left"
-              >
-                <span
-                  className={`w-3 h-3 rounded-sm border flex-shrink-0 flex items-center justify-center ${
-                    visible.has(w.id)
-                      ? 'bg-accent border-accent text-on-accent'
-                      : 'border-edge-dim'
-                  }`}
-                >
-                  {visible.has(w.id) && (
-                    <svg width="8" height="8" viewBox="0 0 16 16" fill="currentColor">
-                      <path d="M13.854 3.646a.5.5 0 0 1 0 .708l-7 7a.5.5 0 0 1-.708 0l-3.5-3.5a.5.5 0 1 1 .708-.708L6.5 10.293l6.646-6.647a.5.5 0 0 1 .708 0z" />
-                    </svg>
-                  )}
-                </span>
-                <span className="text-fg">{w.label}</span>
-              </button>
-            ))}
-          </div>
-        )}
-      </div>
+      {/* Customize widget — pencil icon opens config popup, always last */}
+      <button
+        onClick={() => setPopupOpen(true)}
+        className="ml-auto flex items-center justify-center w-5 h-5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors"
+        title="Customize Status Bar"
+      >
+        <PencilIcon />
+      </button>
+
+      {/* Config popup — centered modal with grouped widgets + (i) info */}
+      <WidgetConfigPopup
+        open={popupOpen}
+        onClose={() => setPopupOpen(false)}
+        visible={visible}
+        toggle={toggle}
+      />
     </div>
   );
 }

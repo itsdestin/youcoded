@@ -1027,7 +1027,31 @@ class Bootstrap(internal val context: Context) {
             usageFetchDest.outputStream().use { output -> input.copyTo(output) }
         }
 
-        // Single unified write — covers both relay hooks AND auto-title hook
+        // Deploy statusline.sh to ~/.claude-mobile/ for session stats + context %
+        val statuslineDest = File(mobileDir, "statusline.sh")
+        context.assets.open("statusline.sh").use { input ->
+            statuslineDest.outputStream().use { output -> input.copyTo(output) }
+        }
+        statuslineDest.setExecutable(true)
+
+        // Register statusline command — only if unset or pointing to our known path
+        val bashPath = File(usrDir, "bin/bash").absolutePath
+        val statuslineCommand = "$bashPath ${statuslineDest.absolutePath}"
+        val currentStatuslineCmd = existingJson.optJSONObject("statusLine")
+            ?.optString("command", "") ?: ""
+        val isOurStatusline = currentStatuslineCmd.isEmpty()
+                || currentStatuslineCmd.contains("statusline.sh")
+                || currentStatuslineCmd.contains("destinclaude")
+                || currentStatuslineCmd.contains("destincode")
+                || currentStatuslineCmd.contains(".claude-mobile")
+        if (isOurStatusline) {
+            val statusLineObj = org.json.JSONObject()
+            statusLineObj.put("type", "command")
+            statusLineObj.put("command", statuslineCommand)
+            existingJson.put("statusLine", statusLineObj)
+        }
+
+        // Single unified write — covers relay hooks, auto-title hook, AND statusline
         existingJson.put("hooks", hooksObj)
         settingsFile.writeText(existingJson.toString(2))
     }

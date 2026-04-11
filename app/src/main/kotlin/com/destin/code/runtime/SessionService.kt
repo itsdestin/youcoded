@@ -100,6 +100,7 @@ class SessionService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
     private var urlObserver: FileObserver? = null
     private var usageRefreshTimer: java.util.Timer? = null
+    private var statusBroadcastTimer: java.util.Timer? = null
     var skillProvider: LocalSkillProvider? = null
         private set
     var pluginInstaller: PluginInstaller? = null
@@ -148,6 +149,7 @@ class SessionService : Service() {
         titlesDir.mkdirs()
         startUrlObserver(bs)
         startUsageRefresh(bs)
+        startStatusBroadcast(bs)
         skillProvider = LocalSkillProvider(bs.homeDir, applicationContext)
         skillProvider?.ensureMigrated()
         pluginInstaller = PluginInstaller(bs.homeDir, bs, skillProvider!!.configStore)
@@ -204,6 +206,64 @@ class SessionService : Service() {
                     } catch (_: Exception) {}
                 }
             }, 10_000, 5 * 60 * 1000) // initial 10s delay, then every 5 min
+        }
+    }
+
+    /**
+     * Broadcasts status:data to React UI every 10s, mirroring desktop's status poller.
+     * Reads usage cache, context %, and session stats files written by statusline.sh.
+     */
+    private fun startStatusBroadcast(bs: Bootstrap) {
+        statusBroadcastTimer?.cancel()
+        val claudeDir = File(bs.homeDir, ".claude")
+
+        statusBroadcastTimer = java.util.Timer("status-broadcast", true).apply {
+            scheduleAtFixedRate(object : java.util.TimerTask() {
+                override fun run() {
+                    try {
+                        val payload = JSONObject()
+
+                        // Usage cache (rate limits)
+                        val usageFile = File(claudeDir, ".usage-cache.json")
+                        if (usageFile.exists()) {
+                            try { payload.put("usage", JSONObject(usageFile.readText())) } catch (_: Exception) {}
+                        }
+
+                        // Sync status
+                        val syncFile = File(claudeDir, ".sync-status")
+                        if (syncFile.exists()) {
+                            try { payload.put("syncStatus", syncFile.readText().trim()) } catch (_: Exception) {}
+                        }
+                        val warnFile = File(claudeDir, ".sync-warnings")
+                        if (warnFile.exists()) {
+                            try { payload.put("syncWarnings", warnFile.readText().trim()) } catch (_: Exception) {}
+                        }
+
+                        // Per-session context % and session stats
+                        val contextMap = JSONObject()
+                        val sessionStatsMap = JSONObject()
+                        for ((mobileId, session) in sessionRegistry.sessions.value) {
+                            val claudeId = session.ptyBridge?.getEventBridge()
+                                ?.getClaudeSessionId(mobileId) ?: continue
+                            val ctxFile = File(claudeDir, ".context-$claudeId")
+                            if (ctxFile.exists()) {
+                                try { contextMap.put(mobileId, ctxFile.readText().trim().toInt()) } catch (_: Exception) {}
+                            }
+                            val statsFile = File(claudeDir, ".session-stats-$claudeId.json")
+                            if (statsFile.exists()) {
+                                try { sessionStatsMap.put(mobileId, JSONObject(statsFile.readText())) } catch (_: Exception) {}
+                            }
+                        }
+                        payload.put("contextMap", contextMap)
+                        payload.put("sessionStatsMap", sessionStatsMap)
+
+                        bridgeServer.broadcast(JSONObject().apply {
+                            put("type", "status:data")
+                            put("payload", payload)
+                        })
+                    } catch (_: Exception) {}
+                }
+            }, 5_000, 10_000) // initial 5s delay, then every 10s (matches desktop)
         }
     }
 
@@ -379,6 +439,8 @@ class SessionService : Service() {
         urlObserver = null
         usageRefreshTimer?.cancel()
         usageRefreshTimer = null
+        statusBroadcastTimer?.cancel()
+        statusBroadcastTimer = null
         sessionRegistry.destroyAll()
         releaseWakeLock()
         super.onDestroy()
