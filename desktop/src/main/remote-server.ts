@@ -9,6 +9,7 @@ import type { SessionManager } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
 import type { LocalSkillProvider } from './skill-provider';
+import { BrowserWindow } from 'electron';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory } from './session-browser';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
@@ -1065,6 +1066,32 @@ export class RemoteServer {
         }
         // Also forward to Electron window via IPC if this came from a remote client
         this.sessionManager.emit('ui-action', payload);
+        break;
+      }
+
+      // --- Zoom controls (applies to the desktop Electron window) ---
+      case 'zoom:in':
+      case 'zoom:out':
+      case 'zoom:reset':
+      case 'zoom:get': {
+        const win = BrowserWindow.getAllWindows()[0];
+        if (!win || win.isDestroyed()) {
+          this.respond(client.ws, type, id, 100);
+          break;
+        }
+        const ZOOM_STEP = 0.5;
+        const ZOOM_MIN = -3;
+        const ZOOM_MAX = 5;
+        const toPercent = (l: number) => Math.round(Math.pow(1.2, l) * 100);
+        const wc = win.webContents;
+        if (type === 'zoom:in') {
+          wc.setZoomLevel(Math.min(wc.getZoomLevel() + ZOOM_STEP, ZOOM_MAX));
+        } else if (type === 'zoom:out') {
+          wc.setZoomLevel(Math.max(wc.getZoomLevel() - ZOOM_STEP, ZOOM_MIN));
+        } else if (type === 'zoom:reset') {
+          wc.setZoomLevel(0);
+        }
+        this.respond(client.ws, type, id, toPercent(wc.getZoomLevel()));
         break;
       }
 

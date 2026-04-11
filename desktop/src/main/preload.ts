@@ -69,6 +69,10 @@ const IPC = {
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
+  ZOOM_IN: 'zoom:in',
+  ZOOM_OUT: 'zoom:out',
+  ZOOM_RESET: 'zoom:reset',
+  ZOOM_GET: 'zoom:get',
   // Theme marketplace
   THEME_MARKETPLACE_LIST: 'theme-marketplace:list',
   THEME_MARKETPLACE_DETAIL: 'theme-marketplace:detail',
@@ -344,5 +348,11 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.FIRST_RUN_STATE, handler);
       return handler;
     },
+  },
+  zoom: {
+    zoomIn: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_IN),
+    zoomOut: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_OUT),
+    reset: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_RESET),
+    get: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_GET),
   },
 });

@@ -222,6 +222,12 @@ function createWindow(firstRunManager?: FirstRunManager) {
   // Security: deny all window.open() calls from renderer
   mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' as const }));
 
+  // Disable Chromium's built-in visual pinch-to-zoom so our custom zoom handler
+  // (Ctrl+Wheel / trackpad pinch → IPC → setZoomLevel) is the sole zoom path.
+  // setVisualZoomLevelLimits disables the viewport zoom; page zoom via setZoomLevel
+  // still works. Without this, pinch gestures double-fire (compositor + our handler).
+  mainWindow.webContents.setVisualZoomLevelLimits(1, 1);
+
   if (!app.isPackaged) {
     mainWindow.loadURL(DEV_SERVER_URL);
   } else {

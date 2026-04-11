@@ -644,5 +644,46 @@ export function installShim(): void {
     setFavorites: (favorites: string[]) => invoke('favorites:set', favorites),
     getIncognito: () => invoke('game:getIncognito'),
     setIncognito: (incognito: boolean) => invoke('game:setIncognito', incognito),
+    // Zoom — when connected to a remote desktop, delegate to the desktop's
+    // Electron zoom. On local Android/browser, use CSS transform as fallback.
+    zoom: (() => {
+      let cssZoomLevel = 0; // Matches Electron's logarithmic scale
+      const STEP = 0.5;
+      const MIN = -3;
+      const MAX = 5;
+      const toPercent = (level: number) => Math.round(Math.pow(1.2, level) * 100);
+      const applyCSS = (level: number) => {
+        const scale = Math.pow(1.2, level);
+        document.documentElement.style.transform = level === 0 ? '' : `scale(${scale})`;
+        document.documentElement.style.transformOrigin = 'top left';
+        // Adjust width so content doesn't overflow when zoomed in
+        document.documentElement.style.width = level === 0 ? '' : `${100 / scale}%`;
+        document.documentElement.style.height = level === 0 ? '' : `${100 / scale}%`;
+      };
+      return {
+        zoomIn: () => {
+          if (targetUrl) return invoke('zoom:in');
+          cssZoomLevel = Math.min(cssZoomLevel + STEP, MAX);
+          applyCSS(cssZoomLevel);
+          return Promise.resolve(toPercent(cssZoomLevel));
+        },
+        zoomOut: () => {
+          if (targetUrl) return invoke('zoom:out');
+          cssZoomLevel = Math.max(cssZoomLevel - STEP, MIN);
+          applyCSS(cssZoomLevel);
+          return Promise.resolve(toPercent(cssZoomLevel));
+        },
+        reset: () => {
+          if (targetUrl) return invoke('zoom:reset');
+          cssZoomLevel = 0;
+          applyCSS(0);
+          return Promise.resolve(100);
+        },
+        get: () => {
+          if (targetUrl) return invoke('zoom:get');
+          return Promise.resolve(toPercent(cssZoomLevel));
+        },
+      };
+    })(),
   };
 }

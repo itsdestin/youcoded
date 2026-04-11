@@ -311,6 +311,11 @@ export const IPC = {
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
+  // Zoom controls
+  ZOOM_IN: 'zoom:in',
+  ZOOM_OUT: 'zoom:out',
+  ZOOM_RESET: 'zoom:reset',
+  ZOOM_GET: 'zoom:get',
   // Theme marketplace
   THEME_MARKETPLACE_LIST: 'theme-marketplace:list',
   THEME_MARKETPLACE_DETAIL: 'theme-marketplace:detail',
