@@ -8,18 +8,20 @@ data class ParsedMenu(
     val title: String,
     val options: List<String>,
     val selectedIndex: Int,  // which option is currently highlighted by ❯
+    val description: String? = null, // Contextual text above menu (e.g., resume trade-offs)
 )
 
 object InkSelectParser {
 
     // Matches the selected line: optional leading whitespace + ❯, optionally followed by number
-    private val SELECTED_LINE = Regex("""^\s*❯\s*(?:\d+\.\s+)?(.+)$""")
+    // Supports both period ("1. ") and colon ("1: ") numbered formats — resume prompt uses colons
+    private val SELECTED_LINE = Regex("""^\s*❯\s*(?:\d+[.:]\s+)?(.+)$""")
     // Strips ANSI escape sequences from terminal output
     private val ANSI_ESCAPE = Regex("""\u001B\[[0-9;]*[a-zA-Z]""")
     // Matches unselected lines: 2+ leading spaces (no ❯), optionally numbered
-    private val UNSELECTED_LINE = Regex("""^\s{2,}(?:\d+\.\s+)?(.+)$""")
-    // Detects a new option (has a number prefix like "1. " or "2. ")
-    private val NUMBERED_PREFIX = Regex("""^\s*\d+\.\s+""")
+    private val UNSELECTED_LINE = Regex("""^\s{2,}(?:\d+[.:]\s+)?(.+)$""")
+    // Detects a new option (has a number prefix like "1. " or "1: ")
+    private val NUMBERED_PREFIX = Regex("""^\s*\d+[.:]\s+""")
 
     // Title overrides for known prompts — keyed by lowercase keyword found in context
     // Note: bypass permissions prompt is handled by a hardcoded handler in ManagedSession,
@@ -28,6 +30,8 @@ object InkSelectParser {
         "trust" to "Trust This Folder?",
         "dark mode" to "Choose a Theme for the Terminal",
         "login method" to "Select Login Method",
+        // Resume session prompt — shown when resuming a stale/large session
+        "resuming from a summary" to "Resume Session",
     )
 
     /**
@@ -113,7 +117,36 @@ object InkSelectParser {
         val id = "menu_" + options.joinToString("_") { it.take(10) }
             .lowercase().replace(Regex("[^a-z0-9_]"), "")
 
-        return ParsedMenu(id = id, title = title, options = options, selectedIndex = selectedIndex)
+        // Extract contextual description from lines above the menu (e.g., resume
+        // session trade-off text: session age, token count, usage warning)
+        val description = extractDescription(lines, optionIndices.first(), title)
+
+        return ParsedMenu(id = id, title = title, options = options, selectedIndex = selectedIndex, description = description)
+    }
+
+    /**
+     * Extract descriptive text from lines above the menu options, between the
+     * title region and the first option. Used to surface contextual info like
+     * the resume prompt's session-age and usage-limit trade-off explanation.
+     */
+    private fun extractDescription(lines: List<String>, firstOptionLine: Int, title: String): String? {
+        val searchStart = maxOf(0, firstOptionLine - 15)
+        val descLines = mutableListOf<String>()
+        val titleNorm = title.trimEnd(':', '?').trim()
+        val boxDrawing = Regex("""^[─┌┐└┘│╭╮╯╰┬┴├┤┼╔╗╚╝║═━]+$""")
+
+        for (i in searchStart until firstOptionLine) {
+            val clean = stripAnsi(lines[i]).trim()
+            if (clean.isEmpty()) continue
+            if (boxDrawing.matches(clean)) continue
+            // Skip the line that became the title (avoid duplication)
+            if (clean.trimEnd(':', '?').trim() == titleNorm) continue
+            // Skip footer instructions
+            if (clean.contains("enter to confirm", ignoreCase = true)) continue
+            descLines.add(clean)
+        }
+
+        return if (descLines.isEmpty()) null else descLines.joinToString(" ")
     }
 
     /**

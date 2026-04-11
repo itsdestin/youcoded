@@ -52,6 +52,12 @@ export default React.memo(function PromptCard({ prompt, sessionId, onSelect }: P
             <span className="text-fg-faint text-xs select-none">|</span>
             <span className="text-xs font-medium text-fg-2">{prompt.title}</span>
           </div>
+          {/* Description — contextual trade-off explanation (e.g., resume session) */}
+          {prompt.description && (
+            <div className="px-3 py-1.5 text-xs text-fg-dim leading-relaxed border-t border-edge">
+              {prompt.description}
+            </div>
+          )}
           {/* Buttons */}
           <div className="flex items-center gap-2 px-3 py-2 border-t border-edge bg-inset/30">
             {prompt.buttons.map((btn) => (

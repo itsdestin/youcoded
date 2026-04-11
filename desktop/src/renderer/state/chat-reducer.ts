@@ -155,6 +155,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         prompt: {
           promptId: action.promptId,
           title: action.title,
+          description: action.description,
           buttons: action.buttons,
         },
       });
