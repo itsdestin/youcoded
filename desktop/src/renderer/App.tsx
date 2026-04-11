@@ -39,6 +39,7 @@ import type { SessionStatusColor } from './components/StatusDot';
 import { ThemeProvider, useTheme } from './state/theme-context';
 import { SkillProvider } from './state/skill-context';
 import ThemeEffects from './components/ThemeEffects';
+import { ZoomOverlay } from './components/ZoomOverlay';
 
 type ViewMode = 'chat' | 'terminal';
 
@@ -125,6 +126,9 @@ function AppInner() {
   // old model and would cause false "failed to switch" errors.
   const postSwitchTurnReady = useRef(false);
   const [toast, setToast] = useState<string | null>(null);
+  const [zoomPercent, setZoomPercent] = useState(100);
+  const [zoomVisible, setZoomVisible] = useState(false);
+  const zoomHideTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [sessionDefaults, setSessionDefaults] = useState({ skipPermissions: false, model: 'sonnet', projectFolder: '', geminiEnabled: false });
 
   // Check first-run state with a 3-second safety timeout — never hang the app
@@ -249,8 +253,20 @@ function AppInner() {
         setSessionId(info.id);
         return [...prev, info];
       });
-      setViewModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, 'chat'));
+      // Gemini sessions are terminal-only (no transcript watcher), so default to terminal view
+      const defaultView = (info.provider && info.provider !== 'claude') ? 'terminal' : 'chat';
+      setViewModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, defaultView));
       setPermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, info.permissionMode || 'normal'));
+      // Non-Claude providers (e.g. Gemini) don't emit hook events, so they'd
+      // never trigger the "first hook = initialized" gate. Mark them ready immediately.
+      if (info.provider && info.provider !== 'claude') {
+        setInitializedSessions((prev) => {
+          if (prev.has(info.id)) return prev;
+          const next = new Set(prev);
+          next.add(info.id);
+          return next;
+        });
+      }
     });
 
     const destroyedHandler = window.claude.on.sessionDestroyed((id) => {
