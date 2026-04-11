@@ -251,9 +251,11 @@ contextBridge.exposeInMainWorld('claude', {
     readLastModel: (transcriptPath: string): Promise<string | null> => ipcRenderer.invoke(IPC.MODEL_READ_LAST, transcriptPath),
   },
   appearance: {
-    get: (): Promise<{ theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean } | null> =>
+    get: (): Promise<{ theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; glassOverrides?: Record<string, Record<string, number>> } | null> =>
       ipcRenderer.invoke(IPC.APPEARANCE_GET),
-    set: (prefs: { theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean }): Promise<boolean> =>
+    // Accepts arbitrary appearance prefs — glassOverrides stores per-theme
+    // glass slider overrides for community/builtin themes
+    set: (prefs: { theme?: string; themeCycle?: string[]; reducedEffects?: boolean; showTimestamps?: boolean; glassOverrides?: Record<string, Record<string, number>> }): Promise<boolean> =>
       ipcRenderer.invoke(IPC.APPEARANCE_SET, prefs),
   },
   defaults: {

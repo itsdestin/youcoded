@@ -28,8 +28,18 @@ const STORAGE_KEY = 'destincode-theme';
 const CYCLE_KEY = 'destincode-theme-cycle';
 const REDUCED_EFFECTS_KEY = 'destincode-reduced-effects';
 const SHOW_TIMESTAMPS_KEY = 'destincode-show-timestamps';
+const GLASS_OVERRIDES_KEY = 'destincode-glass-overrides';
 const DEFAULT_THEME = 'midnight';
 const DEFAULT_CYCLE = ['midnight', 'dark'];
+
+/** Per-theme glass overrides for non-user themes (community/builtin).
+ *  User themes write directly to the theme file instead. */
+export type GlassOverrides = {
+  'panels-blur'?: number;
+  'panels-opacity'?: number;
+  'bubble-blur'?: number;
+  'bubble-opacity'?: number;
+};
 /** Reserved slug for live-preview during /theme-builder — auto-switches on write, reverts on delete. */
 const PREVIEW_SLUG = '_preview';
 
@@ -48,6 +58,9 @@ interface ThemeContextValue {
   activeTheme: LoadedTheme;
   bgStyle: Record<string, string> | null;
   patternStyle: Record<string, string> | null;
+  /** Update a glass override for a non-user theme (community/builtin).
+   *  Overrides persist per-slug so switching themes preserves the user's preference. */
+  setGlassOverride: (slug: string, field: string, value: number) => void;
 }
 
 const ThemeContext = createContext<ThemeContextValue>({
@@ -57,6 +70,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   reducedEffects: false, setReducedEffects: () => {},
   showTimestamps: true, setShowTimestamps: () => {},
   allThemes: BUILTIN_THEMES, activeTheme: BUILTIN_THEMES[0], bgStyle: null, patternStyle: null,
+  setGlassOverride: () => {},
 });
 
 function getStored(key: string, fallback: string): string {
@@ -91,12 +105,28 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [showTimestamps, setShowTimestampsState] = useState(() => getStored(SHOW_TIMESTAMPS_KEY, '1') !== '0');
   const [userThemes, setUserThemes] = useState<LoadedTheme[]>([]);
   const [userThemesLoaded, setUserThemesLoaded] = useState(false);
+  // Glass overrides for non-user themes — keyed by theme slug, persisted to
+  // localStorage and disk so users can tweak community/builtin glass values
+  // without modifying the theme file they don't own.
+  const [glassOverrides, setGlassOverrides] = useState<Record<string, GlassOverrides>>(
+    () => getStoredJSON(GLASS_OVERRIDES_KEY, {} as Record<string, GlassOverrides>)
+  );
 
   // All themes including _preview (for engine lookup) — memoized to stabilize references
   const allThemesInternal = useMemo(() => [...BUILTIN_THEMES, ...userThemes], [userThemes]);
   // Public list excludes _preview (UI pickers shouldn't show it)
   const allThemes = useMemo(() => allThemesInternal.filter(t => t.slug !== PREVIEW_SLUG), [allThemesInternal]);
-  const activeTheme = useMemo(() => allThemesInternal.find(t => t.slug === activeSlug) ?? BUILTIN_THEMES[0], [allThemesInternal, activeSlug]);
+  const activeThemeRaw = useMemo(() => allThemesInternal.find(t => t.slug === activeSlug) ?? BUILTIN_THEMES[0], [allThemesInternal, activeSlug]);
+
+  // Merge glass overrides into the active theme for non-user themes with
+  // a non-solid background. User themes write glass values directly to the
+  // theme file, so they don't need the override layer.
+  const activeTheme = useMemo(() => {
+    const overrides = glassOverrides[activeSlug];
+    if (!overrides || activeThemeRaw.source === 'user') return activeThemeRaw;
+    if (!activeThemeRaw.background || activeThemeRaw.background.type === 'solid') return activeThemeRaw;
+    return { ...activeThemeRaw, background: { ...activeThemeRaw.background, ...overrides } };
+  }, [activeThemeRaw, activeSlug, glassOverrides]);
 
   // Fallback if active theme was uninstalled (slug no longer in allThemes).
   // Guard: skip until user themes have loaded, otherwise a valid community/user
@@ -162,6 +192,11 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         if (typeof prefs.showTimestamps === 'boolean') {
           setShowTimestampsState(prefs.showTimestamps);
           try { localStorage.setItem(SHOW_TIMESTAMPS_KEY, prefs.showTimestamps ? '1' : '0'); } catch {}
+        }
+        // Load per-theme glass overrides from disk (same pattern as theme/cycle)
+        if (prefs.glassOverrides && typeof prefs.glassOverrides === 'object') {
+          setGlassOverrides(prefs.glassOverrides);
+          try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(prefs.glassOverrides)); } catch {}
         }
       } catch {}
     };
@@ -262,6 +297,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     persistAppearance({ showTimestamps: v });
   }, []);
 
+  // Update a glass field for a non-user theme. Persists per-slug so the
+  // user's glass preferences survive theme switches and app restarts.
+  const setGlassOverride = useCallback((slug: string, field: string, value: number) => {
+    setGlassOverrides(prev => {
+      const next = { ...prev, [slug]: { ...prev[slug], [field]: value } };
+      try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(next)); } catch {}
+      persistAppearance({ glassOverrides: next });
+      return next;
+    });
+  }, []);
+
   const cycleTheme = useCallback(() => {
     setActiveSlug(prev => {
       // If currently previewing, exit preview and cycle from the pre-preview theme
@@ -296,9 +342,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     reducedEffects, setReducedEffects,
     showTimestamps, setShowTimestamps,
     allThemes, activeTheme, bgStyle, patternStyle,
+    setGlassOverride,
   }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
        reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps,
-       allThemes, activeTheme, bgStyle, patternStyle]);
+       allThemes, activeTheme, bgStyle, patternStyle, setGlassOverride]);
 
   return (
     <ThemeContext.Provider value={value}>

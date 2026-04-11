@@ -59,7 +59,7 @@ function roundnessToShape(value: number) {
 interface Props { onClose: () => void; onSendInput?: (text: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void; }
 
 export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, onPublishTheme }: Props) {
-  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, activeTheme, reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps } = useTheme();
+  const { allThemes, theme: activeSlug, setTheme, cycleList, setCycleList, font, activeTheme, reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps, setGlassOverride } = useTheme();
   const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // Flips the popup body to the plain-language explainer view via the (i) icon.
   const [showInfo, setShowInfo] = useState(false);
@@ -207,65 +207,6 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
                   {PARTICLE_OPTIONS.map(p => <option key={p} value={p}>{p}</option>)}
                 </select>
               </div>
-              {/* Glassmorphism sliders — only for themes with panels-blur enabled */}
-              {/* Glass section — visible for any theme with a wallpaper/gradient
-                  background (glassmorphism-capable). Always show the panel blur
-                  slider so the user can drag it back up from zero. */}
-              {activeTheme.background && activeTheme.background.type !== 'solid' && (
-                <>
-                  <div className="border-t border-edge-dim pt-3 mt-1">
-                    <p className="text-[9px] text-fg-faint uppercase tracking-wider mb-2">Glass</p>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-fg-2 shrink-0">Panel Blur</span>
-                    <div className="flex items-center gap-2 flex-1">
-                      <input
-                        type="range" min="0" max="30" step="1"
-                        value={activeTheme.background?.['panels-blur'] ?? 24}
-                        onChange={e => updateBackground('panels-blur', parseFloat(e.target.value))}
-                        className="flex-1 accent-accent"
-                      />
-                      <span className="text-[10px] text-fg-muted w-7 text-right">{activeTheme.background?.['panels-blur'] ?? 24}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-fg-2 shrink-0">Panel Opacity</span>
-                    <div className="flex items-center gap-2 flex-1">
-                      <input
-                        type="range" min="0.3" max="1" step="0.02"
-                        value={activeTheme.background?.['panels-opacity'] ?? 0.88}
-                        onChange={e => updateBackground('panels-opacity', parseFloat(e.target.value))}
-                        className="flex-1 accent-accent"
-                      />
-                      <span className="text-[10px] text-fg-muted w-7 text-right">{Math.round((activeTheme.background?.['panels-opacity'] ?? 0.88) * 100)}%</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-fg-2 shrink-0">Bubble Blur</span>
-                    <div className="flex items-center gap-2 flex-1">
-                      <input
-                        type="range" min="0" max="24" step="1"
-                        value={activeTheme.background?.['bubble-blur'] ?? 16}
-                        onChange={e => updateBackground('bubble-blur', parseFloat(e.target.value))}
-                        className="flex-1 accent-accent"
-                      />
-                      <span className="text-[10px] text-fg-muted w-7 text-right">{activeTheme.background?.['bubble-blur'] ?? 16}</span>
-                    </div>
-                  </div>
-                  <div className="flex items-center justify-between gap-3">
-                    <span className="text-xs text-fg-2 shrink-0">Bubble Opacity</span>
-                    <div className="flex items-center gap-2 flex-1">
-                      <input
-                        type="range" min="0.3" max="1" step="0.02"
-                        value={activeTheme.background?.['bubble-opacity'] ?? 0.88}
-                        onChange={e => updateBackground('bubble-opacity', parseFloat(e.target.value))}
-                        className="flex-1 accent-accent"
-                      />
-                      <span className="text-[10px] text-fg-muted w-7 text-right">{Math.round((activeTheme.background?.['bubble-opacity'] ?? 0.88) * 100)}%</span>
-                    </div>
-                  </div>
-                </>
-              )}
               {onPublishTheme && (
                 <button
                   onClick={() => {
@@ -277,6 +218,79 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
                   Publish to Marketplace
                 </button>
               )}
+            </div>
+          </div>
+        )}
+
+        {/* Glass sliders — shown for ANY theme with a non-solid background
+            (wallpaper/gradient), not just user themes. For user themes we write
+            directly to the theme file; for community/builtin themes we store
+            glass overrides in a separate per-slug map (see setGlassOverride). */}
+        {activeTheme?.background && activeTheme.background.type !== 'solid' && (
+          <div>
+            <p className="text-[9px] text-fg-faint uppercase tracking-wider mb-2">Glass</p>
+            <div className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-fg-2 shrink-0">Panel Blur</span>
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="range" min="0" max="30" step="1"
+                    value={activeTheme.background?.['panels-blur'] ?? 24}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value);
+                      // User themes write to file; others use the override layer
+                      activeTheme.source === 'user' ? updateBackground('panels-blur', v) : setGlassOverride(activeTheme.slug, 'panels-blur', v);
+                    }}
+                    className="flex-1 accent-accent"
+                  />
+                  <span className="text-[10px] text-fg-muted w-7 text-right">{activeTheme.background?.['panels-blur'] ?? 24}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-fg-2 shrink-0">Panel Opacity</span>
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="range" min="0.3" max="1" step="0.02"
+                    value={activeTheme.background?.['panels-opacity'] ?? 0.88}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value);
+                      activeTheme.source === 'user' ? updateBackground('panels-opacity', v) : setGlassOverride(activeTheme.slug, 'panels-opacity', v);
+                    }}
+                    className="flex-1 accent-accent"
+                  />
+                  <span className="text-[10px] text-fg-muted w-7 text-right">{Math.round((activeTheme.background?.['panels-opacity'] ?? 0.88) * 100)}%</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-fg-2 shrink-0">Bubble Blur</span>
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="range" min="0" max="24" step="1"
+                    value={activeTheme.background?.['bubble-blur'] ?? 16}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value);
+                      activeTheme.source === 'user' ? updateBackground('bubble-blur', v) : setGlassOverride(activeTheme.slug, 'bubble-blur', v);
+                    }}
+                    className="flex-1 accent-accent"
+                  />
+                  <span className="text-[10px] text-fg-muted w-7 text-right">{activeTheme.background?.['bubble-blur'] ?? 16}</span>
+                </div>
+              </div>
+              <div className="flex items-center justify-between gap-3">
+                <span className="text-xs text-fg-2 shrink-0">Bubble Opacity</span>
+                <div className="flex items-center gap-2 flex-1">
+                  <input
+                    type="range" min="0.3" max="1" step="0.02"
+                    value={activeTheme.background?.['bubble-opacity'] ?? 0.88}
+                    onChange={e => {
+                      const v = parseFloat(e.target.value);
+                      activeTheme.source === 'user' ? updateBackground('bubble-opacity', v) : setGlassOverride(activeTheme.slug, 'bubble-opacity', v);
+                    }}
+                    className="flex-1 accent-accent"
+                  />
+                  <span className="text-[10px] text-fg-muted w-7 text-right">{Math.round((activeTheme.background?.['bubble-opacity'] ?? 0.88) * 100)}%</span>
+                </div>
+              </div>
             </div>
           </div>
         )}
