@@ -17,7 +17,7 @@ import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -1034,6 +1034,38 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.SYNC_FORCE, () => forceSync());
   ipcMain.handle(IPC.SYNC_GET_LOG, (_e, lines) => getSyncLog(lines));
   ipcMain.handle(IPC.SYNC_DISMISS_WARNING, (_e, warning) => dismissWarning(warning));
+
+  // V2: Per-instance backend management (storage backends + multi-instance support)
+  ipcMain.handle('sync:add-backend', (_e, instance) => addBackend(instance));
+  ipcMain.handle('sync:remove-backend', (_e, id) => removeBackend(id));
+  ipcMain.handle('sync:update-backend', (_e, id, updates) => updateBackend(id, updates));
+  ipcMain.handle('sync:push-backend', (_e, id) => pushBackend(id));
+  ipcMain.handle('sync:pull-backend', (_e, id) => pullBackend(id));
+
+  // Open a backend's remote location in the default browser/file explorer
+  ipcMain.handle('sync:open-folder', async (_e, id: string) => {
+    const { shell } = require('electron');
+    const config = await getSyncConfig();
+    const backend = config.backends.find((b: any) => b.id === id);
+    if (!backend) return;
+
+    switch (backend.type) {
+      case 'drive':
+        // Open Google Drive in browser (can't deep-link to a specific folder via rclone)
+        shell.openExternal('https://drive.google.com');
+        break;
+      case 'github': {
+        const repoUrl = backend.config?.PERSONAL_SYNC_REPO || '';
+        if (repoUrl) shell.openExternal(repoUrl);
+        break;
+      }
+      case 'icloud': {
+        const icloudPath = backend.config?.ICLOUD_PATH || '';
+        if (icloudPath) shell.openPath(icloudPath);
+        break;
+      }
+    }
+  });
 
   // --- Permission response (blocking hooks) ---
   if (hookRelay) {

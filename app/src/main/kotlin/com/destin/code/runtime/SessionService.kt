@@ -1023,39 +1023,65 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, current) }
             }
 
-            // --- Sync management ---
-            // Delegates to native SyncService for push/pull/status.
-            // Reads state files from ~/.claude/ for status queries.
+            // --- Sync management (V2: multi-instance backend model) ---
+            // Reads storage_backends array from config.json. Falls back to legacy
+            // flat keys if the array doesn't exist yet (auto-migration on desktop).
             "sync:get-status" -> {
                 val claudeDir = File(bootstrap!!.homeDir, ".claude")
-                val sync = syncService
-                // Read config via SyncService if available, else read files directly
-                val backendStr = sync?.configGet("PERSONAL_SYNC_BACKEND", "none") ?: "none"
-                val driveRoot = sync?.configGet("DRIVE_ROOT", "Claude") ?: "Claude"
-                val syncRepo = sync?.configGet("PERSONAL_SYNC_REPO", "") ?: ""
-                val activeBackends = backendStr.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() && it != "none" }
+                val configFile = File(claudeDir, "toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
 
-                // Note: iCloud backend always shows "Not configured" on Android (not supported)
-                val backends = org.json.JSONArray().apply {
-                    put(JSONObject().put("name", "drive").put("configured", activeBackends.contains("drive"))
-                        .put("detail", if (activeBackends.contains("drive")) "gdrive:$driveRoot/Backup/personal" else "Not configured"))
-                    put(JSONObject().put("name", "github").put("configured", activeBackends.contains("github"))
-                        .put("detail", if (activeBackends.contains("github") && syncRepo.isNotEmpty()) syncRepo else "Not configured"))
-                    put(JSONObject().put("name", "icloud").put("configured", false)
-                        .put("detail", "Not available on Android"))
+                // Read backend instances from storage_backends array or build from legacy keys
+                val backends = org.json.JSONArray()
+                val storageBackends = config.optJSONArray("storage_backends")
+                if (storageBackends != null) {
+                    for (i in 0 until storageBackends.length()) {
+                        val b = storageBackends.getJSONObject(i)
+                        val id = b.getString("id")
+                        // Read per-backend marker for last push time
+                        val markerFile = File(claudeDir, "toolkit-state/.sync-marker-$id")
+                        val lastPush = try { markerFile.readText().trim().toLong() } catch (_: Exception) { 0L }
+                        // Read per-backend error file
+                        val errorFile = File(claudeDir, "toolkit-state/.sync-error-$id")
+                        val lastError = try { errorFile.readText().trim().ifEmpty { null } } catch (_: Exception) { null as String? }
+
+                        backends.put(JSONObject().apply {
+                            put("id", id)
+                            put("type", b.getString("type"))
+                            put("label", b.getString("label"))
+                            put("syncEnabled", b.getBoolean("syncEnabled"))
+                            put("config", b.getJSONObject("config"))
+                            put("connected", lastError == null)
+                            put("lastPushEpoch", if (lastPush > 0) lastPush else org.json.JSONObject.NULL)
+                            put("lastError", lastError ?: org.json.JSONObject.NULL)
+                        })
+                    }
+                } else {
+                    // Legacy fallback: build from flat keys (pre-migration)
+                    val backendStr = config.optString("PERSONAL_SYNC_BACKEND", "none")
+                    val driveRoot = config.optString("DRIVE_ROOT", "Claude")
+                    val syncRepo = config.optString("PERSONAL_SYNC_REPO", "")
+                    val active = backendStr.split(",").map { it.trim().lowercase() }.filter { it.isNotEmpty() && it != "none" }
+                    if (active.contains("drive")) {
+                        backends.put(JSONObject().put("id", "drive-default").put("type", "drive").put("label", "Google Drive")
+                            .put("syncEnabled", true).put("config", JSONObject().put("DRIVE_ROOT", driveRoot).put("rcloneRemote", "gdrive"))
+                            .put("connected", true).put("lastPushEpoch", org.json.JSONObject.NULL).put("lastError", org.json.JSONObject.NULL))
+                    }
+                    if (active.contains("github")) {
+                        backends.put(JSONObject().put("id", "github-default").put("type", "github").put("label", "GitHub")
+                            .put("syncEnabled", true).put("config", JSONObject().put("PERSONAL_SYNC_REPO", syncRepo))
+                            .put("connected", true).put("lastPushEpoch", org.json.JSONObject.NULL).put("lastError", org.json.JSONObject.NULL))
+                    }
                 }
 
                 val markerFile = File(claudeDir, "toolkit-state/.sync-marker")
                 val lastSyncEpoch = try { markerFile.readText().trim().toLong() } catch (_: Exception) { 0L }
-
                 val metaFile = File(claudeDir, "backup-meta.json")
                 val backupMeta: Any = try { org.json.JSONObject(metaFile.readText()) } catch (_: Exception) { org.json.JSONObject.NULL }
-
                 val warningsFile = File(claudeDir, ".sync-warnings")
                 val warnings = org.json.JSONArray().apply {
                     try { warningsFile.readText().lines().filter { it.isNotBlank() }.forEach { put(it) } } catch (_: Exception) {}
                 }
-
                 val lockDir = File(claudeDir, "toolkit-state/.sync-lock")
 
                 val result = JSONObject().apply {
@@ -1064,6 +1090,7 @@ class SessionService : Service() {
                     put("backupMeta", backupMeta)
                     put("warnings", warnings)
                     put("syncInProgress", lockDir.isDirectory)
+                    put("syncingBackendId", org.json.JSONObject.NULL)
                     put("syncedCategories", org.json.JSONArray().apply {
                         if (File(claudeDir, "projects").isDirectory) { put("memory"); put("conversations") }
                         if (File(claudeDir, "encyclopedia").isDirectory) put("encyclopedia")
@@ -1074,13 +1101,15 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "sync:get-config" -> {
-                val sync = syncService
+                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
                 val result = JSONObject().apply {
-                    put("PERSONAL_SYNC_BACKEND", sync?.configGet("PERSONAL_SYNC_BACKEND", "none") ?: "none")
-                    put("DRIVE_ROOT", sync?.configGet("DRIVE_ROOT", "Claude") ?: "Claude")
-                    put("PERSONAL_SYNC_REPO", sync?.configGet("PERSONAL_SYNC_REPO", "") ?: "")
-                    put("ICLOUD_PATH", "") // Not supported on Android
-                    put("SYNC_WIFI_ONLY", sync?.configGet("SYNC_WIFI_ONLY", "true") ?: "true")
+                    put("backends", config.optJSONArray("storage_backends") ?: org.json.JSONArray())
+                    put("PERSONAL_SYNC_BACKEND", config.optString("PERSONAL_SYNC_BACKEND", "none"))
+                    put("DRIVE_ROOT", config.optString("DRIVE_ROOT", "Claude"))
+                    put("PERSONAL_SYNC_REPO", config.optString("PERSONAL_SYNC_REPO", ""))
+                    put("ICLOUD_PATH", "")
+                    put("SYNC_WIFI_ONLY", config.optString("SYNC_WIFI_ONLY", "true"))
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
@@ -1092,6 +1121,7 @@ class SessionService : Service() {
                 updates.keys().forEach { key -> existing.put(key, updates.get(key)) }
                 configFile.writeText(existing.toString(2))
                 val result = JSONObject().apply {
+                    put("backends", existing.optJSONArray("storage_backends") ?: org.json.JSONArray())
                     put("PERSONAL_SYNC_BACKEND", existing.optString("PERSONAL_SYNC_BACKEND", "none"))
                     put("DRIVE_ROOT", existing.optString("DRIVE_ROOT", "Claude"))
                     put("PERSONAL_SYNC_REPO", existing.optString("PERSONAL_SYNC_REPO", ""))
@@ -1101,7 +1131,6 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "sync:force" -> {
-                // Delegate to native SyncService — no more shelling out to sync.sh
                 val sync = syncService
                 if (sync == null) {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
@@ -1123,9 +1152,7 @@ class SessionService : Service() {
                 val logFile = File(bootstrap!!.homeDir, ".claude/backup.log")
                 val lines = msg.payload.optInt("lines", 30)
                 val result = org.json.JSONArray().apply {
-                    try {
-                        logFile.readLines().takeLast(lines).forEach { put(it) }
-                    } catch (_: Exception) {}
+                    try { logFile.readLines().takeLast(lines).forEach { put(it) } } catch (_: Exception) {}
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
@@ -1134,13 +1161,140 @@ class SessionService : Service() {
                 val warning = msg.payload.optString("warning", "")
                 if (warning.isNotEmpty() && warningsFile.exists()) {
                     val remaining = warningsFile.readLines().filter { it.trim() != warning.trim() }
-                    if (remaining.isEmpty()) {
-                        warningsFile.delete()
-                    } else {
-                        warningsFile.writeText(remaining.joinToString("\n") + "\n")
-                    }
+                    if (remaining.isEmpty()) warningsFile.delete()
+                    else warningsFile.writeText(remaining.joinToString("\n") + "\n")
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+            }
+
+            // V2: Per-instance backend management
+            "sync:add-backend" -> {
+                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
+                configFile.parentFile?.mkdirs()
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val backends = config.optJSONArray("storage_backends") ?: org.json.JSONArray()
+
+                val type = msg.payload.getString("type")
+                val label = msg.payload.getString("label")
+                val slug = label.lowercase().replace(Regex("[^a-z0-9]+"), "-").trim('-')
+                var id = "$type-${slug.ifEmpty { "default" }}"
+                // Ensure uniqueness
+                val existingIds = (0 until backends.length()).map { backends.getJSONObject(it).getString("id") }.toSet()
+                var counter = 2
+                while (existingIds.contains(id)) { id = "$type-$slug-$counter"; counter++ }
+
+                val newInstance = JSONObject().apply {
+                    put("id", id)
+                    put("type", type)
+                    put("label", label)
+                    put("syncEnabled", msg.payload.optBoolean("syncEnabled", true))
+                    put("config", msg.payload.optJSONObject("config") ?: JSONObject())
+                }
+                backends.put(newInstance)
+                config.put("storage_backends", backends)
+                configFile.writeText(config.toString(2))
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, newInstance) }
+            }
+            "sync:remove-backend" -> {
+                val id = msg.payload.optString("id", "")
+                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val backends = config.optJSONArray("storage_backends") ?: org.json.JSONArray()
+                val filtered = org.json.JSONArray()
+                for (i in 0 until backends.length()) {
+                    val b = backends.getJSONObject(i)
+                    if (b.getString("id") != id) filtered.put(b)
+                }
+                config.put("storage_backends", filtered)
+                configFile.writeText(config.toString(2))
+                // Clean up per-backend state files
+                val claudeDir = File(bootstrap!!.homeDir, ".claude")
+                File(claudeDir, "toolkit-state/.sync-marker-$id").delete()
+                File(claudeDir, "toolkit-state/.sync-error-$id").delete()
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+            }
+            "sync:update-backend" -> {
+                val id = msg.payload.optString("id", "")
+                val updates = msg.payload.optJSONObject("updates") ?: JSONObject()
+                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val backends = config.optJSONArray("storage_backends") ?: org.json.JSONArray()
+                var updated: JSONObject? = null
+                for (i in 0 until backends.length()) {
+                    val b = backends.getJSONObject(i)
+                    if (b.getString("id") == id) {
+                        if (updates.has("label")) b.put("label", updates.getString("label"))
+                        if (updates.has("syncEnabled")) b.put("syncEnabled", updates.getBoolean("syncEnabled"))
+                        if (updates.has("config")) {
+                            val cfg = b.optJSONObject("config") ?: JSONObject()
+                            val newCfg = updates.getJSONObject("config")
+                            newCfg.keys().forEach { key -> cfg.put(key, newCfg.get(key)) }
+                            b.put("config", cfg)
+                        }
+                        updated = b
+                        break
+                    }
+                }
+                config.put("storage_backends", backends)
+                configFile.writeText(config.toString(2))
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, updated ?: JSONObject().put("error", "not found")) }
+            }
+            "sync:push-backend" -> {
+                val id = msg.payload.optString("id", "")
+                val sync = syncService
+                if (sync == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", false).put("error", "SyncService not initialized")) }
+                } else {
+                    try {
+                        val result = sync.push(force = true, backendId = id)
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
+                            .put("success", result.success).put("error", if (result.errors > 0) "Push had errors" else "")) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", false).put("error", e.message ?: "Push failed")) }
+                    }
+                }
+            }
+            "sync:pull-backend" -> {
+                val id = msg.payload.optString("id", "")
+                val sync = syncService
+                if (sync == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", false).put("error", "SyncService not initialized")) }
+                } else {
+                    try {
+                        sync.pull(backendId = id)
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", true).put("error", "")) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", false).put("error", e.message ?: "Pull failed")) }
+                    }
+                }
+            }
+            "sync:open-folder" -> {
+                // On Android, return the URL so the WebView can open it via window.open
+                val id = msg.payload.optString("id", "")
+                val configFile = File(bootstrap!!.homeDir, ".claude/toolkit-state/config.json")
+                val config = try { org.json.JSONObject(configFile.readText()) } catch (_: Exception) { org.json.JSONObject() }
+                val backends = config.optJSONArray("storage_backends")
+                var url = ""
+                if (backends != null) {
+                    for (i in 0 until backends.length()) {
+                        val b = backends.getJSONObject(i)
+                        if (b.getString("id") == id) {
+                            when (b.getString("type")) {
+                                "drive" -> url = "https://drive.google.com"
+                                "github" -> url = b.optJSONObject("config")?.optString("PERSONAL_SYNC_REPO", "") ?: ""
+                            }
+                            break
+                        }
+                    }
+                }
+                if (url.isNotEmpty()) {
+                    try {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        context.startActivity(intent)
+                    } catch (_: Exception) {}
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", url)) }
             }
 
             else -> {

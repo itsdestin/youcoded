@@ -260,6 +260,13 @@ contextBridge.exposeInMainWorld('claude', {
     force: () => ipcRenderer.invoke(IPC.SYNC_FORCE),
     getLog: (lines?: number) => ipcRenderer.invoke(IPC.SYNC_GET_LOG, lines),
     dismissWarning: (warning: string) => ipcRenderer.invoke(IPC.SYNC_DISMISS_WARNING, warning),
+    // V2: Per-instance backend management
+    addBackend: (instance: any) => ipcRenderer.invoke('sync:add-backend', instance),
+    removeBackend: (id: string) => ipcRenderer.invoke('sync:remove-backend', id),
+    updateBackend: (id: string, updates: any) => ipcRenderer.invoke('sync:update-backend', id, updates),
+    pushBackend: (id: string) => ipcRenderer.invoke('sync:push-backend', id),
+    pullBackend: (id: string) => ipcRenderer.invoke('sync:pull-backend', id),
+    openFolder: (id: string) => ipcRenderer.invoke('sync:open-folder', id),
   },
   getFavorites: () => ipcRenderer.invoke('favorites:get'),
   setFavorites: (favorites: string[]) => ipcRenderer.invoke('favorites:set', favorites),

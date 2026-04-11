@@ -556,6 +556,13 @@ export function installShim(): void {
       force: () => invoke('sync:force'),
       getLog: (lines?: number) => invoke('sync:get-log', { lines }),
       dismissWarning: (warning: string) => invoke('sync:dismiss-warning', { warning }),
+      // V2: Per-instance backend management
+      addBackend: (instance: any) => invoke('sync:add-backend', instance),
+      removeBackend: (id: string) => invoke('sync:remove-backend', { id }),
+      updateBackend: (id: string, updates: any) => invoke('sync:update-backend', { id, updates }),
+      pushBackend: (id: string) => invoke('sync:push-backend', { id }),
+      pullBackend: (id: string) => invoke('sync:pull-backend', { id }),
+      openFolder: (id: string) => invoke('sync:open-folder', { id }),
     },
     folders: {
       list: () => invoke('folders:list'),

@@ -11,7 +11,7 @@ import type { RemoteConfig } from './remote-config';
 import type { LocalSkillProvider } from './skill-provider';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory } from './session-browser';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
 
 const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
 const HOOK_BUFFER_SIZE = 10_000; // ~10MB max, covers full conversations without excessive memory
@@ -966,6 +966,43 @@ export class RemoteServer {
       case 'sync:dismiss-warning': {
         await dismissWarning(payload.warning || payload);
         this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+
+      // V2: Per-instance backend management (remote browser parity)
+      case 'sync:add-backend': {
+        const added = await addBackend(payload);
+        this.respond(client.ws, type, id, added);
+        break;
+      }
+      case 'sync:remove-backend': {
+        await removeBackend(payload.id || payload);
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      case 'sync:update-backend': {
+        const updated = await updateBackend(payload.id, payload.updates);
+        this.respond(client.ws, type, id, updated);
+        break;
+      }
+      case 'sync:push-backend': {
+        const pushResult = await pushBackend(payload.id || payload);
+        this.respond(client.ws, type, id, pushResult);
+        break;
+      }
+      case 'sync:pull-backend': {
+        const pullResult = await pullBackend(payload.id || payload);
+        this.respond(client.ws, type, id, pullResult);
+        break;
+      }
+      case 'sync:open-folder': {
+        // Remote clients can't open local folders — return the URL for them to open manually
+        const cfg = await getSyncConfig();
+        const backend = cfg.backends.find((b: any) => b.id === (payload.id || payload));
+        let url = '';
+        if (backend?.type === 'drive') url = 'https://drive.google.com';
+        else if (backend?.type === 'github') url = backend.config?.PERSONAL_SYNC_REPO || '';
+        this.respond(client.ws, type, id, { url });
         break;
       }
 

@@ -644,8 +644,14 @@ class SyncService(
     // Push: Orchestrator
     // =========================================================================
 
-    /** Push all personal data to all configured backends. */
-    suspend fun push(force: Boolean = false): PushResult {
+    /**
+     * Push personal data to backends.
+     * - Default: pushes to all configured backends (automatic loop)
+     * - With backendId: pushes to that specific backend only (manual upsync).
+     *   On Android, backendId maps to a backend type from the storage_backends
+     *   config. Falls back to legacy flat-key push if instance lookup fails.
+     */
+    suspend fun push(force: Boolean = false, backendId: String? = null): PushResult {
         if (pushing) return PushResult(false, 0, emptyList())
         pushing = true
 
@@ -660,16 +666,23 @@ class SyncService(
             }
 
             try {
-                // Debounce check (skip if force)
-                if (!force && !debounceCheck(syncMarkerPath, PUSH_DEBOUNCE_MIN)) {
+                // Debounce check (skip if force or targeting a specific backend)
+                if (!force && backendId == null && !debounceCheck(syncMarkerPath, PUSH_DEBOUNCE_MIN)) {
                     logBackup("INFO", "Push skipped — debounce", "sync.push")
                     return PushResult(true, 0, emptyList())
                 }
 
-                val backends = getBackends()
+                // If a specific backend was requested, resolve its type from storage_backends
+                val backends: List<String> = if (backendId != null) {
+                    val instanceType = resolveBackendType(backendId)
+                    if (instanceType != null) listOf(instanceType) else emptyList()
+                } else {
+                    getBackends()
+                }
                 if (backends.isEmpty()) return PushResult(true, 0, emptyList())
 
                 var totalErrors = 0
+                val pushedIds = mutableListOf<String>()
 
                 for (backend in backends) {
                     try {
@@ -682,6 +695,7 @@ class SyncService(
                             }
                         }
                         totalErrors += backendErrors
+                        pushedIds.add(backendId ?: backend)
                     } catch (e: Exception) {
                         logBackup("ERROR", "$backend push failed: $e", "sync.push")
                         totalErrors++
@@ -694,13 +708,29 @@ class SyncService(
                 // Update debounce marker AFTER sync (critical ordering)
                 debounceTouch(syncMarkerPath)
 
-                return PushResult(totalErrors == 0, totalErrors, backends)
+                return PushResult(totalErrors == 0, totalErrors, pushedIds)
             } finally {
                 releaseLock()
             }
         } finally {
             pushing = false
         }
+    }
+
+    /**
+     * Resolve a backend instance ID to its type string by reading storage_backends
+     * from config.json. Returns null if not found.
+     */
+    private fun resolveBackendType(backendId: String): String? {
+        try {
+            val config = JSONObject(configPath.readText())
+            val backends = config.optJSONArray("storage_backends") ?: return null
+            for (i in 0 until backends.length()) {
+                val b = backends.getJSONObject(i)
+                if (b.getString("id") == backendId) return b.getString("type")
+            }
+        } catch (_: Exception) {}
+        return null
     }
 
     // =========================================================================
@@ -808,22 +838,32 @@ class SyncService(
     // Pull: Orchestrator
     // =========================================================================
 
-    /** Pull personal data from preferred backend + run post-pull operations. */
-    suspend fun pull() {
+    /**
+     * Pull personal data from a backend + run post-pull operations.
+     * - Default: pulls from the preferred (first configured) backend
+     * - With backendId: pulls from that specific backend (manual downsync)
+     */
+    suspend fun pull(backendId: String? = null) {
         if (pulling) return
         pulling = true
 
         try {
-            val preferred = getPreferredBackend()
-            if (preferred == null) {
-                logBackup("INFO", "No backend configured — skipping pull", "sync.pull")
+            // Resolve which backend type to pull from
+            val backendType: String? = if (backendId != null) {
+                resolveBackendType(backendId)
+            } else {
+                getPreferredBackend()
+            }
+
+            if (backendType == null) {
+                logBackup("INFO", "No backend for pull", "sync.pull")
                 return
             }
 
-            logBackup("INFO", "Pulling from $preferred", "sync.pull")
+            logBackup("INFO", "Pulling from ${backendId ?: backendType}", "sync.pull")
 
             withContext(Dispatchers.IO) {
-                when (preferred) {
+                when (backendType) {
                     "drive" -> pullDrive()
                     "github" -> pullGithub()
                 }

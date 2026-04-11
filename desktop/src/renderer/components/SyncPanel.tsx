@@ -1,9 +1,9 @@
 /**
  * SyncPanel.tsx — Sync Management UI for DestinCode.
  *
- * Control plane for the DestinClaude toolkit's sync system. Reads state files
- * written by sync.sh / session-start.sh and provides visual management:
- * backend status, force sync, warning resolution, config, and log viewer.
+ * V2 redesign: Supports multiple named backend instances with per-instance
+ * sync/storage mode. Replaces the old 3-card grid with a dynamic instance
+ * list, add-backend flow, per-backend overflow menu, and manual push/pull.
  *
  * Follows the same pattern as RemoteButton in SettingsPanel:
  * compact section row → createPortal popup modal.
@@ -13,78 +13,81 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 
-// Plain-language explainer for the Sync popup. Shown when the user taps the
-// (i) icon in the popup header — see SyncPopup's `showInfo` state.
+// --- Explainer content (updated for V2 multi-instance model) ---
+
 const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "Sync saves your DestinClaude data — journal entries, encyclopedia, conversations, custom skills, and settings — to a cloud service. It's both a backup (so nothing is lost if your computer dies) and a way to pick up exactly where you left off on a different device.",
+    "Sync saves your DestinClaude data — journal entries, encyclopedia, conversations, custom skills, and settings — to a cloud service. It's both a backup and a way to pick up where you left off on a different device.",
   sections: [
     {
       heading: 'What gets synced',
       paragraphs: [
-        "Your journal, encyclopedia, conversations, custom skills, system config, plans, and specs — basically everything personal that DestinClaude stores in your hidden .claude folder.",
-        'Your project code is NOT synced here — that\'s what GitHub is for. Sync is just for the personal AI stuff.',
+        "Your journal, encyclopedia, conversations, custom skills, system config, plans, and specs — basically everything personal that DestinClaude stores in your .claude folder.",
+        'Your project code is NOT synced here — that\'s what GitHub is for.',
       ],
     },
     {
       heading: 'Pick where to store it',
       bullets: [
-        { term: 'Google Drive', text: 'The simplest option. Stores everything in a folder of your choice in your Google Drive account.' },
-        { term: 'GitHub', text: "Stores it in a private GitHub repository. Best if you're comfortable with git and want full version history of every change." },
+        { term: 'Google Drive', text: 'Stores everything in a Drive folder. You can connect multiple Drive accounts (personal, work, etc).' },
+        { term: 'GitHub', text: 'Stores it in a private repository. Best for version history of every change.' },
         { term: 'iCloud', text: 'For Mac users. Stores it in your iCloud Drive.' },
-        { term: 'You can pick more than one', text: "They all sync at the same time, so if one breaks or you lose access, you still have the others as backups." },
+        { term: 'Multiple backends', text: "You can connect as many as you want, even multiple of the same type. They all sync independently." },
+      ],
+    },
+    {
+      heading: 'Auto-sync vs Storage only',
+      bullets: [
+        { term: 'Auto-sync (toggle ON)', text: 'Your data is backed up automatically after changes, every 15 minutes. This is the default.' },
+        { term: 'Storage only (toggle OFF)', text: 'The backend stays connected but nothing syncs automatically. Use "Upload now" or "Download now" to sync manually.' },
       ],
     },
     {
       heading: 'What the buttons do',
       bullets: [
-        { term: 'Sync Now', text: "Forces a sync right now instead of waiting for the next automatic one. Good after you've made a lot of changes." },
-        { term: 'Configuration', text: 'Expand this to choose which backends are active and fill in their details (folder name, repo URL, etc).' },
-        { term: 'Sync Log', text: 'Shows the last 30 sync attempts and any errors. Useful when something\'s not working and you want to know why.' },
-        { term: 'Dismiss (on warnings)', text: 'Hides a warning. The underlying issue still exists — dismiss only if you understand and accept it.' },
+        { term: 'Sync Now', text: 'Forces an immediate sync to all auto-sync backends.' },
+        { term: 'Upload now', text: 'Pushes your local data to that specific backend right now.' },
+        { term: 'Download now', text: 'Pulls the latest data from that backend to your device.' },
+        { term: '+ Add backup', text: 'Connect a new cloud storage account.' },
+        { term: 'The toggle switch', text: 'Turns automatic syncing on or off for that backend. Off = storage only.' },
       ],
     },
     {
       heading: 'Common issues',
       bullets: [
-        { term: '"No Internet Connection"', text: 'Sync needs internet to talk to Google/GitHub/iCloud. Check your WiFi or cellular and try again.' },
-        { term: '"No Sync Backend Configured"', text: "You haven't picked a place to store backups yet. Open Configuration and check at least one backend (Drive/GitHub/iCloud)." },
-        { term: '"No Recent Sync (>24h)"', text: "It's been more than a day since your last successful sync. Tap Sync Now to catch up." },
-        { term: '"Pull Failed on Last Start"', text: 'DestinCode tried to pull your latest data when it started but couldn\'t. Usually a temporary network blip — tap Sync Now and it should clear.' },
-        { term: '"Unrouted Skills"', text: "Some custom skills aren't being saved anywhere. Open Configuration and make sure at least one backend is active." },
-        { term: 'Sync seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines — they usually tell you exactly what went wrong (wrong folder, missing permission, etc).' },
-        { term: "Connected the wrong account", text: 'Just change the folder name or repo URL in Configuration and tap Save. The next sync uses the new location.' },
+        { term: '"No Internet Connection"', text: 'Check your WiFi or cellular and try again.' },
+        { term: '"No Sync Backend Configured"', text: "You haven't added any backup destinations yet. Tap + Add backup." },
+        { term: '"No Recent Sync (>24h)"', text: "It's been more than a day since your last sync. Tap Sync Now." },
+        { term: 'Sync seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines.' },
       ],
     },
   ],
 };
 
-// --- Types (mirror sync-state.ts) ---
+// --- Types (mirror sync-state.ts V2 model) ---
 
-interface SyncBackendInfo {
-  name: 'drive' | 'github' | 'icloud';
-  configured: boolean;
-  detail: string;
+interface BackendInstanceStatus {
+  id: string;
+  type: 'drive' | 'github' | 'icloud';
+  label: string;
+  syncEnabled: boolean;
+  config: Record<string, string>;
+  connected: boolean;
+  lastPushEpoch: number | null;
+  lastError: string | null;
 }
 
 interface SyncStatus {
-  backends: SyncBackendInfo[];
+  backends: BackendInstanceStatus[];
   lastSyncEpoch: number | null;
   backupMeta: { last_backup: string; platform: string; toolkit_version: string } | null;
   warnings: string[];
   syncInProgress: boolean;
+  syncingBackendId: string | null;
   syncedCategories: string[];
 }
 
-interface SyncConfig {
-  PERSONAL_SYNC_BACKEND: string;
-  DRIVE_ROOT: string;
-  PERSONAL_SYNC_REPO: string;
-  ICLOUD_PATH: string;
-  SYNC_WIFI_ONLY?: string; // Android only — "true"/"false", defaults to "true"
-}
-
-// --- Warning display map (same codes as StatusBar + /sync skill) ---
+// --- Warning display map ---
 
 const WARNING_DISPLAY: Record<string, { text: string; level: 'danger' | 'warn' }> = {
   'OFFLINE': { text: 'No Internet Connection', level: 'danger' },
@@ -121,10 +124,11 @@ const BACKEND_LABELS: Record<string, string> = {
   icloud: 'iCloud',
 };
 
-const BACKEND_ICONS: Record<string, string> = {
-  drive: '☁',
-  github: '⌂',
-  icloud: '⬡',
+// Backend type icon + tint color for the circle background
+const BACKEND_STYLE: Record<string, { icon: string; tint: string }> = {
+  drive: { icon: '\u2601', tint: 'bg-blue-500/10 text-blue-400' },
+  github: { icon: '\u2302', tint: 'bg-purple-500/10 text-purple-400' },
+  icloud: { icon: '\u2B21', tint: 'bg-sky-500/10 text-sky-400' },
 };
 
 const CATEGORY_LABELS: Record<string, string> = {
@@ -137,25 +141,23 @@ const CATEGORY_LABELS: Record<string, string> = {
   specs: 'Specs',
 };
 
-// --- Backend config field definitions ---
+// --- Config fields per backend type ---
+const BACKEND_CONFIG_FIELDS: Record<string, { key: string; label: string; placeholder: string }[]> = {
+  drive: [
+    { key: 'DRIVE_ROOT', label: 'Drive Root Folder', placeholder: 'Claude' },
+    { key: 'rcloneRemote', label: 'Rclone Remote Name', placeholder: 'gdrive' },
+  ],
+  github: [
+    { key: 'PERSONAL_SYNC_REPO', label: 'GitHub Repo URL', placeholder: 'https://github.com/user/claude-sync' },
+  ],
+  icloud: [
+    { key: 'ICLOUD_PATH', label: 'iCloud Path', placeholder: 'Auto-detected' },
+  ],
+};
 
-interface ConfigField {
-  backend: string;
-  key: keyof SyncConfig;
-  label: string;
-  placeholder: string;
-}
-
-const CONFIG_FIELDS: ConfigField[] = [
-  { backend: 'drive', key: 'DRIVE_ROOT', label: 'Drive Root Folder', placeholder: 'Claude' },
-  { backend: 'github', key: 'PERSONAL_SYNC_REPO', label: 'GitHub Repo URL', placeholder: 'https://github.com/user/claude-sync' },
-  { backend: 'icloud', key: 'ICLOUD_PATH', label: 'iCloud Path', placeholder: 'Auto-detected' },
-];
-
-// --- Main exported component: compact section for SettingsPanel ---
+// --- Main exported component ---
 
 interface SyncSectionProps {
-  /** If true, auto-open the popup (used by StatusBar warning click) */
   autoOpen?: boolean;
   onAutoOpenHandled?: () => void;
 }
@@ -166,26 +168,20 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
   const [loading, setLoading] = useState(true);
   const popupRef = useRef<HTMLDivElement>(null);
 
-  // Load status when section mounts or popup opens
   const loadStatus = useCallback(async () => {
     try {
       const s = await (window as any).claude.sync.getStatus();
       setStatus(s);
-    } catch {
-      // sync API not available (no toolkit)
-    }
+    } catch {}
     setLoading(false);
   }, []);
 
-  // Fix: defer the initial sync status fetch until after the SettingsPanel
-  // slide-in animation finishes. SyncSection mounts as part of the parent
-  // panel and would otherwise block the main thread mid-transition.
+  // Defer initial fetch until after SettingsPanel slide-in animation
   useEffect(() => {
     const timer = setTimeout(() => { loadStatus(); }, 350);
     return () => clearTimeout(timer);
   }, [loadStatus]);
 
-  // Handle autoOpen from StatusBar warning click
   useEffect(() => {
     if (autoOpen && !open) {
       setOpen(true);
@@ -194,14 +190,14 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
   }, [autoOpen, open, onAutoOpenHandled]);
 
   // Derive summary for compact row
-  const configuredCount = status?.backends.filter(b => b.configured).length ?? 0;
+  const syncCount = status?.backends.filter(b => b.syncEnabled).length ?? 0;
+  const storageCount = status?.backends.filter(b => !b.syncEnabled).length ?? 0;
   const warningCount = status?.warnings.length ?? 0;
-  const lastSyncText = status?.lastSyncEpoch
-    ? timeAgo(status.lastSyncEpoch)
-    : 'Never';
+  const lastSyncText = status?.lastSyncEpoch ? timeAgo(status.lastSyncEpoch) : 'Never';
 
-  // Status dot color: green if synced recently, yellow if stale, gray if never/not configured
-  const dotColor = !status || configuredCount === 0
+  // Status dot: only considers sync-enabled backends
+  const syncBackends = status?.backends.filter(b => b.syncEnabled) ?? [];
+  const dotColor = !status || syncBackends.length === 0
     ? 'bg-fg-muted/40'
     : status.syncInProgress
       ? 'bg-blue-400 animate-pulse'
@@ -217,24 +213,24 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
         onClick={() => setOpen(true)}
         className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
       >
-        {/* Status dot */}
         <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
           <div className={`w-2.5 h-2.5 rounded-full ${dotColor}`} />
         </div>
         <div className="flex-1 min-w-0">
           <span className="text-xs text-fg font-medium">
             {loading ? 'Loading...' :
-             configuredCount === 0 ? 'Not configured' :
+             (syncCount + storageCount) === 0 ? 'Not configured' :
              status?.syncInProgress ? 'Syncing...' :
              `Last synced ${lastSyncText}`}
           </span>
-          {configuredCount > 0 && (
+          {(syncCount + storageCount) > 0 && (
             <span className="text-[10px] text-fg-muted ml-2">
-              {configuredCount} backend{configuredCount > 1 ? 's' : ''}
+              {syncCount > 0 ? `${syncCount} synced` : ''}
+              {syncCount > 0 && storageCount > 0 ? ' \u00B7 ' : ''}
+              {storageCount > 0 ? `${storageCount} storage` : ''}
             </span>
           )}
         </div>
-        {/* Warning badge */}
         {warningCount > 0 && (
           <span className="px-1.5 py-0.5 rounded-full bg-[#DD4444]/15 text-[#DD4444] text-[9px] font-medium shrink-0">
             {warningCount}
@@ -258,7 +254,7 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
   );
 }
 
-// --- Popup modal (full sync dashboard) ---
+// --- Popup modal ---
 
 interface SyncPopupProps {
   popupRef: React.RefObject<HTMLDivElement | null>;
@@ -269,97 +265,110 @@ interface SyncPopupProps {
 
 function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupProps) {
   const [status, setStatus] = useState<SyncStatus | null>(initialStatus);
-  const [config, setConfig] = useState<SyncConfig | null>(null);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(!initialStatus);
   const [syncing, setSyncing] = useState(false);
-  const [showConfig, setShowConfig] = useState(false);
   const [showLog, setShowLog] = useState(false);
-  const [configDraft, setConfigDraft] = useState<Partial<SyncConfig>>({});
-  const [configSaving, setConfigSaving] = useState(false);
-  const [configSaved, setConfigSaved] = useState(false);
-  // Flips the popup body to the plain-language explainer view via the (i) icon.
   const [showInfo, setShowInfo] = useState(false);
+  // View stack: 'main' | 'add-type' | 'add-config' | 'edit'
+  const [view, setView] = useState<'main' | 'add-type' | 'add-config' | 'edit'>('main');
+  const [addType, setAddType] = useState<'drive' | 'github' | 'icloud' | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  // Overflow menu state
+  const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  // Per-backend action feedback
+  const [actionFeedback, setActionFeedback] = useState<Record<string, string>>({});
 
   const claude = (window as any).claude;
 
-  // Load all data on mount
   useEffect(() => {
     (async () => {
       try {
-        const [s, c, log] = await Promise.all([
+        const [s, log] = await Promise.all([
           initialStatus ? Promise.resolve(initialStatus) : claude.sync.getStatus(),
-          claude.sync.getConfig(),
           claude.sync.getLog(30),
         ]);
         setStatus(s);
-        setConfig(c);
-        setConfigDraft({});
         setLogLines(log);
       } catch {}
       setLoading(false);
     })();
   }, []);
 
-  // Force sync handler
+  const refreshStatus = useCallback(async () => {
+    try {
+      const s = await claude.sync.getStatus();
+      setStatus(s);
+      onRefresh();
+    } catch {}
+  }, [claude, onRefresh]);
+
+  // Force sync all sync-enabled backends
   const handleForceSync = useCallback(async () => {
     setSyncing(true);
     try {
       await claude.sync.force();
-      // Refresh status after sync completes
-      const s = await claude.sync.getStatus();
-      setStatus(s);
+      await refreshStatus();
       const log = await claude.sync.getLog(30);
       setLogLines(log);
-      onRefresh();
     } catch {}
     setSyncing(false);
-  }, [claude, onRefresh]);
+  }, [claude, refreshStatus]);
 
-  // Dismiss warning
   const handleDismiss = useCallback(async (warning: string) => {
     try {
       await claude.sync.dismissWarning(warning);
-      // Remove from local state immediately
       setStatus(prev => prev ? { ...prev, warnings: prev.warnings.filter(w => w !== warning) } : prev);
     } catch {}
   }, [claude]);
 
-  // Save config
-  const handleSaveConfig = useCallback(async () => {
-    if (!config || Object.keys(configDraft).length === 0) return;
-    setConfigSaving(true);
+  // Per-backend actions
+  const handlePushBackend = useCallback(async (id: string) => {
+    setActionFeedback(prev => ({ ...prev, [id]: 'uploading' }));
     try {
-      // Build the updated backends string from checkboxes
-      const merged = { ...config, ...configDraft };
-      const updated = await claude.sync.setConfig(merged);
-      setConfig(updated);
-      setConfigDraft({});
-      // Refresh status to reflect new config
-      const s = await claude.sync.getStatus();
-      setStatus(s);
-      setConfigSaved(true);
-      setTimeout(() => setConfigSaved(false), 2000);
-      onRefresh();
-    } catch {}
-    setConfigSaving(false);
-  }, [claude, config, configDraft, onRefresh]);
-
-  // Backend toggle handler
-  const toggleBackend = useCallback((name: string, enabled: boolean) => {
-    const currentBackends = (configDraft.PERSONAL_SYNC_BACKEND || config?.PERSONAL_SYNC_BACKEND || 'none')
-      .split(',').map(b => b.trim()).filter(b => b && b !== 'none');
-    let next: string[];
-    if (enabled) {
-      next = [...currentBackends, name];
-    } else {
-      next = currentBackends.filter(b => b !== name);
+      const result = await claude.sync.pushBackend(id);
+      setActionFeedback(prev => ({ ...prev, [id]: result.success ? 'uploaded' : 'error' }));
+      await refreshStatus();
+    } catch {
+      setActionFeedback(prev => ({ ...prev, [id]: 'error' }));
     }
-    setConfigDraft(prev => ({
-      ...prev,
-      PERSONAL_SYNC_BACKEND: next.length > 0 ? next.join(',') : 'none',
-    }));
-  }, [config, configDraft]);
+    setTimeout(() => setActionFeedback(prev => { const n = { ...prev }; delete n[id]; return n; }), 2000);
+  }, [claude, refreshStatus]);
+
+  const handlePullBackend = useCallback(async (id: string) => {
+    setActionFeedback(prev => ({ ...prev, [id]: 'downloading' }));
+    try {
+      const result = await claude.sync.pullBackend(id);
+      setActionFeedback(prev => ({ ...prev, [id]: result.success ? 'downloaded' : 'error' }));
+      await refreshStatus();
+    } catch {
+      setActionFeedback(prev => ({ ...prev, [id]: 'error' }));
+    }
+    setTimeout(() => setActionFeedback(prev => { const n = { ...prev }; delete n[id]; return n; }), 2000);
+  }, [claude, refreshStatus]);
+
+  const handleToggleSync = useCallback(async (id: string, syncEnabled: boolean) => {
+    try {
+      await claude.sync.updateBackend(id, { syncEnabled });
+      await refreshStatus();
+    } catch {}
+  }, [claude, refreshStatus]);
+
+  const handleRemoveBackend = useCallback(async (id: string) => {
+    try {
+      await claude.sync.removeBackend(id);
+      await refreshStatus();
+    } catch {}
+    setMenuOpenId(null);
+  }, [claude, refreshStatus]);
+
+  // Close overflow menu on outside click
+  useEffect(() => {
+    if (!menuOpenId) return;
+    const handler = () => setMenuOpenId(null);
+    const timer = setTimeout(() => document.addEventListener('click', handler), 0);
+    return () => { clearTimeout(timer); document.removeEventListener('click', handler); };
+  }, [menuOpenId]);
 
   if (loading) {
     return (
@@ -373,10 +382,6 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     );
   }
 
-  // Derive active backends for config toggles
-  const activeBackendStr = configDraft.PERSONAL_SYNC_BACKEND ?? config?.PERSONAL_SYNC_BACKEND ?? 'none';
-  const activeBackends = activeBackendStr.split(',').map(b => b.trim()).filter(b => b && b !== 'none');
-
   return (
     <>
       <div className="fixed inset-0 bg-black/30 z-[60]" onClick={onClose} />
@@ -384,11 +389,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         ref={popupRef}
         className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
         style={{
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 'min(520px, 90vw)',
-          height: 'min(640px, 85vh)',
+          top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
+          width: 'min(520px, 90vw)', height: 'min(640px, 85vh)',
         }}
       >
         {showInfo ? (
@@ -399,15 +401,50 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             onBack={() => setShowInfo(false)}
             onClose={onClose}
           />
+        ) : view === 'add-type' ? (
+          <AddBackendTypePicker
+            backends={status?.backends ?? []}
+            onSelect={(type) => { setAddType(type); setView('add-config'); }}
+            onBack={() => setView('main')}
+            onClose={onClose}
+          />
+        ) : view === 'add-config' && addType ? (
+          <AddBackendConfigForm
+            type={addType}
+            onAdd={async (instance) => {
+              try {
+                await claude.sync.addBackend(instance);
+                await refreshStatus();
+              } catch {}
+              setView('main');
+              setAddType(null);
+            }}
+            onBack={() => setView('add-type')}
+            onClose={onClose}
+          />
+        ) : view === 'edit' && editingId ? (
+          <EditBackendForm
+            backend={status?.backends.find(b => b.id === editingId) ?? null}
+            onSave={async (updates) => {
+              try {
+                await claude.sync.updateBackend(editingId, updates);
+                await refreshStatus();
+              } catch {}
+              setView('main');
+              setEditingId(null);
+            }}
+            onBack={() => { setView('main'); setEditingId(null); }}
+            onClose={onClose}
+          />
         ) : (
         <div className="flex flex-col h-full">
-          {/* Header — info icon (left of close) reveals the explainer view */}
+          {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
             <h2 className="text-sm font-bold text-fg">Sync Management</h2>
             <div className="flex items-center gap-1">
               <InfoIconButton onClick={() => setShowInfo(true)} />
               <button onClick={onClose} className="text-fg-muted hover:text-fg-2 text-lg leading-none w-8 h-8 flex items-center justify-center rounded-sm hover:bg-inset">
-                ✕
+                {'\u2715'}
               </button>
             </div>
           </div>
@@ -415,30 +452,112 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           {/* Scrollable content */}
           <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
 
-            {/* 1. Backend Status Cards */}
+            {/* 1. Backend instances list */}
             <div>
-              <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Backends</h3>
-              <div className="grid grid-cols-3 gap-2">
-                {status?.backends.map(b => (
-                  <div
-                    key={b.name}
-                    className={`rounded-lg border p-2.5 text-center ${
-                      b.configured
-                        ? 'border-green-500/30 bg-green-500/5'
-                        : 'border-edge-dim bg-inset/30'
-                    }`}
-                  >
-                    <div className="text-base mb-1">{BACKEND_ICONS[b.name]}</div>
-                    <div className="text-[11px] font-medium text-fg">{BACKEND_LABELS[b.name]}</div>
-                    <div className={`text-[9px] mt-0.5 ${b.configured ? 'text-green-400' : 'text-fg-faint'}`}>
-                      {b.configured ? 'Connected' : 'Not configured'}
+              <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Your Backups</h3>
+
+              {status && status.backends.length > 0 ? (
+                <div className="space-y-2">
+                  {status.backends.map(b => (
+                    <div
+                      key={b.id}
+                      className={`rounded-lg border px-3 py-2.5 flex items-center gap-3 ${
+                        b.lastError ? 'border-red-500/20 bg-red-500/5' :
+                        b.syncEnabled && b.connected ? 'border-green-500/20 bg-green-500/5' :
+                        'border-edge bg-inset/30'
+                      }`}
+                    >
+                      {/* Type icon */}
+                      <div className={`w-8 h-8 rounded-full flex items-center justify-center text-sm shrink-0 ${BACKEND_STYLE[b.type]?.tint ?? ''}`}>
+                        {BACKEND_STYLE[b.type]?.icon ?? '?'}
+                      </div>
+
+                      {/* Name + detail */}
+                      <div className="flex-1 min-w-0">
+                        <div className="text-xs text-fg font-medium truncate">{b.label}</div>
+                        <div className="text-[10px] text-fg-faint truncate">
+                          {b.lastError ? b.lastError :
+                           b.lastPushEpoch ? `Synced ${timeAgo(b.lastPushEpoch)}` :
+                           !b.syncEnabled ? 'Storage only' :
+                           'Never synced'}
+                        </div>
+                        {/* Action feedback badge */}
+                        {actionFeedback[b.id] && (
+                          <span className={`text-[9px] font-medium ${
+                            actionFeedback[b.id] === 'error' ? 'text-red-400' :
+                            actionFeedback[b.id]?.includes('ing') ? 'text-blue-400' :
+                            'text-green-400'
+                          }`}>
+                            {actionFeedback[b.id] === 'uploading' ? 'Uploading...' :
+                             actionFeedback[b.id] === 'downloading' ? 'Downloading...' :
+                             actionFeedback[b.id] === 'uploaded' ? 'Uploaded!' :
+                             actionFeedback[b.id] === 'downloaded' ? 'Downloaded!' :
+                             'Error'}
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Status dot */}
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${
+                        b.lastError ? 'bg-red-500' :
+                        actionFeedback[b.id]?.includes('ing') ? 'bg-blue-400 animate-pulse' :
+                        b.syncEnabled && b.connected && b.lastPushEpoch && (Date.now() / 1000 - b.lastPushEpoch) < 86400 ? 'bg-green-500' :
+                        b.syncEnabled && b.connected ? 'bg-yellow-500' :
+                        'bg-fg-muted/40'
+                      }`} />
+
+                      {/* Sync toggle — green when auto-sync, gray when storage-only */}
+                      <button
+                        onClick={() => handleToggleSync(b.id, !b.syncEnabled)}
+                        className={`relative w-8 h-4 rounded-full transition-colors shrink-0 ${
+                          b.syncEnabled ? 'bg-green-600' : 'bg-inset'
+                        }`}
+                        title={b.syncEnabled ? 'Auto-sync on \u2014 click to switch to storage only' : 'Storage only \u2014 click to enable auto-sync'}
+                      >
+                        <div className="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-all"
+                          style={{ left: b.syncEnabled ? '18px' : '2px' }} />
+                      </button>
+
+                      {/* Overflow menu (three-dot) */}
+                      <div className="relative shrink-0">
+                        <button
+                          onClick={(e) => { e.stopPropagation(); setMenuOpenId(menuOpenId === b.id ? null : b.id); }}
+                          className="w-6 h-6 flex items-center justify-center rounded hover:bg-inset text-fg-muted hover:text-fg-2 text-xs"
+                        >
+                          {'\u00B7\u00B7\u00B7'}
+                        </button>
+                        {menuOpenId === b.id && (
+                          <div className="absolute right-0 top-7 w-40 bg-panel border border-edge rounded-lg shadow-xl z-10 py-1"
+                            onClick={(e) => e.stopPropagation()}>
+                            <MenuButton onClick={() => { handlePushBackend(b.id); setMenuOpenId(null); }}>Upload now</MenuButton>
+                            <MenuButton onClick={() => { handlePullBackend(b.id); setMenuOpenId(null); }}>Download now</MenuButton>
+                            <MenuButton onClick={() => { claude.sync.openFolder(b.id); setMenuOpenId(null); }}>Open folder</MenuButton>
+                            <MenuButton onClick={() => { setEditingId(b.id); setView('edit'); setMenuOpenId(null); }}>Edit settings</MenuButton>
+                            <div className="border-t border-edge-dim my-1" />
+                            <MenuButton danger onClick={() => handleRemoveBackend(b.id)}>Remove</MenuButton>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                ))}
-              </div>
+                  ))}
+                </div>
+              ) : (
+                <div className="text-center py-6">
+                  <div className="text-fg-muted text-sm mb-1">No backup destinations</div>
+                  <div className="text-fg-faint text-[11px] mb-3">Add one to start protecting your data.</div>
+                </div>
+              )}
+
+              {/* Add backend button */}
+              <button
+                onClick={() => setView('add-type')}
+                className="w-full mt-2 border border-dashed border-edge-dim rounded-lg py-3 text-center text-[11px] text-fg-muted hover:text-fg-2 hover:border-edge hover:bg-inset/30 transition-colors"
+              >
+                + Add backup
+              </button>
             </div>
 
-            {/* 2. Last Sync + Force Sync */}
+            {/* 2. Sync Now bar */}
             <div className="flex items-center justify-between px-3 py-2.5 rounded-lg bg-inset/50">
               <div>
                 <div className="text-xs text-fg font-medium">
@@ -450,7 +569,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 </div>
                 {status?.backupMeta?.platform && (
                   <div className="text-[10px] text-fg-faint mt-0.5">
-                    from {status.backupMeta.platform} · toolkit {status.backupMeta.toolkit_version}
+                    from {status.backupMeta.platform} {'\u00B7'} toolkit {status.backupMeta.toolkit_version}
                   </div>
                 )}
               </div>
@@ -472,7 +591,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               </button>
             </div>
 
-            {/* 3. Active Warnings */}
+            {/* 3. Warnings */}
             {status && status.warnings.length > 0 && (
               <div>
                 <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Warnings</h3>
@@ -512,10 +631,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Synced Data</h3>
                 <div className="flex flex-wrap gap-1.5">
                   {status.syncedCategories.map(cat => (
-                    <span
-                      key={cat}
-                      className="px-2 py-1 rounded-md bg-inset/60 border border-edge-dim text-[10px] text-fg-dim"
-                    >
+                    <span key={cat} className="px-2 py-1 rounded-md bg-inset/60 border border-edge-dim text-[10px] text-fg-dim">
                       {CATEGORY_LABELS[cat] || cat}
                     </span>
                   ))}
@@ -523,118 +639,18 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               </div>
             )}
 
-            {/* 5. Backend Configuration (collapsible) */}
-            <div>
-              <button
-                onClick={() => setShowConfig(!showConfig)}
-                className="flex items-center gap-1.5 text-[10px] font-medium text-fg-muted tracking-wider uppercase hover:text-fg-2 transition-colors"
-              >
-                <svg
-                  className={`w-3 h-3 transition-transform ${showConfig ? 'rotate-90' : ''}`}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
-                Configuration
-              </button>
-
-              {showConfig && config && (
-                <div className="mt-3 space-y-4 pl-1">
-                  {/* Backend toggles */}
-                  <div className="space-y-2">
-                    <div className="text-[10px] text-fg-faint uppercase tracking-wider">Active Backends</div>
-                    {(['drive', 'github', 'icloud'] as const).map(name => (
-                      <label key={name} className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={activeBackends.includes(name)}
-                          onChange={(e) => toggleBackend(name, e.target.checked)}
-                          className="rounded border-edge-dim accent-accent"
-                        />
-                        <span className="text-xs text-fg">{BACKEND_LABELS[name]}</span>
-                      </label>
-                    ))}
-                  </div>
-
-                  {/* Wi-Fi only toggle — Android only */}
-                  {location.protocol === 'file:' && (
-                    <div className="pt-1">
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={(configDraft.SYNC_WIFI_ONLY ?? config?.SYNC_WIFI_ONLY ?? 'true') === 'true'}
-                          onChange={(e) => setConfigDraft(prev => ({
-                            ...prev,
-                            SYNC_WIFI_ONLY: e.target.checked ? 'true' : 'false',
-                          }))}
-                          className="rounded border-edge-dim accent-accent"
-                        />
-                        <span className="text-xs text-fg">Sync only on Wi-Fi</span>
-                      </label>
-                      <div className="text-[10px] text-fg-faint mt-0.5 ml-5">
-                        When off, sync runs on cellular data too
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Config fields */}
-                  {CONFIG_FIELDS.map(field => {
-                    // Only show field if its backend is active
-                    if (!activeBackends.includes(field.backend)) return null;
-                    const currentValue = (configDraft as any)[field.key] ?? (config as any)[field.key] ?? '';
-                    return (
-                      <div key={field.key}>
-                        <label className="block text-[10px] text-fg-muted mb-1">{field.label}</label>
-                        <input
-                          type="text"
-                          value={currentValue}
-                          onChange={(e) => setConfigDraft(prev => ({ ...prev, [field.key]: e.target.value }))}
-                          placeholder={field.placeholder}
-                          className="w-full px-2 py-1.5 rounded-md bg-inset border border-edge-dim text-xs text-fg placeholder-fg-faint focus:border-accent focus:outline-none"
-                        />
-                      </div>
-                    );
-                  })}
-
-                  {/* Save button */}
-                  {Object.keys(configDraft).length > 0 && (
-                    <button
-                      onClick={handleSaveConfig}
-                      disabled={configSaving}
-                      className={`px-4 py-1.5 rounded-md text-[11px] font-medium transition-colors ${
-                        configSaved
-                          ? 'bg-green-600/20 text-green-400'
-                          : configSaving
-                            ? 'bg-accent/20 text-accent/60 cursor-wait'
-                            : 'bg-accent hover:bg-accent/80 text-on-accent cursor-pointer'
-                      }`}
-                    >
-                      {configSaved ? 'Saved!' : configSaving ? 'Saving...' : 'Save Configuration'}
-                    </button>
-                  )}
-                </div>
-              )}
-            </div>
-
-            {/* 6. Sync Log (collapsible) */}
+            {/* 5. Sync Log (collapsible) */}
             <div>
               <button
                 onClick={async () => {
                   setShowLog(!showLog);
                   if (!showLog) {
-                    // Refresh log when opening
-                    try {
-                      const log = await claude.sync.getLog(30);
-                      setLogLines(log);
-                    } catch {}
+                    try { const log = await claude.sync.getLog(30); setLogLines(log); } catch {}
                   }
                 }}
                 className="flex items-center gap-1.5 text-[10px] font-medium text-fg-muted tracking-wider uppercase hover:text-fg-2 transition-colors"
               >
-                <svg
-                  className={`w-3 h-3 transition-transform ${showLog ? 'rotate-90' : ''}`}
-                  fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}
-                >
+                <svg className={`w-3 h-3 transition-transform ${showLog ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
                 </svg>
                 Sync Log
@@ -648,7 +664,6 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     <div className="max-h-48 overflow-y-auto rounded-lg bg-inset/40 border border-edge-dim">
                       <pre className="text-[10px] text-fg-dim font-mono px-2 py-2 whitespace-pre-wrap break-all leading-relaxed">
                         {logLines.map((line, i) => {
-                          // Try to parse JSON log lines for colored display
                           try {
                             const entry = JSON.parse(line);
                             const levelColor = entry.level === 'ERROR' ? 'text-[#DD4444]'
@@ -662,7 +677,6 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               </div>
                             );
                           } catch {
-                            // Plaintext fallback
                             return <div key={i} className="py-0.5">{line}</div>;
                           }
                         })}
@@ -670,12 +684,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     </div>
                   )}
                   <button
-                    onClick={async () => {
-                      try {
-                        const log = await claude.sync.getLog(30);
-                        setLogLines(log);
-                      } catch {}
-                    }}
+                    onClick={async () => { try { setLogLines(await claude.sync.getLog(30)); } catch {} }}
                     className="mt-1.5 text-[10px] text-fg-muted hover:text-fg-2 transition-colors"
                   >
                     Refresh
@@ -688,9 +697,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             {!status && !loading && (
               <div className="text-center py-6">
                 <div className="text-fg-muted text-sm mb-1">No Sync Data</div>
-                <div className="text-fg-faint text-[11px]">
-                  Install the DestinClaude toolkit to enable sync.
-                </div>
+                <div className="text-fg-faint text-[11px]">Install the DestinClaude toolkit to enable sync.</div>
               </div>
             )}
           </div>
@@ -698,5 +705,243 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         )}
       </div>
     </>
+  );
+}
+
+// --- Overflow menu button ---
+
+function MenuButton({ children, onClick, danger }: { children: React.ReactNode; onClick: () => void; danger?: boolean }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`w-full text-left px-3 py-1.5 text-[11px] transition-colors ${
+        danger ? 'text-red-400 hover:bg-red-500/10' : 'text-fg hover:bg-inset'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+// --- Sub-view header (shared by add/edit flows) ---
+
+function SubViewHeader({ title, onBack, onClose }: { title: string; onBack: () => void; onClose: () => void }) {
+  return (
+    <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+      <div className="flex items-center gap-2">
+        <button onClick={onBack} className="text-fg-muted hover:text-fg-2 w-6 h-6 flex items-center justify-center rounded hover:bg-inset">
+          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+          </svg>
+        </button>
+        <h2 className="text-sm font-bold text-fg">{title}</h2>
+      </div>
+      <button onClick={onClose} className="text-fg-muted hover:text-fg-2 text-lg leading-none w-8 h-8 flex items-center justify-center rounded-sm hover:bg-inset">
+        {'\u2715'}
+      </button>
+    </div>
+  );
+}
+
+// --- Add backend: Step 1 — Pick type ---
+
+function AddBackendTypePicker({
+  backends, onSelect, onBack, onClose,
+}: {
+  backends: BackendInstanceStatus[];
+  onSelect: (type: 'drive' | 'github' | 'icloud') => void;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  const types: { type: 'drive' | 'github' | 'icloud'; desc: string }[] = [
+    { type: 'drive', desc: 'Store your data in a Google Drive folder.' },
+    { type: 'github', desc: 'Store your data in a private GitHub repository.' },
+    { type: 'icloud', desc: 'Store your data in iCloud Drive (Mac/Windows).' },
+  ];
+
+  return (
+    <div className="flex flex-col h-full">
+      <SubViewHeader title="Add a Backup Destination" onBack={onBack} onClose={onClose} />
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
+        {types.map(({ type, desc }) => {
+          const existing = backends.filter(b => b.type === type).length;
+          return (
+            <button
+              key={type}
+              onClick={() => onSelect(type)}
+              className="w-full rounded-lg border border-edge-dim bg-inset/30 p-4 flex items-center gap-3 hover:bg-inset/50 cursor-pointer text-left transition-colors"
+            >
+              <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${BACKEND_STYLE[type]?.tint ?? ''}`}>
+                {BACKEND_STYLE[type]?.icon ?? '?'}
+              </div>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs text-fg font-medium">{BACKEND_LABELS[type]}</div>
+                <div className="text-[10px] text-fg-faint mt-0.5">{desc}</div>
+                {existing > 0 && (
+                  <div className="text-[9px] text-fg-muted mt-1">({existing} already connected)</div>
+                )}
+              </div>
+              <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// --- Add backend: Step 2 — Configure ---
+
+function AddBackendConfigForm({
+  type, onAdd, onBack, onClose,
+}: {
+  type: 'drive' | 'github' | 'icloud';
+  onAdd: (instance: { type: string; label: string; syncEnabled: boolean; config: Record<string, string> }) => void;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState('');
+  const [syncEnabled, setSyncEnabled] = useState(true);
+  const [configValues, setConfigValues] = useState<Record<string, string>>({});
+  const [saving, setSaving] = useState(false);
+
+  const fields = BACKEND_CONFIG_FIELDS[type] || [];
+
+  const handleConnect = async () => {
+    if (!label.trim()) return;
+    setSaving(true);
+    await onAdd({ type, label: label.trim(), syncEnabled, config: configValues });
+    setSaving(false);
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <SubViewHeader title={`Set Up ${BACKEND_LABELS[type]}`} onBack={onBack} onClose={onClose} />
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        {/* Name */}
+        <div>
+          <label className="block text-[10px] text-fg-muted mb-1">What do you want to call this?</label>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            placeholder={`e.g., Personal ${BACKEND_LABELS[type]}, Work Backup`}
+            className="w-full px-2 py-1.5 rounded-md bg-inset border border-edge-dim text-xs text-fg placeholder-fg-faint focus:border-accent focus:outline-none"
+            autoFocus
+          />
+        </div>
+
+        {/* Type-specific config fields */}
+        {fields.map(field => (
+          <div key={field.key}>
+            <label className="block text-[10px] text-fg-muted mb-1">{field.label}</label>
+            <input
+              type="text"
+              value={configValues[field.key] || ''}
+              onChange={(e) => setConfigValues(prev => ({ ...prev, [field.key]: e.target.value }))}
+              placeholder={field.placeholder}
+              className="w-full px-2 py-1.5 rounded-md bg-inset border border-edge-dim text-xs text-fg placeholder-fg-faint focus:border-accent focus:outline-none"
+            />
+          </div>
+        ))}
+
+        {/* Auto-sync toggle */}
+        <div className="pt-1">
+          <label className="flex items-center gap-2 cursor-pointer">
+            <button
+              onClick={() => setSyncEnabled(!syncEnabled)}
+              className={`relative w-8 h-4 rounded-full transition-colors shrink-0 ${syncEnabled ? 'bg-green-600' : 'bg-inset'}`}
+            >
+              <div className="absolute top-0.5 w-3 h-3 rounded-full bg-white shadow-sm transition-all"
+                style={{ left: syncEnabled ? '18px' : '2px' }} />
+            </button>
+            <span className="text-xs text-fg">Automatically sync changes</span>
+          </label>
+          <div className="text-[10px] text-fg-faint mt-0.5 ml-10">
+            When on, your data is backed up automatically. Turn off to only sync manually.
+          </div>
+        </div>
+
+        {/* Connect button */}
+        <button
+          onClick={handleConnect}
+          disabled={!label.trim() || saving}
+          className={`px-4 py-2 rounded-md text-[11px] font-medium transition-colors ${
+            !label.trim() || saving
+              ? 'bg-accent/20 text-accent/40 cursor-not-allowed'
+              : 'bg-accent hover:bg-accent/80 text-on-accent cursor-pointer'
+          }`}
+        >
+          {saving ? 'Connecting...' : 'Connect'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// --- Edit backend settings ---
+
+function EditBackendForm({
+  backend, onSave, onBack, onClose,
+}: {
+  backend: BackendInstanceStatus | null;
+  onSave: (updates: { label?: string; config?: Record<string, string> }) => void;
+  onBack: () => void;
+  onClose: () => void;
+}) {
+  const [label, setLabel] = useState(backend?.label ?? '');
+  const [configValues, setConfigValues] = useState<Record<string, string>>(backend?.config ?? {});
+  const [saving, setSaving] = useState(false);
+
+  if (!backend) return null;
+
+  const fields = BACKEND_CONFIG_FIELDS[backend.type] || [];
+
+  const handleSave = async () => {
+    setSaving(true);
+    await onSave({ label: label.trim(), config: configValues });
+    setSaving(false);
+  };
+
+  return (
+    <div className="flex flex-col h-full">
+      <SubViewHeader title={`Edit ${backend.label}`} onBack={onBack} onClose={onClose} />
+      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+        <div>
+          <label className="block text-[10px] text-fg-muted mb-1">Name</label>
+          <input
+            type="text"
+            value={label}
+            onChange={(e) => setLabel(e.target.value)}
+            className="w-full px-2 py-1.5 rounded-md bg-inset border border-edge-dim text-xs text-fg focus:border-accent focus:outline-none"
+          />
+        </div>
+
+        {fields.map(field => (
+          <div key={field.key}>
+            <label className="block text-[10px] text-fg-muted mb-1">{field.label}</label>
+            <input
+              type="text"
+              value={configValues[field.key] || ''}
+              onChange={(e) => setConfigValues(prev => ({ ...prev, [field.key]: e.target.value }))}
+              placeholder={field.placeholder}
+              className="w-full px-2 py-1.5 rounded-md bg-inset border border-edge-dim text-xs text-fg placeholder-fg-faint focus:border-accent focus:outline-none"
+            />
+          </div>
+        ))}
+
+        <button
+          onClick={handleSave}
+          disabled={!label.trim() || saving}
+          className={`px-4 py-1.5 rounded-md text-[11px] font-medium transition-colors ${
+            saving ? 'bg-accent/20 text-accent/60 cursor-wait' : 'bg-accent hover:bg-accent/80 text-on-accent cursor-pointer'
+          }`}
+        >
+          {saving ? 'Saving...' : 'Save'}
+        </button>
+      </div>
+    </div>
   );
 }

@@ -23,6 +23,7 @@ import path from 'path';
 import os from 'os';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
+import { type BackendInstance, migrateConfigToV2, syncLegacyKeys } from './sync-state';
 
 const execFileAsync = promisify(execFile);
 
@@ -37,15 +38,7 @@ interface ExecResult {
 interface PushResult {
   success: boolean;
   errors: number;
-  backends: string[];
-}
-
-interface SyncConfig {
-  PERSONAL_SYNC_BACKEND: string;
-  DRIVE_ROOT: string;
-  PERSONAL_SYNC_REPO: string;
-  ICLOUD_PATH: string;
-  toolkit_root: string;
+  backends: string[];  // IDs of backends that were pushed to
 }
 
 interface ConversationIndexEntry {
@@ -165,28 +158,53 @@ export class SyncService extends EventEmitter {
     return defaultValue;
   }
 
-  /** Read full sync config. */
-  private getSyncConfig(): SyncConfig {
+  /**
+   * Read all backend instances from config. Auto-migrates from flat keys
+   * on first read if storage_backends array is missing.
+   */
+  private getBackendInstances(): BackendInstance[] {
     const config = this.readJson(this.configPath) || {};
-    return {
-      PERSONAL_SYNC_BACKEND: config.PERSONAL_SYNC_BACKEND || 'none',
-      DRIVE_ROOT: config.DRIVE_ROOT || 'Claude',
-      PERSONAL_SYNC_REPO: config.PERSONAL_SYNC_REPO || '',
-      ICLOUD_PATH: config.ICLOUD_PATH || '',
-      toolkit_root: config.toolkit_root || '',
-    };
+    if (config.storage_backends && Array.isArray(config.storage_backends)) {
+      return config.storage_backends;
+    }
+    // Auto-migrate from flat keys
+    const migrated = migrateConfigToV2(config);
+    config.storage_backends = migrated;
+    syncLegacyKeys(config);
+    this.atomicWrite(this.configPath, JSON.stringify(config, null, 2));
+    return migrated;
   }
 
-  /** Get active backends as an array. */
-  private getBackends(): string[] {
+  /** Get only backends with syncEnabled=true (for the automatic push loop). */
+  private getSyncEnabledBackends(): BackendInstance[] {
+    return this.getBackendInstances().filter(b => b.syncEnabled);
+  }
+
+  /** Find a single backend by id (for manual push/pull). */
+  private getBackendById(id: string): BackendInstance | null {
+    return this.getBackendInstances().find(b => b.id === id) || null;
+  }
+
+  /** Per-backend sync marker path for tracking individual push times. */
+  private perBackendMarkerPath(backendId: string): string {
+    return path.join(this.claudeDir, 'toolkit-state', `.sync-marker-${backendId}`);
+  }
+
+  /** Write per-backend error message (or clear it on success). */
+  private writeBackendError(backendId: string, error: string | null): void {
+    const errorPath = path.join(this.claudeDir, 'toolkit-state', `.sync-error-${backendId}`);
+    if (error) {
+      this.atomicWrite(errorPath, error);
+    } else {
+      try { fs.unlinkSync(errorPath); } catch {}
+    }
+  }
+
+  // Legacy helpers kept for health check auto-detect (reads flat keys)
+  /** Get active backend type names from legacy flat keys. */
+  private getLegacyBackendTypes(): string[] {
     const raw = this.configGet('PERSONAL_SYNC_BACKEND', 'none');
     return raw.split(',').map(b => b.trim().toLowerCase()).filter(b => b && b !== 'none');
-  }
-
-  /** Get preferred backend for pull (first in list). */
-  private getPreferredBackend(): string | null {
-    const backends = this.getBackends();
-    return backends.length > 0 ? backends[0] : null;
   }
 
   // =========================================================================
@@ -450,9 +468,11 @@ export class SyncService extends EventEmitter {
   // Push: Drive Backend
   // =========================================================================
 
-  private async pushDrive(): Promise<number> {
-    const driveRoot = this.configGet('DRIVE_ROOT', 'Claude');
-    const remoteBase = `gdrive:${driveRoot}/Backup/personal`;
+  // Accepts a BackendInstance so multiple Drive accounts can use different rclone remotes
+  private async pushDrive(instance: BackendInstance): Promise<number> {
+    const rcloneRemote = instance.config.rcloneRemote || 'gdrive';
+    const driveRoot = instance.config.DRIVE_ROOT || 'Claude';
+    const remoteBase = `${rcloneRemote}:${driveRoot}/Backup/personal`;
     const sysRemote = `${remoteBase}/system-backup`;
     let errors = 0;
 
@@ -480,7 +500,7 @@ export class SyncService extends EventEmitter {
       await this.rclone(['copy', encDir + '/', `${remoteBase}/encyclopedia/`, '--update', '--max-depth', '1', '--include', '*.md']);
       // Also push to legacy encyclopedia path from config
       const encRemotePath = this.configGet('encyclopedia_remote_path', 'Encyclopedia/System');
-      await this.rclone(['copy', encDir + '/', `gdrive:${driveRoot}/${encRemotePath}/`, '--update', '--max-depth', '1', '--include', '*.md']);
+      await this.rclone(['copy', encDir + '/', `${rcloneRemote}:${driveRoot}/${encRemotePath}/`, '--update', '--max-depth', '1', '--include', '*.md']);
     }
 
     // User-created skills
@@ -559,9 +579,11 @@ export class SyncService extends EventEmitter {
   // Push: GitHub Backend
   // =========================================================================
 
-  private async pushGithub(): Promise<number> {
-    const syncRepo = this.configGet('PERSONAL_SYNC_REPO', '');
-    const repoDir = path.join(this.claudeDir, 'toolkit-state', 'personal-sync-repo');
+  // Accepts a BackendInstance — each instance gets its own clone dir for multi-repo support
+  private async pushGithub(instance: BackendInstance): Promise<number> {
+    const syncRepo = instance.config.PERSONAL_SYNC_REPO || '';
+    // Per-instance clone directory so multiple GitHub backends don't collide
+    const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
     let errors = 0;
 
     // Init repo if missing
@@ -692,8 +714,9 @@ export class SyncService extends EventEmitter {
   // Push: iCloud Backend
   // =========================================================================
 
-  private async pushiCloud(): Promise<number> {
-    const icloudPath = this.resolveICloudPath();
+  // Accepts a BackendInstance for per-instance iCloud path support
+  private async pushiCloud(instance: BackendInstance): Promise<number> {
+    const icloudPath = this.resolveICloudPath(instance);
     if (!icloudPath) {
       this.logBackup('ERROR', 'iCloud Drive folder not found', 'sync.push.icloud');
       return 1;
@@ -787,9 +810,9 @@ export class SyncService extends EventEmitter {
     return errors;
   }
 
-  /** Resolve iCloud Drive path (auto-detect or from config). */
-  private resolveICloudPath(): string | null {
-    const configured = this.configGet('ICLOUD_PATH', '');
+  /** Resolve iCloud Drive path from instance config or auto-detect. */
+  private resolveICloudPath(instance?: BackendInstance): string | null {
+    const configured = instance?.config.ICLOUD_PATH || this.configGet('ICLOUD_PATH', '');
     if (configured && this.dirExists(configured)) return configured;
 
     // Auto-detect by platform
@@ -809,8 +832,13 @@ export class SyncService extends EventEmitter {
   // Push: Orchestrator
   // =========================================================================
 
-  /** Push all personal data to all configured backends. */
-  async push(opts?: { force?: boolean }): Promise<PushResult> {
+  /**
+   * Push personal data to backends.
+   * - Default: pushes to all sync-enabled backends (automatic loop)
+   * - With backendId: pushes to that specific backend only (manual upsync)
+   * - With force: bypasses the 15-minute debounce
+   */
+  async push(opts?: { force?: boolean; backendId?: string }): Promise<PushResult> {
     if (this.pushing) return { success: false, errors: 0, backends: [] };
     this.pushing = true;
 
@@ -825,29 +853,41 @@ export class SyncService extends EventEmitter {
       }
 
       try {
-        // Debounce check (skip if force)
-        if (!opts?.force && !this.debounceCheck(this.syncMarkerPath, PUSH_DEBOUNCE_MIN)) {
+        // Debounce check (skip if force or targeting a specific backend)
+        if (!opts?.force && !opts?.backendId && !this.debounceCheck(this.syncMarkerPath, PUSH_DEBOUNCE_MIN)) {
           this.logBackup('INFO', 'Push skipped — debounce', 'sync.push');
           return { success: true, errors: 0, backends: [] };
         }
 
-        const backends = this.getBackends();
-        if (backends.length === 0) return { success: true, errors: 0, backends: [] };
+        // If a specific backend was requested (manual push), use just that one.
+        // Otherwise, push to all sync-enabled backends (automatic loop).
+        const instances = opts?.backendId
+          ? [this.getBackendById(opts.backendId)].filter(Boolean) as BackendInstance[]
+          : this.getSyncEnabledBackends();
+
+        if (instances.length === 0) return { success: true, errors: 0, backends: [] };
 
         let totalErrors = 0;
+        const pushedIds: string[] = [];
 
-        for (const backend of backends) {
+        for (const instance of instances) {
           try {
             let backendErrors = 0;
-            switch (backend) {
-              case 'drive': backendErrors = await this.pushDrive(); break;
-              case 'github': backendErrors = await this.pushGithub(); break;
-              case 'icloud': backendErrors = await this.pushiCloud(); break;
-              default: this.logBackup('WARN', `Unknown backend: ${backend}`, 'sync.push'); break;
+            switch (instance.type) {
+              case 'drive': backendErrors = await this.pushDrive(instance); break;
+              case 'github': backendErrors = await this.pushGithub(instance); break;
+              case 'icloud': backendErrors = await this.pushiCloud(instance); break;
             }
             totalErrors += backendErrors;
+            pushedIds.push(instance.id);
+
+            // Write per-backend marker for individual status tracking
+            this.debounceTouch(this.perBackendMarkerPath(instance.id));
+            // Clear per-backend error on success
+            if (backendErrors === 0) this.writeBackendError(instance.id, null);
           } catch (e) {
-            this.logBackup('ERROR', `${backend} push failed: ${e}`, 'sync.push');
+            this.logBackup('ERROR', `${instance.id} push failed: ${e}`, 'sync.push');
+            this.writeBackendError(instance.id, String(e));
             totalErrors++;
           }
         }
@@ -855,11 +895,11 @@ export class SyncService extends EventEmitter {
         // Write backup-meta.json on success
         if (totalErrors === 0) this.writeBackupMeta();
 
-        // Update debounce marker AFTER sync (critical ordering)
+        // Update global debounce marker AFTER sync (critical ordering)
         this.debounceTouch(this.syncMarkerPath);
 
         this.emit('push-complete', { errors: totalErrors });
-        return { success: totalErrors === 0, errors: totalErrors, backends };
+        return { success: totalErrors === 0, errors: totalErrors, backends: pushedIds };
       } finally {
         this.releaseLock();
       }
@@ -872,10 +912,11 @@ export class SyncService extends EventEmitter {
   // Pull: Drive Backend
   // =========================================================================
 
-  private async pullDrive(): Promise<void> {
-    const driveRoot = this.configGet('DRIVE_ROOT', 'Claude');
-    const remoteBase = `gdrive:${driveRoot}/Backup/personal`;
-    const sysRemote = `gdrive:${driveRoot}/Backup/system-backup`;
+  private async pullDrive(instance: BackendInstance): Promise<void> {
+    const rcloneRemote = instance.config.rcloneRemote || 'gdrive';
+    const driveRoot = instance.config.DRIVE_ROOT || 'Claude';
+    const remoteBase = `${rcloneRemote}:${driveRoot}/Backup/personal`;
+    const sysRemote = `${rcloneRemote}:${driveRoot}/Backup/system-backup`;
 
     // Memory files — list remote keys, then pull each
     const memResult = await this.rclone(['lsf', `${remoteBase}/memory/`, '--dirs-only']);
@@ -916,9 +957,9 @@ export class SyncService extends EventEmitter {
   // Pull: GitHub Backend
   // =========================================================================
 
-  private async pullGithub(): Promise<void> {
-    const syncRepo = this.configGet('PERSONAL_SYNC_REPO', '');
-    const repoDir = path.join(this.claudeDir, 'toolkit-state', 'personal-sync-repo');
+  private async pullGithub(instance: BackendInstance): Promise<void> {
+    const syncRepo = instance.config.PERSONAL_SYNC_REPO || '';
+    const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
 
     if (!syncRepo || !this.dirExists(path.join(repoDir, '.git'))) return;
 
@@ -979,8 +1020,8 @@ export class SyncService extends EventEmitter {
   // Pull: iCloud Backend
   // =========================================================================
 
-  private async pulliCloud(): Promise<void> {
-    const icloudPath = this.resolveICloudPath();
+  private async pulliCloud(instance: BackendInstance): Promise<void> {
+    const icloudPath = this.resolveICloudPath(instance);
     if (!icloudPath || !this.dirExists(icloudPath)) return;
 
     // Memory
@@ -1035,24 +1076,35 @@ export class SyncService extends EventEmitter {
   // Pull: Orchestrator
   // =========================================================================
 
-  /** Pull personal data from preferred backend + run post-pull operations. */
-  async pull(): Promise<void> {
+  /**
+   * Pull personal data from a backend + run post-pull operations.
+   * - Default: pulls from the first sync-enabled backend
+   * - With backendId: pulls from that specific backend (manual downsync)
+   */
+  async pull(opts?: { backendId?: string }): Promise<void> {
     if (this.pulling) return;
     this.pulling = true;
 
     try {
-      const preferred = this.getPreferredBackend();
-      if (!preferred) {
-        this.logBackup('INFO', 'No backend configured — skipping pull', 'sync.pull');
+      let instance: BackendInstance | null;
+      if (opts?.backendId) {
+        instance = this.getBackendById(opts.backendId);
+      } else {
+        const syncEnabled = this.getSyncEnabledBackends();
+        instance = syncEnabled.length > 0 ? syncEnabled[0] : null;
+      }
+
+      if (!instance) {
+        this.logBackup('INFO', 'No backend for pull', 'sync.pull');
         return;
       }
 
-      this.logBackup('INFO', `Pulling from ${preferred}`, 'sync.pull');
+      this.logBackup('INFO', `Pulling from ${instance.id} (${instance.type})`, 'sync.pull');
 
-      switch (preferred) {
-        case 'drive': await this.pullDrive(); break;
-        case 'github': await this.pullGithub(); break;
-        case 'icloud': await this.pulliCloud(); break;
+      switch (instance.type) {
+        case 'drive': await this.pullDrive(instance); break;
+        case 'github': await this.pullGithub(instance); break;
+        case 'icloud': await this.pulliCloud(instance); break;
       }
 
       // Sequential post-pull operations (order matters)
@@ -1282,8 +1334,8 @@ export class SyncService extends EventEmitter {
     }
 
     // 1. Personal data sync backend status
-    const backends = this.getBackends();
-    if (backends.length === 0) {
+    const syncBackends = this.getSyncEnabledBackends();
+    if (syncBackends.length === 0) {
       // Auto-detect: check if a known sync provider works
       const detected = await this.autoDetectBackend();
       if (detected) {
@@ -1479,7 +1531,7 @@ export class SyncService extends EventEmitter {
   // Session-End Push
   // =========================================================================
 
-  /** Push a single session's JSONL to all backends (called on session close). */
+  /** Push a single session's JSONL to all sync-enabled backends (called on session close). */
   async pushSession(sessionId: string): Promise<void> {
     const slug = this.getCurrentSlug();
     const jsonlFile = path.join(this.claudeDir, 'projects', slug, `${sessionId}.jsonl`);
@@ -1488,22 +1540,25 @@ export class SyncService extends EventEmitter {
     // Update conversation index first
     this.updateConversationIndex();
 
-    const backends = this.getBackends();
-    const driveRoot = this.configGet('DRIVE_ROOT', 'Claude');
+    // Only push to sync-enabled backends (storage-only backends skip session-end sync)
+    const instances = this.getSyncEnabledBackends();
 
-    for (const backend of backends) {
+    for (const instance of instances) {
       try {
-        switch (backend) {
+        switch (instance.type) {
           case 'drive': {
-            await this.rclone(['copy', jsonlFile, `gdrive:${driveRoot}/Backup/personal/conversations/${slug}/`, '--checksum']);
+            const rcloneRemote = instance.config.rcloneRemote || 'gdrive';
+            const driveRoot = instance.config.DRIVE_ROOT || 'Claude';
+            await this.rclone(['copy', jsonlFile, `${rcloneRemote}:${driveRoot}/Backup/personal/conversations/${slug}/`, '--checksum']);
             // Also push conversation index
             if (this.fileExists(this.conversationIndexPath)) {
-              await this.rclone(['copyto', this.conversationIndexPath, `gdrive:${driveRoot}/Backup/system-backup/conversation-index.json`, '--checksum']);
+              await this.rclone(['copyto', this.conversationIndexPath, `${rcloneRemote}:${driveRoot}/Backup/system-backup/conversation-index.json`, '--checksum']);
             }
             break;
           }
           case 'github': {
-            const repoDir = path.join(this.claudeDir, 'toolkit-state', 'personal-sync-repo');
+            // Per-instance repo directory
+            const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
             if (!this.dirExists(path.join(repoDir, '.git'))) break;
             const convDir = path.join(repoDir, 'conversations', slug);
             fs.mkdirSync(convDir, { recursive: true });
@@ -1521,7 +1576,7 @@ export class SyncService extends EventEmitter {
             break;
           }
           case 'icloud': {
-            const icloudPath = this.resolveICloudPath();
+            const icloudPath = this.resolveICloudPath(instance);
             if (!icloudPath) break;
             const convDir = path.join(icloudPath, 'conversations', slug);
             fs.mkdirSync(convDir, { recursive: true });
@@ -1534,7 +1589,7 @@ export class SyncService extends EventEmitter {
           }
         }
       } catch (e) {
-        this.logBackup('WARN', `Session-end ${backend} sync failed: ${e}`, 'sync.sessionend');
+        this.logBackup('WARN', `Session-end ${instance.id} sync failed: ${e}`, 'sync.sessionend');
       }
     }
 
