@@ -9,10 +9,15 @@ import {
 import type { AttentionState } from '../state/chat-types';
 
 // How long to treat 'unknown' as normal silence before escalating to 'stuck'.
-const UNKNOWN_GRACE_MS = 60_000;
+const UNKNOWN_GRACE_MS = 90_000;
 
 // How often the classifier re-reads the buffer while active.
 const TICK_MS = 1000;
+
+// A non-ok classification must hold for this many consecutive ticks before we
+// dispatch. Suppresses transient false positives between tool calls when the
+// spinner hasn't rendered yet but tool output still sits in the buffer tail.
+const STABILITY_TICKS = 5;
 
 interface HookArgs {
   /** isThinking from reducer — gates the whole classifier. */
@@ -90,6 +95,11 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
     const runStartedAt = Date.now();
     let previousSpinnerSeconds: number | null = null;
     let previousSpinnerAt: number = runStartedAt;
+    // Debounce: count how many consecutive ticks have mapped to the same
+    // non-ok state. Only dispatch once it sticks — transitions back to 'ok'
+    // fire immediately so the banner clears fast when Claude resumes.
+    let pendingState: AttentionState = 'ok';
+    let pendingStreak = 0;
 
     const tick = () => {
       const raw = getScreenText(sessionId);
@@ -113,7 +123,20 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
       }
 
       const mapped = bufferClassToAttention(result.class, runStartedAt);
-      if (mapped !== currentAttentionStateRef.current) {
+
+      // Track how long the mapped state has held across ticks.
+      if (mapped === pendingState) {
+        pendingStreak += 1;
+      } else {
+        pendingState = mapped;
+        pendingStreak = 1;
+      }
+
+      // 'ok' clears the banner immediately — only escalations are debounced.
+      const shouldDispatch =
+        mapped === 'ok' || pendingStreak >= STABILITY_TICKS;
+
+      if (shouldDispatch && mapped !== currentAttentionStateRef.current) {
         dispatch({ type: 'ATTENTION_STATE_CHANGED', sessionId, state: mapped });
       }
     };
