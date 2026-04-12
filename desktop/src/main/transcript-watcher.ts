@@ -377,6 +377,22 @@ export class TranscriptWatcher extends EventEmitter {
     }
 
     const fileSize = stat.size;
+
+    // /clear truncates the JSONL. /compact rewrites it with a summary.
+    // In either case, if it shrank below our offset we reset to 0 so subsequent
+    // writes are read correctly. Without this, we'd silently skip every new
+    // event until the new writes pass the old offset.
+    // Also resets the partial-line buffer so a split UTF-8 sequence from
+    // before the truncation doesn't corrupt the new content.
+    // Emits 'transcript-shrink' so App.tsx can detect /compact completion
+    // (the compaction state machine awaits this signal to finalize the marker).
+    if (fileSize < session.offset) {
+      const oldOffset = session.offset;
+      session.offset = 0;
+      session.partialLine = '';
+      this.emit('transcript-shrink', { sessionId: session.desktopSessionId, oldSize: oldOffset, newSize: fileSize });
+      // Don't return — fall through and read from offset 0 if the file has content now
+    }
     if (fileSize <= session.offset) return; // No new data
 
     const bytesToRead = fileSize - session.offset;

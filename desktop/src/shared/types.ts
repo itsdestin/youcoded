@@ -293,6 +293,9 @@ export const IPC = {
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
   UI_ACTION_RECEIVED: 'ui:action:received',
   TRANSCRIPT_EVENT: 'transcript:event',
+  // JSONL truncation — fired on /clear or /compact rewrite. App uses to
+  // detect /compact completion (see slash-command-dispatcher).
+  TRANSCRIPT_SHRINK: 'transcript:shrink',
   // Session browser
   SESSION_BROWSE: 'session:browse',
   SESSION_HISTORY: 'session:history',

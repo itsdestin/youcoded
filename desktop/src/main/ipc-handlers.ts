@@ -292,6 +292,77 @@ export function registerIpcHandlers(
     }
   });
 
+  // --- Model modes (fast + effort) persistence ---
+  // ~/.claude/destincode-model-modes.json holds `{ fast, effort }`. These aren't
+  // verified from transcripts (Claude Code doesn't include them there) — we
+  // trust our local state and rely on the user's ModelPickerPopup as the source of truth.
+  const modelModesPath = path.join(os.homedir(), '.claude', 'destincode-model-modes.json');
+
+  ipcMain.handle('modes:get', async () => {
+    try {
+      return JSON.parse(fs.readFileSync(modelModesPath, 'utf-8'));
+    } catch {
+      return { fast: false, effort: 'auto' };
+    }
+  });
+
+  ipcMain.handle('modes:set', async (_event, modes: { fast?: boolean; effort?: string }) => {
+    try {
+      let current = { fast: false, effort: 'auto' };
+      try { current = { ...current, ...JSON.parse(fs.readFileSync(modelModesPath, 'utf-8')) }; } catch {}
+      const merged = { ...current, ...modes };
+      fs.mkdirSync(path.dirname(modelModesPath), { recursive: true });
+      fs.writeFileSync(modelModesPath, JSON.stringify(merged));
+      return merged;
+    } catch {
+      return null;
+    }
+  });
+
+  // --- Claude Code settings.json bridge (for Preferences panel) ---
+  // Generic get/set keyed by field name so we don't need a handler per setting.
+  // Reads/writes ~/.claude/settings.json which Claude Code itself also reads.
+  // Field names follow Claude Code's own schema (e.g., 'editorMode', 'defaultMode').
+  const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+
+  ipcMain.handle('settings:get', async (_event, field: string) => {
+    try {
+      const raw = fs.readFileSync(claudeSettingsPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      // Dot-path support for nested fields like 'permissions.defaultMode'
+      return field.split('.').reduce((obj: any, k) => (obj == null ? undefined : obj[k]), parsed);
+    } catch {
+      return undefined;
+    }
+  });
+
+  ipcMain.handle('settings:set', async (_event, field: string, value: unknown) => {
+    try {
+      let existing: Record<string, any> = {};
+      try {
+        existing = JSON.parse(fs.readFileSync(claudeSettingsPath, 'utf-8'));
+      } catch {}
+      // Dot-path support — write nested fields without clobbering siblings
+      const keys = field.split('.');
+      let cursor = existing;
+      for (let i = 0; i < keys.length - 1; i++) {
+        const k = keys[i];
+        if (cursor[k] == null || typeof cursor[k] !== 'object') cursor[k] = {};
+        cursor = cursor[k];
+      }
+      if (value === null || value === undefined) {
+        delete cursor[keys[keys.length - 1]];
+      } else {
+        cursor[keys[keys.length - 1]] = value;
+      }
+      fs.mkdirSync(path.dirname(claudeSettingsPath), { recursive: true });
+      fs.writeFileSync(claudeSettingsPath, JSON.stringify(existing, null, 2));
+      return true;
+    } catch {
+      return false;
+    }
+  });
+
   // --- Appearance preference persistence ---
   ipcMain.handle('appearance:get', async () => {
     try {
@@ -1012,6 +1083,14 @@ export function registerIpcHandlers(
     if (remoteServer) {
       remoteServer.bufferTranscriptEvent(event);
       remoteServer.broadcast({ type: 'transcript:event', payload: event });
+    }
+  });
+  // /clear and /compact both truncate or rewrite the JSONL. App.tsx listens
+  // to detect compaction completion (pending → COMPACTION_COMPLETE).
+  transcriptWatcher.on('transcript-shrink', (payload: any) => {
+    send(IPC.TRANSCRIPT_SHRINK, payload);
+    if (remoteServer) {
+      remoteServer.broadcast({ type: 'transcript:shrink', payload });
     }
   });
   const topicWatchers = new Map<string, fs.FSWatcher | NodeJS.Timeout>();

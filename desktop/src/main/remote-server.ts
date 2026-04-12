@@ -763,6 +763,73 @@ export class RemoteServer {
         this.respond(client.ws, type, id, os.homedir());
         break;
       }
+      // Claude Code settings.json bridge — mirrors ipc-handlers.ts 'settings:get'/'settings:set'.
+      // Dot-path keys supported (e.g. 'permissions.defaultMode').
+      case 'settings:get': {
+        const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+        try {
+          const raw = await fs.promises.readFile(claudeSettingsPath, 'utf-8');
+          const parsed = JSON.parse(raw);
+          const field: string = (payload as any)?.field ?? '';
+          const value = field.split('.').reduce((obj: any, k) => (obj == null ? undefined : obj[k]), parsed);
+          this.respond(client.ws, type, id, value);
+        } catch {
+          this.respond(client.ws, type, id, undefined);
+        }
+        break;
+      }
+      // Fast + effort mode persistence — mirrors ipc-handlers.ts 'modes:get'/'modes:set'.
+      case 'modes:get': {
+        const modelModesPath = path.join(os.homedir(), '.claude', 'destincode-model-modes.json');
+        try {
+          const raw = await fs.promises.readFile(modelModesPath, 'utf-8');
+          this.respond(client.ws, type, id, JSON.parse(raw));
+        } catch {
+          this.respond(client.ws, type, id, { fast: false, effort: 'auto' });
+        }
+        break;
+      }
+      case 'modes:set': {
+        const modelModesPath = path.join(os.homedir(), '.claude', 'destincode-model-modes.json');
+        try {
+          let current = { fast: false, effort: 'auto' } as Record<string, any>;
+          try { current = { ...current, ...JSON.parse(await fs.promises.readFile(modelModesPath, 'utf-8')) }; } catch {}
+          const merged = { ...current, ...(payload as Record<string, any>) };
+          await fs.promises.mkdir(path.dirname(modelModesPath), { recursive: true });
+          await fs.promises.writeFile(modelModesPath, JSON.stringify(merged));
+          this.respond(client.ws, type, id, merged);
+        } catch {
+          this.respond(client.ws, type, id, null);
+        }
+        break;
+      }
+      case 'settings:set': {
+        const claudeSettingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+        try {
+          let existing: Record<string, any> = {};
+          try { existing = JSON.parse(await fs.promises.readFile(claudeSettingsPath, 'utf-8')); } catch {}
+          const field: string = (payload as any)?.field ?? '';
+          const value = (payload as any)?.value;
+          const keys = field.split('.');
+          let cursor = existing;
+          for (let i = 0; i < keys.length - 1; i++) {
+            const k = keys[i];
+            if (cursor[k] == null || typeof cursor[k] !== 'object') cursor[k] = {};
+            cursor = cursor[k];
+          }
+          if (value === null || value === undefined) {
+            delete cursor[keys[keys.length - 1]];
+          } else {
+            cursor[keys[keys.length - 1]] = value;
+          }
+          await fs.promises.mkdir(path.dirname(claudeSettingsPath), { recursive: true });
+          await fs.promises.writeFile(claudeSettingsPath, JSON.stringify(existing, null, 2));
+          this.respond(client.ws, type, id, true);
+        } catch {
+          this.respond(client.ws, type, id, false);
+        }
+        break;
+      }
       case 'folders:list': {
         const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
         try {

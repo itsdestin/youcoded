@@ -118,6 +118,11 @@ interface Props {
   onCycleModel?: () => void;
   permissionMode?: PermissionMode;
   onCyclePermission?: () => void;
+  // Fast + effort state and opener. When non-default, chips render next to the model
+  // chip. Clicking either (or the model chip directly) opens the ModelPickerPopup.
+  fast?: boolean;
+  effort?: string;
+  onOpenModelPicker?: () => void;
 }
 
 // Map raw warning codes to the same descriptive text used in the terminal statusline
@@ -484,7 +489,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
 
 // --- Main StatusBar component ---
 
-export default function StatusBar({ statusData, onRunSync, onOpenSync, model, onCycleModel, permissionMode, onCyclePermission }: Props) {
+export default function StatusBar({ statusData, onRunSync, onOpenSync, model, onCycleModel, permissionMode, onCyclePermission, fast, effort, onOpenModelPicker }: Props) {
   const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncStatus, syncWarnings } = statusData;
   const warnings = parseSyncWarnings(syncWarnings);
   const { activeTheme, cycleTheme } = useTheme();
@@ -506,9 +511,31 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
             color: MODEL_DISPLAY[model].color,
             borderColor: MODEL_DISPLAY[model].border,
           }}
-          title={`Model: ${MODEL_DISPLAY[model].label} (click to cycle)`}
+          title={`Model: ${MODEL_DISPLAY[model].label} (click to cycle · type /model for picker)`}
         >
           {MODEL_DISPLAY[model].label}
+        </button>
+      )}
+
+      {/* Fast mode chip — only rendered when on. Click opens the ModelPickerPopup. */}
+      {fast && (
+        <button
+          onClick={onOpenModelPicker}
+          className="px-1.5 py-0.5 rounded-sm border border-yellow-500/40 bg-yellow-500/15 text-yellow-500 cursor-pointer hover:brightness-125 transition-colors"
+          title="Fast mode on — click to configure"
+        >
+          ⚡
+        </button>
+      )}
+
+      {/* Effort chip — only rendered when non-default (non-auto). Short letter label. */}
+      {effort && effort !== 'auto' && (
+        <button
+          onClick={onOpenModelPicker}
+          className="px-1.5 py-0.5 rounded-sm border border-edge-dim bg-inset text-fg-2 cursor-pointer hover:bg-well transition-colors"
+          title={`Effort: ${effort} — click to configure`}
+        >
+          {effort === 'max' ? 'Max' : effort.charAt(0).toUpperCase()}
         </button>
       )}
 

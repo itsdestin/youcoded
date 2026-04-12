@@ -5,6 +5,10 @@ import UserMessage from './UserMessage';
 import AssistantTurnBubble from './AssistantTurnBubble';
 import ToolCard from './ToolCard';
 import PromptCard from './PromptCard';
+import UsageCard from './UsageCard';
+import SystemMarker from './SystemMarker';
+import CompactingCard from './CompactingCard';
+import CopyPicker from './CopyPicker';
 import ThinkingIndicator from './ThinkingIndicator';
 import { useTheme } from '../state/theme-context';
 
@@ -218,7 +222,21 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
   }, []);
 
   const handlePromptSelect = useCallback(
-    (promptId: string, input: string, label: string) => {
+    (promptId: string, input: string, label: string, promptTitle?: string) => {
+      // Resume-from-summary tie-in: clicking "Resume from summary" (or similar)
+      // on the Resume Session prompt triggers Claude Code's compaction flow.
+      // Dispatch COMPACTION_PENDING NOW so the spinner appears immediately —
+      // otherwise the user watches a blank chat for 15-30s with no feedback.
+      // Completion is detected via first-turn-complete fallback in App.tsx
+      // (resume creates a new JSONL file, so transcript-shrink never fires).
+      if (promptTitle === 'Resume Session' && /summar/i.test(label)) {
+        dispatch({
+          type: 'COMPACTION_PENDING',
+          sessionId,
+          cardId: `compact-resume-${Date.now()}`,
+          beforeContextTokens: null, // Resume doesn't have pre-compaction stats
+        });
+      }
       // Send keystrokes to PTY to navigate the Ink menu
       window.claude.session.sendInput(sessionId, input);
       // Mark the prompt as completed in the UI
@@ -287,10 +305,46 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
                     <PromptCard
                       prompt={entry.prompt}
                       sessionId={sessionId}
-                      onSelect={(input, label) => handlePromptSelect(entry.prompt.promptId, input, label)}
+                      onSelect={(input, label) => handlePromptSelect(entry.prompt.promptId, input, label, entry.prompt.title)}
                     />
                   );
                   break;
+                // /cost and /usage snapshot — entryId is the stable key since the
+                // same snapshot object is kept in state across re-renders.
+                case 'usage-card':
+                  key = entry.snapshot.entryId;
+                  content = <UsageCard snapshot={entry.snapshot} />;
+                  break;
+                // /clear and /compact dividers
+                case 'system-marker':
+                  key = entry.marker.id;
+                  content = <SystemMarker marker={entry.marker} />;
+                  break;
+                // /compact spinner (and resume-from-summary)
+                case 'compacting':
+                  key = entry.id;
+                  content = <CompactingCard startedAt={entry.startedAt} />;
+                  break;
+                // /copy multi-block picker
+                case 'copy-picker': {
+                  key = entry.id;
+                  // Capture id in closure so the callbacks work after TS narrowing.
+                  const pickerId = entry.id;
+                  content = (
+                    <CopyPicker
+                      id={pickerId}
+                      options={entry.options}
+                      onCopy={(text, label) => {
+                        navigator.clipboard.writeText(text).catch(() => {});
+                        dispatch({ type: 'DISMISS_COPY_PICKER', sessionId, id: pickerId });
+                        // onToast would be nicer but ChatView doesn't have it — minimal UX for now
+                        void label;
+                      }}
+                      onDismiss={() => dispatch({ type: 'DISMISS_COPY_PICKER', sessionId, id: pickerId })}
+                    />
+                  );
+                  break;
+                }
               }
               return (
                 <div key={key!} ref={observeEntry} className="timeline-entry in-view">

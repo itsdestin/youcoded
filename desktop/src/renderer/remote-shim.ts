@@ -160,6 +160,9 @@ function handleMessage(data: string): void {
     case 'transcript:event':
       dispatchEvent('transcript:event', payload);
       break;
+    case 'transcript:shrink':
+      dispatchEvent('transcript:shrink', payload);
+      break;
     case 'prompt:show':
       dispatchEvent('prompt:show', payload);
       break;
@@ -532,6 +535,7 @@ export function installShim(): void {
       sessionPermissionMode: (cb: Callback) => addListener('session:permission-mode', cb),
       uiAction: (cb: Callback) => addListener('ui:action:received', cb),
       transcriptEvent: (cb: Callback) => addListener('transcript:event', cb),
+      transcriptShrink: (cb: Callback) => addListener('transcript:shrink', cb),
       promptShow: (cb: Callback) => addListener('prompt:show', cb),
       promptDismiss: (cb: Callback) => addListener('prompt:dismiss', cb),
       promptComplete: (cb: Callback) => addListener('prompt:complete', cb),
@@ -621,6 +625,15 @@ export function installShim(): void {
     defaults: {
       get: () => invoke('defaults:get'),
       set: (updates: Record<string, any>) => invoke('defaults:set', updates),
+    },
+    // Parity with preload.ts — Preferences panel uses this over remote too
+    settings: {
+      get: (field: string) => invoke('settings:get', { field }),
+      set: (field: string, value: unknown) => invoke('settings:set', { field, value }),
+    },
+    modes: {
+      get: () => invoke('modes:get'),
+      set: (modes: Record<string, any>) => invoke('modes:set', modes),
     },
     sync: {
       getStatus: () => invoke('sync:get-status'),

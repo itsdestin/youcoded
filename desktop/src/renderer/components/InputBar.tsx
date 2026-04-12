@@ -3,6 +3,10 @@ import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
 import { AttachIcon, CompassIcon } from './Icons';
 import BrailleBurst from './BrailleBurst';
+// Central slash-command router. All /-prefixed messages flow through here
+// so interception is consistent between typed input and drawer selection.
+import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
+import type { UsageSnapshot } from '../state/chat-types';
 
 export interface InputBarHandle {
   clear: () => void;
@@ -12,10 +16,21 @@ interface Props {
   sessionId: string;
   disabled?: boolean;
   minimal?: boolean;
+  view?: ViewMode;                  // Current view mode — forwarded to dispatcher (e.g. /config behaves differently in terminal view)
   onOpenDrawer?: (searchMode: boolean) => void;
   onCloseDrawer?: () => void;
   onDrawerSearch?: (query: string) => void;
   onResumeCommand?: () => void;
+  // /cost and /usage — App provides the snapshot factory since stats live in statusData.
+  getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null;
+  // /config (chat view) — App opens the PreferencesPopup
+  onOpenPreferences?: () => void;
+  // Toast channel for dispatcher warnings ("Attachments ignored with /clear", etc.)
+  onToast?: (message: string) => void;
+  // /copy needs to read assistant turns from session state to extract blocks
+  getSessionState?: (sessionId: string) => import('../state/chat-types').SessionChatState | undefined;
+  // Bare /model, /fast, /effort open the unified ModelPickerPopup
+  onOpenModelPicker?: () => void;
 }
 
 interface Attachment {
@@ -35,7 +50,7 @@ function fileNameFromPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -141,18 +156,34 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
   const sendMessage = useCallback(
     (message: string, files: Attachment[] = []) => {
-      // Intercept /resume command
-      if (message.trim() === '/resume' && onResumeCommand) {
-        onResumeCommand();
+      // Route slash commands through the central dispatcher BEFORE attachment
+      // merging so the intercept sees the pristine command text (not "file.txt /clear").
+      // The dispatcher decides: fully intercept, forward-and-intercept, or let through.
+      const dispatchResult = dispatchSlashCommand({
+        raw: message,
+        sessionId,
+        view: view ?? 'chat',
+        files,
+        dispatch,
+        timeline: [], // Day 1: unused; will wire per-session timeline on Day 2 when commands need it
+        callbacks: { onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker },
+      });
+      if (dispatchResult.handled) {
+        if (dispatchResult.alsoSendToPty) {
+          // For commands like /clear and /compact that still need Claude Code's own state to change.
+          window.claude.session.sendInput(sessionId, dispatchResult.alsoSendToPty);
+        }
         return;
       }
+      // Dispatcher may rewrite the message (e.g. strip escape-hatch backslash)
+      const effectiveMessage = dispatchResult.rewritten ?? message;
 
       const parts: string[] = [];
       for (const f of files) {
         parts.push(f.path);
       }
-      if (message.trim()) {
-        parts.push(message.trim());
+      if (effectiveMessage.trim()) {
+        parts.push(effectiveMessage.trim());
       }
       const combined = parts.join(' ');
       if (!combined || disabled) return;
@@ -183,7 +214,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       window.claude.session.sendInput(sessionId, PASTE_START + sanitized + PASTE_END);
       setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 20);
     },
-    [sessionId, disabled, dispatch],
+    [sessionId, disabled, dispatch, view, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker],
   );
 
   // Auto-resize textarea to fit content, up to 3 lines then scroll

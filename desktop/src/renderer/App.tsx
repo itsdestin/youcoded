@@ -16,6 +16,9 @@ const WELCOME_MODEL_LABELS: Record<string, string> = {
 import ErrorBoundary from './components/ErrorBoundary';
 import GamePanel from './components/game/GamePanel';
 import { ChatProvider, useChatDispatch, useChatState, useChatStateMap } from './state/chat-context';
+// Central slash-command router — also used by the drawer so drawer-initiated
+// slash commands behave the same as typed ones (otherwise drawer bypasses InputBar's intercept).
+import { dispatchSlashCommand } from './state/slash-command-dispatcher';
 import { GameProvider, useGameState, useGameDispatch } from './state/game-context';
 import { hookEventToAction } from './state/hook-dispatcher';
 import { usePromptDetector } from './hooks/usePromptDetector';
@@ -27,6 +30,8 @@ import TerminalToolbar, { TerminalScrollButtons } from './components/TerminalToo
 import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
+import PreferencesPopup from './components/PreferencesPopup';
+import ModelPickerPopup from './components/ModelPickerPopup';
 import Marketplace from './components/Marketplace';
 import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillEditor from './components/SkillEditor';
@@ -103,6 +108,23 @@ function AppInner() {
   const [viewedSessions, setViewedSessions] = useState<Set<string>>(new Set());
   const [resumeInfo, setResumeInfo] = useState<Map<string, { claudeSessionId: string; projectSlug: string }>>(new Map());
   const [resumeRequested, setResumeRequested] = useState(false);
+  // Preferences popup state — opened by /config in chat view or from SettingsPanel
+  const [preferencesOpen, setPreferencesOpen] = useState(false);
+  // Model/effort/fast picker — opened by bare /model, /fast, /effort (and future status-bar chip clicks)
+  const [modelPickerOpen, setModelPickerOpen] = useState(false);
+  // Fast + effort state — surfaced via status bar chips. Persisted to ~/.claude/destincode-model-modes.json.
+  const [fastMode, setFastMode] = useState(false);
+  const [effortLevel, setEffortLevel] = useState<string>('auto');
+  // Load persisted modes on mount, and re-load when popup closes (picks up
+  // edits made in the popup). Simple poll on popup close keeps the chips in sync.
+  useEffect(() => {
+    const api = (window.claude as any).modes;
+    if (!api) return;
+    api.get().then((m: { fast?: boolean; effort?: string }) => {
+      setFastMode(!!m?.fast);
+      if (m?.effort) setEffortLevel(m.effort);
+    }).catch(() => {});
+  }, [modelPickerOpen]);
   // Unified marketplace modal — null means closed, string selects initial tab
   const [marketplaceTab, setMarketplaceTab] = useState<'installed' | 'skills' | 'themes' | null>(null);
   const [publishThemeSlug, setPublishThemeSlug] = useState<string | null>(null);
@@ -176,6 +198,39 @@ function AppInner() {
   usePromptDetector();
   const dispatch = useChatDispatch();
   const chatStateMap = useChatStateMap();
+  // Latest-value ref so transcript-shrink and turn-complete handlers see
+  // up-to-date compactionPending state without re-subscribing on every reducer tick.
+  const chatStateMapRef = useRef(chatStateMap);
+  useEffect(() => { chatStateMapRef.current = chatStateMap; }, [chatStateMap]);
+
+  // Compaction watchdog: if pending for > 60s with no shrink/turn-complete,
+  // abort gracefully. Claude Code should finish compaction in 10-30s in practice;
+  // 60s means something went wrong (API failure, user interrupted, etc.).
+  const compactWatchdogs = useRef(new Map<string, ReturnType<typeof setTimeout>>());
+  useEffect(() => {
+    for (const [sid, session] of chatStateMap) {
+      const existing = compactWatchdogs.current.get(sid);
+      if (session.compactionPending && !existing) {
+        const timer = setTimeout(() => {
+          const current = chatStateMapRef.current.get(sid);
+          if (current?.compactionPending) {
+            dispatch({
+              type: 'COMPACTION_COMPLETE',
+              sessionId: sid,
+              markerId: `compact-timeout-${Date.now()}`,
+              afterContextTokens: null,
+              aborted: true,
+            });
+          }
+          compactWatchdogs.current.delete(sid);
+        }, 60_000);
+        compactWatchdogs.current.set(sid, timer);
+      } else if (!session.compactionPending && existing) {
+        clearTimeout(existing);
+        compactWatchdogs.current.delete(sid);
+      }
+    }
+  }, [chatStateMap, dispatch]);
   const gameState = useGameState();
   const gameDispatch = useGameDispatch();
   const lobby = usePartyLobby();
@@ -396,8 +451,40 @@ function AppInner() {
             uuid: event.uuid,
             timestamp: event.timestamp,
           });
+          // Resume-from-summary fallback: resume creates a NEW JSONL file so
+          // transcript-shrink never fires on it. The summary arrives as the
+          // first turn-complete after COMPACTION_PENDING was set — use that
+          // as the completion signal instead.
+          {
+            const sessionState = chatStateMapRef.current.get(event.sessionId);
+            if (sessionState?.compactionPending) {
+              const contextTokens = statusData.sessionStatsMap[event.sessionId]?.contextTokens ?? null;
+              dispatch({
+                type: 'COMPACTION_COMPLETE',
+                sessionId: event.sessionId,
+                markerId: `compact-done-${Date.now()}`,
+                afterContextTokens: contextTokens,
+              });
+            }
+          }
           break;
       }
+    });
+
+    // /compact completion (primary path): Claude Code rewrites the JSONL with
+    // the compacted summary; we see the file shrink and finalize the marker.
+    // For typed /compact (not resume-from-summary), this is the reliable signal.
+    const shrinkHandler = (window.claude.on as any).transcriptShrink?.((payload: { sessionId: string }) => {
+      if (!payload?.sessionId) return;
+      const sessionState = chatStateMapRef.current.get(payload.sessionId);
+      if (!sessionState?.compactionPending) return; // /clear or unrelated shrink — ignore
+      const contextTokens = statusData.sessionStatsMap[payload.sessionId]?.contextTokens ?? null;
+      dispatch({
+        type: 'COMPACTION_COMPLETE',
+        sessionId: payload.sessionId,
+        markerId: `compact-done-${Date.now()}`,
+        afterContextTokens: contextTokens,
+      });
     });
 
     const renamedHandler = window.claude.on.sessionRenamed((sid, name) => {
@@ -526,6 +613,7 @@ function AppInner() {
       window.claude.off('pty:output', ptyModeHandler);
       window.claude.off('status:data', statusHandler);
       if (transcriptHandler) window.claude.off('transcript:event', transcriptHandler);
+      if (shrinkHandler) window.claude.off('transcript:shrink', shrinkHandler);
       if (uiActionHandler) window.claude.off('ui:action:received', uiActionHandler);
       if (promptShowHandler) window.claude.off('prompt:show', promptShowHandler);
       if (promptDismissHandler) window.claude.off('prompt:dismiss', promptDismissHandler);
@@ -766,6 +854,39 @@ function AppInner() {
     };
   }, [pendingModel, sessionId]);
 
+  // Snapshot factory for /cost and /usage. Pulls live stats from statusData
+  // and freezes them as a point-in-time snapshot. Returns null if stats haven't
+  // arrived yet (status line hook runs after each command, so a brand-new session
+  // may have no data for a few seconds).
+  const getUsageSnapshot = useCallback(
+    (sid: string) => {
+      const stats = statusData.sessionStatsMap[sid];
+      const ctx = statusData.contextMap[sid] ?? null;
+      const usage = statusData.usage as { five_hour?: { utilization: number; resets_at: string }; seven_day?: { utilization: number; resets_at: string } } | null;
+      if (!stats && ctx == null && !usage) return null;
+      return {
+        entryId: `usage-${sid}-${Date.now()}`,
+        timestamp: Date.now(),
+        costUsd: stats?.costUsd ?? null,
+        inputTokens: stats?.inputTokens ?? null,
+        outputTokens: stats?.outputTokens ?? null,
+        cacheReadTokens: stats?.cacheReadTokens ?? null,
+        cacheCreationTokens: stats?.cacheCreationTokens ?? null,
+        contextTokens: stats?.contextTokens ?? null,
+        contextPercent: ctx,
+        duration: stats?.duration ?? null,
+        apiDuration: stats?.apiDuration ?? null,
+        linesAdded: stats?.linesAdded ?? null,
+        linesRemoved: stats?.linesRemoved ?? null,
+        fiveHourUtilization: usage?.five_hour?.utilization ?? null,
+        fiveHourResetsAt: usage?.five_hour?.resets_at ?? null,
+        sevenDayUtilization: usage?.seven_day?.utilization ?? null,
+        sevenDayResetsAt: usage?.seven_day?.resets_at ?? null,
+      };
+    },
+    [statusData],
+  );
+
   const handleSelectSkill = useCallback(
     (skill: SkillEntry) => {
       if (skill.id === '_resume') {
@@ -778,6 +899,30 @@ function AppInner() {
       setDrawerOpen(false);
       setDrawerFilter(undefined);
       inputBarRef.current?.clear();
+
+      // If the skill's prompt is a slash command, route it through the dispatcher
+      // so drawer-initiated /clear (etc.) behaves the same as typed /clear.
+      // Non-slash prompts (natural language) fall through to the existing send path.
+      const trimmedPrompt = skill.prompt.trim();
+      if (trimmedPrompt.startsWith('/')) {
+        const currentView = viewModes.get(sessionId) || 'chat';
+        const result = dispatchSlashCommand({
+          raw: skill.prompt,
+          sessionId,
+          view: currentView,
+          files: [],
+          dispatch,
+          timeline: [],
+          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3000); }, getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+        });
+        if (result.handled) {
+          if (result.alsoSendToPty) {
+            window.claude.session.sendInput(sessionId, result.alsoSendToPty);
+          }
+          return;
+        }
+      }
+
       dispatch({
         type: 'USER_PROMPT',
         sessionId,
@@ -786,7 +931,7 @@ function AppInner() {
       });
       window.claude.session.sendInput(sessionId, skill.prompt + '\r');
     },
-    [sessionId, dispatch],
+    [sessionId, dispatch, viewModes, getUsageSnapshot],
   );
 
   const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'gemini') => {
@@ -1164,7 +1309,7 @@ function AppInner() {
                 {isTerminalTouch && sessionId && (
                   <TerminalToolbar sessionId={sessionId} />
                 )}
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} />
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 3000); }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} />
                 <StatusBar
                   statusData={{
                     usage: statusData.usage,
@@ -1188,6 +1333,9 @@ function AppInner() {
                   onCycleModel={cycleModel}
                   permissionMode={currentPermissionMode}
                   onCyclePermission={cyclePermission}
+                  fast={fastMode}
+                  effort={effortLevel}
+                  onOpenModelPicker={() => setModelPickerOpen(true)}
                 />
               </div>
           </>
@@ -1314,6 +1462,34 @@ function AppInner() {
         defaultModel={sessionDefaults.model}
         defaultSkipPermissions={sessionDefaults.skipPermissions}
       />
+      <PreferencesPopup
+        open={preferencesOpen}
+        onClose={() => setPreferencesOpen(false)}
+        // Advanced → switch to terminal view and forward /config to Claude Code's
+        // native TUI. The user sees the full config menu rendered in xterm.
+        onOpenAdvanced={() => {
+          if (!sessionId) return;
+          setViewModes((prev) => new Map(prev).set(sessionId, 'terminal'));
+          // Small delay so the view switch happens before input lands
+          setTimeout(() => window.claude.session.sendInput(sessionId, '/config\r'), 50);
+        }}
+      />
+      <ModelPickerPopup
+        open={modelPickerOpen}
+        onClose={() => setModelPickerOpen(false)}
+        sessionId={sessionId}
+        currentModel={model}
+        onSelectModel={(m) => {
+          // Reuse the existing cycle plumbing but with an explicit target.
+          // pendingModel + setModel + PTY send matches the cycleModel flow.
+          setModel(m);
+          setPendingModel(m);
+          (window.claude as any).model?.setPreference(m);
+          if (sessionId) {
+            window.claude.session.sendInput(sessionId, `/model ${m}\r`);
+          }
+        }}
+      />
       {/* Unified marketplace modal — replaces old Marketplace + ThemeMarketplace + SkillManager */}
       {marketplaceTab && (
         <Marketplace
@@ -1348,9 +1524,15 @@ function AppInner() {
   );
 }
 
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void }>(
-  function ChatInputBar({ sessionId, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand }, ref) {
-    return <InputBar ref={ref} sessionId={sessionId} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} />;
+// view is forwarded so InputBar's slash-command dispatcher can behave
+// differently in chat vs terminal view (e.g. /config opens Preferences in
+// chat view but passes through to Claude Code's TUI in terminal view).
+// getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
+import type { UsageSnapshot } from './state/chat-types';
+import type { SessionChatState } from './state/chat-types';
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void }>(
+  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker }, ref) {
+    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} />;
   },
 );
 

@@ -663,6 +663,119 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    // /cost and /usage — appends a point-in-time stats snapshot card to the timeline.
+    // Permanent (not dismissible); reducer is write-only, UsageCard reads from snapshot.
+    case 'SHOW_USAGE_CARD': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: [...session.timeline, { kind: 'usage-card', snapshot: action.snapshot }],
+      });
+      return next;
+    }
+
+    // /compact — inserts spinner card + sets pending flag. Claude Code does the
+    // actual summarization via API; we detect completion via transcript shrink
+    // OR next turn-complete (see COMPACTION_COMPLETE). Keep existing timeline —
+    // the user should still see their messages during the 10-30s compaction.
+    case 'COMPACTION_PENDING': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      // Idempotent: if already pending, just update the card (don't stack spinners)
+      const filtered = session.timeline.filter((e) => e.kind !== 'compacting');
+      const startedAt = Date.now();
+      next.set(action.sessionId, {
+        ...session,
+        timeline: [...filtered, { kind: 'compacting', id: action.cardId, startedAt }],
+        compactionPending: { startedAt, beforeContextTokens: action.beforeContextTokens },
+      });
+      return next;
+    }
+
+    // Compaction finished — remove spinner, clear timeline, insert a marker with
+    // the token-freed diff. Invoked from two code paths: transcript-shrink event
+    // (typed /compact) and first turn-complete after pending (resume-from-summary).
+    case 'COMPACTION_COMPLETE': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      if (!session.compactionPending) return state; // Stale event — ignore
+      const before = session.compactionPending.beforeContextTokens;
+      const after = action.afterContextTokens;
+      let label: string;
+      if (action.aborted) {
+        label = 'Compaction may have failed';
+      } else if (before != null && after != null && before > after) {
+        const freed = before - after;
+        label = `Compacted · freed ${freed.toLocaleString()} tokens`;
+      } else {
+        label = 'Conversation compacted';
+      }
+      next.set(action.sessionId, {
+        ...session,
+        ...endTurn(session),
+        timeline: [
+          {
+            kind: 'system-marker',
+            marker: {
+              id: action.markerId,
+              timestamp: Date.now(),
+              label,
+              variant: 'compact',
+            },
+          },
+        ],
+        compactionPending: null,
+      });
+      return next;
+    }
+
+    // /copy picker — inserts a copy-picker card inline. Removed on click or cancel.
+    case 'SHOW_COPY_PICKER': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: [...session.timeline, { kind: 'copy-picker', id: action.id, options: action.options }],
+      });
+      return next;
+    }
+
+    case 'DISMISS_COPY_PICKER': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: session.timeline.filter((e) => !(e.kind === 'copy-picker' && e.id === action.id)),
+      });
+      return next;
+    }
+
+    // /clear — wipes visible timeline, inserts a thin divider, resets turn state.
+    // Claude Code's own context is reset separately by forwarding /clear to the PTY.
+    // We preserve toolCalls/toolGroups Maps so any mid-flight results that arrive
+    // after the clear (before the PTY-level reset takes effect) don't crash lookups.
+    case 'CLEAR_TIMELINE': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      next.set(action.sessionId, {
+        ...session,
+        ...endTurn(session),
+        timeline: [
+          {
+            kind: 'system-marker',
+            marker: {
+              id: action.markerId,
+              timestamp: action.timestamp,
+              label: 'Conversation cleared',
+              variant: 'clear',
+            },
+          },
+        ],
+      });
+      return next;
+    }
+
     default:
       return state;
   }

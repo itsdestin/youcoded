@@ -136,6 +136,13 @@ class TranscriptWatcher(
         if (!file.exists()) return@withLock
 
         val fileLength = file.length()
+
+        // /clear truncates the JSONL. If it shrank below our offset, reset to 0
+        // so subsequent writes are read correctly. Without this, we'd silently
+        // skip every new event until the new writes pass the old offset.
+        if (fileLength < state.fileOffset) {
+            state.fileOffset = 0L
+        }
         if (fileLength <= state.fileOffset) return@withLock
 
         try {

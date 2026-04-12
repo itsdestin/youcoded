@@ -53,6 +53,9 @@ const IPC = {
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
   UI_ACTION_RECEIVED: 'ui:action:received',
   TRANSCRIPT_EVENT: 'transcript:event',
+  // Fired when the JSONL file shrinks (/.clear truncation or /compact rewrite).
+  // App.tsx listens to finalize compaction state machines.
+  TRANSCRIPT_SHRINK: 'transcript:shrink',
   SESSION_BROWSE: 'session:browse',
   SESSION_HISTORY: 'session:history',
   // Folder switcher
@@ -99,6 +102,12 @@ const IPC = {
   MODEL_READ_LAST: 'model:read-last',
   DEFAULTS_GET: 'defaults:get',
   DEFAULTS_SET: 'defaults:set',
+  // Claude Code settings.json bridge — used by Preferences panel (/config intercept)
+  SETTINGS_GET: 'settings:get',
+  SETTINGS_SET: 'settings:set',
+  // Fast mode + effort level — DestinCode-local state (Claude Code doesn't transcribe these)
+  MODES_GET: 'modes:get',
+  MODES_SET: 'modes:set',
   SESSION_SWITCH: 'session:switch',
   // Sync management
   SYNC_GET_STATUS: 'sync:get-status',
@@ -184,6 +193,13 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.TRANSCRIPT_EVENT, handler);
       return handler;
     },
+    // Fired on JSONL truncation — used to detect /compact completion and
+    // (defensively) catch /clear even if the dispatcher intercept was bypassed.
+    transcriptShrink: (cb: (payload: { sessionId: string; oldSize: number; newSize: number }) => void) => {
+      const handler = (_e: IpcRendererEvent, payload: any) => cb(payload);
+      ipcRenderer.on(IPC.TRANSCRIPT_SHRINK, handler);
+      return handler;
+    },
   },
   skills: {
     list: (): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_LIST),
@@ -263,6 +279,17 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.DEFAULTS_GET),
     set: (updates: Partial<{ skipPermissions: boolean; model: string; projectFolder: string }>): Promise<any> =>
       ipcRenderer.invoke(IPC.DEFAULTS_SET, updates),
+  },
+  // Claude Code settings.json — used by Preferences panel (/config intercept).
+  // Field names follow Claude Code's schema; dot-paths supported (e.g. 'permissions.defaultMode').
+  settings: {
+    get: (field: string): Promise<unknown> => ipcRenderer.invoke(IPC.SETTINGS_GET, field),
+    set: (field: string, value: unknown): Promise<boolean> => ipcRenderer.invoke(IPC.SETTINGS_SET, field, value),
+  },
+  // Fast mode + effort level — local-only state for /fast and /effort UI.
+  modes: {
+    get: (): Promise<{ fast: boolean; effort: string }> => ipcRenderer.invoke(IPC.MODES_GET),
+    set: (modes: { fast?: boolean; effort?: string }): Promise<any> => ipcRenderer.invoke(IPC.MODES_SET, modes),
   },
   folders: {
     list: (): Promise<any[]> => ipcRenderer.invoke(IPC.FOLDERS_LIST),
