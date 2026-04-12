@@ -69,11 +69,10 @@ export function scanSkills(): SkillEntry[] {
   } catch {}
 
   // 2. Scan installed cache plugins via installed_plugins.json.
-  // Fix: the canonical location is ~/.claude/installed_plugins.json, NOT
-  // ~/.claude/plugins/installed_plugins.json. The old path always missed the
-  // file, which is one reason marketplace-installed plugins never showed up.
+  // Claude Code's plugin cache dir is `~/.claude/plugins/` (the binary's `tW()`),
+  // so installed_plugins.json lives inside it.
   try {
-    const installedPath = path.join(os.homedir(), '.claude', 'installed_plugins.json');
+    const installedPath = path.join(pluginsDir, 'installed_plugins.json');
     const installed = JSON.parse(fs.readFileSync(installedPath, 'utf8'));
     const plugins = installed.plugins || {};
 

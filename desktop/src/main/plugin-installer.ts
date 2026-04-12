@@ -116,13 +116,12 @@ function copyDirSync(src: string, dest: string): void {
 }
 
 /** Check if a plugin is already installed via Claude Code's /plugin install.
- * `installed_plugins.json` actually lives at ~/.claude/installed_plugins.json —
- * NOT inside the plugins/ subdirectory. (Earlier versions of this check looked
- * in the wrong place and always returned false.) We skip keys ending in
- * `@destincode` since those are ours, not a foreign conflict. */
+ * Claude Code's plugin cache dir (`tW()` in the CLI) is `~/.claude/plugins/`,
+ * so `installed_plugins.json` lives there — not at `~/.claude/`. Skip keys
+ * ending in `@destincode` since those are ours, not a foreign conflict. */
 export function hasConflict(id: string): boolean {
   try {
-    const installedPath = path.join(os.homedir(), '.claude', 'installed_plugins.json');
+    const installedPath = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
     if (!fs.existsSync(installedPath)) return false;
     const data = JSON.parse(fs.readFileSync(installedPath, 'utf8'));
     const plugins = data.plugins || {};
@@ -305,10 +304,18 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
     if (fs.existsSync(targetDir)) {
       fs.rmSync(targetDir, { recursive: true, force: true });
     }
-    // Also clean up legacy installs at ~/.claude/plugins/<id>/ from pre-registry versions
-    const legacyDir = path.join(os.homedir(), '.claude', 'plugins', id);
-    if (fs.existsSync(legacyDir) && isContainedIn(legacyDir, path.join(os.homedir(), '.claude', 'plugins'))) {
-      fs.rmSync(legacyDir, { recursive: true, force: true });
+    // Clean up stale install locations from earlier DestinCode versions:
+    //   (a) ~/.claude/plugins/<id>/                         (pre-registry)
+    //   (b) ~/.claude/marketplaces/destincode/plugins/<id>/ (first registry fix, wrong path)
+    const legacyDirs = [
+      path.join(os.homedir(), '.claude', 'plugins', id),
+      path.join(os.homedir(), '.claude', 'marketplaces', 'destincode', 'plugins', id),
+    ];
+    for (const legacyDir of legacyDirs) {
+      const parent = path.dirname(legacyDir);
+      if (fs.existsSync(legacyDir) && isContainedIn(legacyDir, parent)) {
+        fs.rmSync(legacyDir, { recursive: true, force: true });
+      }
     }
     return true;
   } catch {

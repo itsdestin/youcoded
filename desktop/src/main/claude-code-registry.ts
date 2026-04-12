@@ -27,15 +27,25 @@ import os from 'os';
  */
 
 // --- Paths ---
+//
+// IMPORTANT: Claude Code's "plugin cache dir" (`tW()` in the binary) is
+// `~/.claude/plugins/`, NOT `~/.claude/`. `installed_plugins.json`,
+// `known_marketplaces.json`, and the `marketplaces/` subtree all live under
+// that cache dir. Only `settings.json` (which carries `enabledPlugins`) is
+// at `~/.claude/settings.json` — it's read via a scan across all home dirs.
+// A previous fix wrote these to `~/.claude/` one level too high; that
+// produced files the CLI never read.
 
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
+const PLUGIN_CACHE_DIR = path.join(CLAUDE_DIR, 'plugins'); // tW() in the CLI
+
 export const DESTINCODE_MARKETPLACE_ID = 'destincode';
-export const DESTINCODE_MARKETPLACE_ROOT = path.join(CLAUDE_DIR, 'marketplaces', DESTINCODE_MARKETPLACE_ID);
+export const DESTINCODE_MARKETPLACE_ROOT = path.join(PLUGIN_CACHE_DIR, 'marketplaces', DESTINCODE_MARKETPLACE_ID);
 export const DESTINCODE_PLUGINS_DIR = path.join(DESTINCODE_MARKETPLACE_ROOT, 'plugins');
 
 const MARKETPLACE_MANIFEST = path.join(DESTINCODE_MARKETPLACE_ROOT, '.claude-plugin', 'marketplace.json');
-const KNOWN_MARKETPLACES = path.join(CLAUDE_DIR, 'known_marketplaces.json');
-const INSTALLED_PLUGINS = path.join(CLAUDE_DIR, 'installed_plugins.json');
+const KNOWN_MARKETPLACES = path.join(PLUGIN_CACHE_DIR, 'known_marketplaces.json');
+const INSTALLED_PLUGINS = path.join(PLUGIN_CACHE_DIR, 'installed_plugins.json');
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 
 // --- Key helpers ---
