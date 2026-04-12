@@ -2,10 +2,24 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import { execFile } from 'child_process';
+import {
+  DESTINCODE_PLUGINS_DIR,
+  pluginInstallDir,
+  registerPluginInstall,
+  unregisterPluginInstall,
+} from './claude-code-registry';
 
 /**
- * Installs Claude Code plugins by placing files at ~/.claude/plugins/<name>/.
- * Claude Code auto-discovers plugins via .claude-plugin/plugin.json at session start.
+ * Installs Claude Code plugins under our own marketplace root at
+ * ~/.claude/marketplaces/destincode/plugins/<name>/ and wires them into all
+ * four Claude Code registries (settings.json, installed_plugins.json,
+ * known_marketplaces.json, marketplace.json) so /reload-plugins picks them
+ * up as first-class plugins.
+ *
+ * Prior versions of this file installed to ~/.claude/plugins/<name>/ and
+ * relied on filesystem auto-discovery. Claude Code v2.1+ does NOT scan the
+ * filesystem — plugins must be registered in the four files above or they
+ * are invisible to the loader. See claude-code-registry.ts for details.
  *
  * Three source types:
  * - "local": copy from a cached clone of the marketplace repo
@@ -13,7 +27,9 @@ import { execFile } from 'child_process';
  * - "git-subdir": git clone + sparse checkout a subdirectory
  */
 
-const PLUGINS_DIR = path.join(os.homedir(), '.claude', 'plugins');
+// All DestinCode-installed plugins now live under the marketplace root so
+// Claude Code's non-cache plugin loader (t71) can resolve `<marketplace>/<source>`.
+const PLUGINS_DIR = DESTINCODE_PLUGINS_DIR;
 const CACHE_DIR = path.join(os.homedir(), '.claude', 'destincode-marketplace-cache');
 const MARKETPLACE_REPO = 'https://github.com/anthropics/claude-plugins-official.git';
 const GIT_TIMEOUT = 120_000; // 2 minutes
@@ -99,14 +115,20 @@ function copyDirSync(src: string, dest: string): void {
   }
 }
 
-/** Check if a plugin is already installed via Claude Code's /plugin install. */
+/** Check if a plugin is already installed via Claude Code's /plugin install.
+ * `installed_plugins.json` actually lives at ~/.claude/installed_plugins.json —
+ * NOT inside the plugins/ subdirectory. (Earlier versions of this check looked
+ * in the wrong place and always returned false.) We skip keys ending in
+ * `@destincode` since those are ours, not a foreign conflict. */
 export function hasConflict(id: string): boolean {
   try {
-    const installedPath = path.join(PLUGINS_DIR, 'installed_plugins.json');
+    const installedPath = path.join(os.homedir(), '.claude', 'installed_plugins.json');
     if (!fs.existsSync(installedPath)) return false;
     const data = JSON.parse(fs.readFileSync(installedPath, 'utf8'));
     const plugins = data.plugins || {};
-    return Object.keys(plugins).some(key => key.startsWith(`${id}@`));
+    return Object.keys(plugins).some(key =>
+      key.startsWith(`${id}@`) && !key.endsWith('@destincode')
+    );
   } catch {
     return false;
   }
@@ -216,6 +238,10 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
     // Guard: already installed via Claude Code
     if (hasConflict(id)) return { status: 'already_installed', via: 'Claude Code' };
 
+    // Ensure the marketplace plugins dir exists — git clone and sparse checkout
+    // both fail if parent dirs are missing.
+    fs.mkdirSync(PLUGINS_DIR, { recursive: true });
+
     // Guard: already installed via DestinCode
     const targetDir = path.join(PLUGINS_DIR, id);
     const dotJson = path.join(targetDir, '.claude-plugin', 'plugin.json');
@@ -241,6 +267,20 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
 
     if (result.status === 'installed') {
       ensurePluginJson(id, entry);
+      // Wire the plugin into Claude Code's four registries. Without this,
+      // /reload-plugins reports "0 new plugins" because the loader never scans
+      // the filesystem — it only iterates enabledPlugins from settings.json.
+      try {
+        registerPluginInstall({
+          id,
+          installPath: path.join(PLUGINS_DIR, id),
+          version: '1.0.0', // real version flows from the marketplace entry in skill-provider
+          description: entry.description,
+          author: entry.author,
+        });
+      } catch (err: any) {
+        return { status: 'failed', error: `Registry write failed: ${err?.message || String(err)}` };
+      }
     }
 
     return result;
@@ -255,11 +295,20 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
   // Security: validate plugin ID to prevent path traversal → arbitrary directory deletion
   if (!SAFE_ID_RE.test(id)) return false;
   try {
-    const targetDir = path.join(PLUGINS_DIR, id);
+    // Remove from all four Claude Code registries first so /reload-plugins
+    // stops trying to load a directory we're about to delete.
+    try { unregisterPluginInstall(id); } catch {}
+
+    const targetDir = pluginInstallDir(id);
     // Double-check: resolved path must stay within plugins directory
     if (!isContainedIn(targetDir, PLUGINS_DIR)) return false;
     if (fs.existsSync(targetDir)) {
       fs.rmSync(targetDir, { recursive: true, force: true });
+    }
+    // Also clean up legacy installs at ~/.claude/plugins/<id>/ from pre-registry versions
+    const legacyDir = path.join(os.homedir(), '.claude', 'plugins', id);
+    if (fs.existsSync(legacyDir) && isContainedIn(legacyDir, path.join(os.homedir(), '.claude', 'plugins'))) {
+      fs.rmSync(legacyDir, { recursive: true, force: true });
     }
     return true;
   } catch {
@@ -269,7 +318,7 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
 
 export function isPluginInstalled(id: string): boolean {
   if (!SAFE_ID_RE.test(id)) return false; // Security: reject invalid IDs
-  const targetDir = path.join(PLUGINS_DIR, id);
+  const targetDir = pluginInstallDir(id);
   return fs.existsSync(targetDir) && (
     fs.existsSync(path.join(targetDir, '.claude-plugin', 'plugin.json')) ||
     fs.existsSync(path.join(targetDir, 'plugin.json'))

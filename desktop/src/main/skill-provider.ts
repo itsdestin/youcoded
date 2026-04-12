@@ -7,6 +7,7 @@ import { scanSkills } from './skill-scanner';
 import { SkillConfigStore } from './skill-config-store';
 import { encodeSkillLink, decodeSkillLink } from './skill-share';
 import { installPlugin, uninstallPlugin, isPluginInstalled, type InstallResult } from './plugin-installer';
+import { pluginInstallDir } from './claude-code-registry';
 import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
 import type {
   SkillEntry, SkillDetailView, SkillFilters, ChipConfig,
@@ -229,7 +230,9 @@ export class LocalSkillProvider implements SkillProvider {
         removable: true,
         components: [{
           type: 'plugin',
-          path: path.join(os.homedir(), '.claude', 'plugins', id),
+          // New install location under our Claude Code marketplace root —
+          // required for non-cache plugin loads (/reload-plugins) to resolve.
+          path: pluginInstallDir(id),
         }],
       });
       this.installedCache = null;
