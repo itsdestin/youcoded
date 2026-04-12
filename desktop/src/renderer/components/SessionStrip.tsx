@@ -572,7 +572,9 @@ export default function SessionStrip({
                       </span>
                     </button>
                     <button
-                      onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) onCloseSession(s.id); }}
+                      // Close the dropdown so the CloseSessionPrompt (L2 popup)
+                      // isn't competing with the still-open session menu above it.
+                      onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) { setMenuOpen(false); onCloseSession(s.id); } }}
                       onPointerDown={(e) => e.stopPropagation()}
                       className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-[#DD4444] hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
                       title="Close Session"
