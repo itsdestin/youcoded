@@ -22,6 +22,33 @@ export function computeOnAccent(accentHex: string): '#FFFFFF' | '#000000' {
   return luminance(accentHex) < 0.179 ? '#FFFFFF' : '#000000';
 }
 
+/** Warns (non-fatal) on custom_css anti-patterns that silently hurt readability.
+ *  Most common: a fixed/absolute rule at z-index 0+ rendering ABOVE chat bubbles.
+ *  The old body::before/::after wallpaper+pattern template prescribed z-index: 0,
+ *  which stopped being correct when the terminal switched to container-opacity
+ *  (Apr 8, destincode commit e3cc7ce2). Negative z-index is the right value now. */
+export function lintCustomCss(css: string | undefined, slug: string): void {
+  if (!css) return;
+  // Match rule blocks with position:fixed|absolute AND z-index: 0 or positive integer.
+  // Deliberately loose — this is a console warn, not a reject.
+  const blockRe = /\{[^}]*\}/g;
+  const blocks = css.match(blockRe) ?? [];
+  for (const block of blocks) {
+    const hasFixedOrAbs = /position\s*:\s*(fixed|absolute)/i.test(block);
+    if (!hasFixedOrAbs) continue;
+    const zMatch = block.match(/z-index\s*:\s*(-?\d+)/i);
+    if (!zMatch) continue;
+    const z = parseInt(zMatch[1], 10);
+    if (z >= 0) {
+      console.warn(
+        `[theme-validator] Theme "${slug}" has custom_css with position: fixed/absolute at z-index: ${z}. ` +
+        `This renders above chat bubbles and hurts readability. Use z-index: -1, or better, put wallpaper/pattern in the manifest.background fields instead of custom_css.`
+      );
+      return; // One warning per theme is enough
+    }
+  }
+}
+
 /** Throws a descriptive error if the theme JSON is invalid. */
 export function validateTheme(raw: unknown): ThemeDefinition {
   if (!raw || typeof raw !== 'object') throw new Error('Theme must be an object');
@@ -55,6 +82,11 @@ export function validateTheme(raw: unknown): ThemeDefinition {
       shape['radius-2xl'] = '36px';
     }
   }
+
+  // Non-fatal lint pass — surfaces known-bad custom_css patterns in DevTools
+  // without blocking theme load. Keeps the current behavior of "a theme with
+  // buggy custom_css still applies," but makes the bug visible instead of silent.
+  lintCustomCss(t.custom_css as string | undefined, t.slug as string);
 
   return raw as ThemeDefinition;
 }
