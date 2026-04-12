@@ -651,13 +651,20 @@ export default React.memo(function ToolCard({ tool, sessionId }: Props) {
       })()}
 
       {/* Expanded details */}
-      {expanded && (
+      {expanded && (() => {
+        // For ExitPlanMode, the plan markdown is rendered in its own bubble above
+        // via PlanBubbleContent — strip it from the JSON view so users don't see
+        // the same content twice.
+        const inputForDisplay = tool.toolName === 'ExitPlanMode'
+          ? Object.fromEntries(Object.entries(tool.input).filter(([k]) => k !== 'plan'))
+          : tool.input;
+        return (
         <div className="px-3 pb-3 border-t border-edge pt-2 space-y-2">
-          {Object.keys(tool.input).length > 0 && (
+          {Object.keys(inputForDisplay).length > 0 && (
             <div>
               <div className="text-[10px] uppercase tracking-wider text-fg-muted mb-1">Input</div>
               <pre className="text-xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto max-h-48">
-                {JSON.stringify(tool.input, null, 2)}
+                {JSON.stringify(inputForDisplay, null, 2)}
               </pre>
             </div>
           )}
@@ -678,7 +685,8 @@ export default React.memo(function ToolCard({ tool, sessionId }: Props) {
             </div>
           )}
         </div>
-      )}
+        );
+      })()}
     </div>
   );
 })

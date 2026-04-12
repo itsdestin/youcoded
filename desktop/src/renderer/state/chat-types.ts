@@ -12,7 +12,11 @@ export interface InteractivePrompt {
 
 export type AssistantTurnSegment =
   | { type: 'text'; content: string; messageId: string }
-  | { type: 'tool-group'; groupId: string };
+  | { type: 'tool-group'; groupId: string }
+  // Plan mode: ExitPlanMode tool's `input.plan` surfaced as its own bubble so
+  // users see the full plan markdown in chat, not just the approval buttons.
+  // Linked to the tool via toolUseId so the reducer can dedup across re-emits.
+  | { type: 'plan'; messageId: string; toolUseId: string; content: string; planFilePath?: string; allowedPrompts?: unknown };
 
 export interface AssistantTurn {
   id: string;

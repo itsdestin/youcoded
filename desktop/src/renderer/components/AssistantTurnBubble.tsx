@@ -73,6 +73,7 @@ function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[]; sess
 interface VisualBubble {
   key: string;
   text?: { content: string; messageId: string };
+  plan?: { content: string; messageId: string; planFilePath?: string; allowedPrompts?: unknown };
   toolGroupIds: string[];
 }
 
@@ -87,6 +88,20 @@ function splitIntoBubbles(turn: AssistantTurn): VisualBubble[] {
       current = {
         key: seg.messageId,
         text: { content: seg.content, messageId: seg.messageId },
+        toolGroupIds: [],
+      };
+    } else if (seg.type === 'plan') {
+      // Plan bubble: its own distinct bubble, rendered differently from text.
+      // The following ExitPlanMode tool-group naturally attaches below.
+      if (current) bubbles.push(current);
+      current = {
+        key: seg.messageId,
+        plan: {
+          content: seg.content,
+          messageId: seg.messageId,
+          planFilePath: seg.planFilePath,
+          allowedPrompts: seg.allowedPrompts,
+        },
         toolGroupIds: [],
       };
     } else {
@@ -108,13 +123,21 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
     <>
       {bubbles.map((bubble, i) => {
         const hasTools = bubble.toolGroupIds.length > 0;
-        const toolsOnly = hasTools && !bubble.text;
+        const hasContent = !!(bubble.text || bubble.plan);
+        const toolsOnly = hasTools && !hasContent;
         const isLastBubble = i === bubbles.length - 1;
         return (
           <div key={bubble.key} className="flex justify-start px-4 py-0.5">
             <div className={`assistant-bubble max-w-[85%] rounded-2xl rounded-bl-sm bg-inset text-sm text-fg px-5 ${toolsOnly ? 'py-2.5' : hasTools ? 'pt-4 pb-3' : 'py-3.5'}`}>
               {bubble.text && (
                 <MarkdownContent content={bubble.text.content} />
+              )}
+              {bubble.plan && (
+                <PlanBubbleContent
+                  content={bubble.plan.content}
+                  planFilePath={bubble.plan.planFilePath}
+                  allowedPrompts={bubble.plan.allowedPrompts}
+                />
               )}
               {hasTools && (
                 <div className={bubble.text ? 'mt-1' : ''}>
@@ -141,6 +164,55 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
     </>
   );
 });
+
+/**
+ * Renders a plan-mode plan (from ExitPlanMode tool input) as a distinct section
+ * inside an assistant bubble. Shows a "Plan" header, the markdown body, and
+ * (collapsed by default) the list of allowedPrompts Claude intends to run.
+ */
+function PlanBubbleContent({
+  content,
+  planFilePath,
+  allowedPrompts,
+}: {
+  content: string;
+  planFilePath?: string;
+  allowedPrompts?: unknown;
+}) {
+  const [showPrompts, setShowPrompts] = useState(false);
+  const prompts = Array.isArray(allowedPrompts) ? allowedPrompts : [];
+  const fileName = planFilePath
+    ? planFilePath.replace(/\\/g, '/').split('/').pop()
+    : undefined;
+
+  return (
+    <div className="border border-accent/40 rounded-md bg-accent/5 px-3 py-2 my-0.5">
+      <div className="flex items-center gap-2 mb-1 text-xs font-medium text-fg-2">
+        <span>📋 Plan</span>
+        {fileName && (
+          <span className="text-fg-muted font-normal truncate">{fileName}</span>
+        )}
+      </div>
+      <MarkdownContent content={content} />
+      {prompts.length > 0 && (
+        <div className="mt-2 pt-2 border-t border-edge-dim">
+          <button
+            onClick={() => setShowPrompts((v) => !v)}
+            className="text-[11px] text-fg-muted hover:text-fg-dim flex items-center gap-1"
+          >
+            <ChevronIcon className="w-3 h-3" expanded={showPrompts} />
+            {prompts.length} allowed {prompts.length === 1 ? 'action' : 'actions'} if approved
+          </button>
+          {showPrompts && (
+            <pre className="mt-1 text-[11px] text-fg-dim bg-panel rounded-sm p-2 overflow-auto max-h-40">
+              {JSON.stringify(prompts, null, 2)}
+            </pre>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
 
 /** Renders a tool group inline within the assistant bubble. */
 function ToolGroupInline({

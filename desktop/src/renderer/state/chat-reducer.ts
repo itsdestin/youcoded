@@ -1,5 +1,6 @@
 import {
   AssistantTurn,
+  AssistantTurnSegment,
   ChatAction,
   ChatState,
   SessionChatState,
@@ -43,6 +44,53 @@ function getOrCreateTurn(session: SessionChatState): {
   assistantTurns.set(currentTurnId, { id: currentTurnId, segments: [], timestamp: Date.now() });
   timeline = [...timeline, { kind: 'assistant-turn' as const, turnId: currentTurnId }];
   return { assistantTurns, timeline, currentTurnId };
+}
+
+/**
+ * Inject a plan segment into the current turn for an ExitPlanMode tool_use.
+ * Returns a new assistantTurns Map (or the original if no injection happened).
+ *
+ * - Dedups by toolUseId so re-emits of the same tool_use don't duplicate bubbles.
+ * - If `beforeGroupId` is provided (merge-synthetic path, where the tool-group
+ *   already exists), splices the plan segment in before it so the plan renders
+ *   above the approval card. Otherwise appends.
+ */
+function injectPlanSegment(
+  assistantTurns: Map<string, AssistantTurn>,
+  currentTurnId: string,
+  toolUseId: string,
+  toolInput: Record<string, unknown>,
+  beforeGroupId?: string,
+): Map<string, AssistantTurn> {
+  const plan = toolInput.plan;
+  if (typeof plan !== 'string' || !plan) return assistantTurns;
+  const turn = assistantTurns.get(currentTurnId);
+  if (!turn) return assistantTurns;
+  if (turn.segments.some((s) => s.type === 'plan' && s.toolUseId === toolUseId)) {
+    return assistantTurns;
+  }
+  const planSeg: AssistantTurnSegment = {
+    type: 'plan',
+    messageId: nextMessageId(),
+    toolUseId,
+    content: plan,
+    planFilePath: typeof toolInput.planFilePath === 'string' ? toolInput.planFilePath : undefined,
+    allowedPrompts: toolInput.allowedPrompts,
+  };
+  let newSegments: AssistantTurnSegment[];
+  if (beforeGroupId) {
+    const idx = turn.segments.findIndex(
+      (s) => s.type === 'tool-group' && s.groupId === beforeGroupId,
+    );
+    newSegments = idx >= 0
+      ? [...turn.segments.slice(0, idx), planSeg, ...turn.segments.slice(idx)]
+      : [...turn.segments, planSeg];
+  } else {
+    newSegments = [...turn.segments, planSeg];
+  }
+  const updated = new Map(assistantTurns);
+  updated.set(currentTurnId, { ...turn, segments: newSegments });
+  return updated;
 }
 
 /**
@@ -307,8 +355,28 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           const activeTurnToolIds = new Set(session.activeTurnToolIds);
           activeTurnToolIds.delete(synId);
           activeTurnToolIds.add(action.toolUseId);
+
+          // For ExitPlanMode, surface the plan markdown as its own bubble.
+          // The tool-group already exists (hook arrived first), so splice the
+          // plan segment in before it rather than appending.
+          let mergedTurns = session.assistantTurns;
+          if (action.toolName === 'ExitPlanMode' && session.currentTurnId) {
+            let targetGroupId: string | undefined;
+            for (const [gid, group] of toolGroups) {
+              if (group.toolIds.includes(action.toolUseId)) { targetGroupId = gid; break; }
+            }
+            mergedTurns = injectPlanSegment(
+              session.assistantTurns,
+              session.currentTurnId,
+              action.toolUseId,
+              action.toolInput,
+              targetGroupId,
+            );
+          }
+
           next.set(action.sessionId, {
             ...session, toolCalls, toolGroups,
+            assistantTurns: mergedTurns,
             activeTurnToolIds,
             lastActivityAt: Date.now(),
           });
@@ -325,9 +393,21 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         status: 'running',
       });
 
-      const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
+      let { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
       const toolGroups = new Map(session.toolGroups);
       let currentGroupId = session.currentGroupId;
+
+      // ExitPlanMode: inject plan markdown as its own bubble BEFORE the
+      // tool-group, so the full plan is visible in chat view (not just the
+      // approval buttons).
+      if (action.toolName === 'ExitPlanMode') {
+        assistantTurns = injectPlanSegment(
+          assistantTurns,
+          currentTurnId,
+          action.toolUseId,
+          action.toolInput,
+        );
+      }
 
       if (currentGroupId && toolGroups.has(currentGroupId)) {
         // Add to existing group (no new segment needed)
