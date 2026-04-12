@@ -482,7 +482,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // cursor visible. Selection highlight still renders from the
             // browser. Placeholder uses its own color token so it's unaffected.
             style={{ caretColor: 'var(--fg)' }}
-            className="relative w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none overflow-y-hidden leading-snug"
+            className="relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none overflow-y-hidden leading-snug p-0 m-0 align-middle"
           />
           </div>
           <button
