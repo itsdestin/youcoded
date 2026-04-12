@@ -588,12 +588,10 @@ export class RemoteServer {
         const installResult = this.skillProvider
           ? await this.skillProvider.install(payload.id)
           : { status: 'failed' as const, error: 'Skill provider not initialized' };
-        // Reload plugins in all active sessions so Claude Code discovers the
-        // new plugin immediately — matches Android behavior (SessionService.kt:458)
+        // Reload plugins so Claude Code discovers the new plugin. Delayed
+        // via broadcastReloadPlugins() to avoid racing the prompt-ready state.
         if (installResult.status === 'installed' && 'type' in installResult && installResult.type === 'plugin') {
-          for (const s of this.sessionManager.listSessions()) {
-            if (s.status === 'active') this.sessionManager.sendInput(s.id, '/reload-plugins\r');
-          }
+          this.sessionManager.broadcastReloadPlugins();
         }
         this.respond(client.ws, type, id, installResult);
         break;
@@ -605,9 +603,7 @@ export class RemoteServer {
         // Reload plugins so Claude Code drops the uninstalled plugin — matches
         // Android behavior (SessionService.kt:490)
         if (uninstallResult.type === 'plugin') {
-          for (const s of this.sessionManager.listSessions()) {
-            if (s.status === 'active') this.sessionManager.sendInput(s.id, '/reload-plugins\r');
-          }
+          this.sessionManager.broadcastReloadPlugins();
         }
         this.respond(client.ws, type, id, { ok: true });
         break;

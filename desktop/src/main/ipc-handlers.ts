@@ -563,12 +563,12 @@ export function registerIpcHandlers(
 
   ipcMain.handle(IPC.SKILLS_INSTALL, async (_event, id: string) => {
     const result = await skillProvider.install(id);
-    // Reload plugins in all active Claude Code sessions so the new plugin is
-    // discovered immediately — matches Android behavior (SessionService.kt:458)
+    // Reload plugins so Claude Code discovers the new plugin. Uses a
+    // short delay because firing immediately races the prompt-ready state
+    // (the reload gets queued but silently no-ops). Matches Android
+    // behavior (SessionService.kt:458).
     if (result.status === 'installed' && result.type === 'plugin') {
-      for (const s of sessionManager.listSessions()) {
-        if (s.status === 'active') sessionManager.sendInput(s.id, '/reload-plugins\r');
-      }
+      sessionManager.broadcastReloadPlugins();
     }
     return result;
   });
@@ -578,9 +578,7 @@ export function registerIpcHandlers(
     // Reload plugins so Claude Code drops the uninstalled plugin — matches
     // Android behavior (SessionService.kt:490)
     if (result.type === 'plugin') {
-      for (const s of sessionManager.listSessions()) {
-        if (s.status === 'active') sessionManager.sendInput(s.id, '/reload-plugins\r');
-      }
+      sessionManager.broadcastReloadPlugins();
     }
     return result;
   });
@@ -647,9 +645,7 @@ export function registerIpcHandlers(
     const result = await skillProvider.update(id);
     // Reload plugins in active sessions so Claude Code picks up updated code
     if (result.ok) {
-      for (const s of sessionManager.listSessions()) {
-        if (s.status === 'active') sessionManager.sendInput(s.id, '/reload-plugins\r');
-      }
+      sessionManager.broadcastReloadPlugins();
     }
     return result;
   });
