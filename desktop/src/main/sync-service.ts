@@ -969,14 +969,22 @@ export class SyncService extends EventEmitter {
       }
     }
 
+    // Safety: only pull config.json on first-run (when local doesn't exist).
+    // Once local config exists, it is authoritative — users configure backends
+    // deliberately per-device, and silently overwriting their config could
+    // disable sync, change backends, or break machine-specific setups.
+    const configPullPromise = this.fileExists(this.configPath)
+      ? Promise.resolve({ code: 0, stdout: '', stderr: 'skipped — local config exists' })
+      : this.rclone(['copyto', `${sysRemote}/config.json`, this.configPath, '--update']);
+
     // Parallel pulls for non-dependent resources.
     // Each wrapped in its own catch so a single rclone failure (network timeout,
     // DNS error) doesn't abort the entire pull via unhandled rejection.
     const pullResults = await Promise.allSettled([
       // CLAUDE.md
       this.rclone(['copyto', `${remoteBase}/CLAUDE.md`, path.join(this.claudeDir, 'CLAUDE.md'), '--update']),
-      // System config
-      this.rclone(['copyto', `${sysRemote}/config.json`, this.configPath, '--update']),
+      // System config — first-run only (see above)
+      configPullPromise,
       // Encyclopedia
       (async () => {
         const encDir = path.join(this.claudeDir, 'encyclopedia');
@@ -1052,9 +1060,10 @@ export class SyncService extends EventEmitter {
       }
     }
 
-    // System config
+    // System config — first-run only. Once local config exists, it is
+    // authoritative; users configure backends deliberately per-device.
     const repoSys = path.join(repoDir, 'system-backup');
-    if (this.fileExists(path.join(repoSys, 'config.json'))) {
+    if (this.fileExists(path.join(repoSys, 'config.json')) && !this.fileExists(this.configPath)) {
       fs.copyFileSync(path.join(repoSys, 'config.json'), this.configPath);
     }
 
@@ -1108,9 +1117,10 @@ export class SyncService extends EventEmitter {
       }
     }
 
-    // System config
+    // System config — first-run only. Once local config exists, it is
+    // authoritative; users configure backends deliberately per-device.
     const icSys = path.join(icloudPath, 'system-backup');
-    if (this.fileExists(path.join(icSys, 'config.json'))) {
+    if (this.fileExists(path.join(icSys, 'config.json')) && !this.fileExists(this.configPath)) {
       fs.copyFileSync(path.join(icSys, 'config.json'), this.configPath);
     }
 

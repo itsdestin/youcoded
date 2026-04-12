@@ -788,9 +788,13 @@ class SyncService(
             if (it.code != 0) logBackup("WARN", "Pull CLAUDE.md failed: ${it.stderr}", "sync.pull.drive")
         }
 
-        // System config
-        rclone(listOf("copyto", "$sysRemote/config.json", configPath.absolutePath, "--update")).also {
-            if (it.code != 0) logBackup("WARN", "Pull config.json failed: ${it.stderr}", "sync.pull.drive")
+        // System config — first-run only. Once local config exists, it is
+        // authoritative; users configure backends deliberately per-device, and
+        // silently overwriting could disable sync or change backends.
+        if (!configPath.exists()) {
+            rclone(listOf("copyto", "$sysRemote/config.json", configPath.absolutePath, "--update")).also {
+                if (it.code != 0) logBackup("WARN", "Pull config.json failed: ${it.stderr}", "sync.pull.drive")
+            }
         }
 
         // Encyclopedia
@@ -861,10 +865,11 @@ class SyncService(
             }
         }
 
-        // System config
+        // System config — first-run only. Once local config exists, it is
+        // authoritative; users configure backends deliberately per-device.
         val repoSys = File(repoDir, "system-backup")
         val repoConfig = File(repoSys, "config.json")
-        if (repoConfig.exists()) repoConfig.copyTo(configPath, overwrite = true)
+        if (repoConfig.exists() && !configPath.exists()) repoConfig.copyTo(configPath, overwrite = false)
 
         // Conversation index to staging
         val repoIndex = File(repoSys, "conversation-index.json")
