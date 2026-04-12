@@ -143,7 +143,30 @@ export class LocalSkillProvider implements SkillProvider {
     if (!this.installedCache) {
       const scanned = scanSkills();
       const privateSkills = this.configStore.getPrivateSkills();
-      this.installedCache = [...scanned, ...privateSkills];
+
+      // Fix: scanSkills() only discovers DestinClaude skills and Claude Code's
+      // installed_plugins.json entries. Plugins installed via the DestinCode
+      // marketplace are tracked in configStore packages — merge them so the UI
+      // marks them as "Installed" and fetchAll() sees them right after install.
+      const installedPackages = this.configStore.getInstalledPlugins();
+      const alreadyFound = new Set([...scanned.map(s => s.id), ...privateSkills.map(s => s.id)]);
+      const packageSkills: SkillEntry[] = [];
+      for (const [id, pkg] of Object.entries(installedPackages) as Array<[string, any]>) {
+        if (alreadyFound.has(id)) continue;
+        packageSkills.push({
+          id,
+          displayName: id.split('-').map((w: string) => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+          description: '',
+          category: 'other',
+          prompt: `/${id}`,
+          source: 'marketplace',
+          type: 'plugin',
+          visibility: 'published',
+          installedAt: pkg.installedAt,
+        });
+      }
+
+      this.installedCache = [...scanned, ...privateSkills, ...packageSkills];
     }
 
     const overrides = this.configStore.getOverrides();

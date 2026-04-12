@@ -343,6 +343,7 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
   const [query, setQuery] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryFilter>('all');
   const [sort, setSort] = useState<SortOption>('popular');
+  const [installingId, setInstallingId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
 
   const installedIds = useMemo(() => new Set(installedSkills.map(s => s.id)), [installedSkills]);
@@ -370,7 +371,9 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
   useEffect(() => { searchRef.current?.focus(); }, []);
 
   const handleInstall = useCallback(async (skill: SkillEntry) => {
+    setInstallingId(skill.id);
     try { await installSkill(skill.id); } catch (err) { console.error('[Marketplace] Install failed:', err); }
+    finally { setInstallingId(null); }
   }, [installSkill]);
 
   return (
@@ -438,7 +441,8 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
                 variant="marketplace"
                 installed={installedIds.has(skill.id)}
                 updateAvailable={updateAvailable[skill.id]}
-                onInstall={!installedIds.has(skill.id) ? handleInstall : undefined}
+                installing={installingId === skill.id}
+                onInstall={!installedIds.has(skill.id) && installingId !== skill.id ? handleInstall : undefined}
               />
             ))}
           </div>

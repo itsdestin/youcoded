@@ -9,6 +9,7 @@ interface Props {
   // Phase 3b: show an amber badge when a newer version is available
   updateAvailable?: boolean;
   onInstall?: (skill: SkillEntry) => void;
+  installing?: boolean;
 }
 
 const sourceBadgeStyles: Record<string, string> = {
@@ -36,7 +37,7 @@ function StarRating({ rating }: { rating?: number }) {
   return <span className="text-[7px] text-[#f0ad4e]">{stars}</span>;
 }
 
-export default function SkillCard({ skill, onClick, variant = 'drawer', installed, updateAvailable, onInstall }: Props) {
+export default function SkillCard({ skill, onClick, variant = 'drawer', installed, updateAvailable, onInstall, installing }: Props) {
   if (variant === 'marketplace') {
     return (
       <div
@@ -70,6 +71,10 @@ export default function SkillCard({ skill, onClick, variant = 'drawer', installe
           }`}>
             {/* Phase 3b: surface update-available state on browse cards */}
             {updateAvailable ? 'Update Available' : 'Installed'}
+          </div>
+        ) : installing ? (
+          <div className="text-center text-[11px] py-1 mt-2 border rounded-sm text-fg-muted border-edge-dim opacity-60">
+            Installing...
           </div>
         ) : onInstall ? (
           <button
