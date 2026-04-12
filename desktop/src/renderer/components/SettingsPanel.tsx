@@ -162,14 +162,17 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
         />
       )}
 
-      {/* Panel */}
+      {/* Panel — outer handles slide animation (transform), inner carries
+          .settings-drawer glass. backdrop-filter on a transformed element
+          breaks sampling in Chrome; moving it to an untransformed child
+          is the common workaround. */}
       <div
-        className={`settings-drawer fixed top-0 left-0 h-full w-80 border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out overlay-no-drag ${
+        className={`fixed top-0 left-0 h-full w-80 z-50 transform transition-transform duration-300 ease-out overlay-no-drag ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
       >
-        <div className="flex flex-col h-full overflow-y-auto">
+        <div className="settings-drawer flex flex-col h-full overflow-y-auto border-r border-edge-dim">
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
             <h2 className="text-sm font-bold text-fg">Settings</h2>
