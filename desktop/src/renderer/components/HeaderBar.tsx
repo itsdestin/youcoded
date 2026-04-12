@@ -81,29 +81,52 @@ export default function HeaderBar({
   const chatBtnRef = useRef<HTMLButtonElement>(null);
   const termBtnRef = useRef<HTMLButtonElement>(null);
   const [pillPos, setPillPos] = useState({ left: 0, width: 0 });
+  const pillPosRef = useRef(pillPos);
+  pillPosRef.current = pillPos;
+  const rafIdRef = useRef<number | null>(null);
 
+  // Fix: ResizeObserver used to fire `measure` synchronously on every frame
+  // while the button text animated (max-width transition), each firing a
+  // getBoundingClientRect + setState that re-rendered HeaderBar's entire
+  // subtree 60× during the 300ms toggle. Now we coalesce into one RAF and
+  // skip setState when the new value is within 0.5px of the current one —
+  // the CSS transition on `left`/`width` interpolates smoothly either way.
   const measure = useCallback(() => {
     const container = containerRef.current;
     const activeBtn = viewMode === 'chat' ? chatBtnRef.current : termBtnRef.current;
     if (!container || !activeBtn) return;
     const cRect = container.getBoundingClientRect();
     const bRect = activeBtn.getBoundingClientRect();
-    setPillPos({ left: bRect.left - cRect.left, width: bRect.width });
+    const next = { left: bRect.left - cRect.left, width: bRect.width };
+    const prev = pillPosRef.current;
+    if (Math.abs(next.left - prev.left) < 0.5 && Math.abs(next.width - prev.width) < 0.5) return;
+    setPillPos(next);
   }, [viewMode]);
 
-  // Measure immediately on viewMode change
+  const scheduleMeasure = useCallback(() => {
+    if (rafIdRef.current !== null) return;
+    rafIdRef.current = requestAnimationFrame(() => {
+      rafIdRef.current = null;
+      measure();
+    });
+  }, [measure]);
+
+  // Measure immediately on viewMode change (synchronous — first frame of transition)
   useLayoutEffect(measure, [measure]);
 
-  // Re-measure continuously as buttons resize (text expanding/collapsing)
+  // Re-measure as buttons resize (text expanding/collapsing) — coalesced to one per frame
   useEffect(() => {
     const chatBtn = chatBtnRef.current;
     const termBtn = termBtnRef.current;
     if (!chatBtn || !termBtn) return;
-    const ro = new ResizeObserver(measure);
+    const ro = new ResizeObserver(scheduleMeasure);
     ro.observe(chatBtn);
     ro.observe(termBtn);
-    return () => ro.disconnect();
-  }, [measure]);
+    return () => {
+      ro.disconnect();
+      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
+    };
+  }, [scheduleMeasure]);
 
   return (
     <div className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>

@@ -411,6 +411,19 @@ html, body, #root {
   background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
 }
 
+/* Fix: during the 300ms chat↔terminal toggle, backdrop-filter has to
+   recomposite the entire chrome every frame on top of a layout that is
+   itself changing — a major source of reported jank on every theme that
+   has panel blur enabled. Suppress the blur for the transition window
+   (React sets data-toggling on <html>, clears it on transitionend).
+   Opaque panel background stays, so the visual swap is minimal. */
+[data-toggling] .header-bar,
+[data-toggling] .status-bar,
+[data-toggling] .input-bar-container {
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
 /* Floating overlays (portaled menus/popups) — frosted glass.
    Portaled to #root (not body) so backdrop-filter can sample live
    content from the compositing tree. position: fixed escapes #root's

@@ -180,26 +180,18 @@ export default function TerminalView({ sessionId, visible }: Props) {
     };
   }, [sessionId]);
 
-  // Re-fit when visible, blur when hidden (prevents xterm stealing keyboard input).
-  // Hidden terminals are collapsed to 0x0 via CSS (.terminal-hidden). When becoming
-  // visible, the class is removed but the browser needs time to reflow. We fit twice:
-  // once after a short delay (catches most cases) and again after a longer delay
-  // (catches slow reflows where the container hasn't reached its final size yet).
+  // Visibility toggle side effects.
+  // Fix: the ResizeObserver attached in the mount effect already fires a fit on
+  // the next frame when the container resizes from hidden → visible, so the
+  // previous double setTimeout(50ms/200ms) fit calls were redundant work inside
+  // the 300ms toggle animation (a major source of visual jank). Here we just
+  // manage focus; the fit happens through the observer.
   useEffect(() => {
-    if (visible && fitAddonRef.current) {
-      const doFit = () => {
-        try {
-          fitAddonRef.current!.fit();
-          const dims = fitAddonRef.current!.proposeDimensions();
-          if (dims && dims.cols && dims.rows) {
-            window.claude.session.resize(sessionId, dims.cols, dims.rows);
-          }
-        } catch {}
-      };
-      const t1 = setTimeout(() => { doFit(); terminalRef.current?.focus(); }, 50);
-      const t2 = setTimeout(doFit, 200);
-      return () => { clearTimeout(t1); clearTimeout(t2); };
-    } else if (!visible && terminalRef.current) {
+    if (visible && terminalRef.current) {
+      const raf = requestAnimationFrame(() => terminalRef.current?.focus());
+      return () => cancelAnimationFrame(raf);
+    }
+    if (!visible && terminalRef.current) {
       terminalRef.current.blur();
     }
   }, [visible, sessionId]);

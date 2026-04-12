@@ -252,14 +252,24 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
 
   return (
     <div
+      // Fix: previously toggled display:none/flex, which forced a full reflow of
+      // both views on every chat↔terminal toggle (the #1 cause of visual jank
+      // reports). Using visibility+opacity+pointer-events keeps the layout box
+      // stable across toggles — no reflow, no flash, and focus/IME survive.
+      // `inert` removes hidden subtree from tab order + a11y tree.
+      inert={!visible}
+      aria-hidden={visible ? undefined : true}
       style={{
         position: 'absolute',
         top: 0,
         left: 0,
         right: 0,
         bottom: 0,
-        display: visible ? 'flex' : 'none',
+        display: 'flex',
         flexDirection: 'column',
+        visibility: visible ? 'visible' : 'hidden',
+        opacity: visible ? 1 : 0,
+        pointerEvents: visible ? 'auto' : 'none',
       }}
     >
       <div ref={scrollContainerRef} className="chat-scroll flex-1 overflow-y-auto pt-4 pb-1">
