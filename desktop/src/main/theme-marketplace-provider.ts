@@ -360,7 +360,7 @@ export class ThemeMarketplaceProvider {
       try {
         await execFileAsync(ghPath, [
           'api', `repos/${FORK_REPO}/git/refs/heads/${branchName}`, '-X', 'PATCH',
-          '-f', `sha=${baseSha}`, '-f', 'force=true',
+          '-f', `sha=${baseSha}`, '-F', 'force=true',
         ]);
       } catch (err: any) {
         throw new Error(`Failed to create branch: ${err.message}`);
