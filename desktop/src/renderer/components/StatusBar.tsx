@@ -394,22 +394,20 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
 
   return createPortal(
     <>
-      {/* Overlay layer L2 — theme-driven via Scrim/OverlayPanel. */}
+      {/* Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
+          Layout mirrors ResumeBrowser: outer flex wrapper centers the panel,
+          panel uses position:relative + flex-col + max-h so its flex-1 scroll
+          region actually has a bounded height to scroll within. The prior
+          position:fixed + transform approach broke the height constraint. */}
       <Scrim layer={2} onClick={onClose} />
-      <OverlayPanel
-        layer={2}
-        className="fixed overflow-hidden"
-        style={{
-          top: '50%',
-          left: '50%',
-          transform: 'translate(-50%, -50%)',
-          width: 'min(420px, 90vw)',
-          maxHeight: '80vh',
-        }}
-      >
-        <div className="flex flex-col h-full">
+      <div className="fixed inset-0 z-[61] flex items-center justify-center p-4 pointer-events-none">
+        <OverlayPanel
+          layer={2}
+          className="w-full max-w-[420px] max-h-[80vh] flex flex-col pointer-events-auto"
+          style={{ position: 'relative', zIndex: 'auto' }}
+        >
           {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+          <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
             <h2 className="text-sm font-bold text-fg">Status Bar Widgets</h2>
             <button
               onClick={onClose}
@@ -421,7 +419,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
             </button>
           </div>
 
-          {/* Scrollable widget list grouped by category */}
+          {/* Widget list grouped by category — scrolls within the panel */}
           <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4">
             {WIDGET_CATEGORIES.map((cat) => (
               <section key={cat.name}>
@@ -483,8 +481,8 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
               </section>
             ))}
           </div>
-        </div>
-      </OverlayPanel>
+        </OverlayPanel>
+      </div>
     </>,
     document.body
   );
