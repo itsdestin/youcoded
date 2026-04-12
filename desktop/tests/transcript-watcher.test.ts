@@ -164,7 +164,7 @@ describe('parseTranscriptLine', () => {
     expect(events[1].data.toolName).toBe('Read');
   });
 
-  it('skips thinking blocks', () => {
+  it('emits assistant-thinking heartbeat alongside text for reasoning blocks', () => {
     const line = JSON.stringify({
       type: 'assistant',
       uuid: 'uuid-8',
@@ -179,9 +179,12 @@ describe('parseTranscriptLine', () => {
     });
 
     const events = parseTranscriptLine(line, sessionId);
-    expect(events).toHaveLength(1);
-    expect(events[0].type).toBe('assistant-text');
-    expect(events[0].data.text).toBe('Here is my answer.');
+    // Thinking blocks now surface as a lightweight heartbeat so the
+    // attention classifier doesn't misread extended-thinking pauses as 'stuck'.
+    expect(events).toHaveLength(2);
+    expect(events[0].type).toBe('assistant-thinking');
+    expect(events[1].type).toBe('assistant-text');
+    expect(events[1].data.text).toBe('Here is my answer.');
   });
 
   it('skips user messages without promptId (tool result wrappers)', () => {
