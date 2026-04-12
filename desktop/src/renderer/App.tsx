@@ -30,7 +30,7 @@ import TerminalToolbar, { TerminalScrollButtons } from './components/TerminalToo
 import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
-import CloseSessionPrompt from './components/CloseSessionPrompt';
+import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import ModelPickerPopup from './components/ModelPickerPopup';
 import Marketplace from './components/Marketplace';
@@ -1248,7 +1248,16 @@ function AppInner() {
                   (window as any).claude?.session?.switch?.(id);
                 }}
                 onCreateSession={createSession}
-                onCloseSession={(id) => setClosePromptFor(id)}
+                onCloseSession={(id) => {
+                  // Skip prompt if the user has checked "Don't show again".
+                  // In that case destroy immediately without any flags — the
+                  // user can still tag sessions from the resume menu later.
+                  if (localStorage.getItem(CLOSE_PROMPT_SUPPRESS_KEY) === '1') {
+                    try { window.claude.session.destroy(id); } catch {}
+                  } else {
+                    setClosePromptFor(id);
+                  }
+                }}
                 onReorderSessions={(fromIndex: number, toIndex: number) => {
                   setSessions(prev => {
                     const next = [...prev];

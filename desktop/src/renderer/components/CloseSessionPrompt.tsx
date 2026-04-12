@@ -20,6 +20,11 @@ interface Props {
   onConfirm: (flagsToSet: FlagName[]) => void;
 }
 
+// localStorage key used to suppress this prompt permanently. Exported so
+// App.tsx can check it before deciding whether to show the prompt.
+export const CLOSE_PROMPT_SUPPRESS_KEY = 'destincode-close-prompt-disabled';
+const SUPPRESS_KEY = CLOSE_PROMPT_SUPPRESS_KEY;
+
 // Shown when the user closes an active session. Lets them tag the session with
 // any combination of Priority, Helpful, Complete in one step. Complete defaults
 // to `true` because that's the usual "I'm done with this" close intent, which
@@ -30,9 +35,15 @@ export default function CloseSessionPrompt({ open, sessionName, onCancel, onConf
     helpful: false,
     complete: true,
   });
+  // "Don't show again" — persisted to localStorage so the caller can skip this
+  // prompt on future closes. Default off so users see it at least once.
+  const [dontShowAgain, setDontShowAgain] = useState(false);
 
   useEffect(() => {
-    if (open) setSel({ priority: false, helpful: false, complete: true });
+    if (open) {
+      setSel({ priority: false, helpful: false, complete: true });
+      setDontShowAgain(false);
+    }
   }, [open]);
 
   useEffect(() => {
@@ -92,19 +103,48 @@ export default function CloseSessionPrompt({ open, sessionName, onCancel, onConf
                 : 'Will appear in the resume menu next time you open it.'}
             </p>
           </div>
-          <div className="px-4 pb-4 flex items-center gap-2 justify-end">
+          <div className="px-4 pb-4 flex items-center gap-2 justify-between">
+            {/* Don't show again — persists suppress flag to localStorage so App.tsx
+                skips this prompt on future closes and destroys sessions directly. */}
             <button
-              onClick={onCancel}
-              className="text-[11px] text-fg-dim hover:text-fg px-3 py-1.5 rounded-md hover:bg-inset transition-colors"
+              onClick={() => setDontShowAgain((v) => !v)}
+              className="flex items-center gap-1.5 text-[10px] text-fg-muted hover:text-fg transition-colors"
+              aria-pressed={dontShowAgain}
             >
-              Cancel
+              <span
+                className={`w-7 h-4 rounded-full transition-colors flex-shrink-0 ${
+                  dontShowAgain ? 'bg-accent' : 'bg-edge'
+                }`}
+              >
+                <span
+                  className={`block w-3 h-3 rounded-full bg-on-accent shadow transition-transform mt-0.5 ${
+                    dontShowAgain ? 'translate-x-3.5' : 'translate-x-0.5'
+                  }`}
+                />
+              </span>
+              Don't show again
             </button>
-            <button
-              onClick={() => onConfirm(FLAG_ORDER.filter((f) => sel[f]))}
-              className="text-[11px] font-medium bg-accent text-on-accent px-3 py-1.5 rounded-md hover:opacity-90 transition-opacity"
-            >
-              Close session
-            </button>
+            <div className="flex gap-2">
+              <button
+                onClick={onCancel}
+                className="text-[11px] text-fg-dim hover:text-fg px-3 py-1.5 rounded-md hover:bg-inset transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  // Persist suppress preference before confirming so the caller
+                  // can immediately skip the prompt on the next close.
+                  if (dontShowAgain) {
+                    localStorage.setItem(SUPPRESS_KEY, '1');
+                  }
+                  onConfirm(FLAG_ORDER.filter((f) => sel[f]));
+                }}
+                className="text-[11px] font-medium bg-accent text-on-accent px-3 py-1.5 rounded-md hover:opacity-90 transition-opacity"
+              >
+                Close session
+              </button>
+            </div>
           </div>
         </OverlayPanel>
       </div>
