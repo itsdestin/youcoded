@@ -152,28 +152,61 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
 }
 
 export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme, syncAutoOpen, onSyncAutoOpenHandled }: Props) {
+  // Slide polish: track animation window so CSS can reduce backdrop-filter cost
+  // and suppress scrollbar-thumb while the 300ms transform is running. Also
+  // keeps the Scrim mounted during the close animation so it can fade out
+  // instead of popping. `hasOpened` prevents the first render from showing a
+  // stale scrim before the user has ever opened the panel.
+  const [animating, setAnimating] = useState(false);
+  const [hasOpened, setHasOpened] = useState(open);
+  useEffect(() => {
+    if (open) setHasOpened(true);
+    setAnimating(true);
+    // Fallback timer in case transitionend doesn't fire (e.g., tab backgrounded).
+    const t = setTimeout(() => setAnimating(false), 350);
+    return () => clearTimeout(t);
+  }, [open]);
+
+  const scrimVisible = hasOpened && (open || animating);
+
   return (
     <>
-      {/* Backdrop — L1 drawer scrim, theme-driven via <Scrim>. */}
-      {open && (
+      {/* Backdrop — L1 drawer scrim, theme-driven via <Scrim>. Kept mounted
+          through the close animation so opacity can fade rather than pop. */}
+      {scrimVisible && (
         <Scrim
           layer={1}
           onClick={onClose}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{
+            WebkitAppRegion: 'no-drag',
+            opacity: open ? 1 : 0,
+            transition: 'opacity 300ms ease-out',
+            pointerEvents: open ? 'auto' : 'none',
+          } as React.CSSProperties}
         />
       )}
 
       {/* Panel — outer handles slide animation (transform), inner carries
           .settings-drawer glass. backdrop-filter on a transformed element
           breaks sampling in Chrome; moving it to an untransformed child
-          is the common workaround. */}
+          is the common workaround. `will-change: transform` promotes the
+          layer up front so the first frame doesn't hitch on layer creation.
+          `data-animating` drives CSS that reduces backdrop-filter cost and
+          hides the scrollbar-thumb during the slide (both ramp back in via
+          CSS transitions on transitionend). */}
       <div
         className={`fixed top-0 left-0 h-full w-80 z-50 transform transition-transform duration-300 ease-out overlay-no-drag ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
-        style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        style={{ WebkitAppRegion: 'no-drag', willChange: 'transform' } as React.CSSProperties}
+        onTransitionEnd={(e) => {
+          if (e.propertyName === 'transform') setAnimating(false);
+        }}
       >
-        <div className="settings-drawer flex flex-col h-full overflow-y-auto border-r border-edge-dim">
+        <div
+          className="settings-drawer flex flex-col h-full overflow-y-auto border-r border-edge-dim"
+          data-animating={animating ? 'true' : undefined}
+        >
           {/* Header */}
           <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
             <h2 className="text-sm font-bold text-fg">Settings</h2>
