@@ -342,28 +342,33 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   }, [claude, onRefresh]);
 
   // While the popup is open, patch live-updating fields from the 10s status:data
-  // push so the header "Last synced Xm ago" and the syncInProgress spinner stay
-  // fresh. When the global marker advances, also refetch full status to pick up
-  // new per-backend lastPushEpoch values (those aren't in status:data).
+  // push AND refetch full status when the global marker advances so per-backend
+  // lastPushEpoch values stay in sync with the compact header.
+  // Ref-tracked epoch avoids scheduling refreshStatus from inside a setState
+  // updater (which is a React anti-pattern and was unreliable).
+  const lastSeenEpochRef = useRef<number | null>(initialStatus?.lastSyncEpoch ?? null);
   useEffect(() => {
     const handler = (window as any).claude?.on?.statusData?.((data: any) => {
       if (!data) return;
-      setStatus(prev => {
-        if (!prev) return prev;
-        const advanced =
-          typeof data.lastSyncEpoch === 'number' &&
-          data.lastSyncEpoch !== prev.lastSyncEpoch;
-        if (advanced) {
-          // New sync cycle completed — refetch full status so per-backend markers update
-          refreshStatus();
-        }
-        return {
-          ...prev,
-          lastSyncEpoch: data.lastSyncEpoch ?? prev.lastSyncEpoch,
-          syncInProgress: data.syncInProgress ?? prev.syncInProgress,
-          backupMeta: data.backupMeta ?? prev.backupMeta,
-        };
-      });
+      const epoch = typeof data.lastSyncEpoch === 'number' ? data.lastSyncEpoch : null;
+      const advanced = epoch !== null && epoch !== lastSeenEpochRef.current;
+      if (advanced) {
+        lastSeenEpochRef.current = epoch;
+        // Fire-and-forget — refetches full status including per-backend markers
+        refreshStatus();
+      } else {
+        // Same cycle: just patch the cheap fields so timeAgo() re-renders tick forward
+        setStatus(prev =>
+          prev
+            ? {
+                ...prev,
+                lastSyncEpoch: epoch ?? prev.lastSyncEpoch,
+                syncInProgress: data.syncInProgress ?? prev.syncInProgress,
+                backupMeta: data.backupMeta ?? prev.backupMeta,
+              }
+            : prev,
+        );
+      }
     });
     return () => {
       if (handler) (window as any).claude?.off?.('status:data', handler);
