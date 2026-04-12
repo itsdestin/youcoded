@@ -22,7 +22,7 @@ const execFileAsync = promisify(execFile);
 // --- Timeouts ---
 const DETECT_TIMEOUT = 15_000;       // 15s for detection (which, listremotes, auth status)
 const INSTALL_TIMEOUT = 300_000;     // 5m for tool installation
-const AUTH_TIMEOUT = 120_000;        // 2m for OAuth (user is signing in via browser)
+const AUTH_TIMEOUT = 300_000;        // 5m for OAuth (covers slow 2FA and device-code flows)
 const REPO_TIMEOUT = 30_000;         // 30s for repo creation
 
 // --- Helpers ---

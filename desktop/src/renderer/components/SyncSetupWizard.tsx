@@ -83,8 +83,8 @@ function WizardHeader({ title, onBack, onClose }: { title: string; onBack?: () =
 interface SyncSetupWizardProps {
   /** Pre-selected backend type from the type picker (skips step 1) */
   initialType?: BackendType;
-  /** Number of existing backends per type (for "N already connected" hint) */
-  existingCounts: Record<BackendType, number>;
+  /** Existing backend instances — used for "N already connected" hint and duplicate-destination warning */
+  existingBackends: Array<{ type: BackendType; config: Record<string, string> }>;
   /** Called when setup completes — passes the assembled backend instance */
   onComplete: (instance: {
     type: BackendType;
@@ -95,7 +95,12 @@ interface SyncSetupWizardProps {
   onClose: () => void;
 }
 
-export default function SyncSetupWizard({ initialType, existingCounts, onComplete, onClose }: SyncSetupWizardProps) {
+// Normalize a GitHub repo URL for duplicate comparison (strip trailing slash and .git)
+function normalizeRepoUrl(url: string): string {
+  return url.trim().replace(/\.git$/, '').replace(/\/+$/, '').toLowerCase();
+}
+
+export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose }: SyncSetupWizardProps) {
   const [step, setStep] = useState<WizardStep>(initialType ? 'prereqs' : 'type');
   const [backendType, setBackendType] = useState<BackendType | null>(initialType ?? null);
   const [prereqs, setPrereqs] = useState<PrereqStatus | null>(null);
@@ -136,7 +141,7 @@ export default function SyncSetupWizard({ initialType, existingCounts, onComplet
         <WizardHeader title="Add a Backup Destination" onClose={onClose} />
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
           {types.map(({ type, desc }) => {
-            const existing = existingCounts[type] || 0;
+            const existing = existingBackends.filter(b => b.type === type).length;
             return (
               <button
                 key={type}
@@ -380,6 +385,28 @@ export default function SyncSetupWizard({ initialType, existingCounts, onComplet
               {error}
             </div>
           )}
+
+          {/* Duplicate destination warning — same backend already points here */}
+          {(() => {
+            const dupes = existingBackends.filter(b => b.type === backendType);
+            let isDup = false;
+            if (backendType === 'drive') {
+              isDup = dupes.some(b => (b.config.DRIVE_ROOT || '').toLowerCase() === driveFolder.trim().toLowerCase());
+            } else if (backendType === 'github') {
+              const target = repoMode === 'existing' ? repoUrl : (ghUsername ? `https://github.com/${ghUsername}/${repoName}` : '');
+              if (target.trim()) {
+                const norm = normalizeRepoUrl(target);
+                isDup = dupes.some(b => normalizeRepoUrl(b.config.PERSONAL_SYNC_REPO || '') === norm);
+              }
+            } else if (backendType === 'icloud' && icloudPath) {
+              isDup = dupes.some(b => (b.config.ICLOUD_PATH || '') === icloudPath);
+            }
+            return isDup ? (
+              <div className="px-3 py-2 rounded-lg bg-amber-500/10 border border-amber-500/20 text-[11px] text-amber-400">
+                You already have a backup pointing to this location. Adding another may cause conflicts.
+              </div>
+            ) : null;
+          })()}
 
           {/* Start Backup button */}
           <button
