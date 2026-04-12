@@ -967,6 +967,8 @@ class SessionService : Service() {
                 val pastSessions = withContext(Dispatchers.IO) {
                     SessionBrowser.listPastSessions(projectsDir, topicsDir, activeIds)
                 }
+                // Read user-set complete flags from the synced conversation-index.json
+                val completeFlags = withContext(Dispatchers.IO) { readCompleteFlags(homeDir) }
                 val arr = org.json.JSONArray()
                 for (s in pastSessions) {
                     arr.put(JSONObject().apply {
@@ -975,9 +977,42 @@ class SessionService : Service() {
                         put("name", s.name)
                         put("lastModified", s.lastModified)
                         put("projectPath", s.projectPath)
+                        put("complete", completeFlags.contains(s.sessionId))
                     })
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
+            }
+            "session:set-complete" -> {
+                // Mark/unmark a past session as complete. Writes the same
+                // conversation-index.json the desktop writes — sync picks it
+                // up through the existing backup pipeline.
+                val sessionId = msg.payload.optString("sessionId", "")
+                val complete = msg.payload.optBoolean("complete", false)
+                if (sessionId.isEmpty()) {
+                    msg.id?.let {
+                        bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                            put("ok", false); put("error", "missing sessionId")
+                        })
+                    }
+                } else {
+                    val homeDir = bootstrap?.homeDir ?: filesDir
+                    val ok = withContext(Dispatchers.IO) {
+                        writeSessionComplete(homeDir, sessionId, complete)
+                    }
+                    msg.id?.let {
+                        bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                            put("ok", ok)
+                        })
+                    }
+                    // Broadcast a meta-changed push so any open browser refreshes.
+                    bridgeServer.broadcast(JSONObject().apply {
+                        put("type", "session:meta-changed")
+                        put("payload", JSONObject().apply {
+                            put("sessionId", sessionId)
+                            put("complete", complete)
+                        })
+                    })
+                }
             }
             "session:history" -> {
                 val sessionId = msg.payload.optString("sessionId", "")
@@ -2224,6 +2259,60 @@ class SessionService : Service() {
             put("generatedAt", "")
             put("themes", org.json.JSONArray())
         }
+    }
+
+    /**
+     * Read the complete-flag set from ~/.claude/conversation-index.json.
+     * Returns the set of sessionIds where entry.complete == true.
+     */
+    private fun readCompleteFlags(homeDir: File): Set<String> {
+        val indexFile = File(homeDir, ".claude/conversation-index.json")
+        if (!indexFile.exists()) return emptySet()
+        return try {
+            val root = JSONObject(indexFile.readText())
+            val sessions = root.optJSONObject("sessions") ?: return emptySet()
+            val out = mutableSetOf<String>()
+            val keys = sessions.keys()
+            while (keys.hasNext()) {
+                val k = keys.next()
+                val entry = sessions.optJSONObject(k) ?: continue
+                if (entry.optBoolean("complete", false)) out.add(k)
+            }
+            out
+        } catch (_: Throwable) { emptySet() }
+    }
+
+    /**
+     * Write the complete flag for a session into ~/.claude/conversation-index.json.
+     * Mirrors SyncService.setSessionComplete() on desktop — sets completeUpdatedAt
+     * so cross-device merge does latest-writer-wins on the flag independent of lastActive.
+     */
+    private fun writeSessionComplete(homeDir: File, sessionId: String, complete: Boolean): Boolean {
+        val indexFile = File(homeDir, ".claude/conversation-index.json")
+        return try {
+            indexFile.parentFile?.mkdirs()
+            val root = if (indexFile.exists()) {
+                JSONObject(indexFile.readText())
+            } else {
+                JSONObject().apply { put("version", 1); put("sessions", JSONObject()) }
+            }
+            val sessions = root.optJSONObject("sessions") ?: JSONObject().also { root.put("sessions", it) }
+            val nowIso = java.time.OffsetDateTime.now(java.time.ZoneOffset.UTC).toString()
+            val entry = sessions.optJSONObject(sessionId) ?: JSONObject().apply {
+                put("topic", "Untitled")
+                put("lastActive", nowIso)
+                put("slug", "")
+                put("device", android.os.Build.MODEL ?: "android")
+            }
+            entry.put("complete", complete)
+            entry.put("completeUpdatedAt", nowIso)
+            sessions.put(sessionId, entry)
+            // Atomic write via tmp rename to avoid partial reads
+            val tmp = File(indexFile.parentFile, indexFile.name + ".tmp")
+            tmp.writeText(root.toString(2))
+            tmp.renameTo(indexFile) || run { indexFile.writeText(root.toString(2)); true }
+            true
+        } catch (_: Throwable) { false }
     }
 
     companion object {

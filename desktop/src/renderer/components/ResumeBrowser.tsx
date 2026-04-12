@@ -34,6 +34,8 @@ interface PastSession {
   projectPath: string;
   lastModified: number;
   size: number;
+  // User-marked "complete" — hidden unless Show Complete toggle is on
+  complete?: boolean;
 }
 
 interface Props {
@@ -52,6 +54,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
+  // Show Complete: when off, sessions marked complete are hidden (default).
+  // Persists across opens via localStorage so Destin doesn't re-toggle each time.
+  const [showComplete, setShowComplete] = useState<boolean>(() => {
+    try { return localStorage.getItem('destincode-resume-show-complete') === '1'; }
+    catch { return false; }
+  });
+  useEffect(() => {
+    try { localStorage.setItem('destincode-resume-show-complete', showComplete ? '1' : '0'); } catch {}
+  }, [showComplete]);
 
   // Fetch sessions when opened
   useEffect(() => {
@@ -84,14 +95,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   }, [open, onClose, expandedId]);
 
   const filtered = useMemo(() => {
-    if (!search.trim()) return sessions;
+    // Hide complete sessions by default; Show Complete toggle reveals them.
+    const base = showComplete ? sessions : sessions.filter((s) => !s.complete);
+    if (!search.trim()) return base;
     const q = search.toLowerCase();
-    return sessions.filter(
+    return base.filter(
       (s) =>
         s.name.toLowerCase().includes(q) ||
         s.projectPath.toLowerCase().includes(q),
     );
-  }, [sessions, search]);
+  }, [sessions, search, showComplete]);
 
   // Group by project path
   const grouped = useMemo(() => {
@@ -104,6 +117,37 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     }
     return groups;
   }, [filtered, search]);
+
+  // Optimistically flip the complete flag in local state, then persist via IPC.
+  // On failure we revert. A meta-changed push from other tabs/devices also
+  // refreshes the list — see the subscription effect below.
+  const toggleComplete = async (sessionId: string, next: boolean) => {
+    setSessions((prev) => prev.map((s) => s.sessionId === sessionId ? { ...s, complete: next } : s));
+    try {
+      const res: any = await (window as any).claude.session.setComplete(sessionId, next);
+      if (res && res.ok === false) {
+        setSessions((prev) => prev.map((s) => s.sessionId === sessionId ? { ...s, complete: !next } : s));
+      }
+    } catch {
+      setSessions((prev) => prev.map((s) => s.sessionId === sessionId ? { ...s, complete: !next } : s));
+    }
+  };
+
+  // Listen for cross-tab / cross-device meta changes while the browser is open.
+  useEffect(() => {
+    if (!open) return;
+    const sub = (window as any).claude?.on?.sessionMetaChanged;
+    if (!sub) return;
+    const off = sub((sid: string, meta: { complete?: boolean }) => {
+      setSessions((prev) => prev.map((s) =>
+        s.sessionId === sid ? { ...s, complete: !!meta?.complete } : s,
+      ));
+    });
+    // Desktop preload returns the raw handler; remote-shim returns an unsubscribe fn.
+    return () => {
+      try { if (typeof off === 'function') off(); } catch {}
+    };
+  }, [open]);
 
   const handleSelectSession = (sessionId: string) => {
     if (expandedId === sessionId) {
@@ -159,6 +203,22 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           <p className="text-[10px] text-[#DD4444]">Claude will execute tools without asking for approval.</p>
         )}
 
+        {/* Complete? — only visible when Show Complete is on so the flag can be cleared
+            or re-applied. Uses --accent so it's visually distinct from the destructive
+            red of Skip Permissions. */}
+        {showComplete && (
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] uppercase tracking-wider text-fg-muted">Complete?</label>
+            <button
+              onClick={(e) => { e.stopPropagation(); toggleComplete(s.sessionId, !s.complete); }}
+              className={`w-8 h-4.5 rounded-full relative transition-colors ${s.complete ? 'bg-accent' : 'bg-inset'}`}
+              aria-pressed={!!s.complete}
+            >
+              <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${s.complete ? 'left-[calc(100%-16px)]' : 'left-0.5'}`} />
+            </button>
+          </div>
+        )}
+
         {/* Resume button */}
         <button
           onClick={() => handleConfirmResume(s)}
@@ -185,7 +245,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         }`}
       >
         <div className="flex-1 min-w-0">
-          <div className="text-sm truncate">{s.name}</div>
+          <div className="text-sm truncate flex items-center gap-1.5">
+            {/* Subtle check badge marks complete sessions (only reachable when Show Complete is on). */}
+            {s.complete && (
+              <span
+                className="text-[9px] leading-none px-1 py-[1px] rounded-sm bg-accent text-on-accent shrink-0"
+                title="Marked complete"
+              >✓</span>
+            )}
+            <span className="truncate">{s.name}</span>
+          </div>
           <div className="text-[10px] text-fg-faint">
             {showPath
               ? s.projectPath.replace(/\\/g, '/').split('/').pop()
@@ -213,7 +282,21 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         >
           {/* Header */}
           <div className="px-4 pt-4 pb-3 border-b border-edge">
-            <h2 className="text-sm font-bold text-fg mb-3">Resume Session</h2>
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-bold text-fg">Resume Session</h2>
+              {/* Show Complete — same toggle pattern as Skip Permissions + Gemini CLI
+                  in SessionStrip, but accent-colored to signal "on" rather than "danger". */}
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] uppercase tracking-wider text-fg-muted">Show Complete</label>
+                <button
+                  onClick={() => setShowComplete(!showComplete)}
+                  className={`w-8 h-4.5 rounded-full relative transition-colors ${showComplete ? 'bg-accent' : 'bg-inset'}`}
+                  aria-pressed={showComplete}
+                >
+                  <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${showComplete ? 'left-[calc(100%-16px)]' : 'left-0.5'}`} />
+                </button>
+              </div>
+            </div>
             <div className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
               <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <circle cx="11" cy="11" r="7" />

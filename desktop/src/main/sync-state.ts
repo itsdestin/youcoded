@@ -31,6 +31,12 @@ export function setSyncService(service: SyncService | null): void {
   syncServiceInstance = service;
 }
 
+/** Exposed so IPC handlers can read/write the conversation index without
+ *  importing the SyncService module directly. */
+export function getSyncService(): SyncService | null {
+  return syncServiceInstance;
+}
+
 // --- V2 Types: Multi-instance backend model ---
 
 /** The three cloud service types the sync system supports. */

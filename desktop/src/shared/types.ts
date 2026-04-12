@@ -212,6 +212,8 @@ export interface PastSession {
   lastModified: number;
   /** File size in bytes — proxy for conversation length */
   size: number;
+  /** User-marked "complete" — hidden from resume menu by default */
+  complete?: boolean;
 }
 
 export interface HistoryMessage {
@@ -299,6 +301,10 @@ export const IPC = {
   // Session browser
   SESSION_BROWSE: 'session:browse',
   SESSION_HISTORY: 'session:history',
+  // Mark/unmark a past session as complete (hidden from resume menu by default)
+  SESSION_SET_COMPLETE: 'session:set-complete',
+  // Broadcast when session metadata changes (e.g. complete flag toggled)
+  SESSION_META_CHANGED: 'session:meta-changed',
   SESSION_RESUME: 'session:resume',
   // Folder switcher
   FOLDERS_LIST: 'folders:list',

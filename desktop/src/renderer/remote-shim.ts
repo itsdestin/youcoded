@@ -145,6 +145,9 @@ function handleMessage(data: string): void {
     case 'session:renamed':
       dispatchEvent('session:renamed', payload.sessionId, payload.name);
       break;
+    case 'session:meta-changed':
+      dispatchEvent('session:meta-changed', payload.sessionId, { complete: payload.complete });
+      break;
     case 'session:permission-mode':
       // Android-only: corrects React's optimistic Shift+Tab cycling state.
       // Desktop uses pty:output text detection in App.tsx, but Android doesn't
@@ -514,6 +517,9 @@ export function installShim(): void {
       loadHistory: (sessionId: string, count?: number, all?: boolean, projectSlug?: string) =>
         invoke('session:history', { sessionId, count, all, projectSlug }),
       switch: (sessionId: string) => invoke('session:switch', { sessionId }),
+      // Mark/unmark a past session as complete (hides it from the default resume list)
+      setComplete: (sessionId: string, complete: boolean) =>
+        invoke('session:set-complete', { sessionId, complete }),
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
@@ -531,6 +537,7 @@ export function installShim(): void {
       hookEvent: (cb: Callback) => addListener('hook:event', cb),
       statusData: (cb: Callback) => addListener('status:data', cb),
       sessionRenamed: (cb: Callback) => addListener('session:renamed', cb),
+      sessionMetaChanged: (cb: Callback) => addListener('session:meta-changed', cb),
       // Android-only push event — see remote-shim handleMessage above for rationale.
       sessionPermissionMode: (cb: Callback) => addListener('session:permission-mode', cb),
       uiAction: (cb: Callback) => addListener('ui:action:received', cb),

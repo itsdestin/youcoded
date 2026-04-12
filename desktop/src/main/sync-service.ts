@@ -46,6 +46,11 @@ interface ConversationIndexEntry {
   lastActive: string; // ISO-8601
   slug: string;
   device: string;
+  // User-set "complete" flag. Hidden from the resume menu by default.
+  complete?: boolean;
+  // ISO-8601 timestamp of the last complete-flag change; used by merge
+  // (latest wins) so marking/unmarking doesn't fake new session activity.
+  completeUpdatedAt?: string;
 }
 
 interface ConversationIndex {
@@ -1234,7 +1239,16 @@ export class SyncService extends EventEmitter {
         const existing = index.sessions[sessionId];
         if (existing && new Date(existing.lastActive).getTime() >= stat.mtimeMs) continue;
 
-        index.sessions[sessionId] = { topic, lastActive, slug, device };
+        // Preserve user-set complete flag across topic-file-driven upserts
+        // so a topic rename doesn't clobber the complete metadata.
+        index.sessions[sessionId] = {
+          topic,
+          lastActive,
+          slug,
+          device,
+          ...(existing?.complete !== undefined ? { complete: existing.complete } : {}),
+          ...(existing?.completeUpdatedAt ? { completeUpdatedAt: existing.completeUpdatedAt } : {}),
+        };
       } catch {}
     }
 
@@ -1257,12 +1271,85 @@ export class SyncService extends EventEmitter {
 
     for (const [sid, remoteEntry] of Object.entries(remote.sessions || {})) {
       const localEntry = merged.sessions[sid];
+
+      // Base entry: latest lastActive wins for topic/slug/device (existing behavior).
+      let baseEntry: ConversationIndexEntry;
       if (!localEntry || new Date(remoteEntry.lastActive).getTime() > new Date(localEntry.lastActive).getTime()) {
-        merged.sessions[sid] = remoteEntry;
+        baseEntry = { ...remoteEntry };
+      } else {
+        baseEntry = { ...localEntry };
       }
+
+      // Complete flag merges independently by completeUpdatedAt so marking
+      // complete on device B doesn't require more-recent activity than A.
+      const localTs = localEntry?.completeUpdatedAt ? new Date(localEntry.completeUpdatedAt).getTime() : 0;
+      const remoteTs = remoteEntry.completeUpdatedAt ? new Date(remoteEntry.completeUpdatedAt).getTime() : 0;
+      if (remoteTs > localTs) {
+        baseEntry.complete = remoteEntry.complete;
+        baseEntry.completeUpdatedAt = remoteEntry.completeUpdatedAt;
+      } else if (localEntry) {
+        baseEntry.complete = localEntry.complete;
+        baseEntry.completeUpdatedAt = localEntry.completeUpdatedAt;
+      }
+      if (baseEntry.complete === undefined) delete baseEntry.complete;
+      if (!baseEntry.completeUpdatedAt) delete baseEntry.completeUpdatedAt;
+
+      merged.sessions[sid] = baseEntry;
     }
 
     this.atomicWrite(this.conversationIndexPath, JSON.stringify(merged, null, 2));
+  }
+
+  /**
+   * Read the current complete flag for a session from the local index.
+   * Returns false if the session or flag is absent.
+   */
+  getSessionComplete(sessionId: string): boolean {
+    const index: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
+    return !!index.sessions?.[sessionId]?.complete;
+  }
+
+  /**
+   * Read the full complete-flag map for all sessions in the index.
+   * Callers join this onto PastSession[] in the resume menu.
+   */
+  getAllSessionCompleteFlags(): Record<string, boolean> {
+    const index: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
+    const out: Record<string, boolean> = {};
+    for (const [sid, entry] of Object.entries(index.sessions || {})) {
+      if (entry.complete) out[sid] = true;
+    }
+    return out;
+  }
+
+  /**
+   * Mark or unmark a session as complete. Writes to conversation-index.json
+   * with a fresh completeUpdatedAt timestamp so sync merge honors latest-writer-wins.
+   * The entry is created (topic: 'Untitled') if the session isn't already indexed.
+   */
+  setSessionComplete(sessionId: string, complete: boolean): void {
+    const index: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
+    if (!index.sessions) index.sessions = {};
+
+    const now = new Date().toISOString();
+    const existing = index.sessions[sessionId];
+    if (existing) {
+      existing.complete = complete;
+      existing.completeUpdatedAt = now;
+    } else {
+      // First time seeing this session in the index — seed a minimal entry.
+      // Topic will be filled in next updateConversationIndex() scan.
+      index.sessions[sessionId] = {
+        topic: 'Untitled',
+        lastActive: now,
+        slug: '',
+        device: os.hostname(),
+        complete,
+        completeUpdatedAt: now,
+      };
+    }
+
+    this.atomicWrite(this.conversationIndexPath, JSON.stringify(index, null, 2));
   }
 
   /** Create topic cache files from index for cross-device sessions. */

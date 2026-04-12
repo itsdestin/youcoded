@@ -30,6 +30,7 @@ import TerminalToolbar, { TerminalScrollButtons } from './components/TerminalToo
 import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
+import MarkCompletePrompt from './components/MarkCompletePrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import ModelPickerPopup from './components/ModelPickerPopup';
 import Marketplace from './components/Marketplace';
@@ -108,6 +109,9 @@ function AppInner() {
   const [viewedSessions, setViewedSessions] = useState<Set<string>>(new Set());
   const [resumeInfo, setResumeInfo] = useState<Map<string, { claudeSessionId: string; projectSlug: string }>>(new Map());
   const [resumeRequested, setResumeRequested] = useState(false);
+  // Shown when the user closes an active session — offers to mark it complete
+  // in one step so it's hidden from the resume menu by default.
+  const [closePromptFor, setClosePromptFor] = useState<string | null>(null);
   // Preferences popup state — opened by /config in chat view or from SettingsPanel
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   // Model/effort/fast picker — opened by bare /model, /fast, /effort (and future status-bar chip clicks)
@@ -1234,7 +1238,7 @@ function AppInner() {
                   (window as any).claude?.session?.switch?.(id);
                 }}
                 onCreateSession={createSession}
-                onCloseSession={(id) => window.claude.session.destroy(id)}
+                onCloseSession={(id) => setClosePromptFor(id)}
                 onReorderSessions={(fromIndex: number, toIndex: number) => {
                   setSessions(prev => {
                     const next = [...prev];
@@ -1471,6 +1475,23 @@ function AppInner() {
         onResume={handleResumeSession}
         defaultModel={sessionDefaults.model}
         defaultSkipPermissions={sessionDefaults.skipPermissions}
+      />
+      <MarkCompletePrompt
+        open={closePromptFor !== null}
+        sessionName={sessions.find((s) => s.id === closePromptFor)?.name}
+        onCancel={() => setClosePromptFor(null)}
+        onConfirm={(markComplete) => {
+          const id = closePromptFor;
+          if (!id) return;
+          // Fire mark-complete first (fire-and-forget — backend logs any failure).
+          // Use the desktop session ID; main resolves it to a Claude session ID
+          // via sessionIdMap before writing conversation-index.json.
+          if (markComplete) {
+            try { (window as any).claude.session.setComplete(id, true); } catch {}
+          }
+          try { window.claude.session.destroy(id); } catch {}
+          setClosePromptFor(null);
+        }}
       />
       <PreferencesPopup
         open={preferencesOpen}

@@ -17,7 +17,7 @@ import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService } from './sync-state';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 
@@ -786,6 +786,7 @@ export function registerIpcHandlers(
     return loadHistory(sessionId, projectSlug, count, all);
   });
 
+
   // PTY input (fire-and-forget, not request-response)
   ipcMain.on(IPC.SESSION_INPUT, (_event, sessionId: string, text: string) => {
     sessionManager.sendInput(sessionId, text);
@@ -1205,6 +1206,31 @@ export function registerIpcHandlers(
       fs.unlink(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`), () => {});
     }
     sessionIdMap.delete(sessionId);
+  });
+
+  // Mark/unmark a past session as complete. Persists in conversation-index.json
+  // via SyncService (so it rides the existing backup/downsync pipeline) and
+  // broadcasts SESSION_META_CHANGED so any open resume browser refreshes.
+  // Accepts either a Claude session ID (as stored in the index) or a desktop
+  // session ID — the desktop ID is resolved via sessionIdMap, which is only
+  // populated after Claude Code emits its first hook event. Brand-new sessions
+  // without that initialization yet will surface a "session not yet ready" error.
+  ipcMain.handle(IPC.SESSION_SET_COMPLETE, async (_event, sessionId: string, complete: boolean) => {
+    const svc = getSyncService();
+    if (!svc) return { ok: false, error: 'sync service unavailable' };
+    // Try to resolve a desktop ID to its Claude session ID.
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    try {
+      svc.setSessionComplete(resolved, !!complete);
+      send(IPC.SESSION_META_CHANGED, resolved, { complete: !!complete });
+      remoteServer?.broadcast({
+        type: IPC.SESSION_META_CHANGED,
+        payload: { sessionId: resolved, complete: !!complete },
+      });
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || String(e) };
+    }
   });
 
   // --- Sync management ---

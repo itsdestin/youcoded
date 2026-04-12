@@ -6,6 +6,21 @@ import { PastSession, HistoryMessage } from '../shared/types';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const TOPICS_DIR = path.join(CLAUDE_DIR, 'topics');
+const CONVERSATION_INDEX_PATH = path.join(CLAUDE_DIR, 'conversation-index.json');
+
+/** Read the synced complete-flag map from conversation-index.json.
+ *  Returned as a { sessionId: true } map for O(1) join. */
+function readCompleteFlags(): Record<string, boolean> {
+  try {
+    const raw = fs.readFileSync(CONVERSATION_INDEX_PATH, 'utf8');
+    const index = JSON.parse(raw);
+    const out: Record<string, boolean> = {};
+    for (const [sid, entry] of Object.entries<any>(index?.sessions || {})) {
+      if (entry?.complete) out[sid] = true;
+    }
+    return out;
+  } catch { return {}; }
+}
 
 const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/;
 
@@ -107,6 +122,9 @@ export async function listPastSessions(activeSessionIds?: Set<string>): Promise<
     return [];
   }
 
+  // Join complete-flag metadata from the synced conversation index
+  const completeFlags = readCompleteFlags();
+
   const allSessions: PastSession[] = [];
 
   for (const slug of slugs) {
@@ -135,6 +153,7 @@ export async function listPastSessions(activeSessionIds?: Set<string>): Promise<
           projectPath: resolveSlugToPath(slug),
           lastModified: stat.mtimeMs,
           size: stat.size,
+          complete: !!completeFlags[sessionId],
         } as PastSession;
       } catch {
         console.warn(`[session-browser] Failed to stat ${slug}/${file} after retries`);
