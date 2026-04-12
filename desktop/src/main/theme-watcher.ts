@@ -1,10 +1,12 @@
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import chokidar, { type FSWatcher } from 'chokidar';
 import type { BrowserWindow } from 'electron';
 import { migrateBarJsonFiles } from './theme-migration';
 
 const THEMES_DIR = path.join(os.homedir(), '.claude', 'destinclaude-themes');
+const WATCHED_EXTS = new Set(['.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.css']);
 
 /** Ensures themes dir exists and migrates any bare JSON files to folder format. */
 function ensureAndMigrate(): void {
@@ -22,36 +24,55 @@ function ensureAndMigrate(): void {
 export function startThemeWatcher(win: BrowserWindow): () => void {
   ensureAndMigrate();
 
-  let watcher: fs.FSWatcher | null = null;
+  // chokidar, not fs.watch — fs.watch misses events for subdirs created after
+  // the watcher starts on Windows, and doesn't support recursive on Linux at all.
+  // The theme-builder's _preview/ folder is created at runtime, so fs.watch broke hot-reload there.
+  let watcher: FSWatcher | null = null;
   const debounceMap = new Map<string, ReturnType<typeof setTimeout>>();
 
+  const fire = (absPath: string) => {
+    const rel = path.relative(THEMES_DIR, absPath).replace(/\\/g, '/');
+    if (!rel || rel.startsWith('..')) return;
+    const slug = rel.split('/')[0];
+    if (!slug) return;
+
+    const ext = path.extname(rel).toLowerCase();
+    if (!WATCHED_EXTS.has(ext)) return;
+
+    const existing = debounceMap.get(slug);
+    if (existing) clearTimeout(existing);
+    debounceMap.set(slug, setTimeout(() => {
+      debounceMap.delete(slug);
+      if (!win.isDestroyed()) {
+        win.webContents.send('theme:reload', slug);
+      }
+    }, 100));
+  };
+
   try {
-    watcher = fs.watch(THEMES_DIR, { recursive: true }, (_eventType, filename) => {
-      if (!filename) return;
-      // Extract slug from path (first path component)
-      const normalized = filename.replace(/\\/g, '/');
-      const slug = normalized.split('/')[0];
-      if (!slug) return;
-
-      // Only reload on relevant file changes
-      const ext = path.extname(normalized).toLowerCase();
-      if (!['.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.css'].includes(ext)) return;
-
-      const existing = debounceMap.get(slug);
-      if (existing) clearTimeout(existing);
-      debounceMap.set(slug, setTimeout(() => {
-        debounceMap.delete(slug);
-        if (!win.isDestroyed()) {
-          win.webContents.send('theme:reload', slug);
-        }
-      }, 100));
+    watcher = chokidar.watch(THEMES_DIR, {
+      ignoreInitial: true,
+      // awaitWriteFinish coalesces rapid writes (including atomic rename-over) into a single event.
+      awaitWriteFinish: { stabilityThreshold: 100, pollInterval: 25 },
+    });
+    watcher.on('add', fire);
+    watcher.on('change', fire);
+    watcher.on('unlink', fire);
+    watcher.on('unlinkDir', (absPath) => {
+      // Emit a reload keyed on the removed slug so the renderer can revert active-theme state.
+      const rel = path.relative(THEMES_DIR, absPath).replace(/\\/g, '/');
+      if (!rel || rel.includes('/') || rel.startsWith('..')) return;
+      if (!win.isDestroyed()) win.webContents.send('theme:reload', rel);
+    });
+    watcher.on('error', (err) => {
+      console.warn('[theme-watcher] chokidar error:', err);
     });
   } catch (err) {
-    console.warn('[theme-watcher] fs.watch failed, themes will not hot-reload:', err);
+    console.warn('[theme-watcher] chokidar failed, themes will not hot-reload:', err);
   }
 
   return () => {
-    watcher?.close();
+    void watcher?.close();
     for (const t of debounceMap.values()) clearTimeout(t);
     debounceMap.clear();
   };
