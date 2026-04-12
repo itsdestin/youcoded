@@ -1,6 +1,7 @@
 import React, { useState, useCallback, useEffect, useRef } from 'react';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 import { useTheme } from '../state/theme-context';
+import { useMarketplace } from '../state/marketplace-context';
 import { applyThemeToDom } from '../themes/theme-engine';
 import type { ThemeDefinition } from '../themes/theme-types';
 import ConfigForm from './ConfigForm';
@@ -12,7 +13,8 @@ interface ThemeDetailProps {
 }
 
 export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeDetailProps) {
-  const { setTheme, allThemes, activeTheme } = useTheme();
+  const { setTheme, allThemes, activeTheme, reloadUserThemes } = useTheme();
+  const marketplace = useMarketplace();
   const [installing, setInstalling] = useState(false);
   const [uninstalling, setUninstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -111,19 +113,22 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
     setUninstalling(true);
     setError(null);
     try {
-      const claude = (window as any).claude;
-      const result = await claude?.theme?.marketplace?.uninstall(entry.slug);
-      if (result.status === 'failed') {
-        setError(result.error || 'Uninstall failed');
-      } else {
-        onInstallComplete();
-      }
+      // Route through MarketplaceContext so the marketplace list refreshes
+      // (flips the entry's installed flag). Then reload user themes from
+      // disk so ThemeProvider.userThemes drops the deleted slug — the
+      // active-theme fallback effect in theme-context then auto-resets to
+      // the default theme if the user had the uninstalled theme applied.
+      // Fix: previously this called the raw IPC and neither list refreshed,
+      // leaving the button stuck and the theme visually applied.
+      await marketplace.uninstallTheme(entry.slug);
+      await reloadUserThemes();
+      onInstallComplete();
     } catch (err: any) {
       setError(err?.message || 'Uninstall failed');
     } finally {
       setUninstalling(false);
     }
-  }, [entry.slug, onInstallComplete]);
+  }, [entry.slug, onInstallComplete, marketplace, reloadUserThemes]);
 
   const handleApply = useCallback(() => {
     // Revert try-preview, then set as active
