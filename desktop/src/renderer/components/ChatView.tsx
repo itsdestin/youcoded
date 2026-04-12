@@ -164,6 +164,31 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
     }
   }, [state.timeline.length, state.lastActivityAt, state.isThinking, atBottom]);
 
+  // Fix: when a tool/permission card expands at the bottom of the chat, its new
+  // content grows below the input bar and the user has to manually scroll. The
+  // reducer-based effect above doesn't fire because expansion is local ToolCard
+  // state, invisible to ChatView. Watch the content wrapper's size instead and
+  // re-stick to bottom on any growth while atBottom is true.
+  const contentRef = useRef<HTMLDivElement>(null);
+  const atBottomRef = useRef(atBottom);
+  useEffect(() => {
+    atBottomRef.current = atBottom;
+  }, [atBottom]);
+  useEffect(() => {
+    const node = contentRef.current;
+    if (!node) return;
+    let lastHeight = node.scrollHeight;
+    const observer = new ResizeObserver(() => {
+      const next = node.scrollHeight;
+      if (next > lastHeight && atBottomRef.current && bottomRef.current) {
+        bottomRef.current.scrollIntoView({ behavior: 'auto' });
+      }
+      lastHeight = next;
+    });
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
   const jumpToBottom = useCallback(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, []);
@@ -273,6 +298,7 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
       }}
     >
       <div ref={scrollContainerRef} className="chat-scroll flex-1 overflow-y-auto pt-4 pb-1">
+       <div ref={contentRef}>
         {state.timeline.length === 0 && !state.isThinking ? (
           <div className="flex items-center justify-center h-full text-fg-muted text-sm">
             Start a conversation with Claude
@@ -408,6 +434,7 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
           </>
         )}
         <div ref={bottomRef} className="h-1" />
+       </div>
       </div>
 
       {/* Jump to bottom button — .jump-to-bottom class handles glassmorphism
