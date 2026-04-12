@@ -13,6 +13,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import SyncSetupWizard from './SyncSetupWizard';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -443,23 +444,29 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   }, [menuOpenId]);
 
   if (loading) {
+    // Overlay layer L2 — theme-driven via Scrim/OverlayPanel (matches SettingsPanel popups).
     return (
       <>
-        <div className="fixed inset-0 bg-black/30 z-[60]" onClick={onClose} />
-        <div className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl"
-          style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(520px, 90vw)', height: 'min(640px, 85vh)' }}>
+        <Scrim layer={2} onClick={onClose} />
+        <OverlayPanel
+          layer={2}
+          className="fixed overflow-hidden"
+          style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(520px, 90vw)', height: 'min(640px, 85vh)' }}
+        >
           <div className="flex items-center justify-center h-full text-fg-muted text-sm">Loading...</div>
-        </div>
+        </OverlayPanel>
       </>
     );
   }
 
   return (
+    // Overlay layer L2 — theme-driven via Scrim/OverlayPanel (matches SettingsPanel popups).
     <>
-      <div className="fixed inset-0 bg-black/30 z-[60]" onClick={onClose} />
-      <div
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
         ref={popupRef}
-        className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+        layer={2}
+        className="fixed overflow-hidden"
         style={{
           top: '50%', left: '50%', transform: 'translate(-50%, -50%)',
           width: 'min(520px, 90vw)', height: 'min(640px, 85vh)',
@@ -782,7 +789,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           </div>
         </div>
         )}
-      </div>
+      </OverlayPanel>
 
       {/* Confirmation dialog: Remove backend */}
       {confirmRemoveId && (() => {
@@ -818,7 +825,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 }
 
 // --- Confirmation dialog (reusable) ---
-// Pattern follows SettingsPanel.tsx danger confirmation modal (createPortal, z-[70]/z-[71])
+// L3 destructive confirmation — uses OverlayPanel destructive variant for theme-driven danger border.
 
 function ConfirmDialog({
   title, message, confirmLabel, confirmColor, onConfirm, onCancel,
@@ -838,10 +845,13 @@ function ConfirmDialog({
     : 'bg-blue-600 hover:bg-blue-500 text-white';
 
   return createPortal(
+    // Overlay layer L3 — destructive confirmations use OverlayPanel destructive variant.
     <>
-      <div className="fixed inset-0 bg-black/50 z-[70]" onClick={onCancel} />
-      <div
-        className={`fixed z-[71] rounded-xl bg-panel/80 backdrop-blur-xl border ${borderColor} shadow-2xl overflow-hidden`}
+      <Scrim layer={3} onClick={onCancel} />
+      <OverlayPanel
+        layer={3}
+        destructive={confirmColor === 'red'}
+        className="fixed overflow-hidden"
         style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(360px, 85vw)' }}
       >
         <div className={`px-4 py-3 border-b ${borderColor} ${headerBg}`}>
@@ -864,7 +874,7 @@ function ConfirmDialog({
             </button>
           </div>
         </div>
-      </div>
+      </OverlayPanel>
     </>,
     document.body,
   );
