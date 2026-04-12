@@ -341,6 +341,12 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
       backdrop-filter: blur(${bubbleBlur}px) saturate(1.1);
       -webkit-backdrop-filter: blur(${bubbleBlur}px) saturate(1.1);
     }` : '';
+    // Slide polish: while the settings drawer is mid-slide we drop the blur
+    // radius to ~30% so Chrome re-samples a much cheaper region per frame,
+    // then transition back to full radius on transitionend. Without this,
+    // a 320×100vh backdrop-filter re-rasterizes every animation frame and
+    // visibly stutters the slide on integrated GPUs.
+    const drawerReducedBlur = Math.max(1, Math.round(panelsBlur * 0.3));
     glassEl.textContent = `
     [data-wallpaper] .header-bar,
     [data-wallpaper] .status-bar,
@@ -350,6 +356,13 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     [data-wallpaper] .layer-surface {
       backdrop-filter: blur(${panelsBlur}px) saturate(1.2);
       -webkit-backdrop-filter: blur(${panelsBlur}px) saturate(1.2);
+    }
+    [data-wallpaper] .settings-drawer {
+      transition: backdrop-filter 220ms ease-out, -webkit-backdrop-filter 220ms ease-out;
+    }
+    [data-wallpaper] .settings-drawer[data-animating="true"] {
+      backdrop-filter: blur(${drawerReducedBlur}px) saturate(1.1);
+      -webkit-backdrop-filter: blur(${drawerReducedBlur}px) saturate(1.1);
     }
     [data-wallpaper] .layer-scrim {
       backdrop-filter: blur(${scrimBlur}px);
