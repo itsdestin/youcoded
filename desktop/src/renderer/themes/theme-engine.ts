@@ -253,19 +253,6 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   root.style.setProperty('--bubble-blur', `${bubbleBlur}px`);
   root.style.setProperty('--bubble-opacity', String(bubbleOpacity));
 
-  // Narrow attribute gates for backdrop-filter ONLY. Even backdrop-filter:
-  // blur(0) creates a stacking context in Chrome, which traps z-index-based
-  // popups like SessionStrip's dropdown (z-9000 inside .header-bar) and
-  // prevents backdrop-filter on fixed drawers/popups from sampling the page
-  // behind them. These attributes stay OFF when blur = 0 so no backdrop-filter
-  // applies and no extraneous stacking context is created.
-  // Note: opacity still applies unconditionally (via color-mix), so blur and
-  // opacity remain independent knobs.
-  if (panelsBlur > 0) root.setAttribute('data-panels-blur', String(panelsBlur));
-  else root.removeAttribute('data-panels-blur');
-  if (bubbleBlur > 0) root.setAttribute('data-bubble-blur', String(bubbleBlur));
-  else root.removeAttribute('data-bubble-blur');
-
   if (reducedEffects) {
     root.setAttribute('data-reduced-effects', '');
   } else {
