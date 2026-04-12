@@ -1006,14 +1006,6 @@ function AppInner() {
     (mode: ViewMode) => {
       if (!sessionId) return;
       setViewModes((prev) => new Map(prev).set(sessionId, mode));
-      // Fix: flag a transition window so CSS can suppress backdrop-filter
-      // on the chrome during the 300ms toggle. Blur recomposite was a major
-      // driver of jank reports across all themes with panel blur enabled.
-      // Timer-based rather than transitionend because the transition lives
-      // on multiple elements and cancellation can skip the event.
-      const root = document.documentElement;
-      root.setAttribute('data-toggling', '');
-      window.setTimeout(() => root.removeAttribute('data-toggling'), 320);
       // On Android, tell the native side to switch views
       if (getPlatform() === 'android') {
         (window as any).claude?.remote?.broadcastAction?.({ action: 'switch-view', mode });

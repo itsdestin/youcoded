@@ -355,12 +355,6 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
       backdrop-filter: blur(${scrimBlur}px);
       -webkit-backdrop-filter: blur(${scrimBlur}px);
     }${bubbleRule}
-    [data-toggling] .header-bar,
-    [data-toggling] .status-bar,
-    [data-toggling] .input-bar-container {
-      backdrop-filter: none !important;
-      -webkit-backdrop-filter: none !important;
-    }
     `;
   } else {
     // Keep the tag in place but empty it — avoids layout thrash from
