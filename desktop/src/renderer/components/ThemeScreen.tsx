@@ -64,18 +64,9 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
   // Flips the popup body to the plain-language explainer view via the (i) icon.
   const [showInfo, setShowInfo] = useState(false);
 
-  if (showInfo) {
-    return (
-      <SettingsExplainer
-        title="Appearance"
-        intro={APPEARANCE_EXPLAINER.intro}
-        sections={APPEARANCE_EXPLAINER.sections}
-        onBack={() => setShowInfo(false)}
-        onClose={onClose}
-      />
-    );
-  }
-
+  // NOTE: all hooks below MUST run before the `if (showInfo) return` early
+  // return further down. Returning before a hook changes hook count between
+  // renders and crashes the whole app with React minified error #300.
   const currentFontName = font.split(',')[0].trim().replace(/^['"]|['"]$/g, '');
 
   const updateAccent = useCallback((hex: string) => {
@@ -113,6 +104,19 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
     if (!md) return 0.5;
     return Math.min(parseInt(md) / 16, 1);
   })();
+
+  // Explainer view — swap the popup body. Must live AFTER every hook above.
+  if (showInfo) {
+    return (
+      <SettingsExplainer
+        title="Appearance"
+        intro={APPEARANCE_EXPLAINER.intro}
+        sections={APPEARANCE_EXPLAINER.sections}
+        onBack={() => setShowInfo(false)}
+        onClose={onClose}
+      />
+    );
+  }
 
   return (
     <div className="flex flex-col h-full">
