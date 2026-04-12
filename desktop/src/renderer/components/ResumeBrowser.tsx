@@ -84,6 +84,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     try { localStorage.setItem('destincode-resume-show-complete', showComplete ? '1' : '0'); } catch {}
   }, [showComplete]);
 
+  // Sessions the user flagged Complete during the current open. They stay
+  // visible until the menu is closed and reopened, so the row doesn't vanish
+  // mid-interaction when Show Complete is off. Reset on every open.
+  const [stickyComplete, setStickyComplete] = useState<Set<string>>(new Set());
+
   // Fetch sessions when opened
   useEffect(() => {
     if (open) {
@@ -91,6 +96,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setExpandedId(null);
       setResumeModel(defaultModel || 'sonnet');
       setResumeDangerous(defaultSkipPermissions || false);
+      // Reset the sticky-visible set each open — previously kept rows drop out.
+      setStickyComplete(new Set());
       setLoading(true);
       (window as any).claude.session.browse()
         .then((list: PastSession[]) => setSessions(list))
@@ -117,7 +124,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const filtered = useMemo(() => {
     // Hide complete sessions by default; Show Complete toggle reveals them.
     // Priority does NOT override hiding — a complete+priority session stays hidden.
-    const base = showComplete ? sessions : sessions.filter((s) => !s.flags?.complete);
+    // Exception: sessions just flagged Complete during this open stay visible
+    // (stickyComplete) so the row doesn't disappear mid-interaction.
+    const base = showComplete
+      ? sessions
+      : sessions.filter((s) => !s.flags?.complete || stickyComplete.has(s.sessionId));
     if (!search.trim()) return base;
     const q = search.toLowerCase();
     return base.filter(
@@ -125,7 +136,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         s.name.toLowerCase().includes(q) ||
         s.projectPath.toLowerCase().includes(q),
     );
-  }, [sessions, search, showComplete]);
+  }, [sessions, search, showComplete, stickyComplete]);
 
   // Group by project path AND sort priority sessions to the top of each group.
   // Secondary sort is lastModified desc (preserves the existing default).
@@ -168,6 +179,14 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       s.sessionId === sessionId ? { ...s, flags: { ...(s.flags || {}), [flag]: val } } : s,
     ));
     apply(next);
+    // Pin just-flagged-Complete rows visible for the remainder of this open.
+    if (flag === 'complete' && next && !showComplete) {
+      setStickyComplete((prev) => {
+        const ns = new Set(prev);
+        ns.add(sessionId);
+        return ns;
+      });
+    }
     try {
       const res: any = await (window as any).claude.session.setFlag(sessionId, flag, next);
       if (res && res.ok === false) apply(!next);
@@ -250,30 +269,24 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         )}
 
         {/* Flags — one row of multi-select pills (Priority / Helpful / Complete).
-            Complete is disabled unless Show Complete is on, since marking Complete
-            while hidden would make the row disappear mid-interaction. */}
+            Complete can be toggled on with Show Complete off; the row stays
+            visible until the menu is closed and reopened (stickyComplete). */}
         <div>
           <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Flags</label>
           <div className="flex gap-1">
             {FLAG_ORDER.map((flag) => {
               const active = !!s.flags?.[flag];
-              const disabled = flag === 'complete' && !showComplete && !active;
               return (
                 <button
                   key={flag}
                   onClick={(e) => {
                     e.stopPropagation();
-                    if (disabled) return;
                     toggleFlag(s.sessionId, flag, !active);
                   }}
-                  disabled={disabled}
-                  title={disabled ? 'Turn on Show Complete to set this flag' : undefined}
                   className={`flex-1 px-1 py-1 rounded-sm text-[10px] transition-colors ${
                     active
                       ? 'bg-accent text-on-accent font-medium'
-                      : disabled
-                        ? 'bg-inset text-fg-faint opacity-60 cursor-not-allowed'
-                        : 'bg-inset text-fg-dim hover:bg-edge'
+                      : 'bg-inset text-fg-dim hover:bg-edge'
                   }`}
                   aria-pressed={active}
                 >
