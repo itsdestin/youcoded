@@ -1,4 +1,4 @@
-import React, { useRef, useState, useLayoutEffect, useEffect, useCallback } from 'react';
+import React, { useRef, useLayoutEffect, useEffect, useCallback } from 'react';
 import { ChatIcon, TerminalIcon, GamepadIcon } from './Icons';
 import SessionStrip from './SessionStrip';
 import type { SessionStatusColor } from './StatusDot';
@@ -76,31 +76,38 @@ export default function HeaderBar({
   defaultModel, defaultSkipPermissions, defaultProjectFolder,
   geminiEnabled,
 }: Props) {
-  // Sliding pill tracks active button position via ResizeObserver
+  // Sliding pill tracks active button position via ResizeObserver.
+  //
+  // Fix: previously the pill had its own 300ms CSS transition AND its
+  // target position was React state updated on every ResizeObserver frame
+  // while the button text animated (max-width: 0 → 3rem). The two
+  // animations fought each other — each setState restarted the pill's
+  // transition mid-flight, producing the "stuck then stutters" artifact
+  // users reported. Also the initial useLayoutEffect measured *before*
+  // the button had grown, so the pill would briefly head toward a stale
+  // narrow target.
+  //
+  // Solution: remove the pill's CSS transition entirely and drive its
+  // style directly via ref (bypassing React reconciliation). The pill
+  // snaps to the active button's exact current size every frame — which
+  // is smooth because the button's own max-width transition is smooth,
+  // and there's no competing animation. Also zero re-renders of
+  // HeaderBar's subtree during the 300ms window.
   const containerRef = useRef<HTMLDivElement>(null);
   const chatBtnRef = useRef<HTMLButtonElement>(null);
   const termBtnRef = useRef<HTMLButtonElement>(null);
-  const [pillPos, setPillPos] = useState({ left: 0, width: 0 });
-  const pillPosRef = useRef(pillPos);
-  pillPosRef.current = pillPos;
+  const pillRef = useRef<HTMLDivElement>(null);
   const rafIdRef = useRef<number | null>(null);
 
-  // Fix: ResizeObserver used to fire `measure` synchronously on every frame
-  // while the button text animated (max-width transition), each firing a
-  // getBoundingClientRect + setState that re-rendered HeaderBar's entire
-  // subtree 60× during the 300ms toggle. Now we coalesce into one RAF and
-  // skip setState when the new value is within 0.5px of the current one —
-  // the CSS transition on `left`/`width` interpolates smoothly either way.
   const measure = useCallback(() => {
     const container = containerRef.current;
+    const pill = pillRef.current;
     const activeBtn = viewMode === 'chat' ? chatBtnRef.current : termBtnRef.current;
-    if (!container || !activeBtn) return;
+    if (!container || !pill || !activeBtn) return;
     const cRect = container.getBoundingClientRect();
     const bRect = activeBtn.getBoundingClientRect();
-    const next = { left: bRect.left - cRect.left, width: bRect.width };
-    const prev = pillPosRef.current;
-    if (Math.abs(next.left - prev.left) < 0.5 && Math.abs(next.width - prev.width) < 0.5) return;
-    setPillPos(next);
+    pill.style.left = `${bRect.left - cRect.left}px`;
+    pill.style.width = `${bRect.width}px`;
   }, [viewMode]);
 
   const scheduleMeasure = useCallback(() => {
@@ -178,10 +185,14 @@ export default function HeaderBar({
       <div className="flex-1 flex items-center justify-end gap-1 sm:gap-2">
         {/* Chat/Terminal toggle — sliding pill with text roll-out */}
         <div ref={containerRef} className="relative flex bg-inset rounded-md p-0.5 gap-0.5">
-          {/* Sliding background pill — tracks active button via ResizeObserver */}
+          {/* Sliding background pill — position/width set directly by measure()
+              via ref every frame. No CSS transition here: the pill tracks the
+              button's own max-width animation precisely, which is what makes
+              the motion smooth. Adding a transition causes the two animations
+              to fight and produces a stutter. */}
           <div
-            className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)] transition-all duration-300 ease-in-out"
-            style={{ left: pillPos.left, width: pillPos.width }}
+            ref={pillRef}
+            className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)]"
           />
           <button
             ref={chatBtnRef}
