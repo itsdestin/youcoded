@@ -194,6 +194,20 @@ export class SessionManager extends EventEmitter {
     return Array.from(this.sessions.values()).map(s => s.info);
   }
 
+  /**
+   * Send `/reload-plugins` to every active session after a short delay.
+   * The delay gives Claude Code time to (a) flush its cached plugin state
+   * and (b) be ready for input at the prompt. Firing immediately after an
+   * install races with both and the reload silently no-ops.
+   */
+  broadcastReloadPlugins(delayMs: number = 1000): void {
+    setTimeout(() => {
+      for (const s of this.listSessions()) {
+        if (s.status === 'active') this.sendInput(s.id, '/reload-plugins\r');
+      }
+    }, delayMs);
+  }
+
   getSession(id: string): SessionInfo | undefined {
     return this.sessions.get(id)?.info;
   }
