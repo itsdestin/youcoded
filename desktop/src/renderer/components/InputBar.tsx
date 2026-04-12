@@ -429,6 +429,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             ref={inputRef}
             value={text}
             rows={1}
+            // Disable spellcheck — with transparent text + mirror overlay, the
+            // red/blue squiggles render on top of the mirror and look like bugs.
+            spellCheck={false}
+            autoCorrect="off"
+            autoCapitalize="off"
             onScroll={(e) => {
               if (mirrorContentRef.current) {
                 mirrorContentRef.current.style.transform = `translateY(${-e.currentTarget.scrollTop}px)`;
