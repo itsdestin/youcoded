@@ -269,7 +269,21 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
           </div>
         ) : (
           <>
-            {state.timeline.map((entry) => {
+            {(() => {
+              // Find the most recent compaction marker so we can visually fade
+              // entries above it — Claude's context is just the post-compaction
+              // summary, so pre-compaction messages are "archived" from its POV.
+              // Fading signals this without hiding history the user may want to re-read.
+              let lastCompactIdx = -1;
+              for (let i = state.timeline.length - 1; i >= 0; i--) {
+                const e = state.timeline[i];
+                if (e.kind === 'system-marker' && e.marker.variant === 'compact') {
+                  lastCompactIdx = i;
+                  break;
+                }
+              }
+              return state.timeline.map((entry, idx) => {
+                const isPreCompaction = lastCompactIdx >= 0 && idx < lastCompactIdx;
               let key: string;
               let content: React.ReactNode;
               switch (entry.kind) {
@@ -347,11 +361,17 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
                 }
               }
               return (
-                <div key={key!} ref={observeEntry} className="timeline-entry in-view">
+                <div
+                  key={key!}
+                  ref={observeEntry}
+                  className={`timeline-entry in-view${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
+                  title={isPreCompaction ? 'Archived by compaction — not in Claude\'s active context' : undefined}
+                >
                   {content}
                 </div>
               );
-            })}
+              });
+            })()}
             {/* Awaiting-approval tools pop out as standalone bubbles at the bottom */}
             {awaitingTools.map((tool) => (
                 <div key={tool.toolUseId} className="flex justify-start px-4 py-0.5">

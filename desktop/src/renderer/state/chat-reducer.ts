@@ -693,9 +693,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
-    // Compaction finished — remove spinner, clear timeline, insert a marker with
-    // the token-freed diff. Invoked from two code paths: transcript-shrink event
-    // (typed /compact) and first turn-complete after pending (resume-from-summary).
+    // Compaction finished — remove the spinner, insert a marker, but KEEP
+    // the pre-compaction timeline so the user can scroll back and read what
+    // they discussed. Claude's actual context is now just the summary (which
+    // arrives as a new assistant-turn via transcript events), but visually
+    // showing the history matches how long chat threads feel elsewhere.
+    // ChatView fades entries above the marker to hint they're "archived".
+    // Invoked from two paths: transcript-shrink (typed /compact) and first
+    // turn-complete after pending (resume-from-summary).
     case 'COMPACTION_COMPLETE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
@@ -711,10 +716,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       } else {
         label = 'Conversation compacted';
       }
+      // Strip the compacting spinner card but preserve everything else.
+      const preserved = session.timeline.filter((e) => e.kind !== 'compacting');
       next.set(action.sessionId, {
         ...session,
         ...endTurn(session),
         timeline: [
+          ...preserved,
           {
             kind: 'system-marker',
             marker: {

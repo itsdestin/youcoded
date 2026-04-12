@@ -203,14 +203,24 @@ function AppInner() {
   const chatStateMapRef = useRef(chatStateMap);
   useEffect(() => { chatStateMapRef.current = chatStateMap; }, [chatStateMap]);
 
-  // Compaction watchdog: if pending for > 60s with no shrink/turn-complete,
-  // abort gracefully. Claude Code should finish compaction in 10-30s in practice;
-  // 60s means something went wrong (API failure, user interrupted, etc.).
+  // Compaction watchdog: activity-aware — resets on any reducer update for a
+  // session with compactionPending set. Any transcript event bumps the timer
+  // forward, so long compactions (large sessions) don't trigger a false "may
+  // have failed" message as long as events keep flowing. Only fires if nothing
+  // happens for 180s straight, which genuinely means something's stuck.
+  //
+  // Prior bug: fixed 60s timer. Big sessions took longer than 60s legitimately,
+  // hit the watchdog, dispatched aborted=true, cleared pending flag — then the
+  // real shrink event arrived but had no pending flag to key off of, so the
+  // user saw "may have failed" even though compaction succeeded.
   const compactWatchdogs = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(() => {
     for (const [sid, session] of chatStateMap) {
       const existing = compactWatchdogs.current.get(sid);
-      if (session.compactionPending && !existing) {
+      if (session.compactionPending) {
+        // Reset on every reducer tick while pending — if transcript events are
+        // flowing for this session, the timer keeps bumping and never fires.
+        if (existing) clearTimeout(existing);
         const timer = setTimeout(() => {
           const current = chatStateMapRef.current.get(sid);
           if (current?.compactionPending) {
@@ -223,9 +233,9 @@ function AppInner() {
             });
           }
           compactWatchdogs.current.delete(sid);
-        }, 60_000);
+        }, 180_000);
         compactWatchdogs.current.set(sid, timer);
-      } else if (!session.compactionPending && existing) {
+      } else if (existing) {
         clearTimeout(existing);
         compactWatchdogs.current.delete(sid);
       }
