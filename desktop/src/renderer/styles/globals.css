@@ -179,11 +179,10 @@
 
   /* Overlay system — computed by theme-engine.ts from color tokens.
      Scrims are theme-tinted (not plain black), shadow strength adapts
-     to theme lightness, and overlay surfaces become frosted glass
-     automatically when the theme has glassmorphism enabled. */
+     to theme lightness. Overlay surfaces consume --panels-blur /
+     --panels-opacity directly (always-on vars set by theme-engine). */
   --color-scrim: var(--scrim);
   --color-scrim-heavy: var(--scrim-heavy);
-  --color-overlay-bg: var(--overlay-bg);
   --color-destructive: var(--destructive);
   --color-destructive-dim: var(--destructive-dim);
 
@@ -321,59 +320,59 @@ html, body, #root {
   opacity: 0;
 }
 
-/* Glassmorphism panels — active when data-panels-blur is set on <html> */
-[data-panels-blur] .bg-panel {
-  backdrop-filter: blur(var(--panels-blur, 0px));
-  -webkit-backdrop-filter: blur(var(--panels-blur, 0px));
-  background-color: var(--panel-glass, var(--panel));
-}
+/* Glassmorphism — unified treatment for chrome + popup surfaces.
+   --panels-blur and --panels-opacity are ALWAYS set by theme-engine
+   (defaults: 0px / 1). At default values these rules are a visual no-op
+   but preserve the compositing path so slider changes take effect live.
+   See GLASSMORPHISM-REFACTOR-PLAN.md for the full model.
 
-/* When a wallpaper or glassmorphism is active, make the app shell and
-   chrome wrappers transparent so the background shows through.
-   .chrome-wrapper = header/bottom bar wrappers in App.tsx that would
-   otherwise block the wallpaper with opaque bg-canvas */
-[data-panels-blur] .app-shell,
-[data-panels-blur] .chrome-wrapper,
+   .bg-panel does NOT get glass treatment here — keep it as a plain
+   background token for generic surfaces. Glass is applied to specific
+   chrome/overlay surfaces below. */
+
+/* When a wallpaper is active OR the user has dialed down panels-opacity,
+   the app shell and chrome wrappers must be transparent so what's behind
+   them shows through. Kept unconditional under [data-wallpaper] because
+   wallpaper themes ALWAYS need this; for solid themes a partially
+   transparent opacity also benefits (chrome shell won't block the canvas). */
 [data-wallpaper] .app-shell,
 [data-wallpaper] .chrome-wrapper {
   background-color: transparent !important;
 }
 
 /* Header bar — frosted glass overlay, content scrolls underneath.
-   Uses --panels-blur and --panel-glass CSS variables set by the theme
-   engine so the Panel Blur and Panel Opacity sliders work in real-time. */
-[data-panels-blur] .header-bar {
+   Always positioned absolute so chat scrolls under the bar; the bar's
+   background mixes --panel with transparency per --panels-opacity. */
+.header-bar {
   position: absolute;
   top: 0;
   left: 0;
   right: 0;
   z-index: 20;
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
 /* Chat scroll area extends behind header and bottom chrome —
    extra padding so content starts below the header / above the
    input bar, but scrolls behind frosted glass in both directions */
-[data-panels-blur] .chat-scroll {
+.chat-scroll {
   padding-top: 3rem;
   padding-bottom: var(--bottom-chrome-height, 5rem);
 }
 
 /* Inset the scrollbar track so it stops below the header and above the
-   bottom chrome, matching the visible content area. Without this the
-   scrollbar extends behind the frosted glass bars which looks broken. */
-[data-panels-blur] .chat-scroll::-webkit-scrollbar-track {
+   bottom chrome, matching the visible content area. */
+.chat-scroll::-webkit-scrollbar-track {
   margin-top: 2.5rem;
   margin-bottom: var(--bottom-chrome-height, 5rem);
 }
 
 /* Bottom chrome (input + status bars) — mirrors header pattern.
-   Absolutely positioned so chat messages scroll behind the
-   frosted glass. Only when glassmorphism + chat view are active
-   (React toggles .bottom-float based on view mode). */
-[data-panels-blur] .bottom-float {
+   Absolutely positioned so chat messages scroll behind the chrome.
+   React toggles .bottom-float based on view mode. */
+.bottom-float {
   position: absolute;
   bottom: 0;
   left: 0;
@@ -381,9 +380,9 @@ html, body, #root {
   z-index: 20;
 }
 
-/* Jump-to-bottom button — in glassmorphism mode the bottom chrome floats
-   over the content area, so push the button up above it */
-[data-panels-blur] .jump-to-bottom {
+/* Jump-to-bottom button — chrome floats over the content area,
+   so push the button up above it */
+.jump-to-bottom {
   bottom: calc(var(--bottom-chrome-height, 5rem) + 0.75rem);
 }
 
@@ -397,18 +396,27 @@ html, body, #root {
   contain: layout style;
 }
 
-/* Status bar — frosted glass (slider-controlled) */
-[data-panels-blur] .status-bar {
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+/* Status bar — slider-controlled blur + opacity */
+.status-bar {
+  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
-/* Input bar wrapper — frosted glass (slider-controlled) */
-[data-panels-blur] .input-bar-container {
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+/* Input bar wrapper — slider-controlled blur + opacity */
+.input-bar-container {
+  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+
+/* Settings drawer — shares chrome glass treatment. Border/radius
+   overrides come from the component (drawer is left-anchored and
+   should not be border-radius'd all around like a popup). */
+.settings-drawer {
+  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
 /* Fix: during the 300ms chat↔terminal toggle, backdrop-filter has to
@@ -424,49 +432,48 @@ html, body, #root {
   -webkit-backdrop-filter: none !important;
 }
 
-/* Floating overlays (portaled menus/popups) — frosted glass.
+/* Floating overlays (portaled menus/popups) — slider-controlled glass.
    Portaled to #root (not body) so backdrop-filter can sample live
    content from the compositing tree. position: fixed escapes #root's
    overflow:hidden since #root has no transform/filter/will-change. */
-[data-panels-blur] .glass-overlay {
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
+.glass-overlay {
+  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
 /* Inside glass overlays, children use opaque backgrounds so the
-   blurred wallpaper ::before doesn't leak through them */
-[data-panels-blur] .glass-overlay .bg-inset {
+   blurred wallpaper doesn't leak through nested elements */
+.glass-overlay .bg-inset {
   background-color: var(--inset);
 }
 
-[data-panels-blur] .glass-overlay .bg-accent {
+.glass-overlay .bg-accent {
   background-color: var(--accent);
 }
 
-/* Chat bubbles — semi-transparent by default (no blur = fast scroll).
-   --bubble-opacity is set by theme-engine from background.bubble-opacity.
-   Blur is only applied on wallpaper themes for visible bubbles (see below). */
-[data-panels-blur] .bg-inset {
-  background-color: color-mix(in srgb, var(--inset) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
+/* Chat bubbles — bubble-opacity is ALWAYS applied (slider-controlled).
+   At bubble-opacity=1 this resolves to the opaque --inset/--accent color.
+   Blur is wallpaper-gated below for performance. */
+.bg-inset {
+  background-color: color-mix(in srgb, var(--inset) calc(var(--bubble-opacity, 1) * 100%), transparent);
 }
-[data-panels-blur] .bg-accent {
-  background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
+.bg-accent {
+  background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 1) * 100%), transparent);
 }
 
-/* Wallpaper themes: restore frosted glass on VISIBLE bubbles only.
-   --bubble-blur is set by theme-engine from background.bubble-blur.
-   The .in-view class is toggled by IntersectionObserver in ChatView.
-   200px overscan ensures blur appears before the bubble scrolls into view. */
-[data-panels-blur][data-wallpaper] .in-view .bg-inset {
-  backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  -webkit-backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  background-color: color-mix(in srgb, var(--inset) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
+/* Wallpaper themes: apply bubble blur on VISIBLE bubbles only.
+   --bubble-blur is ALWAYS set (default 0px, no-op). The .in-view class
+   is toggled by IntersectionObserver in ChatView with 200px overscan so
+   blur appears before the bubble scrolls into view. Wallpaper is the
+   perf gate: bubbles over a solid color don't need blur. */
+[data-wallpaper] .in-view .bg-inset {
+  backdrop-filter: blur(var(--bubble-blur, 0px)) saturate(1.1);
+  -webkit-backdrop-filter: blur(var(--bubble-blur, 0px)) saturate(1.1);
 }
-[data-panels-blur][data-wallpaper] .in-view .bg-accent {
-  backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  -webkit-backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
+[data-wallpaper] .in-view .bg-accent {
+  backdrop-filter: blur(var(--bubble-blur, 0px)) saturate(1.1);
+  -webkit-backdrop-filter: blur(var(--bubble-blur, 0px)) saturate(1.1);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
@@ -484,44 +491,32 @@ html, body, #root {
    ═══════════════════════════════════════════════════════════════════════════ */
 
 /* Layer scrims — theme-tinted backdrops (not cold bg-black).
-   Scrim color adapts to theme: warm tint on cream, cool on midnight. */
+   Scrim color adapts to theme: warm tint on cream, cool on midnight.
+   Scrim blur follows --panels-blur so it's uniform with popup surfaces;
+   at blur=0 it's a no-op. */
 .layer-scrim {
   position: fixed;
   inset: 0;
   background-color: var(--scrim);
+  backdrop-filter: blur(var(--panels-blur, 0px));
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px));
 }
 
 .layer-scrim[data-layer="3"] {
   background-color: var(--scrim-heavy);
 }
 
-/* Scrim blur — only when glassmorphism active, kept subtle to limit
-   GPU compositing cost (especially on Android WebView). */
-[data-panels-blur] .layer-scrim {
-  backdrop-filter: blur(4px);
-  -webkit-backdrop-filter: blur(4px);
-}
-
-[data-panels-blur] .layer-scrim[data-layer="3"] {
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
 /* Layer surfaces — popup/modal panel backgrounds.
-   --overlay-bg is opaque (var(--panel)) in normal mode, semi-transparent
-   rgba() when glassmorphism active. --shadow-strength adapts to theme
-   lightness (higher on light themes where shadows need to be visible). */
+   Blur + opacity track --panels-blur / --panels-opacity directly so
+   popups share the chrome's glass treatment. --shadow-strength adapts
+   to theme lightness (higher on light themes). */
 .layer-surface {
-  background-color: var(--overlay-bg);
+  background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
+  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
   border: 1px solid var(--edge);
   border-radius: var(--radius-xl);
   box-shadow: 0 8px 32px rgba(0, 0, 0, var(--shadow-strength, 0.15));
-}
-
-/* Frosted glass popups — automatic when theme has glassmorphism */
-[data-panels-blur] .layer-surface {
-  backdrop-filter: blur(var(--overlay-blur, 16px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--overlay-blur, 16px)) saturate(1.2);
 }
 
 /* Destructive variant — danger-tinted border + ring for delete/clear dialogs */
@@ -531,13 +526,15 @@ html, body, #root {
               0 0 0 1px var(--destructive-dim);
 }
 
-/* Inside layer surfaces, children that use bg-inset/bg-accent should stay
-   opaque so the blurred background doesn't leak through nested elements */
-[data-panels-blur] .layer-surface .bg-inset {
+/* Protection cascade: inside any popup/overlay, nested .bg-inset / .bg-accent
+   elements stay opaque so the blurred background and bubble-opacity setting
+   don't leak through soft buttons, dividers, or inline chips. Unconditional
+   (was gated on [data-panels-blur] before the refactor). */
+.layer-surface .bg-inset {
   background-color: var(--inset);
 }
 
-[data-panels-blur] .layer-surface .bg-accent {
+.layer-surface .bg-accent {
   background-color: var(--accent);
 }
 
@@ -615,16 +612,13 @@ html, body, #root {
 [data-input-style="terminal"] .input-bar-container {
   border-radius: 0 !important;
   font-family: var(--font-mono);
-  border-top: 1px solid var(--accent, var(--edge));
-}
-
-/* Glassmorphism + input style combinations */
-[data-panels-blur][data-input-style="floating"] .input-bar-container {
-  border-top: none;
-}
-
-[data-panels-blur][data-input-style="terminal"] .input-bar-container {
+  /* Softer 40% accent top border — works under any panels-opacity setting */
   border-top: 1px solid color-mix(in srgb, var(--accent) 40%, transparent);
+}
+
+/* Floating input: no top border (was previously gated on glassmorphism) */
+[data-input-style="floating"] .input-bar-container {
+  border-top: none;
 }
 
 /* Bubble styles — "pill" uses the largest non-infinite radius so the shape

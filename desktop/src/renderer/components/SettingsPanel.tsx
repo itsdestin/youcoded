@@ -163,7 +163,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
 
       {/* Panel */}
       <div
-        className={`fixed top-0 left-0 h-full w-80 bg-panel border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out overlay-no-drag ${
+        className={`settings-drawer fixed top-0 left-0 h-full w-80 border-r border-edge-dim z-50 transform transition-transform duration-300 ease-out overlay-no-drag ${
           open ? 'translate-x-0' : '-translate-x-full'
         }`}
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
@@ -451,10 +451,10 @@ function SoundButton() {
 
       {open && createPortal(
         <>
-          <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
+          <Scrim layer={2} onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="layer-surface fixed z-[61] overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -579,10 +579,10 @@ function ThemeButton({ onSendInput, onOpenMarketplace, onPublishTheme }: { onSen
 
       {open && createPortal(
         <>
-          <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
+          <Scrim layer={2} onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="layer-surface fixed z-[61] overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -698,10 +698,10 @@ function RemoteButton({
 
       {open && createPortal(
         <>
-          <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
+          <Scrim layer={2} onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="layer-surface fixed z-[61] overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -1097,12 +1097,14 @@ function SkipPermissionsSection({ defaults, onDefaultsChange }: {
             </div>
           )}
 
-          {/* Confirmation popup for Approve All */}
+          {/* Confirmation popup for Approve All — L3 destructive, theme-driven glass */}
           {confirmOpen && createPortal(
             <>
-              <div className="fixed inset-0 bg-black/50 z-[70]" onClick={() => setConfirmOpen(false)} />
-              <div
-                className="fixed z-[71] rounded-xl bg-panel/80 backdrop-blur-xl border border-red-600/40 shadow-2xl overflow-hidden"
+              <Scrim layer={3} onClick={() => setConfirmOpen(false)} />
+              <OverlayPanel
+                layer={3}
+                destructive
+                className="fixed overflow-hidden"
                 style={{ top: '50%', left: '50%', transform: 'translate(-50%, -50%)', width: 'min(340px, 85vw)' }}
               >
                 <div className="px-4 py-3 border-b border-red-600/30 bg-red-600/10">
@@ -1142,7 +1144,7 @@ function SkipPermissionsSection({ defaults, onDefaultsChange }: {
                     </button>
                   </div>
                 </div>
-              </div>
+              </OverlayPanel>
             </>,
             document.body,
           )}
@@ -1205,10 +1207,10 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
 
       {open && createPortal(
         <>
-          <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
+          <Scrim layer={2} onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="layer-surface fixed z-[61] overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -1342,10 +1344,10 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
       {/* Popup overlay */}
       {open && (
         <>
-          <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
+          <Scrim layer={2} onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+            className="layer-surface fixed z-[61] overflow-hidden"
             style={{
               top: '50%',
               left: '50%',
@@ -1543,10 +1545,10 @@ function ConnectToDesktopButton() {
 
       {open && createPortal(
         <>
-          <div className="fixed inset-0 bg-black/30 z-[60]" onClick={() => setOpen(false)} />
+          <Scrim layer={2} onClick={() => setOpen(false)} />
           <div
             ref={popupRef}
-            className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden flex flex-col"
+            className="layer-surface fixed z-[61] overflow-hidden flex flex-col"
             style={{
               top: '50%',
               left: '50%',
@@ -1842,9 +1844,9 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
             {/* Donate confirmation modal */}
             {showDonateConfirm && createPortal(
               <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={() => setShowDonateConfirm(false)}>
-                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                <div className="absolute inset-0 layer-scrim" data-layer="2" />
                 <div
-                  className="relative bg-panel border border-edge-dim rounded-xl p-6 max-w-xs w-full mx-4 shadow-xl text-center"
+                  className="layer-surface relative p-6 max-w-xs w-full mx-4 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <p className="text-xs text-fg-muted mb-1">Donations supported via</p>
@@ -2200,9 +2202,9 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
             {/* Donate confirmation modal */}
             {showDonateConfirm && createPortal(
               <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={() => setShowDonateConfirm(false)}>
-                <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
+                <div className="absolute inset-0 layer-scrim" data-layer="2" />
                 <div
-                  className="relative bg-panel border border-edge-dim rounded-xl p-6 max-w-xs w-full mx-4 shadow-xl text-center"
+                  className="layer-surface relative p-6 max-w-xs w-full mx-4 text-center"
                   onClick={(e) => e.stopPropagation()}
                 >
                   <p className="text-xs text-fg-muted mb-1">Donations supported via</p>
