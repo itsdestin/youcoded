@@ -154,8 +154,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.SESSION_CREATED, handler);
       return handler;
     },
-    sessionDestroyed: (cb: (id: string) => void) => {
-      const handler = (_e: IpcRendererEvent, id: string) => cb(id);
+    sessionDestroyed: (cb: (id: string, exitCode: number) => void) => {
+      // exitCode piped in so the chat reducer can classify this as a clean
+      // exit vs. 'session-died'. Default to 0 when absent (older bridges).
+      const handler = (_e: IpcRendererEvent, id: string, exitCode: number = 0) => cb(id, exitCode);
       ipcRenderer.on(IPC.SESSION_DESTROYED, handler);
       return handler;
     },

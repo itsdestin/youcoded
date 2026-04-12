@@ -263,12 +263,14 @@ export class RemoteServer {
     this.broadcast({ type: 'session:created', payload: info });
   };
 
-  private onSessionExit = (sessionId: string) => {
+  private onSessionExit = (sessionId: string, exitCode: number = 0) => {
     this.ptyBuffers.delete(sessionId);
     this.hookBuffers.delete(sessionId);
     this.transcriptBuffers.delete(sessionId);
     this.lastTopics.delete(sessionId);
-    this.broadcast({ type: 'session:destroyed', payload: { sessionId } });
+    // Forward exitCode so the remote shim can surface 'session-died' banners
+    // when Claude's process dies mid-turn on the host machine.
+    this.broadcast({ type: 'session:destroyed', payload: { sessionId, exitCode } });
   };
 
   bufferTranscriptEvent(event: any): void {

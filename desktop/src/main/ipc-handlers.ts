@@ -165,7 +165,9 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.SESSION_DESTROY, async (_event, sessionId: string) => {
     const result = sessionManager.destroySession(sessionId);
     if (result) {
-      send(IPC.SESSION_DESTROYED, sessionId);
+      // Explicit user-initiated destroy → treat as clean exit (0). The
+      // reducer no-ops clean exits unless a turn was in flight.
+      send(IPC.SESSION_DESTROYED, sessionId, 0);
     }
     return result;
   });
@@ -831,9 +833,10 @@ export function registerIpcHandlers(
     }
   });
 
-  // Forward session exit events
-  sessionManager.on('session-exit', (sessionId: string) => {
-    send(IPC.SESSION_DESTROYED, sessionId);
+  // Forward session exit events — exitCode is piped through to the renderer
+  // so the reducer can distinguish clean shutdowns from 'session-died' cases.
+  sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
+    send(IPC.SESSION_DESTROYED, sessionId, exitCode);
     pendingOutput.delete(sessionId);
     readySessions.delete(sessionId);
   });

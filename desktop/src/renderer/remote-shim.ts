@@ -140,7 +140,13 @@ function handleMessage(data: string): void {
       dispatchEvent('session:created', payload);
       break;
     case 'session:destroyed':
-      dispatchEvent('session:destroyed', payload.sessionId || payload);
+      // Forward exitCode alongside id so the chat reducer can surface
+      // 'session-died' when a turn was in flight. Default 0 for older bridges.
+      dispatchEvent(
+        'session:destroyed',
+        payload.sessionId || payload,
+        typeof payload?.exitCode === 'number' ? payload.exitCode : 0,
+      );
       break;
     case 'session:renamed':
       dispatchEvent('session:renamed', payload.sessionId, payload.name);
