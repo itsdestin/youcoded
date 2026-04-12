@@ -270,8 +270,16 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   //    Also expose as --wallpaper-url so portaled glass overlays can render
   //    a blurred copy via ::before (backdrop-filter doesn't work on body children)
   const bg = theme.background;
-  if (bg?.type === 'image' && bg.value) {
+  // Fix: gradient backgrounds also need the app-shell transparency + glass treatment
+  // gated on [data-wallpaper]. Without this, the bg-canvas app-shell paints over the
+  // #theme-bg gradient layer and the gradient appears as a flat canvas-colored screen.
+  const hasBackgroundLayer = (bg?.type === 'image' || bg?.type === 'gradient') && !!bg.value;
+  if (hasBackgroundLayer) {
     root.setAttribute('data-wallpaper', '');
+  } else {
+    root.removeAttribute('data-wallpaper');
+  }
+  if (bg?.type === 'image' && bg.value) {
     body.style.backgroundImage = `url("${bg.value}")`;
     body.style.backgroundSize = 'cover';
     body.style.backgroundPosition = 'center';
@@ -281,7 +289,6 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
       // The slight dimming is handled by the vignette/overlay in custom_css if needed
     }
   } else {
-    root.removeAttribute('data-wallpaper');
     body.style.backgroundImage = '';
     body.style.backgroundSize = '';
     body.style.backgroundPosition = '';
