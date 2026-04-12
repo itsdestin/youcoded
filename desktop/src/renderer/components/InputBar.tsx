@@ -199,20 +199,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       // into separate PTY inputs (each \n would act as Enter).
       const sanitized = combined.replace(/[\r\n]+/g, ' ');
 
-      // Wrap in bracketed paste escapes (\x1b[200~ … \x1b[201~). Claude Code's
-      // Ink parser natively handles these: the start marker flips it into
-      // IN_PASTE mode, the end marker commits the paste to its cache
-      // synchronously (no timer involvement). Without brackets, Ink falls
-      // back to a length/timing heuristic with a 500ms PASTE_TIMEOUT silence
-      // window — our previous chunking approach kept resetting that timer
-      // and our Enter landed inside the window, so messages wouldn't submit.
-      // Bracketed paste is the protocol Ink is designed to handle: one atomic
-      // write, then Enter after a tiny gap so it isn't coalesced with the
-      // end marker on the same stdin read.
-      const PASTE_START = '\x1b[200~';
-      const PASTE_END = '\x1b[201~';
-      window.claude.session.sendInput(sessionId, PASTE_START + sanitized + PASTE_END);
-      setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 20);
+      // Send text, wait, then Enter as two separate PTY writes. Claude
+      // Code's Ink parser has a 500ms PASTE_TIMEOUT that fires when long
+      // input is detected — during that window any \r we send is absorbed
+      // as content rather than submit. Waiting 700ms (> PASTE_TIMEOUT)
+      // guarantees the paste buffer has committed before Enter arrives.
+      // Short messages don't trigger paste mode, so the wait is just a
+      // harmless delay. Previous attempts chunked the text or wrapped it
+      // in bracketed-paste escapes — both raced other timers and failed
+      // on Windows ConPTY. The simplest fix is also the most reliable:
+      // one write, wait long enough, then submit.
+      window.claude.session.sendInput(sessionId, sanitized);
+      setTimeout(() => window.claude.session.sendInput(sessionId, '\r'), 700);
     },
     [sessionId, disabled, dispatch, view, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker],
   );
