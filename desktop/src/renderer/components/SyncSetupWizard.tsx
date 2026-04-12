@@ -408,7 +408,14 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             const dupes = existingBackends.filter(b => b.type === backendType);
             let isDup = false;
             if (backendType === 'drive') {
-              isDup = dupes.some(b => (b.config.DRIVE_ROOT || '').toLowerCase() === driveFolder.trim().toLowerCase());
+              // Two Drive backends are only truly duplicates when BOTH the rclone
+              // remote (→ Google account) AND the folder match. Different remotes
+              // mean different accounts (e.g., work vs school) even with same folder.
+              const thisRemote = (remoteName || 'gdrive').toLowerCase();
+              isDup = dupes.some(b =>
+                (b.config.rcloneRemote || '').toLowerCase() === thisRemote &&
+                (b.config.DRIVE_ROOT || '').toLowerCase() === driveFolder.trim().toLowerCase()
+              );
             } else if (backendType === 'github') {
               const target = repoMode === 'existing' ? repoUrl : (ghUsername ? `https://github.com/${ghUsername}/${repoName}` : '');
               if (target.trim()) {
@@ -420,7 +427,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             }
             return isDup ? (
               <div className="px-3 py-2 rounded-lg bg-inset/50 text-[11px] text-fg-dim">
-                Heads up: you already have a backup in this location. Adding another is fine — they'll both keep the same place in sync.
+                Heads up: you already have a backup pointing to this exact destination (same account and folder). Adding another is safe, but it'll just duplicate what the existing one does. If you meant a different account, cancel and sign into that account first.
               </div>
             ) : null;
           })()}
