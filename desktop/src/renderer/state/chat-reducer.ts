@@ -140,21 +140,13 @@ function endTurn(session: SessionChatState): Partial<SessionChatState> {
     currentGroupId: null,
     currentTurnId: null,
     activeTurnToolIds: new Set(),
-    thinkingTimedOut: false,
+    // Clean slate on turn end. SESSION_PROCESS_EXITED sets 'session-died'
+    // AFTER spreading endTurn() so it overrides this reset.
+    attentionState: 'ok' as const,
   };
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
-  // Fast path: the two highest-frequency no-op patterns exit before cloning.
-  // TERMINAL_ACTIVITY fires on every rAF during output; default catches unknown types.
-  if (action.type === 'TERMINAL_ACTIVITY') {
-    const session = state.get(action.sessionId);
-    if (!session || !session.isThinking) return state;
-    const next = new Map(state);
-    next.set(action.sessionId, { ...session, lastActivityAt: Date.now() });
-    return next;
-  }
-
   const next = new Map(state);
 
   switch (action.type) {
@@ -267,18 +259,46 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
-    case 'THINKING_TIMEOUT': {
+    // Process exited — if the session was still working (in-flight tools OR
+    // isThinking) OR exited nonzero, surface this as 'session-died'. Clean
+    // exits during idle are no-ops (we don't want a banner when the user
+    // intentionally closes a quiet session).
+    case 'SESSION_PROCESS_EXITED': {
       const session = next.get(action.sessionId);
-      if (!session || !session.isThinking) return state;
+      if (!session) return state;
+      const hadInFlight = session.isThinking || session.activeTurnToolIds.size > 0;
+      if (action.exitCode === 0 && !hadInFlight) return state;
       next.set(action.sessionId, {
         ...session,
         ...endTurn(session),
-        thinkingTimedOut: true,
+        // Override endTurn's 'ok' reset — this is the state we want to surface.
+        attentionState: 'session-died',
       });
       return next;
     }
 
-    // TERMINAL_ACTIVITY handled in fast path above (before Map clone)
+    // Pure state write from the classifier driver hook. Gated by the hook
+    // itself (only dispatches when mapped state differs), so no guard needed.
+    case 'ATTENTION_STATE_CHANGED': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      if (session.attentionState === action.state) return state;
+      next.set(action.sessionId, { ...session, attentionState: action.state });
+      return next;
+    }
+
+    // Thinking blocks are genuine activity — bump lastActivityAt and clear
+    // any stale attention state back to 'ok'. No timeline change.
+    case 'TRANSCRIPT_THINKING_HEARTBEAT': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      next.set(action.sessionId, {
+        ...session,
+        lastActivityAt: Date.now(),
+        attentionState: 'ok',
+      });
+      return next;
+    }
 
     // --- Transcript watcher actions ---
 
@@ -319,6 +339,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         isThinking: true,
         currentGroupId: null,
         currentTurnId: null,
+        // Fresh activity from the transcript → chat view is back in sync,
+        // so any stale attention banner should disappear.
+        attentionState: 'ok',
       });
       return next;
     }
@@ -341,6 +364,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...session, assistantTurns, timeline, currentTurnId,
         currentGroupId: null, // next tool_use creates a new group
         lastActivityAt: Date.now(),
+        attentionState: 'ok',
       });
       return next;
     }
@@ -407,6 +431,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             assistantTurns: mergedTurns,
             activeTurnToolIds,
             lastActivityAt: Date.now(),
+            attentionState: 'ok',
           });
           mergedSynthetic = true;
           break;
@@ -463,6 +488,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         currentGroupId, currentTurnId,
         activeTurnToolIds,
         lastActivityAt: Date.now(),
+        attentionState: 'ok',
       });
       return next;
     }
@@ -487,6 +513,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       next.set(action.sessionId, {
         ...session, toolCalls, lastActivityAt: Date.now(),
+        attentionState: 'ok',
       });
       return next;
     }
@@ -582,6 +609,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         next.set(action.sessionId, {
           ...session, toolCalls, toolGroups, assistantTurns,
           timeline, currentTurnId, activeTurnToolIds,
+          // Chat already renders the approval card — classifier doesn't also need to warn.
+          attentionState: 'ok',
         });
         return next;
       }
@@ -591,7 +620,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         (e) => !(e.kind === 'prompt' && !e.prompt.completed),
       );
 
-      next.set(action.sessionId, { ...session, toolCalls, timeline });
+      next.set(action.sessionId, { ...session, toolCalls, timeline, attentionState: 'ok' });
       return next;
     }
 

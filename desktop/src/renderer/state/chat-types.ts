@@ -79,6 +79,18 @@ export type TimelineEntry =
   // /copy picker when the target turn has multiple copyable blocks
   | { kind: 'copy-picker'; id: string; options: CopyPickerOption[] };
 
+// AttentionState drives the UI decision between ThinkingIndicator (ok) and
+// the AttentionBanner (everything else). A classifier reads the PTY buffer
+// and maps its conclusions onto these states; process-exit events also
+// transition to 'session-died' directly. See docs/chat-reducer.md.
+export type AttentionState =
+  | 'ok'              // Default — indicator renders if isThinking
+  | 'awaiting-input'  // PTY shows a non-hook prompt (CLI-level confirm, etc.)
+  | 'shell-idle'      // PTY shows bash/shell prompt; session not actively running
+  | 'error'           // PTY tail matches error pattern
+  | 'stuck'           // Spinner frame stale ≥ 10s OR unknown silence > 60s
+  | 'session-died';   // Process exited mid-turn
+
 export interface SessionChatState {
   timeline: TimelineEntry[];
   toolCalls: Map<string, ToolCallState>;
@@ -94,8 +106,20 @@ export interface SessionChatState {
   lastActivityAt: number;
   /** Tool IDs belonging to the current active turn — cleared on turn end */
   activeTurnToolIds: Set<string>;
-  /** True when the thinking timeout fired — ephemeral, cleared on turn-complete */
-  thinkingTimedOut: boolean;
+  /**
+   * Drives the chat-view "is something wrong?" banner. Default 'ok' means
+   * render the normal ThinkingIndicator (when isThinking). Anything else
+   * surfaces an AttentionBanner with state-specific copy. Set by the PTY
+   * buffer classifier (useAttentionClassifier) or by SESSION_PROCESS_EXITED.
+   * Reset to 'ok' on any transcript activity or endTurn().
+   */
+  attentionState: AttentionState;
+  /**
+   * Wall-clock of the last non-spinner buffer change (set by classifier).
+   * Used to distinguish "spinner is ticking but nothing else is changing"
+   * from "buffer is actively producing new output."
+   */
+  lastBufferActivityAt: number;
   /**
    * Compaction in flight — set by /compact (typed or resume-from-summary click),
    * cleared by transcript-shrink event OR first turn-complete after pending was set
@@ -118,7 +142,8 @@ export function createSessionChatState(): SessionChatState {
     currentTurnId: null,
     lastActivityAt: 0,
     activeTurnToolIds: new Set(),
-    thinkingTimedOut: false,
+    attentionState: 'ok',
+    lastBufferActivityAt: 0,
     compactionPending: null,
   };
 }
@@ -153,7 +178,26 @@ export type ChatAction =
       promptId: string;
     }
   | {
-      type: 'THINKING_TIMEOUT';
+      // Process exited — main-process session-exit event forwarded via IPC.
+      // Reducer decides whether to surface 'session-died' based on exitCode
+      // and whether a turn was in flight.
+      type: 'SESSION_PROCESS_EXITED';
+      sessionId: string;
+      exitCode: number;
+    }
+  | {
+      // Classifier-driven attention state change. Pure state write; no
+      // side effects. Dispatched by useAttentionClassifier only when the
+      // classifier's decision differs from the current state.
+      type: 'ATTENTION_STATE_CHANGED';
+      sessionId: string;
+      state: AttentionState;
+    }
+  | {
+      // Heartbeat fired when the transcript watcher sees an assistant
+      // thinking block (extended-thinking models). No UI; just bumps
+      // lastActivityAt and clears attentionState back to 'ok'.
+      type: 'TRANSCRIPT_THINKING_HEARTBEAT';
       sessionId: string;
     }
   | {
@@ -173,10 +217,6 @@ export type ChatAction =
       type: 'PERMISSION_RESPONDED';
       sessionId: string;
       requestId: string;
-    }
-  | {
-      type: 'TERMINAL_ACTIVITY';
-      sessionId: string;
     }
   | {
       type: 'TRANSCRIPT_USER_MESSAGE';
