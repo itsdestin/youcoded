@@ -1,7 +1,17 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { isAndroid } from '../platform';
 import { useSkills } from '../state/skill-context';
 import type { ChipConfig } from '../../shared/types';
+
+// Pencil SVG icon — matches the one used in StatusBar.tsx
+function PencilIcon({ size = 10 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg">
+      <path d="M12.146.854a.5.5 0 0 1 .708 0l2.292 2.292a.5.5 0 0 1 0 .708l-9.5 9.5a.5.5 0 0 1-.168.11l-4 1.5a.5.5 0 0 1-.638-.638l1.5-4a.5.5 0 0 1 .11-.168l9.5-9.5zM11.207 2.5 13.5 4.793 14.793 3.5 12.5 1.207 11.207 2.5zm1.586 3L10.5 3.207 4 9.707V10h.5a.5.5 0 0 1 .5.5v.5h.5a.5.5 0 0 1 .5.5v.5h.293l6.5-6.5z"/>
+    </svg>
+  );
+}
 
 export interface QuickChip {
   label: string;
@@ -79,22 +89,24 @@ export default function QuickChips({ onChipTap }: Props) {
         <button
           ref={pencilRef}
           onClick={() => setEditorOpen(!editorOpen)}
-          className={`shrink-0 ${pencilSize} rounded-md bg-well border border-edge-dim text-[11px] text-fg-muted hover:bg-inset hover:text-fg transition-colors flex items-center justify-center`}
+          className={`shrink-0 ${pencilSize} rounded-md bg-well border border-edge-dim text-fg-muted hover:bg-inset hover:text-fg transition-colors flex items-center justify-center`}
           title="Edit quick chips"
         >
-          &#9998;
+          <PencilIcon size={android ? 12 : 10} />
         </button>
       </div>
 
-      {/* Chip editor popup */}
-      {editorOpen && (
+      {/* Chip editor popup — portaled to body to escape overflow:hidden on floating input style */}
+      {editorOpen && createPortal(
         <ChipEditorPopup
           ref={popupRef}
           chips={chips}
           setChips={setChips}
           installed={installed}
           onClose={() => setEditorOpen(false)}
-        />
+          anchorRef={pencilRef}
+        />,
+        document.body,
       )}
     </div>
   );
@@ -107,13 +119,31 @@ interface ChipEditorProps {
   setChips: (chips: ChipConfig[]) => Promise<void>;
   installed: import('../../shared/types').SkillEntry[];
   onClose: () => void;
+  anchorRef: React.RefObject<HTMLButtonElement | null>;
 }
 
 const ChipEditorPopup = React.forwardRef<HTMLDivElement, ChipEditorProps>(
-  ({ chips, setChips, installed, onClose }, ref) => {
+  ({ chips, setChips, installed, onClose, anchorRef }, ref) => {
     const [showAddForm, setShowAddForm] = useState(false);
     const [customLabel, setCustomLabel] = useState('');
     const [customPrompt, setCustomPrompt] = useState('');
+
+    // Position the popup above the pencil button via anchorRef
+    const [pos, setPos] = useState<{ top: number; left: number }>({ top: 0, left: 0 });
+    useEffect(() => {
+      if (!anchorRef.current) return;
+      const updatePos = () => {
+        const rect = anchorRef.current!.getBoundingClientRect();
+        // Popup anchors its bottom-right to the button's top-right (via transform)
+        setPos({
+          top: rect.top - 4, // 4px gap above button
+          left: rect.right,
+        });
+      };
+      updatePos();
+      window.addEventListener('resize', updatePos);
+      return () => window.removeEventListener('resize', updatePos);
+    }, [anchorRef]);
 
     // Skills not already assigned to a chip
     const chipSkillIds = useMemo(() => new Set(chips.map(c => c.skillId).filter(Boolean)), [chips]);
@@ -155,7 +185,8 @@ const ChipEditorPopup = React.forwardRef<HTMLDivElement, ChipEditorProps>(
     return (
       <div
         ref={ref}
-        className="absolute bottom-full right-0 mb-1 w-80 max-h-[400px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-xl p-3 z-50"
+        className="fixed w-80 max-h-[400px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-xl p-3 z-50"
+        style={{ top: pos.top, left: pos.left, transform: 'translate(-100%, -100%)' }}
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-2">
