@@ -67,15 +67,20 @@ function PathHeader({ fp, extra }: { fp: string; extra?: React.ReactNode }) {
   );
 }
 
+// Tinted chips keep the semantic signal but use hardcoded status text colors
+// (text-green-400 etc. are defined in globals.css and stay consistent across
+// themes) instead of pastels like text-green-300 which wash out on high-chroma
+// theme canvases (e.g. Hello Kitty's pink). info falls back to bg-inset because
+// there's no hardcoded blue token — translucent blue on pink goes muddy.
 function Chip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'add' | 'remove' | 'warn' | 'info' }) {
   const toneClass =
-    tone === 'add' ? 'bg-green-600/20 text-green-300 border-green-600/40'
-    : tone === 'remove' ? 'bg-red-600/20 text-red-300 border-red-600/40'
-    : tone === 'warn' ? 'bg-amber-600/20 text-amber-300 border-amber-600/40'
-    : tone === 'info' ? 'bg-blue-600/20 text-blue-300 border-blue-600/40'
+    tone === 'add' ? 'bg-green-600/15 text-green-400 border-green-600/40'
+    : tone === 'remove' ? 'bg-red-600/15 text-red-400 border-red-600/40'
+    : tone === 'warn' ? 'bg-amber-600/15 text-amber-700 border-amber-600/40'
+    : tone === 'info' ? 'bg-inset text-fg-2 border-edge'
     : 'bg-inset text-fg-muted border-edge';
   return (
-    <span className={`px-1.5 py-px text-[10px] uppercase tracking-wider rounded-sm border ${toneClass}`}>
+    <span className={`px-1.5 py-px text-[10px] uppercase tracking-wider rounded-sm border font-medium ${toneClass}`}>
       {children}
     </span>
   );
@@ -114,6 +119,11 @@ function ErrorBlock({ error }: { error: string }) {
 
 // --- Edit / Write ---
 
+// Tinted row backgrounds carry the semantic signal (kept per design intent),
+// but code text uses text-fg (theme-adaptive) instead of pastel text-red-200 /
+// text-green-200 which washed out on high-chroma theme canvases like Hello
+// Kitty's pink. The solid left bar + colored gutter glyph stay hardcoded so
+// the add/remove signal is visible even if the tint blends into the bubble.
 function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');
@@ -121,17 +131,17 @@ function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   return (
     <div className="text-xs font-mono rounded-sm overflow-hidden border border-edge">
       {oldLines.map((line, i) => (
-        <div key={`o-${i}`} className="flex items-start bg-red-600/10 border-l-2 border-red-500/60">
+        <div key={`o-${i}`} className="flex items-start bg-red-600/10 border-l-[3px] border-red-500">
           <span className="w-8 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0">{i + 1}</span>
-          <span className="w-4 text-red-400 select-none shrink-0">−</span>
-          <span className="py-0.5 pr-2 text-red-200 whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
+          <span className="w-4 text-red-400 select-none shrink-0 font-bold">−</span>
+          <span className="py-0.5 pr-2 text-fg whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
         </div>
       ))}
       {newLines.map((line, i) => (
-        <div key={`n-${i}`} className="flex items-start bg-green-600/10 border-l-2 border-green-500/60">
+        <div key={`n-${i}`} className="flex items-start bg-green-600/10 border-l-[3px] border-green-400">
           <span className="w-8 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0">{i + 1}</span>
-          <span className="w-4 text-green-400 select-none shrink-0">+</span>
-          <span className="py-0.5 pr-2 text-green-200 whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
+          <span className="w-4 text-green-400 select-none shrink-0 font-bold">+</span>
+          <span className="py-0.5 pr-2 text-fg whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
         </div>
       ))}
     </div>
@@ -173,7 +183,7 @@ function WriteView({ tool }: { tool: ToolCallState }) {
         {lineCount > 0 && <span className="text-[10px] text-fg-muted">{lineCount} lines</span>}
       </div>
       {content ? (
-        <div className="rounded-sm overflow-hidden border border-green-600/30 bg-green-600/5">
+        <div className="rounded-sm overflow-hidden border border-green-600/30 bg-green-600/10">
           <CollapsibleBlock maxLines={20}>{content}</CollapsibleBlock>
         </div>
       ) : (
