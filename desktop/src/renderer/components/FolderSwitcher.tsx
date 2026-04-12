@@ -133,7 +133,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
       )}
 
       {/* Dropdown panel — uses .layer-surface for theme-driven background,
-          border, shadow, and glassmorphism (blur when [data-panels-blur]). */}
+          border, shadow, and glassmorphism (blur/opacity from --panels-* vars). */}
       {open && (
         <div
           className="layer-surface absolute top-full mt-1 left-1/2 w-72 overflow-hidden"

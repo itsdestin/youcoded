@@ -171,17 +171,16 @@ function rgbLuminance(r: number, g: number, b: number): number {
 }
 
 /** Computes overlay CSS custom properties from existing theme tokens.
- *  All values are concrete rgba() strings — no color-mix() — for Android
- *  WebView compatibility. Theme authors can override any value via the
- *  optional `overlay` field in their manifest. */
+ *  After the glassmorphism refactor, overlay surfaces consume --panels-blur /
+ *  --panels-opacity directly (set globally in applyThemeToDom), so this helper
+ *  only emits scrim, shadow, and destructive tokens — NOT overlay-bg/overlay-blur. */
 export function computeOverlayTokens(
   tokens: ThemeTokens,
-  background: ThemeBackground | undefined,
+  _background: ThemeBackground | undefined,
   overlay: ThemeOverlay | undefined,
-  reducedEffects: boolean,
+  _reducedEffects: boolean,
 ): Record<string, string> {
   const [canvasR, canvasG, canvasB] = parseHex(tokens.canvas);
-  const [panelR, panelG, panelB] = parseHex(tokens.panel);
   const lum = rgbLuminance(canvasR, canvasG, canvasB);
 
   // Scrim — darken canvas toward black for a theme-tinted overlay dim.
@@ -196,19 +195,9 @@ export function computeOverlayTokens(
   // dark themes rely more on borders so shadows can be subtle.
   const shadowStrength = overlay?.['shadow-strength'] ?? (lum > 0.2 ? 0.2 : 0.1);
 
-  // Glassmorphism-aware overlay surface
-  const blur = background?.['panels-blur'];
-  const hasGlass = blur != null && blur > 0 && !reducedEffects;
-
   const result: Record<string, string> = {
     '--scrim': overlay?.scrim ?? `rgba(${scrimR}, ${scrimG}, ${scrimB}, 0.5)`,
     '--scrim-heavy': overlay?.['scrim-heavy'] ?? `rgba(${scrimR}, ${scrimG}, ${scrimB}, 0.7)`,
-    // Overlay surface: semi-transparent panel when glass is active, opaque otherwise
-    '--overlay-bg': hasGlass
-      ? `rgba(${panelR}, ${panelG}, ${panelB}, 0.85)`
-      : tokens.panel,
-    // Overlay blur: 16px when glass active, 0 otherwise (or when reduced effects)
-    '--overlay-blur': hasGlass ? '16px' : '0px',
     '--shadow-strength': String(shadowStrength),
     '--destructive': overlay?.destructive ?? '#DD4444',
     '--destructive-dim': `rgba(${parseHex(overlay?.destructive ?? '#DD4444').join(', ')}, 0.15)`,
@@ -216,6 +205,11 @@ export function computeOverlayTokens(
 
   return result;
 }
+
+/** Implicit opacity fallback when a theme declares blur without opacity.
+ *  Preserves translucent feel for themes written before the fields were decoupled.
+ *  See GLASSMORPHISM-REFACTOR-PLAN.md § "Implicit opacity fallback". */
+const IMPLICIT_GLASS_OPACITY = 0.77;
 
 const LAYOUT_ATTRS = ['data-chrome-style', 'data-input-style', 'data-bubble-style', 'data-header-style', 'data-statusbar-style'] as const;
 
@@ -238,32 +232,31 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     root.style.setProperty(prop, value);
   }
 
-  // 4. Glassmorphism — set/remove data-panels-blur + CSS vars
-  const blur = theme.background?.['panels-blur'];
-  const panelsOpacity = theme.background?.['panels-opacity'];
-  const bubbleBlur = theme.background?.['bubble-blur'];
-  const bubbleOpacity = theme.background?.['bubble-opacity'];
-  if (blur && blur > 0 && !reducedEffects) {
-    root.setAttribute('data-panels-blur', String(blur));
-    root.style.setProperty('--panels-blur', `${blur}px`);
-    // Compute semi-transparent panel color for glassmorphism.
-    // Always set --panel-glass so the slider value is always reflected,
-    // even at 100% opacity (prevents fallback to hardcoded color-mix).
-    const opacity = panelsOpacity ?? 0.88;
-    const hex = theme.tokens.panel.replace(/^#/, '');
-    const r = parseInt(hex.slice(0, 2), 16);
-    const g = parseInt(hex.slice(2, 4), 16);
-    const b = parseInt(hex.slice(4, 6), 16);
-    root.style.setProperty('--panel-glass', `rgba(${r}, ${g}, ${b}, ${opacity})`);
-    // Bubble glassmorphism — separate blur/opacity for chat bubbles
-    root.style.setProperty('--bubble-blur', `${bubbleBlur ?? 16}px`);
-    root.style.setProperty('--bubble-opacity', String(bubbleOpacity ?? 0.88));
+  // 4. Glassmorphism — always-on CSS vars with safe defaults.
+  //    Blur and opacity are INDEPENDENT knobs. globals.css rules consume the
+  //    vars unconditionally; at 0px blur + opacity 1 the effect is a no-op.
+  //    Implicit opacity fallback (IMPLICIT_GLASS_OPACITY) preserves the
+  //    translucent look for legacy themes that only declared blur.
+  //    Reduced-effects mode forces blurs to 0 but leaves opacities alone so
+  //    the user's transparency intent is respected.
+  const rawPanelsBlur = theme.background?.['panels-blur'] ?? 0;
+  const rawBubbleBlur = theme.background?.['bubble-blur'] ?? 0;
+  const panelsBlur = reducedEffects ? 0 : rawPanelsBlur;
+  const bubbleBlur = reducedEffects ? 0 : rawBubbleBlur;
+  const panelsOpacity = theme.background?.['panels-opacity']
+    ?? (rawPanelsBlur > 0 ? IMPLICIT_GLASS_OPACITY : 1);
+  const bubbleOpacity = theme.background?.['bubble-opacity']
+    ?? (rawBubbleBlur > 0 ? IMPLICIT_GLASS_OPACITY : 1);
+
+  root.style.setProperty('--panels-blur', `${panelsBlur}px`);
+  root.style.setProperty('--panels-opacity', String(panelsOpacity));
+  root.style.setProperty('--bubble-blur', `${bubbleBlur}px`);
+  root.style.setProperty('--bubble-opacity', String(bubbleOpacity));
+
+  if (reducedEffects) {
+    root.setAttribute('data-reduced-effects', '');
   } else {
-    root.removeAttribute('data-panels-blur');
-    root.style.removeProperty('--panels-blur');
-    root.style.removeProperty('--panel-glass');
-    root.style.removeProperty('--bubble-blur');
-    root.style.removeProperty('--bubble-opacity');
+    root.removeAttribute('data-reduced-effects');
   }
 
   // 4b. Overlay tokens — scrim, overlay surface, shadow strength, destructive accent.
@@ -317,60 +310,13 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     customEl.textContent = '';
   }
 
-  // 7b. Engine overrides — injected AFTER custom_css so they win at equal
-  //     specificity. Themes may hardcode bubble blur/opacity in custom_css,
-  //     but manifest fields (via CSS variables) must take precedence.
-  const overridesId = 'theme-engine-overrides';
-  let overridesEl = document.getElementById(overridesId) as HTMLStyleElement | null;
-  if (blur && blur > 0 && !reducedEffects) {
-    if (!overridesEl) {
-      overridesEl = document.createElement('style');
-      overridesEl.id = overridesId;
-      document.head.appendChild(overridesEl);
-    }
-    // These rules mirror globals.css but are injected after theme custom_css
-    // so they override any hardcoded blur/opacity in the theme.
-    // Covers both panel chrome (header, status, input) and chat bubbles.
-    overridesEl.textContent = `
-[data-panels-blur] .header-bar {
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
-}
-[data-panels-blur] .status-bar {
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
-}
-[data-panels-blur] .input-bar-container {
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
-}
-[data-panels-blur] .glass-overlay {
-  backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  -webkit-backdrop-filter: blur(var(--panels-blur, 24px)) saturate(1.2);
-  background-color: var(--panel-glass, color-mix(in srgb, var(--panel) 88%, transparent));
-}
-[data-panels-blur] .bg-inset {
-  background-color: color-mix(in srgb, var(--inset) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
-}
-[data-panels-blur] .bg-accent {
-  background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
-}
-[data-panels-blur][data-wallpaper] .in-view .bg-inset {
-  backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  -webkit-backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  background-color: color-mix(in srgb, var(--inset) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
-}
-[data-panels-blur][data-wallpaper] .in-view .bg-accent {
-  backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  -webkit-backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
-  background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
-}`;
-  } else if (overridesEl) {
-    overridesEl.textContent = '';
-  }
+  // 7b. Engine overrides style tag — removed in the glassmorphism refactor.
+  //     Manifest fields flow through --panels-* / --bubble-* CSS variables which
+  //     globals.css consumes unconditionally, so there's no longer a need to
+  //     re-inject rules after theme custom_css. If a stale overrides tag exists
+  //     from a previous engine version, clear it so it can't compete.
+  const staleOverridesEl = document.getElementById('theme-engine-overrides');
+  if (staleOverridesEl) staleOverridesEl.textContent = '';
 
   // 8. Theme font — inject Google Font <link> and set --font-sans/--font-mono
   applyThemeFont(theme.font);
@@ -384,7 +330,9 @@ const TOKEN_CSS_PROPS = [
   '--fg', '--fg-2', '--fg-dim', '--fg-muted', '--fg-faint',
   '--edge', '--edge-dim', '--scrollbar-thumb', '--scrollbar-hover',
   // Overlay tokens (computed by theme engine from color tokens)
-  '--scrim', '--scrim-heavy', '--overlay-bg', '--overlay-blur',
+  '--scrim', '--scrim-heavy',
   '--shadow-strength', '--destructive', '--destructive-dim',
+  // Glassmorphism vars — always present with safe defaults (blur 0, opacity 1)
+  '--panels-blur', '--panels-opacity', '--bubble-blur', '--bubble-opacity',
 ] as const;
 

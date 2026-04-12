@@ -42,12 +42,14 @@ describe.skipIf(!previewExists)('theme-preview.css ↔ globals.css sync', () => 
     expect(preview).toContain(`var(${token}`);
   });
 
-  // Glassmorphism selectors must exist in both
+  // Glassmorphism selectors must exist in both. After the glassmorphism
+  // refactor these are unconditional (no [data-panels-blur] gate) — the
+  // always-on --panels-*/--bubble-* vars control the effect level.
   const GLASS_SELECTORS = [
-    '[data-panels-blur] .header-bar',
-    '[data-panels-blur] .status-bar',
-    '[data-panels-blur] .bg-inset',
-    '[data-panels-blur] .bg-accent',
+    '.header-bar',
+    '.status-bar',
+    '.bg-inset',
+    '.bg-accent',
   ];
 
   it.each(GLASS_SELECTORS)('both files contain glassmorphism selector: %s', (sel) => {
@@ -95,11 +97,12 @@ describe.skipIf(!previewExists)('theme-preview.css ↔ globals.css sync', () => 
     expect(preview).toContain('.effect-scanlines');
   });
 
-  // Key CSS properties that must be present in the glassmorphism rules
+  // Key CSS properties that must be present in the glassmorphism rules.
+  // Post-refactor: the .header-bar rule is unconditional and reads
+  // --panels-blur / --panels-opacity directly (defaults 0px / 1).
   it('glassmorphism header has blur + saturate in both files', () => {
-    // Extract the header-bar glass rule content from both
-    const globalsHeaderMatch = globals.match(/\[data-panels-blur\]\s+\.header-bar\s*\{([^}]+)\}/);
-    const previewHeaderMatch = preview.match(/\[data-panels-blur\]\s+\.header-bar\s*\{([^}]+)\}/);
+    const globalsHeaderMatch = globals.match(/\n\.header-bar\s*\{([^}]+)\}/);
+    const previewHeaderMatch = preview.match(/\n\.header-bar\s*\{([^}]+)\}/);
 
     expect(globalsHeaderMatch).not.toBeNull();
     expect(previewHeaderMatch).not.toBeNull();
@@ -107,15 +110,17 @@ describe.skipIf(!previewExists)('theme-preview.css ↔ globals.css sync', () => 
     const globalsBody = globalsHeaderMatch![1];
     const previewBody = previewHeaderMatch![1];
 
-    // Both should have blur (via CSS variable with 24px fallback) and saturate(1.2)
-    expect(globalsBody).toContain('blur(var(--panels-blur, 24px))');
-    expect(previewBody).toContain('blur(var(--panels-blur, 24px))');
+    // Both should read --panels-blur with 0px default and saturate(1.2)
+    expect(globalsBody).toContain('blur(var(--panels-blur, 0px))');
+    expect(previewBody).toContain('blur(var(--panels-blur, 0px))');
     expect(globalsBody).toContain('saturate(1.2)');
     expect(previewBody).toContain('saturate(1.2)');
 
-    // Both should use color-mix for transparency
+    // Both should use color-mix with --panels-opacity
     expect(globalsBody).toContain('color-mix');
     expect(previewBody).toContain('color-mix');
+    expect(globalsBody).toContain('--panels-opacity');
+    expect(previewBody).toContain('--panels-opacity');
   });
 
   // Scrollbar sizing should match
