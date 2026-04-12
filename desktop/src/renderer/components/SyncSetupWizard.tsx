@@ -154,11 +154,21 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
         <div className="flex-1 overflow-y-auto px-4 py-4 space-y-3">
           {types.map(({ type, desc }) => {
             const existing = existingBackends.filter(b => b.type === type).length;
+            // Only Drive supports multiple accounts — rclone gives each its own remote.
+            // GitHub shares a single global `gh auth` identity, and iCloud uses a single
+            // auto-detected path, so both are limited to one backend each.
+            const supportsMultiple = type === 'drive';
+            const disabled = existing > 0 && !supportsMultiple;
             return (
               <button
                 key={type}
-                onClick={() => selectType(type)}
-                className="w-full rounded-lg border border-edge-dim bg-inset/30 p-4 flex items-center gap-3 hover:bg-inset/50 cursor-pointer text-left transition-colors"
+                onClick={() => !disabled && selectType(type)}
+                disabled={disabled}
+                className={`w-full rounded-lg border border-edge-dim p-4 flex items-center gap-3 text-left transition-colors ${
+                  disabled
+                    ? 'bg-inset/10 opacity-50 cursor-not-allowed'
+                    : 'bg-inset/30 hover:bg-inset/50 cursor-pointer'
+                }`}
               >
                 <div className={`w-10 h-10 rounded-full flex items-center justify-center text-lg shrink-0 ${BACKEND_STYLE[type].tint}`}>
                   {BACKEND_STYLE[type].icon}
@@ -167,12 +177,18 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
                   <div className="text-xs text-fg font-medium">{BACKEND_LABELS[type]}</div>
                   <div className="text-[10px] text-fg-faint mt-0.5">{desc}</div>
                   {existing > 0 && (
-                    <div className="text-[9px] text-fg-muted mt-1">({existing} already connected)</div>
+                    <div className="text-[9px] text-fg-muted mt-1">
+                      {disabled
+                        ? `Already connected — ${BACKEND_LABELS[type]} only supports one backup`
+                        : `(${existing} already connected)`}
+                    </div>
                   )}
                 </div>
-                <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
-                </svg>
+                {!disabled && (
+                  <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                    <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+                  </svg>
+                )}
               </button>
             );
           })}
@@ -191,8 +207,12 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           setRemoteName(prereqStatus.gdriveRemoteName);
           setGhUsername(prereqStatus.ghUsername);
           setIcloudPath(prereqStatus.icloudPath);
-          // If Drive remote or GitHub auth is missing, go to auth step
-          if (backendType === 'drive' && !prereqStatus.gdriveConfigured) {
+          // For Drive, if there's already a Drive backend connected we force the
+          // auth step to run again — that triggers authGdrive() which auto-picks
+          // a fresh remote name (gdrive2, gdrive3, ...) and opens the browser so
+          // the user can sign into a DIFFERENT Google account (e.g., work vs school).
+          const hasExistingDrive = existingBackends.some(b => b.type === 'drive');
+          if (backendType === 'drive' && (!prereqStatus.gdriveConfigured || hasExistingDrive)) {
             setStep('auth');
           } else if (backendType === 'github' && !prereqStatus.ghAuthenticated) {
             setStep('auth');
@@ -209,9 +229,11 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
 
   // --- Step: OAuth / Sign-In ---
   if (step === 'auth' && backendType) {
+    const isAdditionalDrive = backendType === 'drive' && existingBackends.some(b => b.type === 'drive');
     return (
       <AuthStep
         backendType={backendType}
+        isAdditionalDrive={isAdditionalDrive}
         onSuccess={(authResult) => {
           if (backendType === 'drive') {
             setRemoteName(authResult.remoteName || 'gdrive');
@@ -749,11 +771,13 @@ function PrereqRow({ label, status }: { label: string; status: 'checking' | 'rea
 
 function AuthStep({
   backendType,
+  isAdditionalDrive = false,
   onSuccess,
   onBack,
   onClose,
 }: {
   backendType: BackendType;
+  isAdditionalDrive?: boolean;
   onSuccess: (result: { remoteName?: string; username?: string }) => void;
   onBack: () => void;
   onClose: () => void;
@@ -788,7 +812,9 @@ function AuthStep({
     setWaiting(false);
   };
 
-  const title = backendType === 'drive' ? 'Connect your Google account' : 'Sign in to GitHub';
+  const title = backendType === 'drive'
+    ? (isAdditionalDrive ? 'Connect another Google account' : 'Connect your Google account')
+    : 'Sign in to GitHub';
   const buttonLabel = backendType === 'drive' ? 'Connect to Google' : 'Sign in to GitHub';
 
   return (
@@ -802,9 +828,13 @@ function AuthStep({
 
         {!waiting ? (
           <>
-            <div className="text-fg-dim text-[11px] mb-6 max-w-xs">
-              A browser window will open for you to sign in.
-              After you sign in, come back here — it'll update automatically.
+            <div className="text-fg-dim text-[11px] mb-6 max-w-xs space-y-2">
+              <div>A browser window will open for you to sign in. After you sign in, come back here — it'll update automatically.</div>
+              {isAdditionalDrive && (
+                <div className="text-amber-400 text-[10px] pt-1">
+                  Tip: make sure you pick the <strong>other</strong> Google account (e.g., work vs. personal vs. school) in the browser — not the same one you already connected. You may need to sign out of Google in your browser first, or use an incognito window.
+                </div>
+              )}
             </div>
             <button
               onClick={handleAuth}

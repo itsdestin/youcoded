@@ -30,10 +30,10 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
     {
       heading: 'Pick where to store it',
       bullets: [
-        { term: 'Google Drive', text: 'Stores everything in a Drive folder. You can connect multiple Drive accounts (personal, work, etc).' },
-        { term: 'GitHub', text: 'Stores it in a private repository. Best for version history of every change.' },
-        { term: 'iCloud', text: 'For Mac users. Stores it in your iCloud Drive.' },
-        { term: 'Multiple backends', text: "You can connect as many as you want, even multiple of the same type. They all sync independently." },
+        { term: 'Google Drive', text: 'Stores everything in a Drive folder. You can connect multiple Google accounts (e.g. personal, work, school) — each one syncs independently.' },
+        { term: 'GitHub', text: 'Stores it in a private repository. Best for version history of every change. One GitHub account at a time.' },
+        { term: 'iCloud', text: 'Stores it in your iCloud Drive. Works on macOS and Windows (install iCloud for Windows). One iCloud location at a time.' },
+        { term: 'Mixing backends', text: 'You can connect one GitHub and one iCloud plus as many Google Drive accounts as you want — all running in parallel.' },
       ],
     },
     {
