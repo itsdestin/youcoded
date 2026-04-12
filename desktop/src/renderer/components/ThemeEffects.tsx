@@ -192,7 +192,10 @@ export default function ThemeEffects() {
       style={{
         position: 'fixed',
         top: 0, left: 0, right: 0, bottom: 0,
-        zIndex: 0,
+        // Behind chat bubbles / chrome, above #theme-bg / #theme-pattern via DOM
+        // order. At z-index: 0 particles rendered IN FRONT of bubble text, hurting
+        // readability on wallpaper themes.
+        zIndex: -1,
         pointerEvents: 'none',
         opacity: 0.6,
       }}

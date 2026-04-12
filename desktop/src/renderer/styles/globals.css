@@ -578,7 +578,10 @@ html, body, #root {
 #theme-effects-overlay {
   position: fixed;
   inset: 0;
-  z-index: 1;
+  /* Behind chat bubbles / chrome — vignette and noise overlaying bubble text
+     hurt readability on wallpaper themes. Above #theme-bg / #theme-pattern via
+     DOM order (appended later by theme-engine). */
+  z-index: -1;
   pointer-events: none;
 }
 

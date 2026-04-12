@@ -145,12 +145,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // theme would be falsely detected as "uninstalled" before its theme file loads.
   useEffect(() => {
     if (!userThemesLoaded) return;
-    if (!allThemes.find(t => t.slug === activeSlug)) {
+    // Check allThemesInternal (includes _preview) not allThemes (filters it out) —
+    // otherwise the fallback would treat _preview as "uninstalled" and reset to
+    // DEFAULT, silently undoing every theme-builder preview activation.
+    if (!allThemesInternal.find(t => t.slug === activeSlug)) {
       setActiveSlug(DEFAULT_THEME);
       try { localStorage.setItem(STORAGE_KEY, DEFAULT_THEME); } catch {}
       persistAppearance({ theme: DEFAULT_THEME });
     }
-  }, [allThemes, activeSlug, userThemesLoaded]);
+  }, [allThemesInternal, activeSlug, userThemesLoaded]);
 
   // Re-read all user themes from disk. Exposed so install/uninstall flows
   // can refresh the list; the active-theme fallback effect (above) uses the
@@ -221,6 +224,22 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   // Track the slug the user had before preview auto-switch
   const [prePreviewSlug, setPrePreviewSlug] = useState<string | null>(null);
 
+  // Initial-load auto-switch to _preview.
+  // Without this, a _preview folder that exists BEFORE the app starts (e.g. user
+  // restarted mid-theme-build, or chokidar's `ignoreInitial: true` skipped the
+  // add event because files settled before the watcher mounted) loads into
+  // userThemes but never activates — theme-builder appears to "silently fail."
+  // Runs once after initial theme load completes. Does NOT persist to
+  // localStorage/appearance — preview is ephemeral; deleting the folder reverts.
+  useEffect(() => {
+    if (!userThemesLoaded) return;
+    if (activeSlug === PREVIEW_SLUG) return; // localStorage shouldn't hold this, but guard anyway
+    if (!userThemes.some(t => t.slug === PREVIEW_SLUG)) return;
+    setPrePreviewSlug(p => p ?? activeSlug);
+    setActiveSlug(PREVIEW_SLUG);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userThemesLoaded]);
+
   // Listen for hot-reload signal from main process
   useEffect(() => {
     const claude = (window as any).claude;
@@ -231,6 +250,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           const theme = validateTheme(JSON.parse(raw));
           const source = (theme as any).source === 'community' ? 'community' as const : 'user' as const;
           const loaded: LoadedTheme = resolveAllAssetPaths({ ...theme, source });
+          // Dir name and manifest.slug must match — renderer keys activeSlug on dir
+          // name but resolves the active theme by .slug. A mismatch silently falls
+          // back to the built-in default theme. Warn loudly to catch theme-builder
+          // footguns during authoring.
+          if (theme.slug !== slug) {
+            console.warn(
+              `[ThemeProvider] Slug mismatch for theme dir "${slug}": manifest.slug is "${theme.slug}". ` +
+              `The app keys activeSlug on the directory name — this theme will silently fall back to the default.`
+            );
+          }
           setUserThemes(prev => {
             const idx = prev.findIndex(t => t.slug === slug);
             if (idx >= 0) { const next = [...prev]; next[idx] = loaded; return next; }
