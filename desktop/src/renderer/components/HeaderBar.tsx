@@ -1,4 +1,4 @@
-import React, { useRef, useLayoutEffect, useEffect, useCallback } from 'react';
+import React, { useRef, useLayoutEffect } from 'react';
 import { ChatIcon, TerminalIcon, GamepadIcon } from './Icons';
 import SessionStrip from './SessionStrip';
 import type { SessionStatusColor } from './StatusDot';
@@ -76,30 +76,27 @@ export default function HeaderBar({
   defaultModel, defaultSkipPermissions, defaultProjectFolder,
   geminiEnabled,
 }: Props) {
-  // Sliding pill tracks active button position via ResizeObserver.
+  // Sliding pill between two fixed button positions.
   //
-  // Fix: previously the pill had its own 300ms CSS transition AND its
-  // target position was React state updated on every ResizeObserver frame
-  // while the button text animated (max-width: 0 → 3rem). The two
-  // animations fought each other — each setState restarted the pill's
-  // transition mid-flight, producing the "stuck then stutters" artifact
-  // users reported. Also the initial useLayoutEffect measured *before*
-  // the button had grown, so the pill would briefly head toward a stale
-  // narrow target.
+  // Fix: prior versions animated button text via max-width (0 ↔ 3rem) and
+  // tried to make the pill track the button's live width with a
+  // ResizeObserver. That race caused stutter then teleport-on-toggle
+  // artifacts because getBoundingClientRect returned the button's
+  // interpolated (narrow) rect at the moment of the click.
   //
-  // Solution: remove the pill's CSS transition entirely and drive its
-  // style directly via ref (bypassing React reconciliation). The pill
-  // snaps to the active button's exact current size every frame — which
-  // is smooth because the button's own max-width transition is smooth,
-  // and there's no competing animation. Also zero re-renders of
-  // HeaderBar's subtree during the 300ms window.
+  // Now button widths are FIXED per active/inactive state (w-9 inactive,
+  // wider when active) with a width transition on the button itself, and
+  // text uses opacity-only crossfade. Because button rects settle to
+  // their final values immediately on viewMode change, measuring the
+  // active button once in useLayoutEffect gives the correct endpoint,
+  // and a plain CSS transition on the pill's left/width animates it
+  // smoothly across the gap. No observer, no per-frame work.
   const containerRef = useRef<HTMLDivElement>(null);
   const chatBtnRef = useRef<HTMLButtonElement>(null);
   const termBtnRef = useRef<HTMLButtonElement>(null);
   const pillRef = useRef<HTMLDivElement>(null);
-  const rafIdRef = useRef<number | null>(null);
 
-  const measure = useCallback(() => {
+  useLayoutEffect(() => {
     const container = containerRef.current;
     const pill = pillRef.current;
     const activeBtn = viewMode === 'chat' ? chatBtnRef.current : termBtnRef.current;
@@ -109,31 +106,6 @@ export default function HeaderBar({
     pill.style.left = `${bRect.left - cRect.left}px`;
     pill.style.width = `${bRect.width}px`;
   }, [viewMode]);
-
-  const scheduleMeasure = useCallback(() => {
-    if (rafIdRef.current !== null) return;
-    rafIdRef.current = requestAnimationFrame(() => {
-      rafIdRef.current = null;
-      measure();
-    });
-  }, [measure]);
-
-  // Measure immediately on viewMode change (synchronous — first frame of transition)
-  useLayoutEffect(measure, [measure]);
-
-  // Re-measure as buttons resize (text expanding/collapsing) — coalesced to one per frame
-  useEffect(() => {
-    const chatBtn = chatBtnRef.current;
-    const termBtn = termBtnRef.current;
-    if (!chatBtn || !termBtn) return;
-    const ro = new ResizeObserver(scheduleMeasure);
-    ro.observe(chatBtn);
-    ro.observe(termBtn);
-    return () => {
-      ro.disconnect();
-      if (rafIdRef.current !== null) cancelAnimationFrame(rafIdRef.current);
-    };
-  }, [scheduleMeasure]);
 
   return (
     <div className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
@@ -185,52 +157,46 @@ export default function HeaderBar({
       <div className="flex-1 flex items-center justify-end gap-1 sm:gap-2">
         {/* Chat/Terminal toggle — sliding pill with text roll-out */}
         <div ref={containerRef} className="relative flex bg-inset rounded-md p-0.5 gap-0.5">
-          {/* Sliding background pill — position/width set directly by measure()
-              via ref every frame. No CSS transition here: the pill tracks the
-              button's own max-width animation precisely, which is what makes
-              the motion smooth. Adding a transition causes the two animations
-              to fight and produces a stutter. */}
+          {/* Sliding background pill — left/width set imperatively in the
+              layout effect above; the CSS transition here tweens between
+              the two stable endpoints. */}
           <div
             ref={pillRef}
-            className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)]"
+            className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)] transition-[left,width] duration-300 ease-in-out"
           />
           <button
             ref={chatBtnRef}
             onClick={() => onToggleView('chat')}
-            className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
+            className={`relative z-10 py-1 rounded-[var(--radius-toggle)] flex items-center justify-center gap-1.5 transition-[width,color] duration-300 ease-in-out ${
               viewMode === 'chat'
-                ? 'text-on-accent'
-                : 'text-fg-dim hover:text-fg-2'
+                ? 'text-on-accent w-9 sm:w-20'
+                : 'text-fg-dim hover:text-fg-2 w-9'
             }`}
             title="Chat"
           >
             <ChatIcon className="w-3.5 h-3.5 shrink-0" />
-            {/* Text rolls out via max-width + opacity transition */}
+            {/* Text crossfades via opacity; width is owned by the button */}
             <span
-              className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
-              style={{
-                maxWidth: viewMode === 'chat' ? '3rem' : '0',
-                opacity: viewMode === 'chat' ? 1 : 0,
-              }}
+              className={`text-xs font-medium hidden sm:inline-block whitespace-nowrap transition-opacity duration-300 ease-in-out ${
+                viewMode === 'chat' ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
             >Chat</span>
           </button>
           <button
             ref={termBtnRef}
             onClick={() => onToggleView('terminal')}
-            className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
+            className={`relative z-10 py-1 rounded-[var(--radius-toggle)] flex items-center justify-center gap-1.5 transition-[width,color] duration-300 ease-in-out ${
               viewMode === 'terminal'
-                ? 'text-on-accent'
-                : 'text-fg-dim hover:text-fg-2'
+                ? 'text-on-accent w-9 sm:w-[6.5rem]'
+                : 'text-fg-dim hover:text-fg-2 w-9'
             }`}
             title="Terminal"
           >
             <TerminalIcon className="w-3.5 h-3.5 shrink-0" />
             <span
-              className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
-              style={{
-                maxWidth: viewMode === 'terminal' ? '4.5rem' : '0',
-                opacity: viewMode === 'terminal' ? 1 : 0,
-              }}
+              className={`text-xs font-medium hidden sm:inline-block whitespace-nowrap transition-opacity duration-300 ease-in-out ${
+                viewMode === 'terminal' ? 'opacity-100' : 'opacity-0 pointer-events-none'
+              }`}
             >Terminal</span>
           </button>
         </div>
