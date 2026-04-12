@@ -220,6 +220,15 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
             </div>
           )}
 
+          {/* Overlay preview — shows how popups render under the *active*
+              theme (use "Preview Theme" below to try this theme first). */}
+          {trying && (
+            <div>
+              <span className="text-[10px] text-fg-faint uppercase tracking-wider">Overlay Preview</span>
+              <OverlayPreviewStrip />
+            </div>
+          )}
+
           {/* Dates */}
           <div className="flex gap-4 text-[10px] text-fg-faint">
             {entry.created && <span>Created: {entry.created}</span>}
@@ -282,6 +291,54 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
             </button>
           )}
         </div>
+      </div>
+    </div>
+  );
+}
+
+// Miniature overlay preview — shows how L2 popup, destructive (L3), and
+// scrim tint look against the live theme. Uses inline positioning (not
+// fixed) so the preview sits inside ThemeDetail instead of covering it.
+function OverlayPreviewStrip() {
+  return (
+    <div
+      className="mt-2 rounded-lg overflow-hidden border border-edge-dim"
+      style={{ position: 'relative', height: 160, background: 'var(--canvas)' }}
+    >
+      {/* Simulated scrim tint */}
+      <div style={{ position: 'absolute', inset: 0, background: 'var(--scrim)' }} />
+      {/* L2 popup sample */}
+      <div
+        className="layer-surface"
+        style={{
+          position: 'absolute',
+          top: '50%',
+          left: '20%',
+          transform: 'translateY(-50%)',
+          width: '45%',
+          padding: '10px 12px',
+          zIndex: 'auto',
+        }}
+      >
+        <div className="text-[10px] font-semibold text-fg mb-1">L2 Popup</div>
+        <div className="text-[9px] text-fg-muted">Theme-driven surface</div>
+      </div>
+      {/* L3 destructive sample */}
+      <div
+        className="layer-surface"
+        data-destructive=""
+        style={{
+          position: 'absolute',
+          top: '50%',
+          right: '8%',
+          transform: 'translateY(-50%)',
+          width: '28%',
+          padding: '10px 12px',
+          zIndex: 'auto',
+        }}
+      >
+        <div className="text-[10px] font-semibold mb-1" style={{ color: 'var(--destructive)' }}>Destructive</div>
+        <div className="text-[9px] text-fg-muted">L3 variant</div>
       </div>
     </div>
   );

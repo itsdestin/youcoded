@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../state/theme-context';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 interface ThemeShareSheetProps {
   themeSlug: string;
@@ -57,10 +58,14 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
   if (!theme) return null;
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-      <div
-        className="relative bg-panel border border-edge-dim rounded-xl p-5 max-w-md w-full mx-4 shadow-xl"
+    // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
+        layer={2}
+        role="dialog"
+        aria-modal={true}
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-5 max-w-md w-[calc(100%-2rem)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
@@ -145,7 +150,7 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
             </>
           )}
         </div>
-      </div>
-    </div>
+      </OverlayPanel>
+    </>
   );
 }

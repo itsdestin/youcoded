@@ -183,10 +183,12 @@ const ChipEditorPopup = React.forwardRef<HTMLDivElement, ChipEditorProps>(
     }, [chips, setChips, customLabel, customPrompt]);
 
     return (
+      // Anchored popover — .layer-surface for theme-driven background,
+      // border, shadow, glassmorphism (no scrim — dismissed by outside click).
       <div
         ref={ref}
-        className="fixed w-80 max-h-[400px] overflow-y-auto bg-panel border border-edge rounded-xl shadow-xl p-3 z-50"
-        style={{ top: pos.top, left: pos.left, transform: 'translate(-100%, -100%)' }}
+        className="layer-surface fixed w-80 max-h-[400px] overflow-y-auto p-3"
+        style={{ top: pos.top, left: pos.left, transform: 'translate(-100%, -100%)', zIndex: 50 }}
       >
         {/* Header */}
         <div className="flex items-center justify-between mb-2">

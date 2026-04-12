@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MODELS, type ModelAlias } from './StatusBar';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 const MODEL_LABELS: Record<string, string> = {
   sonnet: 'Sonnet',
@@ -201,16 +202,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   return (
     <>
-      {/* Backdrop */}
-      <div
-        className="fixed inset-0 z-40 bg-canvas/60 backdrop-blur-sm"
-        onClick={onClose}
-      />
-
-      {/* Modal */}
+      {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
+      <Scrim layer={1} onClick={onClose} />
       <div className="fixed inset-0 z-50 flex items-center justify-center p-4 pointer-events-none">
-        <div
-          className="bg-panel border border-edge rounded-xl shadow-2xl w-full max-w-md max-h-[70vh] flex flex-col pointer-events-auto"
+        <OverlayPanel
+          layer={1}
+          className="w-full max-w-md max-h-[70vh] flex flex-col pointer-events-auto"
+          style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
           {/* Header */}
@@ -257,7 +255,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               filtered.map((s) => renderSessionRow(s, true))
             )}
           </div>
-        </div>
+        </OverlayPanel>
       </div>
     </>
   );

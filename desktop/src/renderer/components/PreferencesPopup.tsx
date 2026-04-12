@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
 // ~/.claude/settings.json via the settings:* IPC bridge.
@@ -107,10 +108,15 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
   if (!open) return null;
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-      <div
-        className="relative bg-panel border border-edge-dim rounded-xl max-w-md w-full mx-4 shadow-xl max-h-[85vh] overflow-y-auto"
+    // Overlay layer L2 via <Scrim>/<OverlayPanel>; scrim, blur, shadow all
+    // driven by theme tokens — previously hardcoded bg-black/40.
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
+        layer={2}
+        role="dialog"
+        aria-modal={true}
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-md w-[calc(100%-2rem)] max-h-[85vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="sticky top-0 bg-panel border-b border-edge flex items-center justify-between px-5 py-3 z-10">
@@ -235,8 +241,8 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
             </section>
           </div>
         )}
-      </div>
-    </div>,
+      </OverlayPanel>
+    </>,
     document.body,
   );
 }

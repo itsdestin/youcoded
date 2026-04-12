@@ -132,11 +132,12 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
         </div>
       )}
 
-      {/* Dropdown panel — inline, not portaled */}
+      {/* Dropdown panel — uses .layer-surface for theme-driven background,
+          border, shadow, and glassmorphism (blur when [data-panels-blur]). */}
       {open && (
         <div
-          className="absolute top-full mt-1 left-1/2 w-72 bg-panel border border-edge rounded-lg shadow-lg overflow-hidden z-50"
-          style={{ transform: 'translateX(-50%)', animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
+          className="layer-surface absolute top-full mt-1 left-1/2 w-72 overflow-hidden"
+          style={{ transform: 'translateX(-50%)', zIndex: 50, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
         >
           {/* Saved folders list */}
           {folders.length > 0 && (

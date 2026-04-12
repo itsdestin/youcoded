@@ -8,6 +8,7 @@ import SyncSection from './SyncPanel';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import { useTheme } from '../state/theme-context';
 import { MODELS, type ModelAlias } from './StatusBar';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 // Plain-language explainer for the Remote Access popup. Shown when the user
 // taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
@@ -116,10 +117,14 @@ const SHORTCUTS: { keys: string; description: string }[] = [
 function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-      <div
-        className="relative bg-panel border border-edge-dim rounded-xl p-5 max-w-sm w-full mx-4 shadow-xl"
+    // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
+        layer={2}
+        role="dialog"
+        aria-modal={true}
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-5 max-w-sm w-[calc(100%-2rem)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
@@ -138,8 +143,8 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
             </div>
           ))}
         </div>
-      </div>
-    </div>,
+      </OverlayPanel>
+    </>,
     document.body
   );
 }
@@ -147,10 +152,10 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
 export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme, syncAutoOpen, onSyncAutoOpenHandled }: Props) {
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — L1 drawer scrim, theme-driven via <Scrim>. */}
       {open && (
-        <div
-          className="fixed inset-0 bg-black/40 backdrop-blur-sm z-40"
+        <Scrim
+          layer={1}
           onClick={onClose}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
         />

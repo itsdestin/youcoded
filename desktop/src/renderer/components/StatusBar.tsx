@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import type { PermissionMode } from '../../shared/types';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 // --- Session stats shape (written by statusline.sh to .session-stats-{id}.json) ---
 
@@ -393,9 +394,11 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
 
   return createPortal(
     <>
-      <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-[60]" onClick={onClose} />
-      <div
-        className="fixed z-[61] rounded-xl bg-panel border border-edge shadow-2xl overflow-hidden"
+      {/* Overlay layer L2 — theme-driven via Scrim/OverlayPanel. */}
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
+        layer={2}
+        className="fixed overflow-hidden"
         style={{
           top: '50%',
           left: '50%',
@@ -481,7 +484,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
             ))}
           </div>
         </div>
-      </div>
+      </OverlayPanel>
     </>,
     document.body
   );

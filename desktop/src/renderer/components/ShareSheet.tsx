@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useMemo } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useSkills } from '../state/skill-context';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 interface ShareSheetProps {
   skillId: string;
@@ -78,10 +79,14 @@ export default function ShareSheet({ skillId, onClose }: ShareSheetProps) {
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-      <div
-        className="relative bg-panel border border-edge-dim rounded-xl p-5 max-w-sm w-full mx-4 shadow-xl"
+    // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
+        layer={2}
+        role="dialog"
+        aria-modal={true}
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 p-5 max-w-sm w-[calc(100%-2rem)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between mb-4">
@@ -154,7 +159,7 @@ export default function ShareSheet({ skillId, onClose }: ShareSheetProps) {
             </>
           )}
         </div>
-      </div>
-    </div>
+      </OverlayPanel>
+    </>
   );
 }

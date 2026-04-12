@@ -78,11 +78,13 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
 
   return (
     <>
-      {/* Backdrop */}
+      {/* Backdrop — L1 drawer scrim via layer-scrim class (theme-tinted). */}
       <div
-        className={`fixed inset-0 z-40 bg-canvas/60 backdrop-blur-sm transition-opacity duration-300 ${
+        className={`layer-scrim transition-opacity duration-300 ${
           open ? 'opacity-100' : 'opacity-0 pointer-events-none'
         }`}
+        data-layer={1}
+        style={{ zIndex: 40 }}
         onClick={onClose}
       />
 

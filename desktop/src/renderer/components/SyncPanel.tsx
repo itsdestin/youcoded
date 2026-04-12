@@ -544,7 +544,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           {'\u00B7\u00B7\u00B7'}
                         </button>
                         {menuOpenId === b.id && (
-                          <div className="absolute right-0 top-7 w-40 bg-panel border border-edge rounded-lg shadow-xl z-10 py-1"
+                          /* Overflow menu — .layer-surface for theme-consistent look + glass. */
+                          <div className="layer-surface absolute right-0 top-7 w-40 py-1"
+                            style={{ zIndex: 10 }}
                             onClick={(e) => e.stopPropagation()}>
                             <MenuButton onClick={() => { handlePushBackend(b.id); setMenuOpenId(null); }}>Upload now</MenuButton>
                             <MenuButton onClick={() => { setConfirmPullId(b.id); setMenuOpenId(null); }}>Download now</MenuButton>

@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
+import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -87,10 +88,14 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   const maxAllowed = currentModel === 'opus[1m]';
 
   return createPortal(
-    <div className="fixed inset-0 z-[9999] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 bg-black/40 backdrop-blur-sm" />
-      <div
-        className="relative bg-panel border border-edge-dim rounded-xl max-w-md w-full mx-4 shadow-xl"
+    // Overlay layer L2 — theme-driven scrim/surface via Scrim/OverlayPanel.
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
+        layer={2}
+        role="dialog"
+        aria-modal={true}
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-md w-[calc(100%-2rem)]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center justify-between px-5 py-3 border-b border-edge">
@@ -179,8 +184,8 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
             </section>
           </div>
         )}
-      </div>
-    </div>,
+      </OverlayPanel>
+    </>,
     document.body,
   );
 }
