@@ -1,6 +1,5 @@
 import React, { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { useChatState, useChatDispatch } from '../state/chat-context';
-import { onBufferReady } from '../hooks/terminal-registry';
 import UserMessage from './UserMessage';
 import AssistantTurnBubble from './AssistantTurnBubble';
 import ToolCard from './ToolCard';
@@ -10,6 +9,8 @@ import SystemMarker from './SystemMarker';
 import CompactingCard from './CompactingCard';
 import CopyPicker from './CopyPicker';
 import ThinkingIndicator from './ThinkingIndicator';
+import AttentionBanner from './AttentionBanner';
+import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
 
 interface Props {
@@ -66,15 +67,6 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
   const { showTimestamps } = useTheme();
   const bottomRef = useRef<HTMLDivElement>(null);
   const [atBottom, setAtBottom] = useState(true);
-  const thinkingTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Thinking timeout — if isThinking stays true with no activity for 30s, auto-clear.
-  // lastActivityAt resets the clock whenever hook events or streaming updates arrive,
-  // so the warning only fires after 30s of complete silence from Claude.
-  const mountedRef = useRef(true);
-  useEffect(() => {
-    return () => { mountedRef.current = false; };
-  }, []);
 
   // Single pass — compute all tool status flags, memoized to avoid re-iterating
   // the Map on every render (toolCalls is a new ref on every reducer dispatch)
@@ -95,47 +87,16 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
     return { hasAwaitingApproval: hasAwaiting, hasRunningTools: hasRunning, awaitingTools: awaiting };
   }, [state.toolCalls, state.activeTurnToolIds]);
 
-  useEffect(() => {
-    // Don't start the timeout when a tool is awaiting permission approval —
-    // Claude is waiting for the user, not the other way around.
-    if (state.isThinking && !hasAwaitingApproval && !hasRunningTools) {
-      thinkingTimerRef.current = setTimeout(() => {
-        if (mountedRef.current) {
-          dispatch({ type: 'THINKING_TIMEOUT', sessionId });
-        }
-      }, 30000);
-    } else {
-      if (thinkingTimerRef.current) {
-        clearTimeout(thinkingTimerRef.current);
-        thinkingTimerRef.current = null;
-      }
-    }
-    return () => {
-      if (thinkingTimerRef.current) clearTimeout(thinkingTimerRef.current);
-    };
-  }, [state.isThinking, state.lastActivityAt, hasAwaitingApproval, hasRunningTools, sessionId, dispatch]);
-
-  // Reset the thinking timer when the terminal buffer receives output.
-  // During extended thinking, Claude's CLI renders a spinner/timer in the PTY
-  // but fires no hook events, so lastActivityAt goes stale.  Listening to
-  // buffer writes keeps the timeout from triggering prematurely.
-  const isThinkingRef = useRef(state.isThinking);
-  isThinkingRef.current = state.isThinking;
-
-  // Throttle TERMINAL_ACTIVITY dispatches — the thinking timeout only needs
-  // a heartbeat every few seconds, not a dispatch on every PTY write.
-  const lastActivityDispatchRef = useRef(0);
-  useEffect(() => {
-    return onBufferReady((sid) => {
-      if (sid === sessionId && isThinkingRef.current) {
-        const now = Date.now();
-        if (now - lastActivityDispatchRef.current > 5000) {
-          lastActivityDispatchRef.current = now;
-          dispatch({ type: 'TERMINAL_ACTIVITY', sessionId });
-        }
-      }
-    });
-  }, [sessionId, dispatch]);
+  // PTY-buffer classifier drives the attention banner. Replaces the old
+  // 30s thinking-timeout watchdog + TERMINAL_ACTIVITY heartbeat — the hook
+  // reads the xterm buffer directly and decides 'ok' vs. 'stuck'/'shell-idle'/etc.
+  useAttentionClassifier(sessionId, {
+    isThinking: state.isThinking,
+    hasRunningTools,
+    hasAwaitingApproval,
+    visible,
+    currentAttentionState: state.attentionState,
+  });
 
   // Scroll to bottom when switching sessions
   useEffect(() => {
@@ -416,20 +377,14 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
                   </div>
                 </div>
               ))}
-            {/* Only show thinking when Claude is between tool completion and next text —
-                not when tools are still running or awaiting approval */}
-            {state.isThinking
-              && !hasAwaitingApproval
-              && !hasRunningTools
-              && <ThinkingIndicator />}
-            {state.thinkingTimedOut && !state.isThinking && (
-              <div className="flex items-center gap-2 px-4 py-1.5">
-                <div className="bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5">
-                  <span className="text-sm text-fg-muted italic">
-                    Response may have arrived — check the Terminal view.
-                  </span>
-                </div>
-              </div>
+            {/* Only show thinking indicator when Claude is between tool completion
+                and next text — not when tools are still running or awaiting approval.
+                When the classifier flags a non-ok attention state, swap the
+                spinner for an AttentionBanner tailored to the state. */}
+            {state.isThinking && !hasAwaitingApproval && !hasRunningTools && (
+              state.attentionState === 'ok'
+                ? <ThinkingIndicator />
+                : <AttentionBanner state={state.attentionState} />
             )}
           </>
         )}

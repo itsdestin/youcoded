@@ -346,7 +346,11 @@ function AppInner() {
       }
     });
 
-    const destroyedHandler = window.claude.on.sessionDestroyed((id) => {
+    const destroyedHandler = window.claude.on.sessionDestroyed((id: string, exitCode: number = 0) => {
+      // Fire BEFORE removing the session from state — the reducer needs the
+      // current SessionChatState to decide whether this warrants a 'session-died'
+      // banner (in-flight tools OR nonzero exit). SESSION_REMOVE below wipes it.
+      dispatch({ type: 'SESSION_PROCESS_EXITED', sessionId: id, exitCode });
       setSessions((prev) => {
         const remaining = prev.filter((s) => s.id !== id);
         // Auto-switch to another session when closing the active one
@@ -464,6 +468,14 @@ function AppInner() {
             sessionId: event.sessionId,
             uuid: event.uuid,
             timestamp: event.timestamp,
+          });
+          break;
+        case 'assistant-thinking':
+          // Extended-thinking heartbeat — bumps lastActivityAt and clears
+          // any stale attention banner. No timeline change.
+          batchTranscriptDispatch({
+            type: 'TRANSCRIPT_THINKING_HEARTBEAT',
+            sessionId: event.sessionId,
           });
           break;
         case 'compact-summary': {
