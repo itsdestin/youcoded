@@ -8,15 +8,23 @@ const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const TOPICS_DIR = path.join(CLAUDE_DIR, 'topics');
 const CONVERSATION_INDEX_PATH = path.join(CLAUDE_DIR, 'conversation-index.json');
 
-/** Read the synced complete-flag map from conversation-index.json.
- *  Returned as a { sessionId: true } map for O(1) join. */
-function readCompleteFlags(): Record<string, boolean> {
+/** Read the per-session flag map from conversation-index.json. Also lifts v1
+ *  legacy `complete` / `completeUpdatedAt` fields into the new flags shape so
+ *  older entries (written before the flags generalization) still show up. */
+function readFlagMap(): Record<string, Record<string, boolean>> {
   try {
     const raw = fs.readFileSync(CONVERSATION_INDEX_PATH, 'utf8');
     const index = JSON.parse(raw);
-    const out: Record<string, boolean> = {};
+    const out: Record<string, Record<string, boolean>> = {};
     for (const [sid, entry] of Object.entries<any>(index?.sessions || {})) {
-      if (entry?.complete) out[sid] = true;
+      if (!entry) continue;
+      const on: Record<string, boolean> = {};
+      for (const [name, state] of Object.entries<any>(entry.flags || {})) {
+        if (state?.value) on[name] = true;
+      }
+      // v1 legacy — tolerated on read until old devices are upgraded.
+      if (!on.complete && entry.complete) on.complete = true;
+      if (Object.keys(on).length > 0) out[sid] = on;
     }
     return out;
   } catch { return {}; }
@@ -123,7 +131,7 @@ export async function listPastSessions(activeSessionIds?: Set<string>): Promise<
   }
 
   // Join complete-flag metadata from the synced conversation index
-  const completeFlags = readCompleteFlags();
+  const flagMap = readFlagMap();
 
   const allSessions: PastSession[] = [];
 
@@ -146,6 +154,7 @@ export async function listPastSessions(activeSessionIds?: Set<string>): Promise<
         if (stat.size < 500) return null;
         const name = await readTopic(sessionId);
 
+        const joinedFlags = flagMap[sessionId];
         return {
           sessionId,
           name,
@@ -153,7 +162,7 @@ export async function listPastSessions(activeSessionIds?: Set<string>): Promise<
           projectPath: resolveSlugToPath(slug),
           lastModified: stat.mtimeMs,
           size: stat.size,
-          complete: !!completeFlags[sessionId],
+          ...(joinedFlags ? { flags: joinedFlags } : {}),
         } as PastSession;
       } catch {
         console.warn(`[session-browser] Failed to stat ${slug}/${file} after retries`);

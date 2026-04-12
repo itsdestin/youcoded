@@ -27,6 +27,24 @@ function formatSize(bytes: number): string {
   return `${(kb / 1024).toFixed(1)}MB`;
 }
 
+// Keep in sync with SESSION_FLAG_NAMES in shared/types.ts. The renderer imports
+// from shared/types would be ideal, but that module is CommonJS — we use a
+// literal list here to avoid the compile coupling and keep the flag order
+// stable in the UI (Priority first, Helpful, then Complete).
+type FlagName = 'priority' | 'helpful' | 'complete';
+const FLAG_ORDER: FlagName[] = ['priority', 'helpful', 'complete'];
+const FLAG_LABEL: Record<FlagName, string> = {
+  priority: 'Priority',
+  helpful: 'Helpful',
+  complete: 'Complete',
+};
+// Compact glyph shown in the session-row badge for each flag.
+const FLAG_BADGE: Record<FlagName, string> = {
+  priority: '▲',
+  helpful: '●',
+  complete: '✓',
+};
+
 interface PastSession {
   sessionId: string;
   name: string;
@@ -34,8 +52,10 @@ interface PastSession {
   projectPath: string;
   lastModified: number;
   size: number;
-  // User-marked "complete" — hidden unless Show Complete toggle is on
-  complete?: boolean;
+  // User-set flags — multiple allowed. `complete` hides unless Show Complete
+  // is on; `priority` pins the session to the top of its project group;
+  // `helpful` is informational only.
+  flags?: Partial<Record<FlagName, boolean>>;
 }
 
 interface Props {
@@ -96,7 +116,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   const filtered = useMemo(() => {
     // Hide complete sessions by default; Show Complete toggle reveals them.
-    const base = showComplete ? sessions : sessions.filter((s) => !s.complete);
+    // Priority does NOT override hiding — a complete+priority session stays hidden.
+    const base = showComplete ? sessions : sessions.filter((s) => !s.flags?.complete);
     if (!search.trim()) return base;
     const q = search.toLowerCase();
     return base.filter(
@@ -106,7 +127,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     );
   }, [sessions, search, showComplete]);
 
-  // Group by project path
+  // Group by project path AND sort priority sessions to the top of each group.
+  // Secondary sort is lastModified desc (preserves the existing default).
   const grouped = useMemo(() => {
     if (search.trim()) return null;
     const groups = new Map<string, PastSession[]>();
@@ -115,21 +137,42 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       list.push(s);
       groups.set(s.projectPath, list);
     }
+    for (const [k, arr] of groups) {
+      arr.sort((a, b) => {
+        const ap = a.flags?.priority ? 0 : 1;
+        const bp = b.flags?.priority ? 0 : 1;
+        if (ap !== bp) return ap - bp;
+        return b.lastModified - a.lastModified;
+      });
+      groups.set(k, arr);
+    }
     return groups;
   }, [filtered, search]);
 
-  // Optimistically flip the complete flag in local state, then persist via IPC.
-  // On failure we revert. A meta-changed push from other tabs/devices also
-  // refreshes the list — see the subscription effect below.
-  const toggleComplete = async (sessionId: string, next: boolean) => {
-    setSessions((prev) => prev.map((s) => s.sessionId === sessionId ? { ...s, complete: next } : s));
+  // Flat list (search mode) — still pin priority to the top.
+  const flatSorted = useMemo(() => {
+    if (!search.trim()) return filtered;
+    return [...filtered].sort((a, b) => {
+      const ap = a.flags?.priority ? 0 : 1;
+      const bp = b.flags?.priority ? 0 : 1;
+      if (ap !== bp) return ap - bp;
+      return b.lastModified - a.lastModified;
+    });
+  }, [filtered, search]);
+
+  // Optimistically flip a flag in local state, then persist via IPC. On failure
+  // we revert. A meta-changed push from other tabs/devices also refreshes the
+  // list — see the subscription effect below.
+  const toggleFlag = async (sessionId: string, flag: FlagName, next: boolean) => {
+    const apply = (val: boolean) => setSessions((prev) => prev.map((s) =>
+      s.sessionId === sessionId ? { ...s, flags: { ...(s.flags || {}), [flag]: val } } : s,
+    ));
+    apply(next);
     try {
-      const res: any = await (window as any).claude.session.setComplete(sessionId, next);
-      if (res && res.ok === false) {
-        setSessions((prev) => prev.map((s) => s.sessionId === sessionId ? { ...s, complete: !next } : s));
-      }
+      const res: any = await (window as any).claude.session.setFlag(sessionId, flag, next);
+      if (res && res.ok === false) apply(!next);
     } catch {
-      setSessions((prev) => prev.map((s) => s.sessionId === sessionId ? { ...s, complete: !next } : s));
+      apply(!next);
     }
   };
 
@@ -138,9 +181,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     if (!open) return;
     const sub = (window as any).claude?.on?.sessionMetaChanged;
     if (!sub) return;
-    const off = sub((sid: string, meta: { complete?: boolean }) => {
+    const off = sub((sid: string, meta: { flag?: string; value?: boolean }) => {
+      if (!meta?.flag) return;
       setSessions((prev) => prev.map((s) =>
-        s.sessionId === sid ? { ...s, complete: !!meta?.complete } : s,
+        s.sessionId === sid
+          ? { ...s, flags: { ...(s.flags || {}), [meta.flag as FlagName]: !!meta.value } }
+          : s,
       ));
     });
     // Desktop preload returns the raw handler; remote-shim returns an unsubscribe fn.
@@ -203,21 +249,40 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           <p className="text-[10px] text-[#DD4444]">Claude will execute tools without asking for approval.</p>
         )}
 
-        {/* Complete? — only visible when Show Complete is on so the flag can be cleared
-            or re-applied. Uses --accent so it's visually distinct from the destructive
-            red of Skip Permissions. */}
-        {showComplete && (
-          <div className="flex items-center justify-between">
-            <label className="text-[10px] uppercase tracking-wider text-fg-muted">Complete?</label>
-            <button
-              onClick={(e) => { e.stopPropagation(); toggleComplete(s.sessionId, !s.complete); }}
-              className={`w-8 h-4.5 rounded-full relative transition-colors ${s.complete ? 'bg-accent' : 'bg-inset'}`}
-              aria-pressed={!!s.complete}
-            >
-              <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${s.complete ? 'left-[calc(100%-16px)]' : 'left-0.5'}`} />
-            </button>
+        {/* Flags — one row of multi-select pills (Priority / Helpful / Complete).
+            Complete is disabled unless Show Complete is on, since marking Complete
+            while hidden would make the row disappear mid-interaction. */}
+        <div>
+          <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Flags</label>
+          <div className="flex gap-1">
+            {FLAG_ORDER.map((flag) => {
+              const active = !!s.flags?.[flag];
+              const disabled = flag === 'complete' && !showComplete && !active;
+              return (
+                <button
+                  key={flag}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (disabled) return;
+                    toggleFlag(s.sessionId, flag, !active);
+                  }}
+                  disabled={disabled}
+                  title={disabled ? 'Turn on Show Complete to set this flag' : undefined}
+                  className={`flex-1 px-1 py-1 rounded-sm text-[10px] transition-colors ${
+                    active
+                      ? 'bg-accent text-on-accent font-medium'
+                      : disabled
+                        ? 'bg-inset text-fg-faint opacity-60 cursor-not-allowed'
+                        : 'bg-inset text-fg-dim hover:bg-edge'
+                  }`}
+                  aria-pressed={active}
+                >
+                  {FLAG_LABEL[flag]}
+                </button>
+              );
+            })}
           </div>
-        )}
+        </div>
 
         {/* Resume button */}
         <button
@@ -246,13 +311,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       >
         <div className="flex-1 min-w-0">
           <div className="text-sm truncate flex items-center gap-1.5">
-            {/* Subtle check badge marks complete sessions (only reachable when Show Complete is on). */}
-            {s.complete && (
+            {/* Compact per-flag badges before the name. Priority sits leftmost so
+                it reads like an at-a-glance pin marker. */}
+            {FLAG_ORDER.filter((f) => s.flags?.[f]).map((f) => (
               <span
+                key={f}
                 className="text-[9px] leading-none px-1 py-[1px] rounded-sm bg-accent text-on-accent shrink-0"
-                title="Marked complete"
-              >✓</span>
-            )}
+                title={FLAG_LABEL[f]}
+              >{FLAG_BADGE[f]}</span>
+            ))}
             <span className="truncate">{s.name}</span>
           </div>
           <div className="text-[10px] text-fg-faint">
@@ -334,8 +401,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 </div>
               ))
             ) : (
-              // Flat search results
-              filtered.map((s) => renderSessionRow(s, true))
+              // Flat search results, priority-pinned
+              flatSorted.map((s) => renderSessionRow(s, true))
             )}
           </div>
         </OverlayPanel>

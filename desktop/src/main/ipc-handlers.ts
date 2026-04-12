@@ -6,7 +6,7 @@ import https from 'https';
 import { execFile } from 'child_process';
 import { SessionManager } from './session-manager';
 import { HookRelay } from './hook-relay';
-import { IPC, PERMISSION_OVERRIDES_DEFAULT } from '../shared/types';
+import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName } from '../shared/types';
 import { setPermissionOverrides } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { RemoteConfig } from './remote-config';
@@ -1208,24 +1208,27 @@ export function registerIpcHandlers(
     sessionIdMap.delete(sessionId);
   });
 
-  // Mark/unmark a past session as complete. Persists in conversation-index.json
-  // via SyncService (so it rides the existing backup/downsync pipeline) and
-  // broadcasts SESSION_META_CHANGED so any open resume browser refreshes.
-  // Accepts either a Claude session ID (as stored in the index) or a desktop
-  // session ID — the desktop ID is resolved via sessionIdMap, which is only
-  // populated after Claude Code emits its first hook event. Brand-new sessions
-  // without that initialization yet will surface a "session not yet ready" error.
-  ipcMain.handle(IPC.SESSION_SET_COMPLETE, async (_event, sessionId: string, complete: boolean) => {
+  // Set a named flag on a session (complete, priority, helpful). Persists in
+  // conversation-index.json via SyncService (so it rides the existing
+  // backup/downsync pipeline) and broadcasts SESSION_META_CHANGED so any open
+  // resume browser refreshes. Accepts either a Claude session ID (as stored in
+  // the index) or a desktop session ID — the desktop ID is resolved via
+  // sessionIdMap. Unknown flag names are rejected server-side so a typo
+  // surfaces as an error rather than silently writing dead data.
+  ipcMain.handle(IPC.SESSION_SET_FLAG, async (_event, sessionId: string, flag: string, value: boolean) => {
     const svc = getSyncService();
     if (!svc) return { ok: false, error: 'sync service unavailable' };
-    // Try to resolve a desktop ID to its Claude session ID.
+    if (!SESSION_FLAG_NAMES.includes(flag as SessionFlagName)) {
+      return { ok: false, error: `unknown flag: ${flag}` };
+    }
     const resolved = sessionIdMap.get(sessionId) || sessionId;
     try {
-      svc.setSessionComplete(resolved, !!complete);
-      send(IPC.SESSION_META_CHANGED, resolved, { complete: !!complete });
+      svc.setSessionFlag(resolved, flag, !!value);
+      const payload = { flag, value: !!value };
+      send(IPC.SESSION_META_CHANGED, resolved, payload);
       remoteServer?.broadcast({
         type: IPC.SESSION_META_CHANGED,
-        payload: { sessionId: resolved, complete: !!complete },
+        payload: { sessionId: resolved, ...payload },
       });
       return { ok: true };
     } catch (e: any) {

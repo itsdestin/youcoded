@@ -30,7 +30,7 @@ import TerminalToolbar, { TerminalScrollButtons } from './components/TerminalToo
 import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
-import MarkCompletePrompt from './components/MarkCompletePrompt';
+import CloseSessionPrompt from './components/CloseSessionPrompt';
 import PreferencesPopup from './components/PreferencesPopup';
 import ModelPickerPopup from './components/ModelPickerPopup';
 import Marketplace from './components/Marketplace';
@@ -1484,18 +1484,18 @@ function AppInner() {
         defaultModel={sessionDefaults.model}
         defaultSkipPermissions={sessionDefaults.skipPermissions}
       />
-      <MarkCompletePrompt
+      <CloseSessionPrompt
         open={closePromptFor !== null}
         sessionName={sessions.find((s) => s.id === closePromptFor)?.name}
         onCancel={() => setClosePromptFor(null)}
-        onConfirm={(markComplete) => {
+        onConfirm={(flagsToSet) => {
           const id = closePromptFor;
           if (!id) return;
-          // Fire mark-complete first (fire-and-forget — backend logs any failure).
-          // Use the desktop session ID; main resolves it to a Claude session ID
+          // Fire setFlag for each selected tag (fire-and-forget — backend logs
+          // any failure). Main resolves the desktop ID to a Claude session ID
           // via sessionIdMap before writing conversation-index.json.
-          if (markComplete) {
-            try { (window as any).claude.session.setComplete(id, true); } catch {}
+          for (const flag of flagsToSet) {
+            try { (window as any).claude.session.setFlag(id, flag, true); } catch {}
           }
           try { window.claude.session.destroy(id); } catch {}
           setClosePromptFor(null);

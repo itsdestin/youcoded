@@ -58,9 +58,9 @@ const IPC = {
   TRANSCRIPT_SHRINK: 'transcript:shrink',
   SESSION_BROWSE: 'session:browse',
   SESSION_HISTORY: 'session:history',
-  // Mark a past session as complete/incomplete (hides from resume menu by default)
-  SESSION_SET_COMPLETE: 'session:set-complete',
-  // Pushed when session metadata (e.g. complete flag) changes so open browsers refresh
+  // Mark/unmark a session flag (complete, priority, helpful, …)
+  SESSION_SET_FLAG: 'session:set-flag',
+  // Pushed when session metadata (a flag value) changes so open browsers refresh
   SESSION_META_CHANGED: 'session:meta-changed',
   // Folder switcher
   FOLDERS_LIST: 'folders:list',
@@ -143,10 +143,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SESSION_HISTORY, sessionId, projectSlug, count || 10, all || false),
     switch: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_SWITCH, sessionId),
-    // Mark/unmark a past session as complete; persists in conversation-index.json
-    // and rides the existing sync pipeline
-    setComplete: (sessionId: string, complete: boolean) =>
-      ipcRenderer.invoke(IPC.SESSION_SET_COMPLETE, sessionId, complete),
+    // Mark/unmark a session flag (complete, priority, helpful, …).
+    // Persists in conversation-index.json and rides the existing sync pipeline.
+    setFlag: (sessionId: string, flag: string, value: boolean) =>
+      ipcRenderer.invoke(IPC.SESSION_SET_FLAG, sessionId, flag, value),
   },
   on: {
     sessionCreated: (cb: (info: any) => void) => {
@@ -186,7 +186,7 @@ contextBridge.exposeInMainWorld('claude', {
       return handler;
     },
     // Pushed when a session's metadata changes (currently: complete flag)
-    sessionMetaChanged: (cb: (sessionId: string, meta: { complete?: boolean }) => void) => {
+    sessionMetaChanged: (cb: (sessionId: string, meta: { flag: string; value: boolean }) => void) => {
       const handler = (_e: IpcRendererEvent, sid: string, meta: any) => cb(sid, meta);
       ipcRenderer.on(IPC.SESSION_META_CHANGED, handler);
       return handler;

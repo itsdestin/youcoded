@@ -199,6 +199,11 @@ export interface SkillProvider {
   importFromLink(encoded: string): Promise<SkillEntry>;
 }
 
+// Known session flag names. Add new flags here + in the renderer's pill list.
+// Server-side validation rejects any flag name not in this union.
+export type SessionFlagName = 'complete' | 'priority' | 'helpful';
+export const SESSION_FLAG_NAMES: SessionFlagName[] = ['complete', 'priority', 'helpful'];
+
 export interface PastSession {
   /** Claude Code's internal session ID (JSONL filename without extension) */
   sessionId: string;
@@ -212,8 +217,9 @@ export interface PastSession {
   lastModified: number;
   /** File size in bytes — proxy for conversation length */
   size: number;
-  /** User-marked "complete" — hidden from resume menu by default */
-  complete?: boolean;
+  /** User-set flags. `complete` hides from resume menu; `priority` pins to top;
+   *  `helpful` is informational only. Multiple flags per session are allowed. */
+  flags?: Partial<Record<SessionFlagName, boolean>>;
 }
 
 export interface HistoryMessage {
@@ -301,9 +307,9 @@ export const IPC = {
   // Session browser
   SESSION_BROWSE: 'session:browse',
   SESSION_HISTORY: 'session:history',
-  // Mark/unmark a past session as complete (hidden from resume menu by default)
-  SESSION_SET_COMPLETE: 'session:set-complete',
-  // Broadcast when session metadata changes (e.g. complete flag toggled)
+  // Mark/unmark a session flag (complete, priority, helpful, …)
+  SESSION_SET_FLAG: 'session:set-flag',
+  // Broadcast when session metadata changes (carries a flag + value)
   SESSION_META_CHANGED: 'session:meta-changed',
   SESSION_RESUME: 'session:resume',
   // Folder switcher

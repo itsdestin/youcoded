@@ -146,7 +146,7 @@ function handleMessage(data: string): void {
       dispatchEvent('session:renamed', payload.sessionId, payload.name);
       break;
     case 'session:meta-changed':
-      dispatchEvent('session:meta-changed', payload.sessionId, { complete: payload.complete });
+      dispatchEvent('session:meta-changed', payload.sessionId, { flag: payload.flag, value: payload.value });
       break;
     case 'session:permission-mode':
       // Android-only: corrects React's optimistic Shift+Tab cycling state.
@@ -517,9 +517,9 @@ export function installShim(): void {
       loadHistory: (sessionId: string, count?: number, all?: boolean, projectSlug?: string) =>
         invoke('session:history', { sessionId, count, all, projectSlug }),
       switch: (sessionId: string) => invoke('session:switch', { sessionId }),
-      // Mark/unmark a past session as complete (hides it from the default resume list)
-      setComplete: (sessionId: string, complete: boolean) =>
-        invoke('session:set-complete', { sessionId, complete }),
+      // Set a named flag on a past session (complete, priority, helpful).
+      setFlag: (sessionId: string, flag: string, value: boolean) =>
+        invoke('session:set-flag', { sessionId, flag, value }),
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),

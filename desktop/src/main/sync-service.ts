@@ -41,21 +41,48 @@ interface PushResult {
   backends: string[];  // IDs of backends that were pushed to
 }
 
+// Per-flag storage shape. updatedAt drives cross-device merge (latest writer wins)
+// independent of lastActive, so marking/unmarking doesn't fake new session activity.
+interface SessionFlagState {
+  value: boolean;
+  updatedAt: string; // ISO-8601
+}
+
 interface ConversationIndexEntry {
   topic: string;
   lastActive: string; // ISO-8601
   slug: string;
   device: string;
-  // User-set "complete" flag. Hidden from the resume menu by default.
+  // User-set flags. Keys are flag names (e.g. 'complete', 'priority', 'helpful').
+  // Added in v2 schema; v1 used top-level `complete` / `completeUpdatedAt`
+  // and is lifted into `flags.complete` on read for backward compatibility.
+  flags?: Record<string, SessionFlagState>;
+  // v1 legacy — tolerated on read, never written by this version.
   complete?: boolean;
-  // ISO-8601 timestamp of the last complete-flag change; used by merge
-  // (latest wins) so marking/unmarking doesn't fake new session activity.
   completeUpdatedAt?: string;
 }
 
 interface ConversationIndex {
   version: number;
   sessions: Record<string, ConversationIndexEntry>;
+}
+
+/** Lift v1 `complete` / `completeUpdatedAt` into `flags.complete` so older devices'
+ *  index entries still mean the same thing after upgrade. Returns a normalized
+ *  copy so callers can trust entry.flags exists when non-empty. */
+function migrateEntry(entry: ConversationIndexEntry): ConversationIndexEntry {
+  if (entry.complete === undefined && !entry.completeUpdatedAt) return entry;
+  const flags = { ...(entry.flags || {}) };
+  if (!flags.complete && entry.complete !== undefined) {
+    flags.complete = {
+      value: !!entry.complete,
+      updatedAt: entry.completeUpdatedAt || entry.lastActive || new Date(0).toISOString(),
+    };
+  }
+  const next = { ...entry, flags };
+  delete (next as any).complete;
+  delete (next as any).completeUpdatedAt;
+  return next;
 }
 
 // --- Constants ---
@@ -1235,19 +1262,26 @@ export class SyncService extends EventEmitter {
         const stat = fs.statSync(filePath);
         const lastActive = stat.mtime.toISOString();
 
-        // Only upsert if newer than existing entry
-        const existing = index.sessions[sessionId];
-        if (existing && new Date(existing.lastActive).getTime() >= stat.mtimeMs) continue;
+        // Lift any v1 legacy fields into flags before comparing / merging.
+        const existing = index.sessions[sessionId]
+          ? migrateEntry(index.sessions[sessionId])
+          : undefined;
 
-        // Preserve user-set complete flag across topic-file-driven upserts
-        // so a topic rename doesn't clobber the complete metadata.
+        // Only upsert if newer than existing entry
+        if (existing && new Date(existing.lastActive).getTime() >= stat.mtimeMs) {
+          // Still write back the migrated form in case legacy fields were present.
+          if (existing !== index.sessions[sessionId]) index.sessions[sessionId] = existing;
+          continue;
+        }
+
+        // Preserve user-set flags across topic-file-driven upserts so a topic
+        // rename doesn't clobber complete/priority/helpful.
         index.sessions[sessionId] = {
           topic,
           lastActive,
           slug,
           device,
-          ...(existing?.complete !== undefined ? { complete: existing.complete } : {}),
-          ...(existing?.completeUpdatedAt ? { completeUpdatedAt: existing.completeUpdatedAt } : {}),
+          ...(existing?.flags ? { flags: { ...existing.flags } } : {}),
         };
       } catch {}
     }
@@ -1262,17 +1296,21 @@ export class SyncService extends EventEmitter {
     this.atomicWrite(this.conversationIndexPath, JSON.stringify(index, null, 2));
   }
 
-  /** Merge a remote conversation index with the local one (union, latest wins). */
+  /** Merge a remote conversation index with the local one. Base entry fields
+   *  follow latest-lastActive-wins; each flag merges independently by its own
+   *  updatedAt so marking/unmarking on any device doesn't need fresher activity. */
   mergeConversationIndex(remotePath: string): void {
     const remote: ConversationIndex = this.readJson(remotePath) || { version: 1, sessions: {} };
     const local: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
 
     const merged: ConversationIndex = { version: 1, sessions: { ...local.sessions } };
 
-    for (const [sid, remoteEntry] of Object.entries(remote.sessions || {})) {
-      const localEntry = merged.sessions[sid];
+    for (const [sid, rawRemote] of Object.entries(remote.sessions || {})) {
+      const remoteEntry = migrateEntry(rawRemote);
+      const rawLocal = merged.sessions[sid];
+      const localEntry = rawLocal ? migrateEntry(rawLocal) : undefined;
 
-      // Base entry: latest lastActive wins for topic/slug/device (existing behavior).
+      // Base entry: latest lastActive wins for topic/slug/device.
       let baseEntry: ConversationIndexEntry;
       if (!localEntry || new Date(remoteEntry.lastActive).getTime() > new Date(localEntry.lastActive).getTime()) {
         baseEntry = { ...remoteEntry };
@@ -1280,19 +1318,27 @@ export class SyncService extends EventEmitter {
         baseEntry = { ...localEntry };
       }
 
-      // Complete flag merges independently by completeUpdatedAt so marking
-      // complete on device B doesn't require more-recent activity than A.
-      const localTs = localEntry?.completeUpdatedAt ? new Date(localEntry.completeUpdatedAt).getTime() : 0;
-      const remoteTs = remoteEntry.completeUpdatedAt ? new Date(remoteEntry.completeUpdatedAt).getTime() : 0;
-      if (remoteTs > localTs) {
-        baseEntry.complete = remoteEntry.complete;
-        baseEntry.completeUpdatedAt = remoteEntry.completeUpdatedAt;
-      } else if (localEntry) {
-        baseEntry.complete = localEntry.complete;
-        baseEntry.completeUpdatedAt = localEntry.completeUpdatedAt;
+      // Per-flag merge. Union of all flag names seen on either side; whichever
+      // side has the larger updatedAt wins for that flag.
+      const flagNames = new Set<string>([
+        ...Object.keys(localEntry?.flags || {}),
+        ...Object.keys(remoteEntry.flags || {}),
+      ]);
+      const mergedFlags: Record<string, SessionFlagState> = {};
+      for (const name of flagNames) {
+        const l = localEntry?.flags?.[name];
+        const r = remoteEntry.flags?.[name];
+        const lTs = l ? new Date(l.updatedAt).getTime() : 0;
+        const rTs = r ? new Date(r.updatedAt).getTime() : 0;
+        const winner = rTs > lTs ? r : l;
+        if (winner) mergedFlags[name] = winner;
       }
-      if (baseEntry.complete === undefined) delete baseEntry.complete;
-      if (!baseEntry.completeUpdatedAt) delete baseEntry.completeUpdatedAt;
+      if (Object.keys(mergedFlags).length > 0) baseEntry.flags = mergedFlags;
+      else delete baseEntry.flags;
+
+      // Never write legacy fields — the migrated shape is the canonical form now.
+      delete (baseEntry as any).complete;
+      delete (baseEntry as any).completeUpdatedAt;
 
       merged.sessions[sid] = baseEntry;
     }
@@ -1300,52 +1346,46 @@ export class SyncService extends EventEmitter {
     this.atomicWrite(this.conversationIndexPath, JSON.stringify(merged, null, 2));
   }
 
-  /**
-   * Read the current complete flag for a session from the local index.
-   * Returns false if the session or flag is absent.
-   */
-  getSessionComplete(sessionId: string): boolean {
+  /** Read all session flags (from the normalized index, migrating legacy fields).
+   *  Returns { sessionId: { flagName: boolean } } for flags whose value is truthy. */
+  getAllSessionFlags(): Record<string, Record<string, boolean>> {
     const index: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
-    return !!index.sessions?.[sessionId]?.complete;
-  }
-
-  /**
-   * Read the full complete-flag map for all sessions in the index.
-   * Callers join this onto PastSession[] in the resume menu.
-   */
-  getAllSessionCompleteFlags(): Record<string, boolean> {
-    const index: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
-    const out: Record<string, boolean> = {};
-    for (const [sid, entry] of Object.entries(index.sessions || {})) {
-      if (entry.complete) out[sid] = true;
+    const out: Record<string, Record<string, boolean>> = {};
+    for (const [sid, raw] of Object.entries(index.sessions || {})) {
+      const entry = migrateEntry(raw);
+      const flags = entry.flags || {};
+      const onFlags: Record<string, boolean> = {};
+      for (const [name, state] of Object.entries(flags)) {
+        if (state?.value) onFlags[name] = true;
+      }
+      if (Object.keys(onFlags).length > 0) out[sid] = onFlags;
     }
     return out;
   }
 
-  /**
-   * Mark or unmark a session as complete. Writes to conversation-index.json
-   * with a fresh completeUpdatedAt timestamp so sync merge honors latest-writer-wins.
-   * The entry is created (topic: 'Untitled') if the session isn't already indexed.
-   */
-  setSessionComplete(sessionId: string, complete: boolean): void {
+  /** Set a named flag on a session. Fresh updatedAt timestamp so cross-device
+   *  merge honors latest-writer-wins per-flag. Creates the entry if missing. */
+  setSessionFlag(sessionId: string, flag: string, value: boolean): void {
     const index: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
     if (!index.sessions) index.sessions = {};
 
     const now = new Date().toISOString();
-    const existing = index.sessions[sessionId];
+    const existing = index.sessions[sessionId]
+      ? migrateEntry(index.sessions[sessionId])
+      : null;
+
     if (existing) {
-      existing.complete = complete;
-      existing.completeUpdatedAt = now;
+      const flags = { ...(existing.flags || {}) };
+      flags[flag] = { value: !!value, updatedAt: now };
+      index.sessions[sessionId] = { ...existing, flags };
     } else {
-      // First time seeing this session in the index — seed a minimal entry.
-      // Topic will be filled in next updateConversationIndex() scan.
+      // First time seeing this session — seed a minimal entry.
       index.sessions[sessionId] = {
         topic: 'Untitled',
         lastActive: now,
         slug: '',
         device: os.hostname(),
-        complete,
-        completeUpdatedAt: now,
+        flags: { [flag]: { value: !!value, updatedAt: now } },
       };
     }
 

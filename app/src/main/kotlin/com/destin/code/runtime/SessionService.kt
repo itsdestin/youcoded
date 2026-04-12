@@ -967,8 +967,8 @@ class SessionService : Service() {
                 val pastSessions = withContext(Dispatchers.IO) {
                     SessionBrowser.listPastSessions(projectsDir, topicsDir, activeIds)
                 }
-                // Read user-set complete flags from the synced conversation-index.json
-                val completeFlags = withContext(Dispatchers.IO) { readCompleteFlags(homeDir) }
+                // Read user-set flag map from the synced conversation-index.json
+                val flagMap = withContext(Dispatchers.IO) { readFlagMap(homeDir) }
                 val arr = org.json.JSONArray()
                 for (s in pastSessions) {
                     arr.put(JSONObject().apply {
@@ -977,39 +977,49 @@ class SessionService : Service() {
                         put("name", s.name)
                         put("lastModified", s.lastModified)
                         put("projectPath", s.projectPath)
-                        put("complete", completeFlags.contains(s.sessionId))
+                        // flags: { complete: true, priority: true, ... } — only set flags included
+                        val entryFlags = flagMap[s.sessionId]
+                        if (entryFlags != null && entryFlags.isNotEmpty()) {
+                            put("flags", JSONObject().apply {
+                                for ((name, v) in entryFlags) put(name, v)
+                            })
+                        }
                     })
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
             }
-            "session:set-complete" -> {
-                // Mark/unmark a past session as complete. Writes the same
+            "session:set-flag" -> {
+                // Set a named flag on a past session. Writes the same
                 // conversation-index.json the desktop writes — sync picks it
-                // up through the existing backup pipeline.
+                // up through the existing backup pipeline. Unknown flag names
+                // are rejected so a typo surfaces as an error.
                 val sessionId = msg.payload.optString("sessionId", "")
-                val complete = msg.payload.optBoolean("complete", false)
-                if (sessionId.isEmpty()) {
+                val flag = msg.payload.optString("flag", "")
+                val value = msg.payload.optBoolean("value", false)
+                val allowed = setOf("complete", "priority", "helpful")
+                if (sessionId.isEmpty() || flag !in allowed) {
                     msg.id?.let {
                         bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
-                            put("ok", false); put("error", "missing sessionId")
+                            put("ok", false)
+                            put("error", if (sessionId.isEmpty()) "missing sessionId" else "unknown flag: $flag")
                         })
                     }
                 } else {
                     val homeDir = bootstrap?.homeDir ?: filesDir
                     val ok = withContext(Dispatchers.IO) {
-                        writeSessionComplete(homeDir, sessionId, complete)
+                        writeSessionFlag(homeDir, sessionId, flag, value)
                     }
                     msg.id?.let {
                         bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
                             put("ok", ok)
                         })
                     }
-                    // Broadcast a meta-changed push so any open browser refreshes.
                     bridgeServer.broadcast(JSONObject().apply {
                         put("type", "session:meta-changed")
                         put("payload", JSONObject().apply {
                             put("sessionId", sessionId)
-                            put("complete", complete)
+                            put("flag", flag)
+                            put("value", value)
                         })
                     })
                 }
@@ -2262,32 +2272,48 @@ class SessionService : Service() {
     }
 
     /**
-     * Read the complete-flag set from ~/.claude/conversation-index.json.
-     * Returns the set of sessionIds where entry.complete == true.
+     * Read all user-set flags from ~/.claude/conversation-index.json.
+     * Returns { sessionId: { flagName: true } } for flags whose value is true.
+     * Also lifts v1 legacy `complete` field into flags.complete on read so
+     * entries written before the flags generalization still show up correctly.
      */
-    private fun readCompleteFlags(homeDir: File): Set<String> {
+    private fun readFlagMap(homeDir: File): Map<String, Map<String, Boolean>> {
         val indexFile = File(homeDir, ".claude/conversation-index.json")
-        if (!indexFile.exists()) return emptySet()
+        if (!indexFile.exists()) return emptyMap()
         return try {
             val root = JSONObject(indexFile.readText())
-            val sessions = root.optJSONObject("sessions") ?: return emptySet()
-            val out = mutableSetOf<String>()
+            val sessions = root.optJSONObject("sessions") ?: return emptyMap()
+            val out = mutableMapOf<String, MutableMap<String, Boolean>>()
             val keys = sessions.keys()
             while (keys.hasNext()) {
-                val k = keys.next()
-                val entry = sessions.optJSONObject(k) ?: continue
-                if (entry.optBoolean("complete", false)) out.add(k)
+                val sid = keys.next()
+                val entry = sessions.optJSONObject(sid) ?: continue
+                val row = mutableMapOf<String, Boolean>()
+                entry.optJSONObject("flags")?.let { flagsObj ->
+                    val fkeys = flagsObj.keys()
+                    while (fkeys.hasNext()) {
+                        val name = fkeys.next()
+                        val state = flagsObj.optJSONObject(name) ?: continue
+                        if (state.optBoolean("value", false)) row[name] = true
+                    }
+                }
+                // v1 legacy — tolerated on read
+                if (!row.containsKey("complete") && entry.optBoolean("complete", false)) {
+                    row["complete"] = true
+                }
+                if (row.isNotEmpty()) out[sid] = row
             }
             out
-        } catch (_: Throwable) { emptySet() }
+        } catch (_: Throwable) { emptyMap() }
     }
 
     /**
-     * Write the complete flag for a session into ~/.claude/conversation-index.json.
-     * Mirrors SyncService.setSessionComplete() on desktop — sets completeUpdatedAt
-     * so cross-device merge does latest-writer-wins on the flag independent of lastActive.
+     * Set a named flag on a session in ~/.claude/conversation-index.json.
+     * Writes under entry.flags[name] = { value, updatedAt } — mirrors
+     * SyncService.setSessionFlag() on desktop so cross-device merge treats
+     * each flag's updatedAt independently.
      */
-    private fun writeSessionComplete(homeDir: File, sessionId: String, complete: Boolean): Boolean {
+    private fun writeSessionFlag(homeDir: File, sessionId: String, flag: String, value: Boolean): Boolean {
         val indexFile = File(homeDir, ".claude/conversation-index.json")
         return try {
             indexFile.parentFile?.mkdirs()
@@ -2304,10 +2330,15 @@ class SessionService : Service() {
                 put("slug", "")
                 put("device", android.os.Build.MODEL ?: "android")
             }
-            entry.put("complete", complete)
-            entry.put("completeUpdatedAt", nowIso)
+            val flags = entry.optJSONObject("flags") ?: JSONObject().also { entry.put("flags", it) }
+            flags.put(flag, JSONObject().apply {
+                put("value", value)
+                put("updatedAt", nowIso)
+            })
+            // Drop v1 legacy complete fields if present — canonical form is flags.complete now
+            entry.remove("complete")
+            entry.remove("completeUpdatedAt")
             sessions.put(sessionId, entry)
-            // Atomic write via tmp rename to avoid partial reads
             val tmp = File(indexFile.parentFile, indexFile.name + ".tmp")
             tmp.writeText(root.toString(2))
             tmp.renameTo(indexFile) || run { indexFile.writeText(root.toString(2)); true }
