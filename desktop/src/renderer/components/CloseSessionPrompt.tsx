@@ -26,14 +26,13 @@ export const CLOSE_PROMPT_SUPPRESS_KEY = 'destincode-close-prompt-disabled';
 const SUPPRESS_KEY = CLOSE_PROMPT_SUPPRESS_KEY;
 
 // Shown when the user closes an active session. Lets them tag the session with
-// any combination of Priority, Helpful, Complete in one step. Complete defaults
-// to `true` because that's the usual "I'm done with this" close intent, which
-// Destin already validated on the prior Complete-only prompt.
+// any combination of Priority, Helpful, Complete in one step. Nothing is
+// pre-selected — the user chooses which flags apply, or closes with none.
 export default function CloseSessionPrompt({ open, sessionName, onCancel, onConfirm }: Props) {
   const [sel, setSel] = useState<Record<FlagName, boolean>>({
     priority: false,
     helpful: false,
-    complete: true,
+    complete: false,
   });
   // "Don't show again" — persisted to localStorage so the caller can skip this
   // prompt on future closes. Default off so users see it at least once.
@@ -41,7 +40,7 @@ export default function CloseSessionPrompt({ open, sessionName, onCancel, onConf
 
   useEffect(() => {
     if (open) {
-      setSel({ priority: false, helpful: false, complete: true });
+      setSel({ priority: false, helpful: false, complete: false });
       setDontShowAgain(false);
     }
   }, [open]);
@@ -99,8 +98,8 @@ export default function CloseSessionPrompt({ open, sessionName, onCancel, onConf
             </div>
             <p className="text-[10px] text-fg-faint">
               {sel.complete
-                ? 'Marking Complete hides this from the resume menu by default.'
-                : 'Will appear in the resume menu next time you open it.'}
+                ? 'Complete hides this from the resume menu by default.'
+                : 'Tap a flag to tag this session, or close with none.'}
             </p>
           </div>
           <div className="px-4 pb-4 flex items-center gap-2 justify-between">
