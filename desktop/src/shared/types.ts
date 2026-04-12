@@ -50,6 +50,10 @@ export type TranscriptEventType =
   | 'tool-use'
   | 'tool-result'
   | 'thinking'
+  // Extended-thinking models emit `thinking` blocks between tool calls that
+  // carry no chat text — the watcher surfaces them as heartbeats so the
+  // attention classifier doesn't misread the silence as 'stuck'.
+  | 'assistant-thinking'
   | 'turn-complete'
   // Emitted when Claude Code writes a {type:"user", isCompactSummary:true}
   // entry — the canonical "compaction finished" signal. In-session /compact

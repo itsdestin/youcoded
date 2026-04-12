@@ -153,7 +153,21 @@ export function parseTranscriptLine(line: string, sessionId: string): Transcript
           });
           break;
 
-        // Skip thinking, images, etc.
+        // Extended-thinking models write `thinking` blocks with no visible
+        // text — emit a lightweight heartbeat so the renderer's attention
+        // classifier knows Claude is still working and doesn't flag a
+        // multi-minute reasoning pause as 'stuck'.
+        case 'thinking':
+          events.push({
+            type: 'assistant-thinking',
+            sessionId,
+            uuid,
+            timestamp,
+            data: {},
+          });
+          break;
+
+        // Skip images, etc.
         default:
           break;
       }
