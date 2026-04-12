@@ -85,6 +85,24 @@ export interface ThemeScrollbar {
   'track-color'?: string;
 }
 
+/** Optional overlay appearance overrides. When omitted, the theme engine
+ *  computes sensible defaults from the existing color tokens — dark themes
+ *  get subtle shadows and cool-tinted scrims, light themes get stronger
+ *  shadows and warm-tinted scrims. Theme authors only need to set these
+ *  if the computed defaults don't match their vision. */
+export interface ThemeOverlay {
+  /** Scrim (backdrop dim) color — CSS color string, e.g. 'rgba(10, 10, 15, 0.5)'.
+   *  Computed from canvas darkened toward black when omitted. */
+  scrim?: string;
+  /** Heavy scrim for destructive/critical dialogs — deeper dim than standard scrim. */
+  'scrim-heavy'?: string;
+  /** Destructive accent color for delete/danger actions. Defaults to #DD4444. */
+  destructive?: string;
+  /** Shadow intensity multiplier (0–1). Higher = more visible popup shadows.
+   *  Computed from canvas luminance when omitted (light themes ≈ 0.2, dark ≈ 0.1). */
+  'shadow-strength'?: number;
+}
+
 export interface ThemeDefinition {
   name: string;
   slug: string;
@@ -101,6 +119,9 @@ export interface ThemeDefinition {
   mascot?: ThemeMascot;
   cursor?: string;
   scrollbar?: ThemeScrollbar;
+  /** Overlay appearance — scrim color, shadow strength, destructive accent.
+   *  All fields optional; the engine computes defaults from color tokens. */
+  overlay?: ThemeOverlay;
   custom_css?: string;
 }
 

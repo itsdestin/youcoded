@@ -1,4 +1,4 @@
-import type { ThemeTokens, ThemeShape, ThemeFont, ThemeBackground, ThemeLayout, ThemeEffects, ThemeDefinition } from './theme-types';
+import type { ThemeTokens, ThemeShape, ThemeFont, ThemeBackground, ThemeLayout, ThemeEffects, ThemeOverlay, ThemeDefinition } from './theme-types';
 
 /** Returns CSS custom property map for all 15 color tokens. */
 export function buildTokenCSS(tokens: ThemeTokens): Record<string, string> {
@@ -151,6 +151,72 @@ function applyEffects(effects: ThemeEffects | undefined): void {
   div.style.backgroundRepeat = backgrounds.map(() => 'repeat').join(', ');
 }
 
+/** Parses a hex color string (#RRGGBB) into [r, g, b] components (0-255). */
+function parseHex(hex: string): [number, number, number] {
+  const clean = hex.replace(/^#/, '');
+  return [
+    parseInt(clean.slice(0, 2), 16) || 0,
+    parseInt(clean.slice(2, 4), 16) || 0,
+    parseInt(clean.slice(4, 6), 16) || 0,
+  ];
+}
+
+/** Relative luminance of an [r, g, b] triplet (0-255) — WCAG 2.0 formula. */
+function rgbLuminance(r: number, g: number, b: number): number {
+  const toLinear = (c: number) => {
+    const s = c / 255;
+    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
+  };
+  return 0.2126 * toLinear(r) + 0.7152 * toLinear(g) + 0.0722 * toLinear(b);
+}
+
+/** Computes overlay CSS custom properties from existing theme tokens.
+ *  All values are concrete rgba() strings — no color-mix() — for Android
+ *  WebView compatibility. Theme authors can override any value via the
+ *  optional `overlay` field in their manifest. */
+export function computeOverlayTokens(
+  tokens: ThemeTokens,
+  background: ThemeBackground | undefined,
+  overlay: ThemeOverlay | undefined,
+  reducedEffects: boolean,
+): Record<string, string> {
+  const [canvasR, canvasG, canvasB] = parseHex(tokens.canvas);
+  const [panelR, panelG, panelB] = parseHex(tokens.panel);
+  const lum = rgbLuminance(canvasR, canvasG, canvasB);
+
+  // Scrim — darken canvas toward black for a theme-tinted overlay dim.
+  // Dark themes: mix canvas 40% with black → subtle tinted dim.
+  // Light themes: mix canvas 30% with black → darker dim needed for contrast.
+  const scrimMix = lum > 0.2 ? 0.3 : 0.4;
+  const scrimR = Math.round(canvasR * scrimMix);
+  const scrimG = Math.round(canvasG * scrimMix);
+  const scrimB = Math.round(canvasB * scrimMix);
+
+  // Shadow strength — light themes need heavier shadows for visibility,
+  // dark themes rely more on borders so shadows can be subtle.
+  const shadowStrength = overlay?.['shadow-strength'] ?? (lum > 0.2 ? 0.2 : 0.1);
+
+  // Glassmorphism-aware overlay surface
+  const blur = background?.['panels-blur'];
+  const hasGlass = blur != null && blur > 0 && !reducedEffects;
+
+  const result: Record<string, string> = {
+    '--scrim': overlay?.scrim ?? `rgba(${scrimR}, ${scrimG}, ${scrimB}, 0.5)`,
+    '--scrim-heavy': overlay?.['scrim-heavy'] ?? `rgba(${scrimR}, ${scrimG}, ${scrimB}, 0.7)`,
+    // Overlay surface: semi-transparent panel when glass is active, opaque otherwise
+    '--overlay-bg': hasGlass
+      ? `rgba(${panelR}, ${panelG}, ${panelB}, 0.85)`
+      : tokens.panel,
+    // Overlay blur: 16px when glass active, 0 otherwise (or when reduced effects)
+    '--overlay-blur': hasGlass ? '16px' : '0px',
+    '--shadow-strength': String(shadowStrength),
+    '--destructive': overlay?.destructive ?? '#DD4444',
+    '--destructive-dim': `rgba(${parseHex(overlay?.destructive ?? '#DD4444').join(', ')}, 0.15)`,
+  };
+
+  return result;
+}
+
 const LAYOUT_ATTRS = ['data-chrome-style', 'data-input-style', 'data-bubble-style', 'data-header-style', 'data-statusbar-style'] as const;
 
 /** Applies a full ThemeDefinition to the live DOM. Only call from renderer process.
@@ -198,6 +264,13 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     root.style.removeProperty('--panel-glass');
     root.style.removeProperty('--bubble-blur');
     root.style.removeProperty('--bubble-opacity');
+  }
+
+  // 4b. Overlay tokens — scrim, overlay surface, shadow strength, destructive accent.
+  //     Computed from existing color tokens; theme authors can override via overlay field.
+  //     Uses concrete rgba() values (not color-mix) for Android WebView compatibility.
+  for (const [prop, value] of Object.entries(computeOverlayTokens(theme.tokens, theme.background, theme.overlay, reducedEffects))) {
+    root.style.setProperty(prop, value);
   }
 
   // 5. Background wallpaper — set directly on <body> (bypasses z-index stacking issues)
@@ -310,5 +383,8 @@ const TOKEN_CSS_PROPS = [
   '--canvas', '--panel', '--inset', '--well', '--accent', '--on-accent',
   '--fg', '--fg-2', '--fg-dim', '--fg-muted', '--fg-faint',
   '--edge', '--edge-dim', '--scrollbar-thumb', '--scrollbar-hover',
+  // Overlay tokens (computed by theme engine from color tokens)
+  '--scrim', '--scrim-heavy', '--overlay-bg', '--overlay-blur',
+  '--shadow-strength', '--destructive', '--destructive-dim',
 ] as const;
 

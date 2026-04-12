@@ -177,6 +177,16 @@
   --color-link: var(--link);
   --color-link-hover: var(--link-hover);
 
+  /* Overlay system — computed by theme-engine.ts from color tokens.
+     Scrims are theme-tinted (not plain black), shadow strength adapts
+     to theme lightness, and overlay surfaces become frosted glass
+     automatically when the theme has glassmorphism enabled. */
+  --color-scrim: var(--scrim);
+  --color-scrim-heavy: var(--scrim-heavy);
+  --color-overlay-bg: var(--overlay-bg);
+  --color-destructive: var(--destructive);
+  --color-destructive-dim: var(--destructive-dim);
+
   /* Status colors — constant across all themes */
   --color-green-400: #4CAF50;
   --color-red-400: #DD4444;
@@ -444,6 +454,78 @@ html, body, #root {
   backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
   -webkit-backdrop-filter: blur(var(--bubble-blur, 16px)) saturate(1.1);
   background-color: color-mix(in srgb, var(--accent) calc(var(--bubble-opacity, 0.88) * 100%), transparent);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Overlay layer system — standardized scrim, surface, and shadow treatment
+   for popups/modals/drawers. CSS variables (--scrim, --overlay-bg, etc.)
+   are computed by theme-engine.ts from color tokens.
+
+   Layer hierarchy (z-index assignments):
+     L1 Drawer:   scrim z-40, content z-50  (Settings, CommandDrawer)
+     L2 Popup:    scrim z-60, content z-61  (theme picker, ShareSheet)
+     L3 Critical: scrim z-70, content z-71  (delete confirmation)
+     L4 System:   z-100                     (keyboard shortcuts, toasts)
+   Note: SessionStrip dropdown stays z-[9000] — load-bearing due to
+   header backdrop-filter creating a stacking context.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* Layer scrims — theme-tinted backdrops (not cold bg-black).
+   Scrim color adapts to theme: warm tint on cream, cool on midnight. */
+.layer-scrim {
+  position: fixed;
+  inset: 0;
+  background-color: var(--scrim);
+}
+
+.layer-scrim[data-layer="3"] {
+  background-color: var(--scrim-heavy);
+}
+
+/* Scrim blur — only when glassmorphism active, kept subtle to limit
+   GPU compositing cost (especially on Android WebView). */
+[data-panels-blur] .layer-scrim {
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+}
+
+[data-panels-blur] .layer-scrim[data-layer="3"] {
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+}
+
+/* Layer surfaces — popup/modal panel backgrounds.
+   --overlay-bg is opaque (var(--panel)) in normal mode, semi-transparent
+   rgba() when glassmorphism active. --shadow-strength adapts to theme
+   lightness (higher on light themes where shadows need to be visible). */
+.layer-surface {
+  background-color: var(--overlay-bg);
+  border: 1px solid var(--edge);
+  border-radius: var(--radius-xl);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, var(--shadow-strength, 0.15));
+}
+
+/* Frosted glass popups — automatic when theme has glassmorphism */
+[data-panels-blur] .layer-surface {
+  backdrop-filter: blur(var(--overlay-blur, 16px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--overlay-blur, 16px)) saturate(1.2);
+}
+
+/* Destructive variant — danger-tinted border + ring for delete/clear dialogs */
+.layer-surface[data-destructive] {
+  border-color: var(--destructive-dim);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, var(--shadow-strength, 0.15)),
+              0 0 0 1px var(--destructive-dim);
+}
+
+/* Inside layer surfaces, children that use bg-inset/bg-accent should stay
+   opaque so the blurred background doesn't leak through nested elements */
+[data-panels-blur] .layer-surface .bg-inset {
+  background-color: var(--inset);
+}
+
+[data-panels-blur] .layer-surface .bg-accent {
+  background-color: var(--accent);
 }
 
 /* ═══════════════════════════════════════════════════════════════════════════
