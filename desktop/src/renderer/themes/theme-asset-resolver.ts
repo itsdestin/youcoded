@@ -34,6 +34,10 @@ export function resolveAllAssetPaths<T extends ThemeDefinition | LoadedTheme>(th
       const r = resolveAssetPath(bg.value, slug);
       if (r) bg.value = r;
     }
+    if (bg['terminal-value']) {
+      const r = resolveAssetPath(bg['terminal-value'], slug);
+      if (r) bg['terminal-value'] = r;
+    }
     if (bg.pattern) {
       const r = resolveAssetPath(bg.pattern, slug);
       if (r) bg.pattern = r;

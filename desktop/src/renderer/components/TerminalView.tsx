@@ -43,6 +43,16 @@ export default function TerminalView({ sessionId, visible }: Props) {
   const hasBlur = !!(bg?.['panels-blur'] && bg['panels-blur'] > 0 && !reducedEffects);
   // Terminal needs to be see-through when any visual background is active
   const seeThrough = hasWallpaper || hasGradient || hasBlur;
+  // Dedicated background layer for terminal readability (image themes only).
+  // Preferred source: theme author supplies a pre-blurred+darkened
+  // `terminal-value` asset (zero runtime cost). Fallback: use the sharp
+  // wallpaper with a runtime CSS filter — applied once on a static image,
+  // not per-frame like backdrop-filter, so it's cheap. Reduced-effects
+  // skips the runtime fallback entirely.
+  const terminalBgAsset = hasWallpaper ? bg?.['terminal-value'] : undefined;
+  const terminalBgFallback = hasWallpaper && !terminalBgAsset && !reducedEffects ? bg?.value : undefined;
+  const terminalBg = terminalBgAsset ?? terminalBgFallback;
+  const needsRuntimeBlur = !!terminalBgFallback;
 
   // Sync xterm theme when app theme changes. Always keep WebGL for performance.
   useEffect(() => {
@@ -201,9 +211,14 @@ export default function TerminalView({ sessionId, visible }: Props) {
     terminalRef.current?.write(data, () => notifyBufferReady(sessionId));
   });
 
+  // With a blurred terminal wallpaper (pre-baked OR runtime) we can sit xterm
+  // at a gentler 0.92 opacity — the blurred layer handles ambience. Without
+  // one (gradient, glass-only, or reduced-effects themes), fall back to the
+  // old 0.88 container opacity trick so the sharp background peeks through.
+  const xtermOpacity = terminalBg ? 0.92 : (seeThrough ? 0.88 : 1);
+
   return (
     <div
-      ref={containerRef}
       className={visible ? undefined : 'terminal-hidden'}
       style={{
         position: 'absolute',
@@ -213,10 +228,6 @@ export default function TerminalView({ sessionId, visible }: Props) {
         bottom: 0,
         borderRadius: 'var(--radius-md)',
         overflow: 'hidden',
-        // When a wallpaper/gradient is active, reduce terminal opacity so
-        // the background peeks through. WebGL stays loaded (no lag), and
-        // the text remains readable at 88% opacity.
-        opacity: seeThrough ? 0.88 : 1,
         // Use visibility:hidden instead of display:none so xterm.js can
         // measure fonts and maintain its screen buffer while the terminal
         // tab is not active. display:none causes a 0x0 container, which
@@ -228,6 +239,34 @@ export default function TerminalView({ sessionId, visible }: Props) {
         // text selection in the ChatView sitting underneath.
         pointerEvents: visible ? 'auto' : 'none',
       }}
-    />
+    >
+      {terminalBg && (
+        <div
+          aria-hidden
+          style={{
+            position: 'absolute',
+            inset: 0,
+            backgroundImage: `url("${terminalBg}")`,
+            backgroundSize: 'cover',
+            backgroundPosition: 'center',
+            // Runtime `filter` on a static image paints once — unlike
+            // backdrop-filter which recomposites every frame. Only applied
+            // when the theme didn't ship a pre-baked terminal asset.
+            filter: needsRuntimeBlur ? 'blur(32px) brightness(0.82)' : undefined,
+            // Blur expands beyond the element's bounds; scale up so the
+            // soft edges don't reveal clipped pixels at the corners.
+            transform: needsRuntimeBlur ? 'scale(1.1)' : undefined,
+          }}
+        />
+      )}
+      <div
+        ref={containerRef}
+        style={{
+          position: 'absolute',
+          inset: 0,
+          opacity: xtermOpacity,
+        }}
+      />
+    </div>
   );
 }

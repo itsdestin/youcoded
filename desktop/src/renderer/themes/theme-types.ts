@@ -36,6 +36,10 @@ export interface ThemeFont {
 export interface ThemeBackground {
   type: 'solid' | 'gradient' | 'image';
   value: string;
+  // Pre-blurred + darkened wallpaper used exclusively in TerminalView so
+  // xterm text stays readable over high-frequency image detail. Optional —
+  // themes without it fall back to the container-opacity wallpaper-peek trick.
+  'terminal-value'?: string;
   opacity?: number;
   'panels-blur'?: number;
   'panels-opacity'?: number;
