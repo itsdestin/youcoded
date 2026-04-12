@@ -124,27 +124,53 @@ function ErrorBlock({ error }: { error: string }) {
 // text-green-200 which washed out on high-chroma theme canvases like Hello
 // Kitty's pink. The solid left bar + colored gutter glyph stay hardcoded so
 // the add/remove signal is visible even if the tint blends into the bubble.
+//
+// Long diffs cap the container height to DIFF_PREVIEW_LINES rows and scroll
+// internally; an Expand button removes the cap for full inline view. Matches
+// ReadView's preview-then-expand pattern.
+const DIFF_ROW_PX = 20;
+const DIFF_PREVIEW_LINES = 15;
+
 function DiffView({ oldStr, newStr }: { oldStr: string; newStr: string }) {
   const oldLines = oldStr.split('\n');
   const newLines = newStr.split('\n');
+  const total = oldLines.length + newLines.length;
+  const [open, setOpen] = useState(false);
+  const overflow = total > DIFF_PREVIEW_LINES;
+  const containerStyle = open || !overflow
+    ? undefined
+    : { maxHeight: `${DIFF_PREVIEW_LINES * DIFF_ROW_PX}px` };
 
   return (
-    <div className="text-xs font-mono rounded-sm overflow-hidden border border-edge">
-      {oldLines.map((line, i) => (
-        <div key={`o-${i}`} className="flex items-start bg-red-600/10 border-l-[3px] border-red-500">
-          <span className="w-8 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0">{i + 1}</span>
-          <span className="w-4 text-red-400 select-none shrink-0 font-bold">−</span>
-          <span className="py-0.5 pr-2 text-fg whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
-        </div>
-      ))}
-      {newLines.map((line, i) => (
-        <div key={`n-${i}`} className="flex items-start bg-green-600/10 border-l-[3px] border-green-400">
-          <span className="w-8 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0">{i + 1}</span>
-          <span className="w-4 text-green-400 select-none shrink-0 font-bold">+</span>
-          <span className="py-0.5 pr-2 text-fg whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
-        </div>
-      ))}
-    </div>
+    <>
+      <div
+        className="text-xs font-mono rounded-sm border border-edge overflow-auto"
+        style={containerStyle}
+      >
+        {oldLines.map((line, i) => (
+          <div key={`o-${i}`} className="flex items-start bg-red-600/10 border-l-[3px] border-red-500">
+            <span className="w-8 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0">{i + 1}</span>
+            <span className="w-4 text-red-400 select-none shrink-0 font-bold">−</span>
+            <span className="py-0.5 pr-2 text-fg whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
+          </div>
+        ))}
+        {newLines.map((line, i) => (
+          <div key={`n-${i}`} className="flex items-start bg-green-600/10 border-l-[3px] border-green-400">
+            <span className="w-8 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0">{i + 1}</span>
+            <span className="w-4 text-green-400 select-none shrink-0 font-bold">+</span>
+            <span className="py-0.5 pr-2 text-fg whitespace-pre-wrap break-all flex-1">{line || ' '}</span>
+          </div>
+        ))}
+      </div>
+      {overflow && (
+        <button
+          onClick={() => setOpen(o => !o)}
+          className="mt-1 text-[10px] uppercase tracking-wider text-fg-muted hover:text-fg-2"
+        >
+          {open ? 'Collapse' : `Expand (${total} lines)`}
+        </button>
+      )}
+    </>
   );
 }
 
@@ -199,20 +225,19 @@ function WriteView({ tool }: { tool: ToolCallState }) {
 // Shared renderer for shell-like tools (Bash, MCP PowerShell, etc.). Shows the
 // command prominently, routes output through CR-strip + collapse, and promotes
 // error state to a pill at the top.
-function ShellView({ tool, commandField, descriptionField }: {
+function ShellView({ tool, commandField }: {
   tool: ToolCallState;
   commandField: string;
-  descriptionField?: string;
 }) {
   const cmd = (tool.input[commandField] as string) || '';
-  const desc = descriptionField ? (tool.input[descriptionField] as string | undefined) : undefined;
   const bg = tool.input.run_in_background as boolean | undefined;
   const response = tool.response ? stripCarriageReturns(tool.response) : '';
   const failed = tool.status === 'failed';
 
+  // Description is already shown as the collapsed-header label (see
+  // friendlyToolDisplay in ToolCard.tsx); don't repeat it in the expanded body.
   return (
     <div className="space-y-2">
-      {desc && <div className="text-xs text-fg-2">{desc}</div>}
       <div className="flex items-start gap-2">
         <pre className="flex-1 text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 overflow-auto whitespace-pre-wrap break-all text-fg">
           {cmd || <span className="text-fg-muted italic">(no command)</span>}
@@ -312,15 +337,18 @@ function parseCatN(resp: string): { lineNo: number; text: string }[] {
   return rows;
 }
 
+// Approximate line height for the xs mono rows — keeps the initial viewport
+// capped at ~15 lines (text-xs ≈ 12px + py-0.5 padding ≈ 20px per row).
+const READ_ROW_PX = 20;
+const READ_PREVIEW_LINES = 15;
+
 function ReadView({ tool }: { tool: ToolCallState }) {
   const fp = (tool.input.file_path as string) || '';
   const offset = tool.input.offset as number | undefined;
   const limit = tool.input.limit as number | undefined;
   const rows = tool.response ? parseCatN(tool.response) : [];
   const [open, setOpen] = useState(false);
-  const MAX = 40;
-  const shown = open ? rows : rows.slice(0, MAX);
-  const overflow = rows.length > MAX;
+  const overflow = rows.length > READ_PREVIEW_LINES;
 
   let rangeLabel = '';
   if (rows.length > 0) {
@@ -328,6 +356,14 @@ function ReadView({ tool }: { tool: ToolCallState }) {
   } else if (offset != null && limit != null) {
     rangeLabel = `lines ${offset}–${offset + limit}`;
   }
+
+  // Collapsed: cap container height to 15 rows and let it scroll internally.
+  // Expanded: remove the cap so everything flows inline. All rows always
+  // render (no virtualization needed — Read responses are bounded by the
+  // tool's limit param).
+  const containerStyle = open
+    ? undefined
+    : { maxHeight: `${READ_PREVIEW_LINES * READ_ROW_PX}px` };
 
   return (
     <div className="space-y-2">
@@ -337,8 +373,11 @@ function ReadView({ tool }: { tool: ToolCallState }) {
       </div>
       {rows.length > 0 ? (
         <>
-          <div className="text-xs font-mono rounded-sm overflow-hidden border border-edge bg-panel">
-            {shown.map(r => (
+          <div
+            className="text-xs font-mono rounded-sm border border-edge bg-panel overflow-auto"
+            style={containerStyle}
+          >
+            {rows.map(r => (
               <div key={r.lineNo} className="flex items-start">
                 <span className="w-10 text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0 border-r border-edge">{r.lineNo}</span>
                 <span className="py-0.5 px-2 text-fg-dim whitespace-pre-wrap break-all flex-1">{r.text || ' '}</span>
@@ -350,7 +389,7 @@ function ReadView({ tool }: { tool: ToolCallState }) {
               onClick={() => setOpen(o => !o)}
               className="text-[10px] uppercase tracking-wider text-fg-muted hover:text-fg-2"
             >
-              {open ? 'Show less' : `Show ${rows.length - MAX} more lines`}
+              {open ? 'Collapse' : `Expand (${rows.length} lines)`}
             </button>
           )}
         </>
@@ -590,7 +629,7 @@ export default function ToolBody({ tool }: { tool: ToolCallState }) {
       case 'Write':
         return <WriteView tool={tool} />;
       case 'Bash':
-        return <ShellView tool={tool} commandField="command" descriptionField="description" />;
+        return <ShellView tool={tool} commandField="command" />;
       case 'TodoWrite':
         return <TodoWriteView tool={tool} />;
       case 'TaskCreate':
