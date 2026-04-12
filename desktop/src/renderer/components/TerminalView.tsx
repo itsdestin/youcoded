@@ -252,10 +252,10 @@ export default function TerminalView({ sessionId, visible }: Props) {
             // Runtime `filter` on a static image paints once — unlike
             // backdrop-filter which recomposites every frame. Only applied
             // when the theme didn't ship a pre-baked terminal asset.
-            filter: needsRuntimeBlur ? 'blur(32px) brightness(0.82)' : undefined,
+            filter: needsRuntimeBlur ? 'blur(8px) brightness(0.86)' : undefined,
             // Blur expands beyond the element's bounds; scale up so the
             // soft edges don't reveal clipped pixels at the corners.
-            transform: needsRuntimeBlur ? 'scale(1.1)' : undefined,
+            transform: needsRuntimeBlur ? 'scale(1.03)' : undefined,
           }}
         />
       )}
