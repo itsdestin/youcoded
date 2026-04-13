@@ -178,6 +178,18 @@ export function registerIpcHandlers(
     return themeMarketplace.publishTheme(slug);
   });
 
+  // Publish-lifecycle: resolve button state (draft / in-review / published-current /
+  // published-drift / unknown) for a user-authored theme on each detail open.
+  ipcMain.handle(IPC.THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE, async (_event, slug: string) => {
+    return themeMarketplace.resolvePublishStateForSlug(slug);
+  });
+
+  // Manual refresh: drop in-memory registry cache + return a fresh listing in one round-trip.
+  ipcMain.handle(IPC.THEME_MARKETPLACE_REFRESH_REGISTRY, async () => {
+    themeMarketplace.invalidateRegistryCache();
+    return themeMarketplace.listThemes();
+  });
+
   ipcMain.handle(IPC.THEME_MARKETPLACE_GENERATE_PREVIEW, async (_event, slug: string) => {
     try {
       const manifestPath = path.resolve(userThemeManifest(slug));

@@ -348,6 +348,8 @@ export const IPC = {
   THEME_MARKETPLACE_UPDATE: 'theme-marketplace:update',
   THEME_MARKETPLACE_PUBLISH: 'theme-marketplace:publish',
   THEME_MARKETPLACE_GENERATE_PREVIEW: 'theme-marketplace:generate-preview',
+  THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE: 'theme-marketplace:resolve-publish-state',
+  THEME_MARKETPLACE_REFRESH_REGISTRY: 'theme-marketplace:refresh-registry',
   // Unified marketplace — packages + update + config (Phase 3)
   MARKETPLACE_GET_PACKAGES: 'marketplace:get-packages',
   SKILLS_UPDATE: 'skills:update',

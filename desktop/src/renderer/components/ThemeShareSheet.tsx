@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../state/theme-context';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import type { PublishState } from '../../shared/theme-marketplace-types';
 
 interface ThemeShareSheetProps {
   themeSlug: string;
@@ -14,8 +15,9 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
   const [previewPath, setPreviewPath] = useState<string | null>(null);
   const [previewLoading, setPreviewLoading] = useState(true);
   const [publishing, setPublishing] = useState(false);
-  const [prUrl, setPrUrl] = useState<string | null>(null);
   const [publishError, setPublishError] = useState<string | null>(null);
+  // null = still resolving (shows neutral placeholder). Set on mount via IPC.
+  const [publishState, setPublishState] = useState<PublishState | null>(null);
 
   // Generate preview on mount
   useEffect(() => {
@@ -30,6 +32,21 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
         setPreviewLoading(false);
       })
       .catch(() => setPreviewLoading(false));
+  }, [themeSlug]);
+
+  // Resolve publish state on mount — drives the publish button appearance.
+  // Null means "still resolving" (shows a neutral placeholder).
+  useEffect(() => {
+    let cancelled = false;
+    const claude = (window as any).claude;
+    claude?.theme?.marketplace?.resolvePublishState?.(themeSlug)
+      .then((state: PublishState | null) => {
+        if (!cancelled && state) setPublishState(state);
+      })
+      .catch(() => {
+        if (!cancelled) setPublishState({ kind: 'unknown', reason: 'IPC failed' });
+      });
+    return () => { cancelled = true; };
   }, [themeSlug]);
 
   // Close on Escape
@@ -47,7 +64,12 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
     try {
       const claude = (window as any).claude;
       const result = await claude?.theme?.marketplace?.publish(themeSlug);
-      setPrUrl(result.prUrl);
+      if (result?.prUrl && result?.prNumber) {
+        // Optimistic flip — don't wait for re-resolve
+        setPublishState({ kind: 'in-review', prNumber: result.prNumber, prUrl: result.prUrl });
+      } else {
+        setPublishError('Publish completed but no PR info returned. Check GitHub.');
+      }
     } catch (err: any) {
       setPublishError(err?.message || 'Failed to publish');
     } finally {
@@ -117,40 +139,117 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
           Requires the <span className="font-mono">gh</span> CLI to be installed and authenticated.
         </p>
 
-        {/* Publish section */}
+        {/* Publish section — state-driven */}
         <div className="border-t border-edge-dim pt-4">
-          {prUrl ? (
-            <div className="text-center">
-              <p className="text-xs text-[#4CAF50] font-medium mb-1">Published successfully!</p>
-              <a
-                href={prUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-xs text-accent hover:underline break-all"
-                onClick={(e) => {
-                  e.preventDefault();
-                  (window as any).claude?.shell?.openExternal?.(prUrl);
-                }}
-              >
-                {prUrl}
-              </a>
-            </div>
-          ) : (
-            <>
-              <button
-                onClick={handlePublish}
-                disabled={publishing || previewLoading}
-                className="w-full text-xs font-medium py-2.5 rounded-lg bg-accent text-on-accent hover:brightness-110 transition-colors disabled:opacity-50"
-              >
-                {publishing ? 'Publishing...' : previewLoading ? 'Generating preview...' : 'Publish to Marketplace'}
-              </button>
-              {publishError && (
-                <p className="text-xs text-red-400 text-center mt-2">{publishError}</p>
-              )}
-            </>
+          {renderPublishButton({
+            state: publishState,
+            publishing,
+            previewLoading,
+            onPublish: handlePublish,
+          })}
+          {publishError && (
+            <p className="text-xs text-red-400 text-center mt-2">{publishError}</p>
           )}
         </div>
       </OverlayPanel>
     </>
+  );
+}
+
+function renderPublishButton(args: {
+  state: PublishState | null;
+  publishing: boolean;
+  previewLoading: boolean;
+  onPublish: () => void;
+}): React.ReactNode {
+  const { state, publishing, previewLoading, onPublish } = args;
+
+  // Pre-resolution — state still loading. No spinner to avoid flicker on the
+  // common fast path (<200ms).
+  if (!state) {
+    return (
+      <div className="w-full py-2.5 text-xs rounded-lg border border-edge-dim text-fg-faint text-center">
+        Checking publish status…
+      </div>
+    );
+  }
+
+  const openExternal = (url: string) => {
+    (window as any).claude?.shell?.openExternal?.(url);
+  };
+
+  if (state.kind === 'in-review') {
+    return (
+      <a
+        href={state.prUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => { e.preventDefault(); openExternal(state.prUrl); }}
+        className="block w-full py-2.5 text-xs font-medium rounded-lg border border-edge text-fg-muted text-center cursor-pointer hover:text-fg hover:border-edge-bright transition-colors"
+        title="Your submission is awaiting review. You'll see ✓ Published here once it's merged."
+      >
+        Pull request open · #{state.prNumber} ↗
+      </a>
+    );
+  }
+
+  if (state.kind === 'published-current') {
+    return (
+      <a
+        href={state.marketplaceUrl}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => { e.preventDefault(); openExternal(state.marketplaceUrl); }}
+        className="block w-full py-2.5 text-xs font-medium rounded-lg bg-emerald-500/10 border border-emerald-500/30 text-emerald-500 text-center hover:bg-emerald-500/20 transition-colors"
+      >
+        ✓ Published ↗
+      </a>
+    );
+  }
+
+  if (state.kind === 'published-drift') {
+    return (
+      <>
+        <button
+          onClick={onPublish}
+          disabled={publishing || previewLoading}
+          className="w-full py-2.5 text-xs font-medium rounded-lg bg-accent text-on-accent hover:brightness-110 transition-colors disabled:opacity-50"
+        >
+          {publishing ? 'Publishing update…' : 'Publish update'}
+        </button>
+        <p className="text-[10px] text-fg-faint text-center mt-1.5">
+          Local changes not yet published
+        </p>
+      </>
+    );
+  }
+
+  if (state.kind === 'unknown') {
+    return (
+      <>
+        <button
+          onClick={onPublish}
+          disabled={publishing || previewLoading}
+          className="w-full py-2.5 text-xs font-medium rounded-lg bg-accent text-on-accent hover:brightness-110 transition-colors disabled:opacity-50"
+          title={`Couldn't verify publish status — proceed at your own risk (${state.reason})`}
+        >
+          {publishing ? 'Publishing…' : previewLoading ? 'Generating preview…' : '⚠ Publish to Marketplace'}
+        </button>
+        <p className="text-[10px] text-fg-faint text-center mt-1.5">
+          Could not verify status: {state.reason}
+        </p>
+      </>
+    );
+  }
+
+  // draft — the default happy path.
+  return (
+    <button
+      onClick={onPublish}
+      disabled={publishing || previewLoading}
+      className="w-full py-2.5 text-xs font-medium rounded-lg bg-accent text-on-accent hover:brightness-110 transition-colors disabled:opacity-50"
+    >
+      {publishing ? 'Publishing…' : previewLoading ? 'Generating preview…' : 'Publish to Marketplace'}
+    </button>
   );
 }

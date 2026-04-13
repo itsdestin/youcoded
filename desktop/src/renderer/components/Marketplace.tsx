@@ -462,14 +462,27 @@ type ThemeSortOption = 'newest' | 'name';
 const FEATURE_PILLS = ['wallpaper', 'particles', 'glassmorphism', 'custom-font', 'custom-icons', 'mascot', 'custom-css'];
 
 function ThemesTab({ onSelectTheme }: { onSelectTheme: (theme: ThemeRegistryEntryWithStatus) => void }) {
-  const { themeEntries, loading, updateAvailable } = useMarketplace();
+  const { themeEntries, loading, updateAvailable, refresh } = useMarketplace();
   const [query, setQuery] = useState('');
   const [sourceFilter, setSourceFilter] = useState<'all' | 'destinclaude' | 'community'>('all');
   const [modeFilter, setModeFilter] = useState<'all' | 'dark' | 'light'>('all');
   const [activeFeatures, setActiveFeatures] = useState<string[]>([]);
   const [sort, setSort] = useState<ThemeSortOption>('newest');
+  const [refreshing, setRefreshing] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRef = useScrollFade<HTMLDivElement>();
+
+  // Manual escape hatch for the 15-min registry cache. Drops the main-process
+  // cache via refreshRegistry(), then pulls a fresh list via context refresh().
+  const handleRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      await (window as any).claude?.theme?.marketplace?.refreshRegistry?.();
+      await refresh();
+    } finally {
+      setRefreshing(false);
+    }
+  }, [refresh]);
 
   const toggleFeature = (f: string) => {
     setActiveFeatures(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]);
@@ -500,16 +513,33 @@ function ThemesTab({ onSelectTheme }: { onSelectTheme: (theme: ThemeRegistryEntr
 
   return (
     <>
-      {/* Search bar */}
-      <div className="px-4 pt-3 pb-2">
+      {/* Search bar + Refresh */}
+      <div className="px-4 pt-3 pb-2 flex items-center gap-2">
         <input
           ref={searchRef}
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Search themes..."
-          className="w-full px-3 py-2 text-sm rounded-lg bg-well border border-edge-dim text-fg placeholder:text-fg-faint focus:outline-none focus:border-accent"
+          className="flex-1 px-3 py-2 text-sm rounded-lg bg-well border border-edge-dim text-fg placeholder:text-fg-faint focus:outline-none focus:border-accent"
         />
+        <button
+          onClick={handleRefresh}
+          disabled={refreshing}
+          title="Refresh marketplace from GitHub"
+          aria-label="Refresh marketplace"
+          className="shrink-0 p-2 rounded-lg text-fg-muted hover:text-fg hover:bg-well border border-edge-dim hover:border-edge transition-colors disabled:opacity-50"
+        >
+          {/* Inline SVG — no dep on an icon lib (project's Marketplace.tsx uses text/SVG ad hoc) */}
+          <svg
+            className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`}
+            fill="none" stroke="currentColor" strokeWidth="2"
+            strokeLinecap="round" strokeLinejoin="round" viewBox="0 0 24 24"
+          >
+            <path d="M21 12a9 9 0 1 1-3-6.7L21 8" />
+            <path d="M21 3v5h-5" />
+          </svg>
+        </button>
       </div>
 
       {/* Filter pills */}

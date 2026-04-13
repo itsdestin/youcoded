@@ -89,6 +89,8 @@ const IPC = {
   THEME_MARKETPLACE_UPDATE: 'theme-marketplace:update',
   THEME_MARKETPLACE_PUBLISH: 'theme-marketplace:publish',
   THEME_MARKETPLACE_GENERATE_PREVIEW: 'theme-marketplace:generate-preview',
+  THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE: 'theme-marketplace:resolve-publish-state',
+  THEME_MARKETPLACE_REFRESH_REGISTRY: 'theme-marketplace:refresh-registry',
   // Unified marketplace (Phase 3)
   MARKETPLACE_GET_PACKAGES: 'marketplace:get-packages',
   SKILLS_UPDATE: 'skills:update',
@@ -382,6 +384,12 @@ contextBridge.exposeInMainWorld('claude', {
       update: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_UPDATE, slug),
       publish: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_PUBLISH, slug),
       generatePreview: (slug: string): Promise<string | null> => ipcRenderer.invoke(IPC.THEME_MARKETPLACE_GENERATE_PREVIEW, slug),
+      // Publish-lifecycle: derive button state from registry + gh PRs + local content hash
+      resolvePublishState: (slug: string): Promise<any> =>
+        ipcRenderer.invoke(IPC.THEME_MARKETPLACE_RESOLVE_PUBLISH_STATE, slug),
+      // Manual "pull from GitHub now" — drops the 15-min cache and returns a fresh list
+      refreshRegistry: (): Promise<any[]> =>
+        ipcRenderer.invoke(IPC.THEME_MARKETPLACE_REFRESH_REGISTRY),
     },
   },
   firstRun: {
