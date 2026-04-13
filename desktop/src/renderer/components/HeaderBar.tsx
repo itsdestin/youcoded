@@ -98,6 +98,30 @@ export default function HeaderBar({
   const termBtnRef = useRef<HTMLButtonElement>(null);
   const [measured, setMeasured] = useState(false);
 
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [showToggleLabels, setShowToggleLabels] = useState(true);
+
+  // Measure whether the header has room for the toggle labels. The labels
+  // are the first things to drop; below that threshold, flex still has
+  // room for the icon-only toggle, gamepad, caption buttons, and the
+  // session strip is allowed to pack more aggressively.
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const compute = () => {
+      // Empirical: at <560 px total header width, labels cause the strip
+      // to lose meaningful room. Above 720 px, labels always fit.
+      // Between, choose labels-visible unless the right cluster would
+      // be narrower than the session strip's minimum viable width (~180px).
+      const w = el.clientWidth;
+      setShowToggleLabels(w >= 560);
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const measureEndpoints = useCallback(() => {
     const container = containerRef.current;
     const chatBtn = chatBtnRef.current;
@@ -106,7 +130,7 @@ export default function HeaderBar({
     const chatSpan = chatBtn.querySelector<HTMLElement>('[data-btn-text]');
     const termSpan = termBtn.querySelector<HTMLElement>('[data-btn-text]');
 
-    // If spans don't exist (narrow viewport — `hidden sm:inline-block`),
+    // If spans don't exist (narrow header — labels hidden via showToggleLabels),
     // both states collapse to icon-only widths; one measurement covers both.
     if (!chatSpan || !termSpan) {
       const cRect = container.getBoundingClientRect();
@@ -159,6 +183,13 @@ export default function HeaderBar({
 
   useLayoutEffect(() => { measureEndpoints(); }, [measureEndpoints]);
 
+  // Re-measure when toggle labels appear/disappear — button widths change
+  // drastically between label-visible and icon-only states.
+  useEffect(() => {
+    // Wait one frame for the new class to apply before measuring.
+    requestAnimationFrame(() => measureEndpoints());
+  }, [showToggleLabels, measureEndpoints]);
+
   // Refresh on font load (text widths shift) and window resize (breakpoint crosses,
   // viewport zoom). Theme swaps typically trigger a resize-like layout pass.
   useEffect(() => {
@@ -206,7 +237,7 @@ export default function HeaderBar({
         {/* Text rolls out via max-width + opacity transition */}
         <span
           data-btn-text
-          className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
+          className={`text-xs font-medium overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out ${showToggleLabels ? 'inline-block' : 'hidden'}`}
           style={{
             maxWidth: viewMode === 'chat' ? '3rem' : '0',
             opacity: viewMode === 'chat' ? 1 : 0,
@@ -226,7 +257,7 @@ export default function HeaderBar({
         <TerminalIcon className="w-3.5 h-3.5 shrink-0" />
         <span
           data-btn-text
-          className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
+          className={`text-xs font-medium overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out ${showToggleLabels ? 'inline-block' : 'hidden'}`}
           style={{
             maxWidth: viewMode === 'terminal' ? '4.5rem' : '0',
             opacity: viewMode === 'terminal' ? 1 : 0,
@@ -237,7 +268,7 @@ export default function HeaderBar({
   );
 
   return (
-    <div className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       {/* Left — settings gear + REMOTE badge + (Win/Linux) chat/terminal toggle.
           NOTE: no min-w-0 — left children are all shrink-0; letting this collapse
           would allow SessionStrip to overpaint the gear. Keep symmetric with right. */}
