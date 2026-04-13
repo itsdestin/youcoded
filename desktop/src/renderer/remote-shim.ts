@@ -8,7 +8,7 @@
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
 interface MarketplaceUser {
-  id: string;
+  id: string;       // github:<numeric id>
   login: string;
   avatar_url: string;
 }
@@ -597,10 +597,10 @@ export function installShim(): void {
     // Marketplace sign-in (device-code OAuth flow) — same shape as preload.ts.
     // On Android the handlers live in SessionService.kt (Task 13). Until then
     // these will time-out gracefully — no crash, just a pending Promise.
-    // start/poll return ApiResult; signedIn/user/signOut return plain values.
+    // start/poll return ApiResult; signedIn/user/signOut have no HTTP call, no ApiResult wrapper.
     marketplaceAuth: {
-      start: (): Promise<ApiResult<any>> => invoke('marketplace:auth:start'),
-      poll: (deviceCode: string): Promise<ApiResult<any>> =>
+      start: (): Promise<ApiResult<unknown>> => invoke('marketplace:auth:start'),
+      poll: (deviceCode: string): Promise<ApiResult<unknown>> =>
         invoke('marketplace:auth:poll', { deviceCode }),
       signedIn: (): Promise<boolean> => invoke('marketplace:auth:signed-in'),
       user: (): Promise<MarketplaceUser | null> => invoke('marketplace:auth:user'),
@@ -608,16 +608,19 @@ export function installShim(): void {
     },
     // Marketplace write endpoints — same shape as preload.ts.
     marketplaceApi: {
-      install: (pluginId: string): Promise<ApiResult<any>> =>
+      install: (pluginId: string): Promise<ApiResult<unknown>> =>
         invoke('marketplace:install', { pluginId }),
-      rate: (input: { plugin_id: string; stars: number; review_text?: string }): Promise<ApiResult<any>> =>
-        invoke('marketplace:rate', { input }),
-      deleteRating: (pluginId: string): Promise<ApiResult<any>> =>
+      // WHY: pass input flat so Android handler reaches payload.plugin_id directly,
+      // not payload.input.plugin_id — consistent with all other shim call sites.
+      rate: (input: { plugin_id: string; stars: 1 | 2 | 3 | 4 | 5; review_text?: string }): Promise<ApiResult<unknown>> =>
+        invoke('marketplace:rate', input),
+      deleteRating: (pluginId: string): Promise<ApiResult<unknown>> =>
         invoke('marketplace:rate:delete', { pluginId }),
-      likeTheme: (themeId: string): Promise<ApiResult<any>> =>
+      likeTheme: (themeId: string): Promise<ApiResult<unknown>> =>
         invoke('marketplace:theme:like', { themeId }),
-      report: (input: { rating_user_id: string; rating_plugin_id: string; reason?: string }): Promise<ApiResult<any>> =>
-        invoke('marketplace:report', { input }),
+      // WHY: pass input flat — same rationale as rate above.
+      report: (input: { rating_user_id: string; rating_plugin_id: string; reason?: string }): Promise<ApiResult<unknown>> =>
+        invoke('marketplace:report', input),
     },
     // Phase 3: theme namespace (stub + marketplace endpoints) so the unified
     // Marketplace modal can reach theme install/uninstall/update on Android.
