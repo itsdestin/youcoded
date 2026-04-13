@@ -9,6 +9,13 @@ import { isAndroid, isRemoteMode } from '../platform';
 const showCaptionButtons = typeof navigator !== 'undefined'
   && navigator.platform === 'Win32';
 
+/** Toggle sits on the opposite side of the OS window-control buttons
+ *  so the header is balanced. macOS traffic lights live on the left,
+ *  so the toggle goes right. Windows/Linux window controls live on
+ *  the right, so the toggle goes left. */
+const toggleOnLeft = typeof navigator !== 'undefined'
+  && !navigator.platform.startsWith('Mac');
+
 function CaptionButtons() {
   const claude = (window as any).claude;
   if (!claude?.window) return null;
@@ -52,7 +59,6 @@ interface Props {
   challengePending: boolean;
   permissionMode: PermissionMode;
   onCyclePermission: () => void;
-  announcement: string | null;
   settingsOpen: boolean;
   onToggleSettings: () => void;
   settingsBadge?: boolean;
@@ -70,7 +76,7 @@ export default function HeaderBar({
   sessions, activeSessionId, onSelectSession, onCreateSession, onCloseSession,
   viewMode, onToggleView,
   gamePanelOpen, onToggleGamePanel, gameConnected, challengePending,
-  permissionMode, onCyclePermission, announcement,
+  permissionMode, onCyclePermission,
   settingsOpen, onToggleSettings, settingsBadge, sessionStatuses, onResumeSession,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultSkipPermissions, defaultProjectFolder,
@@ -92,6 +98,30 @@ export default function HeaderBar({
   const termBtnRef = useRef<HTMLButtonElement>(null);
   const [measured, setMeasured] = useState(false);
 
+  const headerRef = useRef<HTMLDivElement>(null);
+  const [showToggleLabels, setShowToggleLabels] = useState(true);
+
+  // Measure whether the header has room for the toggle labels. The labels
+  // are the first things to drop; below that threshold, flex still has
+  // room for the icon-only toggle, gamepad, caption buttons, and the
+  // session strip is allowed to pack more aggressively.
+  useEffect(() => {
+    const el = headerRef.current;
+    if (!el) return;
+    const compute = () => {
+      // Empirical: at <560 px total header width, labels cause the strip
+      // to lose meaningful room. Above 720 px, labels always fit.
+      // Between, choose labels-visible unless the right cluster would
+      // be narrower than the session strip's minimum viable width (~180px).
+      const w = el.clientWidth;
+      setShowToggleLabels(w >= 560);
+    };
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(el);
+    return () => ro.disconnect();
+  }, []);
+
   const measureEndpoints = useCallback(() => {
     const container = containerRef.current;
     const chatBtn = chatBtnRef.current;
@@ -100,7 +130,7 @@ export default function HeaderBar({
     const chatSpan = chatBtn.querySelector<HTMLElement>('[data-btn-text]');
     const termSpan = termBtn.querySelector<HTMLElement>('[data-btn-text]');
 
-    // If spans don't exist (narrow viewport — `hidden sm:inline-block`),
+    // If spans don't exist (narrow header — labels hidden via showToggleLabels),
     // both states collapse to icon-only widths; one measurement covers both.
     if (!chatSpan || !termSpan) {
       const cRect = container.getBoundingClientRect();
@@ -153,6 +183,13 @@ export default function HeaderBar({
 
   useLayoutEffect(() => { measureEndpoints(); }, [measureEndpoints]);
 
+  // Re-measure when toggle labels appear/disappear — button widths change
+  // drastically between label-visible and icon-only states.
+  useEffect(() => {
+    // Wait one frame for the new class to apply before measuring.
+    requestAnimationFrame(() => measureEndpoints());
+  }, [showToggleLabels, measureEndpoints]);
+
   // Refresh on font load (text widths shift) and window resize (breakpoint crosses,
   // viewport zoom). Theme swaps typically trigger a resize-like layout pass.
   useEffect(() => {
@@ -169,10 +206,73 @@ export default function HeaderBar({
     return () => window.removeEventListener('resize', handler);
   }, [measureEndpoints]);
 
+  // Extracted so it can be rendered into either cluster depending on platform.
+  // Task 6 will tweak the inner span classNames; don't edit those here.
+  const toggleElement = (
+    <div ref={containerRef} className="relative flex bg-inset rounded-md p-0.5 gap-0.5">
+      {/* Sliding background pill — left/width come from CSS variables
+          set once by measureEndpoints(). Plain CSS transition tweens
+          between the two cached endpoints. */}
+      <div
+        className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)] transition-[left,width] duration-300 ease-in-out"
+        style={{
+          left:  viewMode === 'chat' ? 'var(--pill-chat-left)'  : 'var(--pill-term-left)',
+          width: viewMode === 'chat' ? 'var(--pill-chat-width)' : 'var(--pill-term-width)',
+          // Hide until first measurement completes — avoids a 1-frame flash
+          // at left: 0, width: auto before CSS vars are set.
+          opacity: measured ? 1 : 0,
+        }}
+      />
+      <button
+        ref={chatBtnRef}
+        onClick={() => onToggleView('chat')}
+        className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
+          viewMode === 'chat'
+            ? 'text-on-accent'
+            : 'text-fg-dim hover:text-fg-2'
+        }`}
+        title="Chat"
+      >
+        <ChatIcon className="w-3.5 h-3.5 shrink-0" />
+        {/* Text rolls out via max-width + opacity transition */}
+        <span
+          data-btn-text
+          className={`text-xs font-medium overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out ${showToggleLabels ? 'inline-block' : 'hidden'}`}
+          style={{
+            maxWidth: viewMode === 'chat' ? '3rem' : '0',
+            opacity: viewMode === 'chat' ? 1 : 0,
+          }}
+        >Chat</span>
+      </button>
+      <button
+        ref={termBtnRef}
+        onClick={() => onToggleView('terminal')}
+        className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
+          viewMode === 'terminal'
+            ? 'text-on-accent'
+            : 'text-fg-dim hover:text-fg-2'
+        }`}
+        title="Terminal"
+      >
+        <TerminalIcon className="w-3.5 h-3.5 shrink-0" />
+        <span
+          data-btn-text
+          className={`text-xs font-medium overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out ${showToggleLabels ? 'inline-block' : 'hidden'}`}
+          style={{
+            maxWidth: viewMode === 'terminal' ? '4.5rem' : '0',
+            opacity: viewMode === 'terminal' ? 1 : 0,
+          }}
+        >Terminal</span>
+      </button>
+    </div>
+  );
+
   return (
-    <div className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-      {/* Left — settings + remote/announcement badges */}
-      <div className="flex-1 flex items-center gap-1 sm:gap-2 min-w-0">
+    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+      {/* Left — settings gear + REMOTE badge + (Win/Linux) chat/terminal toggle.
+          NOTE: no min-w-0 — left children are all shrink-0; letting this collapse
+          would allow SessionStrip to overpaint the gear. Keep symmetric with right. */}
+      <div className="flex-1 flex items-center gap-1 sm:gap-2">
         <button
           onClick={onToggleSettings}
           className={`relative ${isAndroid() ? 'p-2' : 'p-1'} rounded-sm hover:bg-inset transition-colors shrink-0 ${settingsOpen ? 'text-fg' : 'text-fg-muted'}`}
@@ -191,11 +291,7 @@ export default function HeaderBar({
             REMOTE
           </span>
         )}
-        {announcement && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm bg-[#FF9800]/15 text-[#FF9800] border border-[#FF9800]/25 truncate max-w-[200px] hidden sm:inline" title={announcement}>
-            ★ {announcement}
-          </span>
-        )}
+        {toggleOnLeft && toggleElement}
       </div>
 
       {/* Center — session strip */}
@@ -217,63 +313,7 @@ export default function HeaderBar({
 
       {/* Right — view toggles */}
       <div className="flex-1 flex items-center justify-end gap-1 sm:gap-2">
-        {/* Chat/Terminal toggle — sliding pill with text roll-out */}
-        <div ref={containerRef} className="relative flex bg-inset rounded-md p-0.5 gap-0.5">
-          {/* Sliding background pill — left/width come from CSS variables
-              set once by measureEndpoints(). Plain CSS transition tweens
-              between the two cached endpoints. */}
-          <div
-            className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)] transition-[left,width] duration-300 ease-in-out"
-            style={{
-              left:  viewMode === 'chat' ? 'var(--pill-chat-left)'  : 'var(--pill-term-left)',
-              width: viewMode === 'chat' ? 'var(--pill-chat-width)' : 'var(--pill-term-width)',
-              // Hide until first measurement completes — avoids a 1-frame flash
-              // at left: 0, width: auto before CSS vars are set.
-              opacity: measured ? 1 : 0,
-            }}
-          />
-          <button
-            ref={chatBtnRef}
-            onClick={() => onToggleView('chat')}
-            className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
-              viewMode === 'chat'
-                ? 'text-on-accent'
-                : 'text-fg-dim hover:text-fg-2'
-            }`}
-            title="Chat"
-          >
-            <ChatIcon className="w-3.5 h-3.5 shrink-0" />
-            {/* Text rolls out via max-width + opacity transition */}
-            <span
-              data-btn-text
-              className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
-              style={{
-                maxWidth: viewMode === 'chat' ? '3rem' : '0',
-                opacity: viewMode === 'chat' ? 1 : 0,
-              }}
-            >Chat</span>
-          </button>
-          <button
-            ref={termBtnRef}
-            onClick={() => onToggleView('terminal')}
-            className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
-              viewMode === 'terminal'
-                ? 'text-on-accent'
-                : 'text-fg-dim hover:text-fg-2'
-            }`}
-            title="Terminal"
-          >
-            <TerminalIcon className="w-3.5 h-3.5 shrink-0" />
-            <span
-              data-btn-text
-              className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
-              style={{
-                maxWidth: viewMode === 'terminal' ? '4.5rem' : '0',
-                opacity: viewMode === 'terminal' ? 1 : 0,
-              }}
-            >Terminal</span>
-          </button>
-        </div>
+        {!toggleOnLeft && toggleElement}
         <div className="bg-inset rounded-md p-0.5 hidden sm:block">
           <button
             onClick={onToggleGamePanel}

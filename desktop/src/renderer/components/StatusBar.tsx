@@ -31,6 +31,7 @@ interface StatusData {
     update_available: boolean;
     download_url: string | null;
   } | null;
+  announcement: { message: string } | null;
   contextPercent: number | null;
   gitBranch: string | null;
   sessionStats: SessionStats | null;
@@ -160,7 +161,8 @@ const warnStyles = {
 type WidgetId =
   | 'usage-5h' | 'usage-7d' | 'context' | 'git-branch' | 'sync-warnings' | 'theme' | 'version'
   | 'session-cost' | 'tokens-in' | 'tokens-out' | 'cache-stats' | 'code-changes' | 'session-time'
-  | 'cache-hit-rate' | 'active-ratio' | 'output-speed';
+  | 'cache-hit-rate' | 'active-ratio' | 'output-speed'
+  | 'announcement';
 
 // Widget categories and definitions with info tooltips
 // defaultVisible: true = shown for new installs, false = opt-in only
@@ -312,6 +314,18 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         description: 'Current DestinCode version. Glows when an update is available.',
         bestFor: 'Everyone. Stay up to date with the latest features and fixes.',
+      },
+    ],
+  },
+  {
+    name: 'Updates',
+    widgets: [
+      {
+        id: 'announcement',
+        label: 'Announcement',
+        defaultVisible: true,
+        description: 'Platform announcements from the DestinCode team — new releases, outages, tips. Pulled every 6 hours from the announcement cache.',
+        bestFor: 'Everyone. Hides automatically when there is no active announcement.',
       },
     ],
   },
@@ -841,6 +855,22 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
         >
           {activeTheme.name}
         </button>
+      )}
+
+      {/* Platform announcement — ★ orange pill, truncates long copy */}
+      {show('announcement') && statusData.announcement?.message && (
+        <span
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border truncate max-w-[280px]"
+          style={{
+            backgroundColor: 'rgba(255,152,0,0.15)',
+            color: '#FF9800',
+            borderColor: 'rgba(255,152,0,0.25)',
+          }}
+          title={statusData.announcement.message}
+        >
+          <span aria-hidden>★</span>
+          <span className="truncate">{statusData.announcement.message}</span>
+        </span>
       )}
 
       {/* Version pill — shows DestinCode app version, glows yellow when update available */}

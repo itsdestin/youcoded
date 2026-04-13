@@ -1171,9 +1171,6 @@ function AppInner() {
 
   const sessionInitialized = sessionId ? initializedSessions.has(sessionId) : true;
 
-  // Parse announcement
-  const announcementText = statusData.announcement?.message || null;
-
   // Terminal mode on touch/remote platforms — show minimal input with special keys
   const isTerminalTouch = currentViewMode === 'terminal' && getPlatform() !== 'electron';
 
@@ -1278,7 +1275,6 @@ function AppInner() {
                 challengePending={gameState.challengeFrom !== null}
                 permissionMode={currentPermissionMode}
                 onCyclePermission={cyclePermission}
-                announcement={announcementText}
                 settingsOpen={settingsOpen}
                 onToggleSettings={() => setSettingsOpen(prev => !prev)}
                 settingsBadge={settingsBadge}
@@ -1351,6 +1347,7 @@ function AppInner() {
                   statusData={{
                     usage: statusData.usage,
                     updateStatus: statusData.updateStatus,
+                    announcement: statusData.announcement,
                     contextPercent: sessionId ? (statusData.contextMap[sessionId] ?? null) : null,
                     gitBranch: sessionId ? (statusData.gitBranchMap[sessionId] ?? null) : null,
                     sessionStats: sessionId ? (statusData.sessionStatsMap[sessionId] ?? null) : null,
