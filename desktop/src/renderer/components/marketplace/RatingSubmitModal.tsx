@@ -98,6 +98,8 @@ export default function RatingSubmitModal({
   // 'install-gate' triggers the one-click install-then-rate affordance
   const [installGate, setInstallGate] = useState(false);
   const [installing, setInstalling] = useState(false);
+  // isOfflineError — true when the last submit failed due to network unavailability
+  const [isOfflineError, setIsOfflineError] = useState(false);
 
   // cancelledRef — prevent setState after unmount for any async chain
   const cancelledRef = useRef(false);
@@ -127,6 +129,7 @@ export default function RatingSubmitModal({
       setInstallGate(false);
       setInFlight(false);
       setInstalling(false);
+      setIsOfflineError(false);
     }
   }, [open]);
 
@@ -147,6 +150,7 @@ export default function RatingSubmitModal({
     setInFlight(true);
     setError(null);
     setInstallGate(false);
+    setIsOfflineError(false);
 
     try {
       const res = await doRate(stars);
@@ -170,7 +174,15 @@ export default function RatingSubmitModal({
     } catch (err) {
       if (cancelledRef.current) return;
       console.error('[RatingSubmitModal] network error:', err);
-      setError('Network error — try again.');
+      // Detect offline / network errors — TypeError covers fetch failures
+      // (e.g. "Failed to fetch", "NetworkError", "Load failed")
+      const isOffline = err instanceof TypeError;
+      if (isOffline) {
+        setIsOfflineError(true);
+        setError("Offline — your rating wasn't submitted. Try again when you're back online.");
+      } else {
+        setError('Network error — try again.');
+      }
     } finally {
       if (!cancelledRef.current) setInFlight(false);
     }
@@ -298,11 +310,23 @@ export default function RatingSubmitModal({
               )}
             </div>
 
-            {/* Inline error message */}
+            {/* Inline error message — offline errors get a Retry button */}
             {error && (
-              <p role="alert" className="text-xs text-red-400 -mt-1">
-                {error}
-              </p>
+              <div className="-mt-1">
+                <p role="alert" className="text-xs text-red-400">
+                  {error}
+                </p>
+                {/* Retry button — only shown for offline errors; replays the last submit */}
+                {isOfflineError && (
+                  <button
+                    onClick={() => void handleSubmit()}
+                    disabled={inFlight}
+                    className="mt-1.5 text-xs font-medium text-accent hover:underline disabled:opacity-50"
+                  >
+                    Retry
+                  </button>
+                )}
+              </div>
             )}
 
             {/* Install-gate affordance — clear labeling, not a surprise install */}

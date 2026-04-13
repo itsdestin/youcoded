@@ -287,6 +287,84 @@ describe('RatingSubmitModal', () => {
     expect(refresh).toHaveBeenCalled();
   });
 
+  // ── Offline error: specific message + Retry button ───────────────────────────
+
+  it('shows offline message and Retry button when rate rejects with TypeError', async () => {
+    // TypeError simulates a fetch-level network failure (offline / DNS failure)
+    const rateMock = vi.fn().mockRejectedValue(new TypeError('Failed to fetch'));
+    const onClose = vi.fn();
+    mockAuth(true);
+    mockStats();
+    setupApiMock({ rate: rateMock });
+
+    render(
+      <RatingSubmitModal
+        pluginId="test-plugin"
+        open
+        onClose={onClose}
+        onSubmitted={vi.fn()}
+      />
+    );
+
+    await act(async () => { clickStar(3); });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /submit rating/i }));
+      await Promise.resolve();
+    });
+
+    // Offline-specific error message
+    const alert = screen.getByRole('alert');
+    expect(alert.textContent).toMatch(/offline/i);
+
+    // Retry button should be visible
+    expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy();
+  });
+
+  it('retries the submission when Retry is clicked after offline error', async () => {
+    const rateMock = vi
+      .fn()
+      // First call: offline failure
+      .mockRejectedValueOnce(new TypeError('Failed to fetch'))
+      // Second call (retry): success
+      .mockResolvedValueOnce({ ok: true, value: { hidden: false } });
+
+    const onClose = vi.fn();
+    const onSubmitted = vi.fn();
+    const refresh = mockStats();
+    mockAuth(true);
+    setupApiMock({ rate: rateMock });
+
+    render(
+      <RatingSubmitModal
+        pluginId="test-plugin"
+        open
+        onClose={onClose}
+        onSubmitted={onSubmitted}
+      />
+    );
+
+    await act(async () => { clickStar(4); });
+
+    // First submit — fails offline
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /submit rating/i }));
+      await Promise.resolve();
+    });
+
+    expect(screen.getByRole('button', { name: /retry/i })).toBeTruthy();
+
+    // Click Retry — succeeds
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /retry/i }));
+      await Promise.resolve();
+    });
+
+    expect(rateMock).toHaveBeenCalledTimes(2);
+    expect(refresh).toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+    expect(onSubmitted).toHaveBeenCalled();
+  });
+
   // ── Not-open state ───────────────────────────────────────────────────────────
 
   it('renders nothing when open=false', () => {
