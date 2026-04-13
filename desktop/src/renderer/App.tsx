@@ -83,6 +83,14 @@ interface StatusDataState {
 function AppInner() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
+  // Multi-window detach state (desktop-only; remote-shim stubs these as no-ops).
+  // `myWindowId` identifies this renderer's BrowserWindow so the switcher can
+  // distinguish local sessions from sessions owned by peer windows. `directory`
+  // and `leaderWindowId` are pushed from main whenever window topology changes.
+  const [myWindowId, setMyWindowId] = useState<number | null>(null);
+  const [windowDirectory, setWindowDirectory] = useState<any>(null);
+  const [leaderWindowId, setLeaderWindowId] = useState<number>(-1);
+  const isLeader = myWindowId != null && leaderWindowId === myWindowId;
   const [viewModes, setViewModes] = useState<Map<string, ViewMode>>(new Map());
   const [statusData, setStatusData] = useState<StatusDataState>({
     usage: null, announcement: null, updateStatus: null,
@@ -675,6 +683,77 @@ function AppInner() {
         return next;
       });
     }).catch(() => {});
+  }, [dispatch]);
+
+  // Multi-window ownership wiring (Phase 2 of detach feature).
+  // Subscribes to directory/leader/ownership pushes from main and mutates
+  // local session list + chat reducer in response. When this window acquires
+  // a session (via detach or re-dock), we request transcript replay so the
+  // reducer hydrates from disk — the reducer is deterministic from TRANSCRIPT_*
+  // events and uuid dedup handles any overlap with live events.
+  useEffect(() => {
+    const det = (window as any).claude?.detach;
+    const getId = (window as any).claude?.window?.getId;
+    if (getId) getId().then((id: number) => setMyWindowId(id)).catch(() => {});
+    if (!det) return;
+
+    const cleanupDir = det.onDirectoryUpdated?.((dir: any) => setWindowDirectory(dir));
+    const cleanupLeader = det.onLeaderChanged?.((id: number) => setLeaderWindowId(id));
+
+    const cleanupAcquired = det.onOwnershipAcquired?.((payload: any) => {
+      const { sessionId: sid, sessionInfo, freshWindow, refocusOnly } = payload;
+      if (refocusOnly) {
+        // Switcher asked us to focus an existing local session — just flip active.
+        setSessionId(sid);
+        return;
+      }
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === sid)) return prev;
+        return [...prev, sessionInfo];
+      });
+      dispatch({ type: 'SESSION_INIT', sessionId: sid });
+      const defaultView = (sessionInfo.provider && sessionInfo.provider !== 'claude') ? 'terminal' : 'chat';
+      setViewModes((prev) => prev.has(sid) ? prev : new Map(prev).set(sid, defaultView));
+      setPermissionModes((prev) => prev.has(sid) ? prev : new Map(prev).set(sid, sessionInfo.permissionMode || 'normal'));
+      // Transferred sessions were already initialized on the source — skip the
+      // "Initializing" overlay, it would flash briefly before replay completes.
+      setInitializedSessions((prev) => {
+        if (prev.has(sid)) return prev;
+        const next = new Set(prev); next.add(sid); return next;
+      });
+      if (freshWindow) setSessionId(sid);
+      // Hydrate reducer from disk. Main streams every transcript event back on
+      // the normal channel; uuid dedup absorbs any overlap with live events.
+      det.requestTranscriptReplay?.(sid);
+    });
+
+    const cleanupLost = det.onOwnershipLost?.((payload: any) => {
+      const { sessionId: sid } = payload;
+      setSessions((prev) => {
+        const remaining = prev.filter((s) => s.id !== sid);
+        setSessionId((curr) => {
+          if (curr !== sid) return curr;
+          return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+        });
+        return remaining;
+      });
+      setViewModes((prev) => { const n = new Map(prev); n.delete(sid); return n; });
+      setPermissionModes((prev) => { const n = new Map(prev); n.delete(sid); return n; });
+      setInitializedSessions((prev) => {
+        if (!prev.has(sid)) return prev;
+        const n = new Set(prev); n.delete(sid); return n;
+      });
+      // Use SESSION_REMOVE — NOT SESSION_PROCESS_EXITED — because the session
+      // is still alive, just owned by another window now.
+      dispatch({ type: 'SESSION_REMOVE', sessionId: sid });
+    });
+
+    return () => {
+      cleanupDir?.();
+      cleanupLeader?.();
+      cleanupAcquired?.();
+      cleanupLost?.();
+    };
   }, [dispatch]);
 
   // Load skills once on mount

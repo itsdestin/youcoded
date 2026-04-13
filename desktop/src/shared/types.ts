@@ -383,6 +383,9 @@ export const IPC = {
   SESSION_DRAG_DROPPED: 'session:drag-dropped',
   SESSION_DROP_RESOLVE: 'session:drop-resolve',
   CROSS_WINDOW_CURSOR: 'session:cross-window-cursor',
+  // Request the full transcript history for a session — used when a window
+  // acquires ownership and needs to hydrate its reducer from disk.
+  TRANSCRIPT_REPLAY: 'transcript:replay-from-start',
 } as const;
 
 // --- Window registry / detach types ---

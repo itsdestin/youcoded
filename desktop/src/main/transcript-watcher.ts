@@ -341,6 +341,30 @@ export class TranscriptWatcher extends EventEmitter {
     }
   }
 
+  /**
+   * Return every TranscriptEvent parsed from disk for a currently-watched
+   * session. Used during ownership transfer: when a new window acquires a
+   * session via detach/re-dock, it calls this once through IPC to rebuild its
+   * reducer state from the JSONL (disk is the source of truth). Does not
+   * mutate watcher state — safe to call alongside live watching.
+   */
+  getHistory(desktopSessionId: string): TranscriptEvent[] {
+    const session = this.sessions.get(desktopSessionId);
+    if (!session) return [];
+    if (!fs.existsSync(session.jsonlPath)) return [];
+    let raw: string;
+    try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
+    catch { return []; }
+    const events: TranscriptEvent[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      for (const ev of parseTranscriptLine(line, desktopSessionId)) {
+        events.push(ev);
+      }
+    }
+    return events;
+  }
+
   // -------------------------------------------------------------------------
   // Internal
   // -------------------------------------------------------------------------

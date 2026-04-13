@@ -1170,6 +1170,18 @@ export function registerIpcHandlers(
       remoteServer.broadcast({ type: 'transcript:event', payload: event });
     }
   });
+
+  // Transcript replay: a window that just acquired a session asks for every
+  // historical event so its reducer can hydrate. Events stream back on the
+  // normal TRANSCRIPT_EVENT channel (uuid dedup handles overlap with live).
+  // We send directly to the requesting window — NOT via sendForSession —
+  // because ownership has already transferred to them by the time this fires.
+  ipcMain.on(IPC.TRANSCRIPT_REPLAY, (evt, { sessionId }: { sessionId: string }) => {
+    const events = transcriptWatcher.getHistory(sessionId);
+    for (const ev of events) {
+      evt.sender.send(IPC.TRANSCRIPT_EVENT, ev);
+    }
+  });
   // /clear and /compact both truncate or rewrite the JSONL. App.tsx listens
   // to detect compaction completion (pending → COMPACTION_COMPLETE).
   transcriptWatcher.on('transcript-shrink', (payload: any) => {

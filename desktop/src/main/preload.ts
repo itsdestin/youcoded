@@ -137,6 +137,7 @@ const IPC = {
   SESSION_DRAG_DROPPED: 'session:drag-dropped',
   SESSION_DROP_RESOLVE: 'session:drop-resolve',
   CROSS_WINDOW_CURSOR: 'session:cross-window-cursor',
+  TRANSCRIPT_REPLAY: 'transcript:replay-from-start',
 } as const;
 
 contextBridge.exposeInMainWorld('claude', {
@@ -428,6 +429,11 @@ contextBridge.exposeInMainWorld('claude', {
     // Request/response — ask main which window's strip currently contains the cursor
     dropResolve: (): Promise<{ targetWindowId: number | null }> =>
       ipcRenderer.invoke(IPC.SESSION_DROP_RESOLVE),
+    // Fire-and-forget: main streams every historical TRANSCRIPT_EVENT for this
+    // session back over the normal transcript:event channel. The reducer's
+    // uuid-based dedup handles any overlap with live events.
+    requestTranscriptReplay: (sessionId: string) =>
+      ipcRenderer.send(IPC.TRANSCRIPT_REPLAY, { sessionId }),
   },
   theme: {
     list: () => ipcRenderer.invoke(IPC.THEME_LIST),
