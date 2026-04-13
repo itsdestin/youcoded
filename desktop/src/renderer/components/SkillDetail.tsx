@@ -134,6 +134,7 @@ export default function SkillDetail({ skillId, onBack }: Props) {
             />
             <button
               onClick={() => setRatingModalOpen(true)}
+              aria-label="Rate this plugin"
               className="text-[10px] text-fg-muted hover:text-accent border border-edge-dim hover:border-accent/40 rounded-full px-2 py-0.5 transition-colors"
             >
               Rate

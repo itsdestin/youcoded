@@ -25,10 +25,7 @@ import React, {
 } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useMarketplaceAuth } from '../../state/marketplace-auth-context';
-
-// ── Constants ─────────────────────────────────────────────────────────────────
-
-const MAX_REASON_CHARS = 300;
+import { REPORT_REASON_MAX } from '../../state/marketplace-constants';
 
 // ── Flag icon SVG ─────────────────────────────────────────────────────────────
 
@@ -93,14 +90,25 @@ function ReportDialog({ reviewerLogin, onClose, onSubmit }: ReportDialogProps) {
     return () => { cancelledRef.current = true; };
   }, []);
 
-  // Close on Escape
+  // successTimerRef — stores the auto-close timer handle so we can clear it on unmount.
+  // Prevents the "Can't perform a React state update on an unmounted component" leak
+  // if the user navigates away during the 2s success display window.
+  const successTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => {
+    return () => {
+      if (successTimerRef.current) clearTimeout(successTimerRef.current);
+    };
+  }, []);
+
+  // Close on Escape — gated: don't close mid-submit (inFlight guard via dialogState)
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
+      // Fix: block Escape while submitting to prevent closing a mid-flight request
+      if (e.key === 'Escape' && dialogState.phase !== 'submitting') onClose();
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  }, [onClose, dialogState.phase]);
 
   const handleSubmit = useCallback(async () => {
     if (dialogState.phase === 'submitting') return;
@@ -111,9 +119,11 @@ function ReportDialog({ reviewerLogin, onClose, onSubmit }: ReportDialogProps) {
 
       if (cancelledRef.current) return;
 
-      // Success: show confirmation briefly, then close
+      // Success: show confirmation briefly, then close.
+      // Store the timer in a ref so cleanup can cancel it on unmount.
       setDialogState({ phase: 'success' });
-      setTimeout(() => {
+      successTimerRef.current = setTimeout(() => {
+        successTimerRef.current = null;
         if (!cancelledRef.current) onClose();
       }, 2000);
     } catch (err: unknown) {
@@ -145,10 +155,12 @@ function ReportDialog({ reviewerLogin, onClose, onSubmit }: ReportDialogProps) {
           <h2 id="report-dialog-title" className="text-sm font-semibold text-fg">
             Report this review?
           </h2>
+          {/* Fix: disabled during submitting phase to prevent closing a mid-flight request */}
           <button
             onClick={onClose}
+            disabled={inFlight}
             aria-label="Close"
-            className="text-fg-muted hover:text-fg transition-colors leading-none text-lg"
+            className="text-fg-muted hover:text-fg transition-colors leading-none text-lg disabled:opacity-40 disabled:cursor-not-allowed"
           >
             &times;
           </button>
@@ -179,9 +191,9 @@ function ReportDialog({ reviewerLogin, onClose, onSubmit }: ReportDialogProps) {
               <textarea
                 id="report-reason"
                 value={reason}
-                onChange={e => setReason(e.target.value.slice(0, MAX_REASON_CHARS))}
+                onChange={e => setReason(e.target.value.slice(0, REPORT_REASON_MAX))}
                 rows={3}
-                maxLength={MAX_REASON_CHARS}
+                maxLength={REPORT_REASON_MAX}
                 placeholder={`Why are you reporting ${displayName}'s review?`}
                 disabled={inFlight}
                 className="w-full rounded-lg bg-inset border border-edge text-sm text-fg placeholder:text-fg-faint resize-none px-3 py-2 focus:outline-none focus:ring-1 focus:ring-accent disabled:opacity-60"
@@ -189,7 +201,7 @@ function ReportDialog({ reviewerLogin, onClose, onSubmit }: ReportDialogProps) {
               {/* Character counter — shows remaining when text is present */}
               {reason.length > 0 && (
                 <p className="text-right text-[10px] text-fg-faint mt-0.5">
-                  {reason.length}/{MAX_REASON_CHARS}
+                  {reason.length}/{REPORT_REASON_MAX}
                 </p>
               )}
             </div>

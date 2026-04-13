@@ -43,19 +43,24 @@ function formatDate(unixSec: number): string {
 // ── Single review row ─────────────────────────────────────────────────────────
 
 function ReviewRow({ r, pluginId }: { r: RatingEntry; pluginId: string }) {
+  // Fix: track whether the avatar image failed to load (e.g. GitHub CDN unreachable).
+  // When load fails, swap to the initials circle so the row doesn't show a broken image.
+  const [avatarFailed, setAvatarFailed] = React.useState(false);
+
   return (
     <div className="flex flex-col gap-1 py-3 border-b border-edge-dim last:border-0">
       {/* Author row: avatar + login + stars + date + report button */}
       <div className="flex items-center gap-2">
-        {/* Avatar — 24px circular */}
-        {r.user_avatar_url ? (
+        {/* Avatar — 24px circular. Falls back to initials if URL absent OR load fails. */}
+        {r.user_avatar_url && !avatarFailed ? (
           <img
             src={r.user_avatar_url}
             alt={r.user_login}
+            onError={() => setAvatarFailed(true)}
             className="w-6 h-6 rounded-full shrink-0 object-cover"
           />
         ) : (
-          // Fallback initials circle when avatar URL is absent
+          // Fallback initials circle when avatar URL is absent or image fails to load
           <span className="w-6 h-6 rounded-full bg-accent/20 shrink-0 flex items-center justify-center text-[9px] font-bold text-accent">
             {r.user_login.charAt(0).toUpperCase()}
           </span>
