@@ -81,6 +81,10 @@ export default function TerminalView({ sessionId, visible }: Props) {
     const terminal = new Terminal({
       allowProposedApi: true,
       cursorBlink: true,
+      // Hide the cursor when the terminal isn't focused. Claude's TUI redraws
+      // constantly move the cursor; without this, it visibly bounces around
+      // when the user is in chat view (terminal unfocused but still rendering).
+      cursorInactiveStyle: 'none',
       fontSize: 14,
       fontFamily: TERMINAL_FONT,
       theme: getXtermTheme(false),
