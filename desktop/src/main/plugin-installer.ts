@@ -86,6 +86,10 @@ interface MarketplaceEntry {
   sourceMarketplace?: string;
   description?: string;
   author?: string;
+  // Used to detect when a cached local-source package has drifted from the
+  // marketplace index (see installFromLocal). Optional — missing version
+  // falls through to pure time-based cache refresh.
+  version?: string;
   // Decomposition v3: shell command run after install. Only executed when
   // sourceRef URL points to a trusted GitHub org — see installPlugin().
   postInstall?: string;
@@ -211,21 +215,54 @@ function setCacheTimestamp(cacheRepo: string): void {
   } catch { /* non-fatal — just means we'll retry next install */ }
 }
 
-async function installFromLocal(id: string, sourceRef: string, sourceMarketplace?: string): Promise<InstallResult> {
+function readCachedPluginVersion(sourceDir: string): string | null {
+  // Check both standard plugin.json layouts.
+  const candidates = [
+    path.join(sourceDir, 'plugin.json'),
+    path.join(sourceDir, '.claude-plugin', 'plugin.json'),
+  ];
+  for (const p of candidates) {
+    try {
+      if (!fs.existsSync(p)) continue;
+      const v = JSON.parse(fs.readFileSync(p, 'utf8')).version;
+      if (typeof v === 'string') return v;
+    } catch { /* corrupt manifest — treat as missing */ }
+  }
+  return null;
+}
+
+async function installFromLocal(id: string, sourceRef: string, sourceMarketplace?: string, expectedVersion?: string): Promise<InstallResult> {
   // Phase 3a: source-aware repo selection — DestinCode entries clone from
   // itsdestin/destincode-marketplace, not the Anthropic upstream repo
   const cacheRepo = path.join(CACHE_DIR, getCacheRepoName(sourceMarketplace));
   const repoUrl = getMarketplaceRepo(sourceMarketplace);
 
-  // Ensure marketplace repo is cloned, or refresh it if it's been >1h since
-  // the last pull. Pull failures fall back to the cached copy (offline-safe)
-  // and skip updating the timestamp so the next install will retry.
+  // Ensure marketplace repo is cloned, or refresh it if:
+  //   (a) it's been >1h since the last pull (time-based refresh), OR
+  //   (b) the cached copy's plugin.json version doesn't match the version
+  //       declared in the marketplace index (version-based refresh).
+  // (b) catches the case where a critical fix bumped a package version within
+  // the 1h time window — without it, users would stay on the old copy until
+  // their timer elapsed. Pull failures fall back to the cached copy
+  // (offline-safe) and skip updating the timestamp so the next install retries.
+  let shouldRefresh = false;
   if (!fs.existsSync(cacheRepo)) {
     fs.mkdirSync(CACHE_DIR, { recursive: true });
     const { ok, output } = await runGit('clone', '--depth', '1', repoUrl, cacheRepo);
     if (!ok) return { status: 'failed', error: `Failed to clone marketplace repo: ${output.slice(0, 200)}` };
     setCacheTimestamp(cacheRepo);
-  } else if (Date.now() - getCacheTimestamp(cacheRepo) > CACHE_REFRESH_MS) {
+  } else {
+    shouldRefresh = Date.now() - getCacheTimestamp(cacheRepo) > CACHE_REFRESH_MS;
+    if (!shouldRefresh && expectedVersion) {
+      const cachedVersion = readCachedPluginVersion(path.join(cacheRepo, sourceRef));
+      // Version present and mismatched → refresh. Missing version → fall back
+      // to time-based refresh only (don't thrash the cache on manifests that
+      // never declare a version).
+      if (cachedVersion && cachedVersion !== expectedVersion) shouldRefresh = true;
+    }
+  }
+
+  if (shouldRefresh) {
     const fetchResult = await runGit('-C', cacheRepo, 'fetch', 'origin');
     if (fetchResult.ok) {
       // Default branch defaults to master per workspace convention. If a
@@ -322,8 +359,9 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
     let result: InstallResult;
     switch (sourceType) {
       case 'local':
-        // Phase 3a: pass sourceMarketplace so the installer clones the right repo
-        result = await installFromLocal(id, sourceRef, entry.sourceMarketplace);
+        // Phase 3a: pass sourceMarketplace so the installer clones the right repo.
+        // Pass entry.version so the cache refreshes when a package bumped mid-TTL.
+        result = await installFromLocal(id, sourceRef, entry.sourceMarketplace, entry.version);
         break;
       case 'url':
         result = await installFromUrl(id, sourceRef);
