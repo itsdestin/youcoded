@@ -11,6 +11,7 @@ import { MODELS, type ModelAlias } from './StatusBar';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { CLOSE_PROMPT_SUPPRESS_KEY } from './CloseSessionPrompt';
 import { ModelInfoTooltip } from './ModelPickerPopup';
+import { useScrollFade } from '../hooks/useScrollFade';
 
 // Plain-language explainer for the Remote Access popup. Shown when the user
 // taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
@@ -159,6 +160,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
   // stale scrim before the user has ever opened the panel.
   const [animating, setAnimating] = useState(false);
   const [hasOpened, setHasOpened] = useState(open);
+  const outerScrollRef = useScrollFade<HTMLDivElement>();
   useEffect(() => {
     if (open) setHasOpened(true);
     setAnimating(true);
@@ -204,11 +206,11 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
         }}
       >
         <div
-          className="settings-drawer flex flex-col h-full overflow-y-auto border-r border-edge-dim"
+          className="settings-drawer flex flex-col h-full border-r border-edge-dim"
           data-animating={animating ? 'true' : undefined}
         >
-          {/* Header */}
-          <div className="flex items-center justify-between px-4 py-3 border-b border-edge">
+          {/* Header — sits outside the scrolling body so it doesn't fade when content scrolls */}
+          <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-edge">
             <h2 className="text-sm font-bold text-fg">Settings</h2>
             <button
               onClick={onClose}
@@ -219,20 +221,22 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
             </button>
           </div>
 
-          {isAndroid() ? (
-            <AndroidSettings open={open} onClose={onClose} onSendInput={onSendInput} onOpenThemeMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} syncAutoOpen={syncAutoOpen} onSyncAutoOpenHandled={onSyncAutoOpenHandled} />
-          ) : (
-            <DesktopSettings
-              open={open}
-              onClose={onClose}
-              onSendInput={onSendInput}
-              hasActiveSession={hasActiveSession}
-              onOpenThemeMarketplace={onOpenThemeMarketplace}
-              onPublishTheme={onPublishTheme}
-              syncAutoOpen={syncAutoOpen}
-              onSyncAutoOpenHandled={onSyncAutoOpenHandled}
-            />
-          )}
+          <div ref={outerScrollRef} className="scroll-fade flex-1 min-h-0">
+            {isAndroid() ? (
+              <AndroidSettings open={open} onClose={onClose} onSendInput={onSendInput} onOpenThemeMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} syncAutoOpen={syncAutoOpen} onSyncAutoOpenHandled={onSyncAutoOpenHandled} />
+            ) : (
+              <DesktopSettings
+                open={open}
+                onClose={onClose}
+                onSendInput={onSendInput}
+                hasActiveSession={hasActiveSession}
+                onOpenThemeMarketplace={onOpenThemeMarketplace}
+                onPublishTheme={onPublishTheme}
+                syncAutoOpen={syncAutoOpen}
+                onSyncAutoOpenHandled={onSyncAutoOpenHandled}
+              />
+            )}
+          </div>
         </div>
       </div>
     </>
@@ -413,6 +417,7 @@ function SoundCategorySection({ category, label, description, dotColor }: {
 function SoundButton() {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
   const [muted, setMuted] = useState(() => {
     try { return localStorage.getItem(SOUND_MUTED_KEY) === '1'; } catch { return false; }
   });
@@ -508,7 +513,7 @@ function SoundButton() {
                 <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
               </div>
 
-              <div className="px-4 py-4 space-y-5 overflow-y-auto">
+              <div ref={scrollRef} className="scroll-fade px-4 py-4 space-y-5">
                 {/* Master volume */}
                 <section>
                   <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Volume</h3>
@@ -680,6 +685,7 @@ function RemoteButton({
   // main settings, not whichever screen they last viewed.
   const [showInfo, setShowInfo] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   useEffect(() => {
     if (!open) setShowInfo(false);
@@ -768,7 +774,7 @@ function RemoteButton({
               </div>
 
               {/* Scrollable content */}
-              <div className="flex-1 overflow-y-auto px-4 py-4 space-y-6">
+              <div ref={scrollRef} className="scroll-fade flex-1 px-4 py-4 space-y-6">
                 {loading ? (
                   <div className="flex items-center justify-center py-8 text-fg-muted text-sm">Loading...</div>
                 ) : (
@@ -1212,6 +1218,7 @@ interface DefaultsButtonProps {
 function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
   // Close-session prompt suppression — reads/writes localStorage directly since
   // this is a UI preference, not a session default backed by sessionDefaults.
   const [closePromptDisabled, setClosePromptDisabled] = useState(
@@ -1281,7 +1288,7 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
                 <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
               </div>
 
-              <div className="px-4 py-4 space-y-5 overflow-y-auto">
+              <div ref={scrollRef} className="scroll-fade px-4 py-4 space-y-5">
                 {/* Default Model */}
                 <section>
                   <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Default Model</h3>
@@ -1391,6 +1398,7 @@ const TIER_OPTIONS = [
 function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string) => void }) {
   const [open, setOpen] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   useEffect(() => {
     if (!open) return;
@@ -1445,7 +1453,7 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
               <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
             </div>
 
-            <div className="p-3 space-y-2 overflow-y-auto" style={{ maxHeight: 'calc(80vh - 52px)' }}>
+            <div ref={scrollRef} className="scroll-fade p-3 space-y-2" style={{ maxHeight: 'calc(80vh - 52px)' }}>
               {TIER_OPTIONS.map(t => {
                 const isActive = tier === t.id;
                 return (
@@ -1488,6 +1496,7 @@ interface PairedDevice {
 
 function ConnectToDesktopButton() {
   const [open, setOpen] = useState(false);
+  const scrollRef = useScrollFade<HTMLDivElement>();
   const [pairedDevices, setPairedDevices] = useState<PairedDevice[]>([]);
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [connectedDeviceName, setConnectedDeviceName] = useState('');
@@ -1646,7 +1655,7 @@ function ConnectToDesktopButton() {
               <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
             </div>
 
-            <div className="px-4 py-4 space-y-4 overflow-y-auto">
+            <div ref={scrollRef} className="scroll-fade px-4 py-4 space-y-4">
 
               {/* Tailscale warning */}
               {!tailscaleLoading && tailscaleStatus !== null && !tailscaleStatus.connected && (

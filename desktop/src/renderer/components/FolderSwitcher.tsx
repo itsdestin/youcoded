@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { useScrollFade } from '../hooks/useScrollFade';
 
 interface SavedFolder {
   path: string;
@@ -23,6 +24,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
   const [editNickname, setEditNickname] = useState('');
   const editRef = useRef<HTMLInputElement>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
+  const listRef = useScrollFade<HTMLDivElement>();
 
   const load = useCallback(async () => {
     try {
@@ -141,7 +143,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
         >
           {/* Saved folders list */}
           {folders.length > 0 && (
-            <div className="max-h-48 overflow-y-auto py-1">
+            <div ref={listRef} className="scroll-fade max-h-48 py-1">
               {folders.map((f) => {
                 const isSelected = f.path === value;
                 const isEditing = editingPath === f.path;

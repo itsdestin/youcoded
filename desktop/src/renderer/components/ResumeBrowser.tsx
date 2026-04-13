@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { MODELS, type ModelAlias } from './StatusBar';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { useScrollFade } from '../hooks/useScrollFade';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 
 const MODEL_LABELS: Record<string, string> = {
@@ -72,6 +73,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const listRef = useScrollFade<HTMLDivElement>();
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
@@ -398,7 +400,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           </div>
 
           {/* Session list */}
-          <div className="flex-1 overflow-y-auto py-2">
+          <div ref={listRef} className="scroll-fade flex-1 py-2">
             {loading ? (
               <p className="text-sm text-fg-muted text-center py-8">Loading sessions...</p>
             ) : filtered.length === 0 ? (

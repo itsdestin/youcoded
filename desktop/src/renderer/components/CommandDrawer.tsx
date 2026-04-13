@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { SkillEntry } from '../../shared/types';
 import SkillCard from './SkillCard';
 import { useSkills } from '../state/skill-context';
+import { useScrollFade } from '../hooks/useScrollFade';
 
 interface Props {
   open: boolean;
@@ -26,6 +27,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
   const { drawerSkills } = useSkills();
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   // Effective query: in search mode (slash-triggered), the InputBar drives
   // the filter via externalFilter; in browse mode, the drawer's own input does
@@ -140,7 +142,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
         </div>
 
         {/* Scrollable content */}
-        <div className="overflow-y-auto px-4 pb-4" style={{ maxHeight: 'calc(45vh - 80px)' }}>
+        <div ref={scrollRef} className="scroll-fade px-4 pb-4" style={{ maxHeight: 'calc(45vh - 80px)' }}>
           {filtered.length === 0 ? (
             <div className="text-center py-6">
               <p className="text-sm text-fg-muted">No matching skills</p>

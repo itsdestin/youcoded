@@ -13,6 +13,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import SyncSetupWizard from './SyncSetupWizard';
+import { useScrollFade } from '../hooks/useScrollFade';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
@@ -312,6 +313,8 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const [editingId, setEditingId] = useState<string | null>(null);
   // Overflow menu state
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null);
+  const mainScrollRef = useScrollFade<HTMLDivElement>();
+  const logScrollRef = useScrollFade<HTMLDivElement>();
   // Per-backend action feedback
   const [actionFeedback, setActionFeedback] = useState<Record<string, string>>({});
   // Confirmation dialog state
@@ -523,7 +526,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           </div>
 
           {/* Scrollable content */}
-          <div className="flex-1 overflow-y-auto px-4 py-4 space-y-5">
+          <div ref={mainScrollRef} className="scroll-fade flex-1 px-4 py-4 space-y-5">
 
             {/* 1. Backend instances list */}
             <div>
@@ -747,7 +750,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   {logLines.length === 0 ? (
                     <div className="text-[11px] text-fg-faint px-2 py-3">No sync log entries yet.</div>
                   ) : (
-                    <div className="max-h-48 overflow-y-auto rounded-lg bg-inset/40 border border-edge-dim">
+                    <div ref={logScrollRef} className="scroll-fade max-h-48 rounded-lg bg-inset/40 border border-edge-dim">
                       <pre className="text-[10px] text-fg-dim font-mono px-2 py-2 whitespace-pre-wrap break-all leading-relaxed">
                         {logLines.map((line, i) => {
                           try {
@@ -929,6 +932,7 @@ function EditBackendForm({
 }) {
   const [label, setLabel] = useState(backend?.label ?? '');
   const [saving, setSaving] = useState(false);
+  const actionsScrollRef = useScrollFade<HTMLDivElement>();
 
   if (!backend) return null;
 
@@ -944,7 +948,7 @@ function EditBackendForm({
   return (
     <div className="flex flex-col h-full">
       <SubViewHeader title={`Edit ${backend.label}`} onBack={onBack} onClose={onClose} />
-      <div className="flex-1 overflow-y-auto px-4 py-4 space-y-4">
+      <div ref={actionsScrollRef} className="scroll-fade flex-1 px-4 py-4 space-y-4">
         <div>
           <label className="block text-[10px] text-fg-muted mb-1">Name</label>
           <input
