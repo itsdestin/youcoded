@@ -1,5 +1,13 @@
 import { useEffect, useRef } from 'react';
 
+// Discriminated union for IPC calls that can fail with a structured error.
+// Using a local type (not imported from main) keeps the renderer/main boundary
+// clean — consistent with how remote-shim.ts duplicates types rather than
+// importing across the Node/browser boundary.
+type ApiResult<T> =
+  | { ok: true; value: T }
+  | { ok: false; status: number; message: string };
+
 // Type declaration for the preload API
 declare global {
   interface Window {
@@ -72,10 +80,20 @@ declare global {
       getHomePath: () => Promise<string>;
       getFavorites: () => Promise<any>;
       setFavorites: (favorites: any) => Promise<void>;
-      // Fix: marketplace auth — start/poll return ApiResult; the rest are plain returns
+      // Fix: marketplace auth — start/poll return typed ApiResult discriminated unions;
+      // the rest return plain values (not wrapped). Keep these types local — do NOT
+      // import from main; the renderer/main boundary must stay clean.
       marketplaceAuth: {
-        start: () => Promise<{ ok: boolean; value?: any; message?: string }>;
-        poll: (deviceCode: string) => Promise<{ ok: boolean; value?: any; message?: string }>;
+        start: () => Promise<ApiResult<{
+          device_code: string;
+          user_code: string;
+          auth_url: string;
+          expires_in: number;
+        }>>;
+        poll: (deviceCode: string) => Promise<ApiResult<
+          | { status: "pending" }
+          | { status: "complete"; token: string }
+        >>;
         signedIn: () => Promise<boolean>;
         user: () => Promise<import('../../main/marketplace-auth-store').MarketplaceUser | null>;
         signOut: () => Promise<void>;
