@@ -192,6 +192,20 @@ class MainActivity : ComponentActivity() {
                                         svc.onQrScanRequested = {
                                             _showQrScanner.value = true
                                         }
+                                        // Marketplace auth: open the GitHub device-code URL in the
+                                        // device's default browser. Non-fatal — if no browser is
+                                        // installed the service already logged and the UI still
+                                        // receives auth_url for manual copy-paste.
+                                        svc.onMarketplaceAuthUrlRequested = { url ->
+                                            try {
+                                                val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url)).apply {
+                                                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                                }
+                                                startActivity(intent)
+                                            } catch (e: Exception) {
+                                                android.util.Log.w("MainActivity", "marketplace auth browser open failed: ${e.message}")
+                                            }
+                                        }
                                     }
 
                                     // Handle intent session_id from notification tap

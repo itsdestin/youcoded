@@ -27,6 +27,8 @@ import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKeys
+import com.destin.code.marketplace.MarketplaceApiClient
+import com.destin.code.marketplace.MarketplaceAuthStore
 import com.destin.code.skills.LocalSkillProvider
 import com.destin.code.skills.PluginInstaller
 
@@ -96,6 +98,22 @@ class SessionService : Service() {
     var pendingQrScanner: CompletableDeferred<String?>? = null
     /** Callback for Activity to know when to launch the QR scanner. */
     var onQrScanRequested: (() -> Unit)? = null
+
+    // ── Marketplace auth + API ───────────────────────────────────────────────
+    // WHY lazy: applicationContext is not available during construction; initialized
+    // on first use inside handleBridgeMessage which always runs after onCreate().
+    private val marketplaceAuthStore: MarketplaceAuthStore by lazy {
+        MarketplaceAuthStore.create(applicationContext)
+    }
+    private val marketplaceApiClient: MarketplaceApiClient by lazy {
+        MarketplaceApiClient(marketplaceAuthStore)
+    }
+    /**
+     * Callback for the Activity to open the device's browser at the given URL.
+     * Follows the same deferred-callback pattern as onFilePickerRequested and
+     * onFolderPickerRequested — the Activity sets this after binding to the service.
+     */
+    var onMarketplaceAuthUrlRequested: ((String) -> Unit)? = null
 
     private var wakeLock: PowerManager.WakeLock? = null
     private var urlObserver: FileObserver? = null
@@ -1739,6 +1757,146 @@ class SessionService : Service() {
                             }
                         }
                     }
+                }
+            }
+
+            // ── Marketplace auth (device-code OAuth) ────────────────────────────
+            // These 5 types mirror the desktop marketplace-auth-handlers.ts exactly.
+
+            "marketplace:auth:start" -> {
+                // Calls the Worker to start device-code flow, then opens the browser
+                // via the Activity callback so the user can authorize on GitHub.
+                // WHY Activity callback: Service cannot startActivity() with FLAG_ACTIVITY_NEW_TASK
+                // for browser intents reliably — we delegate to MainActivity which is in foreground.
+                val result = marketplaceApiClient.authStart()
+                if (result is com.destin.code.marketplace.ApiResult.Ok) {
+                    val authUrl = result.value.optString("auth_url", "")
+                    if (authUrl.isNotEmpty()) {
+                        // Non-fatal: if no browser is installed, log and no-op —
+                        // the renderer still receives auth_url and can display it for manual copy.
+                        try {
+                            withContext(Dispatchers.Main) {
+                                onMarketplaceAuthUrlRequested?.invoke(authUrl)
+                            }
+                        } catch (e: Exception) {
+                            android.util.Log.w("SessionService", "marketplace:auth:start — browser open failed: ${e.message}")
+                        }
+                    }
+                }
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, result.toJson { v -> v })
+                }
+            }
+
+            "marketplace:auth:poll" -> {
+                // payload: { deviceCode } (camelCase — matches remote-shim.ts invoke call)
+                val deviceCode = msg.payload.optString("deviceCode", "")
+                val result = marketplaceApiClient.authPoll(deviceCode)
+                if (result is com.destin.code.marketplace.ApiResult.Ok) {
+                    // If complete, persist the token immediately so subsequent calls are authenticated
+                    val pollBody = result.value
+                    if (pollBody.optString("status") == "complete") {
+                        val token = pollBody.optString("token", "")
+                        if (token.isNotEmpty()) {
+                            // WHY: token not logged — only status logged
+                            android.util.Log.i("SessionService", "marketplace:auth:poll — complete, saving token")
+                            marketplaceAuthStore.setToken(token)
+                            // Persist user info if returned alongside token
+                            val userObj = pollBody.optJSONObject("user")
+                            if (userObj != null) {
+                                val user = com.destin.code.marketplace.MarketplaceUser(
+                                    id        = userObj.optString("id", ""),
+                                    login     = userObj.optString("login", ""),
+                                    avatarUrl = userObj.optString("avatar_url", ""),
+                                )
+                                marketplaceAuthStore.setSession(token, user)
+                            }
+                        }
+                    }
+                }
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, result.toJson { v -> v })
+                }
+            }
+
+            "marketplace:auth:signed-in" -> {
+                // Plain boolean — no HTTP call, reads local store only
+                val signedIn = marketplaceAuthStore.getToken() != null
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, signedIn) }
+            }
+
+            "marketplace:auth:user" -> {
+                // Returns the stored MarketplaceUser as a JSONObject, or null
+                val user = marketplaceAuthStore.getUser()
+                val result: Any = if (user != null) {
+                    JSONObject().apply {
+                        put("id",         user.id)
+                        put("login",      user.login)
+                        put("avatar_url", user.avatarUrl)
+                    }
+                } else {
+                    JSONObject.NULL
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+
+            "marketplace:auth:sign-out" -> {
+                // Fire-and-forget: clears local credentials, no HTTP call needed
+                marketplaceAuthStore.signOut()
+                // Respond with void (true as success indicator, matching desktop convention)
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            }
+
+            // ── Marketplace write endpoints ───────────────────────────────────
+
+            "marketplace:install" -> {
+                // payload: { pluginId } (camelCase)
+                val pluginId = msg.payload.optString("pluginId", "")
+                val result = marketplaceApiClient.postInstall(pluginId)
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, result.toJson { _ -> JSONObject.NULL })
+                }
+            }
+
+            "marketplace:rate" -> {
+                // payload passed flat: { plugin_id, stars, review_text? } (snake_case from TS input)
+                val pluginId   = msg.payload.optString("plugin_id", "")
+                val stars      = msg.payload.optInt("stars", 0)
+                val reviewText = msg.payload.optString("review_text", "").ifEmpty { null }
+                val result = marketplaceApiClient.postRating(pluginId, stars, reviewText)
+                msg.id?.let {
+                    // value shape: { hidden: boolean }
+                    bridgeServer.respond(ws, msg.type, it, result.toJson { v -> v })
+                }
+            }
+
+            "marketplace:rate:delete" -> {
+                // payload: { pluginId } (camelCase)
+                val pluginId = msg.payload.optString("pluginId", "")
+                val result = marketplaceApiClient.deleteRating(pluginId)
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, result.toJson { _ -> JSONObject.NULL })
+                }
+            }
+
+            "marketplace:theme:like" -> {
+                // payload: { themeId } (camelCase)
+                val themeId = msg.payload.optString("themeId", "")
+                val result = marketplaceApiClient.toggleThemeLike(themeId)
+                msg.id?.let {
+                    // value shape: { liked: boolean }
+                    bridgeServer.respond(ws, msg.type, it, result.toJson { v -> v })
+                }
+            }
+
+            "marketplace:report" -> {
+                // payload passed flat: { rating_user_id, rating_plugin_id, reason? } (snake_case)
+                val ratingUserId   = msg.payload.optString("rating_user_id", "")
+                val ratingPluginId = msg.payload.optString("rating_plugin_id", "")
+                val reason         = msg.payload.optString("reason", "").ifEmpty { null }
+                val result = marketplaceApiClient.postReport(ratingUserId, ratingPluginId, reason)
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, result.toJson { _ -> JSONObject.NULL })
                 }
             }
 
