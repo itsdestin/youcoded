@@ -4,6 +4,8 @@ import { useMarketplaceStats } from '../state/marketplace-stats-context';
 import type { SkillDetailView } from '../../shared/types';
 import ConfigForm from './ConfigForm';
 import StarRating from './marketplace/StarRating';
+import RatingSubmitModal from './marketplace/RatingSubmitModal';
+import ReviewList from './marketplace/ReviewList';
 
 interface Props {
   skillId: string;
@@ -26,6 +28,10 @@ export default function SkillDetail({ skillId, onBack }: Props) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
+  // Task 10: rating modal + review list state
+  const [ratingModalOpen, setRatingModalOpen] = useState(false);
+  // Bumped on every successful submission to trigger a ReviewList re-fetch
+  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
 
   const isInstalled = installed.some(s => s.id === skillId);
   const isFavorite = favorites.includes(skillId);
@@ -119,12 +125,19 @@ export default function SkillDetail({ skillId, onBack }: Props) {
             <p className="text-xs text-fg-muted mt-0.5">by {detail.author}</p>
           )}
           {/* Task 9: live star rating from /stats API — renders null when no reviews */}
-          <div className="mt-1">
+          {/* Task 10: "Rate this plugin" button beside the aggregate rating */}
+          <div className="mt-1 flex items-center justify-center gap-2">
             <StarRating
               value={liveStats?.rating ?? detail.rating ?? 0}
               count={liveStats?.review_count ?? detail.ratingCount ?? 0}
               size="lg"
             />
+            <button
+              onClick={() => setRatingModalOpen(true)}
+              className="text-[10px] text-fg-muted hover:text-accent border border-edge-dim hover:border-accent/40 rounded-full px-2 py-0.5 transition-colors"
+            >
+              Rate
+            </button>
           </div>
         </div>
 
@@ -242,7 +255,23 @@ export default function SkillDetail({ skillId, onBack }: Props) {
             )}
           </div>
         </div>
+
+        {/* Task 10: Reviews section — below metadata */}
+        <div className="border-t border-edge-dim pt-3 mt-1">
+          <ReviewList pluginId={detail.id} refreshKey={reviewRefreshKey} />
+        </div>
       </div>
+
+      {/* Task 10: Rating submit modal — mounted at the SkillDetail root so it's above the scroll container */}
+      <RatingSubmitModal
+        pluginId={detail.id}
+        open={ratingModalOpen}
+        onClose={() => setRatingModalOpen(false)}
+        onSubmitted={() => {
+          // Bump the review list key to trigger a re-fetch showing the new review
+          setReviewRefreshKey(k => k + 1);
+        }}
+      />
     </div>
   );
 }

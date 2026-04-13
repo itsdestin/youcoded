@@ -2,9 +2,11 @@
 // Pure presentational component. No hooks, no context, no side effects.
 //
 // Props:
-//   value  — 0-5 rating (fractional allowed, e.g. 4.3)
-//   count  — number of reviews
-//   size   — "sm" for cards (small stars), "lg" for detail panels (larger stars)
+//   value      — 0-5 rating (fractional allowed, e.g. 4.3)
+//   count      — number of reviews
+//   size       — "sm" for cards (small stars), "lg" for detail panels (larger stars)
+//   hideCount  — when true, omits the "(N)" review-count suffix.
+//                Used by ReviewList to show per-review stars without a count label.
 //
 // Renders null when count < 1 so callers don't see an orphaned 0-review row.
 // Uses an inline filled+empty overlay technique: a clipping wrapper constrains
@@ -17,6 +19,8 @@ interface StarRatingProps {
   value: number;
   count: number;
   size: 'sm' | 'lg';
+  /** Omit the "(N reviews)" suffix — used for per-review display in ReviewList. */
+  hideCount?: boolean;
 }
 
 const SIZE_CONFIG = {
@@ -32,7 +36,7 @@ const SIZE_CONFIG = {
   },
 };
 
-export default function StarRating({ value, count, size }: StarRatingProps) {
+export default function StarRating({ value, count, size, hideCount = false }: StarRatingProps) {
   // Render nothing when there are no reviews — caller owns the empty-state UX
   if (count < 1) return null;
 
@@ -67,10 +71,12 @@ export default function StarRating({ value, count, size }: StarRatingProps) {
         </span>
       </span>
 
-      {/* Review count — subdued, after the stars */}
-      <span className={`${cfg.countText} text-fg-muted`}>
-        ({count})
-      </span>
+      {/* Review count — subdued, after the stars. Hidden when hideCount is true (e.g. ReviewList rows). */}
+      {!hideCount && (
+        <span className={`${cfg.countText} text-fg-muted`}>
+          ({count})
+        </span>
+      )}
     </span>
   );
 }
