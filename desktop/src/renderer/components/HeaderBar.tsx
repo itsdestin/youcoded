@@ -52,7 +52,6 @@ interface Props {
   challengePending: boolean;
   permissionMode: PermissionMode;
   onCyclePermission: () => void;
-  announcement: string | null;
   settingsOpen: boolean;
   onToggleSettings: () => void;
   settingsBadge?: boolean;
@@ -70,7 +69,7 @@ export default function HeaderBar({
   sessions, activeSessionId, onSelectSession, onCreateSession, onCloseSession,
   viewMode, onToggleView,
   gamePanelOpen, onToggleGamePanel, gameConnected, challengePending,
-  permissionMode, onCyclePermission, announcement,
+  permissionMode, onCyclePermission,
   settingsOpen, onToggleSettings, settingsBadge, sessionStatuses, onResumeSession,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultSkipPermissions, defaultProjectFolder,
@@ -171,8 +170,8 @@ export default function HeaderBar({
 
   return (
     <div className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-      {/* Left — settings + remote/announcement badges */}
-      <div className="flex-1 flex items-center gap-1 sm:gap-2 min-w-0">
+      {/* Left — settings + remote badge */}
+      <div className="flex-1 flex items-center gap-1 sm:gap-2">
         <button
           onClick={onToggleSettings}
           className={`relative ${isAndroid() ? 'p-2' : 'p-1'} rounded-sm hover:bg-inset transition-colors shrink-0 ${settingsOpen ? 'text-fg' : 'text-fg-muted'}`}
@@ -189,11 +188,6 @@ export default function HeaderBar({
         {isRemoteMode() && (
           <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-blue-400 border border-blue-500/25 shrink-0">
             REMOTE
-          </span>
-        )}
-        {announcement && (
-          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-sm bg-[#FF9800]/15 text-[#FF9800] border border-[#FF9800]/25 truncate max-w-[200px] hidden sm:inline" title={announcement}>
-            ★ {announcement}
           </span>
         )}
       </div>
