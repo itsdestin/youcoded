@@ -207,6 +207,42 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
     };
   }, []);
 
+  // Wheel scroll acceleration: rapid successive touchpad/mousewheel flicks
+  // compound — the 5th flick in a row scrolls farther than the 1st. A pause
+  // (~350ms) resets the multiplier so an intentional small scroll stays small.
+  // Mirrors the arrow-key acceleration pattern above but for wheel input.
+  useEffect(() => {
+    const container = scrollContainerRef.current;
+    if (!container) return;
+
+    let multiplier = 1;
+    let lastWheelTime = 0;
+    const RESET_MS = 350;
+    const STEP = 0.25;
+    const MAX = 4;
+
+    const onWheel = (e: WheelEvent) => {
+      // Let browser zoom (Ctrl+wheel) pass through untouched
+      if (e.ctrlKey) return;
+      if (Math.abs(e.deltaY) < 1) return;
+
+      const now = performance.now();
+      if (now - lastWheelTime > RESET_MS) {
+        multiplier = 1;
+      } else {
+        multiplier = Math.min(multiplier + STEP, MAX);
+      }
+      lastWheelTime = now;
+
+      e.preventDefault();
+      container.scrollBy({ top: e.deltaY * multiplier, behavior: 'auto' });
+    };
+
+    // Non-passive so preventDefault() works and our delta replaces native scroll
+    container.addEventListener('wheel', onWheel, { passive: false });
+    return () => container.removeEventListener('wheel', onWheel);
+  }, []);
+
   const handlePromptSelect = useCallback(
     (promptId: string, input: string, label: string, promptTitle?: string) => {
       // Resume-from-summary tie-in: clicking "Resume from summary" (or similar)
