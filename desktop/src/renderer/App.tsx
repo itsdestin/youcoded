@@ -1381,7 +1381,7 @@ function AppInner() {
             <div className="flex flex-col items-center gap-2 mt-1 w-64">
               {welcomeFormOpen ? (
                 /* Expanded new-session form with toggles */
-                <div className="w-full rounded-lg bg-panel border border-edge p-3 flex flex-col gap-2">
+                <div className="layer-surface w-full p-3 flex flex-col gap-2">
                   <div>
                     <label className="text-[10px] uppercase tracking-wider text-fg-muted mb-1 block">Project Folder</label>
                     <FolderSwitcher value={welcomeCwd} onChange={setWelcomeCwd} />
