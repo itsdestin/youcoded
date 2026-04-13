@@ -9,6 +9,7 @@ import { render, cleanup, act, screen } from '@testing-library/react';
 
 import ReviewList from '../src/renderer/components/marketplace/ReviewList';
 import type { RatingEntry } from '../src/renderer/state/marketplace-api-client';
+import * as AuthContextModule from '../src/renderer/state/marketplace-auth-context';
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -43,6 +44,15 @@ function mockFetchError() {
 describe('ReviewList', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // ReviewList now renders ReportReviewButton which calls useMarketplaceAuth.
+    // Provide a default signed-out mock so the auth context doesn't throw.
+    vi.spyOn(AuthContextModule, 'useMarketplaceAuth').mockReturnValue({
+      signedIn: false,
+      user: null,
+      signInPending: false,
+      startSignIn: vi.fn().mockResolvedValue(undefined),
+      signOut: vi.fn().mockResolvedValue(undefined),
+    });
   });
 
   afterEach(() => {

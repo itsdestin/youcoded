@@ -21,6 +21,7 @@ import {
   type RatingEntry,
 } from '../../state/marketplace-api-client';
 import StarRating from './StarRating';
+import ReportReviewButton from './ReportReviewButton';
 
 // Unauthenticated client — listRatings is a public endpoint
 const apiClient = createMarketplaceApiClient({
@@ -41,10 +42,10 @@ function formatDate(unixSec: number): string {
 
 // ── Single review row ─────────────────────────────────────────────────────────
 
-function ReviewRow({ r }: { r: RatingEntry }) {
+function ReviewRow({ r, pluginId }: { r: RatingEntry; pluginId: string }) {
   return (
     <div className="flex flex-col gap-1 py-3 border-b border-edge-dim last:border-0">
-      {/* Author row: avatar + login + stars + date */}
+      {/* Author row: avatar + login + stars + date + report button */}
       <div className="flex items-center gap-2">
         {/* Avatar — 24px circular */}
         {r.user_avatar_url ? (
@@ -64,6 +65,12 @@ function ReviewRow({ r }: { r: RatingEntry }) {
         {/* count=1: each row represents one review; hideCount suppresses the "(1)" suffix */}
         <StarRating value={r.stars} count={1} size="sm" hideCount />
         <span className="ml-auto text-[10px] text-fg-faint shrink-0">{formatDate(r.created_at)}</span>
+        {/* Report button — far right of the row, subtle until hovered */}
+        <ReportReviewButton
+          ratingUserId={r.user_id}
+          pluginId={pluginId}
+          reviewerLogin={r.user_login}
+        />
       </div>
 
       {/* Review text — React auto-escapes this, so XSS-safe */}
@@ -147,7 +154,7 @@ export default function ReviewList({ pluginId, refreshKey = 0 }: ReviewListProps
       {state.status === 'loaded' && (
         <div>
           {state.ratings.map(r => (
-            <ReviewRow key={r.id} r={r} />
+            <ReviewRow key={r.id} r={r} pluginId={pluginId} />
           ))}
         </div>
       )}
