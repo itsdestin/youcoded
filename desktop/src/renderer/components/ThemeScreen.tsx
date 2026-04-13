@@ -227,6 +227,12 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
   const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isUserTheme = theme.source === 'user';
   const hasWallpaper = theme.background?.type === 'image';
+  const hasGradient = theme.background?.type === 'gradient';
+  // Pre-baked terminal-value asset already has blur/brightness cooked in — the
+  // runtime-filter slider wouldn't affect it, so hide those two sliders.
+  const hasBakedTerminalBg = hasWallpaper && !!theme.background?.['terminal-value'];
+  const canTuneTerminalOpacity = hasWallpaper || hasGradient;
+  const canTuneTerminalFilter = hasWallpaper && !hasBakedTerminalBg;
 
   const updateAccent = useCallback((hex: string) => {
     if (!isUserTheme) return;
@@ -291,7 +297,7 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
         {/* Locked banner for non-user themes so it's clear why most controls are absent */}
         {!isUserTheme && (
           <p className="text-[10px] text-fg-faint bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 leading-relaxed">
-            Built-in themes are locked. Only glass (blur/opacity) is customizable. Use "Build New Theme with Claude" to make an editable copy.
+            Built-in themes are locked. Only glass + terminal transparency sliders are customizable. Use "Build New Theme with Claude" to make an editable copy.
           </p>
         )}
 
@@ -378,6 +384,55 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
                 onChange={v => setGlassField('bubble-opacity', v)}
                 format={v => `${Math.round(v * 100)}%`}
               />
+            </div>
+          </div>
+        )}
+
+        {/* Terminal — transparency knobs for TerminalView. Opacity applies to
+            any see-through background (wallpaper OR gradient). Blur + brightness
+            are runtime-CSS-filter on the wallpaper layer, so they're hidden when
+            the theme ships a pre-baked `terminal-value` asset (bake dictates
+            those values) or when there's no wallpaper to blur. */}
+        {canTuneTerminalOpacity && (
+          <div>
+            <p className="text-[9px] text-fg-faint uppercase tracking-wider mb-2">Terminal</p>
+            {canTuneTerminalFilter && reducedEffects && (
+              <p className="text-[10px] text-fg-faint bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
+                Reduce Visual Effects is active — wallpaper blur is disabled. Opacity + brightness still apply.
+              </p>
+            )}
+            {hasBakedTerminalBg && (
+              <p className="text-[10px] text-fg-faint bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 mb-2 leading-relaxed">
+                This theme ships a pre-blurred terminal wallpaper — blur + brightness are baked in. Only opacity is adjustable here.
+              </p>
+            )}
+            <div className="space-y-3">
+              <GlassSlider
+                label="Terminal Opacity"
+                min={0.3} max={1} step={0.02}
+                value={theme.background?.['terminal-opacity'] ?? 0.6}
+                onChange={v => setGlassField('terminal-opacity', v)}
+                format={v => `${Math.round(v * 100)}%`}
+              />
+              {canTuneTerminalFilter && (
+                <>
+                  <GlassSlider
+                    label="Wallpaper Blur"
+                    min={0} max={30} step={1}
+                    value={theme.background?.['terminal-blur'] ?? 8}
+                    disabled={reducedEffects}
+                    onChange={v => setGlassField('terminal-blur', v)}
+                    format={v => String(Math.round(v))}
+                  />
+                  <GlassSlider
+                    label="Wallpaper Brightness"
+                    min={0.5} max={1.2} step={0.02}
+                    value={theme.background?.['terminal-brightness'] ?? 0.86}
+                    onChange={v => setGlassField('terminal-brightness', v)}
+                    format={v => `${Math.round(v * 100)}%`}
+                  />
+                </>
+              )}
             </div>
           </div>
         )}

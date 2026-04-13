@@ -39,6 +39,11 @@ export type GlassOverrides = {
   'panels-opacity'?: number;
   'bubble-blur'?: number;
   'bubble-opacity'?: number;
+  // Terminal transparency sliders (see TerminalView + theme-engine). Kept in the
+  // same override bag as glass — same persistence, same per-slug scoping.
+  'terminal-opacity'?: number;
+  'terminal-blur'?: number;
+  'terminal-brightness'?: number;
 };
 /** Reserved slug for live-preview during /theme-builder — auto-switches on write, reverts on delete. */
 const PREVIEW_SLUG = '_preview';

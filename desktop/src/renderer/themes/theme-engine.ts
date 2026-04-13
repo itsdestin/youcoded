@@ -253,6 +253,18 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   root.style.setProperty('--bubble-blur', `${bubbleBlur}px`);
   root.style.setProperty('--bubble-opacity', String(bubbleOpacity));
 
+  // Terminal transparency vars. Read directly by TerminalView — no global
+  // CSS rules consume these, so literal-value injection (like the #theme-glass
+  // hack for panels-blur) is not needed. Reduced-effects zeros runtime blur
+  // but leaves opacity + brightness alone (same policy as panels-blur).
+  const rawTerminalBlur = theme.background?.['terminal-blur'] ?? 8;
+  const terminalBlur = reducedEffects ? 0 : rawTerminalBlur;
+  const terminalOpacity = theme.background?.['terminal-opacity'] ?? 0.6;
+  const terminalBrightness = theme.background?.['terminal-brightness'] ?? 0.86;
+  root.style.setProperty('--terminal-xterm-opacity', String(terminalOpacity));
+  root.style.setProperty('--terminal-bg-blur', `${terminalBlur}px`);
+  root.style.setProperty('--terminal-bg-brightness', String(terminalBrightness));
+
   if (reducedEffects) {
     root.setAttribute('data-reduced-effects', '');
   } else {

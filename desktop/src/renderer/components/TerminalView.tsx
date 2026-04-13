@@ -211,11 +211,13 @@ export default function TerminalView({ sessionId, visible }: Props) {
     terminalRef.current?.write(data, () => notifyBufferReady(sessionId));
   });
 
-  // With a blurred terminal wallpaper (pre-baked OR runtime) we can sit xterm
-  // at a gentler 0.92 opacity — the blurred layer handles ambience. Without
-  // one (gradient, glass-only, or reduced-effects themes), fall back to the
-  // old 0.88 container opacity trick so the sharp background peeks through.
-  const xtermOpacity = terminalBg ? 0.6 : (seeThrough ? 0.6 : 1);
+  // xterm opacity is driven by `--terminal-xterm-opacity` (theme-engine writes
+  // it from the theme's `background.terminal-opacity`, user slider overrides).
+  // When no visual background is active we force a full-opacity `1` so solid
+  // themes don't inherit a translucent xterm.
+  const xtermOpacityStyle: React.CSSProperties['opacity'] = seeThrough
+    ? 'var(--terminal-xterm-opacity)'
+    : 1;
 
   return (
     <div
@@ -250,12 +252,15 @@ export default function TerminalView({ sessionId, visible }: Props) {
             backgroundSize: 'cover',
             backgroundPosition: 'center',
             // Runtime `filter` on a static image paints once — unlike
-            // backdrop-filter which recomposites every frame. Only applied
-            // when the theme didn't ship a pre-baked terminal asset.
-            filter: needsRuntimeBlur ? 'blur(8px) brightness(0.86)' : undefined,
-            // Blur expands beyond the element's bounds; scale up so the
-            // soft edges don't reveal clipped pixels at the corners.
-            transform: needsRuntimeBlur ? 'scale(1.03)' : undefined,
+            // backdrop-filter which recomposites every frame. Values come from
+            // `--terminal-bg-blur` / `--terminal-bg-brightness` so Appearance
+            // sliders update the preview live. Only applied when the theme
+            // didn't ship a pre-baked terminal asset (in which case blur is
+            // already baked in).
+            filter: needsRuntimeBlur ? 'blur(var(--terminal-bg-blur)) brightness(var(--terminal-bg-brightness))' : undefined,
+            // Blur expands beyond the element's bounds; scale up so the soft
+            // edges don't reveal clipped pixels even at the max slider blur.
+            transform: needsRuntimeBlur ? 'scale(1.06)' : undefined,
           }}
         />
       )}
@@ -264,7 +269,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
         style={{
           position: 'absolute',
           inset: 0,
-          opacity: xtermOpacity,
+          opacity: xtermOpacityStyle,
         }}
       />
     </div>

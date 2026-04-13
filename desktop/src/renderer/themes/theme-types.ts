@@ -40,6 +40,11 @@ export interface ThemeBackground {
   // xterm text stays readable over high-frequency image detail. Optional —
   // themes without it fall back to the container-opacity wallpaper-peek trick.
   'terminal-value'?: string;
+  // TerminalView transparency knobs. All three are overridable per-theme via
+  // the Appearance editor sliders. Defaults live in theme-engine.ts.
+  'terminal-opacity'?: number;     // 0.3–1   xterm layer opacity (how much background peeks through)
+  'terminal-blur'?: number;        // 0–30 px runtime blur sigma on the wallpaper layer (image themes only)
+  'terminal-brightness'?: number;  // 0.5–1.2 wallpaper brightness multiplier
   opacity?: number;
   'panels-blur'?: number;
   'panels-opacity'?: number;
