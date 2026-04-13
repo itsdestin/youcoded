@@ -14,6 +14,7 @@ import SkillCard from './SkillCard';
 import SkillDetail from './SkillDetail';
 import ThemeCard from './ThemeCard';
 import ThemeDetail from './ThemeDetail';
+import SignInButton from './marketplace/SignInButton';
 import type { SkillEntry, SkillFilters } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 
@@ -85,10 +86,12 @@ function MarketplaceInner({ onClose, initialTab = 'skills', onOpenShareSheet, on
 
   return (
     <div className="fixed inset-0 z-50 bg-canvas flex flex-col">
-      {/* Header */}
+      {/* Header — back button + title + sign-in chip (right-aligned) */}
       <div className="flex items-center px-4 py-3 border-b border-edge">
         <button onClick={onClose} className="text-fg-muted hover:text-fg mr-3 text-lg">&larr;</button>
-        <h2 className="text-sm font-bold text-fg">Marketplace</h2>
+        <h2 className="text-sm font-bold text-fg flex-1">Marketplace</h2>
+        {/* Task 8: marketplace sign-in chip — shows signed-out button, pending state, or user avatar */}
+        <SignInButton />
       </div>
 
       {/* Tab bar */}
