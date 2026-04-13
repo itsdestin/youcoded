@@ -85,4 +85,16 @@ describe("MarketplaceApiClient", () => {
     expect(out.ratings).toHaveLength(1);
     expect(out.ratings[0]).toMatchObject({ user_login: "alice", stars: 5, review_text: "Great plugin!" });
   });
+
+  it("listRatings forwards the AbortSignal to fetch", async () => {
+    // Verify that when a signal is passed, it reaches fetch — this is the load-bearing
+    // fix for the fake-abort bug where controller.abort() was called but signal was never wired.
+    fetchMock.mockResolvedValueOnce(new Response(JSON.stringify({ ratings: [] })));
+    const client = createMarketplaceApiClient({ host: HOST, getToken: () => null });
+    const controller = new AbortController();
+    await client.listRatings("my-plugin", controller.signal);
+
+    const callArgs = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(callArgs.signal).toBe(controller.signal);
+  });
 });

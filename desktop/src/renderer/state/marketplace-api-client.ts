@@ -61,8 +61,9 @@ export interface MarketplaceApiClient {
   deleteRating(pluginId: string): Promise<void>;
   toggleThemeLike(themeId: string): Promise<{ liked: boolean }>;
   postReport(input: { rating_user_id: string; rating_plugin_id: string; reason?: string }): Promise<void>;
-  /** Fetch all visible ratings for a plugin. Unauthenticated; newest-first, LIMIT 50. */
-  listRatings(pluginId: string): Promise<ListRatingsResponse>;
+  /** Fetch all visible ratings for a plugin. Unauthenticated; newest-first, LIMIT 50.
+   *  Pass an AbortSignal to cancel in-flight requests on unmount or refresh. */
+  listRatings(pluginId: string, signal?: AbortSignal): Promise<ListRatingsResponse>;
 }
 
 export function createMarketplaceApiClient(opts: {
@@ -71,7 +72,9 @@ export function createMarketplaceApiClient(opts: {
 }): MarketplaceApiClient {
   const { host, getToken } = opts;
 
-  async function request<T>(path: string, init: RequestInit & { auth?: boolean } = {}): Promise<T> {
+  // signal is threaded through only for endpoints that need cancellation (e.g. listRatings).
+  // Other methods can opt-in later without changing callers.
+  async function request<T>(path: string, init: RequestInit & { auth?: boolean; signal?: AbortSignal } = {}): Promise<T> {
     const headers: Record<string, string> = { "Content-Type": "application/json", ...(init.headers as Record<string, string>) };
     if (init.auth) {
       const token = getToken();
@@ -118,7 +121,8 @@ export function createMarketplaceApiClient(opts: {
       await request("/reports", { method: "POST", body: JSON.stringify(input), auth: true });
     },
     // Unauthenticated — public read endpoint, no Authorization header needed.
-    listRatings: (plugin_id) =>
-      request<ListRatingsResponse>(`/ratings/${encodeURIComponent(plugin_id)}`, { method: "GET" }),
+    // signal allows callers to cancel mid-flight on unmount or refreshKey change.
+    listRatings: (plugin_id, signal?) =>
+      request<ListRatingsResponse>(`/ratings/${encodeURIComponent(plugin_id)}`, { method: "GET", signal }),
   };
 }

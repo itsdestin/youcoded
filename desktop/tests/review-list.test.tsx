@@ -153,6 +153,36 @@ describe('ReviewList', () => {
     expect(screen.getByText(/couldn't load reviews/i)).toBeTruthy();
   });
 
+  // ── Abort on unmount ─────────────────────────────────────────────────────────
+
+  it('aborts the fetch when unmounted mid-request', async () => {
+    // Use a fetch that captures the signal so we can verify abort() fires on it.
+    let capturedSignal: AbortSignal | undefined;
+    let resolveResponse!: (v: Response) => void;
+    const pendingResponse = new Promise<Response>((res) => { resolveResponse = res; });
+
+    globalThis.fetch = vi.fn().mockImplementation((_url: string, init: RequestInit) => {
+      capturedSignal = init?.signal as AbortSignal | undefined;
+      return pendingResponse;
+    }) as unknown as typeof fetch;
+
+    const { unmount } = render(<ReviewList pluginId="test-plugin" />);
+
+    // Signal should exist (ReviewList wired it through to fetch)
+    expect(capturedSignal).toBeDefined();
+    expect(capturedSignal!.aborted).toBe(false);
+
+    // Unmount triggers cleanup → controller.abort()
+    unmount();
+    expect(capturedSignal!.aborted).toBe(true);
+
+    // Resolve the dangling promise to avoid unhandled-rejection noise
+    await act(async () => {
+      resolveResponse(new Response(JSON.stringify({ ratings: [] })));
+      await Promise.resolve();
+    });
+  });
+
   // ── refreshKey re-fetch ──────────────────────────────────────────────────────
 
   it('re-fetches when refreshKey changes', async () => {

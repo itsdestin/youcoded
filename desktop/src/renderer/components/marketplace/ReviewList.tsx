@@ -61,7 +61,8 @@ function ReviewRow({ r }: { r: RatingEntry }) {
         )}
         <span className="text-xs font-medium text-fg">{r.user_login}</span>
         {/* StarRating with hideCount=true — individual review rows don't need "(1)" */}
-        <StarRating value={r.stars} count={r.stars} size="sm" hideCount />
+        {/* count=1: each row represents one review; hideCount suppresses the "(1)" suffix */}
+        <StarRating value={r.stars} count={1} size="sm" hideCount />
         <span className="ml-auto text-[10px] text-fg-faint shrink-0">{formatDate(r.created_at)}</span>
       </div>
 
@@ -102,7 +103,9 @@ export default function ReviewList({ pluginId, refreshKey = 0 }: ReviewListProps
     const controller = new AbortController();
     let cancelled = false;
 
-    apiClient.listRatings(pluginId)
+    // Pass the signal so fetch is actually cancelled on unmount/refreshKey change —
+    // the `cancelled` boolean alone guards setState but leaves the network request running.
+    apiClient.listRatings(pluginId, controller.signal)
       .then(({ ratings }) => {
         if (cancelled) return;
         setState(
@@ -111,8 +114,9 @@ export default function ReviewList({ pluginId, refreshKey = 0 }: ReviewListProps
             : { status: 'loaded', ratings }
         );
       })
-      .catch(() => {
-        if (cancelled) return;
+      .catch((err: unknown) => {
+        // AbortError is intentional (unmount or refreshKey change) — don't surface as an error.
+        if (cancelled || (err instanceof Error && err.name === 'AbortError')) return;
         setState({ status: 'error' });
       });
 

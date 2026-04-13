@@ -116,13 +116,17 @@ export default function RatingSubmitModal({
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  // Reset form state whenever the modal opens for a new session
+  // Reset form state whenever the modal opens for a new session.
+  // inFlight and installing are also reset here so that a close+reopen while a
+  // previous submit was mid-flight doesn't leave the button permanently disabled.
   useEffect(() => {
     if (open) {
       setStars(null);
       setReviewText('');
       setError(null);
       setInstallGate(false);
+      setInFlight(false);
+      setInstalling(false);
     }
   }, [open]);
 
