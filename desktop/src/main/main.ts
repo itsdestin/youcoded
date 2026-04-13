@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, protocol, screen, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, screen, shell } from 'electron';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -294,6 +294,34 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   windowRegistry.registerWindow(wid, Date.now());
   win.on('closed', () => {
     windowRegistry.unregisterWindow(wid);
+  });
+
+  // Confirm-on-close if this window still owns active sessions. Without the
+  // prompt, closing a window silently kills every session it owns — which is
+  // easy to do by accident and impossible to undo. A guard flag prevents the
+  // prompt from re-firing after the user confirms.
+  let confirmedClose = false;
+  win.on('close', async (ev) => {
+    if (confirmedClose) return;
+    const ownedSessions = windowRegistry.sessionsForWindow(wid);
+    if (ownedSessions.length === 0) return; // no sessions — close freely
+    ev.preventDefault();
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Cancel', 'Close & Kill Sessions'],
+      defaultId: 0,
+      cancelId: 0,
+      message: `This window has ${ownedSessions.length} active session${ownedSessions.length === 1 ? '' : 's'}.`,
+      detail: 'Closing the window will terminate these sessions. To preserve a session, drag its pill to another window first.',
+    });
+    if (response === 1) {
+      for (const sid of ownedSessions) {
+        sessionManager.destroySession(sid);
+        windowRegistry.releaseSession(sid);
+      }
+      confirmedClose = true;
+      win.close();
+    }
   });
 
   return win;
