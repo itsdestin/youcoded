@@ -543,6 +543,17 @@ html, body, #root {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
+/* Opt-in panel-tier glass for elements that ARE the surface (e.g. buttons on
+   the launch screen). Re-tiers their bg-inset/bg-accent translucency from
+   bubble-opacity to panels-opacity; theme-engine extends the .layer-surface
+   backdrop-filter selector to also cover .panel-glass. */
+[data-wallpaper] .panel-glass.bg-inset {
+  background-color: color-mix(in srgb, var(--inset) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+[data-wallpaper] .panel-glass.bg-accent {
+  background-color: color-mix(in srgb, var(--accent) calc(var(--panels-opacity, 1) * 100%), transparent);
+}
+
 /* Destructive variant — danger-tinted border + ring for delete/clear dialogs */
 .layer-surface[data-destructive] {
   border-color: var(--destructive-dim);

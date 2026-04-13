@@ -40,7 +40,9 @@ export default function ThinkingIndicator() {
   }, []);
 
   return (
-    <div className="flex items-center gap-2 px-4 py-1.5">
+    // in-view: opts the inner bg-inset bubble into wallpaper-driven bubble
+    // glassmorphism (theme-engine targets `.in-view .bg-inset` descendants).
+    <div className="flex items-center gap-2 px-4 py-1.5 in-view">
       <div className="flex items-center gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5">
         <BrailleSpinner size="base" />
         <span className="text-sm text-fg-dim">
