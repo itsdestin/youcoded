@@ -436,6 +436,36 @@ html, body, #root {
   background-color: transparent;
 }
 
+/* Scroll-fade affordance. Applied via useScrollFade hook — hides the scrollbar
+   and fades the content at whichever edge still has hidden scroll room. The
+   hook toggles data-fade-top / data-fade-bottom based on scrollTop; the mask
+   gradient reads the resulting --fade-top-size / --fade-bottom-size to show
+   or hide each fade edge. No fade when content fits (both vars stay 0). */
+.scroll-fade {
+  --fade-top-size: 0px;
+  --fade-bottom-size: 0px;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  -webkit-mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--fade-top-size),
+    black calc(100% - var(--fade-bottom-size)),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    black var(--fade-top-size),
+    black calc(100% - var(--fade-bottom-size)),
+    transparent 100%
+  );
+}
+.scroll-fade::-webkit-scrollbar { display: none; }
+.scroll-fade[data-fade-top="true"] { --fade-top-size: 24px; }
+.scroll-fade[data-fade-bottom="true"] { --fade-bottom-size: 24px; }
+
 /* Floating overlays (portaled menus/popups). Solid themes: opaque.
    Wallpaper themes: translucent + blur (injected by theme-engine). */
 .glass-overlay {

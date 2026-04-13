@@ -8,6 +8,7 @@ import FlowingKeywordsText from './FlowingKeywords';
 // so interception is consistent between typed input and drawer selection.
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import type { UsageSnapshot } from '../state/chat-types';
+import { useScrollFade } from '../hooks/useScrollFade';
 
 export interface InputBarHandle {
   clear: () => void;
@@ -55,6 +56,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
+  // Drive the same fade-edge treatment on the textarea itself. The mask fades
+  // wrapped text that sits above/below the 3-line max-height viewport.
+  useScrollFade<HTMLTextAreaElement>(inputRef);
   // Mirror content rendered behind the transparent textarea so ultrathink /
   // ultraplan / plan / brainstorm can flow with a gradient while the user types.
   // We translateY the inner div to keep its position in sync with the
@@ -248,7 +252,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     const maxHeight = lineHeight * 3;
     const clamped = Math.min(el.scrollHeight, maxHeight);
     el.style.height = `${clamped}px`;
-    // Only show scrollbar when content actually overflows the max height
+    // Always keep native scrollbar hidden — scroll-fade provides the affordance
+    // via mask gradient instead. overflow-y stays on 'auto' so wheel/keyboard
+    // scrolling still works when content exceeds max height.
     el.style.overflowY = el.scrollHeight > maxHeight ? 'auto' : 'hidden';
     // Keep the flowing-keyword mirror aligned with the textarea's scroll
     if (mirrorContentRef.current) {
@@ -482,7 +488,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // cursor visible. Selection highlight still renders from the
             // browser. Placeholder uses its own color token so it's unaffected.
             style={{ caretColor: 'var(--fg)' }}
-            className="relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none overflow-y-hidden leading-snug p-0 m-0 align-middle"
+            className="scroll-fade relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none leading-snug p-0 m-0 align-middle"
           />
           </div>
           <button

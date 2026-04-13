@@ -1,6 +1,7 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { useScrollFade } from '../hooks/useScrollFade';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
 // ~/.claude/settings.json via the settings:* IPC bridge.
@@ -51,6 +52,7 @@ const PERMISSION_LABELS: Record<PermissionDefault, { label: string; desc: string
 export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Props) {
   const [prefs, setPrefs] = useState<PrefsState>(DEFAULTS);
   const [loaded, setLoaded] = useState(false);
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   // Load all fields in parallel when opening. Fields missing from settings.json
   // return undefined; we fall back to DEFAULTS so the UI always has values.
@@ -116,10 +118,10 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
         layer={2}
         role="dialog"
         aria-modal={true}
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-md w-[calc(100%-2rem)] max-h-[85vh] overflow-y-auto"
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-md w-[calc(100%-2rem)] max-h-[85vh] flex flex-col"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="sticky top-0 bg-panel border-b border-edge flex items-center justify-between px-5 py-3 z-10">
+        <div className="shrink-0 bg-panel border-b border-edge flex items-center justify-between px-5 py-3">
           <h3 className="text-sm font-semibold text-fg">Claude Code Preferences</h3>
           <button onClick={onClose} className="text-fg-muted hover:text-fg transition-colors w-7 h-7 flex items-center justify-center rounded-sm hover:bg-inset">
             <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -131,7 +133,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
         {!loaded ? (
           <div className="p-8 text-center text-sm text-fg-muted">Loading…</div>
         ) : (
-          <div className="p-5 space-y-5">
+          <div ref={scrollRef} className="scroll-fade p-5 space-y-5">
             {/* Permission default */}
             <section>
               <label className="block text-xs font-medium text-fg-muted tracking-wider uppercase mb-2">

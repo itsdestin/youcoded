@@ -3,6 +3,7 @@ import { useTheme } from '../state/theme-context';
 import { computeOnAccent } from '../themes/theme-validator';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import type { LoadedTheme } from '../themes/theme-types';
+import { useScrollFade } from '../hooks/useScrollFade';
 
 // Plain-language explainer for the Appearance popup. Shown when the user taps
 // the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
@@ -68,6 +69,7 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
   const [showInfo, setShowInfo] = useState(false);
   // Slug of the theme currently being edited (pencil opened). Null = main list.
   const [editingSlug, setEditingSlug] = useState<string | null>(null);
+  const listScrollRef = useScrollFade<HTMLDivElement>();
 
   // Open edit view for a theme. We also activate it so edits preview live
   // behind the popup — users expect to see changes as they drag sliders.
@@ -113,7 +115,7 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
         </div>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+      <div ref={listScrollRef} className="scroll-fade flex-1 p-3 space-y-4">
         {/* Theme grid — pencil on each card opens the per-theme edit view.
             Cycle membership moved to the status bar widget editor. */}
         <div>
@@ -225,6 +227,7 @@ interface EditProps {
 
 function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme, onBack, onClose }: EditProps) {
   const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const editScrollRef = useScrollFade<HTMLDivElement>();
   const isUserTheme = theme.source === 'user';
   const hasWallpaper = theme.background?.type === 'image';
   const hasGradient = theme.background?.type === 'gradient';
@@ -293,7 +296,7 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
         <button onClick={onClose} className="text-fg-muted hover:text-fg-2 text-lg leading-none w-6 h-6 flex items-center justify-center shrink-0">✕</button>
       </div>
 
-      <div className="flex-1 overflow-y-auto p-3 space-y-4">
+      <div ref={editScrollRef} className="scroll-fade flex-1 p-3 space-y-4">
         {/* Locked banner for non-user themes so it's clear why most controls are absent */}
         {!isUserTheme && (
           <p className="text-[10px] text-fg-faint bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 leading-relaxed">

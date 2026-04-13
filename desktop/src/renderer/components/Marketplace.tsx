@@ -7,6 +7,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { useScrollFade } from '../hooks/useScrollFade';
 
 import { MarketplaceProvider, useMarketplace, type MarketplaceTab } from '../state/marketplace-context';
 import SkillCard from './SkillCard';
@@ -143,6 +144,7 @@ function InstalledTab({
 }) {
   const { installedSkills, favorites, loading, setFavorite, updateAvailable, update, uninstallSkill, packages, publishSkill } = useMarketplace();
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
   // Phase 4a: track publish-in-progress state per skill id
   const [publishingId, setPublishingId] = useState<string | null>(null);
   const [publishResult, setPublishResult] = useState<{ id: string; prUrl?: string; error?: string } | null>(null);
@@ -162,7 +164,7 @@ function InstalledTab({
   }
 
   return (
-    <div className="flex-1 overflow-y-auto">
+    <div ref={scrollRef} className="scroll-fade flex-1">
       {/* Filter pills */}
       <div className="px-4 pt-3 pb-2 flex gap-1.5">
         {(['all', 'favorites'] as const).map(f => (
@@ -345,6 +347,7 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
   const [sort, setSort] = useState<SortOption>('popular');
   const [installingId, setInstallingId] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   const installedIds = useMemo(() => new Set(installedSkills.map(s => s.id)), [installedSkills]);
 
@@ -423,7 +426,7 @@ function SkillsTab({ onSelectSkill }: { onSelectSkill: (id: string) => void }) {
       </div>
 
       {/* Grid */}
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <div ref={scrollRef} className="scroll-fade flex-1 px-4 pb-4">
         {loading ? (
           <div className="flex items-center justify-center py-12"><p className="text-fg-muted text-sm">Loading skills...</p></div>
         ) : filtered.length === 0 ? (
@@ -466,6 +469,7 @@ function ThemesTab({ onSelectTheme }: { onSelectTheme: (theme: ThemeRegistryEntr
   const [activeFeatures, setActiveFeatures] = useState<string[]>([]);
   const [sort, setSort] = useState<ThemeSortOption>('newest');
   const searchRef = useRef<HTMLInputElement>(null);
+  const scrollRef = useScrollFade<HTMLDivElement>();
 
   const toggleFeature = (f: string) => {
     setActiveFeatures(prev => prev.includes(f) ? prev.filter(x => x !== f) : [...prev, f]);
@@ -575,7 +579,7 @@ function ThemesTab({ onSelectTheme }: { onSelectTheme: (theme: ThemeRegistryEntr
       </div>
 
       {/* Grid */}
-      <div className="flex-1 overflow-y-auto px-4 pb-4">
+      <div ref={scrollRef} className="scroll-fade flex-1 px-4 pb-4">
         {loading ? (
           <div className="flex items-center justify-center py-12"><p className="text-fg-muted text-sm animate-pulse">Loading themes...</p></div>
         ) : filtered.length === 0 ? (
