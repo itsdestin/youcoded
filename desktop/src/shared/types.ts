@@ -370,3 +370,49 @@ export const IPC = {
   SYNC_GET_LOG: 'sync:get-log',
   SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
 } as const;
+
+// --- Window registry / detach types ---
+
+export interface WindowInfo {
+  id: number;           // BrowserWindow webContentsId
+  label: string;        // e.g. "window 2" (creation order)
+  createdAt: number;
+}
+
+export interface WindowDirectoryEntry {
+  window: WindowInfo;
+  sessions: SessionInfo[];
+}
+
+export interface WindowDirectory {
+  leaderWindowId: number;
+  windows: WindowDirectoryEntry[];
+}
+
+export interface SessionOwnershipAcquired {
+  sessionId: string;
+  sessionInfo: SessionInfo;
+  /** True when the window was just created for this session (skip replay delay UI). */
+  freshWindow: boolean;
+}
+
+export interface SessionOwnershipLost {
+  sessionId: string;
+}
+
+export interface DetachStartPayload {
+  sessionId: string;
+  screenX: number;
+  screenY: number;
+}
+
+export interface DragDroppedPayload {
+  sessionId: string;
+  targetWindowId: number;
+  insertIndex: number;
+}
+
+export interface CrossWindowCursor {
+  screenX: number;
+  screenY: number;
+}
