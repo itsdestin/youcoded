@@ -4,11 +4,16 @@ import os from 'os';
 import bcrypt from 'bcryptjs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
+import { REMOTE_SERVER_DEFAULT_PORT, PORT_OFFSET } from '../shared/ports';
 
 const execFileAsync = promisify(execFile);
 
 const CONFIG_PATH = () => path.join(os.homedir(), '.claude', 'destincode-remote.json');
 const BCRYPT_ROUNDS = 10;
+// Dev profile shares ~/.claude/destincode-remote.json with the built app, but
+// must NOT bind the built app's saved port and must NOT overwrite that saved
+// port on user actions. Offset-shift on read; no-op on save.
+const IS_DEV_PROFILE = process.env.DESTINCODE_PROFILE === 'dev';
 
 interface ConfigData {
   enabled: boolean;
@@ -32,7 +37,9 @@ export class RemoteConfig {
   constructor() {
     const defaults: ConfigData = {
       enabled: false,
-      port: 9900,
+      // Dev-profile offset shifts this (e.g., 9900 → 9950) so dev and built app
+      // don't fight over the same port when both have remote access enabled.
+      port: REMOTE_SERVER_DEFAULT_PORT,
       passwordHash: null,
       passwordPlain: null,
       trustTailscale: false,
@@ -45,7 +52,8 @@ export class RemoteConfig {
       try {
         const data = JSON.parse(fs.readFileSync(configPath, 'utf8'));
         this.enabled = data.enabled ?? defaults.enabled;
-        this.port = data.port ?? defaults.port;
+        // Shift saved port by PORT_OFFSET in dev so we don't collide with built app.
+        this.port = (data.port ?? defaults.port) + (IS_DEV_PROFILE ? PORT_OFFSET : 0);
         this.passwordHash = data.passwordHash ?? defaults.passwordHash;
         this.passwordPlain = data.passwordPlain ?? defaults.passwordPlain;
         this.trustTailscale = data.trustTailscale ?? defaults.trustTailscale;
@@ -90,6 +98,12 @@ export class RemoteConfig {
   }
 
   save(): void {
+    // Dev profile shares the config file with the built app — never persist
+    // dev-side edits (would clobber built-app port, password hash, etc.).
+    if (IS_DEV_PROFILE) {
+      console.warn('[RemoteConfig] skipping save in dev profile (shared config file)');
+      return;
+    }
     const configPath = CONFIG_PATH();
     fs.mkdirSync(path.dirname(configPath), { recursive: true });
     // Security: restrict file permissions to owner-only (contains password hash)
@@ -221,7 +235,7 @@ export class RemoteConfig {
       }
 
       // Verify installation
-      const check = await RemoteConfig.detectTailscale(9900);
+      const check = await RemoteConfig.detectTailscale(REMOTE_SERVER_DEFAULT_PORT);
       if (!check.installed) {
         return { success: false, error: 'Tailscale not found after install. You may need to restart the app.' };
       }

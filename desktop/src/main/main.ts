@@ -11,6 +11,7 @@ import { RemoteServer } from './remote-server';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
 import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT } from '../shared/types';
+import { VITE_DEV_PORT } from '../shared/ports';
 import { log, rotateLog } from './logger';
 import { registerThemeProtocol } from './theme-protocol';
 import { FirstRunManager } from './first-run';
@@ -56,8 +57,17 @@ const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
 const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider);
 
-// Dev server URL — configurable via env var, defaults to Vite's default
-const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || 'http://localhost:5173';
+// Dev server URL — env override wins; otherwise compute from DESTINCODE_PORT_OFFSET
+// (via shared/ports.ts) so Vite and main stay in sync without a second env var.
+const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VITE_DEV_PORT}`;
+
+// Dev-profile isolation: when DESTINCODE_PROFILE=dev, split Electron userData so
+// a dev instance doesn't clobber the built app's localStorage, cookies, cache,
+// or window state. Must be called before app.whenReady().
+if (process.env.DESTINCODE_PROFILE === 'dev') {
+  app.setPath('userData', path.join(app.getPath('appData'), 'destincode-dev'));
+  app.setName('DestinCode Dev');
+}
 
 // Must be called before app.whenReady() — Electron requirement
 protocol.registerSchemesAsPrivileged([

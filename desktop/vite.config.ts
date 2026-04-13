@@ -2,11 +2,17 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import pkg from './package.json';
 
+// Keep Vite's port in sync with the main process via DESTINCODE_PORT_OFFSET.
+// Duplicated (not imported from src/shared/ports.ts) because vite.config runs
+// outside the main-process tsconfig.
+const portOffset = Number(process.env.DESTINCODE_PORT_OFFSET ?? 0);
+const viteDevPort = 5173 + (Number.isFinite(portOffset) ? portOffset : 0);
+
 export default defineConfig({
   plugins: [react()],
   root: 'src/renderer',
   server: {
-    port: 5173,
+    port: viteDevPort,
     strictPort: true,
   },
   base: './',
