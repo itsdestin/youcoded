@@ -226,11 +226,13 @@ export function registerIpcHandlers(
     }
   });
 
-  // Forward session-created to the owning window (IPC creates assign ownership
-  // inside SESSION_CREATE; remote-created sessions fall back to mainWindow
-  // since no renderer owns them yet).
+  // Forward session-created to the owning window. Deferred via nextTick so
+  // the SESSION_CREATE IPC handler can run assignSession first — otherwise
+  // sendForSession fires before ownership is set and falls back to mainWindow,
+  // making a session created in window 2 appear in window 1. Remote-created
+  // sessions still fall back to mainWindow since no renderer owns them yet.
   sessionManager.on('session-created', (info) => {
-    sendForSession(info.id, IPC.SESSION_CREATED, info);
+    process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
 
   // Session CRUD
@@ -244,6 +246,14 @@ export function registerIpcHandlers(
     }
     return info;
   });
+
+  // Pull-style directory snapshot — renderers call this on mount to avoid
+  // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.
+  if (windowRegistry) {
+    ipcMain.handle(IPC.WINDOW_GET_DIRECTORY, async () => {
+      return windowRegistry.getDirectory((id) => sessionManager.getSession(id));
+    });
+  }
 
   ipcMain.handle(IPC.SESSION_DESTROY, async (_event, sessionId: string) => {
     const result = sessionManager.destroySession(sessionId);

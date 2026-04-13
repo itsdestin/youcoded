@@ -126,6 +126,7 @@ const IPC = {
   // Window detach / multi-window ownership (feature: drag session to new window)
   WINDOW_GET_ID: 'window:get-id',
   WINDOW_DIRECTORY_UPDATED: 'window:directory-updated',
+  WINDOW_GET_DIRECTORY: 'window:get-directory',
   WINDOW_LEADER_CHANGED: 'window:leader-changed',
   WINDOW_OPEN_DETACHED: 'window:open-detached',
   WINDOW_FOCUS_AND_SWITCH: 'window:focus-and-switch',
@@ -440,6 +441,11 @@ contextBridge.exposeInMainWorld('claude', {
     // Request/response — ask main which window's strip currently contains the cursor
     dropResolve: (): Promise<{ targetWindowId: number | null }> =>
       ipcRenderer.invoke(IPC.SESSION_DROP_RESOLVE),
+    // Pull-style: new windows call this from their mount useEffect to avoid
+    // racing the WINDOW_DIRECTORY_UPDATED push (which fires before React has
+    // subscribed, so it's missed on first load).
+    getDirectory: (): Promise<any> =>
+      ipcRenderer.invoke(IPC.WINDOW_GET_DIRECTORY),
     // Fire-and-forget: main streams every historical TRANSCRIPT_EVENT for this
     // session back over the normal transcript:event channel. The reducer's
     // uuid-based dedup handles any overlap with live events.

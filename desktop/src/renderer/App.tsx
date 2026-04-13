@@ -710,6 +710,10 @@ function AppInner() {
 
     const cleanupDir = det.onDirectoryUpdated?.((dir: any) => setWindowDirectory(dir));
     const cleanupLeader = det.onLeaderChanged?.((id: number) => setLeaderWindowId(id));
+    // Pull the current directory immediately — the push from main may have
+    // fired before this effect ran (on a brand-new window, React mounts after
+    // registerWindow already broadcast, so we'd miss it).
+    det.getDirectory?.().then((dir: any) => { if (dir) setWindowDirectory(dir); }).catch(() => {});
 
     const cleanupAcquired = det.onOwnershipAcquired?.((payload: any) => {
       const { sessionId: sid, sessionInfo, freshWindow, refocusOnly } = payload;

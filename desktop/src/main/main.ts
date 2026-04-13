@@ -280,16 +280,15 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   if (!app.isPackaged) win.loadURL(DEV_SERVER_URL);
   else win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
-  // Once the renderer is ready, push the current directory snapshot so it
-  // doesn't rely on catching a broadcast that fired before it loaded.
-  // Also open DevTools in dev builds (menu is nulled so F12 doesn't work).
-  win.webContents.on('did-finish-load', () => {
-    if (win.isDestroyed()) return;
-    const dir = windowRegistry.getDirectory((id) => sessionManager.getSession(id));
-    win.webContents.send(IPC.WINDOW_DIRECTORY_UPDATED, dir);
-    win.webContents.send(IPC.WINDOW_LEADER_CHANGED, windowRegistry.getLeaderId() ?? -1);
-    if (!app.isPackaged) win.webContents.openDevTools({ mode: 'detach' });
-  });
+  // Auto-open DevTools in dev — the app's menu is nulled so F12/Ctrl+Shift+I
+  // don't work by default. Opens detached so it doesn't steal window width.
+  // Directory snapshot is pulled by the renderer via WINDOW_GET_DIRECTORY
+  // once it mounts, so no push is needed here.
+  if (!app.isPackaged) {
+    win.webContents.on('did-finish-load', () => {
+      if (!win.isDestroyed()) win.webContents.openDevTools({ mode: 'detach' });
+    });
+  }
 
   // Fullscreen state relay — per-window so macOS traffic-light padding is correct
   win.on('enter-full-screen', () => {
