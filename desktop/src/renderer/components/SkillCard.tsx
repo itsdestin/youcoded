@@ -1,5 +1,7 @@
 import React from 'react';
 import type { SkillEntry } from '../../shared/types';
+import { useMarketplaceStats } from '../state/marketplace-stats-context';
+import StarRating from './marketplace/StarRating';
 
 interface Props {
   skill: SkillEntry;
@@ -29,15 +31,15 @@ const typeLabels: Record<string, string> = {
   plugin: 'Plugin',
 };
 
-function StarRating({ rating }: { rating?: number }) {
-  if (rating == null) return null;
-  const full = Math.floor(rating);
-  const half = rating - full >= 0.5;
-  const stars = '\u2605'.repeat(full) + (half ? '\u00BD' : '') + '\u2606'.repeat(5 - full - (half ? 1 : 0));
-  return <span className="text-[7px] text-[#f0ad4e]">{stars}</span>;
-}
-
 export default function SkillCard({ skill, onClick, variant = 'drawer', installed, updateAvailable, onInstall, installing }: Props) {
+  // Task 9: pull live install count + rating from the marketplace stats context.
+  // Falls back gracefully when stats are loading or unavailable for this skill id.
+  const { plugins } = useMarketplaceStats();
+  const liveStats = plugins[skill.id];
+  const liveInstalls = liveStats?.installs ?? skill.installs ?? null;
+  const liveRating = liveStats?.rating ?? null;
+  const liveReviewCount = liveStats?.review_count ?? 0;
+
   if (variant === 'marketplace') {
     return (
       <div
@@ -56,11 +58,17 @@ export default function SkillCard({ skill, onClick, variant = 'drawer', installe
         <span className="text-[11px] text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">
           {skill.description}
         </span>
-        <StarRating rating={skill.rating} />
+        {/* Task 9: live star rating — only shown when the API has returned at least 1 review */}
+        {liveRating != null && (
+          <div className="mt-1">
+            <StarRating value={liveRating} count={liveReviewCount} size="sm" />
+          </div>
+        )}
         <div className="flex justify-between items-center mt-1">
           <span className="text-[9px] text-fg-faint">
             {skill.author ? `${skill.author}` : ''}
-            {skill.installs != null ? ` \u00B7 ${skill.installs >= 1000 ? `${(skill.installs / 1000).toFixed(1)}k` : skill.installs} \u2193` : ''}
+            {/* Task 9: use live install count from /stats API, fall back to static field */}
+            {liveInstalls != null ? ` \u00B7 ${liveInstalls >= 1000 ? `${(liveInstalls / 1000).toFixed(1)}k` : liveInstalls} \u2193` : ''}
           </span>
         </div>
         {installed ? (

@@ -18,6 +18,8 @@ import { registerThemeProtocol } from './theme-protocol';
 import { FirstRunManager } from './first-run';
 import { SyncService } from './sync-service';
 import { setSyncService } from './sync-state';
+import { createAuthStore } from './marketplace-auth-store';
+import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
 
 // macOS and Linux Electron apps may inherit a minimal PATH that's missing
 // common tool locations (Homebrew, nvm, Volta, pipx, cargo). macOS Finder/Dock
@@ -742,6 +744,13 @@ app.whenReady().then(async () => {
   Menu.setApplicationMenu(null);
 
   registerThemeProtocol();
+
+  // Marketplace auth store — instantiated once at startup, passed to IPC handlers.
+  // The auth store holds the bearer token in the main process only; the token
+  // never crosses the contextBridge into the renderer.
+  const marketplaceAuthStore = createAuthStore(app.getPath('userData'));
+  registerMarketplaceApiHandlers(marketplaceAuthStore);
+
   createWindow(isFirstRun ? firstRunManager : undefined);
   registerDetachIpc();
 

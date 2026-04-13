@@ -35,13 +35,11 @@ const SENSITIVE_PATTERNS = [
 
 const CACHE_DIR = path.join(os.homedir(), '.claude', 'destincode-marketplace-cache');
 const INDEX_CACHE = path.join(CACHE_DIR, 'index.json');
-const STATS_CACHE = path.join(CACHE_DIR, 'stats.json');
 const DEFAULTS_CACHE = path.join(CACHE_DIR, 'curated-defaults.json');
 
 // GitHub raw content base URL — set this to your marketplace repo
 const REGISTRY_BASE = 'https://raw.githubusercontent.com/itsdestin/destincode-marketplace/master';
 
-const STATS_TTL = 60 * 60 * 1000;    // 1 hour
 const INDEX_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
 interface CacheMeta { fetchedAt: number; }
@@ -60,17 +58,9 @@ export class LocalSkillProvider implements SkillProvider {
 
   async listMarketplace(filters?: SkillFilters): Promise<SkillEntry[]> {
     let entries = await this.fetchIndex();
-    const stats = await this.fetchStats();
-
-    // Merge stats
-    for (const entry of entries) {
-      const s = stats[entry.id];
-      if (s) {
-        entry.installs = s.installs;
-        entry.rating = s.rating;
-        entry.ratingCount = s.ratingCount;
-      }
-    }
+    // Stats (installs, rating, ratingCount) are now served by the live
+    // /stats endpoint via MarketplaceStatsProvider in the renderer.
+    // skill-provider.ts no longer fetches or merges static stats.json.
 
     // Apply filters
     if (filters?.type) entries = entries.filter(e => e.type === filters.type);
@@ -111,17 +101,16 @@ export class LocalSkillProvider implements SkillProvider {
     const base = entry || installed;
     if (!base) throw new Error(`Skill not found: ${id}`);
 
-    const stats = await this.fetchStats();
-    const s = stats[id];
-
+    // Stats are now served live from the renderer via MarketplaceStatsProvider.
+    // Default to undefined here — callers can layer in live stats from context.
     const override = this.configStore.getOverride(id);
 
     return {
       ...base,
       ...(override || {}),
-      installs: s?.installs,
-      rating: s?.rating,
-      ratingCount: s?.ratingCount,
+      installs: undefined,
+      rating: undefined,
+      ratingCount: undefined,
     } as SkillDetailView;
   }
 
@@ -679,20 +668,6 @@ export class LocalSkillProvider implements SkillProvider {
       } as SkillEntry));
     } catch {
       return [];
-    }
-  }
-
-  private async fetchStats(): Promise<Record<string, { installs?: number; rating?: number; ratingCount?: number }>> {
-    const cached = this.readCache<Record<string, { installs?: number; rating?: number; ratingCount?: number }>>(STATS_CACHE, STATS_TTL);
-    if (cached) return cached;
-    try {
-      const resp = await fetch(`${REGISTRY_BASE}/stats.json`);
-      if (!resp.ok) return {};
-      const data = await resp.json() as { skills: Record<string, { installs?: number; rating?: number; ratingCount?: number }> };
-      this.writeCache(STATS_CACHE, data.skills);
-      return data.skills;
-    } catch {
-      return this.readCache<Record<string, { installs?: number; rating?: number; ratingCount?: number }>>(STATS_CACHE, Infinity) || {};
     }
   }
 

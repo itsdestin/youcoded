@@ -1,4 +1,7 @@
 import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
+import type { MarketplaceUser } from './marketplace-auth-store';
+import type { ApiResult } from './marketplace-api-handlers';
 
 // IPC channel names inlined here because Electron's sandboxed preload
 // cannot resolve relative imports to other modules
@@ -141,6 +144,17 @@ const IPC = {
   TRANSCRIPT_REPLAY: 'transcript:replay-from-start',
   APPEARANCE_BROADCAST: 'appearance:broadcast',
   APPEARANCE_SYNC: 'appearance:sync',
+  // Marketplace auth + write APIs (Task 4 — byte-identical to marketplace-api-handlers.ts CHANNELS)
+  MARKETPLACE_AUTH_START: 'marketplace:auth:start',
+  MARKETPLACE_AUTH_POLL: 'marketplace:auth:poll',
+  MARKETPLACE_AUTH_SIGNED_IN: 'marketplace:auth:signed-in',
+  MARKETPLACE_AUTH_USER: 'marketplace:auth:user',
+  MARKETPLACE_AUTH_SIGN_OUT: 'marketplace:auth:sign-out',
+  MARKETPLACE_INSTALL: 'marketplace:install',
+  MARKETPLACE_RATE: 'marketplace:rate',
+  MARKETPLACE_RATE_DELETE: 'marketplace:rate:delete',
+  MARKETPLACE_THEME_LIKE: 'marketplace:theme:like',
+  MARKETPLACE_REPORT: 'marketplace:report',
 } as const;
 
 contextBridge.exposeInMainWorld('claude', {
@@ -266,6 +280,36 @@ contextBridge.exposeInMainWorld('claude', {
     getConfig: (id: string): Promise<Record<string, any>> => ipcRenderer.invoke(IPC.MARKETPLACE_GET_CONFIG, id),
     setConfig: (id: string, values: Record<string, any>): Promise<void> =>
       ipcRenderer.invoke(IPC.MARKETPLACE_SET_CONFIG, id, values),
+  },
+  // Marketplace sign-in (device-code OAuth flow) — token stays in main process.
+  // start/poll wrap API calls and return ApiResult so the renderer can inspect
+  // HTTP status codes across the contextBridge (structuredClone drops Error fields).
+  // signedIn / user / signOut are pure local reads — no API call, no ApiResult wrapper.
+  marketplaceAuth: {
+    start: (): Promise<ApiResult<AuthStartResponse>> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_AUTH_START),
+    poll: (deviceCode: string): Promise<ApiResult<AuthPollResponse>> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_AUTH_POLL, deviceCode),
+    signedIn: (): Promise<boolean> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_AUTH_SIGNED_IN),
+    user: (): Promise<MarketplaceUser | null> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_AUTH_USER),
+    signOut: (): Promise<void> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_AUTH_SIGN_OUT),
+  },
+  // Marketplace write endpoints — all return ApiResult so the renderer can
+  // surface install-gate (403) vs. generic errors (Task 7+).
+  marketplaceApi: {
+    install: (pluginId: string): Promise<ApiResult<void>> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_INSTALL, pluginId),
+    rate: (input: PostRatingInput): Promise<ApiResult<{ hidden: boolean }>> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_RATE, input),
+    deleteRating: (pluginId: string): Promise<ApiResult<void>> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_RATE_DELETE, pluginId),
+    likeTheme: (themeId: string): Promise<ApiResult<{ liked: boolean }>> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_THEME_LIKE, themeId),
+    report: (input: { rating_user_id: string; rating_plugin_id: string; reason?: string }): Promise<ApiResult<void>> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_REPORT, input),
   },
   dialog: {
     openFile: (): Promise<string[]> =>

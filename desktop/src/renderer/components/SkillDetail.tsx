@@ -1,8 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useSkills } from '../state/skill-context';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useMarketplaceStats } from '../state/marketplace-stats-context';
 import type { SkillDetailView } from '../../shared/types';
 import ConfigForm from './ConfigForm';
+import StarRating from './marketplace/StarRating';
+import RatingSubmitModal from './marketplace/RatingSubmitModal';
+import ReviewList from './marketplace/ReviewList';
 
 interface Props {
   skillId: string;
@@ -14,26 +18,22 @@ const typeBadgeStyles: Record<string, string> = {
   plugin: 'bg-inset/50 text-fg-dim border border-edge/25',
 };
 
-function StarRating({ rating, count }: { rating?: number; count?: number }) {
-  if (rating == null) return null;
-  const full = Math.floor(rating);
-  const half = rating - full >= 0.5;
-  const stars = '\u2605'.repeat(full) + (half ? '\u00BD' : '') + '\u2606'.repeat(5 - full - (half ? 1 : 0));
-  return (
-    <span className="text-sm text-[#f0ad4e]">
-      {stars}
-      {count != null && <span className="text-fg-muted text-xs ml-1">({count})</span>}
-    </span>
-  );
-}
-
 export default function SkillDetail({ skillId, onBack }: Props) {
   const { getDetail, install, uninstall, setFavorite, getShareLink, installed, favorites } = useSkills();
+  // Task 9 (scope-expanded): pull live install count + rating from /stats for this skill.
+  // Replaces the static detail.rating / detail.installs fields which are zeroed out
+  // after Task 6 removed static stats.json from the skill provider.
+  const { plugins } = useMarketplaceStats();
+  const liveStats = plugins[skillId];
   const [detail, setDetail] = useState<SkillDetailView | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [installing, setInstalling] = useState(false);
   const bodyRef = useScrollFade<HTMLDivElement>();
+  // Task 10: rating modal + review list state
+  const [ratingModalOpen, setRatingModalOpen] = useState(false);
+  // Bumped on every successful submission to trigger a ReviewList re-fetch
+  const [reviewRefreshKey, setReviewRefreshKey] = useState(0);
 
   const isInstalled = installed.some(s => s.id === skillId);
   const isFavorite = favorites.includes(skillId);
@@ -126,8 +126,21 @@ export default function SkillDetail({ skillId, onBack }: Props) {
           {detail.author && (
             <p className="text-xs text-fg-muted mt-0.5">by {detail.author}</p>
           )}
-          <div className="mt-1">
-            <StarRating rating={detail.rating} count={detail.ratingCount} />
+          {/* Task 9: live star rating from /stats API — renders null when no reviews */}
+          {/* Task 10: "Rate this plugin" button beside the aggregate rating */}
+          <div className="mt-1 flex items-center justify-center gap-2">
+            <StarRating
+              value={liveStats?.rating ?? detail.rating ?? 0}
+              count={liveStats?.review_count ?? detail.ratingCount ?? 0}
+              size="lg"
+            />
+            <button
+              onClick={() => setRatingModalOpen(true)}
+              aria-label="Rate this plugin"
+              className="text-[10px] text-fg-muted hover:text-accent border border-edge-dim hover:border-accent/40 rounded-full px-2 py-0.5 transition-colors"
+            >
+              Rate
+            </button>
           </div>
         </div>
 
@@ -173,9 +186,12 @@ export default function SkillDetail({ skillId, onBack }: Props) {
           <span className={`font-medium px-1.5 py-0.5 rounded-sm ${typeBadgeStyles[detail.type] || typeBadgeStyles.plugin}`}>
             {detail.type === 'prompt' ? 'Prompt' : 'Plugin'}
           </span>
-          {detail.installs != null && (
-            <span>{detail.installs >= 1000 ? `${(detail.installs / 1000).toFixed(1)}k` : detail.installs} installs</span>
-          )}
+          {/* Task 9: use live install count from /stats API; fall back to static field */}
+          {(() => {
+            const installs = liveStats?.installs ?? detail.installs;
+            if (installs == null) return null;
+            return <span>{installs >= 1000 ? `${(installs / 1000).toFixed(1)}k` : installs} installs</span>;
+          })()}
           {detail.category && (
             <span className="capitalize">{detail.category}</span>
           )}
@@ -242,7 +258,23 @@ export default function SkillDetail({ skillId, onBack }: Props) {
             )}
           </div>
         </div>
+
+        {/* Task 10: Reviews section — below metadata */}
+        <div className="border-t border-edge-dim pt-3 mt-1">
+          <ReviewList pluginId={detail.id} refreshKey={reviewRefreshKey} />
+        </div>
       </div>
+
+      {/* Task 10: Rating submit modal — mounted at the SkillDetail root so it's above the scroll container */}
+      <RatingSubmitModal
+        pluginId={detail.id}
+        open={ratingModalOpen}
+        onClose={() => setRatingModalOpen(false)}
+        onSubmitted={() => {
+          // Bump the review list key to trigger a re-fetch showing the new review
+          setReviewRefreshKey(k => k + 1);
+        }}
+      />
     </div>
   );
 }

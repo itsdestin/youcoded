@@ -162,6 +162,22 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   const installSkill = useCallback(async (id: string) => {
     await window.claude.skills.install(id);
+    // Fire install telemetry after successful local install. Non-blocking — we
+    // never fail a local install because the Worker is down. Skip silently when
+    // signed out (anonymous installs = no telemetry).
+    // Cast via claude() (any) because marketplaceApi + marketplaceAuth are exposed
+    // in preload/remote-shim but not yet reflected in window.claude's TS type.
+    try {
+      const signedIn = await claude().marketplaceAuth.signedIn();
+      if (signedIn) {
+        const res = await claude().marketplaceApi.install(id);
+        if (!res.ok) {
+          console.warn("[marketplace] install telemetry failed:", res.status, res.message);
+        }
+      }
+    } catch (err) {
+      console.warn("[marketplace] install telemetry threw (non-fatal):", err);
+    }
     await fetchAll(); // Refresh all state after install
   }, [fetchAll]);
 

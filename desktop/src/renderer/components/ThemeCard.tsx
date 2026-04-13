@@ -1,5 +1,7 @@
 import React from 'react';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
+import { useMarketplaceStats } from '../state/marketplace-stats-context';
+import LikeButton from './marketplace/LikeButton';
 
 interface ThemeCardProps {
   entry: ThemeRegistryEntryWithStatus;
@@ -44,6 +46,10 @@ function TokenPreview({ tokens, dark }: { tokens: NonNullable<ThemeRegistryEntry
 }
 
 export default function ThemeCard({ entry, onClick, updateAvailable }: ThemeCardProps) {
+  // Task 12: live like count from /stats API; falls back to 0 when not yet loaded
+  const { themes } = useMarketplaceStats();
+  const likes = themes[entry.slug]?.likes ?? 0;
+
   return (
     <button
       onClick={onClick}
@@ -85,7 +91,7 @@ export default function ThemeCard({ entry, onClick, updateAvailable }: ThemeCard
         </div>
 
         <div className="flex items-center gap-1.5">
-          <span className="text-[9px] text-fg-muted truncate">{entry.author}</span>
+          <span className="text-[9px] text-fg-muted truncate flex-1">{entry.author}</span>
           <span
             className={`text-[8px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${
               entry.source === 'destinclaude'
@@ -95,6 +101,8 @@ export default function ThemeCard({ entry, onClick, updateAvailable }: ThemeCard
           >
             {entry.source === 'destinclaude' ? 'Official' : 'Community'}
           </span>
+          {/* Task 12: like button with optimistic reconciliation from /stats API */}
+          <LikeButton themeId={entry.slug} initialCount={likes} />
         </div>
 
         {/* Feature pills */}
