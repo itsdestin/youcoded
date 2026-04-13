@@ -209,8 +209,11 @@ export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSes
           className="settings-drawer flex flex-col h-full border-r border-edge-dim"
           data-animating={animating ? 'true' : undefined}
         >
-          {/* Header — sits outside the scrolling body so it doesn't fade when content scrolls */}
-          <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-edge">
+          {/* Header — sits outside the scrolling body so it doesn't fade when
+              content scrolls. `settings-drawer-header` adds extra top padding
+              on macOS so the title clears the native traffic lights (which
+              sit at window top-left and can't be moved). */}
+          <div className="settings-drawer-header shrink-0 flex items-center justify-between px-4 py-3 border-b border-edge">
             <h2 className="text-sm font-bold text-fg">Settings</h2>
             <button
               onClick={onClose}

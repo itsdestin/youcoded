@@ -624,6 +624,14 @@ html, body, #root {
   padding-left: 78px;
 }
 
+/* Settings drawer sits at window top-left — same spot as the macOS traffic
+   lights. Left-padding is a bad fit here (drawer is only 320px wide, which
+   would crowd the ✕ button), so push the header row down instead to clear
+   the lights vertically. */
+.mac-titlebar-inset .settings-drawer-header {
+  padding-top: 28px;
+}
+
 
 /* ═══════════════════════════════════════════════════════════════════════════
    Visual effects — single consolidated overlay managed by theme-engine.ts.
