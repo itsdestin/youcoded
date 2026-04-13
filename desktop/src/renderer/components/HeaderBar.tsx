@@ -297,7 +297,11 @@ export default function HeaderBar({
         {toggleOnLeft && toggleElement}
       </div>
 
-      {/* Center — session strip */}
+      {/* Center — session strip.
+          flex-1 wrapper gives the strip a pre-allocated budget (~1/3 of the
+          header) so packSessions reads an available-space value rather than
+          its own current content width (chicken-and-egg fix). */}
+      <div className="flex-1 min-w-0 flex justify-center">
       <SessionStrip
         sessions={sessions}
         activeSessionId={activeSessionId}
@@ -315,6 +319,7 @@ export default function HeaderBar({
         windowDirectory={windowDirectory}
         myWindowId={myWindowId}
       />
+      </div>
 
       {/* Right — view toggles */}
       <div className="flex-1 flex items-center justify-end gap-1 sm:gap-2">

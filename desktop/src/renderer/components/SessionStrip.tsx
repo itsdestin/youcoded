@@ -517,7 +517,11 @@ export default function SessionStrip({
   const repack = useCallback(() => {
     const bar = pillBarRef.current;
     if (!bar) return;
-    const budget = bar.clientWidth;
+    // Fix: read the flex-1 wrapper's allocated width, not the strip's own
+    // content width. Without this, the budget equals whatever 1 pill happens
+    // to occupy — a chicken-and-egg that prevents a 2nd pill from ever
+    // appearing (2nd session would need space that wasn't measured yet).
+    const budget = bar.parentElement?.clientWidth ?? bar.clientWidth;
     const measurements: SessionMeasurement[] = sessions.map(s => ({
       id: s.id,
       expandedWidth: measureExpandedWidth(s.name),
@@ -538,8 +542,12 @@ export default function SessionStrip({
   useEffect(() => {
     const bar = pillBarRef.current;
     if (!bar) return;
+    // Observe the wrapper (parentElement), not the strip itself. The strip is
+    // content-sized and never grows on its own, so observing it would never
+    // fire when more space becomes available.
+    const target = bar.parentElement ?? bar;
     const ro = new ResizeObserver(() => repack());
-    ro.observe(bar);
+    ro.observe(target);
     return () => ro.disconnect();
   }, [repack]);
 
