@@ -9,6 +9,8 @@ import { isAndroid, isRemoteMode } from '../platform';
 const showCaptionButtons = typeof navigator !== 'undefined'
   && navigator.platform === 'Win32';
 
+const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
+
 /** Toggle sits on the opposite side of the OS window-control buttons
  *  so the header is balanced. macOS traffic lights live on the left,
  *  so the toggle goes right. Windows/Linux window controls live on
@@ -34,6 +36,102 @@ function CaptionButtons() {
         <svg className="w-3.5 h-3.5" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.4"><line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" /></svg>
       </button>
     </div>
+  );
+}
+
+/** macOS-only sibling of <CaptionButtons>. Paints a bg-inset pill at the
+ *  spot where the OS renders the native traffic-light cluster, and also
+ *  tells Electron to reposition those native lights so they sit centered
+ *  inside the pill — giving Mac the same "buttons in a container" visual as
+ *  the Windows caption buttons. Does nothing on non-Mac / Android / remote.
+ *
+ *  A ResizeObserver on .header-bar keeps both the pill size and the native
+ *  light position in sync as the header height / window left-edge / chrome
+ *  style changes. A MutationObserver on body's data-chrome-style / -header-style
+ *  attrs covers the case where chrome radius changes without a size change. */
+function MacTrafficLights({ headerRef }: { headerRef: React.RefObject<HTMLDivElement | null> }) {
+  const pillRef = useRef<HTMLDivElement>(null);
+
+  useLayoutEffect(() => {
+    if (!isMac) return;
+    const header = headerRef.current;
+    if (!header) return;
+    const setPos = (window as any).claude?.window?.setTrafficLightPosition as
+      | ((pos: { x: number; y: number } | null) => void)
+      | undefined;
+    if (!setPos) return;
+
+    // Apple's traffic-light cluster dimensions. 3 circles × 12px + 2 gaps × 8px.
+    const LIGHT_GROUP_W = 52;
+    const LIGHT_GROUP_H = 14;
+    // Pill padding around the lights — matches the visual weight of the
+    // Windows caption container (which wraps buttons with p-0.5 + py-1 px-2).
+    const PILL_PAD_X = 8;
+    const PILL_PAD_Y = 4;
+
+    const update = () => {
+      const headerHidden = document.body.getAttribute('data-header-style') === 'hidden';
+      const rect = header.getBoundingClientRect();
+      const pill = pillRef.current;
+      // Not painted yet, or header hidden — reset to OS default and hide pill.
+      if (headerHidden || rect.height < 10) {
+        setPos(null);
+        if (pill) pill.style.display = 'none';
+        return;
+      }
+      const chrome = document.body.getAttribute('data-chrome-style');
+      // Floating chrome rounds the top-left corner with --radius-lg; nudge the
+      // lights past it. Solid chrome sits flush, so 8px from the header's left
+      // edge matches Apple's default.
+      const cornerClearance = chrome === 'floating' ? 12 : 0;
+      const xWindow = Math.round(rect.left + 8 + cornerClearance);
+      const yWindow = Math.round(rect.top + (rect.height - LIGHT_GROUP_H) / 2);
+      setPos({ x: xWindow, y: yWindow });
+
+      if (pill) {
+        pill.style.display = 'block';
+        // Pill coords are relative to .header-bar (its positioned ancestor).
+        pill.style.left = `${xWindow - rect.left - PILL_PAD_X}px`;
+        pill.style.top = `${yWindow - rect.top - PILL_PAD_Y}px`;
+        pill.style.width = `${LIGHT_GROUP_W + 2 * PILL_PAD_X}px`;
+        pill.style.height = `${LIGHT_GROUP_H + 2 * PILL_PAD_Y}px`;
+      }
+    };
+
+    update();
+    const ro = new ResizeObserver(update);
+    ro.observe(header);
+    // Chrome / header-style attribute changes can alter padding/margin/radius
+    // without changing header size — e.g. switching radius only. Watch for them.
+    const mo = new MutationObserver(update);
+    mo.observe(document.body, {
+      attributes: true,
+      attributeFilter: ['data-chrome-style', 'data-header-style'],
+    });
+    // Window move on screen changes rect.left/top without firing ResizeObserver
+    // (size didn't change), so lights would drift. Re-measure on window resize
+    // and on fullscreen toggle (which Electron relays via onFullscreenChanged).
+    window.addEventListener('resize', update);
+    const offFullscreen = (window as any).claude?.window?.onFullscreenChanged?.(() => update());
+
+    return () => {
+      ro.disconnect();
+      mo.disconnect();
+      window.removeEventListener('resize', update);
+      offFullscreen?.();
+    };
+  }, [headerRef]);
+
+  if (!isMac) return null;
+  return (
+    <div
+      ref={pillRef}
+      aria-hidden
+      // pointer-events-none so clicks pass through to the OS-rendered native
+      // traffic lights that paint on top. The pill is purely decorative.
+      className="absolute bg-inset rounded-md pointer-events-none"
+      style={{ display: 'none' }}
+    />
   );
 }
 
@@ -272,6 +370,9 @@ export default function HeaderBar({
 
   return (
     <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+      {/* Mac-only decorative pill under the native traffic lights. Mirrors the
+          bg-inset rounded-md look of <CaptionButtons> on Windows/Linux. */}
+      <MacTrafficLights headerRef={headerRef} />
       {/* Left — settings gear + REMOTE badge + (Win/Linux) chat/terminal toggle.
           NOTE: no min-w-0 — left children are all shrink-0; letting this collapse
           would allow SessionStrip to overpaint the gear. Keep symmetric with right. */}

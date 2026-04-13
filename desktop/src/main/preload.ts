@@ -80,6 +80,10 @@ const IPC = {
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
   WINDOW_SET_ICON: 'window:set-icon',
+  // Repositions macOS traffic lights — needed because the OS positions them at
+  // fixed window coords, so the floating-chrome header (margin + radius) leaves
+  // them stranded in empty space. Caller passes a {x,y} offset or null to reset.
+  WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
   ZOOM_RESET: 'zoom:reset',
@@ -430,6 +434,10 @@ contextBridge.exposeInMainWorld('claude', {
     // (null resets to the bundled default). Main validates the URL and silently
     // ignores anything outside the theme's own asset dir.
     setIcon: (url: string | null) => ipcRenderer.invoke(IPC.WINDOW_SET_ICON, url),
+    // macOS-only: reposition the traffic lights so they sit inside the floating
+    // header chrome. Pass null to restore the OS default. No-ops on Win/Linux.
+    setTrafficLightPosition: (pos: { x: number; y: number } | null) =>
+      ipcRenderer.invoke(IPC.WINDOW_SET_TRAFFIC_LIGHT_POS, pos),
     // Fullscreen state relay — used by renderer to adjust macOS traffic light padding
     onFullscreenChanged: (handler: (isFullscreen: boolean) => void) => {
       const wrapped = (_event: IpcRendererEvent, isFullscreen: boolean) => handler(isFullscreen);

@@ -120,6 +120,19 @@ export function registerIpcHandlers(
     const win = BrowserWindow.fromWebContents(event.sender);
     if (win && !win.isDestroyed()) win.close();
   });
+  // macOS traffic-light repositioning. Non-Mac platforms don't have native
+  // traffic lights, so this is a no-op there. Called from theme-engine when
+  // chrome-style changes — floating chrome's rounded header would otherwise
+  // leave the OS-default (8,12) lights stranded over empty space.
+  ipcMain.handle(IPC.WINDOW_SET_TRAFFIC_LIGHT_POS, (event, pos: { x: number; y: number } | null) => {
+    if (process.platform !== 'darwin') return;
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (!win || win.isDestroyed()) return;
+    // Electron 28+: setWindowButtonPosition(null) resets to the platform default.
+    // Older fallback: passing undefined also resets. We type-narrow before calling.
+    const anyWin = win as unknown as { setWindowButtonPosition: (p: Electron.Point | null) => void };
+    anyWin.setWindowButtonPosition(pos ?? null);
+  });
 
   // Theme-driven window + dock icon hot-swap. Called from theme-context whenever
   // the active theme changes. Two URL forms are accepted:
@@ -240,9 +253,17 @@ export function registerIpcHandlers(
       if (!manifestPath.startsWith(THEMES_DIR + path.sep)) throw new Error('Invalid theme slug');
       const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf-8'));
       const previewPath = await generateThemePreview(userThemeDir(slug), manifest);
+      // Verify the file really landed on disk — if the generator returned a
+      // path but writeFile silently failed, the share sheet would render a
+      // broken-image icon. Better to return null and fall back to the swatch.
+      const stat = await fs.promises.stat(previewPath).catch(() => null);
+      if (!stat || stat.size < 150) {
+        console.warn(`[IPC] Preview file missing/tiny after generation: slug=${slug} path=${previewPath} size=${stat?.size ?? 'missing'}`);
+        return null;
+      }
       return previewPath;
     } catch (err: any) {
-      console.warn('[IPC] Failed to generate theme preview:', err.message);
+      console.warn(`[IPC] Failed to generate theme preview: slug=${slug} err=${err?.message ?? err}`);
       return null;
     }
   });

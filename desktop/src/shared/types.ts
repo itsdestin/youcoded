@@ -335,6 +335,9 @@ export const IPC = {
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
   WINDOW_SET_ICON: 'window:set-icon', // theme-driven window + dock icon hot-swap
+  // Repositions macOS traffic lights so they sit inside the floating chrome's
+  // rounded header; null restores OS default. Called from theme-engine.
+  WINDOW_SET_TRAFFIC_LIGHT_POS: 'window:set-traffic-light-pos',
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',

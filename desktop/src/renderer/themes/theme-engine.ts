@@ -315,6 +315,12 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     body.setAttribute(attr, value);
   }
 
+  // 6b. Traffic-light positioning used to live here but was moved to
+  //     HeaderBar's <MacTrafficLights> component. That component owns a
+  //     ResizeObserver + MutationObserver on .header-bar so the lights track
+  //     header height changes and chrome-style swaps without needing a theme
+  //     re-apply. Keeping this note so future readers don't re-add it here.
+
   // 7. custom_css — inject/replace in <style id="theme-custom">
   const customCSSId = 'theme-custom';
   let customEl = document.getElementById(customCSSId) as HTMLStyleElement | null;
