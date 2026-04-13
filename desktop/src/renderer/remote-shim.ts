@@ -598,6 +598,14 @@ export function installShim(): void {
         update: (slug: string) => invoke('theme-marketplace:update', { slug }),
         publish: (slug: string) => invoke('theme-marketplace:publish', { slug }),
         generatePreview: (slug: string) => invoke('theme-marketplace:generate-preview', { slug }),
+        // Publish-lifecycle: read-side APIs work on Android (registry fetch + gh PR lookup)
+        // if gh is installed. If IPC itself fails, degrade to unknown so the UI shows the
+        // same "couldn't verify" state as a gh auth failure rather than crashing.
+        resolvePublishState: (slug: string) =>
+          invoke('theme-marketplace:resolve-publish-state', { slug })
+            .catch((err: any) => ({ kind: 'unknown', reason: err?.message ?? 'IPC failed' })),
+        refreshRegistry: () =>
+          invoke('theme-marketplace:refresh-registry').catch(() => null),
       },
     },
     dialog: {
