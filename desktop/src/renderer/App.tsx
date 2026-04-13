@@ -694,7 +694,12 @@ function AppInner() {
   useEffect(() => {
     const det = (window as any).claude?.detach;
     const getId = (window as any).claude?.window?.getId;
-    if (getId) getId().then((id: number) => setMyWindowId(id)).catch(() => {});
+    if (getId) getId().then((id: number) => {
+      setMyWindowId(id);
+      // Stash globally so non-React code (SessionStrip drop resolution) can
+      // identify this window without threading a prop through every consumer.
+      (window as any).__destincodeWindowId = id;
+    }).catch(() => {});
     if (!det) return;
 
     const cleanupDir = det.onDirectoryUpdated?.((dir: any) => setWindowDirectory(dir));

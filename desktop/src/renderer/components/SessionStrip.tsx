@@ -169,6 +169,33 @@ export default function SessionStrip({
   const isDragging = useRef(false);
   // Suppress the click that fires after a drag release
   const suppressClick = useRef(false);
+  // Cross-window re-dock: true while another window is dragging a pill and
+  // the cursor is currently over this window's strip. Drives a visual drop-
+  // target highlight. Cleared on any non-hover tick or when the drag ends.
+  const [incomingDropActive, setIncomingDropActive] = useState(false);
+
+  // Listen for cross-window cursor updates from main — fires ~30Hz while
+  // a peer window is dragging a pill. We hit-test each update against our
+  // own strip's bounding box to decide whether to show the drop highlight.
+  useEffect(() => {
+    const det = (window as any).claude?.detach;
+    if (!det?.onCrossWindowCursor) return;
+    const unsub = det.onCrossWindowCursor(({ screenX, screenY }: { screenX: number; screenY: number }) => {
+      const bar = pillBarRef.current;
+      if (!bar) { setIncomingDropActive(false); return; }
+      // Ignore cursor broadcasts originating from our own drag — the source
+      // window also receives these but shouldn't highlight its own strip.
+      if (isDragging.current) { setIncomingDropActive(false); return; }
+      const rect = bar.getBoundingClientRect();
+      const localX = screenX - window.screenX;
+      const localY = screenY - window.screenY;
+      const inside =
+        localX >= rect.left && localX <= rect.right &&
+        localY >= rect.top && localY <= rect.bottom;
+      setIncomingDropActive(inside);
+    });
+    return () => { try { unsub?.(); } catch {} setIncomingDropActive(false); };
+  }, []);
 
   // Home path is now auto-selected by FolderSwitcher on mount
 
@@ -321,35 +348,6 @@ export default function SessionStrip({
       (window as any).claude?.detach?.dragStarted?.({ sessionId: draggedSession.id });
     }
 
-    // Detach: once the cursor crosses outside the window's own bounds,
-    // hand off to main to spawn a peer window and transfer ownership.
-    // Pointer capture keeps events flowing after we leave the viewport.
-    const oob =
-      e.clientX < 0 || e.clientY < 0 ||
-      e.clientX > window.innerWidth || e.clientY > window.innerHeight;
-    if (oob) {
-      const draggedSession = sessions[dragIdx];
-      if (draggedSession) {
-        const screenX = (e as any).screenX ?? (window.screenX + e.clientX);
-        const screenY = (e as any).screenY ?? (window.screenY + e.clientY);
-        (window as any).claude?.detach?.detachStart?.({
-          sessionId: draggedSession.id,
-          screenX,
-          screenY,
-        });
-      }
-      (e.target as HTMLElement).releasePointerCapture?.(e.pointerId);
-      (window as any).claude?.detach?.dragEnded?.();
-      setDragIdx(null);
-      setOverIdx(null);
-      setDragPos(null);
-      setGhostTarget(null);
-      dragOrigin.current = null;
-      isDragging.current = false;
-      setTimeout(() => { suppressClick.current = false; }, 0);
-      return;
-    }
-
     setDragPos({ x: e.clientX, y: e.clientY });
 
     // Hit-test: find nearest pill by horizontal distance (Y-independent, wide pickup range)
@@ -402,32 +400,73 @@ export default function SessionStrip({
   }, [dragIdx]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (dragIdx !== null && isDragging.current) {
-      // Reorder if dropped on a different position
-      if (overIdx !== null && onReorderSessions) {
-        onReorderSessions(dragIdx, overIdx);
-      }
-      // Select the dragged session so it stays active after drop
-      const draggedSession = sessions[dragIdx];
-      if (draggedSession) {
-        onSelectSession(draggedSession.id);
-      }
-    }
-    // Stop main's cross-window cursor ticker (started on real-drag threshold).
-    // Idempotent — main no-ops the event if no ticker is active.
-    if (isDragging.current) {
-      (window as any).claude?.detach?.dragEnded?.();
-    }
-    // Reset all drag state
+    const wasDragging = isDragging.current;
+    const releasedDragIdx = dragIdx;
+    const releasedOverIdx = overIdx;
+    const releasedSession = releasedDragIdx !== null ? sessions[releasedDragIdx] : null;
+
+    // Reset all local drag state immediately so the UI snaps back cleanly.
+    // We do the cross-window resolution async below using the captured values.
     setDragIdx(null);
     setOverIdx(null);
     setDragPos(null);
     setGhostTarget(null);
     dragOrigin.current = null;
     isDragging.current = false;
-
-    // Allow the suppressClick flag to clear after the click event fires
     setTimeout(() => { suppressClick.current = false; }, 0);
+
+    if (!wasDragging || !releasedSession) return;
+
+    const det = (window as any).claude?.detach;
+    det?.dragEnded?.();
+
+    // Resolve drop across all peer windows: main hit-tests [data-session-strip]
+    // in each window against the current cursor. If a hit, re-dock there;
+    // if no hit and the cursor is outside our own viewport, detach to a
+    // new peer window; otherwise fall through to the local reorder path.
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+    const outsideOwnWindow =
+      clientX < 0 || clientY < 0 ||
+      clientX > window.innerWidth || clientY > window.innerHeight;
+
+    const resolveAndRoute = async () => {
+      let resolved: { targetWindowId: number | null } = { targetWindowId: null };
+      try { resolved = await det?.dropResolve?.(); } catch { /* fall through */ }
+
+      const myId = (window as any).__destincodeWindowId;
+      const target = resolved?.targetWindowId;
+
+      if (target != null && target !== myId) {
+        // Dropped on a peer window's strip → re-dock
+        det?.dragDropped?.({ sessionId: releasedSession.id, targetWindowId: target, insertIndex: 0 });
+        return;
+      }
+      if (outsideOwnWindow) {
+        // Dropped outside any window's strip → spawn new peer window
+        const screenX = (e as any).screenX ?? (window.screenX + clientX);
+        const screenY = (e as any).screenY ?? (window.screenY + clientY);
+        det?.detachStart?.({ sessionId: releasedSession.id, screenX, screenY });
+        return;
+      }
+      // Local drop → reorder within this window's strip (existing behavior)
+      if (releasedOverIdx !== null && onReorderSessions && releasedDragIdx !== null) {
+        onReorderSessions(releasedDragIdx, releasedOverIdx);
+      }
+      onSelectSession(releasedSession.id);
+    };
+
+    // If detach IPC isn't available (remote-shim / Android), fall back to
+    // the legacy local-only behavior.
+    if (!det?.dropResolve) {
+      if (releasedOverIdx !== null && onReorderSessions && releasedDragIdx !== null) {
+        onReorderSessions(releasedDragIdx, releasedOverIdx);
+      }
+      onSelectSession(releasedSession.id);
+      return;
+    }
+
+    resolveAndRoute();
   }, [dragIdx, overIdx, onReorderSessions, sessions, onSelectSession]);
 
   const handleClick = useCallback((id: string) => {
@@ -503,7 +542,11 @@ export default function SessionStrip({
 
   return (
     <>
-      <div ref={pillBarRef} data-session-strip className="session-strip flex items-center gap-0.5 bg-inset rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink">
+      <div
+        ref={pillBarRef}
+        data-session-strip
+        className={`session-strip flex items-center gap-0.5 bg-inset rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
+      >
         {/* ── Session pills ──────────────────────────────── */}
         {visibleSessions.map((s, idx) => {
           const color = sessionStatuses?.get(s.id) || 'gray';
