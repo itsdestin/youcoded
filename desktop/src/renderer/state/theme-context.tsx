@@ -312,6 +312,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     applyThemeToDom(activeTheme, reducedEffects);
     applyHighlightTheme(activeTheme.dark);
 
+    // Hot-swap the Electron window + dock icon. Guarded via optional chaining —
+    // the Android WebView shim deliberately omits window.* (launcher icons can't
+    // be swapped at runtime), so this is a no-op there.
+    const anyWin = window as unknown as { claude?: { window?: { setIcon?: (u: string | null) => Promise<void> } } };
+    anyWin.claude?.window?.setIcon?.(activeTheme.appIcon ?? null).catch(() => {});
+
     // Sync font state: use theme's declared font, or fall back to default
     if (activeTheme.font?.family) {
       setFontState(activeTheme.font.family);

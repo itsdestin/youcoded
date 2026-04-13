@@ -78,6 +78,12 @@ export function resolveAllAssetPaths<T extends ThemeDefinition | LoadedTheme>(th
     if (r) resolved.cursor = r;
   }
 
+  // App icon (window + dock icon hot-swap)
+  if (resolved.appIcon) {
+    const r = resolveAssetPath(resolved.appIcon, slug);
+    if (r) resolved.appIcon = r;
+  }
+
   // Scrollbar thumb image
   if (resolved.scrollbar?.['thumb-image']) {
     resolved.scrollbar = { ...resolved.scrollbar };

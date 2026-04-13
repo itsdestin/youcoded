@@ -77,6 +77,34 @@ export function registerIpcHandlers(
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
   });
 
+  // Theme-driven window + dock icon hot-swap. Called from theme-context whenever
+  // the active theme changes. Only theme-asset:// URLs are accepted; anything else
+  // (or null) resets to the bundled default. Path is resolved server-side and
+  // confined to the theme's own asset dir — renderer cannot read arbitrary files.
+  const DEFAULT_ICON_PATH = path.join(__dirname, '../../assets/icon.png');
+  const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'destinclaude-themes');
+  ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
+    if (!mainWindow || mainWindow.isDestroyed()) return;
+    let iconImg = nativeImage.createFromPath(DEFAULT_ICON_PATH);
+    if (url && typeof url === 'string' && url.startsWith('theme-asset://')) {
+      try {
+        const parsed = new URL(url);
+        const slug = parsed.hostname;
+        if (SAFE_SLUG_RE.test(slug)) {
+          const rel = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+          const themeDir = path.join(THEMES_DIR_FOR_ICON, slug);
+          const resolved = path.resolve(themeDir, rel);
+          if (resolved.startsWith(themeDir + path.sep)) {
+            const img = nativeImage.createFromPath(resolved);
+            if (!img.isEmpty()) iconImg = img;
+          }
+        }
+      } catch { /* fall through to default */ }
+    }
+    mainWindow.setIcon(iconImg);
+    if (process.platform === 'darwin' && app.dock) app.dock.setIcon(iconImg);
+  });
+
   // Zoom controls — each returns the new zoom percentage for the overlay UI
   const ZOOM_STEP = 0.5; // ~12% per step (Electron uses logarithmic scale)
   const ZOOM_MIN = -3;   // ~50%

@@ -131,6 +131,11 @@ export interface ThemeDefinition {
   /** Overlay appearance — scrim color, shadow strength, destructive accent.
    *  All fields optional; the engine computes defaults from color tokens. */
   overlay?: ThemeOverlay;
+  /** Optional window/dock icon, hot-swapped when the theme becomes active.
+   *  Relative path inside the theme dir (resolved to theme-asset:// URI at load time).
+   *  Desktop-only: Electron calls BrowserWindow.setIcon() + app.dock.setIcon().
+   *  Android WebView ignores this — launcher icons can't be hot-swapped. */
+  appIcon?: string;
   custom_css?: string;
 }
 

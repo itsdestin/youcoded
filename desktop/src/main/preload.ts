@@ -76,6 +76,7 @@ const IPC = {
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
+  WINDOW_SET_ICON: 'window:set-icon',
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
   ZOOM_RESET: 'zoom:reset',
@@ -352,6 +353,10 @@ contextBridge.exposeInMainWorld('claude', {
     minimize: () => ipcRenderer.invoke(IPC.WINDOW_MINIMIZE),
     maximize: () => ipcRenderer.invoke(IPC.WINDOW_MAXIMIZE),
     close: () => ipcRenderer.invoke(IPC.WINDOW_CLOSE),
+    // Hot-swaps the window + dock icon. Accepts a theme-asset:// URL or null
+    // (null resets to the bundled default). Main validates the URL and silently
+    // ignores anything outside the theme's own asset dir.
+    setIcon: (url: string | null) => ipcRenderer.invoke(IPC.WINDOW_SET_ICON, url),
     // Fullscreen state relay — used by renderer to adjust macOS traffic light padding
     onFullscreenChanged: (handler: (isFullscreen: boolean) => void) => {
       const wrapped = (_event: IpcRendererEvent, isFullscreen: boolean) => handler(isFullscreen);

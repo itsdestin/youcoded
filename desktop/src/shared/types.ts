@@ -334,6 +334,7 @@ export const IPC = {
   WINDOW_MINIMIZE: 'window:minimize',
   WINDOW_MAXIMIZE: 'window:maximize',
   WINDOW_CLOSE: 'window:close',
+  WINDOW_SET_ICON: 'window:set-icon', // theme-driven window + dock icon hot-swap
   // Zoom controls
   ZOOM_IN: 'zoom:in',
   ZOOM_OUT: 'zoom:out',
