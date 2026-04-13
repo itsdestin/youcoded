@@ -63,7 +63,7 @@ interface PastSession {
 interface Props {
   open: boolean;
   onClose: () => void;
-  onResume: (sessionId: string, projectSlug: string, projectPath: string, model: string, dangerous: boolean) => void;
+  onResume: (sessionId: string, projectSlug: string, projectPath: string, model: string, dangerous: boolean, launchInNewWindow?: boolean) => void;
   defaultModel?: string;
   defaultSkipPermissions?: boolean;
 }
@@ -77,6 +77,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
+  // Launch the resumed session in a new peer window (multi-window only).
+  const [resumeLaunchInNewWindow, setResumeLaunchInNewWindow] = useState(false);
+  const detachAvailable = typeof (window as any).claude?.detach?.openDetached === 'function';
   // Show Complete: when off, sessions marked complete are hidden (default).
   // Persists across opens via localStorage so Destin doesn't re-toggle each time.
   const [showComplete, setShowComplete] = useState<boolean>(() => {
@@ -224,11 +227,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setExpandedId(sessionId);
       setResumeModel(defaultModel || 'sonnet');
       setResumeDangerous(defaultSkipPermissions || false);
+      setResumeLaunchInNewWindow(false);
     }
   };
 
   const handleConfirmResume = (s: PastSession) => {
-    onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous);
+    onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow);
     onClose();
   };
 
@@ -272,6 +276,19 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         </div>
         {resumeDangerous && (
           <p className="text-[10px] text-[#DD4444]">Claude will execute tools without asking for approval.</p>
+        )}
+
+        {/* Launch in new window — hidden on remote/Android (single-window) */}
+        {detachAvailable && (
+          <div className="flex items-center justify-between">
+            <label className="text-[10px] uppercase tracking-wider text-fg-muted">Launch in New Window</label>
+            <button
+              onClick={() => setResumeLaunchInNewWindow(!resumeLaunchInNewWindow)}
+              className={`w-8 h-4.5 rounded-full relative transition-colors ${resumeLaunchInNewWindow ? 'bg-accent' : 'bg-inset'}`}
+            >
+              <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${resumeLaunchInNewWindow ? 'left-[calc(100%-16px)]' : 'left-0.5'}`} />
+            </button>
+          </div>
         )}
 
         {/* Flags — one row of multi-select pills (Priority / Helpful / Complete).

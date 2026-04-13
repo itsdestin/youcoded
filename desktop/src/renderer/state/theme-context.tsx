@@ -91,9 +91,12 @@ function getStoredJSON<T>(key: string, fallback: T): T {
   try { const s = localStorage.getItem(key); return s ? JSON.parse(s) : fallback; } catch { return fallback; }
 }
 
-/** Fire-and-forget write of appearance prefs to disk via IPC */
+/** Fire-and-forget write of appearance prefs to disk via IPC, plus a peer-
+ *  window broadcast so ThemeProvider in other windows applies the change
+ *  live (no reload). The broadcast is a no-op on single-window hosts. */
 function persistAppearance(prefs: Record<string, any>) {
   try { (window as any).claude?.appearance?.set(prefs); } catch {}
+  try { (window as any).claude?.appearance?.broadcast?.(prefs); } catch {}
 }
 
 function applyFont(font: string) {
@@ -225,6 +228,38 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       } catch {}
     };
     loadAppearance();
+  }, []);
+
+  // Listen for cross-window appearance broadcasts from peer windows. The
+  // source window already persisted to disk, so we only update in-memory
+  // state + localStorage here. No re-broadcast — that would bounce forever.
+  useEffect(() => {
+    const onSync = (window as any).claude?.appearance?.onSync;
+    if (typeof onSync !== 'function') return;
+    const unsub = onSync((prefs: any) => {
+      if (!prefs || typeof prefs !== 'object') return;
+      if (typeof prefs.theme === 'string' && prefs.theme) {
+        setActiveSlug(prefs.theme);
+        try { localStorage.setItem(STORAGE_KEY, prefs.theme); } catch {}
+      }
+      if (Array.isArray(prefs.themeCycle) && prefs.themeCycle.length > 0) {
+        setCycleListState(prefs.themeCycle);
+        try { localStorage.setItem(CYCLE_KEY, JSON.stringify(prefs.themeCycle)); } catch {}
+      }
+      if (typeof prefs.reducedEffects === 'boolean') {
+        setReducedEffectsState(prefs.reducedEffects);
+        try { localStorage.setItem(REDUCED_EFFECTS_KEY, prefs.reducedEffects ? '1' : ''); } catch {}
+      }
+      if (typeof prefs.showTimestamps === 'boolean') {
+        setShowTimestampsState(prefs.showTimestamps);
+        try { localStorage.setItem(SHOW_TIMESTAMPS_KEY, prefs.showTimestamps ? '1' : '0'); } catch {}
+      }
+      if (prefs.glassOverrides && typeof prefs.glassOverrides === 'object') {
+        setGlassOverrides(prefs.glassOverrides);
+        try { localStorage.setItem(GLASS_OVERRIDES_KEY, JSON.stringify(prefs.glassOverrides)); } catch {}
+      }
+    });
+    return () => { try { unsub?.(); } catch {} };
   }, []);
 
   // Track the slug the user had before preview auto-switch

@@ -83,6 +83,14 @@ interface StatusDataState {
 function AppInner() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<any[]>([]);
+  // Multi-window detach state (desktop-only; remote-shim stubs these as no-ops).
+  // `myWindowId` identifies this renderer's BrowserWindow so the switcher can
+  // distinguish local sessions from sessions owned by peer windows. `directory`
+  // and `leaderWindowId` are pushed from main whenever window topology changes.
+  const [myWindowId, setMyWindowId] = useState<number | null>(null);
+  const [windowDirectory, setWindowDirectory] = useState<any>(null);
+  const [leaderWindowId, setLeaderWindowId] = useState<number>(-1);
+  const isLeader = myWindowId != null && leaderWindowId === myWindowId;
   const [viewModes, setViewModes] = useState<Map<string, ViewMode>>(new Map());
   const [statusData, setStatusData] = useState<StatusDataState>({
     usage: null, announcement: null, updateStatus: null,
@@ -247,7 +255,13 @@ function AppInner() {
   }, [chatStateMap, dispatch]);
   const gameState = useGameState();
   const gameDispatch = useGameDispatch();
-  const lobby = usePartyLobby();
+  // Gate on isLeader so only the first-launched window opens the lobby
+  // socket — avoids duplicate presence for the same GitHub identity when
+  // multiple peer windows are open. When detach isn't available (remote
+  // shim / Android), myWindowId stays null so isLeader is false — fall
+  // back to true-by-default so the lobby still connects.
+  const lobbyLeader = (window as any).claude?.detach?.openDetached ? isLeader : true;
+  const lobby = usePartyLobby(lobbyLeader);
   const game = usePartyGame(lobby.updateStatus, lobby.challengePlayer);
 
   const gameConnection = useMemo(() => ({
@@ -677,6 +691,86 @@ function AppInner() {
     }).catch(() => {});
   }, [dispatch]);
 
+  // Multi-window ownership wiring (Phase 2 of detach feature).
+  // Subscribes to directory/leader/ownership pushes from main and mutates
+  // local session list + chat reducer in response. When this window acquires
+  // a session (via detach or re-dock), we request transcript replay so the
+  // reducer hydrates from disk — the reducer is deterministic from TRANSCRIPT_*
+  // events and uuid dedup handles any overlap with live events.
+  useEffect(() => {
+    const det = (window as any).claude?.detach;
+    const getId = (window as any).claude?.window?.getId;
+    if (getId) getId().then((id: number) => {
+      setMyWindowId(id);
+      // Stash globally so non-React code (SessionStrip drop resolution) can
+      // identify this window without threading a prop through every consumer.
+      (window as any).__destincodeWindowId = id;
+    }).catch(() => {});
+    if (!det) return;
+
+    const cleanupDir = det.onDirectoryUpdated?.((dir: any) => setWindowDirectory(dir));
+    const cleanupLeader = det.onLeaderChanged?.((id: number) => setLeaderWindowId(id));
+    // Pull the current directory immediately — the push from main may have
+    // fired before this effect ran (on a brand-new window, React mounts after
+    // registerWindow already broadcast, so we'd miss it).
+    det.getDirectory?.().then((dir: any) => { if (dir) setWindowDirectory(dir); }).catch(() => {});
+
+    const cleanupAcquired = det.onOwnershipAcquired?.((payload: any) => {
+      const { sessionId: sid, sessionInfo, freshWindow, refocusOnly } = payload;
+      if (refocusOnly) {
+        // Switcher asked us to focus an existing local session — just flip active.
+        setSessionId(sid);
+        return;
+      }
+      setSessions((prev) => {
+        if (prev.some((s) => s.id === sid)) return prev;
+        return [...prev, sessionInfo];
+      });
+      dispatch({ type: 'SESSION_INIT', sessionId: sid });
+      const defaultView = (sessionInfo.provider && sessionInfo.provider !== 'claude') ? 'terminal' : 'chat';
+      setViewModes((prev) => prev.has(sid) ? prev : new Map(prev).set(sid, defaultView));
+      setPermissionModes((prev) => prev.has(sid) ? prev : new Map(prev).set(sid, sessionInfo.permissionMode || 'normal'));
+      // Transferred sessions were already initialized on the source — skip the
+      // "Initializing" overlay, it would flash briefly before replay completes.
+      setInitializedSessions((prev) => {
+        if (prev.has(sid)) return prev;
+        const next = new Set(prev); next.add(sid); return next;
+      });
+      if (freshWindow) setSessionId(sid);
+      // Hydrate reducer from disk. Main streams every transcript event back on
+      // the normal channel; uuid dedup absorbs any overlap with live events.
+      det.requestTranscriptReplay?.(sid);
+    });
+
+    const cleanupLost = det.onOwnershipLost?.((payload: any) => {
+      const { sessionId: sid } = payload;
+      setSessions((prev) => {
+        const remaining = prev.filter((s) => s.id !== sid);
+        setSessionId((curr) => {
+          if (curr !== sid) return curr;
+          return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
+        });
+        return remaining;
+      });
+      setViewModes((prev) => { const n = new Map(prev); n.delete(sid); return n; });
+      setPermissionModes((prev) => { const n = new Map(prev); n.delete(sid); return n; });
+      setInitializedSessions((prev) => {
+        if (!prev.has(sid)) return prev;
+        const n = new Set(prev); n.delete(sid); return n;
+      });
+      // Use SESSION_REMOVE — NOT SESSION_PROCESS_EXITED — because the session
+      // is still alive, just owned by another window now.
+      dispatch({ type: 'SESSION_REMOVE', sessionId: sid });
+    });
+
+    return () => {
+      cleanupDir?.();
+      cleanupLeader?.();
+      cleanupAcquired?.();
+      cleanupLost?.();
+    };
+  }, [dispatch]);
+
   // Load skills once on mount
   useEffect(() => {
     window.claude.skills.list().then((list) => {
@@ -962,22 +1056,27 @@ function AppInner() {
     [sessionId, dispatch, viewModes, getUsageSnapshot],
   );
 
-  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'gemini') => {
+  const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'gemini', launchInNewWindow?: boolean) => {
     const m = sessionModel || model;
     // Update the active model to match what was chosen in the form
     if (sessionModel && MODELS.includes(sessionModel as any)) {
       setModel(sessionModel as ModelAlias);
     }
-    await (window.claude.session.create as any)({
+    const info = await (window.claude.session.create as any)({
       name: provider === 'gemini' ? 'Gemini Session' : 'New Session',
       cwd,
       skipPermissions: dangerous,
       model: m,
       provider: provider || 'claude',
     });
+    // Launch-in-new-window: hand the freshly-created session off to a peer
+    // window via the same ownership-transfer path used by drag-detach.
+    if (launchInNewWindow && info?.id) {
+      (window as any).claude?.detach?.openDetached?.({ sessionId: info.id });
+    }
   }, [model]);
 
-  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean) => {
+  const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean, launchInNewWindow?: boolean) => {
     const cwd = projectPath;
     const m = resumeModel || model;
     if (resumeModel && MODELS.includes(resumeModel as any)) {
@@ -993,6 +1092,11 @@ function AppInner() {
       model: m,
     });
     if (!newSession?.id) return;
+
+    // Launch-in-new-window for resumed sessions — same peer-window spawn path.
+    if (launchInNewWindow) {
+      (window as any).claude?.detach?.openDetached?.({ sessionId: newSession.id });
+    }
 
     setResumeInfo((prev) => new Map(prev).set(newSession.id, { claudeSessionId, projectSlug }));
 
@@ -1285,6 +1389,8 @@ function AppInner() {
                 defaultSkipPermissions={sessionDefaults.skipPermissions}
                 defaultProjectFolder={sessionDefaults.projectFolder}
                 geminiEnabled={sessionDefaults.geminiEnabled}
+                windowDirectory={windowDirectory}
+                myWindowId={myWindowId}
               />
             </div>
             <div

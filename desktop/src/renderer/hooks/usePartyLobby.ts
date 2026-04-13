@@ -4,7 +4,10 @@ import { PartyClient } from '../game/party-client';
 
 const PING_INTERVAL = 30_000; // 30s — matches server sweep interval
 
-export function usePartyLobby() {
+// isLeader: true when this renderer is the leader window (multi-window detach
+// feature). Only the leader maintains the lobby socket; non-leader windows
+// would otherwise double-register the same user as online.
+export function usePartyLobby(isLeader: boolean = true) {
   const dispatch = useGameDispatch();
   const clientRef = useRef<PartyClient | null>(null);
   const pingRef = useRef<ReturnType<typeof setInterval> | null>(null);
@@ -28,6 +31,19 @@ export function usePartyLobby() {
     // so this effect re-runs when it flips to true (fixes missing username on
     // first load when stored preference is already false)
     if (!incognitoLoaded) return;
+
+    // Non-leader windows don't open a lobby socket — two windows per user
+    // would otherwise double-register the same GitHub identity as online.
+    // When leadership transfers (primary closes), the new leader's effect
+    // re-runs because isLeader is a dep below.
+    if (!isLeader) {
+      pingRef.current && clearInterval(pingRef.current);
+      pingRef.current = null;
+      clientRef.current?.close();
+      clientRef.current = null;
+      dispatch({ type: 'PARTY_DISCONNECTED' });
+      return;
+    }
 
     if (incognito) {
       // Disconnect from lobby if connected
@@ -120,7 +136,7 @@ export function usePartyLobby() {
       clientRef.current?.close();
       clientRef.current = null;
     };
-  }, [dispatch, incognito, incognitoLoaded]);
+  }, [dispatch, incognito, incognitoLoaded, isLeader]);
 
   const updateStatus = useCallback((status: 'idle' | 'in-game') => {
     clientRef.current?.send({ type: 'status', status });

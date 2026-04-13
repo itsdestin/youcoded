@@ -1,4 +1,4 @@
-import { app, BrowserWindow, ipcMain, Menu, nativeImage, protocol, shell } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Menu, nativeImage, protocol, screen, shell, webContents } from 'electron';
 import path from 'path';
 import os from 'os';
 import fs from 'fs';
@@ -6,6 +6,7 @@ import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { SessionManager } from './session-manager';
 import { HookRelay } from './hook-relay';
+import { WindowRegistry } from './window-registry';
 import { registerIpcHandlers } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
 import { RemoteConfig } from './remote-config';
@@ -52,6 +53,52 @@ try { const w = require('which'); ghPath = w.sync('gh'); } catch { /* use bare '
 let mainWindow: BrowserWindow | null = null;
 let cleanupIpcHandlers: (() => void) | null = null;
 const sessionManager = new SessionManager();
+
+// Multi-window ownership: maps sessionId -> windowId and tracks leader for
+// singletons (PartyKit lobby). Populated when sessions are created and
+// when windows spawn/close. See window-registry.ts.
+const windowRegistry = new WindowRegistry();
+export function getWindowRegistry() { return windowRegistry; }
+
+// IDs in the registry are webContents.id values, NOT BrowserWindow.id values.
+// BrowserWindow.fromId(webContentsId) silently returns null, so previously
+// every peer-window send fell through to the mainWindow fallback (window 1
+// received events meant for window 2/3/etc). Always look up via webContents.
+function windowFromWcId(wid: number): BrowserWindow | null {
+  const wc = webContents.fromId(wid);
+  return wc ? BrowserWindow.fromWebContents(wc) : null;
+}
+
+// Route a session-scoped IPC event to the window that currently owns the
+// session. No-op if ownership is unknown (e.g., during teardown). Task 1.4
+// will migrate ipc-handlers.ts emits to use this helper.
+export function routeToOwner(sessionId: string, channel: string, ...args: unknown[]): void {
+  const wid = windowRegistry.getOwner(sessionId);
+  if (wid == null) return;
+  const win = windowFromWcId(wid);
+  if (win && !win.isDestroyed()) win.webContents.send(channel, ...args);
+}
+
+// Broadcast the current window directory to every renderer whenever windows
+// or ownership change. The directory drives the "Sessions in other windows"
+// group in the switcher.
+let currentLeaderId = -1;
+function broadcastWindowState() {
+  const dir = windowRegistry.getDirectory((id) => sessionManager.getSession(id));
+  const newLeader = windowRegistry.getLeaderId() ?? -1;
+  for (const wid of windowRegistry.getWindowIds()) {
+    const win = windowFromWcId(wid);
+    if (!win || win.isDestroyed()) continue;
+    win.webContents.send(IPC.WINDOW_DIRECTORY_UPDATED, dir);
+    if (newLeader !== currentLeaderId) {
+      win.webContents.send(IPC.WINDOW_LEADER_CHANGED, newLeader);
+    }
+  }
+  currentLeaderId = newLeader;
+}
+windowRegistry.on('changed', broadcastWindowState);
+
+
 // Unique pipe name per launch — avoids EADDRINUSE from stale Electron processes
 const pipeName = process.platform === 'win32'
   ? `\\\\.\\pipe\\claude-desktop-hooks-${process.pid}`
@@ -206,73 +253,109 @@ function registerFirstRunIpc(
   });
 }
 
-function createWindow(firstRunManager?: FirstRunManager) {
+// Shared BrowserWindow factory — used for the primary window AND for peer
+// windows spawned by the detach subsystem. Keeps webPreferences, security
+// hardening, and fullscreen relay consistent across every window so renderers
+// don't have to guess which features are available.
+function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean }): BrowserWindow {
   const iconPath = path.join(__dirname, '../../assets/icon.png');
   const icon = nativeImage.createFromPath(iconPath);
-
   const isMac = process.platform === 'darwin';
-  const isWin = process.platform === 'win32';
 
-  mainWindow = new BrowserWindow({
-    width: 1200,
-    height: 800,
+  const win = new BrowserWindow({
+    width: opts?.width ?? 1200,
+    height: opts?.height ?? 800,
+    x: opts?.x,
+    y: opts?.y,
     icon,
-    // macOS: hide native title bar but keep traffic lights
-    // Windows/Linux: hide native title bar entirely — custom caption buttons in HeaderBar
     titleBarStyle: isMac ? 'hiddenInset' as const : 'hidden' as const,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
       nodeIntegration: false,
-      sandbox: true, // Security: OS-level process isolation for renderer
+      sandbox: true,
     },
   });
 
   // Security: block navigation to external origins (prevents preload API exposure)
-  mainWindow.webContents.on('will-navigate', (event, url) => {
+  win.webContents.on('will-navigate', (event, url) => {
     const isAppOrigin = url.startsWith('file://') || url.startsWith(DEV_SERVER_URL);
-    if (!isAppOrigin) {
-      event.preventDefault();
-    }
+    if (!isAppOrigin) event.preventDefault();
   });
-  // Security: deny window.open() from renderer, but route safe http(s)/mailto
-  // links (e.g. target="_blank" anchors in chat markdown) to the OS browser so
-  // they are actually clickable. Without this, chat view links silently do nothing.
-  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (/^(https?:|mailto:)/i.test(url)) {
-      shell.openExternal(url);
-    }
+  // Security: deny window.open() but route safe http(s)/mailto to the OS browser
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^(https?:|mailto:)/i.test(url)) shell.openExternal(url);
     return { action: 'deny' as const };
   });
+  // Disable Chromium's pinch-to-zoom so our IPC zoom handler is the sole zoom path
+  win.webContents.setVisualZoomLevelLimits(1, 1);
 
-  // Disable Chromium's built-in visual pinch-to-zoom so our custom zoom handler
-  // (Ctrl+Wheel / trackpad pinch → IPC → setZoomLevel) is the sole zoom path.
-  // setVisualZoomLevelLimits disables the viewport zoom; page zoom via setZoomLevel
-  // still works. Without this, pinch gestures double-fire (compositor + our handler).
-  mainWindow.webContents.setVisualZoomLevelLimits(1, 1);
+  if (opts?.maximize) win.maximize();
 
-  // Always open maximized — width/height above are the restore-size fallback
-  mainWindow.maximize();
+  if (!app.isPackaged) win.loadURL(DEV_SERVER_URL);
+  else win.loadFile(path.join(__dirname, '../renderer/index.html'));
 
+  // Auto-open DevTools in dev — the app's menu is nulled so F12/Ctrl+Shift+I
+  // don't work by default. Opens detached so it doesn't steal window width.
+  // Directory snapshot is pulled by the renderer via WINDOW_GET_DIRECTORY
+  // once it mounts, so no push is needed here.
   if (!app.isPackaged) {
-    mainWindow.loadURL(DEV_SERVER_URL);
-  } else {
-    mainWindow.loadFile(path.join(__dirname, '../renderer/index.html'));
+    win.webContents.on('did-finish-load', () => {
+      if (!win.isDestroyed()) win.webContents.openDevTools({ mode: 'detach' });
+    });
   }
 
-  // Relay fullscreen state to renderer so CSS can adjust (e.g., macOS traffic light padding)
-  mainWindow.on('enter-full-screen', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('window:fullscreen-changed', true);
-    }
+  // Fullscreen state relay — per-window so macOS traffic-light padding is correct
+  win.on('enter-full-screen', () => {
+    if (!win.isDestroyed()) win.webContents.send('window:fullscreen-changed', true);
   });
-  mainWindow.on('leave-full-screen', () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send('window:fullscreen-changed', false);
+  win.on('leave-full-screen', () => {
+    if (!win.isDestroyed()) win.webContents.send('window:fullscreen-changed', false);
+  });
+
+  // Register with the ownership registry so per-session events can route here
+  // and the switcher in other windows sees this window in its directory.
+  const wid = win.webContents.id;
+  windowRegistry.registerWindow(wid, Date.now());
+  win.on('closed', () => {
+    windowRegistry.unregisterWindow(wid);
+  });
+
+  // Confirm-on-close if this window still owns active sessions. Without the
+  // prompt, closing a window silently kills every session it owns — which is
+  // easy to do by accident and impossible to undo. A guard flag prevents the
+  // prompt from re-firing after the user confirms.
+  let confirmedClose = false;
+  win.on('close', async (ev) => {
+    if (confirmedClose) return;
+    const ownedSessions = windowRegistry.sessionsForWindow(wid);
+    if (ownedSessions.length === 0) return; // no sessions — close freely
+    ev.preventDefault();
+    const { response } = await dialog.showMessageBox(win, {
+      type: 'warning',
+      buttons: ['Cancel', 'Close & Kill Sessions'],
+      defaultId: 0,
+      cancelId: 0,
+      message: `This window has ${ownedSessions.length} active session${ownedSessions.length === 1 ? '' : 's'}.`,
+      detail: 'Closing the window will terminate these sessions. To preserve a session, drag its pill to another window first.',
+    });
+    if (response === 1) {
+      for (const sid of ownedSessions) {
+        sessionManager.destroySession(sid);
+        windowRegistry.releaseSession(sid);
+      }
+      confirmedClose = true;
+      win.close();
     }
   });
 
-  cleanupIpcHandlers = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, hookRelay, remoteConfig, remoteServer);
+  return win;
+}
+
+function createWindow(firstRunManager?: FirstRunManager) {
+  mainWindow = createAppWindow({ maximize: true });
+
+  cleanupIpcHandlers = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, hookRelay, remoteConfig, remoteServer, windowRegistry);
 
   if (firstRunManager) {
     registerFirstRunIpc(mainWindow, firstRunManager);
@@ -382,6 +465,16 @@ function createWindow(firstRunManager?: FirstRunManager) {
       }
     }
 
+    // Route to the window that owns this session; fall back to mainWindow if
+    // ownership is unknown (e.g., session not yet created via IPC).
+    const ownerId = windowRegistry.getOwner(event.sessionId);
+    if (ownerId != null) {
+      const win = windowFromWcId(ownerId);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(IPC.HOOK_EVENT, event);
+        return;
+      }
+    }
     if (mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.webContents.send(IPC.HOOK_EVENT, event);
     }
@@ -389,14 +482,149 @@ function createWindow(firstRunManager?: FirstRunManager) {
 
   // Notify renderer when a permission request socket closes (timeout/killed)
   hookRelay.on('permission-expired', (sessionId: string, requestId: string) => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.webContents.send(IPC.HOOK_EVENT, {
-        type: 'PermissionExpired',
-        sessionId,
-        payload: { _requestId: requestId },
-        timestamp: Date.now(),
-      });
+    const evt = {
+      type: 'PermissionExpired',
+      sessionId,
+      payload: { _requestId: requestId },
+      timestamp: Date.now(),
+    };
+    const ownerId = windowRegistry.getOwner(sessionId);
+    if (ownerId != null) {
+      const win = windowFromWcId(ownerId);
+      if (win && !win.isDestroyed()) {
+        win.webContents.send(IPC.HOOK_EVENT, evt);
+        return;
+      }
     }
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send(IPC.HOOK_EVENT, evt);
+    }
+  });
+}
+
+// Detach subsystem: IPC handlers for drag-a-session-to-new-window feature.
+// All session-scoped traffic is routed via windowRegistry.getOwner(). These
+// handlers coordinate ownership transfers between windows and broadcast the
+// cross-window cursor during an active drag so peer windows can highlight
+// their strip as a drop target.
+function registerDetachIpc() {
+  // Renderer asks "which window am I?" — used by SessionStrip to avoid
+  // treating its own directory entry as a remote session.
+  ipcMain.handle(IPC.WINDOW_GET_ID, (evt) => evt.sender.id);
+
+  // Appearance sync across peer windows. When one window writes a theme /
+  // font / reduced-effects change, it broadcasts and every OTHER window
+  // receives the same prefs via appearance:sync. ThemeProvider applies
+  // locally without re-broadcasting (guarded by a ref) so there's no loop.
+  ipcMain.on(IPC.APPEARANCE_BROADCAST, (evt, prefs) => {
+    for (const wid of windowRegistry.getWindowIds()) {
+      if (wid === evt.sender.id) continue;
+      windowFromWcId(wid)?.webContents.send(IPC.APPEARANCE_SYNC, prefs);
+    }
+  });
+
+  // Transfer a session from its current owner window to a target window.
+  // Rejects if the source claim is stale (race protection). Emits ownership
+  // events to both windows so renderers can update their reducers.
+  function transferOwnership(sessionId: string, srcWindowId: number, targetWindowId: number, freshWindow: boolean) {
+    const info = sessionManager.getSession(sessionId);
+    if (!info) return;
+    const currentOwner = windowRegistry.getOwner(sessionId);
+    if (currentOwner !== srcWindowId) return; // stale — another event already moved it
+    windowRegistry.assignSession(sessionId, targetWindowId);
+    const src = windowFromWcId(srcWindowId);
+    const tgt = windowFromWcId(targetWindowId);
+    src?.webContents.send(IPC.SESSION_OWNERSHIP_LOST, { sessionId });
+    tgt?.webContents.send(IPC.SESSION_OWNERSHIP_ACQUIRED, { sessionId, sessionInfo: info, freshWindow });
+  }
+
+  // If a window was emptied by a detach/re-dock and another peer window
+  // exists, close it automatically. The last surviving window may stay empty.
+  function maybeAutoCloseEmpty(windowId: number) {
+    if (windowRegistry.sessionsForWindow(windowId).length > 0) return;
+    if (windowRegistry.getWindowIds().length <= 1) return;
+    windowFromWcId(windowId)?.close();
+  }
+
+  // "Launch in new window" entry point and the direct-spawn fallback for drops
+  // outside any window. Spawns a peer window at/near the cursor and hands it
+  // ownership of the session.
+  ipcMain.on(IPC.WINDOW_OPEN_DETACHED, (evt, { sessionId }: { sessionId: string }) => {
+    const { x, y } = screen.getCursorScreenPoint();
+    const newWin = createAppWindow({ x: x - 60, y: y - 40, width: 900, height: 700 });
+    transferOwnership(sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true);
+    maybeAutoCloseEmpty(evt.sender.id);
+  });
+
+  // Cursor left the source window while dragging — spawn a peer at the cursor
+  // and hand off the session.
+  ipcMain.on(IPC.SESSION_DETACH_START, (evt, payload: { sessionId: string; screenX: number; screenY: number }) => {
+    const newWin = createAppWindow({ x: payload.screenX - 60, y: payload.screenY - 40, width: 900, height: 700 });
+    transferOwnership(payload.sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true);
+    maybeAutoCloseEmpty(evt.sender.id);
+    stopCursorTicker();
+  });
+
+  // Drop landed on another window's SessionStrip — move ownership there.
+  ipcMain.on(IPC.SESSION_DRAG_DROPPED, (evt, payload: { sessionId: string; targetWindowId: number; insertIndex: number }) => {
+    transferOwnership(payload.sessionId, evt.sender.id, payload.targetWindowId, /*freshWindow*/ false);
+    maybeAutoCloseEmpty(evt.sender.id);
+    stopCursorTicker();
+  });
+
+  // Switcher selected a remote session — focus that window and tell it to
+  // switch its active session.
+  ipcMain.on(IPC.WINDOW_FOCUS_AND_SWITCH, (_evt, { windowId, sessionId }: { windowId: number; sessionId: string }) => {
+    const info = sessionManager.getSession(sessionId);
+    const win = windowFromWcId(windowId);
+    if (!win || !info) return;
+    win.focus();
+    // refocusOnly tells the target its state already has this session — just switch active.
+    win.webContents.send(IPC.SESSION_OWNERSHIP_ACQUIRED, { sessionId, sessionInfo: info, freshWindow: false, refocusOnly: true });
+  });
+
+  // Active-drag cursor broadcasting: while a source window is dragging a pill,
+  // every other window needs to know where the cursor is (OS only delivers
+  // pointer events to the active window). Ticker runs ~30Hz; stops on any
+  // drop resolution.
+  let cursorTicker: NodeJS.Timeout | null = null;
+  function stopCursorTicker() {
+    if (cursorTicker) { clearInterval(cursorTicker); cursorTicker = null; }
+  }
+  ipcMain.on(IPC.SESSION_DRAG_STARTED, () => {
+    stopCursorTicker();
+    cursorTicker = setInterval(() => {
+      const { x, y } = screen.getCursorScreenPoint();
+      for (const wid of windowRegistry.getWindowIds()) {
+        windowFromWcId(wid)?.webContents.send(IPC.CROSS_WINDOW_CURSOR, { screenX: x, screenY: y });
+      }
+    }, 33);
+  });
+  ipcMain.on(IPC.SESSION_DRAG_ENDED, () => { stopCursorTicker(); });
+
+  // Resolve a drop: ask each window whether its SessionStrip bounding box
+  // currently contains the cursor. The source window uses the answer on
+  // pointerup to pick between re-dock (other window) vs detach (no hit).
+  ipcMain.handle(IPC.SESSION_DROP_RESOLVE, async () => {
+    const { x, y } = screen.getCursorScreenPoint();
+    for (const wid of windowRegistry.getWindowIds()) {
+      const win = windowFromWcId(wid);
+      if (!win || win.isDestroyed()) continue;
+      try {
+        const hit = await win.webContents.executeJavaScript(
+          `(() => {
+            const el = document.querySelector('[data-session-strip]');
+            if (!el) return false;
+            const r = el.getBoundingClientRect();
+            const lx = ${x} - window.screenX;
+            const ly = ${y} - window.screenY;
+            return (lx >= r.left && lx <= r.right && ly >= r.top && ly <= r.bottom);
+          })()`,
+        );
+        if (hit) return { targetWindowId: wid };
+      } catch { /* window not ready — skip */ }
+    }
+    return { targetWindowId: null };
   });
 }
 
@@ -515,6 +743,7 @@ app.whenReady().then(async () => {
 
   registerThemeProtocol();
   createWindow(isFirstRun ? firstRunManager : undefined);
+  registerDetachIpc();
 
   // Start native sync service — owns push/pull lifecycle, background timer,
   // session-end sync. Replaces bash hook sync when app is running.

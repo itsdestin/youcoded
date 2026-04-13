@@ -369,4 +369,73 @@ export const IPC = {
   SYNC_FORCE: 'sync:force',
   SYNC_GET_LOG: 'sync:get-log',
   SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
+  // Multi-window detach subsystem (Renderer <-> Main)
+  WINDOW_GET_ID: 'window:get-id',
+  WINDOW_DIRECTORY_UPDATED: 'window:directory-updated',
+  WINDOW_GET_DIRECTORY: 'window:get-directory',
+  WINDOW_LEADER_CHANGED: 'window:leader-changed',
+  WINDOW_OPEN_DETACHED: 'window:open-detached',
+  WINDOW_FOCUS_AND_SWITCH: 'window:focus-and-switch',
+  SESSION_OWNERSHIP_ACQUIRED: 'session:ownership-acquired',
+  SESSION_OWNERSHIP_LOST: 'session:ownership-lost',
+  SESSION_DETACH_START: 'session:detach-start',
+  SESSION_DRAG_STARTED: 'session:drag-started',
+  SESSION_DRAG_ENDED: 'session:drag-ended',
+  SESSION_DRAG_DROPPED: 'session:drag-dropped',
+  SESSION_DROP_RESOLVE: 'session:drop-resolve',
+  CROSS_WINDOW_CURSOR: 'session:cross-window-cursor',
+  // Request the full transcript history for a session — used when a window
+  // acquires ownership and needs to hydrate its reducer from disk.
+  TRANSCRIPT_REPLAY: 'transcript:replay-from-start',
+  // Appearance sync across peer windows — Renderer → Main broadcasts, Main
+  // → other Renderers applies without re-broadcasting. Lets a theme change
+  // in window 2 propagate to window 1 without a reload.
+  APPEARANCE_BROADCAST: 'appearance:broadcast',
+  APPEARANCE_SYNC: 'appearance:sync',
 } as const;
+
+// --- Window registry / detach types ---
+
+export interface WindowInfo {
+  id: number;           // BrowserWindow webContentsId
+  label: string;        // e.g. "window 2" (creation order)
+  createdAt: number;
+}
+
+export interface WindowDirectoryEntry {
+  window: WindowInfo;
+  sessions: SessionInfo[];
+}
+
+export interface WindowDirectory {
+  leaderWindowId: number;
+  windows: WindowDirectoryEntry[];
+}
+
+export interface SessionOwnershipAcquired {
+  sessionId: string;
+  sessionInfo: SessionInfo;
+  /** True when the window was just created for this session (skip replay delay UI). */
+  freshWindow: boolean;
+}
+
+export interface SessionOwnershipLost {
+  sessionId: string;
+}
+
+export interface DetachStartPayload {
+  sessionId: string;
+  screenX: number;
+  screenY: number;
+}
+
+export interface DragDroppedPayload {
+  sessionId: string;
+  targetWindowId: number;
+  insertIndex: number;
+}
+
+export interface CrossWindowCursor {
+  screenX: number;
+  screenY: number;
+}

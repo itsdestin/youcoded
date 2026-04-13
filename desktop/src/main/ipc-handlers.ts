@@ -1,4 +1,4 @@
-import { app, IpcMain, BrowserWindow, dialog, clipboard, nativeImage, shell, powerSaveBlocker } from 'electron';
+import { app, IpcMain, BrowserWindow, dialog, clipboard, nativeImage, shell, powerSaveBlocker, webContents } from 'electron';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -20,6 +20,7 @@ import { generateThemePreview } from './theme-preview-generator';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService } from './sync-state';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
+import { log } from './logger';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -32,11 +33,47 @@ export function registerIpcHandlers(
   hookRelay?: HookRelay,
   remoteConfig?: RemoteConfig,
   remoteServer?: RemoteServer,
+  // Multi-window ownership: when a session is created via IPC, assign it to
+  // the calling renderer's window so subsequent per-session events route there.
+  windowRegistry?: import('./window-registry').WindowRegistry,
 ) {
+  // Broadcast a non-session-scoped event to every renderer. Status data, UI
+  // actions, and similar globals must reach every window — not just window 1.
+  // Session-scoped events should use sendForSession instead.
   const send = (channel: string, ...args: any[]) => {
+    if (windowRegistry) {
+      for (const wid of windowRegistry.getWindowIds()) {
+        const wc = webContents.fromId(wid);
+        if (wc && !wc.isDestroyed()) wc.send(channel, ...args);
+      }
+      return;
+    }
     if (!mainWindow.isDestroyed()) {
       mainWindow.webContents.send(channel, ...args);
     }
+  };
+
+  // Route a session-scoped emit to the window that owns the session. Falls
+  // back to the primary `mainWindow` if ownership is unknown (remote-created
+  // sessions during Phase 1; remote clients still get their copy via the
+  // parallel remoteServer.broadcast() calls). This is the single seam that
+  // makes per-session IPC multi-window-aware — adding a new session-scoped
+  // event type should use sendForSession, not send.
+  const sendForSession = (sessionId: string, channel: string, ...args: any[]) => {
+    const wid = windowRegistry?.getOwner(sessionId);
+    if (wid != null) {
+      // wid is a webContents.id, NOT a BrowserWindow.id — use webContents.fromId
+      // (different ID space; BrowserWindow.fromId silently returns null and we
+      // fall through to mainWindow, which made every peer-window event land in
+      // window 1).
+      const wc = webContents.fromId(wid);
+      if (wc && !wc.isDestroyed()) {
+        wc.send(channel, ...args);
+        return;
+      }
+    }
+    // Fallback: no known owner (e.g., remote-created session pre-assignment).
+    if (!mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
   };
 
   // --- Theme file watcher ---
@@ -65,17 +102,23 @@ export function registerIpcHandlers(
     await fs.promises.writeFile(path.join(themeDir, 'manifest.json'), content, 'utf-8');
   });
 
-  // Window controls — used by custom caption buttons on Windows/Linux
-  ipcMain.handle(IPC.WINDOW_MINIMIZE, () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.minimize();
+  // Window controls — used by custom caption buttons on Windows/Linux.
+  // Operate on the SENDING window (BrowserWindow.fromWebContents), not the
+  // primary mainWindow — otherwise window 2's caption buttons all act on
+  // window 1.
+  ipcMain.handle(IPC.WINDOW_MINIMIZE, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.minimize();
   });
-  ipcMain.handle(IPC.WINDOW_MAXIMIZE, () => {
-    if (mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.isMaximized() ? mainWindow.unmaximize() : mainWindow.maximize();
+  ipcMain.handle(IPC.WINDOW_MAXIMIZE, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) {
+      win.isMaximized() ? win.unmaximize() : win.maximize();
     }
   });
-  ipcMain.handle(IPC.WINDOW_CLOSE, () => {
-    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.close();
+  ipcMain.handle(IPC.WINDOW_CLOSE, (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    if (win && !win.isDestroyed()) win.close();
   });
 
   // Theme-driven window + dock icon hot-swap. Called from theme-context whenever
@@ -204,29 +247,63 @@ export function registerIpcHandlers(
     }
   });
 
-  // Broadcast session-created events from SessionManager (covers both IPC and remote-created sessions)
+  // Forward session-created to the owning window. Deferred via nextTick so
+  // the SESSION_CREATE IPC handler can run assignSession first — otherwise
+  // sendForSession fires before ownership is set and falls back to mainWindow,
+  // making a session created in window 2 appear in window 1. Remote-created
+  // sessions still fall back to mainWindow since no renderer owns them yet.
   sessionManager.on('session-created', (info) => {
-    send(IPC.SESSION_CREATED, info);
+    process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
 
   // Session CRUD
-  ipcMain.handle(IPC.SESSION_CREATE, async (_event, opts) => {
+  ipcMain.handle(IPC.SESSION_CREATE, async (event, opts) => {
     const info = sessionManager.createSession(opts);
+    // Assign the new session to the calling window so per-session events (transcript,
+    // pty output, permission prompts) route here once Task 1.4 migrates the emits.
+    if (windowRegistry) {
+      try { windowRegistry.assignSession(info.id, event.sender.id); }
+      catch (e) { log('WARN', 'IPC', 'assignSession failed', { error: String(e) }); }
+    }
     return info;
   });
+
+  // Pull-style directory snapshot — renderers call this on mount to avoid
+  // racing the WINDOW_DIRECTORY_UPDATED push that fires before React subscribes.
+  if (windowRegistry) {
+    ipcMain.handle(IPC.WINDOW_GET_DIRECTORY, async () => {
+      return windowRegistry.getDirectory((id) => sessionManager.getSession(id));
+    });
+  }
 
   ipcMain.handle(IPC.SESSION_DESTROY, async (_event, sessionId: string) => {
     const result = sessionManager.destroySession(sessionId);
     if (result) {
       // Explicit user-initiated destroy → treat as clean exit (0). The
       // reducer no-ops clean exits unless a turn was in flight.
-      send(IPC.SESSION_DESTROYED, sessionId, 0);
+      sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, 0);
+      windowRegistry?.releaseSession(sessionId);
     }
     return result;
   });
 
-  ipcMain.handle(IPC.SESSION_LIST, async () => {
-    return sessionManager.listSessions();
+  // Multi-window aware: when a windowRegistry is wired up, scope the list to
+  // sessions owned by the calling renderer's window — otherwise a freshly-
+  // spawned peer window picks up every session on mount and its ownership-
+  // acquired dedup leaves strangers stuck in the local list. Sessions with no
+  // owner yet (e.g., remote-created) fall back to the primary window's list
+  // so remote clients still see everything. RemoteServer uses its own path
+  // and doesn't go through this handler.
+  ipcMain.handle(IPC.SESSION_LIST, async (event) => {
+    const all = sessionManager.listSessions();
+    if (!windowRegistry) return all;
+    const callerId = event.sender.id;
+    const primaryId = windowRegistry.getLeaderId();
+    return all.filter((s) => {
+      const owner = windowRegistry.getOwner(s.id);
+      if (owner == null) return callerId === primaryId; // unowned → primary only
+      return owner === callerId;
+    });
   });
 
   ipcMain.handle(IPC.SESSION_SWITCH, async (_event, sessionId: string) => {
@@ -857,8 +934,8 @@ export function registerIpcHandlers(
 
   sessionManager.on('pty-output', (sessionId: string, data: string) => {
     if (readySessions.has(sessionId)) {
-      send(`pty:output:${sessionId}`, data);          // per-session (TerminalView)
-      send(IPC.PTY_OUTPUT, sessionId, data);           // global (App.tsx mode detection)
+      sendForSession(sessionId, `pty:output:${sessionId}`, data);  // per-session (TerminalView)
+      sendForSession(sessionId, IPC.PTY_OUTPUT, sessionId, data);  // global (App.tsx mode detection)
     } else {
       let buf = pendingOutput.get(sessionId);
       if (!buf) {
@@ -875,8 +952,8 @@ export function registerIpcHandlers(
     const buffered = pendingOutput.get(sessionId);
     if (buffered) {
       for (const data of buffered) {
-        send(`pty:output:${sessionId}`, data);         // per-session (TerminalView)
-        send(IPC.PTY_OUTPUT, sessionId, data);          // global (App.tsx mode detection)
+        sendForSession(sessionId, `pty:output:${sessionId}`, data);  // per-session (TerminalView)
+        sendForSession(sessionId, IPC.PTY_OUTPUT, sessionId, data);  // global (App.tsx mode detection)
       }
       pendingOutput.delete(sessionId);
     }
@@ -885,9 +962,10 @@ export function registerIpcHandlers(
   // Forward session exit events — exitCode is piped through to the renderer
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
-    send(IPC.SESSION_DESTROYED, sessionId, exitCode);
+    sendForSession(sessionId, IPC.SESSION_DESTROYED, sessionId, exitCode);
     pendingOutput.delete(sessionId);
     readySessions.delete(sessionId);
+    windowRegistry?.releaseSession(sessionId);
   });
 
   // --- Prune stale context files on startup ---
@@ -1132,16 +1210,28 @@ export function registerIpcHandlers(
   const transcriptWatcher = new TranscriptWatcher();
 
   transcriptWatcher.on('transcript-event', (event: any) => {
-    send(IPC.TRANSCRIPT_EVENT, event);
+    sendForSession(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     if (remoteServer) {
       remoteServer.bufferTranscriptEvent(event);
       remoteServer.broadcast({ type: 'transcript:event', payload: event });
     }
   });
+
+  // Transcript replay: a window that just acquired a session asks for every
+  // historical event so its reducer can hydrate. Events stream back on the
+  // normal TRANSCRIPT_EVENT channel (uuid dedup handles overlap with live).
+  // We send directly to the requesting window — NOT via sendForSession —
+  // because ownership has already transferred to them by the time this fires.
+  ipcMain.on(IPC.TRANSCRIPT_REPLAY, (evt, { sessionId }: { sessionId: string }) => {
+    const events = transcriptWatcher.getHistory(sessionId);
+    for (const ev of events) {
+      evt.sender.send(IPC.TRANSCRIPT_EVENT, ev);
+    }
+  });
   // /clear and /compact both truncate or rewrite the JSONL. App.tsx listens
   // to detect compaction completion (pending → COMPACTION_COMPLETE).
   transcriptWatcher.on('transcript-shrink', (payload: any) => {
-    send(IPC.TRANSCRIPT_SHRINK, payload);
+    sendForSession(payload.sessionId, IPC.TRANSCRIPT_SHRINK, payload);
     if (remoteServer) {
       remoteServer.broadcast({ type: 'transcript:shrink', payload });
     }
@@ -1176,7 +1266,7 @@ export function registerIpcHandlers(
     const initial = readTopicFile(claudeId);
     if (initial && initial !== 'New Session') {
       lastTopics.set(desktopId, initial);
-      send(IPC.SESSION_RENAMED, desktopId, initial);
+      sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, initial);
       broadcastRename(desktopId, initial);
     }
 
@@ -1189,7 +1279,7 @@ export function registerIpcHandlers(
         const topic = readTopicFile(claudeId);
         if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
           lastTopics.set(desktopId, topic);
-          send(IPC.SESSION_RENAMED, desktopId, topic);
+          sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, topic);
           broadcastRename(desktopId, topic);
         }
       });
@@ -1213,7 +1303,7 @@ export function registerIpcHandlers(
       const topic = readTopicFile(claudeId);
       if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
         lastTopics.set(desktopId, topic);
-        send(IPC.SESSION_RENAMED, desktopId, topic);
+        sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, topic);
         broadcastRename(desktopId, topic);
       }
     }, 2000);
@@ -1277,7 +1367,7 @@ export function registerIpcHandlers(
     try {
       svc.setSessionFlag(resolved, flag, !!value);
       const payload = { flag, value: !!value };
-      send(IPC.SESSION_META_CHANGED, resolved, payload);
+      sendForSession(resolved, IPC.SESSION_META_CHANGED, resolved, payload);
       remoteServer?.broadcast({
         type: IPC.SESSION_META_CHANGED,
         payload: { sessionId: resolved, ...payload },

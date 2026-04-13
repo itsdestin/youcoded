@@ -26,7 +26,7 @@ interface Props {
   sessions: SessionEntry[];
   activeSessionId: string | null;
   onSelectSession: (id: string) => void;
-  onCreateSession: (cwd: string, dangerous: boolean, model: string, provider?: 'claude' | 'gemini') => void;
+  onCreateSession: (cwd: string, dangerous: boolean, model: string, provider?: 'claude' | 'gemini', launchInNewWindow?: boolean) => void;
   onCloseSession: (id: string) => void;
   sessionStatuses?: Map<string, SessionStatusColor>;
   onResumeSession: (sessionId: string, projectSlug: string, projectPath: string, model?: string, dangerous?: boolean) => void;
@@ -37,6 +37,13 @@ interface Props {
   defaultProjectFolder?: string;
   /** When true, show Gemini CLI toggle in new session form */
   geminiEnabled?: boolean;
+  /** Window directory (for switcher's "Sessions in other windows" group). */
+  windowDirectory?: {
+    leaderWindowId: number;
+    windows: { window: { id: number; label: string; createdAt: number }; sessions: SessionEntry[] }[];
+  } | null;
+  /** This renderer's own window id — excluded from remote sessions group. */
+  myWindowId?: number | null;
 }
 
 /* ── Status dot color maps ───────────────────────────────── */
@@ -139,6 +146,7 @@ export default function SessionStrip({
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultSkipPermissions, defaultProjectFolder,
   geminiEnabled,
+  windowDirectory, myWindowId,
 }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -150,6 +158,10 @@ export default function SessionStrip({
   const [newModel, setNewModel] = useState<string>('sonnet');
   // Gemini CLI session toggle — only visible when enabled in settings
   const [isGemini, setIsGemini] = useState(false);
+  // Launch the new session in its own peer window instead of this one.
+  // Hidden on platforms without multi-window support (Android / remote-shim).
+  const [launchInNewWindow, setLaunchInNewWindow] = useState(false);
+  const detachAvailable = typeof (window as any).claude?.detach?.openDetached === 'function';
   const leaveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const menuRef = useRef<HTMLDivElement>(null);
   const dropdownRef = useRef<HTMLDivElement>(null);
@@ -169,6 +181,33 @@ export default function SessionStrip({
   const isDragging = useRef(false);
   // Suppress the click that fires after a drag release
   const suppressClick = useRef(false);
+  // Cross-window re-dock: true while another window is dragging a pill and
+  // the cursor is currently over this window's strip. Drives a visual drop-
+  // target highlight. Cleared on any non-hover tick or when the drag ends.
+  const [incomingDropActive, setIncomingDropActive] = useState(false);
+
+  // Listen for cross-window cursor updates from main — fires ~30Hz while
+  // a peer window is dragging a pill. We hit-test each update against our
+  // own strip's bounding box to decide whether to show the drop highlight.
+  useEffect(() => {
+    const det = (window as any).claude?.detach;
+    if (!det?.onCrossWindowCursor) return;
+    const unsub = det.onCrossWindowCursor(({ screenX, screenY }: { screenX: number; screenY: number }) => {
+      const bar = pillBarRef.current;
+      if (!bar) { setIncomingDropActive(false); return; }
+      // Ignore cursor broadcasts originating from our own drag — the source
+      // window also receives these but shouldn't highlight its own strip.
+      if (isDragging.current) { setIncomingDropActive(false); return; }
+      const rect = bar.getBoundingClientRect();
+      const localX = screenX - window.screenX;
+      const localY = screenY - window.screenY;
+      const inside =
+        localX >= rect.left && localX <= rect.right &&
+        localY >= rect.top && localY <= rect.bottom;
+      setIncomingDropActive(inside);
+    });
+    return () => { try { unsub?.(); } catch {} setIncomingDropActive(false); };
+  }, []);
 
   // Home path is now auto-selected by FolderSwitcher on mount
 
@@ -276,13 +315,14 @@ export default function SessionStrip({
   }, []);
 
   const handleCreate = useCallback(() => {
-    onCreateSession(newCwd, dangerous, newModel, isGemini ? 'gemini' : 'claude');
+    onCreateSession(newCwd, dangerous, newModel, isGemini ? 'gemini' : 'claude', launchInNewWindow);
     setMenuOpen(false);
     setShowNewForm(false);
     setDangerous(defaultSkipPermissions || false);
     setNewModel(defaultModel || 'sonnet');
     setIsGemini(false);
-  }, [newCwd, dangerous, newModel, isGemini, onCreateSession, defaultSkipPermissions, defaultModel]);
+    setLaunchInNewWindow(false);
+  }, [newCwd, dangerous, newModel, isGemini, launchInNewWindow, onCreateSession, defaultSkipPermissions, defaultModel]);
 
   /* ── Pointer-event drag handlers ───────────────────────── */
 
@@ -315,6 +355,10 @@ export default function SessionStrip({
       if (Math.abs(dx) < 5 && Math.abs(dy) < 5) return;
       isDragging.current = true;
       suppressClick.current = true;
+      // Tell main this is a real drag — it starts the cross-window cursor
+      // ticker so peer windows can highlight their strip as a drop target.
+      const draggedSession = sessions[dragIdx];
+      (window as any).claude?.detach?.dragStarted?.({ sessionId: draggedSession.id });
     }
 
     setDragPos({ x: e.clientX, y: e.clientY });
@@ -369,27 +413,73 @@ export default function SessionStrip({
   }, [dragIdx]);
 
   const handlePointerUp = useCallback((e: React.PointerEvent) => {
-    if (dragIdx !== null && isDragging.current) {
-      // Reorder if dropped on a different position
-      if (overIdx !== null && onReorderSessions) {
-        onReorderSessions(dragIdx, overIdx);
-      }
-      // Select the dragged session so it stays active after drop
-      const draggedSession = sessions[dragIdx];
-      if (draggedSession) {
-        onSelectSession(draggedSession.id);
-      }
-    }
-    // Reset all drag state
+    const wasDragging = isDragging.current;
+    const releasedDragIdx = dragIdx;
+    const releasedOverIdx = overIdx;
+    const releasedSession = releasedDragIdx !== null ? sessions[releasedDragIdx] : null;
+
+    // Reset all local drag state immediately so the UI snaps back cleanly.
+    // We do the cross-window resolution async below using the captured values.
     setDragIdx(null);
     setOverIdx(null);
     setDragPos(null);
     setGhostTarget(null);
     dragOrigin.current = null;
     isDragging.current = false;
-
-    // Allow the suppressClick flag to clear after the click event fires
     setTimeout(() => { suppressClick.current = false; }, 0);
+
+    if (!wasDragging || !releasedSession) return;
+
+    const det = (window as any).claude?.detach;
+    det?.dragEnded?.();
+
+    // Resolve drop across all peer windows: main hit-tests [data-session-strip]
+    // in each window against the current cursor. If a hit, re-dock there;
+    // if no hit and the cursor is outside our own viewport, detach to a
+    // new peer window; otherwise fall through to the local reorder path.
+    const clientX = e.clientX;
+    const clientY = e.clientY;
+    const outsideOwnWindow =
+      clientX < 0 || clientY < 0 ||
+      clientX > window.innerWidth || clientY > window.innerHeight;
+
+    const resolveAndRoute = async () => {
+      let resolved: { targetWindowId: number | null } = { targetWindowId: null };
+      try { resolved = await det?.dropResolve?.(); } catch { /* fall through */ }
+
+      const myId = (window as any).__destincodeWindowId;
+      const target = resolved?.targetWindowId;
+
+      if (target != null && target !== myId) {
+        // Dropped on a peer window's strip → re-dock
+        det?.dragDropped?.({ sessionId: releasedSession.id, targetWindowId: target, insertIndex: 0 });
+        return;
+      }
+      if (outsideOwnWindow) {
+        // Dropped outside any window's strip → spawn new peer window
+        const screenX = (e as any).screenX ?? (window.screenX + clientX);
+        const screenY = (e as any).screenY ?? (window.screenY + clientY);
+        det?.detachStart?.({ sessionId: releasedSession.id, screenX, screenY });
+        return;
+      }
+      // Local drop → reorder within this window's strip (existing behavior)
+      if (releasedOverIdx !== null && onReorderSessions && releasedDragIdx !== null) {
+        onReorderSessions(releasedDragIdx, releasedOverIdx);
+      }
+      onSelectSession(releasedSession.id);
+    };
+
+    // If detach IPC isn't available (remote-shim / Android), fall back to
+    // the legacy local-only behavior.
+    if (!det?.dropResolve) {
+      if (releasedOverIdx !== null && onReorderSessions && releasedDragIdx !== null) {
+        onReorderSessions(releasedDragIdx, releasedOverIdx);
+      }
+      onSelectSession(releasedSession.id);
+      return;
+    }
+
+    resolveAndRoute();
   }, [dragIdx, overIdx, onReorderSessions, sessions, onSelectSession]);
 
   const handleClick = useCallback((id: string) => {
@@ -427,7 +517,11 @@ export default function SessionStrip({
   const repack = useCallback(() => {
     const bar = pillBarRef.current;
     if (!bar) return;
-    const budget = bar.clientWidth;
+    // Fix: read the flex-1 wrapper's allocated width, not the strip's own
+    // content width. Without this, the budget equals whatever 1 pill happens
+    // to occupy — a chicken-and-egg that prevents a 2nd pill from ever
+    // appearing (2nd session would need space that wasn't measured yet).
+    const budget = bar.parentElement?.clientWidth ?? bar.clientWidth;
     const measurements: SessionMeasurement[] = sessions.map(s => ({
       id: s.id,
       expandedWidth: measureExpandedWidth(s.name),
@@ -448,8 +542,12 @@ export default function SessionStrip({
   useEffect(() => {
     const bar = pillBarRef.current;
     if (!bar) return;
+    // Observe the wrapper (parentElement), not the strip itself. The strip is
+    // content-sized and never grows on its own, so observing it would never
+    // fire when more space becomes available.
+    const target = bar.parentElement ?? bar;
     const ro = new ResizeObserver(() => repack());
-    ro.observe(bar);
+    ro.observe(target);
     return () => ro.disconnect();
   }, [repack]);
 
@@ -465,7 +563,11 @@ export default function SessionStrip({
 
   return (
     <>
-      <div ref={pillBarRef} className="session-strip flex items-center gap-0.5 bg-inset rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink">
+      <div
+        ref={pillBarRef}
+        data-session-strip
+        className={`session-strip flex items-center gap-0.5 bg-inset rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
+      >
         {/* ── Session pills ──────────────────────────────── */}
         {visibleSessions.map((s, idx) => {
           const color = sessionStatuses?.get(s.id) || 'gray';
@@ -564,6 +666,13 @@ export default function SessionStrip({
           })()}
         >
           {sessions.length > 0 && (
+            <>
+              <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wider text-fg-muted">
+                Sessions in this window
+              </div>
+            </>
+          )}
+          {sessions.length > 0 && (
             <div ref={sessionListRef} className="scroll-fade py-1" style={{ maxHeight: 'min(336px, 50vh)' }}>
               {sessions.map((s, idx) => {
                 const color = sessionStatuses?.get(s.id) || 'gray';
@@ -632,6 +741,53 @@ export default function SessionStrip({
             </div>
           )}
 
+          {/* Sessions in other windows — only shown when the detach subsystem
+              reports peer windows owning sessions. Selecting one tells main
+              to focus that window and switch its active session. */}
+          {(() => {
+            const remoteGroups = (windowDirectory?.windows ?? [])
+              .filter((w) => w.window.id !== myWindowId)
+              .map((w) => ({
+                label: w.window.label,
+                windowId: w.window.id,
+                sessions: w.sessions,
+              }))
+              .filter((g) => g.sessions.length > 0);
+            if (remoteGroups.length === 0) return null;
+            return (
+              <>
+                <div className="border-t border-edge" />
+                <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wider text-fg-muted">
+                  Sessions in other windows
+                </div>
+                <div className="py-1">
+                  {remoteGroups.flatMap((g) =>
+                    g.sessions.map((s) => {
+                      const color = sessionStatuses?.get(s.id) || 'gray';
+                      return (
+                        <button
+                          key={s.id}
+                          onClick={() => {
+                            (window as any).claude?.detach?.focusAndSwitch?.({ windowId: g.windowId, sessionId: s.id });
+                            setMenuOpen(false);
+                          }}
+                          className="w-full text-left pl-3 pr-2 py-2 flex items-center gap-2 text-fg-dim hover:bg-inset hover:text-fg transition-colors"
+                        >
+                          <SessionDot color={color} isActive={false} />
+                          <SessionName name={s.name} />
+                          <span className="ml-auto shrink-0 text-[10px] text-fg-faint whitespace-nowrap flex items-center gap-1">
+                            <span>→</span>
+                            <span>{g.label}</span>
+                          </span>
+                        </button>
+                      );
+                    }),
+                  )}
+                </div>
+              </>
+            );
+          })()}
+
           <div className="border-t border-edge" />
 
           {showNewForm ? (
@@ -675,6 +831,18 @@ export default function SessionStrip({
               </div>
               {dangerous && !isGemini && (
                 <p className="text-[10px] text-[#DD4444]">Claude will execute tools without asking for approval.</p>
+              )}
+              {/* Launch in new window — hidden on platforms without multi-window support */}
+              {detachAvailable && (
+                <div className="flex items-center justify-between">
+                  <label className="text-[10px] uppercase tracking-wider text-fg-muted">Launch in New Window</label>
+                  <button
+                    onClick={() => setLaunchInNewWindow(!launchInNewWindow)}
+                    className={`w-8 h-4.5 rounded-full relative transition-colors ${launchInNewWindow ? 'bg-accent' : 'bg-inset'}`}
+                  >
+                    <span className={`absolute top-0.5 w-3.5 h-3.5 rounded-full bg-white transition-transform ${launchInNewWindow ? 'left-[calc(100%-16px)]' : 'left-0.5'}`} />
+                  </button>
+                </div>
               )}
               {/* Gemini CLI toggle — only visible when enabled in settings */}
               {geminiEnabled && (
