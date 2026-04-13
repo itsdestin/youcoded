@@ -345,10 +345,11 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
           </div>
         )}
 
-        {/* Glass — only for themes with a wallpaper (image background). Solid/gradient
-            themes render opaque chrome so the sliders do nothing on them. Blur sliders
+        {/* Glass — themes with an image OR gradient background composite a real layer
+            behind the chrome, so blurring/translucency produces a visible effect. Solid
+            themes have nothing behind the chrome so the sliders are hidden. Blur sliders
             are greyed when Reduce Visual Effects is on (the engine forces blur:0). */}
-        {hasWallpaper && (
+        {(hasWallpaper || hasGradient) && (
           <div>
             <p className="text-[9px] text-fg-faint uppercase tracking-wider mb-2">Glass</p>
             {reducedEffects && (

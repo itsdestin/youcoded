@@ -344,6 +344,8 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   //     change on each apply → Chrome reruns the filter pipeline. Gated on
   //     [data-wallpaper] so solid themes never pay the stacking-context +
   //     GPU cost for zero visual benefit. See GLASSMORPHISM-BLUR-FIX-PLAN.md.
+  //     Gradient backgrounds also qualify — they composite a real layer behind
+  //     the chrome, so blurring it produces a visible effect just like an image.
   const glassCSSId = 'theme-glass';
   let glassEl = document.getElementById(glassCSSId) as HTMLStyleElement | null;
   if (!glassEl) {
@@ -351,8 +353,8 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     glassEl.id = glassCSSId;
     document.head.appendChild(glassEl);
   }
-  const isWallpaper = bg?.type === 'image' && !!bg.value;
-  if (isWallpaper && !reducedEffects && panelsBlur > 0) {
+  const hasGlassBackground = (bg?.type === 'image' || bg?.type === 'gradient') && !!bg.value;
+  if (hasGlassBackground && !reducedEffects && panelsBlur > 0) {
     const scrimBlur = Math.min(panelsBlur, 8);
     const bubbleRule = bubbleBlur > 0 ? `
     [data-wallpaper] .in-view .bg-inset,
