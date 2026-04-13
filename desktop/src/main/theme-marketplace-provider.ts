@@ -584,6 +584,23 @@ export class ThemeMarketplaceProvider {
   async resolvePublishStateForSlug(
     slug: string,
   ): Promise<import('../shared/theme-marketplace-types').PublishState> {
+    // Hard cap on the whole operation — if registry fetch OR any gh call hangs
+    // (slow network, gh prompting for auth, dead DNS), we still return a state
+    // the UI can render instead of leaving the user stuck on "Checking publish
+    // status…". 10s is well past the normal ~200ms happy path.
+    const TIMEOUT_MS = 10_000;
+    const timeout = new Promise<import('../shared/theme-marketplace-types').PublishState>(
+      (resolve) => setTimeout(
+        () => resolve({ kind: 'unknown', reason: 'lookup timed out — check network or gh auth' }),
+        TIMEOUT_MS,
+      ),
+    );
+    return Promise.race([this.resolvePublishStateInner(slug), timeout]);
+  }
+
+  private async resolvePublishStateInner(
+    slug: string,
+  ): Promise<import('../shared/theme-marketplace-types').PublishState> {
     const { resolvePublishState } = await import('../renderer/state/publish-state-resolver');
     const { computeThemeContentHash } = await import('./theme-content-hash');
 
@@ -606,7 +623,7 @@ export class ThemeMarketplaceProvider {
       if (typeof manifest.author === 'string' && manifest.author.length > 0) {
         author = manifest.author;
       } else {
-        const { stdout } = await execFileAsync(ghPath, ['api', 'user', '--jq', '.login']);
+        const { stdout } = await execFileAsync(ghPath, ['api', 'user', '--jq', '.login'], { timeout: 5000 });
         author = stdout.trim();
       }
     } catch {
@@ -664,9 +681,12 @@ export class ThemeMarketplaceProvider {
       return this.cachedIndex;
     }
 
-    // Try fetching from remote
+    // Try fetching from remote with a 5s timeout so a dead/slow network falls
+    // through to the disk cache instead of hanging the resolver.
     try {
-      const res = await fetch(REGISTRY_URL);
+      const ctrl = new AbortController();
+      const t = setTimeout(() => ctrl.abort(), 5000);
+      const res = await fetch(REGISTRY_URL, { signal: ctrl.signal }).finally(() => clearTimeout(t));
       if (res.ok) {
         const index: ThemeRegistryIndex = await res.json();
         this.cachedIndex = index;

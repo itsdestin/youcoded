@@ -20,6 +20,17 @@ const REPO = 'itsdestin/destinclaude-themes';
 const DEFAULT_TTL_MS = 60_000;
 // How far back to look when searching for recently-merged PRs.
 const MERGED_WINDOW_MIN = 5;
+// Per-call timeout for the gh binary. If gh hangs (auth prompt, dead network,
+// DNS stall) we'd otherwise freeze the publish-state resolver — the renderer
+// UI would sit on "Checking publish status…" forever.
+const GH_TIMEOUT_MS = 5000;
+
+// Promisified execFile that always passes a timeout option. child_process
+// kills the child with SIGTERM after `timeout` ms, which causes the promise
+// to reject — runAndParseFirst then degrades to `null`.
+const _execFileAsync = promisify(_execFile);
+const defaultExecFile = (bin: string, args: string[]) =>
+  _execFileAsync(bin, args, { timeout: GH_TIMEOUT_MS }) as unknown as Promise<{ stdout: string }>;
 
 export interface PRRef {
   number: number;
@@ -51,7 +62,7 @@ export class ThemePRLookup {
   private ghPath: string;
 
   constructor(opts: ThemePRLookupOpts = {}) {
-    this.execFile = opts.execFile ?? (promisify(_execFile) as any);
+    this.execFile = opts.execFile ?? defaultExecFile;
     this.ttlMs = opts.ttlMs ?? DEFAULT_TTL_MS;
     this.now = opts.now ?? Date.now;
     this.ghPath = opts.ghPath ?? 'gh';
