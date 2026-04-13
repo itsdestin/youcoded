@@ -34,6 +34,12 @@ if (process.platform === 'darwin' || process.platform === 'linux') {
   ];
   if (process.platform === 'darwin') {
     extraPaths.unshift('/opt/homebrew/bin');  // Homebrew (Apple Silicon)
+    // User-local Node installed by first-run installer (tarball extract,
+    // no sudo). Must be on PATH at startup so node/npm/claude resolve on
+    // subsequent launches without re-running the installer.
+    extraPaths.unshift(
+      `${home}/Library/Application Support/DestinCode/node/bin`,
+    );
   }
   process.env.PATH = `${extraPaths.join(path.delimiter)}${path.delimiter}${process.env.PATH}`;
 }

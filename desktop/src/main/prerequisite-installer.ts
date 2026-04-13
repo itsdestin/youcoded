@@ -24,6 +24,73 @@ export interface DetectionResult {
 }
 
 // ---------------------------------------------------------------------------
+// User-local install layout (macOS)
+//
+// Node's official .pkg requires admin (sudo) and does not honor
+// `-target CurrentUserHomeDirectory` — the pkg isn't authored for per-user
+// install, so `installer` exits non-zero for a normal user. We sidestep by
+// extracting the official tarball to a user-writable dir and persisting it
+// to PATH ourselves, so no admin prompt is ever needed.
+// ---------------------------------------------------------------------------
+
+const NODE_VERSION = 'v20.19.0';
+const PATH_MARKER = '# Added by DestinCode first-run installer';
+
+/** Root dir for DestinCode-managed user-local tools (macOS). */
+function destincodeDataDir(): string {
+  if (process.platform === 'darwin') {
+    return path.join(os.homedir(), 'Library', 'Application Support', 'DestinCode');
+  }
+  return path.join(os.homedir(), '.destincode');
+}
+
+/** Where we extract Node's tarball on macOS. */
+export function userLocalNodeDir(): string {
+  return path.join(destincodeDataDir(), 'node');
+}
+
+/** Node's bin dir (contains node, npm, npx — and later, claude from `npm i -g`). */
+export function userLocalNodeBinDir(): string {
+  return path.join(userLocalNodeDir(), 'bin');
+}
+
+/** Prepend `dir` to process.env.PATH if not already present. */
+function prependToProcessPath(dir: string): void {
+  const sep = process.platform === 'win32' ? ';' : ':';
+  const current = process.env.PATH ?? '';
+  if (!current.split(sep).includes(dir)) {
+    process.env.PATH = `${dir}${sep}${current}`;
+  }
+}
+
+/**
+ * Append an idempotent PATH export to common POSIX shell profiles so
+ * interactive shells (and PTY sessions the app spawns) see the new bin dir.
+ * Best-effort — failures on any single file are logged, not fatal.
+ */
+function persistPathToShellProfiles(dir: string): void {
+  if (process.platform === 'win32') return;
+  const home = os.homedir();
+  const block = `\n${PATH_MARKER}\nexport PATH="${dir}:$PATH"\n`;
+  const candidates = [
+    path.join(home, '.zshrc'),
+    path.join(home, '.bash_profile'),
+    path.join(home, '.bashrc'),
+  ];
+  for (const file of candidates) {
+    try {
+      let existing = '';
+      try { existing = fs.readFileSync(file, 'utf8'); } catch { /* file doesn't exist — that's fine */ }
+      if (existing.includes(PATH_MARKER)) continue;
+      fs.appendFileSync(file, block, 'utf8');
+      log('INFO', 'prereq', `Added Node bin to PATH in ${path.basename(file)}`);
+    } catch (err) {
+      log('WARN', 'prereq', `Could not update ${file}`, { error: String(err) });
+    }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Helper functions
 // ---------------------------------------------------------------------------
 
@@ -226,19 +293,31 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
         { timeout: 300000 },
       );
     } else if (process.platform === 'darwin') {
-      const tmpPkg = path.join(os.tmpdir(), 'node-v20.19.0.pkg');
+      // User-local tarball install — no sudo, no admin prompt.
+      // Node's .pkg is system-wide only; previous `installer -target
+      // CurrentUserHomeDirectory` was rejected by the pkg metadata.
+      const arch = process.arch === 'arm64' ? 'arm64' : 'x64';
+      const tarName = `node-${NODE_VERSION}-darwin-${arch}.tar.gz`;
+      const tmpTar = path.join(os.tmpdir(), tarName);
       await downloadFile(
-        'https://nodejs.org/dist/v20.19.0/node-v20.19.0.pkg',
-        tmpPkg,
+        `https://nodejs.org/dist/${NODE_VERSION}/${tarName}`,
+        tmpTar,
       );
-      await execFileAsync('installer', [
-        '-pkg',
-        tmpPkg,
-        '-target',
-        'CurrentUserHomeDirectory',
-      ]);
-      // Best-effort cleanup
-      fs.unlink(tmpPkg, () => {});
+
+      const installDir = userLocalNodeDir();
+      fs.mkdirSync(installDir, { recursive: true });
+      // --strip-components=1 peels the top-level `node-vX.Y.Z-darwin-<arch>/`
+      // directory so bin/ lib/ include/ share/ land directly under installDir.
+      await execFileAsync('tar', [
+        '-xzf', tmpTar,
+        '-C', installDir,
+        '--strip-components=1',
+      ], { timeout: 300000 });
+      fs.unlink(tmpTar, () => {});
+
+      // Make the new node/npm visible to this process AND to future shells.
+      prependToProcessPath(userLocalNodeBinDir());
+      persistPathToShellProfiles(userLocalNodeBinDir());
     } else {
       return { success: false, error: 'Unsupported platform for Node.js install' };
     }
@@ -276,13 +355,28 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
         { timeout: 300000 },
       );
     } else if (process.platform === 'darwin') {
-      // xcode-select --install may return non-zero if already installed or
-      // requires a GUI interaction; wrap in try/catch so either case is OK.
+      // `xcode-select --install` pops a system GUI dialog asking the user to
+      // Agree / Install. Installation is asynchronous and driven by the user
+      // clicking in that dialog — we cannot wait synchronously. If git is
+      // still missing after the call returns, surface an actionable message
+      // so the user knows to accept the dialog and click Try Again.
       try {
         await execFileAsync('xcode-select', ['--install']);
       } catch {
-        log('WARN', 'prereq', 'xcode-select --install exited non-zero (may already be installed or needs GUI)');
+        log('INFO', 'prereq', 'xcode-select --install triggered dialog (or CLT already present)');
       }
+      const check = await detectGit();
+      if (!check.installed) {
+        return {
+          success: false,
+          error:
+            'macOS is installing Command Line Tools. Accept the "Install" prompt ' +
+            'in the system dialog, wait for it to finish (a few minutes), then ' +
+            'click Try Again.',
+        };
+      }
+      log('INFO', 'prereq', `Git installed: ${check.version}`);
+      return { success: true };
     } else {
       return { success: false, error: 'Unsupported platform for Git install' };
     }
