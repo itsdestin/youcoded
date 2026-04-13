@@ -1,4 +1,4 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
+import React, { useState, useRef, useCallback, useEffect, useLayoutEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionStatusColor } from './StatusDot';
 import { isAndroid } from '../platform';
@@ -6,24 +6,7 @@ import { MODELS, type ModelAlias } from './StatusBar';
 import FolderSwitcher from './FolderSwitcher';
 import { ModelInfoTooltip } from './ModelPickerPopup';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
-
-/* ── Narrow viewport hook — mirrors Android's single-session behavior ── */
-const NARROW_BREAKPOINT = 640;
-
-function useIsCompact(): boolean {
-  const [narrow, setNarrow] = useState(() =>
-    isAndroid() || (typeof window !== 'undefined' && window.innerWidth < NARROW_BREAKPOINT)
-  );
-  useEffect(() => {
-    if (isAndroid()) return; // always compact on Android
-    const mq = window.matchMedia(`(max-width: ${NARROW_BREAKPOINT - 1}px)`);
-    const handler = (e: MediaQueryListEvent) => setNarrow(e.matches);
-    setNarrow(mq.matches);
-    mq.addEventListener('change', handler);
-    return () => mq.removeEventListener('change', handler);
-  }, []);
-  return narrow;
-}
+import { packSessions, type SessionMeasurement, type PackResult } from './header/pack-sessions';
 
 interface SessionEntry {
   id: string;
@@ -412,15 +395,70 @@ export default function SessionStrip({
     onSelectSession(id);
   }, [onSelectSession]);
 
-  const isCompact = useIsCompact();
+  // --- Space-aware packing ---
+  // We measure each pill's expanded width offscreen using a hidden canvas
+  // (no layout thrash). Collapsed width is constant (dot + padding ≈ 24 px).
+  const [pack, setPack] = useState<PackResult>({
+    expanded: new Set(),
+    collapsed: sessions.map(s => s.id),
+    overflow: [],
+  });
+
+  // Persistent measuring canvas — exists once per component, reused.
+  const measureCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  if (measureCanvasRef.current === null && typeof document !== 'undefined') {
+    measureCanvasRef.current = document.createElement('canvas');
+  }
+
+  const measureExpandedWidth = useCallback((name: string): number => {
+    const canvas = measureCanvasRef.current;
+    if (!canvas) return 120; // fallback
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return 120;
+    // Match the pill's label styling: text-xs = 12px, medium weight.
+    ctx.font = '500 12px system-ui, -apple-system, sans-serif';
+    const textWidth = ctx.measureText(name).width;
+    // Pill chrome: 6px left pad + dot (10) + 4px gap + text + 6px right pad + 2px border.
+    return Math.ceil(textWidth + 28);
+  }, []);
+
+  const repack = useCallback(() => {
+    const bar = pillBarRef.current;
+    if (!bar) return;
+    const budget = bar.clientWidth;
+    const measurements: SessionMeasurement[] = sessions.map(s => ({
+      id: s.id,
+      expandedWidth: measureExpandedWidth(s.name),
+      collapsedWidth: 24, // dot (10) + horizontal padding (12) + border (2)
+    }));
+    const result = packSessions({
+      sessions: measurements,
+      activeId: activeSessionId,
+      budget,
+      gap: 2,          // matches gap-0.5 on the strip
+      triggerWidth: 24, // ▾ button is w-5 + ml-1
+    });
+    setPack(result);
+  }, [sessions, activeSessionId, measureExpandedWidth]);
+
+  // Pack on mount, on session-list change, and on any container resize.
+  useLayoutEffect(() => { repack(); }, [repack]);
+  useEffect(() => {
+    const bar = pillBarRef.current;
+    if (!bar) return;
+    const ro = new ResizeObserver(() => repack());
+    ro.observe(bar);
+    return () => ro.disconnect();
+  }, [repack]);
+
+  // Android always forces single-session mode (no room for siblings on mobile chrome).
+  const forceSingle = isAndroid();
+  const visibleSessions = forceSingle
+    ? sessions.filter(s => s.id === activeSessionId)
+    : sessions.filter(s => pack.expanded.has(s.id) || pack.collapsed.includes(s.id));
 
   if (sessions.length === 0) return null;
 
-  // Compact mode (Android + narrow desktop): show only the active session pill
-  const visibleSessions = isCompact
-    ? sessions.filter(s => s.id === activeSessionId)
-    : sessions;
-  const allExpanded = !isCompact && sessions.length <= 3;
   const dragging = dragIdx !== null && isDragging.current && dragPos !== null;
 
   return (
@@ -431,7 +469,9 @@ export default function SessionStrip({
           const color = sessionStatuses?.get(s.id) || 'gray';
           const isActive = s.id === activeSessionId;
           const isHovered = hoveredId === s.id;
-          const showName = allExpanded || isHovered || isActive;
+          const showName = forceSingle
+            ? isActive
+            : pack.expanded.has(s.id) || isHovered || isActive;
           const isBeingDragged = dragIdx === idx && isDragging.current;
           const isOver = overIdx === idx;
 
@@ -443,12 +483,12 @@ export default function SessionStrip({
                 onPointerMove={handlePointerMove}
                 onPointerUp={handlePointerUp}
                 onClick={() => handleClick(s.id)}
-                onMouseEnter={allExpanded ? undefined : () => handleEnter(s.id)}
-                onMouseLeave={allExpanded ? undefined : handleLeave}
+                onMouseEnter={pack.expanded.has(s.id) ? undefined : () => handleEnter(s.id)}
+                onMouseLeave={pack.expanded.has(s.id) ? undefined : handleLeave}
                 className={`
                   relative flex items-center gap-1 rounded-full px-1.5 py-px
                   border select-none touch-none overflow-hidden
-                  ${showName && (isActive || !allExpanded)
+                  ${showName && (isActive || !pack.expanded.has(s.id))
                     ? 'border-edge bg-panel'
                     : 'border-transparent'
                   }
@@ -459,7 +499,7 @@ export default function SessionStrip({
                     ? 'opacity 150ms, transform 150ms'
                     : 'all 150ms cubic-bezier(0.34, 1.56, 0.64, 1)',
                   transform: (!isBeingDragged && isHovered && !isActive) ? 'scale(1.02)' : undefined,
-                  boxShadow: (!isCompact && isActive) ? GLOW_SHADOW[color] : undefined,
+                  boxShadow: (!forceSingle && isActive) ? GLOW_SHADOW[color] : undefined,
                   cursor: 'default',
                 }}
                 title={s.name}
@@ -472,7 +512,7 @@ export default function SessionStrip({
                       ? (isActive ? 'none' : 120)
                       : 0,
                     opacity: showName ? 1 : 0,
-                    transition: allExpanded ? 'none' : 'max-width 200ms ease, opacity 150ms ease',
+                    transition: pack.expanded.has(s.id) ? 'none' : 'max-width 200ms ease, opacity 150ms ease',
                   }}
                 >
                   {s.name}
