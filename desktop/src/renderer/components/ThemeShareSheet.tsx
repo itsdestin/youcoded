@@ -28,10 +28,15 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
     }
     claude.theme.marketplace.generatePreview(themeSlug)
       .then((path: string | null) => {
+        if (!path) console.warn(`[ThemeShareSheet] Preview generation returned null for slug=${themeSlug} — falling back to swatch`);
+        else console.log(`[ThemeShareSheet] Preview ready for slug=${themeSlug} path=${path}`);
         setPreviewPath(path);
         setPreviewLoading(false);
       })
-      .catch(() => setPreviewLoading(false));
+      .catch((err: any) => {
+        console.warn(`[ThemeShareSheet] Preview generation threw for slug=${themeSlug}:`, err);
+        setPreviewLoading(false);
+      });
   }, [themeSlug]);
 
   // Resolve publish state on mount — drives the publish button appearance.
@@ -107,9 +112,20 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
             </div>
           ) : previewPath ? (
             <img
-              src={`file://${previewPath.replace(/\\/g, '/')}`}
+              // Windows absolute paths need file:///C:/... (triple slash). The old
+              // file://C:/... form renders as a broken-image icon in Chromium's
+              // stricter path parsing. Cache-bust by mtime so re-generated previews
+              // don't show stale PNG from the browser's image cache.
+              src={`file:///${previewPath.replace(/\\/g, '/').replace(/^\/+/, '')}?t=${Date.now()}`}
               alt={`${theme.name} preview`}
               className="w-full h-auto"
+              onError={() => {
+                // If the PNG fails to load (bad path, corrupt file, missing),
+                // clear previewPath so the swatch fallback renders instead of
+                // a broken-image icon.
+                console.warn(`[ThemeShareSheet] <img> failed to load for slug=${themeSlug} path=${previewPath} — falling back to swatch`);
+                setPreviewPath(null);
+              }}
             />
           ) : (
             /* Fallback: color swatch card */

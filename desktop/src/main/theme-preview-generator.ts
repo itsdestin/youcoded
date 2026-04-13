@@ -16,48 +16,77 @@ export async function generateThemePreview(
   themeDir: string,
   manifest: Record<string, any>,
 ): Promise<string> {
+  const slug = path.basename(themeDir);
+  const t0 = Date.now();
+  const log = (msg: string, extra?: Record<string, any>) => {
+    const suffix = extra ? ' ' + JSON.stringify(extra) : '';
+    console.log(`[theme-preview:${slug}] +${Date.now() - t0}ms ${msg}${suffix}`);
+  };
+  log('start', {
+    hasWallpaper: manifest.background?.type === 'image',
+    hasGradient: manifest.background?.type === 'gradient',
+    hasPattern: !!manifest.background?.pattern,
+  });
   const html = buildPreviewHTML(manifest, themeDir);
   const outputPath = path.join(themeDir, 'preview.png');
 
-  // Create an offscreen window
+  // Use a real hidden window (show: false) rather than offscreen rendering.
+  // capturePage() on offscreen windows is racy: the JS event loop (and our
+  // __previewReady flag) runs independently from the offscreen compositor, so
+  // capture can fire before the GPU has committed a frame — producing empty
+  // or corrupt PNGs that render as a broken-image icon in the share sheet.
+  // Real hidden windows paint on the normal compositor schedule and
+  // capturePage() is reliable once the JS ready gate has fired.
   const win = new BrowserWindow({
     width: PREVIEW_WIDTH,
     height: PREVIEW_HEIGHT,
     show: false,
     webPreferences: {
-      offscreen: true,
       contextIsolation: true,
       nodeIntegration: false,
+      // Hidden windows skip paints by default in Electron 20+ — without this,
+      // capturePage returns empty buffers because no frame was ever composited.
+      // Option is real but missing from this Electron version's type defs.
+      ...({ paintWhenInitiallyHidden: true } as any),
     },
   });
 
   try {
-    // Load the HTML content
     await win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+    log('loaded');
 
     // Wait for an event-based ready signal (fonts + wallpaper/pattern decoded).
     // The old 300ms fixed delay raced large base64 wallpapers — Chromium's
     // image decode can easily exceed that, producing previews that were either
     // missing the wallpaper or captured mid-paint.
-    await waitForPreviewReady(win, 3000);
+    const readyResult = await waitForPreviewReady(win, 3000);
+    log('ready-gate', readyResult);
 
     // One frame of settle after decode so layout + any reflow from late
     // background-size:cover computation has flushed.
     await new Promise(r => setTimeout(r, 50));
 
-    // Capture the page
+    // Capture the page. On hidden (non-offscreen) windows, capturePage produces
+    // a valid frame as long as the window has a compositor surface — which it
+    // does by default for BrowserWindow with show:false + paintWhenInitiallyHidden.
     const image = await win.webContents.capturePage();
+    const size = image.getSize();
     const pngBuffer = image.toPNG();
+    log('captured', { pngBytes: pngBuffer.length, w: size.width, h: size.height, empty: image.isEmpty() });
 
     // Validate: a zero-byte or tiny PNG means capture fired before paint.
     // 800x500 solid color still compresses to ~200-400 bytes, so 150 is a safe
     // "something went wrong" floor without false positives on clean themes.
-    if (pngBuffer.length < 150) {
-      throw new Error(`Preview capture produced suspiciously small PNG (${pngBuffer.length} bytes) — wallpaper likely did not decode in time.`);
+    if (image.isEmpty() || pngBuffer.length < 150) {
+      throw new Error(`Preview capture produced empty/tiny PNG (${pngBuffer.length} bytes, isEmpty=${image.isEmpty()}) — window did not paint in time.`);
     }
 
     await fs.promises.writeFile(outputPath, pngBuffer);
+    log('written', { path: outputPath });
     return outputPath;
+  } catch (err: any) {
+    log('FAILED', { error: err?.message ?? String(err) });
+    throw err;
   } finally {
     win.destroy();
   }
@@ -69,19 +98,25 @@ export async function generateThemePreview(
  * resolved their decode() promises. Returns as soon as the flag is true, or
  * after `capMs` as a hard fallback so a broken theme can't hang publish.
  */
-async function waitForPreviewReady(win: BrowserWindow, capMs: number): Promise<void> {
+async function waitForPreviewReady(
+  win: BrowserWindow,
+  capMs: number,
+): Promise<{ ready: boolean; elapsedMs: number; pollErrors: number }> {
   const start = Date.now();
+  let pollErrors = 0;
   while (Date.now() - start < capMs) {
     try {
       const ready = await win.webContents.executeJavaScript('window.__previewReady === true');
-      if (ready) return;
+      if (ready) return { ready: true, elapsedMs: Date.now() - start, pollErrors };
     } catch {
       // Page not navigated yet or window destroyed — loop and recheck
+      pollErrors++;
     }
     await new Promise(r => setTimeout(r, 50));
   }
   // Cap hit — proceed anyway with whatever's rendered. Validation below will
   // reject if the result is obviously empty.
+  return { ready: false, elapsedMs: Date.now() - start, pollErrors };
 }
 
 /**
