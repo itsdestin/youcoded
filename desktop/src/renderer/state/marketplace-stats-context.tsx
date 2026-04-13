@@ -45,8 +45,11 @@ let cachedStats: { fetchedAt: number; value: StatsResponse } | null = null;
 
 export function MarketplaceStatsProvider({
   children,
+  onNetworkResult,
 }: {
   children: React.ReactNode;
+  /** Optional callback fired after each /stats fetch attempt. Used by WorkerHealthProvider. */
+  onNetworkResult?: (ok: boolean) => void;
 }) {
   const [loading, setLoading] = useState(
     // If we have a fresh cache entry, we can start idle; otherwise show loading.
@@ -97,6 +100,8 @@ export function MarketplaceStatsProvider({
       if (cancelledRef.current) return;
       setPlugins(stats.plugins);
       setThemes(stats.themes);
+      // Report success to the worker health indicator (if wired)
+      onNetworkResult?.(true);
     } catch (err) {
       // Log once and fall back to empty aggregates — never block the UI.
       console.warn(
@@ -106,10 +111,12 @@ export function MarketplaceStatsProvider({
       if (cancelledRef.current) return;
       setPlugins({});
       setThemes({});
+      // Report failure to the worker health indicator (if wired)
+      onNetworkResult?.(false);
     } finally {
       if (!cancelledRef.current) setLoading(false);
     }
-  }, []);
+  }, [onNetworkResult]);
 
   // Fetch on mount (or serve from cache if fresh)
   useEffect(() => {

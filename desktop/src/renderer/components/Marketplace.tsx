@@ -10,6 +10,7 @@ import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react'
 import { useScrollFade } from '../hooks/useScrollFade';
 
 import { MarketplaceProvider, useMarketplace, type MarketplaceTab } from '../state/marketplace-context';
+import { useWorkerHealth } from '../state/worker-health-context';
 import SkillCard from './SkillCard';
 import SkillDetail from './SkillDetail';
 import ThemeCard from './ThemeCard';
@@ -45,6 +46,7 @@ export default function Marketplace(props: MarketplaceProps) {
 
 function MarketplaceInner({ onClose, initialTab = 'skills', onOpenShareSheet, onOpenEditor }: MarketplaceProps) {
   const [activeTab, setActiveTab] = useState<MarketplaceTab>(initialTab);
+  const { reachable, lastError } = useWorkerHealth();
 
   // Detail view state — when set, detail replaces the tab content
   const [selectedSkillId, setSelectedSkillId] = useState<string | null>(null);
@@ -86,10 +88,21 @@ function MarketplaceInner({ onClose, initialTab = 'skills', onOpenShareSheet, on
 
   return (
     <div className="fixed inset-0 z-50 bg-canvas flex flex-col">
-      {/* Header — back button + title + sign-in chip (right-aligned) */}
+      {/* Header — back button + title + worker health indicator + sign-in chip (right-aligned) */}
       <div className="flex items-center px-4 py-3 border-b border-edge">
         <button onClick={onClose} className="text-fg-muted hover:text-fg mr-3 text-lg">&larr;</button>
         <h2 className="text-sm font-bold text-fg flex-1">Marketplace</h2>
+        {/* Worker health indicator — only rendered when backend has been unreachable for >30s.
+            Status colors (red) are theme-independent per CLAUDE.md convention. */}
+        {!reachable && (
+          <div
+            className="relative flex items-center mr-2"
+            title={`Marketplace backend unreachable${lastError ? ` — last error ${Math.round((Date.now() - lastError) / 1000)}s ago` : ''}`}
+            aria-label="Marketplace backend unreachable"
+          >
+            <span className="w-2 h-2 rounded-full bg-red-500 shrink-0" aria-hidden="true" />
+          </div>
+        )}
         {/* Task 8: marketplace sign-in chip — shows signed-out button, pending state, or user avatar */}
         <SignInButton />
       </div>

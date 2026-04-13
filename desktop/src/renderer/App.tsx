@@ -46,6 +46,7 @@ import { ThemeProvider, useTheme } from './state/theme-context';
 import { SkillProvider } from './state/skill-context';
 import { MarketplaceAuthProvider } from './state/marketplace-auth-context';
 import { MarketplaceStatsProvider } from './state/marketplace-stats-context';
+import { WorkerHealthProvider, useWorkerHealth } from './state/worker-health-context';
 import ThemeEffects from './components/ThemeEffects';
 import { ZoomOverlay } from './components/ZoomOverlay';
 
@@ -1599,6 +1600,17 @@ function ThemeBg() {
   );
 }
 
+// Bridge: reads reportResult from WorkerHealthContext and passes it to MarketplaceStatsProvider.
+// Must be a child of WorkerHealthProvider and parent of anything that consumes useMarketplaceStats().
+function StatsWithHealthBridge({ children }: { children: React.ReactNode }) {
+  const { reportResult } = useWorkerHealth();
+  return (
+    <MarketplaceStatsProvider onNetworkResult={reportResult}>
+      {children}
+    </MarketplaceStatsProvider>
+  );
+}
+
 export default function App() {
   return (
     // Root boundary catches provider-level crashes that sub-tree boundaries can't.
@@ -1614,15 +1626,19 @@ export default function App() {
             state, but outside SkillProvider/GameProvider/ChatProvider which may
             eventually consume live stats via useMarketplaceStats(). */}
         <MarketplaceAuthProvider>
-          <MarketplaceStatsProvider>
-          <SkillProvider>
-            <GameProvider>
-              <ChatProvider>
-                <AppInner />
-              </ChatProvider>
-            </GameProvider>
-          </SkillProvider>
-          </MarketplaceStatsProvider>
+          {/* WorkerHealthProvider wraps stats so the stats provider can report
+              network results to the health indicator via the onNetworkResult prop. */}
+          <WorkerHealthProvider>
+            <StatsWithHealthBridge>
+              <SkillProvider>
+                <GameProvider>
+                  <ChatProvider>
+                    <AppInner />
+                  </ChatProvider>
+                </GameProvider>
+              </SkillProvider>
+            </StatsWithHealthBridge>
+          </WorkerHealthProvider>
         </MarketplaceAuthProvider>
       </ThemeProvider>
     </RootErrorBoundary>
