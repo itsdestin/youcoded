@@ -236,19 +236,26 @@ function ShellView({ tool, commandField }: {
 
   // Description is already shown as the collapsed-header label (see
   // friendlyToolDisplay in ToolCard.tsx); don't repeat it in the expanded body.
+  // Status chips (Background / Failed) sit above the command so they don't
+  // squeeze the code block horizontally. "Done" was dropped — the header
+  // status icon already covers success. Copy button is absolutely positioned
+  // inside the code block's top-right corner (visible on hover).
+  const chips: React.ReactNode[] = [];
+  if (bg) chips.push(<Chip key="bg" tone="info">Background</Chip>);
+  if (failed) chips.push(<Chip key="failed" tone="remove">Failed</Chip>);
+
   return (
     <div className="space-y-2">
-      <div className="flex items-start gap-2">
-        <pre className="flex-1 text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 overflow-auto whitespace-pre-wrap break-all text-fg">
+      {chips.length > 0 && <div className="flex items-center gap-1.5">{chips}</div>}
+      <div className="relative group">
+        <pre className="text-xs font-mono bg-canvas border border-edge rounded-sm px-2 py-1 pr-14 overflow-auto whitespace-pre-wrap break-all text-fg">
           {cmd || <span className="text-fg-muted italic">(no command)</span>}
         </pre>
-        <div className="flex items-center gap-1.5 shrink-0 pt-1">
-          {bg && <Chip tone="info">Background</Chip>}
-          {failed ? <Chip tone="remove">Failed</Chip>
-            : tool.status === 'complete' ? <Chip tone="add">Done</Chip>
-            : null}
-          {cmd && <CopyButton text={cmd} />}
-        </div>
+        {cmd && (
+          <div className="absolute top-1 right-1 opacity-70 group-hover:opacity-100 transition-opacity">
+            <CopyButton text={cmd} />
+          </div>
+        )}
       </div>
       {response && (
         <div>
