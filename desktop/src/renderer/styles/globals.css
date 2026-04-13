@@ -426,12 +426,12 @@ html, body, #root {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
-/* Slide polish: suppress the scrollbar thumb during the 300ms slide and fade
-   it back in. Without this, the thumb pops in at the end of the animation
-   (Chromium defers scrollbar paint under an active parent transform). */
-.settings-drawer::-webkit-scrollbar-thumb {
-  transition: background-color 220ms ease-out;
-}
+/* Slide polish: suppress the scrollbar thumb during the 300ms slide so the
+   thumb doesn't pop in mid-animation (Chromium defers scrollbar paint under
+   an active parent transform). Fix: previously transitioned background-color
+   back in over 220ms, which kept a live transition context on the scrollbar
+   thumb permanently and made continuous scrolling feel jittery. Snap-in is
+   imperceptible after a 300ms slide; smooth scrolling is not. */
 .settings-drawer[data-animating="true"]::-webkit-scrollbar-thumb {
   background-color: transparent;
 }
