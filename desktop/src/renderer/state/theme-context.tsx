@@ -8,6 +8,7 @@ import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
+import { buildDefaultIconSvg, rasterizeSvgToPngDataUrl } from '../themes/theme-default-icon';
 
 // Built-in themes imported as JSON (Vite handles JSON imports natively)
 import lightJson from '../themes/builtin/light.json';
@@ -315,8 +316,26 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // Hot-swap the Electron window + dock icon. Guarded via optional chaining —
     // the Android WebView shim deliberately omits window.* (launcher icons can't
     // be swapped at runtime), so this is a no-op there.
+    // If the theme declares its own appIcon we use it directly; otherwise we
+    // synthesize a theme-tinted variant of the default DestinCode glyph so every
+    // theme (built-in, community, user, marketplace) gets a matching icon without
+    // shipping per-theme artwork.
+    let iconCancelled = false;
     const anyWin = window as unknown as { claude?: { window?: { setIcon?: (u: string | null) => Promise<void> } } };
-    anyWin.claude?.window?.setIcon?.(activeTheme.appIcon ?? null).catch(() => {});
+    const setIconFn = anyWin.claude?.window?.setIcon;
+    if (setIconFn) {
+      if (activeTheme.appIcon) {
+        setIconFn(activeTheme.appIcon).catch(() => {});
+      } else {
+        const svg = buildDefaultIconSvg(activeTheme.tokens);
+        rasterizeSvgToPngDataUrl(svg).then(dataUrl => {
+          if (iconCancelled) return;
+          // Null on rasterizer failure — main resets to bundled default, which
+          // is the right fallback.
+          setIconFn(dataUrl).catch(() => {});
+        });
+      }
+    }
 
     // Sync font state: use theme's declared font, or fall back to default
     if (activeTheme.font?.family) {
@@ -325,6 +344,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       setFontState(DEFAULT_FONT_FAMILY);
       applyFont(DEFAULT_FONT_FAMILY);
     }
+    return () => { iconCancelled = true; };
   }, [activeTheme, reducedEffects]);
 
   const setTheme = useCallback((slug: string) => {

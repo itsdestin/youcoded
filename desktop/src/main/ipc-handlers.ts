@@ -78,26 +78,38 @@ export function registerIpcHandlers(
   });
 
   // Theme-driven window + dock icon hot-swap. Called from theme-context whenever
-  // the active theme changes. Only theme-asset:// URLs are accepted; anything else
-  // (or null) resets to the bundled default. Path is resolved server-side and
-  // confined to the theme's own asset dir — renderer cannot read arbitrary files.
+  // the active theme changes. Two URL forms are accepted:
+  //   1. theme-asset://<slug>/<relative-path>  — a file in a community/user theme's
+  //      asset dir (server resolves the path and confines reads to that dir, so
+  //      renderer cannot read arbitrary files).
+  //   2. data:image/png;base64,<...>            — an in-memory PNG synthesized by
+  //      the renderer (theme-default-icon.ts), used for every theme that doesn't
+  //      declare its own appIcon. Capped at MAX_DATA_ICON_BYTES to prevent a
+  //      compromised renderer from flooding main with huge buffers.
+  // Anything else (or null, or failure) resets to the bundled default icon.
   const DEFAULT_ICON_PATH = path.join(__dirname, '../../assets/icon.png');
   const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'destinclaude-themes');
+  const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
   ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
     let iconImg = nativeImage.createFromPath(DEFAULT_ICON_PATH);
-    if (url && typeof url === 'string' && url.startsWith('theme-asset://')) {
+    if (url && typeof url === 'string') {
       try {
-        const parsed = new URL(url);
-        const slug = parsed.hostname;
-        if (SAFE_SLUG_RE.test(slug)) {
-          const rel = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
-          const themeDir = path.join(THEMES_DIR_FOR_ICON, slug);
-          const resolved = path.resolve(themeDir, rel);
-          if (resolved.startsWith(themeDir + path.sep)) {
-            const img = nativeImage.createFromPath(resolved);
-            if (!img.isEmpty()) iconImg = img;
+        if (url.startsWith('theme-asset://')) {
+          const parsed = new URL(url);
+          const slug = parsed.hostname;
+          if (SAFE_SLUG_RE.test(slug)) {
+            const rel = decodeURIComponent(parsed.pathname.replace(/^\//, ''));
+            const themeDir = path.join(THEMES_DIR_FOR_ICON, slug);
+            const resolved = path.resolve(themeDir, rel);
+            if (resolved.startsWith(themeDir + path.sep)) {
+              const img = nativeImage.createFromPath(resolved);
+              if (!img.isEmpty()) iconImg = img;
+            }
           }
+        } else if (url.startsWith('data:image/png;base64,') && url.length <= MAX_DATA_ICON_BYTES) {
+          const img = nativeImage.createFromDataURL(url);
+          if (!img.isEmpty()) iconImg = img;
         }
       } catch { /* fall through to default */ }
     }
