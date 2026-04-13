@@ -12,7 +12,7 @@ export interface SessionMeasurement {
 }
 
 export interface PackInput {
-  sessions: SessionMeasurement[];
+  sessions: readonly SessionMeasurement[];
   activeId: string | null;
   budget: number;
   gap: number;
@@ -30,6 +30,7 @@ function sumWithGaps(widths: number[], gap: number): number {
   return widths.reduce((a, b) => a + b, 0) + gap * (widths.length - 1);
 }
 
+// Caller guarantees session ids are unique within `sessions`.
 export function packSessions(input: PackInput): PackResult {
   const { sessions, activeId, budget, gap, triggerWidth } = input;
   if (sessions.length === 0) {
@@ -49,8 +50,8 @@ export function packSessions(input: PackInput): PackResult {
     return greedyCollapsed(sessions, pillBudget, gap);
   }
 
-  let activeExpanded = active.expandedWidth <= pillBudget;
-  let activeWidth = activeExpanded ? active.expandedWidth : active.collapsedWidth;
+  const activeExpanded = active.expandedWidth <= pillBudget;
+  const activeWidth = activeExpanded ? active.expandedWidth : active.collapsedWidth;
   if (activeWidth > pillBudget) {
     // Active does not even fit collapsed — still show it (it is the active
     // pill; UX requires at least a dot). Everything else overflows.
@@ -101,7 +102,7 @@ export function packSessions(input: PackInput): PackResult {
 
 // Fallback when there is no active session — pack collapsed dots greedily.
 function greedyCollapsed(
-  sessions: SessionMeasurement[],
+  sessions: readonly SessionMeasurement[],
   budget: number,
   gap: number,
 ): PackResult {

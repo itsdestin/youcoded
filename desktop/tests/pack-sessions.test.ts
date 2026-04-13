@@ -44,8 +44,17 @@ describe('packSessions', () => {
     // Active (120) + trigger (20) + 2 gaps (4) = 144; 30 px left = one collapsed pill fits
     const r = packSessions({ sessions, activeId: 'a', budget: 170, gap: 2, triggerWidth: 20 });
     expect(r.expanded).toEqual(new Set(['a']));
-    expect(r.collapsed.length).toBe(1);
-    expect(r.overflow.length).toBe(3);
+    expect(r.collapsed).toEqual(['b']);
+    expect(r.overflow).toEqual(['c', 'd', 'e']);
+  });
+
+  it('treats a non-existent activeId as no-active and packs greedily', () => {
+    const sessions = [mk('a'), mk('b'), mk('c')];
+    const r = packSessions({ sessions, activeId: 'missing', budget: 90, gap: 2, triggerWidth: 20 });
+    // pillBudget = 90 - 20 - 2 = 68; three collapsed at 20 + 2 gaps = 64 → all fit
+    expect(r.expanded).toEqual(new Set());
+    expect(r.collapsed).toEqual(['a', 'b', 'c']);
+    expect(r.overflow).toEqual([]);
   });
 
   it('preserves original session order in collapsed list', () => {
