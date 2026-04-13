@@ -36,7 +36,28 @@ export interface ThemeRegistryEntry {
   assetUrls?: Record<string, string>;
   /** Phase 3c: optional config schema for the settings form */
   configSchema?: ConfigSchema;
+  /**
+   * sha256:<hex> of the theme's manifest + assets (excluding preview.png and
+   * ephemeral fields). Used to detect drift between a published registry entry
+   * and its local source. Optional — entries published before this field
+   * existed are treated as matching by the resolver.
+   */
+  contentHash?: string;
 }
+
+/**
+ * Discriminated union describing where a user-authored theme stands relative
+ * to the marketplace. Derived fresh on every theme-detail open from three
+ * authoritative sources (registry entry, open/recently-merged PR, local
+ * content hash) — never persisted, so it self-heals after reinstalls, PR
+ * rejections, and cross-device publishes.
+ */
+export type PublishState =
+  | { kind: 'draft' }
+  | { kind: 'in-review'; prNumber: number; prUrl: string }
+  | { kind: 'published-current'; marketplaceUrl: string }
+  | { kind: 'published-drift'; marketplaceUrl: string }
+  | { kind: 'unknown'; reason: string };
 
 export interface ThemeRegistryIndex {
   version: number;
