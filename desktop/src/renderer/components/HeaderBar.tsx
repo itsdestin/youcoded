@@ -9,6 +9,13 @@ import { isAndroid, isRemoteMode } from '../platform';
 const showCaptionButtons = typeof navigator !== 'undefined'
   && navigator.platform === 'Win32';
 
+/** Toggle sits on the opposite side of the OS window-control buttons
+ *  so the header is balanced. macOS traffic lights live on the left,
+ *  so the toggle goes right. Windows/Linux window controls live on
+ *  the right, so the toggle goes left. */
+const toggleOnLeft = typeof navigator !== 'undefined'
+  && !navigator.platform.startsWith('Mac');
+
 function CaptionButtons() {
   const claude = (window as any).claude;
   if (!claude?.window) return null;
@@ -168,9 +175,72 @@ export default function HeaderBar({
     return () => window.removeEventListener('resize', handler);
   }, [measureEndpoints]);
 
+  // Extracted so it can be rendered into either cluster depending on platform.
+  // Task 6 will tweak the inner span classNames; don't edit those here.
+  const toggleElement = (
+    <div ref={containerRef} className="relative flex bg-inset rounded-md p-0.5 gap-0.5">
+      {/* Sliding background pill — left/width come from CSS variables
+          set once by measureEndpoints(). Plain CSS transition tweens
+          between the two cached endpoints. */}
+      <div
+        className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)] transition-[left,width] duration-300 ease-in-out"
+        style={{
+          left:  viewMode === 'chat' ? 'var(--pill-chat-left)'  : 'var(--pill-term-left)',
+          width: viewMode === 'chat' ? 'var(--pill-chat-width)' : 'var(--pill-term-width)',
+          // Hide until first measurement completes — avoids a 1-frame flash
+          // at left: 0, width: auto before CSS vars are set.
+          opacity: measured ? 1 : 0,
+        }}
+      />
+      <button
+        ref={chatBtnRef}
+        onClick={() => onToggleView('chat')}
+        className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
+          viewMode === 'chat'
+            ? 'text-on-accent'
+            : 'text-fg-dim hover:text-fg-2'
+        }`}
+        title="Chat"
+      >
+        <ChatIcon className="w-3.5 h-3.5 shrink-0" />
+        {/* Text rolls out via max-width + opacity transition */}
+        <span
+          data-btn-text
+          className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
+          style={{
+            maxWidth: viewMode === 'chat' ? '3rem' : '0',
+            opacity: viewMode === 'chat' ? 1 : 0,
+          }}
+        >Chat</span>
+      </button>
+      <button
+        ref={termBtnRef}
+        onClick={() => onToggleView('terminal')}
+        className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
+          viewMode === 'terminal'
+            ? 'text-on-accent'
+            : 'text-fg-dim hover:text-fg-2'
+        }`}
+        title="Terminal"
+      >
+        <TerminalIcon className="w-3.5 h-3.5 shrink-0" />
+        <span
+          data-btn-text
+          className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
+          style={{
+            maxWidth: viewMode === 'terminal' ? '4.5rem' : '0',
+            opacity: viewMode === 'terminal' ? 1 : 0,
+          }}
+        >Terminal</span>
+      </button>
+    </div>
+  );
+
   return (
     <div className="header-bar flex items-center h-10 px-2 sm:px-3 border-b border-edge shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
-      {/* Left — settings + remote badge */}
+      {/* Left — settings gear + REMOTE badge + (Win/Linux) chat/terminal toggle.
+          NOTE: no min-w-0 — left children are all shrink-0; letting this collapse
+          would allow SessionStrip to overpaint the gear. Keep symmetric with right. */}
       <div className="flex-1 flex items-center gap-1 sm:gap-2">
         <button
           onClick={onToggleSettings}
@@ -190,6 +260,7 @@ export default function HeaderBar({
             REMOTE
           </span>
         )}
+        {toggleOnLeft && toggleElement}
       </div>
 
       {/* Center — session strip */}
@@ -211,63 +282,7 @@ export default function HeaderBar({
 
       {/* Right — view toggles */}
       <div className="flex-1 flex items-center justify-end gap-1 sm:gap-2">
-        {/* Chat/Terminal toggle — sliding pill with text roll-out */}
-        <div ref={containerRef} className="relative flex bg-inset rounded-md p-0.5 gap-0.5">
-          {/* Sliding background pill — left/width come from CSS variables
-              set once by measureEndpoints(). Plain CSS transition tweens
-              between the two cached endpoints. */}
-          <div
-            className="absolute top-0.5 bottom-0.5 bg-accent rounded-[var(--radius-toggle)] transition-[left,width] duration-300 ease-in-out"
-            style={{
-              left:  viewMode === 'chat' ? 'var(--pill-chat-left)'  : 'var(--pill-term-left)',
-              width: viewMode === 'chat' ? 'var(--pill-chat-width)' : 'var(--pill-term-width)',
-              // Hide until first measurement completes — avoids a 1-frame flash
-              // at left: 0, width: auto before CSS vars are set.
-              opacity: measured ? 1 : 0,
-            }}
-          />
-          <button
-            ref={chatBtnRef}
-            onClick={() => onToggleView('chat')}
-            className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
-              viewMode === 'chat'
-                ? 'text-on-accent'
-                : 'text-fg-dim hover:text-fg-2'
-            }`}
-            title="Chat"
-          >
-            <ChatIcon className="w-3.5 h-3.5 shrink-0" />
-            {/* Text rolls out via max-width + opacity transition */}
-            <span
-              data-btn-text
-              className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
-              style={{
-                maxWidth: viewMode === 'chat' ? '3rem' : '0',
-                opacity: viewMode === 'chat' ? 1 : 0,
-              }}
-            >Chat</span>
-          </button>
-          <button
-            ref={termBtnRef}
-            onClick={() => onToggleView('terminal')}
-            className={`relative z-10 px-1.5 sm:px-2.5 py-1 rounded-[var(--radius-toggle)] flex items-center gap-1.5 transition-colors duration-300 ${
-              viewMode === 'terminal'
-                ? 'text-on-accent'
-                : 'text-fg-dim hover:text-fg-2'
-            }`}
-            title="Terminal"
-          >
-            <TerminalIcon className="w-3.5 h-3.5 shrink-0" />
-            <span
-              data-btn-text
-              className="text-xs font-medium hidden sm:inline-block overflow-hidden whitespace-nowrap transition-all duration-300 ease-in-out"
-              style={{
-                maxWidth: viewMode === 'terminal' ? '4.5rem' : '0',
-                opacity: viewMode === 'terminal' ? 1 : 0,
-              }}
-            >Terminal</span>
-          </button>
-        </div>
+        {!toggleOnLeft && toggleElement}
         <div className="bg-inset rounded-md p-0.5 hidden sm:block">
           <button
             onClick={onToggleGamePanel}
