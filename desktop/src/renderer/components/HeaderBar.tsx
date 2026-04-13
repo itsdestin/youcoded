@@ -70,6 +70,8 @@ interface Props {
   defaultSkipPermissions?: boolean;
   defaultProjectFolder?: string;
   geminiEnabled?: boolean;
+  windowDirectory?: any;
+  myWindowId?: number | null;
 }
 
 export default function HeaderBar({
@@ -81,6 +83,7 @@ export default function HeaderBar({
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultSkipPermissions, defaultProjectFolder,
   geminiEnabled,
+  windowDirectory, myWindowId,
 }: Props) {
   // Pill doesn't track live button widths — it pins to the active button's
   // FINAL rect and CSS-transitions between two cached {left,width} pairs.
@@ -309,6 +312,8 @@ export default function HeaderBar({
         defaultSkipPermissions={defaultSkipPermissions}
         defaultProjectFolder={defaultProjectFolder}
         geminiEnabled={geminiEnabled}
+        windowDirectory={windowDirectory}
+        myWindowId={myWindowId}
       />
 
       {/* Right — view toggles */}

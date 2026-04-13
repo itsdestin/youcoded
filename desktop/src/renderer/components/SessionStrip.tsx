@@ -37,6 +37,13 @@ interface Props {
   defaultProjectFolder?: string;
   /** When true, show Gemini CLI toggle in new session form */
   geminiEnabled?: boolean;
+  /** Window directory (for switcher's "Sessions in other windows" group). */
+  windowDirectory?: {
+    leaderWindowId: number;
+    windows: { window: { id: number; label: string; createdAt: number }; sessions: SessionEntry[] }[];
+  } | null;
+  /** This renderer's own window id — excluded from remote sessions group. */
+  myWindowId?: number | null;
 }
 
 /* ── Status dot color maps ───────────────────────────────── */
@@ -139,6 +146,7 @@ export default function SessionStrip({
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultSkipPermissions, defaultProjectFolder,
   geminiEnabled,
+  windowDirectory, myWindowId,
 }: Props) {
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -650,6 +658,13 @@ export default function SessionStrip({
           })()}
         >
           {sessions.length > 0 && (
+            <>
+              <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wider text-fg-muted">
+                Sessions in this window
+              </div>
+            </>
+          )}
+          {sessions.length > 0 && (
             <div ref={sessionListRef} className="scroll-fade py-1" style={{ maxHeight: 'min(336px, 50vh)' }}>
               {sessions.map((s, idx) => {
                 const color = sessionStatuses?.get(s.id) || 'gray';
@@ -717,6 +732,53 @@ export default function SessionStrip({
               })}
             </div>
           )}
+
+          {/* Sessions in other windows — only shown when the detach subsystem
+              reports peer windows owning sessions. Selecting one tells main
+              to focus that window and switch its active session. */}
+          {(() => {
+            const remoteGroups = (windowDirectory?.windows ?? [])
+              .filter((w) => w.window.id !== myWindowId)
+              .map((w) => ({
+                label: w.window.label,
+                windowId: w.window.id,
+                sessions: w.sessions,
+              }))
+              .filter((g) => g.sessions.length > 0);
+            if (remoteGroups.length === 0) return null;
+            return (
+              <>
+                <div className="border-t border-edge" />
+                <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wider text-fg-muted">
+                  Sessions in other windows
+                </div>
+                <div className="py-1">
+                  {remoteGroups.flatMap((g) =>
+                    g.sessions.map((s) => {
+                      const color = sessionStatuses?.get(s.id) || 'gray';
+                      return (
+                        <button
+                          key={s.id}
+                          onClick={() => {
+                            (window as any).claude?.detach?.focusAndSwitch?.({ windowId: g.windowId, sessionId: s.id });
+                            setMenuOpen(false);
+                          }}
+                          className="w-full text-left pl-3 pr-2 py-2 flex items-center gap-2 text-fg-dim hover:bg-inset hover:text-fg transition-colors"
+                        >
+                          <SessionDot color={color} isActive={false} />
+                          <SessionName name={s.name} />
+                          <span className="ml-auto shrink-0 text-[10px] text-fg-faint whitespace-nowrap flex items-center gap-1">
+                            <span>→</span>
+                            <span>{g.label}</span>
+                          </span>
+                        </button>
+                      );
+                    }),
+                  )}
+                </div>
+              </>
+            );
+          })()}
 
           <div className="border-t border-edge" />
 

@@ -1379,6 +1379,8 @@ function AppInner() {
                 defaultSkipPermissions={sessionDefaults.skipPermissions}
                 defaultProjectFolder={sessionDefaults.projectFolder}
                 geminiEnabled={sessionDefaults.geminiEnabled}
+                windowDirectory={windowDirectory}
+                myWindowId={myWindowId}
               />
             </div>
             <div
