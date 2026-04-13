@@ -710,7 +710,11 @@ html, body, #root {
   width: fit-content;
   max-width: 95%;
   border-radius: var(--radius-full);
-  background: var(--panel);
+  /* No background override — let the base .status-bar / [data-wallpaper] .status-bar
+     rules cascade through so wallpaper themes keep translucency + injected
+     backdrop-filter. Previously `background: var(--panel)` here made the
+     floating pill fully opaque on wallpaper themes, killing the glassmorphism
+     that the header bar retained. */
   border: 1px solid var(--edge);
   padding: 2px 12px;
   margin: 4px auto 0;
