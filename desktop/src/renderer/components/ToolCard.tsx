@@ -654,7 +654,7 @@ export default React.memo(function ToolCard({ tool, sessionId }: Props) {
       })()}
 
       {/* Expanded details — per-tool parsed views, raw fallback otherwise */}
-      {expanded && <ToolBody tool={tool} />}
+      {expanded && <ToolBody tool={tool} sessionId={sessionId} />}
     </div>
   );
 })

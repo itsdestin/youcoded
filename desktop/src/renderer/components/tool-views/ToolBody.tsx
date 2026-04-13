@@ -1,6 +1,8 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import { ToolCallState } from '../../../shared/types';
 import MarkdownContent from '../MarkdownContent';
+import { useChatState } from '../../state/chat-context';
+import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 
 // Parsed views for expanded tool cards. One dispatcher + inline view functions;
 // splitting per-file only becomes worthwhile if a single view grows past ~80
@@ -319,8 +321,95 @@ function TaskCreateView({ tool }: { tool: ToolCallState }) {
       <div className="flex items-center gap-2 flex-wrap">
         {subject && <span className="text-sm font-medium text-fg">{subject}</span>}
         {priority && <Chip tone="info">{priority}</Chip>}
+        <Chip tone="add">Created</Chip>
       </div>
       {body && <div className="text-xs text-fg-dim whitespace-pre-wrap">{body}</div>}
+      {tool.error && <ErrorBlock error={tool.error} />}
+    </div>
+  );
+}
+
+// Lifecycle pill: pending → in_progress → completed (or deleted).
+// Current step is bold + filled; earlier steps are dim filled; future steps are
+// outlined muted. Driven purely by the status — works for any Task* view.
+function LifecyclePill({ status }: { status?: TaskStatus }) {
+  if (!status || status === 'deleted') {
+    return status === 'deleted' ? <Chip tone="remove">Deleted</Chip> : null;
+  }
+  const currentIdx = TASK_LIFECYCLE.indexOf(status);
+  return (
+    <div className="flex items-center gap-1 text-[10px] uppercase tracking-wider">
+      {TASK_LIFECYCLE.map((s, i) => {
+        const done = i < currentIdx;
+        const active = i === currentIdx;
+        return (
+          <React.Fragment key={s}>
+            <span className={
+              active ? 'text-fg font-bold'
+              : done ? 'text-fg-muted'
+              : 'text-fg-faint'
+            }>
+              <span className={
+                active ? 'inline-block w-2 h-2 rounded-full bg-fg mr-1 align-middle'
+                : done ? 'inline-block w-2 h-2 rounded-full bg-fg-muted mr-1 align-middle'
+                : 'inline-block w-2 h-2 rounded-full border border-fg-faint mr-1 align-middle'
+              } />
+              {s.replace('_', ' ')}
+            </span>
+            {i < TASK_LIFECYCLE.length - 1 && <span className="text-fg-faint">→</span>}
+          </React.Fragment>
+        );
+      })}
+    </div>
+  );
+}
+
+function TaskUpdateView({ tool, task }: { tool: ToolCallState; task?: TaskState }) {
+  const taskId = (tool.input.taskId as string) || '';
+  const newStatus = tool.input.status as TaskStatus | undefined;
+  const subject = (tool.input.subject as string | undefined) ?? task?.subject;
+  const description = (tool.input.description as string | undefined) ?? task?.description;
+  const priority = (tool.input.priority as string | undefined) ?? task?.priority;
+
+  // Previous status = whatever the task was at the event just before this one.
+  // task.events is insertion-ordered; find our toolUseId and look one back.
+  let prevStatus: TaskStatus | undefined;
+  if (task) {
+    const idx = task.events.findIndex(e => e.toolUseId === tool.toolUseId);
+    if (idx > 0) {
+      for (let i = idx - 1; i >= 0; i--) {
+        if (task.events[i].status) { prevStatus = task.events[i].status; break; }
+      }
+    }
+  }
+
+  // What the task looked like at the moment of this update (for the pill).
+  const displayStatus = newStatus ?? task?.status;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        {subject ? (
+          <span className="text-sm font-medium text-fg">{subject}</span>
+        ) : (
+          <span className="text-xs font-mono text-fg-muted">#{taskId}</span>
+        )}
+        {priority && <Chip tone="info">{priority}</Chip>}
+      </div>
+      {newStatus && prevStatus && prevStatus !== newStatus && (
+        <div className="text-xs text-fg-dim">
+          <span className="text-fg-muted">{prevStatus.replace('_', ' ')}</span>
+          <span className="text-fg-faint mx-1.5">→</span>
+          <span className="text-fg font-medium">{newStatus.replace('_', ' ')}</span>
+        </div>
+      )}
+      <LifecyclePill status={displayStatus} />
+      {description && <div className="text-xs text-fg-dim whitespace-pre-wrap">{description}</div>}
+      {task && task.events.length > 1 && (
+        <div className="text-[10px] text-fg-muted">
+          event {task.events.findIndex(e => e.toolUseId === tool.toolUseId) + 1} of {task.events.length}
+        </div>
+      )}
       {tool.error && <ErrorBlock error={tool.error} />}
     </div>
   );
@@ -628,7 +717,18 @@ function RawFallbackView({ tool }: { tool: ToolCallState }) {
 
 // --- Dispatcher ---
 
-export default function ToolBody({ tool }: { tool: ToolCallState }) {
+export default function ToolBody({ tool, sessionId }: { tool: ToolCallState; sessionId?: string }) {
+  // Look up the per-session task map once per render — memoized on the
+  // toolCalls Map reference (preserved across text streaming). Only
+  // TaskUpdate consumes this right now, but TaskGet/Stop could later.
+  // `Task` (capital T) is the sub-agent launcher and is UNRELATED to the
+  // TaskCreate/TaskUpdate agent-lifecycle tools despite the name overlap.
+  const chatState = useChatState(sessionId || '');
+  const tasksById = useMemo(
+    () => buildTasksById(chatState.toolCalls),
+    [chatState.toolCalls],
+  );
+
   const inner = (() => {
     switch (tool.toolName) {
       case 'Edit':
@@ -641,6 +741,10 @@ export default function ToolBody({ tool }: { tool: ToolCallState }) {
         return <TodoWriteView tool={tool} />;
       case 'TaskCreate':
         return <TaskCreateView tool={tool} />;
+      case 'TaskUpdate': {
+        const tid = tool.input.taskId as string | undefined;
+        return <TaskUpdateView tool={tool} task={tid ? tasksById.get(tid) : undefined} />;
+      }
       case 'Read':
         return <ReadView tool={tool} />;
       case 'Agent':
