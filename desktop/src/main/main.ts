@@ -408,12 +408,41 @@ app.whenReady().then(async () => {
     isFirstRun = false;
   }
 
-  // Install hook relay entries in Claude Code settings
-  try {
-    const installScript = path.join(__dirname, '../../scripts/install-hooks.js');
-    require(installScript);
-  } catch (e) {
-    log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
+  // Install hook relay entries in Claude Code settings.
+  //
+  // Skipped in dev profile so that running `npm run dev` from a worktree
+  // doesn't overwrite ~/.claude/settings.json with paths under that worktree
+  // — those paths break the user's installed app the moment the worktree is
+  // removed. Dev piggybacks on whatever hook paths the built app last wrote.
+  //
+  // install-hooks.js already does in-place replacement of existing entries,
+  // so simply calling it repairs any stale paths. We scan first only to log a
+  // visible warning when staleness is detected — useful for diagnosing the
+  // "stuck on Initializing" symptom that follows a removed dev worktree.
+  if (process.env.DESTINCODE_PROFILE !== 'dev') {
+    try {
+      const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
+      try {
+        const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+        for (const event of Object.values(settings.hooks ?? {}) as any[]) {
+          for (const matcher of event ?? []) {
+            for (const h of matcher.hooks ?? []) {
+              const cmd: string = h?.command ?? '';
+              const m = cmd.match(/"([^"]+\.(?:js|sh))"/);
+              if (m && (m[1].includes('.worktrees') || !fs.existsSync(m[1]))) {
+                log('WARN', 'Main', 'Stale hook command detected — install-hooks will repair', { command: cmd });
+              }
+            }
+          }
+        }
+      } catch { /* settings missing or unparseable — install-hooks will normalize */ }
+      const installScript = path.join(__dirname, '../../scripts/install-hooks.js');
+      require(installScript);
+    } catch (e) {
+      log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
+    }
+  } else {
+    log('INFO', 'Main', 'Dev profile — skipping install-hooks (using built app paths)');
   }
 
   try {
