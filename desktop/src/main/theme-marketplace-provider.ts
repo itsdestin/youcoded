@@ -530,6 +530,7 @@ export class ThemeMarketplaceProvider {
         '--body', prBody,
       ], { timeout: 30000 });
       const prUrl = prUrlRaw.trim();
+      this.invalidatePRStatus(slug, username);
       this.invalidateRegistryCache();
       return { prUrl, prNumber: extractPRNumber(prUrl) };
     } catch (err: any) {
@@ -544,6 +545,7 @@ export class ThemeMarketplaceProvider {
           ]);
           if (existingPr.trim()) {
             const prUrl = existingPr.trim();
+            this.invalidatePRStatus(slug, username);
             this.invalidateRegistryCache();
             return { prUrl, prNumber: extractPRNumber(prUrl) };
           }
@@ -551,6 +553,82 @@ export class ThemeMarketplaceProvider {
       }
       throw new Error(`Failed to create PR: ${err.stderr || err.message}`);
     }
+  }
+
+  // Lazily-constructed PR lookup — initialized on first use so the module is
+  // not required at class instantiation time (which breaks Vitest's CommonJS
+  // transform boundary). Tests that need to stub ThemePRLookup can do so
+  // before calling resolvePublishStateForSlug or invalidatePRStatus.
+  private _prLookup: InstanceType<typeof import('./theme-pr-lookup').ThemePRLookup> | null = null;
+
+  private get prLookup(): InstanceType<typeof import('./theme-pr-lookup').ThemePRLookup> {
+    if (!this._prLookup) {
+      // Why require() not import(): this file is in main process (CommonJS).
+      // The existing file already uses require('which') at module scope for
+      // the same reason. Using require() here keeps the instantiation lazy
+      // (deferred to first method call) without hoisting concerns.
+      // eslint-disable-next-line @typescript-eslint/no-var-requires
+      const { ThemePRLookup } = require('./theme-pr-lookup');
+      this._prLookup = new ThemePRLookup();
+    }
+    return this._prLookup!;
+  }
+
+  /**
+   * Resolve the publish-state for a local user theme. Combines the registry
+   * fetch, gh PR lookups (open + recently merged), and a fresh local content
+   * hash into a discriminated `PublishState`. Errors degrade to
+   * `{ kind: 'unknown', reason }` rather than throwing — callers render a
+   * degraded-mode warning instead of a crash.
+   */
+  async resolvePublishStateForSlug(
+    slug: string,
+  ): Promise<import('../shared/theme-marketplace-types').PublishState> {
+    const { resolvePublishState } = await import('../renderer/state/publish-state-resolver');
+    const { computeThemeContentHash } = await import('./theme-content-hash');
+
+    if (!SAFE_SLUG_RE.test(slug)) {
+      return { kind: 'unknown', reason: 'invalid slug' };
+    }
+
+    const themeDir = path.join(THEMES_DIR, slug);
+    const manifestPath = path.join(themeDir, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) {
+      return { kind: 'unknown', reason: 'theme not found on disk' };
+    }
+
+    // Resolve author: prefer the local manifest (it's the source of truth for
+    // who authored the theme). Fall back to gh auth so a manifest with no
+    // author still gets a reasonable answer.
+    let author: string;
+    try {
+      const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf-8'));
+      if (typeof manifest.author === 'string' && manifest.author.length > 0) {
+        author = manifest.author;
+      } else {
+        const { stdout } = await execFileAsync(ghPath, ['api', 'user', '--jq', '.login']);
+        author = stdout.trim();
+      }
+    } catch {
+      return { kind: 'unknown', reason: 'gh not authenticated' };
+    }
+
+    // All four lookups are independent — parallelize.
+    const [index, openPR, recentlyMergedPR, localHash] = await Promise.all([
+      this.fetchRegistry().catch(() => null),
+      this.prLookup.findOpenPR(slug, author),
+      this.prLookup.findRecentlyMergedPR(slug, author),
+      computeThemeContentHash(themeDir),
+    ]);
+
+    const registryEntry = index?.themes.find(t => t.slug === slug && t.author === author) ?? null;
+
+    return resolvePublishState({ registryEntry, openPR, recentlyMergedPR, localHash });
+  }
+
+  /** Invalidate PR-status cache for a given (slug, author). */
+  invalidatePRStatus(slug: string, author: string): void {
+    this.prLookup.invalidate(slug, author);
   }
 
   /** Recursively walk a directory and return all file paths. */
