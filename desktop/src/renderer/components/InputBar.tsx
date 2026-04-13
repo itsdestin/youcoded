@@ -487,8 +487,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // through (with animated keyword spans). caret-color keeps the
             // cursor visible. Selection highlight still renders from the
             // browser. Placeholder uses its own color token so it's unaffected.
-            style={{ caretColor: 'var(--fg)' }}
-            className="scroll-fade relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none leading-snug p-0 m-0 align-middle"
+            // Fix: Chromium's UA default font-family for <textarea> is
+            // monospace, which makes glyph widths diverge from the sans-font
+            // mirror div behind it — the caret drifts ahead of the visible
+            // keyword text as you type, and selection reveals a second copy
+            // of the text. Inherit font metrics from the parent so both
+            // layers measure identically.
+            style={{ caretColor: 'var(--fg)', fontFamily: 'inherit', letterSpacing: 'inherit' }}
+            className="input-bar-textarea scroll-fade relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none leading-snug p-0 m-0 align-middle"
           />
           </div>
           <button

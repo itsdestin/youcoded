@@ -833,3 +833,15 @@ html, body, #root {
   .flowing-word { animation: none; }
 }
 
+/* Fix: the chat input's <textarea> has color:transparent so the flowing-
+   keyword mirror div shows through. But browsers override color:transparent
+   during selection — selected textarea text paints in the selection fg
+   color and you'd see a second copy of the text on top of the mirror.
+   Force selected text to stay transparent; keep an accent-tinted selection
+   rectangle so highlighting is still visible over the mirror. */
+.input-bar-textarea::selection {
+  color: transparent;
+  -webkit-text-fill-color: transparent;
+  background: color-mix(in srgb, var(--accent) 30%, transparent);
+}
+
