@@ -21,10 +21,13 @@ import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketp
 
 interface Props {
   onExit(): void;
+  // Phase 2 redesign — jump to Your Library without round-tripping through
+  // the command drawer. Optional so the screen still renders standalone.
+  onOpenLibrary?(): void;
   initialTypeChip?: "skill" | "theme";
 }
 
-export default function MarketplaceScreen({ onExit, initialTypeChip }: Props) {
+export default function MarketplaceScreen({ onExit, onOpenLibrary, initialTypeChip }: Props) {
   const mp = useMarketplace();
   const [filter, setFilter] = useState<FilterState>(() => {
     const f = emptyFilter();
@@ -155,14 +158,26 @@ export default function MarketplaceScreen({ onExit, initialTypeChip }: Props) {
       {/* Top bar — stays visible on scroll; holds the Exit hint. */}
       <div className="flex items-center justify-between p-3">
         <h1 className="text-xl font-semibold text-fg pl-2">Marketplace</h1>
-        <button
-          type="button"
-          onClick={onExit}
-          className="text-fg-dim hover:text-fg text-sm px-2 py-1"
-          aria-label="Exit marketplace"
-        >
-          Esc · Back to chat
-        </button>
+        <div className="flex items-center gap-2">
+          {onOpenLibrary && (
+            <button
+              type="button"
+              onClick={onOpenLibrary}
+              className="text-fg-2 hover:text-fg text-sm px-3 py-1 rounded-md border border-edge-dim hover:border-edge"
+              aria-label="Open Your Library"
+            >
+              Your Library
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onExit}
+            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            aria-label="Exit marketplace"
+          >
+            Esc · Back to chat
+          </button>
+        </div>
       </div>
 
       {mode === "discovery" && mp.featured.hero && mp.featured.hero.length > 0 && (
