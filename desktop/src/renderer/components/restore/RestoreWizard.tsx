@@ -6,6 +6,7 @@ import { RestoreProgress } from './RestoreProgress';
 import { RestoreSummary } from './RestoreSummary';
 import type {
   RestoreCategory,
+  RestoreMode,
   RestorePreview as RestorePreviewData,
   RestoreResult,
 } from '../../../shared/types';
@@ -18,6 +19,7 @@ import type {
 type Step =
   | 'pick-version'
   | 'pick-categories'
+  | 'pick-mode'
   | 'preview'
   | 'safety'
   | 'confirm'
@@ -52,13 +54,17 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
   const [versionRef, setVersionRef] = useState<string>('HEAD');
   const [categories, setCategories] = useState<RestoreCategory[]>([...ALL_CATEGORIES]);
   const [preview, setPreview] = useState<RestorePreviewData | null>(null);
+  // Merge (union) is the default because it's non-destructive on both sides.
+  // Wipe (mirror) has to be opted into — and the UI later forces snapshot on.
+  const [mode, setMode] = useState<RestoreMode>('merge');
+  // Only meaningful for wipe; in merge mode we never snapshot (nothing to undo).
   const [snapshotFirst, setSnapshotFirst] = useState(true);
   const [understood, setUnderstood] = useState(false);
   const [result, setResult] = useState<RestoreResult | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  async function loadPreview(cats: RestoreCategory[], ref: string) {
+  async function loadPreview(cats: RestoreCategory[], ref: string, m: RestoreMode) {
     setBusy(true);
     try {
       // @ts-ignore window.claude is contextBridge-provided
@@ -66,7 +72,8 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
         backendId,
         versionRef: ref,
         categories: cats,
-        snapshotFirst,
+        snapshotFirst: m === 'wipe' ? snapshotFirst : false,
+        mode: m,
       });
       setPreview(p);
       setStep('preview');
@@ -86,7 +93,9 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
         backendId,
         versionRef,
         categories,
-        snapshotFirst,
+        // Merge is always non-destructive → snapshot is meaningless and skipped.
+        snapshotFirst: mode === 'wipe' ? snapshotFirst : false,
+        mode,
       });
       setResult(r);
       setStep('done');
@@ -185,7 +194,82 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
                 </button>
                 <button
                   disabled={categories.length === 0 || busy}
-                  onClick={() => loadPreview(categories, versionRef)}
+                  onClick={() => setStep('pick-mode')}
+                  className="px-3 py-1.5 rounded-md text-[11px] font-medium bg-accent hover:opacity-90 text-on-accent transition-colors disabled:opacity-50"
+                >
+                  Next
+                </button>
+              </div>
+            </div>
+          )}
+
+          {step === 'pick-mode' && (
+            <div className="flex flex-col gap-3">
+              <div>
+                <div className="text-sm font-medium text-fg">How should we restore?</div>
+                <div className="text-[11px] text-fg-dim mt-0.5">
+                  Two very different behaviors — pick carefully.
+                </div>
+              </div>
+              <label
+                className={`flex items-start gap-2 px-3 py-2.5 rounded-md border cursor-pointer ${
+                  mode === 'merge'
+                    ? 'bg-accent/10 border-accent'
+                    : 'bg-inset/50 border-edge-dim hover:bg-inset'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="restore-mode"
+                  value="merge"
+                  checked={mode === 'merge'}
+                  onChange={() => setMode('merge')}
+                  className="accent-accent mt-1"
+                />
+                <div className="flex-1">
+                  <div className="text-xs text-fg font-medium">Merge (recommended)</div>
+                  <div className="text-[11px] text-fg-dim mt-0.5">
+                    Download files from the backup that are missing or older locally, and
+                    upload files that are only on this device. Nothing gets deleted on either side.
+                  </div>
+                </div>
+              </label>
+              <label
+                className={`flex items-start gap-2 px-3 py-2.5 rounded-md border cursor-pointer ${
+                  mode === 'wipe'
+                    ? 'bg-red-500/10 border-red-500/40'
+                    : 'bg-inset/50 border-edge-dim hover:bg-inset'
+                }`}
+              >
+                <input
+                  type="radio"
+                  name="restore-mode"
+                  value="wipe"
+                  checked={mode === 'wipe'}
+                  onChange={() => setMode('wipe')}
+                  className="accent-red-500 mt-1"
+                />
+                <div className="flex-1">
+                  <div className="text-xs text-fg font-medium">
+                    Wipe &amp; restore <span className="text-red-400">(destructive)</span>
+                  </div>
+                  <div className="text-[11px] text-fg-dim mt-0.5">
+                    Replace local data with the backup exactly. Any files on this device that
+                    aren&apos;t in the backup will be <span className="text-red-400">deleted</span>.
+                    A safety snapshot is taken first so you can undo.
+                  </div>
+                </div>
+              </label>
+              <div className="flex justify-between gap-2 pt-2 border-t border-edge-dim">
+                <button
+                  onClick={() => setStep('pick-categories')}
+                  className="px-3 py-1.5 rounded-md text-[11px] font-medium bg-inset hover:bg-edge text-fg-muted transition-colors"
+                >
+                  Back
+                </button>
+                <button
+                  disabled={busy}
+                  onClick={() => loadPreview(categories, versionRef, mode)}
                   className="px-3 py-1.5 rounded-md text-[11px] font-medium bg-accent hover:opacity-90 text-on-accent transition-colors disabled:opacity-50"
                 >
                   {busy ? 'Loading…' : 'Preview changes'}
@@ -196,16 +280,21 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
 
           {step === 'preview' && preview && (
             <div className="flex flex-col gap-3">
-              <RestorePreview preview={preview} categories={categories} />
+              <RestorePreview
+                preview={preview}
+                categories={categories}
+                backendId={backendId}
+                versionRef={versionRef}
+              />
               <div className="flex justify-between gap-2 pt-2 border-t border-edge-dim">
                 <button
-                  onClick={() => setStep('pick-categories')}
+                  onClick={() => setStep('pick-mode')}
                   className="px-3 py-1.5 rounded-md text-[11px] font-medium bg-inset hover:bg-edge text-fg-muted transition-colors"
                 >
                   Back
                 </button>
                 <button
-                  onClick={() => setStep('safety')}
+                  onClick={() => setStep(mode === 'wipe' ? 'safety' : 'confirm')}
                   className="px-3 py-1.5 rounded-md text-[11px] font-medium bg-accent hover:opacity-90 text-on-accent transition-colors"
                 >
                   Continue
@@ -289,26 +378,34 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
           {step === 'confirm' && (
             <div className="flex flex-col gap-3">
               <div>
-                <div className="text-sm font-medium text-fg">Ready to restore</div>
+                <div className="text-sm font-medium text-fg">
+                  Ready to {mode === 'merge' ? 'merge' : 'restore'}
+                </div>
                 <div className="text-[11px] text-fg-dim mt-0.5">
-                  Restore <span className="text-fg">{categories.length}</span> categor
-                  {categories.length === 1 ? 'y' : 'ies'} from{' '}
+                  {mode === 'merge' ? 'Merge' : 'Wipe & restore'}{' '}
+                  <span className="text-fg">{categories.length}</span> categor
+                  {categories.length === 1 ? 'y' : 'ies'} with{' '}
                   <span className="text-fg">{backendLabel}</span>
-                  {snapshotFirst && ' (with safety snapshot)'}. This can take a minute.
+                  {mode === 'wipe' && snapshotFirst && ' (with safety snapshot)'}.
+                  {mode === 'merge' ? ' Nothing gets deleted.' : ' This can take a minute.'}
                 </div>
               </div>
               <div className="flex justify-between gap-2 pt-2 border-t border-edge-dim">
                 <button
-                  onClick={() => setStep('safety')}
+                  onClick={() => setStep(mode === 'wipe' ? 'safety' : 'preview')}
                   className="px-3 py-1.5 rounded-md text-[11px] font-medium bg-inset hover:bg-edge text-fg-muted transition-colors"
                 >
                   Back
                 </button>
                 <button
                   onClick={executeRestore}
-                  className="px-3 py-1.5 rounded-md text-[11px] font-medium bg-accent hover:opacity-90 text-on-accent transition-colors"
+                  className={`px-3 py-1.5 rounded-md text-[11px] font-medium transition-colors ${
+                    mode === 'wipe'
+                      ? 'bg-red-600 hover:bg-red-500 text-white'
+                      : 'bg-accent hover:opacity-90 text-on-accent'
+                  }`}
                 >
-                  Start restore
+                  {mode === 'merge' ? 'Start merge' : 'Wipe & restore'}
                 </button>
               </div>
             </div>
