@@ -229,6 +229,12 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
   const accentTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const editScrollRef = useScrollFade<HTMLDivElement>();
   const isUserTheme = theme.source === 'user';
+  // Community themes are downloaded from the marketplace. They share the
+  // non-user edit surface (glass + terminal overrides only, preserved per-slug)
+  // so upstream updates stay mergeable — but the banner copy must distinguish
+  // them from the 4 built-in themes or users think marketplace downloads are
+  // "built-in" and broken.
+  const isCommunityTheme = theme.source === 'community';
   const hasWallpaper = theme.background?.type === 'image';
   const hasGradient = theme.background?.type === 'gradient';
   // Pre-baked terminal-value asset already has blur/brightness cooked in — the
@@ -300,7 +306,9 @@ function ThemeEditView({ theme, reducedEffects, setGlassOverride, onPublishTheme
         {/* Locked banner for non-user themes so it's clear why most controls are absent */}
         {!isUserTheme && (
           <p className="text-[10px] text-fg-faint bg-inset border border-edge-dim rounded-md px-2.5 py-1.5 leading-relaxed">
-            Built-in themes are locked. Only glass + terminal transparency sliders are customizable. Use "Build New Theme with Claude" to make an editable copy.
+            {isCommunityTheme
+              ? 'Marketplace themes are kept in sync with their author\u2019s updates. Glass + terminal transparency sliders are customizable per-theme. Use "Build New Theme with Claude" to fork an editable copy.'
+              : 'Built-in themes are locked. Only glass + terminal transparency sliders are customizable. Use "Build New Theme with Claude" to make an editable copy.'}
           </p>
         )}
 
