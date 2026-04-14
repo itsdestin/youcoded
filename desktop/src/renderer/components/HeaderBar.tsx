@@ -14,9 +14,12 @@ const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith(
 /** Toggle sits on the opposite side of the OS window-control buttons
  *  so the header is balanced. macOS traffic lights live on the left,
  *  so the toggle goes right. Windows/Linux window controls live on
- *  the right, so the toggle goes left. */
+ *  the right, so the toggle goes left. Android has no OS window
+ *  controls in-app, so the toggle goes right (matches Mac placement
+ *  — don't let the Linux-based navigator.platform pull it left). */
 const toggleOnLeft = typeof navigator !== 'undefined'
-  && !navigator.platform.startsWith('Mac');
+  && !navigator.platform.startsWith('Mac')
+  && !isAndroid();
 
 function CaptionButtons() {
   const claude = (window as any).claude;
