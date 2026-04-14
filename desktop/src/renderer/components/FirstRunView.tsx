@@ -237,18 +237,29 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
         <div className="flex flex-col items-center gap-5 w-full max-w-md px-4">
           <p className="text-sm text-gray-400">This usually takes 2-3 minutes</p>
 
-          {/* Prerequisite checklist */}
+          {/* Prerequisite checklist — rounded pills */}
           {state && (
             <ul className="w-full space-y-2">
-              {state.prerequisites.map((p) => (
-                <li key={p.name} className="flex items-center gap-3 text-sm">
-                  <StatusIcon status={p.status} />
-                  <span className="text-gray-200">{p.displayName}</span>
-                  <span className="ml-auto text-xs text-gray-500">
-                    {statusLabel(p.status, p.version)}
-                  </span>
-                </li>
-              ))}
+              {state.prerequisites.map((p) => {
+                const active = p.status === 'installing' || p.status === 'checking';
+                return (
+                  <li
+                    key={p.name}
+                    className={[
+                      'flex items-center gap-3 rounded-full px-4 py-2.5 border transition-colors',
+                      active
+                        ? 'bg-inset border-edge'
+                        : 'bg-panel border-edge-dim',
+                    ].join(' ')}
+                  >
+                    <StatusIcon status={p.status} />
+                    <span className="text-sm text-fg">{p.displayName}</span>
+                    <span className="ml-auto text-xs text-fg-muted">
+                      {statusLabel(p.status, p.version)}
+                    </span>
+                  </li>
+                );
+              })}
             </ul>
           )}
 
