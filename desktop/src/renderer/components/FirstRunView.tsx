@@ -164,6 +164,19 @@ interface FirstRunViewProps {
 export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   const [state, setState] = useState<FirstRunState | null>(null);
 
+  // First launch has no user theme — lock the screen to Creme so the app's
+  // theme tokens resolve to a designed onboarding palette. ThemeProvider
+  // overrides this once the main app mounts after completion.
+  useEffect(() => {
+    const root = document.documentElement;
+    const prev = root.getAttribute('data-theme');
+    root.setAttribute('data-theme', 'creme');
+    return () => {
+      if (prev) root.setAttribute('data-theme', prev);
+      else root.removeAttribute('data-theme');
+    };
+  }, []);
+
   // Fetch initial state + subscribe to updates
   useEffect(() => {
     const api = (window as any).claude.firstRun;
