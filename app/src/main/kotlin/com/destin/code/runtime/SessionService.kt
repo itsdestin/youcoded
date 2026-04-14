@@ -799,6 +799,31 @@ class SessionService : Service() {
                 val result = skillProvider?.getFeatured() ?: JSONObject()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
+            // Marketplace redesign Phase 3 — integrations scaffold. List
+            // returns the cached catalog; the rest are stubs that will gain
+            // real wiring when the desktop Google Workspace slice ships and
+            // we port it to Android.
+            "integrations:list" -> {
+                val result = org.json.JSONArray()
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            // Phase 4 — no-op on Android. Android MarketplaceFetcher caches
+            // in a separate dir; if we ever add a bust there, wire here.
+            "marketplace:invalidate-cache" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
+            }
+            "integrations:status",
+            "integrations:install",
+            "integrations:uninstall",
+            "integrations:configure" -> {
+                val result = JSONObject().apply {
+                    put("slug", msg.payload?.optString("slug") ?: "")
+                    put("installed", false)
+                    put("connected", false)
+                    put("error", "not-implemented: integrations available on Android in a follow-up")
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
             // Decomposition v3 §9.9: integration badges for the detail view
             "skills:get-integration-info" -> {
                 val idArg = msg.payload?.optString("id") ?: ""

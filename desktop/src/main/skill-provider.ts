@@ -654,6 +654,15 @@ export class LocalSkillProvider implements SkillProvider {
     }
   }
 
+  // Phase 4: force-refresh cached registry data. Deletes the 24h-TTL JSON
+  // caches so the next fetchIndex/getFeatured call hits the network. Used
+  // right after /feature curation lands — skips the 24h wait.
+  async invalidateCache(): Promise<void> {
+    for (const file of [INDEX_CACHE, DEFAULTS_CACHE, FEATURED_CACHE]) {
+      try { if (fs.existsSync(file)) fs.unlinkSync(file); } catch { /* best-effort */ }
+    }
+  }
+
   // Marketplace redesign Phase 1: new `hero` + `rails` fields drive the
   // redesigned discovery UI. Old `skills`/`themes` fields are passed through
   // unchanged so older clients keep working. 24h cache mirrors fetchIndex.

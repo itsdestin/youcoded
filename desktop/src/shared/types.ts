@@ -283,6 +283,48 @@ export interface FeaturedData {
   themes?: Array<{ slug: string; tagline?: string }>;
 }
 
+// Marketplace redesign Phase 3 — integrations as a first-class kind.
+export type IntegrationKind = 'mcp' | 'shell' | 'http';
+export type IntegrationStatusValue =
+  | 'not-installed'
+  | 'installing'
+  | 'needs-auth'
+  | 'connected'
+  | 'error';
+
+export interface IntegrationSetup {
+  type: 'script' | 'api-key' | 'macos-only';
+  path?: string;
+  requiresOAuth?: boolean;
+  oauthProvider?: string;
+  keyName?: string;
+}
+
+export interface IntegrationEntry {
+  slug: string;
+  displayName: string;
+  tagline: string;
+  longDescription?: string;
+  kind: IntegrationKind;
+  setup: IntegrationSetup;
+  status: 'available' | 'planned' | 'deprecated';
+  accentColor?: string;
+  lifeArea?: string[];
+}
+
+export interface IntegrationIndex {
+  version: string;
+  integrations: IntegrationEntry[];
+}
+
+export interface IntegrationState {
+  slug: string;
+  installed: boolean;
+  connected: boolean;
+  lastSync?: string;
+  error?: string;
+}
+
 // Marketplace redesign Phase 1 — per-entry component inventory for the
 // "What's inside" peek on cards and detail overlays. Extracted at sync time
 // by scripts/extract-components.js; `null` on the entry signals extraction
@@ -389,6 +431,12 @@ export const IPC = {
   // Marketplace redesign Phase 1: featured (hero/rails) for the redesigned
   // discovery UI.
   SKILLS_GET_FEATURED: 'skills:get-featured',
+  // Marketplace redesign Phase 3: integrations as a first-class content kind.
+  INTEGRATIONS_LIST: 'integrations:list',
+  INTEGRATIONS_INSTALL: 'integrations:install',
+  INTEGRATIONS_UNINSTALL: 'integrations:uninstall',
+  INTEGRATIONS_STATUS: 'integrations:status',
+  INTEGRATIONS_CONFIGURE: 'integrations:configure',
   // Decomposition v3 §9.9: used by SkillDetail to render integration badges
   SKILLS_GET_INTEGRATION_INFO: 'skills:get-integration-info',
   // Decomposition v3 §9.10: onboarding bulk install + output-style apply
@@ -472,6 +520,9 @@ export const IPC = {
   SKILLS_UPDATE: 'skills:update',
   MARKETPLACE_GET_CONFIG: 'marketplace:get-config',
   MARKETPLACE_SET_CONFIG: 'marketplace:set-config',
+  // Phase 4 — force-refresh the featured/index caches without waiting for
+  // the 24h TTL. Useful right after /feature curation lands.
+  MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
   // First-run
   FIRST_RUN_STATE: 'first-run:state',
   FIRST_RUN_RETRY: 'first-run:retry',

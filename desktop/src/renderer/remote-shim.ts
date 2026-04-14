@@ -593,12 +593,22 @@ export function installShim(): void {
       // Phase 3b: update a plugin (re-installs at the same path)
       update: (id: string) => invoke('skills:update', { id }),
     },
+    // Marketplace redesign Phase 3 — integrations namespace.
+    integrations: {
+      list: () => invoke('integrations:list'),
+      install: (slug: string) => invoke('integrations:install', { slug }),
+      uninstall: (slug: string) => invoke('integrations:uninstall', { slug }),
+      status: (slug: string) => invoke('integrations:status', { slug }),
+      configure: (slug: string, settings: Record<string, any>) =>
+        invoke('integrations:configure', { slug, settings }),
+    },
     // Phase 3: unified marketplace (packages map + per-entry config)
     marketplace: {
       getPackages: () => invoke('marketplace:get-packages'),
       getConfig: (id: string) => invoke('marketplace:get-config', { id }),
       setConfig: (id: string, values: Record<string, any>) =>
         invoke('marketplace:set-config', { id, values }),
+      invalidateCache: () => invoke('marketplace:invalidate-cache'),
     },
     // Marketplace sign-in (device-code OAuth flow) — same shape as preload.ts.
     // On Android the handlers live in SessionService.kt (Task 13). Until then

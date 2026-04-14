@@ -15,6 +15,7 @@ import MarketplaceRail from "./MarketplaceRail";
 import MarketplaceCard from "./MarketplaceCard";
 import MarketplaceGrid from "./MarketplaceGrid";
 import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetailOverlay";
+import IntegrationCard, { type IntegrationCardItem } from "./IntegrationCard";
 import type { SkillEntry } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 
@@ -31,6 +32,41 @@ export default function MarketplaceScreen({ onExit, initialTypeChip }: Props) {
     return f;
   });
   const [detail, setDetail] = useState<DetailTarget | null>(null);
+  const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
+  const [integrationBusy, setIntegrationBusy] = useState<string | null>(null);
+
+  // Fetch integrations on mount. Non-blocking — if the namespace is missing
+  // (older app version) the catch keeps the rail empty without warning.
+  useEffect(() => {
+    const api = (window as any).claude.integrations;
+    if (!api?.list) return;
+    api.list().then((items: IntegrationCardItem[]) => setIntegrations(items || []))
+       .catch(() => setIntegrations([]));
+  }, []);
+
+  const refreshIntegrations = async () => {
+    try {
+      const items = await (window as any).claude.integrations.list();
+      setIntegrations(items || []);
+    } catch { /* ignore */ }
+  };
+
+  const handleIntegration = async (item: IntegrationCardItem) => {
+    if (item.status !== "available") return;
+    setIntegrationBusy(item.slug);
+    try {
+      if (item.state.installed) {
+        // Phase 3 scaffold — no real settings panel yet; uninstall as the
+        // safe placeholder so users can recover from a stuck state.
+        await (window as any).claude.integrations.uninstall(item.slug);
+      } else {
+        await (window as any).claude.integrations.install(item.slug);
+      }
+      await refreshIntegrations();
+    } finally {
+      setIntegrationBusy(null);
+    }
+  };
 
   // Esc: close detail first, then exit screen. Matches App.tsx state-transition rules.
   useEffect(() => {
@@ -179,6 +215,22 @@ export default function MarketplaceScreen({ onExit, initialTypeChip }: Props) {
                 </MarketplaceRail>
               );
             })}
+
+            {/* Integrations rail — purpose-built cards only. Never mixed with
+                skill/theme cards. Hidden when the catalog hasn't loaded. */}
+            {integrations.length > 0 && (
+              <MarketplaceRail title="Connect your stuff" description="Bring your data in.">
+                {integrations.map((item) => (
+                  <div key={item.slug} style={{ width: 360 }} className="shrink-0">
+                    <IntegrationCard
+                      item={item}
+                      busy={integrationBusy === item.slug}
+                      onPrimary={() => handleIntegration(item)}
+                    />
+                  </div>
+                ))}
+              </MarketplaceRail>
+            )}
 
             {/* Bottom catalog — denser surface; all skills + themes in default sort. */}
             <section className="flex flex-col gap-2 mt-4">

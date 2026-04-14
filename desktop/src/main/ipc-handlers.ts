@@ -9,6 +9,7 @@ import { HookRelay } from './hook-relay';
 import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName } from '../shared/types';
 import { setPermissionOverrides } from './main';
 import { LocalSkillProvider } from './skill-provider';
+import { IntegrationInstaller, listWithState } from './integration-installer';
 import { RemoteConfig } from './remote-config';
 import { RemoteServer } from './remote-server';
 import { TranscriptWatcher } from './transcript-watcher';
@@ -214,6 +215,9 @@ export function registerIpcHandlers(
   // Phase 3a: pass the shared config store so theme installs also record into
   // the unified destincode-skills.json packages map used for update tracking.
   const themeMarketplace = new ThemeMarketplaceProvider(skillProvider.configStore);
+  // Phase 3 scaffold — kept inline (not a constructor arg) so this file is
+  // the only thing that changes when the installer grows real OAuth wiring.
+  const integrationInstaller = new IntegrationInstaller();
 
   ipcMain.handle(IPC.THEME_MARKETPLACE_LIST, async (_event, filters) => {
     return themeMarketplace.listThemes(filters);
@@ -784,6 +788,30 @@ export function registerIpcHandlers(
 
   ipcMain.handle(IPC.SKILLS_GET_FEATURED, async () => {
     return skillProvider.getFeatured();
+  });
+
+  // Marketplace redesign Phase 3 — integrations IPC. list/status are real;
+  // install/uninstall/configure are scaffolded (manifest-only; the actual
+  // OAuth + script runner lands with the Google Workspace slice).
+  ipcMain.handle(IPC.INTEGRATIONS_LIST, async () => {
+    return listWithState(integrationInstaller);
+  });
+  ipcMain.handle(IPC.INTEGRATIONS_STATUS, async (_e, slug: string) => {
+    return integrationInstaller.status(slug);
+  });
+  ipcMain.handle(IPC.INTEGRATIONS_INSTALL, async (_e, slug: string) => {
+    return integrationInstaller.install(slug);
+  });
+  ipcMain.handle(IPC.INTEGRATIONS_UNINSTALL, async (_e, slug: string) => {
+    return integrationInstaller.uninstall(slug);
+  });
+  ipcMain.handle(IPC.INTEGRATIONS_CONFIGURE, async (_e, slug: string, settings: Record<string, unknown>) => {
+    return integrationInstaller.configure(slug, settings);
+  });
+
+  // Phase 4 — user-initiated cache bust. Next fetchIndex/getFeatured refetches.
+  ipcMain.handle(IPC.MARKETPLACE_INVALIDATE_CACHE, async () => {
+    await skillProvider.invalidateCache();
   });
 
   // Decomposition v3 §9.9: surface integration info for the detail view badges
