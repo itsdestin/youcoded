@@ -34,6 +34,10 @@ import CloseSessionPrompt, { CLOSE_PROMPT_SUPPRESS_KEY } from './components/Clos
 import PreferencesPopup from './components/PreferencesPopup';
 import ModelPickerPopup from './components/ModelPickerPopup';
 import Marketplace from './components/Marketplace';
+import MarketplaceScreen from './components/marketplace/MarketplaceScreen';
+import LibraryScreen from './components/library/LibraryScreen';
+import { MarketplaceProvider } from './state/marketplace-context';
+import { useFeatureFlag } from './state/feature-flags';
 import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
@@ -140,8 +144,35 @@ function AppInner() {
       if (m?.effort) setEffortLevel(m.effort);
     }).catch(() => {});
   }, [modelPickerOpen]);
-  // Unified marketplace modal — null means closed, string selects initial tab
+  // Unified marketplace modal — null means closed, string selects initial tab.
+  // Kept as the legacy code path; when the `newMarketplace` flag is on, the
+  // setter is rerouted to `activeView` below (see openLegacyMarketplace).
   const [marketplaceTab, setMarketplaceTab] = useState<'installed' | 'skills' | 'themes' | null>(null);
+
+  // Marketplace redesign Phase 2 — four top-level destinations. App-scoped
+  // (NOT per-session). Gated on `destincode-flag-newMarketplace`. Transitions
+  // are defined in docs/plans/2026-04-14-marketplace-redesign-implementation.md.
+  const [activeView, setActiveView] = useState<'chat' | 'terminal' | 'marketplace' | 'library'>('chat');
+  // Preferred type chip when the redesign is opened from a legacy entry point
+  // (e.g. SettingsPanel theme picker). Cleared after the screen reads it.
+  const [marketplaceInitialType, setMarketplaceInitialType] = useState<'skill' | 'theme' | undefined>(undefined);
+  const [newMarketplaceFlag] = useFeatureFlag('newMarketplace');
+
+  // Legacy setter replacements: when the redesign is on, flip activeView
+  // instead of opening the tabbed modal. Keep the signature identical so
+  // call sites don't need to branch.
+  const openMarketplace = useCallback((tab: 'installed' | 'skills' | 'themes' = 'skills') => {
+    if (newMarketplaceFlag) {
+      if (tab === 'installed') {
+        setActiveView('library');
+      } else {
+        setMarketplaceInitialType(tab === 'themes' ? 'theme' : 'skill');
+        setActiveView('marketplace');
+      }
+      return;
+    }
+    setMarketplaceTab(tab);
+  }, [newMarketplaceFlag]);
   const [publishThemeSlug, setPublishThemeSlug] = useState<string | null>(null);
   const [editorSkillId, setEditorSkillId] = useState<string | null>(null);
   const [shareSkillId, setShareSkillId] = useState<string | null>(null);
@@ -1453,8 +1484,9 @@ function AppInner() {
                   externalFilter={drawerFilter}
                   onSelect={handleSelectSkill}
                   onClose={handleCloseDrawer}
-                  onOpenManager={() => setMarketplaceTab('installed')}
-                  onOpenMarketplace={() => setMarketplaceTab('skills')}
+                  onOpenManager={() => openMarketplace('installed')}
+                  onOpenMarketplace={() => openMarketplace('skills')}
+                  onOpenLibrary={newMarketplaceFlag ? () => setActiveView('library') : undefined}
                 />
               )}
               {isTerminalTouch && sessionId && (
@@ -1610,7 +1642,7 @@ function AppInner() {
           }
         }}
         hasActiveSession={!!sessionId}
-        onOpenThemeMarketplace={() => { setSettingsOpen(false); setMarketplaceTab('themes'); }}
+        onOpenThemeMarketplace={() => { setSettingsOpen(false); openMarketplace('themes'); }}
         onPublishTheme={(slug) => { setSettingsOpen(false); setPublishThemeSlug(slug); }}
         syncAutoOpen={syncAutoOpen}
         onSyncAutoOpenHandled={() => setSyncAutoOpen(false)}
@@ -1667,14 +1699,30 @@ function AppInner() {
           }
         }}
       />
-      {/* Unified marketplace modal — replaces old Marketplace + ThemeMarketplace + SkillManager */}
-      {marketplaceTab && (
+      {/* Legacy three-tab modal. When `newMarketplace` flag is on, this path
+          is unreachable because openMarketplace() flips activeView instead. */}
+      {!newMarketplaceFlag && marketplaceTab && (
         <Marketplace
           onClose={() => setMarketplaceTab(null)}
           initialTab={marketplaceTab}
           onOpenShareSheet={(id) => setShareSkillId(id)}
           onOpenEditor={(id) => setEditorSkillId(id)}
         />
+      )}
+      {/* Marketplace redesign Phase 2 — full-screen glass destinations.
+          Shares a single MarketplaceProvider across both screens so install/
+          uninstall mutations reflect in both without forked state. */}
+      {newMarketplaceFlag && (activeView === 'marketplace' || activeView === 'library') && (
+        <MarketplaceProvider>
+          {activeView === 'marketplace' ? (
+            <MarketplaceScreen
+              onExit={() => { setActiveView('chat'); setMarketplaceInitialType(undefined); }}
+              initialTypeChip={marketplaceInitialType}
+            />
+          ) : (
+            <LibraryScreen onExit={() => setActiveView('chat')} />
+          )}
+        </MarketplaceProvider>
       )}
       {publishThemeSlug && (
         <ThemeShareSheet themeSlug={publishThemeSlug} onClose={() => setPublishThemeSlug(null)} />
