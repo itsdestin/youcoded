@@ -57,6 +57,8 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
   // Merge (union) is the default because it's non-destructive on both sides.
   // Wipe (mirror) has to be opted into — and the UI later forces snapshot on.
   const [mode, setMode] = useState<RestoreMode>('merge');
+  // Which mode's (i) panel is expanded. Only one can be open at a time.
+  const [infoOpen, setInfoOpen] = useState<RestoreMode | null>(null);
   // Only meaningful for wipe; in merge mode we never snapshot (nothing to undo).
   const [snapshotFirst, setSnapshotFirst] = useState(true);
   const [understood, setUnderstood] = useState(false);
@@ -211,55 +213,28 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
                   Two very different behaviors — pick carefully.
                 </div>
               </div>
-              <label
-                className={`flex items-start gap-2 px-3 py-2.5 rounded-md border cursor-pointer ${
-                  mode === 'merge'
-                    ? 'bg-accent/10 border-accent'
-                    : 'bg-inset/50 border-edge-dim hover:bg-inset'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="restore-mode"
-                  value="merge"
-                  checked={mode === 'merge'}
-                  onChange={() => setMode('merge')}
-                  className="accent-accent mt-1"
-                />
-                <div className="flex-1">
-                  <div className="text-xs text-fg font-medium">Merge (recommended)</div>
-                  <div className="text-[11px] text-fg-dim mt-0.5">
-                    Download files from the backup that are missing or older locally, and
-                    upload files that are only on this device. Nothing gets deleted on either side.
-                  </div>
-                </div>
-              </label>
-              <label
-                className={`flex items-start gap-2 px-3 py-2.5 rounded-md border cursor-pointer ${
-                  mode === 'wipe'
-                    ? 'bg-red-500/10 border-red-500/40'
-                    : 'bg-inset/50 border-edge-dim hover:bg-inset'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="restore-mode"
-                  value="wipe"
-                  checked={mode === 'wipe'}
-                  onChange={() => setMode('wipe')}
-                  className="accent-red-500 mt-1"
-                />
-                <div className="flex-1">
-                  <div className="text-xs text-fg font-medium">
-                    Wipe &amp; restore <span className="text-red-400">(destructive)</span>
-                  </div>
-                  <div className="text-[11px] text-fg-dim mt-0.5">
-                    Replace local data with the backup exactly. Any files on this device that
-                    aren&apos;t in the backup will be <span className="text-red-400">deleted</span>.
-                    A safety snapshot is taken first so you can undo.
-                  </div>
-                </div>
-              </label>
+              <ModeCard
+                mode="merge"
+                selected={mode === 'merge'}
+                onSelect={() => setMode('merge')}
+                infoOpen={infoOpen === 'merge'}
+                onToggleInfo={() => setInfoOpen(infoOpen === 'merge' ? null : 'merge')}
+                title="Merge (recommended)"
+                short="Download files from the backup that are missing or older locally, and upload files that are only on this device. Nothing gets deleted on either side."
+                details={MERGE_DETAILS}
+              />
+              <ModeCard
+                mode="wipe"
+                selected={mode === 'wipe'}
+                onSelect={() => setMode('wipe')}
+                infoOpen={infoOpen === 'wipe'}
+                onToggleInfo={() => setInfoOpen(infoOpen === 'wipe' ? null : 'wipe')}
+                title={<>Wipe &amp; restore <span className="text-red-400">(destructive)</span></>}
+                short={<>Replace local data with the backup exactly. Any files on this device that aren&apos;t in the backup will be <span className="text-red-400">deleted</span>. A safety snapshot is taken first so you can undo.</>}
+                details={WIPE_DETAILS}
+                destructive
+              />
+
               <div className="flex justify-between gap-2 pt-2 border-t border-edge-dim">
                 <button
                   onClick={() => setStep('pick-categories')}
@@ -436,5 +411,113 @@ export function RestoreWizard({ backendId, backendLabel, backendType, onClose, o
         </div>
       </OverlayPanel>
     </>
+  );
+}
+
+// --- Mode picker sub-components ---
+//
+// Each mode renders as a card with a radio, title, short description, and an
+// (i) button that expands a longer explanation inline (no overlay — keeps the
+// wizard's focus trap simple). The details list is deliberately concrete:
+// Destin is a non-developer and the "what does this actually do" question
+// needs to be answerable without reading code.
+
+const MERGE_DETAILS: string[] = [
+  'Runs like a two-way sync: pulls new or newer files from the backup, then pushes files that are only on this device up to the backup.',
+  'No deletions on either side. If you have a file here that isn\'t in the backup, it stays — and it also gets uploaded.',
+  'No safety snapshot is taken (nothing to undo — merge never removes anything).',
+  'Use this when you want to pick up where another device left off, or after a fresh install.',
+];
+
+const WIPE_DETAILS: string[] = [
+  'Replaces local files with the exact contents of the backup. Any local file that isn\'t in the backup is DELETED.',
+  'A safety snapshot is taken first under ~/.claude/restore-snapshots/ so you can Undo within 10 snapshots / 90 days.',
+  'Use this when you know the backup is the authoritative state (e.g., rolling back an accidentally corrupted local copy).',
+  'The regular sync loop is paused during the restore so it can\'t re-upload half-restored state to the cloud.',
+];
+
+function ModeCard({
+  mode,
+  selected,
+  onSelect,
+  infoOpen,
+  onToggleInfo,
+  title,
+  short,
+  details,
+  destructive,
+}: {
+  mode: RestoreMode;
+  selected: boolean;
+  onSelect: () => void;
+  infoOpen: boolean;
+  onToggleInfo: () => void;
+  title: React.ReactNode;
+  short: React.ReactNode;
+  details: string[];
+  destructive?: boolean;
+}) {
+  const ringClass = selected
+    ? destructive
+      ? 'bg-red-500/10 border-red-500/40'
+      : 'bg-accent/10 border-accent'
+    : 'bg-inset/50 border-edge-dim hover:bg-inset';
+  const accent = destructive ? 'accent-red-500' : 'accent-accent';
+  return (
+    <div className={`rounded-md border ${ringClass}`}>
+      {/* Clickable row — NOT a <label> wrapper because the (i) button lives
+          inside and a <label> would forward its click to the radio. Instead
+          we intercept row clicks to flip the radio, and the (i) stops
+          propagation. */}
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onSelect}
+        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && onSelect()}
+        className="flex items-start gap-2 px-3 py-2.5 cursor-pointer"
+      >
+        <input
+          type="radio"
+          name="restore-mode"
+          value={mode}
+          checked={selected}
+          onChange={onSelect}
+          className={`${accent} mt-1`}
+          onClick={(e) => e.stopPropagation()}
+        />
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-fg font-medium">{title}</span>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onToggleInfo();
+              }}
+              className="text-fg-muted hover:text-fg-2 w-5 h-5 flex items-center justify-center rounded-sm hover:bg-inset"
+              aria-label={`What does ${mode} mode do?`}
+              aria-expanded={infoOpen}
+              title="Show details"
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <circle cx="12" cy="12" r="9" />
+                <path strokeLinecap="round" d="M12 11v5" />
+                <circle cx="12" cy="8" r="0.5" fill="currentColor" />
+              </svg>
+            </button>
+          </div>
+          <div className="text-[11px] text-fg-dim mt-0.5">{short}</div>
+        </div>
+      </div>
+      {infoOpen && (
+        <div className="px-3 pb-3 pt-1 border-t border-edge-dim">
+          <ul className="text-[11px] text-fg-dim space-y-1.5 list-disc pl-4">
+            {details.map((d, i) => (
+              <li key={i}>{d}</li>
+            ))}
+          </ul>
+        </div>
+      )}
+    </div>
   );
 }
