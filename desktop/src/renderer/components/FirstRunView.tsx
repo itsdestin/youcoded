@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import type { FirstRunState, PrerequisiteState } from '../../shared/first-run-types';
 import BrailleSpinner from './BrailleSpinner';
+import { describeStep } from './first-run/describe-step';
 
 /* ------------------------------------------------------------------ */
 /*  StatusIcon                                                        */
@@ -241,7 +242,11 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
         <p className="text-sm text-gray-400 animate-pulse">Starting your setup...</p>
       ) : (
         <div className="flex flex-col items-center gap-5 w-full max-w-md px-4">
-          <p className="text-sm text-gray-400">This usually takes 2-3 minutes</p>
+          {state && (
+            <p className="text-sm text-fg-dim text-center max-w-md leading-relaxed">
+              {describeStep(state)}
+            </p>
+          )}
 
           {/* Prerequisite checklist — rounded pills */}
           {state && (
@@ -271,11 +276,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
 
           {/* Progress bar (percent rendered inline) */}
           {state && <ProgressBar percent={state.overallProgress} />}
-
-          {/* Status message */}
-          {state?.statusMessage && (
-            <p className="text-xs text-gray-400 text-center">{state.statusMessage}</p>
-          )}
 
           {/* Auth screen */}
           {state?.currentStep === 'AUTHENTICATE' && (
