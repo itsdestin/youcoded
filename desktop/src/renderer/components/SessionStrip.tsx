@@ -592,6 +592,7 @@ export default function SessionStrip({
                 className={`
                   relative flex items-center gap-1 rounded-full px-1.5 py-px
                   border select-none touch-none overflow-hidden
+                  ${isActive ? 'min-w-0 shrink' : 'shrink-0'}
                   ${showName && (isActive || !pack.expanded.has(s.id))
                     ? 'border-edge bg-panel'
                     : 'border-transparent'
@@ -610,10 +611,12 @@ export default function SessionStrip({
               >
                 <SessionDot color={color} isActive={isActive} />
                 <span
-                  className="text-xs font-medium text-fg-2 whitespace-nowrap overflow-hidden text-ellipsis"
+                  className={`text-xs font-medium text-fg-2 whitespace-nowrap overflow-hidden text-ellipsis ${isActive ? 'min-w-0' : ''}`}
                   style={{
+                    // Active pill flex-shrinks so ellipsis kicks in when the
+                    // strip is narrower than the full name (no hard cap).
                     maxWidth: showName
-                      ? (isActive ? 'none' : 120)
+                      ? (isActive ? undefined : 120)
                       : 0,
                     opacity: showName ? 1 : 0,
                     transition: pack.expanded.has(s.id) ? 'none' : 'max-width 200ms ease, opacity 150ms ease',

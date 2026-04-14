@@ -50,22 +50,24 @@ export function packSessions(input: PackInput): PackResult {
     return greedyCollapsed(sessions, pillBudget, gap);
   }
 
-  const activeExpanded = active.expandedWidth <= pillBudget;
-  const activeWidth = activeExpanded ? active.expandedWidth : active.collapsedWidth;
-  if (activeWidth > pillBudget) {
-    // Active does not even fit collapsed — still show it (it is the active
-    // pill; UX requires at least a dot). Everything else overflows.
+  // Rule: the active pill is ALWAYS expanded (never collapsed to a dot).
+  // If there's not enough room, overflow non-active pills first. If even the
+  // active pill's expanded width exceeds the budget, we still render it
+  // expanded and let CSS ellipsis truncate — the active session's name is
+  // more useful than a handful of dots for its siblings.
+  if (active.expandedWidth > pillBudget) {
     return {
-      expanded: new Set(),
-      collapsed: [active.id],
+      expanded: new Set([active.id]),
+      collapsed: [],
       overflow: others.map(o => o.id),
     };
   }
 
-  // First pass: pack others as collapsed dots in original order.
+  // Pack others as collapsed dots in original order, after reserving the
+  // active pill's full expanded width.
   const collapsedIds: string[] = [];
   const overflowIds: string[] = [];
-  let used = activeWidth;
+  let used = active.expandedWidth;
   for (const s of others) {
     const candidate = used + gap + s.collapsedWidth;
     if (candidate <= pillBudget) {
@@ -76,10 +78,9 @@ export function packSessions(input: PackInput): PackResult {
     }
   }
 
-  // Second pass: if every session is visible AND expanding all of them fits,
-  // upgrade to allExpanded mode. This matches the old `allExpanded` UX
-  // (names visible when there is room) but is budget-driven.
-  if (overflowIds.length === 0 && activeExpanded) {
+  // Upgrade: if every session is visible AND expanding all of them fits,
+  // show all names (budget-driven allExpanded mode).
+  if (overflowIds.length === 0) {
     const allExpandedWidth = sumWithGaps(
       [active.expandedWidth, ...others.map(o => o.expandedWidth)],
       gap,
@@ -94,8 +95,8 @@ export function packSessions(input: PackInput): PackResult {
   }
 
   return {
-    expanded: activeExpanded ? new Set([active.id]) : new Set(),
-    collapsed: activeExpanded ? collapsedIds : [active.id, ...collapsedIds],
+    expanded: new Set([active.id]),
+    collapsed: collapsedIds,
     overflow: overflowIds,
   };
 }

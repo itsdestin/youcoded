@@ -72,11 +72,12 @@ describe('packSessions', () => {
     expect(r.overflow).toEqual([]);
   });
 
-  it('falls back to showing only active as a collapsed dot if budget is below expanded width', () => {
-    const r = packSessions({ sessions: [mk('a', 120, 20)], activeId: 'a', budget: 50, gap: 2, triggerWidth: 20 });
-    // Active must always be visible, prefer expanded but fall back to collapsed.
-    expect(r.collapsed).toEqual(['a']);
-    expect(r.expanded.size).toBe(0);
-    expect(r.overflow).toEqual([]);
+  it('keeps active expanded (CSS truncates) when budget is below its expanded width, overflowing the rest', () => {
+    const sessions = [mk('a', 120, 20), mk('b', 120, 20), mk('c', 120, 20)];
+    const r = packSessions({ sessions, activeId: 'a', budget: 50, gap: 2, triggerWidth: 20 });
+    // Active must stay expanded (name over dots). Everything else overflows.
+    expect(r.expanded).toEqual(new Set(['a']));
+    expect(r.collapsed).toEqual([]);
+    expect(r.overflow).toEqual(['b', 'c']);
   });
 });
