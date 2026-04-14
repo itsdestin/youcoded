@@ -141,46 +141,62 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
           </div>
         </div>
 
-        {/* Scrollable content */}
+        {/* Scrollable content.
+             "Add Skills +" is always the last box in the drawer (even when the
+             user has favorites) so the marketplace is always one click away.
+             When a search has zero matches, it stands alone as the empty-state
+             affordance. */}
         <div ref={scrollRef} className="scroll-fade px-4 pb-4" style={{ maxHeight: 'calc(45vh - 80px)' }}>
-          {filtered.length === 0 ? (
-            <div className="text-center py-6">
-              <p className="text-sm text-fg-muted">No matching skills</p>
-              <button
-                onClick={() => { onClose(); onOpenMarketplace(); }}
-                className="mt-2 text-sm text-accent hover:underline"
-              >
-                Browse Marketplace
-              </button>
-            </div>
-          ) : grouped ? (
-            // Categorized view
-            categoryOrder.map((cat) => {
-              const items = grouped.get(cat);
-              if (!items || items.length === 0) return null;
-              return (
-                <div key={cat} className="mb-4">
-                  <h3 className="text-[10px] font-medium text-fg-muted tracking-wider mb-2">
-                    {categoryLabels[cat]}
-                  </h3>
-                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                    {items.map((skill) => (
-                      <SkillCard key={skill.id} skill={skill} onClick={onSelect} />
-                    ))}
+          {grouped ? (
+            // Categorized view (browse mode)
+            <>
+              {categoryOrder.map((cat) => {
+                const items = grouped.get(cat);
+                if (!items || items.length === 0) return null;
+                return (
+                  <div key={cat} className="mb-4">
+                    <h3 className="text-[10px] font-medium text-fg-muted tracking-wider mb-2">
+                      {categoryLabels[cat]}
+                    </h3>
+                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                      {items.map((skill) => (
+                        <SkillCard key={skill.id} skill={skill} onClick={onSelect} />
+                      ))}
+                    </div>
                   </div>
-                </div>
-              );
-            })
+                );
+              })}
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                <AddSkillsCard onClick={() => { onClose(); onOpenMarketplace(); }} />
+              </div>
+            </>
           ) : (
-            // Flat search results
+            // Flat search results — "Add Skills +" trails the matches
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
               {filtered.map((skill) => (
                 <SkillCard key={skill.id} skill={skill} onClick={onSelect} />
               ))}
+              <AddSkillsCard onClick={() => { onClose(); onOpenMarketplace(); }} />
             </div>
           )}
         </div>
       </div>
     </>
+  );
+}
+
+// Persistent "Add Skills +" tile — matches SkillCard's drawer dimensions so it
+// sits naturally at the end of the grid. Uses dashed border + accent color to
+// read as an action, not a skill.
+function AddSkillsCard({ onClick }: { onClick: () => void }) {
+  return (
+    <button
+      onClick={onClick}
+      className="bg-panel/40 border border-dashed border-edge rounded-lg p-3 text-left hover:bg-inset hover:border-accent transition-colors flex flex-col items-center justify-center text-accent"
+    >
+      <span className="text-lg font-medium leading-none">+</span>
+      <span className="text-sm font-medium mt-1">Add Skills</span>
+      <span className="text-[11px] text-fg-muted mt-1">Browse marketplace</span>
+    </button>
   );
 }

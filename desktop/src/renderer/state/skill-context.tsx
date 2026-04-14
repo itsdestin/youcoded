@@ -27,9 +27,16 @@ interface SkillActions {
 }
 
 interface SkillContextValue extends SkillState, SkillActions {
-  /** Skills filtered for the CommandDrawer: favorites ∪ curated defaults */
+  /** Skills filtered for the CommandDrawer: user favorites only. Curated defaults
+   *  seed the favorites list on first encounter (see SEEDED_KEY below), not at read time. */
   drawerSkills: SkillEntry[];
 }
+
+// localStorage key tracking which curated-default skill ids have already been
+// one-time seeded into favorites. Once an id is in this list we never re-seed it,
+// so unfavoriting it sticks. Adding NEW curated defaults later still seeds them
+// the next time the app loads.
+const SEEDED_KEY = 'destincode-seeded-favorites';
 
 const SkillContext = createContext<SkillContextValue | null>(null);
 
@@ -47,11 +54,31 @@ export function SkillProvider({ children }: { children: ReactNode }) {
       window.claude.skills.getFavorites(),
       window.claude.skills.getChips(),
       window.claude.skills.getCuratedDefaults(),
-    ]).then(([inst, favs, ch, defaults]) => {
+    ]).then(async ([inst, favs, ch, defaults]) => {
       setInstalled(inst ?? []);
-      setFavorites(favs ?? []);
       setChipsState(ch ?? []);
       setCuratedDefaults(defaults ?? []); // Guard: IPC may return undefined if registry key mismatches
+
+      // First-run seeding: for each curated default we haven't seeded before,
+      // persist it as a favorite so the drawer is non-empty out of the box.
+      // We track seeded ids separately so unfavoriting sticks permanently.
+      const curated = defaults ?? [];
+      const currentFavs = favs ?? [];
+      let seeded: string[] = [];
+      try { seeded = JSON.parse(localStorage.getItem(SEEDED_KEY) ?? '[]'); } catch {}
+      const toSeed = curated.filter(id => !seeded.includes(id));
+      if (toSeed.length > 0) {
+        const favSet = new Set(currentFavs);
+        for (const id of toSeed) {
+          if (!favSet.has(id)) {
+            try { await window.claude.skills.setFavorite(id, true); favSet.add(id); } catch {}
+          }
+        }
+        localStorage.setItem(SEEDED_KEY, JSON.stringify([...new Set([...seeded, ...toSeed])]));
+        setFavorites(Array.from(favSet));
+      } else {
+        setFavorites(currentFavs);
+      }
       setLoading(false);
     }).catch((err) => {
       console.error('[SkillContext] Failed to load:', err);
@@ -102,21 +129,14 @@ export function SkillProvider({ children }: { children: ReactNode }) {
     await refreshInstalled();
   }, [refreshInstalled]);
 
-  // Compute drawer skills: favorites ∪ curated defaults, favorites sorted first.
-  // Curated defaults hold PACKAGE ids (e.g. "destinclaude-encyclopedia") post-decomposition,
-  // so match skill.pluginName as well as skill.id — a single curated package surfaces all
-  // the skills it provides.
+  // Drawer shows only user favorites. Curated defaults seed favorites on first run
+  // (see initial-load effect); after that the user fully controls what's in the drawer.
+  // Favorites may hold PACKAGE ids (e.g. "destinclaude-encyclopedia") post-decomposition,
+  // so also match skill.pluginName — a single favorited package surfaces all its skills.
   const drawerSkills = useMemo(() => {
     const favSet = new Set(favorites);
-    const favOrCurated = new Set([...favorites, ...curatedDefaults]);
-    return installed
-      .filter(s => favOrCurated.has(s.id) || (s.pluginName && favOrCurated.has(s.pluginName)))
-      .sort((a, b) => {
-        const aFav = favSet.has(a.id) ? 0 : 1;
-        const bFav = favSet.has(b.id) ? 0 : 1;
-        return aFav - bFav;
-      });
-  }, [installed, favorites, curatedDefaults]);
+    return installed.filter(s => favSet.has(s.id) || (s.pluginName && favSet.has(s.pluginName)));
+  }, [installed, favorites]);
 
   // Stable references for pass-through IPC methods (no state dependencies)
   const listMarketplace = useCallback((filters?: SkillFilters) => window.claude.skills.listMarketplace(filters), []);
