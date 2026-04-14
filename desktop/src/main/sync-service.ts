@@ -234,7 +234,9 @@ export class SyncService extends EventEmitter {
   }
 
   /** Find a single backend by id (for manual push/pull). */
-  private getBackendById(id: string): BackendInstance | null {
+  // Public so RestoreService can look up the active BackendInstance by id
+  // without re-reading config.json itself.
+  public getBackendById(id: string): BackendInstance | null {
     return this.getBackendInstances().find(b => b.id === id) || null;
   }
 

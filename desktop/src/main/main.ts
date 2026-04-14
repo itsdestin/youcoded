@@ -18,6 +18,7 @@ import { registerThemeProtocol } from './theme-protocol';
 import { FirstRunManager } from './first-run';
 import { SyncService } from './sync-service';
 import { setSyncService } from './sync-state';
+import { initRestoreService } from './restore-service';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
 
@@ -953,6 +954,9 @@ app.whenReady().then(async () => {
   const syncService = new SyncService();
   setSyncService(syncService);
   syncService.start().catch(e => log('ERROR', 'Main', 'SyncService start failed', { error: String(e) }));
+  // Initialize restore service after sync is live — it needs SyncService to
+  // flip restoreInProgress, which pauses the push loop during restore/undo.
+  initRestoreService(syncService, app.getPath('userData'));
   // Push session JSONL on session close (replaces session-end-sync.sh)
   sessionManager.on('session-exit', (sessionId: string) => {
     syncService.pushSession(sessionId).catch(e =>

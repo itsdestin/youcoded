@@ -13,6 +13,8 @@ import { BrowserWindow } from 'electron';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory } from './session-browser';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
+import { getRestoreService } from './restore-service';
+import { setExperimentalFlag } from './config';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 
 const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
@@ -1164,6 +1166,61 @@ export class RemoteServer {
       case 'sync:setup:create-repo': {
         const repoResult = await createGithubRepo(payload.repoName || payload);
         this.respond(client.ws, type, id, repoResult);
+        break;
+      }
+
+      // --- Restore from backup (browser + Android parity) ---
+      // Each case fetches the RestoreService singleton lazily — it's initialized
+      // after SyncService.start(), so browser clients that connect very early
+      // (rare) will see an "RestoreService not initialized" error rather than a crash.
+      case 'sync:restore:list-versions': {
+        const versions = await getRestoreService()!.listVersions(payload.backendId || payload);
+        this.respond(client.ws, type, id, versions);
+        break;
+      }
+      case 'sync:restore:preview': {
+        const previewResult = await getRestoreService()!.previewRestore(payload.opts || payload);
+        this.respond(client.ws, type, id, previewResult);
+        break;
+      }
+      case 'sync:restore:execute': {
+        // Progress events stream back to the originating client only — restore
+        // is single-actor, broadcasting to peer browsers would be noise.
+        const execResult = await getRestoreService()!.executeRestore(
+          payload.opts || payload,
+          (evt) => {
+            if (client.ws.readyState === WebSocket.OPEN) {
+              client.ws.send(JSON.stringify({ type: 'sync:restore:progress', payload: evt }));
+            }
+          },
+        );
+        this.respond(client.ws, type, id, execResult);
+        break;
+      }
+      case 'sync:restore:list-snapshots': {
+        const snaps = await getRestoreService()!.listSnapshots();
+        this.respond(client.ws, type, id, snaps);
+        break;
+      }
+      case 'sync:restore:undo': {
+        await getRestoreService()!.undoRestore(payload.snapshotId || payload);
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      case 'sync:restore:delete-snapshot': {
+        await getRestoreService()!.deleteSnapshot(payload.snapshotId || payload);
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      case 'sync:restore:probe': {
+        const probeResult = await getRestoreService()!.probe(payload.backendId || payload);
+        this.respond(client.ws, type, id, probeResult);
+        break;
+      }
+
+      case 'config:set-experimental-flag': {
+        setExperimentalFlag(payload.name, payload.value);
+        this.respond(client.ws, type, id, { ok: true });
         break;
       }
 

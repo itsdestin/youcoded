@@ -439,6 +439,29 @@ export class RestoreService {
   }
 }
 
+// Module-level singleton — constructed once SyncService is ready (see main.ts).
+// IPC handlers call getRestoreService() lazily because they're registered before
+// SyncService.start() and the restore service needs a live sync service to pause
+// the push loop during execute/undo.
+let _restoreInstance: RestoreService | null = null;
+
+export function initRestoreService(syncService: SyncService, userDataDir?: string): RestoreService {
+  _restoreInstance = new RestoreService(
+    syncService,
+    (id) => syncService.getBackendById(id),
+    userDataDir,
+  );
+  // Startup housekeeping — orphan cleanup from a prior crashed restore, and
+  // age/count retention. Both are best-effort; failures don't block the app.
+  _restoreInstance.cleanupOrphanedStaging();
+  _restoreInstance.enforceRetention();
+  return _restoreInstance;
+}
+
+export function getRestoreService(): RestoreService | null {
+  return _restoreInstance;
+}
+
 // Shared helper for adapters: count files, bytes under a directory tree.
 export function walkFiles(dir: string): { files: string[]; bytes: number } {
   const files: string[] = [];

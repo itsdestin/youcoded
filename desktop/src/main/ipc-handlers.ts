@@ -21,6 +21,9 @@ import { generateThemePreview } from './theme-preview-generator';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService } from './sync-state';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
+import { getRestoreService } from './restore-service';
+import { setExperimentalFlag } from './config';
+import type { RestoreOptions, RestoreProgressEvent } from '../shared/types';
 import { log } from './logger';
 
 // Max age for clipboard paste images (1 hour)
@@ -1523,6 +1526,48 @@ export function registerIpcHandlers(
   ipcMain.handle('sync:setup:auth-gdrive', () => authGdrive());
   ipcMain.handle('sync:setup:auth-github', () => authGithub());
   ipcMain.handle('sync:setup:create-repo', (_e, repoName) => createGithubRepo(repoName));
+
+  // --- Restore from backup ---
+  // Directional, user-initiated pull. See restore-service.ts for safety invariants.
+  // Throws if SyncService hasn't finished starting yet (restore needs it to pause pushes).
+  const restore = () => {
+    const svc = getRestoreService();
+    if (!svc) throw new Error('RestoreService not initialized — SyncService must start first');
+    return svc;
+  };
+
+  ipcMain.handle(IPC.SYNC_RESTORE_LIST_VERSIONS, (_e, backendId: string) =>
+    restore().listVersions(backendId),
+  );
+  ipcMain.handle(IPC.SYNC_RESTORE_PREVIEW, (_e, opts: RestoreOptions) =>
+    restore().previewRestore(opts),
+  );
+  ipcMain.handle(IPC.SYNC_RESTORE_EXECUTE, async (e, opts: RestoreOptions) => {
+    // Progress is pushed back to the calling window only (not broadcast to
+    // peer windows) — restore is a single-actor flow; showing progress in a
+    // peer window would be noise. Event channel: IPC.SYNC_RESTORE_PROGRESS.
+    const wc = e.sender;
+    return restore().executeRestore(opts, (evt: RestoreProgressEvent) => {
+      if (!wc.isDestroyed()) wc.send(IPC.SYNC_RESTORE_PROGRESS, evt);
+    });
+  });
+  ipcMain.handle(IPC.SYNC_RESTORE_LIST_SNAPSHOTS, () => restore().listSnapshots());
+  ipcMain.handle(IPC.SYNC_RESTORE_UNDO, (_e, snapshotId: string) =>
+    restore().undoRestore(snapshotId),
+  );
+  ipcMain.handle(IPC.SYNC_RESTORE_DELETE_SNAPSHOT, (_e, snapshotId: string) =>
+    restore().deleteSnapshot(snapshotId),
+  );
+  ipcMain.handle(IPC.SYNC_RESTORE_PROBE, (_e, backendId: string) =>
+    restore().probe(backendId),
+  );
+
+  // Experimental feature flag toggle — persists to ~/.claude/destincode-local.json.
+  // Restore UI reads this via SyncStatus.experimentalFlags; no renderer restart needed.
+  ipcMain.handle('config:set-experimental-flag', (_e, name: string, value: boolean) => {
+    setExperimentalFlag(name as any, value);
+    return { ok: true };
+  });
 
   // --- Permission response (blocking hooks) ---
   if (hookRelay) {
