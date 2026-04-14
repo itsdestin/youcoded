@@ -85,49 +85,50 @@ function AuthScreen({
 
   if (authMode === 'oauth') {
     return (
-      <div className="mt-6 text-center">
-        <p className="text-sm text-gray-300 animate-pulse">
-          A browser window should have opened. Complete sign-in there...
-        </p>
+      <div className="mt-6 text-center flex items-center justify-center gap-2 text-sm text-fg-dim">
+        <BrailleSpinner size="sm" />
+        <span>A browser window should have opened. Complete sign-in there…</span>
       </div>
     );
   }
 
   return (
-    <div className="mt-6 flex flex-col items-center gap-4">
+    <div className="mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4">
+      <p className="text-sm text-fg-dim text-center leading-relaxed">
+        Sign in with your Claude Pro or Max plan — no API key or credit card needed.
+      </p>
+
       <button
         onClick={onOAuth}
-        className="px-6 py-3 rounded-lg bg-orange-600 hover:bg-orange-500 text-white font-semibold text-lg transition-colors"
+        className="px-6 py-3 rounded-full bg-accent text-on-accent font-semibold text-base hover:opacity-90 transition-opacity"
       >
         Log in with Claude
       </button>
 
-      <span className="text-xs text-gray-500">or</span>
-
       {!showApiKey ? (
         <button
           onClick={() => setShowApiKey(true)}
-          className="text-xs text-gray-400 hover:text-gray-200 underline transition-colors"
+          className="text-xs text-fg-muted hover:text-fg-dim underline transition-colors"
         >
-          I have an API key
+          I have an API key instead
         </button>
       ) : (
-        <div className="flex flex-col items-center gap-3 max-w-sm w-full">
+        <div className="flex flex-col items-center gap-3 w-full">
           <input
             type="password"
             placeholder="sk-ant-..."
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
-            className="w-full px-3 py-2 rounded-md bg-gray-800 border border-gray-700 text-gray-100 text-sm placeholder-gray-500 focus:outline-none focus:border-blue-500"
+            className="w-full px-3 py-2 rounded-md bg-well border border-edge text-fg text-sm placeholder:text-fg-faint focus:outline-none focus:border-accent"
           />
-          <p className="text-xs text-gray-500 text-center leading-relaxed">
+          <p className="text-xs text-fg-muted text-center leading-relaxed">
             Your key is passed directly to Claude Code and stored in its secure config.
             DestinCode never stores, logs, or backs up your key.
           </p>
           <button
             onClick={() => onApiKey(apiKey)}
             disabled={!apiKey.trim()}
-            className="px-4 py-2 rounded-md bg-blue-600 hover:bg-blue-500 text-white text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+            className="px-4 py-2 rounded-full bg-accent text-on-accent text-sm font-medium hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed transition-opacity"
           >
             Verify &amp; Continue
           </button>
