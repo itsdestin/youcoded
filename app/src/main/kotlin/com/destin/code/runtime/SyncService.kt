@@ -63,6 +63,16 @@ class SyncService(
     private var pulling = false
     private var pushing = false
 
+    /**
+     * Flipped to true by RestoreService.executeRestore / undoRestore so the
+     * 15-minute background push loop skips its tick instead of uploading a
+     * half-restored state. Kept @Volatile since the push loop runs on a
+     * separate coroutine (Dispatchers.IO) and RestoreService writes from
+     * whatever thread invoked it via the bridge.
+     */
+    @Volatile
+    var restoreInProgress: Boolean = false
+
     // --- Result types ---
     data class PushResult(val success: Boolean, val errors: Int, val backends: List<String>)
     data class ExecResult(val code: Int, val stdout: String, val stderr: String)
@@ -106,6 +116,12 @@ class SyncService(
         pushJob = scope.launch {
             while (isActive) {
                 delay(PUSH_INTERVAL_MS)
+                // Restore in progress → skip this tick. Prevents uploading a
+                // half-swapped staging dir to the backup mid-restore.
+                if (restoreInProgress) {
+                    logBackup("INFO", "Push skipped — restore in progress", "sync.push")
+                    continue
+                }
                 // Check Wi-Fi preference before pushing
                 if (!shouldSyncNow()) {
                     logBackup("INFO", "Push skipped — not on Wi-Fi and Wi-Fi-only enabled", "sync.push")

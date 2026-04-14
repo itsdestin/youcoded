@@ -134,6 +134,11 @@ class SessionService : Service() {
     var syncService: SyncService? = null
         private set
 
+    // Restore service — directional user-initiated pull from a backup. Paused
+    // push loop during execute prevents uploading half-restored state.
+    var restoreService: RestoreService? = null
+        private set
+
     // Legacy single-session API — kept for ServiceBinder compatibility during migration
     var ptyBridge: PtyBridge? = null
         private set
@@ -228,6 +233,13 @@ class SessionService : Service() {
 
         // Start native sync engine — pulls on launch, pushes every 15 min
         syncService = SyncService(applicationContext, bs).also { it.start() }
+
+        // Wire up restore service — owns the snapshot + atomic-swap machinery.
+        // Startup housekeeping (orphan staging cleanup + retention) runs once here.
+        restoreService = RestoreService(syncService!!, File(bs.homeDir, ".claude")).also {
+            it.cleanupOrphanedStaging()
+            it.enforceRetention()
+        }
     }
 
     /** Watch ~/.claude-mobile/open-url for URLs written by the JS wrapper.
@@ -560,6 +572,7 @@ class SessionService : Service() {
         // Stop sync service — cancels timer, releases locks, removes .app-sync-active marker
         try { syncService?.stop() } catch (_: Exception) {}
         syncService = null
+        restoreService = null
         bridgeServer.stop()
         urlObserver?.stopWatching()
         urlObserver = null
@@ -1647,6 +1660,144 @@ class SessionService : Service() {
                     } catch (_: Exception) {}
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", url)) }
+            }
+
+            // ── Restore from backup — directional user-initiated pull ─────────
+            // Separate code path from sync (which is bidirectional merge). See
+            // RestoreService.kt header for safety invariants (snapshot-first,
+            // atomic swap, paused push loop).
+            "sync:restore:probe" -> {
+                val backendId = msg.payload.optString("backendId", "")
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("hasData", false).put("categories", org.json.JSONArray())) }
+                } else {
+                    try {
+                        val (hasData, cats) = svc.probe(backendId)
+                        val payload = JSONObject()
+                            .put("hasData", hasData)
+                            .put("categories", org.json.JSONArray(cats.map { c -> c.wire }))
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("hasData", false).put("categories", org.json.JSONArray()).put("error", e.message ?: "probe failed")) }
+                    }
+                }
+            }
+            "sync:restore:list-versions" -> {
+                val backendId = msg.payload.optString("backendId", "")
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+                } else {
+                    try {
+                        val points = svc.listVersions(backendId)
+                        val arr = org.json.JSONArray()
+                        points.forEach { p -> arr.put(p.toJson()) }
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "listVersions failed")) }
+                    }
+                }
+            }
+            "sync:restore:preview" -> {
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
+                } else {
+                    try {
+                        val opts = RestoreOptions.fromJson(msg.payload)
+                        val preview = svc.previewRestore(opts)
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, preview.toJson()) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "preview failed")) }
+                    }
+                }
+            }
+            "sync:restore:execute" -> {
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
+                } else {
+                    try {
+                        val opts = RestoreOptions.fromJson(msg.payload)
+                        // Progress events are broadcast (no id) — matches desktop's
+                        // sync:restore:progress push-event shape. Wizard UI subscribes
+                        // to them across every connected client.
+                        val result = svc.executeRestore(opts) { evt ->
+                            bridgeServer.broadcast(JSONObject().apply {
+                                put("type", "sync:restore:progress")
+                                put("payload", evt.toJson())
+                            })
+                        }
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, result.toJson()) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "execute failed")) }
+                    }
+                }
+            }
+            "sync:restore:list-snapshots" -> {
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+                } else {
+                    try {
+                        val arr = org.json.JSONArray()
+                        svc.listSnapshots().forEach { s -> arr.put(s.toJson()) }
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "listSnapshots failed")) }
+                    }
+                }
+            }
+            "sync:restore:undo" -> {
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", "RestoreService not initialized")) }
+                } else {
+                    try {
+                        val snapshotId = msg.payload.optString("snapshotId", "")
+                        svc.undoRestore(snapshotId)
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "undo failed")) }
+                    }
+                }
+            }
+            "sync:restore:delete-snapshot" -> {
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", "RestoreService not initialized")) }
+                } else {
+                    try {
+                        val snapshotId = msg.payload.optString("snapshotId", "")
+                        svc.deleteSnapshot(snapshotId)
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+                    } catch (e: Exception) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "delete failed")) }
+                    }
+                }
+            }
+
+            // Experimental feature flags — written to ~/.claude/destincode-local.json
+            // to match desktop's config.ts location. File is read by the shared
+            // React app via a first-run probe.
+            "config:set-experimental-flag" -> {
+                try {
+                    val key = msg.payload.optString("key", "")
+                    val value = msg.payload.opt("value")
+                    if (key.isEmpty()) throw IllegalArgumentException("missing key")
+                    val flagsFile = File(bootstrap!!.homeDir, ".claude/destincode-local.json")
+                    flagsFile.parentFile?.mkdirs()
+                    val current = try { JSONObject(flagsFile.readText()) } catch (_: Exception) { JSONObject() }
+                    val experimental = current.optJSONObject("experimental") ?: JSONObject()
+                    if (value == null || value == JSONObject.NULL) experimental.remove(key)
+                    else experimental.put(key, value)
+                    current.put("experimental", experimental)
+                    flagsFile.writeText(current.toString(2))
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+                } catch (e: Exception) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "set-experimental-flag failed")) }
+                }
             }
 
             // ── Phase 5a: Theme marketplace browsing ─────────────────
