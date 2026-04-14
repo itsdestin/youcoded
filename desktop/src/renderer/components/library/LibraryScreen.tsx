@@ -13,9 +13,12 @@ import type { SkillEntry } from "../../../shared/types";
 
 interface Props {
   onExit(): void;
+  // Jump to the marketplace destination. Matches MarketplaceScreen's
+  // onOpenLibrary — symmetric navigation between the two top-level views.
+  onOpenMarketplace?(): void;
 }
 
-export default function LibraryScreen({ onExit }: Props) {
+export default function LibraryScreen({ onExit, onOpenMarketplace }: Props) {
   const mp = useMarketplace();
   const [detail, setDetail] = useState<DetailTarget | null>(null);
 
@@ -49,14 +52,26 @@ export default function LibraryScreen({ onExit }: Props) {
     <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
       <div className="flex items-center justify-between p-3">
         <h1 className="text-xl font-semibold text-fg pl-2">Your Library</h1>
-        <button
-          type="button"
-          onClick={onExit}
-          className="text-fg-dim hover:text-fg text-sm px-2 py-1"
-          aria-label="Exit library"
-        >
-          Esc · Back to chat
-        </button>
+        <div className="flex items-center gap-2">
+          {onOpenMarketplace && (
+            <button
+              type="button"
+              onClick={onOpenMarketplace}
+              className="text-fg-2 hover:text-fg text-sm px-3 py-1 rounded-md border border-edge-dim hover:border-edge"
+              aria-label="Open marketplace"
+            >
+              Marketplace
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onExit}
+            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            aria-label="Exit library"
+          >
+            Esc · Back to chat
+          </button>
+        </div>
       </div>
 
       <div className="px-4 flex flex-col gap-8 pb-12">

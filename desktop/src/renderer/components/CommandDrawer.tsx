@@ -184,9 +184,6 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
               })}
               <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                 <AddSkillsCard onClick={() => { onClose(); onOpenMarketplace(); }} />
-                {onOpenLibrary && (
-                  <LibraryCard onClick={() => { onClose(); onOpenLibrary(); }} />
-                )}
               </div>
             </>
           ) : (
@@ -201,20 +198,6 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
         </div>
       </div>
     </>
-  );
-}
-
-// Sibling of AddSkillsCard for the Phase-2 redesign. Routes to the Library
-// destination. Dashed border + accent color read as an action, not a skill.
-function LibraryCard({ onClick }: { onClick: () => void }) {
-  return (
-    <button
-      onClick={onClick}
-      className="bg-panel/40 border border-dashed border-edge rounded-lg p-3 text-left hover:bg-inset hover:border-accent transition-colors flex flex-col items-center justify-center text-accent"
-    >
-      <span className="text-sm font-medium mt-1">Your Library</span>
-      <span className="text-[11px] text-fg-muted mt-1">Installed · Favorites</span>
-    </button>
   );
 }
 

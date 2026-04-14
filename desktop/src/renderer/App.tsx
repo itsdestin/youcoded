@@ -1724,10 +1724,14 @@ function AppInner() {
           {activeView === 'marketplace' ? (
             <MarketplaceScreen
               onExit={() => { setActiveView('chat'); setMarketplaceInitialType(undefined); }}
+              onOpenLibrary={() => { setActiveView('library'); setMarketplaceInitialType(undefined); }}
               initialTypeChip={marketplaceInitialType}
             />
           ) : (
-            <LibraryScreen onExit={() => setActiveView('chat')} />
+            <LibraryScreen
+              onExit={() => setActiveView('chat')}
+              onOpenMarketplace={() => setActiveView('marketplace')}
+            />
           )}
         </MarketplaceProvider>
       )}
