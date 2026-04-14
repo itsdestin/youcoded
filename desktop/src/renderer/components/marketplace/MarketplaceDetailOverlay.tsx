@@ -224,8 +224,19 @@ function ThemeBody({
           )}
         </div>
       </header>
-      {/* Seven-swatch preview from token registry. Token-based preview is the
-          primary path per docs/registries.md; PNGs are secondary polish. */}
+      {/* PNG preview — uploaded on publish. Shown first when present so the
+          user sees the real rendered screen. Token swatches follow as a
+          fallback/supplement for themes whose PNG hasn't regenerated. */}
+      {entry.preview && (
+        <section>
+          <img
+            src={entry.preview}
+            alt={`${entry.name} preview`}
+            loading="lazy"
+            className="w-full rounded-md border border-edge-dim"
+          />
+        </section>
+      )}
       {entry.previewTokens && (
         <section className="flex gap-2 flex-wrap">
           {Object.entries(entry.previewTokens).map(([name, color]) => (

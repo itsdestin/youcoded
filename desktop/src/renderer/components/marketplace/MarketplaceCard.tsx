@@ -45,6 +45,10 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
 
   const title = item.kind === "skill" ? item.entry.displayName : item.entry.name;
   const author = item.kind === "skill" ? (item.entry.author || "") : (item.entry.author || "");
+  // Theme preview PNG (uploaded/regenerated on theme publish). Tokens are the
+  // fallback; when the full preview exists it reads much more like "this is
+  // what you'll get" than a 7-swatch strip.
+  const themePreviewUrl = item.kind === "theme" ? item.entry.preview : undefined;
   // Prefer tagline when the override supplies one; falls back to the raw
   // description so cards never appear blank.
   const blurb = item.kind === "skill"
@@ -56,9 +60,18 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
     <button
       type="button"
       onClick={onOpen}
-      className="layer-surface text-left p-4 flex flex-col gap-2 transition-transform duration-200 hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="layer-surface text-left flex flex-col overflow-hidden transition-transform duration-200 hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       data-marketplace-card={id}
     >
+      {themePreviewUrl && (
+        <img
+          src={themePreviewUrl}
+          alt=""
+          loading="lazy"
+          className="w-full h-36 object-cover border-b border-edge-dim"
+        />
+      )}
+      <div className="p-4 flex flex-col gap-2 flex-1">
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">
           <h3 className="font-medium text-fg truncate">{title}</h3>
@@ -78,6 +91,7 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
         {installs > 0 && <span>{installs.toLocaleString()} installs</span>}
         {likes > 0 && <span>{likes.toLocaleString()} likes</span>}
         {peek && <span className="text-fg-muted truncate">{peek}</span>}
+      </div>
       </div>
     </button>
   );

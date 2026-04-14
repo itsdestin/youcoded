@@ -1383,8 +1383,15 @@ function AppInner() {
 
   return (
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
-      {/* Main area — relative so bottom-float chrome can position against it */}
-      <div className="flex-1 flex flex-col overflow-hidden relative">
+      {/* Main area — relative so bottom-float chrome can position against it.
+          When a Phase-2 full-screen destination is active, hide the chat
+          chrome entirely. Unmounting via `hidden` is cleaner than z-index
+          games — chrome has backdrop-filter stacking contexts that trap
+          sibling z-index values. */}
+      <div
+        className="flex-1 flex flex-col overflow-hidden relative"
+        hidden={newMarketplaceFlag && (activeView === 'marketplace' || activeView === 'library')}
+      >
         {sessions.length > 0 && sessionId && currentSession ? (
           <>
             <div ref={headerRef} className="chrome-wrapper bg-canvas">

@@ -4,6 +4,8 @@
 
 import React from "react";
 
+// "skill" kept as the internal id — maps to plugin-shaped entries in the
+// index. UI labels it "Plugins" because that's what users actually install.
 export type TypeChip = "skill" | "theme";
 export type MetaChip = "new" | "popular" | "picks";
 
@@ -14,18 +16,20 @@ const VIBES = ["school", "work", "creative", "health", "personal", "finance", "h
 export type VibeChip = typeof VIBES[number];
 
 export interface FilterState {
-  types: Set<TypeChip>;
+  // Single-select: a user is either browsing plugins OR themes, not both.
+  // null = show everything (discovery default).
+  type: TypeChip | null;
   vibes: Set<VibeChip>;
   meta: Set<MetaChip>;
   query: string;
 }
 
 export function emptyFilter(): FilterState {
-  return { types: new Set(), vibes: new Set(), meta: new Set(), query: "" };
+  return { type: null, vibes: new Set(), meta: new Set(), query: "" };
 }
 
 export function isActive(f: FilterState): boolean {
-  return f.types.size > 0 || f.vibes.size > 0 || f.meta.size > 0 || f.query.trim().length > 0;
+  return f.type !== null || f.vibes.size > 0 || f.meta.size > 0 || f.query.trim().length > 0;
 }
 
 interface Props {
@@ -34,32 +38,36 @@ interface Props {
 }
 
 export default function MarketplaceFilterBar({ value, onChange }: Props) {
-  const toggle = <K extends keyof FilterState>(key: K, v: any) => {
-    const next = { ...value, types: new Set(value.types), vibes: new Set(value.vibes), meta: new Set(value.meta) };
+  // Multi-select for vibes and meta; type is single-select (radio-like).
+  const toggleMulti = (key: "vibes" | "meta", v: any) => {
+    const next = { ...value, vibes: new Set(value.vibes), meta: new Set(value.meta) };
     const set = next[key] as Set<any>;
     if (set.has(v)) set.delete(v); else set.add(v);
     onChange(next);
+  };
+  const setType = (t: TypeChip) => {
+    onChange({ ...value, type: value.type === t ? null : t });
   };
 
   return (
     <div className="layer-surface sticky top-0 z-20 flex flex-wrap items-center gap-2 p-3">
       <ChipGroup label="Type">
-        <Chip active={value.types.has("skill")} onClick={() => toggle("types", "skill")}>Skills</Chip>
-        <Chip active={value.types.has("theme")} onClick={() => toggle("types", "theme")}>Themes</Chip>
+        <Chip active={value.type === "skill"} onClick={() => setType("skill")}>Plugins</Chip>
+        <Chip active={value.type === "theme"} onClick={() => setType("theme")}>Themes</Chip>
       </ChipGroup>
       <Divider />
       <ChipGroup label="Vibe">
         {VIBES.map((v) => (
-          <Chip key={v} active={value.vibes.has(v)} onClick={() => toggle("vibes", v)}>
+          <Chip key={v} active={value.vibes.has(v)} onClick={() => toggleMulti("vibes", v)}>
             {v[0].toUpperCase() + v.slice(1)}
           </Chip>
         ))}
       </ChipGroup>
       <Divider />
       <ChipGroup label="Meta">
-        <Chip active={value.meta.has("new")} onClick={() => toggle("meta", "new")}>New</Chip>
-        <Chip active={value.meta.has("popular")} onClick={() => toggle("meta", "popular")}>Popular</Chip>
-        <Chip active={value.meta.has("picks")} onClick={() => toggle("meta", "picks")}>Destin's picks</Chip>
+        <Chip active={value.meta.has("new")} onClick={() => toggleMulti("meta", "new")}>New</Chip>
+        <Chip active={value.meta.has("popular")} onClick={() => toggleMulti("meta", "popular")}>Popular</Chip>
+        <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Destin's picks</Chip>
       </ChipGroup>
       <div className="ml-auto">
         <input

@@ -28,7 +28,7 @@ export default function MarketplaceScreen({ onExit, initialTypeChip }: Props) {
   const mp = useMarketplace();
   const [filter, setFilter] = useState<FilterState>(() => {
     const f = emptyFilter();
-    if (initialTypeChip) f.types.add(initialTypeChip);
+    if (initialTypeChip) f.type = initialTypeChip;
     return f;
   });
   const [detail, setDetail] = useState<DetailTarget | null>(null);
@@ -104,7 +104,7 @@ export default function MarketplaceScreen({ onExit, initialTypeChip }: Props) {
     const q = filter.query.trim().toLowerCase();
 
     const skillPass = (s: SkillEntry): boolean => {
-      if (filter.types.size > 0 && !filter.types.has("skill")) return false;
+      if (filter.type !== null && filter.type !== "skill") return false;
       if (filter.vibes.size > 0) {
         const areas = s.lifeArea || [];
         if (!areas.some((a) => filter.vibes.has(a as any))) return false;
@@ -116,7 +116,7 @@ export default function MarketplaceScreen({ onExit, initialTypeChip }: Props) {
       return true;
     };
     const themePass = (t: ThemeRegistryEntryWithStatus): boolean => {
-      if (filter.types.size > 0 && !filter.types.has("theme")) return false;
+      if (filter.type !== null && filter.type !== "theme") return false;
       if (filter.vibes.size > 0) return false; // themes have no lifeArea (yet)
       if (q) {
         const hay = `${t.name} ${t.description || ""}`.toLowerCase();
