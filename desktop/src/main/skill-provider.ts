@@ -658,24 +658,18 @@ export class LocalSkillProvider implements SkillProvider {
       const cached = this.readCache<string[]>(DEFAULTS_CACHE, INDEX_TTL);
       if (cached) return cached;
       const resp = await fetch(`${REGISTRY_BASE}/curated-defaults.json`);
-      if (!resp.ok) return this.getFallbackDefaults();
+      if (!resp.ok) {
+        // Stale cache beats nothing — first-run seeding is better with slightly
+        // outdated defaults than with an empty list.
+        return this.readCache<string[]>(DEFAULTS_CACHE, Infinity) ?? [];
+      }
       // Registry uses "skills" key (not "defaults") — see curated-defaults.json
       const data = await resp.json() as { skills: string[] };
       const list = data.skills ?? [];
       this.writeCache(DEFAULTS_CACHE, list);
       return list;
     } catch {
-      return this.getFallbackDefaults();
-    }
-  }
-
-  private getFallbackDefaults(): string[] {
-    try {
-      const registryPath = path.join(__dirname, '..', 'renderer', 'data', 'skill-registry.json');
-      const registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
-      return Object.keys(registry);
-    } catch {
-      return [];
+      return this.readCache<string[]>(DEFAULTS_CACHE, Infinity) ?? [];
     }
   }
 
@@ -686,28 +680,16 @@ export class LocalSkillProvider implements SkillProvider {
     if (cached) return cached;
     try {
       const resp = await fetch(`${REGISTRY_BASE}/index.json`);
-      if (!resp.ok) return this.readCache<SkillEntry[]>(INDEX_CACHE, Infinity) || this.getBundledIndex();
+      // Stale cache beats the bundled skill-registry.json — those ids are
+      // `<plugin>:<skill>` sub-skills with no sourceRef, so "Get" buttons on
+      // them wouldn't actually install anything. Empty list on true first-run
+      // offline is the honest answer; the UI already renders "No skills found".
+      if (!resp.ok) return this.readCache<SkillEntry[]>(INDEX_CACHE, Infinity) ?? [];
       const data = await resp.json() as SkillEntry[];
       this.writeCache(INDEX_CACHE, data);
       return data;
     } catch {
-      return this.readCache<SkillEntry[]>(INDEX_CACHE, Infinity) || this.getBundledIndex();
-    }
-  }
-
-  /** Convert bundled skill-registry.json into SkillEntry[] for offline marketplace fallback */
-  private getBundledIndex(): SkillEntry[] {
-    try {
-      const registryPath = path.join(__dirname, '..', 'renderer', 'data', 'skill-registry.json');
-      const registry: Record<string, Omit<SkillEntry, 'id'>> = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
-      return Object.entries(registry).map(([id, meta]) => ({
-        id,
-        ...meta,
-        type: (meta as any).type || 'plugin',
-        visibility: (meta as any).visibility || 'published',
-      } as SkillEntry));
-    } catch {
-      return [];
+      return this.readCache<SkillEntry[]>(INDEX_CACHE, Infinity) ?? [];
     }
   }
 
