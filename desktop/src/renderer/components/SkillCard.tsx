@@ -75,10 +75,17 @@ export default function SkillCard({ skill, onClick, variant = 'drawer', installe
           <div className={`text-center text-[11px] py-1 mt-2 border rounded-sm ${
             updateAvailable
               ? 'text-[#f0ad4e] border-[#f0ad4e]/40'
-              : 'text-[#4CAF50] border-[#4CAF50]/40'
+              : skill.source === 'self' || skill.visibility === 'private'
+                ? 'text-[#66AAFF] border-[#66AAFF]/40'
+                : 'text-[#4CAF50] border-[#4CAF50]/40'
           }`}>
-            {/* Phase 3b: surface update-available state on browse cards */}
-            {updateAvailable ? 'Update Available' : 'Installed'}
+            {/* User-authored skills read "User Skill"; updates still win so */}
+            {/* bumping versions isn't blocked by the user-skill label. */}
+            {updateAvailable
+              ? 'Update Available'
+              : skill.source === 'self' || skill.visibility === 'private'
+                ? 'User Skill'
+                : 'Installed'}
           </div>
         ) : installing ? (
           <div className="text-center text-[11px] py-1 mt-2 border rounded-sm text-fg-muted border-edge-dim opacity-60">

@@ -222,10 +222,16 @@ function InstalledTab({
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-1.5">
                 <span className="text-sm font-medium text-fg truncate">{skill.displayName || skill.id}</span>
-                {/* Type badge */}
-                <span className="px-1.5 py-0.5 text-[8px] font-medium rounded-sm bg-inset/50 text-fg-dim border border-edge/25">
-                  Plugin
-                </span>
+                {/* Type badge — user-authored skills get their own pill */}
+                {skill.source === 'self' || skill.visibility === 'private' ? (
+                  <span className="px-1.5 py-0.5 text-[8px] font-medium rounded-sm bg-[#66AAFF]/15 text-[#66AAFF] border border-[#66AAFF]/25">
+                    User Skill
+                  </span>
+                ) : (
+                  <span className="px-1.5 py-0.5 text-[8px] font-medium rounded-sm bg-inset/50 text-fg-dim border border-edge/25">
+                    Plugin
+                  </span>
+                )}
               </div>
               <p className="text-[11px] text-fg-muted truncate">{skill.description}</p>
             </div>
