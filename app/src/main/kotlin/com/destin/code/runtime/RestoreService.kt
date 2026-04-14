@@ -117,34 +117,114 @@ class RestoreService(
 
     suspend fun previewRestore(opts: RestoreOptions): RestorePreview = withContext(Dispatchers.IO) {
         val adapter = adapterFor(opts.backendId)
-        val perCategory = mutableListOf<CategoryPreview>()
-        var totalBytes = 0L
+        val raw = mutableListOf<CategoryPreview>()
         val warnings = mutableListOf<String>()
 
         for (category in opts.categories) {
             try {
-                val p = adapter.previewCategory(category, opts.versionRef)
-                perCategory.add(p)
-                totalBytes += p.bytes
+                raw.add(adapter.previewCategory(category, opts.versionRef))
             } catch (e: Exception) {
                 warnings.add("Preview failed for ${category.wire}: ${e.message ?: e}")
-                perCategory.add(CategoryPreview(category, 0, 0, 0, 0, 0, 0))
+                raw.add(CategoryPreview(category, 0, 0, 0, 0, 0, 0))
             }
         }
 
-        if (opts.categories.contains(RestoreCategory.SKILLS) ||
-            opts.categories.contains(RestoreCategory.MEMORY)) {
+        // For merge mode, reinterpret the same raw counts:
+        //   - toDelete=0 (merge never deletes locally; those files stay + get uploaded)
+        //   - toUpload = original toDelete (they go up to the backup instead of away)
+        // Wipe keeps the as-measured shape.
+        val perCategory: List<CategoryPreview> = raw.map { p ->
+            if (opts.mode == RestoreMode.MERGE) {
+                p.copy(toUpload = p.toDelete, toDelete = 0)
+            } else p
+        }
+
+        val totalBytes = perCategory.sumOf { it.bytes }
+
+        // Skip the restart hint in merge mode — merge doesn't swap live dirs.
+        if (opts.mode == RestoreMode.WIPE &&
+            (opts.categories.contains(RestoreCategory.SKILLS) ||
+             opts.categories.contains(RestoreCategory.MEMORY))) {
             warnings.add("Skills or memory restored — app restart recommended to pick up changes.")
+        }
+        if (opts.mode == RestoreMode.WIPE && perCategory.any { it.toDelete > 0 }) {
+            warnings.add("Wipe & restore will DELETE local files not present in the backup.")
         }
 
         // Rough estimate: 10 MB/s effective throughput after overhead. Cellular
         // on Android will be slower — this is a UX hint, not a contract.
         val estimatedSeconds = maxOf(3L, (totalBytes + 10L * 1024 * 1024 - 1) / (10L * 1024 * 1024))
 
-        RestorePreview(perCategory, totalBytes, estimatedSeconds, warnings)
+        RestorePreview(perCategory, totalBytes, estimatedSeconds, warnings, opts.mode)
+    }
+
+    /**
+     * Resolve a browse URL for a single category on the remote backend.
+     * Returns null if the adapter doesn't support browse links or lookup fails.
+     */
+    suspend fun browseCategoryUrl(
+        backendId: String,
+        category: RestoreCategory,
+        versionRef: String,
+    ): String? = withContext(Dispatchers.IO) {
+        try {
+            adapterFor(backendId).remoteBrowseUrlFor(category, versionRef)
+        } catch (_: Exception) {
+            null
+        }
     }
 
     suspend fun executeRestore(
+        opts: RestoreOptions,
+        onProgress: (RestoreProgressEvent) -> Unit,
+    ): RestoreResult {
+        // Merge mode reuses the sync loop's pull + push (remote → local
+        // add/overwrite with no deletions, then local → remote upload for
+        // anything local-only). This is NON-destructive on both sides, so no
+        // snapshot is needed and we explicitly do NOT flip restoreInProgress
+        // — we actually want the push to run.
+        return if (opts.mode == RestoreMode.MERGE) {
+            executeMerge(opts, onProgress)
+        } else {
+            executeWipe(opts, onProgress)
+        }
+    }
+
+    private suspend fun executeMerge(
+        opts: RestoreOptions,
+        onProgress: (RestoreProgressEvent) -> Unit,
+    ): RestoreResult = withContext(Dispatchers.IO) {
+        val startedAt = System.currentTimeMillis()
+
+        // Emit a single 'fetching' phase for each category up-front so the UI
+        // renders per-category rows. Merge doesn't stage per-category, so we
+        // don't get file-level progress — just the two top-level phases.
+        for (category in opts.categories) {
+            onProgress(RestoreProgressEvent(category, 0, 0, null, "fetching"))
+        }
+
+        // Phase 1: pull remote → local (add + overwrite-newer, no deletions).
+        syncService.pull(backendId = opts.backendId)
+
+        // Phase 2: push local → remote (uploads anything local-only). force=true
+        // so the push isn't skipped for being recent — the user just asked for it.
+        syncService.push(force = true, backendId = opts.backendId)
+
+        for (category in opts.categories) {
+            onProgress(RestoreProgressEvent(category, 1, 1, null, "done"))
+        }
+
+        RestoreResult(
+            snapshotId = null,
+            categoriesRestored = opts.categories,
+            filesWritten = 0, // merge doesn't track per-file writes; sync logs it
+            durationMs = System.currentTimeMillis() - startedAt,
+            requiresRestart = opts.categories.contains(RestoreCategory.SKILLS) ||
+                              opts.categories.contains(RestoreCategory.MEMORY),
+        )
+    }
+
+    private suspend fun executeWipe(
         opts: RestoreOptions,
         onProgress: (RestoreProgressEvent) -> Unit,
     ): RestoreResult = withContext(Dispatchers.IO) {

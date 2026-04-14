@@ -1683,6 +1683,32 @@ class SessionService : Service() {
                     }
                 }
             }
+            "sync:restore:browse-url" -> {
+                // Resolve a deep link into the remote backend for a given
+                // category (Drive folder, GitHub tree). UI shows a "browse remote"
+                // button from the preview screen. Adapters that don't support
+                // browse URLs return null → we pass JSONObject.NULL over the wire.
+                val backendId = msg.payload.optString("backendId", "")
+                val categoryStr = msg.payload.optString("category", "")
+                val versionRef = msg.payload.optString("versionRef", "HEAD")
+                val svc = restoreService
+                if (svc == null) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", JSONObject.NULL)) }
+                } else {
+                    val cat = RestoreCategory.fromWire(categoryStr)
+                    val url = if (cat == null) {
+                        null
+                    } else {
+                        try {
+                            svc.browseCategoryUrl(backendId, cat, versionRef)
+                        } catch (_: Exception) { null }
+                    }
+                    msg.id?.let {
+                        bridgeServer.respond(ws, msg.type, it,
+                            JSONObject().put("url", url ?: JSONObject.NULL))
+                    }
+                }
+            }
             "sync:restore:list-versions" -> {
                 val backendId = msg.payload.optString("backendId", "")
                 val svc = restoreService

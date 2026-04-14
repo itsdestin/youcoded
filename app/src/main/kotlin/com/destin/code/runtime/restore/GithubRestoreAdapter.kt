@@ -30,7 +30,7 @@ import java.io.File
  * Android adds per-instance repos later, update repoDir below to match.
  */
 class GithubRestoreAdapter(
-    @Suppress("unused") private val instance: JSONObject,
+    private val instance: JSONObject,
     private val claudeDir: File,
     private val syncService: SyncService,
 ) : RestoreAdapter {
@@ -48,6 +48,27 @@ class GithubRestoreAdapter(
 
     private fun git(args: List<String>, cwd: File? = null, timeoutSeconds: Long = 60L): SyncService.ExecResult {
         return syncService.execCommand(listOf("git") + args, cwd = cwd, timeoutSeconds = timeoutSeconds)
+    }
+
+    /**
+     * Resolve a GitHub tree URL for the given ref + category. Translates
+     * 'HEAD' to 'main' (GitHub's default-branch convention) since HEAD isn't
+     * a valid tree ref in GitHub's URL scheme. Falls back to the repo URL or
+     * github.com if PERSONAL_SYNC_REPO isn't an https github URL.
+     */
+    override suspend fun remoteBrowseUrlFor(
+        category: RestoreCategory,
+        versionRef: String,
+    ): String? = withContext(Dispatchers.IO) {
+        val raw = instance.optJSONObject("config")?.optString("PERSONAL_SYNC_REPO", "") ?: ""
+        val base = raw.replace(Regex("""\.git$"""), "").trimEnd('/')
+        val sub = categoryRepoSubpath(category)
+        val ref = if (versionRef == "HEAD") "main" else versionRef
+        if (Regex("""^https://github\.com/""", RegexOption.IGNORE_CASE).containsMatchIn(base)) {
+            "$base/tree/$ref/$sub"
+        } else {
+            base.ifEmpty { "https://github.com" }
+        }
     }
 
     override suspend fun listVersions(): List<RestorePoint> = withContext(Dispatchers.IO) {

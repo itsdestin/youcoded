@@ -26,6 +26,24 @@ enum class RestoreCategory(val wire: String) {
 }
 
 /**
+ * Restore mode — must match TS RestoreMode ('merge' | 'wipe').
+ * - MERGE: union. Remote→local add/overwrite only, then local→remote upload
+ *          for local-only files (reuses sync loop). Non-destructive both sides.
+ * - WIPE:  mirror. Local tree replaced with the backup exactly. Snapshot-first
+ *          is forced so undo works.
+ * Wire values are lowercase strings — Kotlin enum name lowercased.
+ */
+enum class RestoreMode(val wire: String) {
+    MERGE("merge"),
+    WIPE("wipe");
+
+    companion object {
+        fun fromWire(s: String?): RestoreMode =
+            values().firstOrNull { it.wire == s } ?: WIPE
+    }
+}
+
+/**
  * A restorable point in time. 'HEAD' for Drive (overwrite-in-place, no history);
  * a git SHA for GitHub (full commit history surfaced as PIT options).
  */
@@ -48,6 +66,8 @@ data class RestoreOptions(
     val versionRef: String,
     val categories: List<RestoreCategory>,
     val snapshotFirst: Boolean,
+    /** Mode: MERGE (non-destructive union) or WIPE (mirror, with snapshot-first). */
+    val mode: RestoreMode,
 ) {
     companion object {
         fun fromJson(j: JSONObject): RestoreOptions {
@@ -61,6 +81,9 @@ data class RestoreOptions(
                 versionRef = j.optString("versionRef", "HEAD"),
                 categories = cats,
                 snapshotFirst = j.optBoolean("snapshotFirst", true),
+                // Mode defaults to WIPE if missing — matches the historical
+                // behavior before the merge/wipe split existed.
+                mode = RestoreMode.fromWire(if (j.has("mode")) j.optString("mode") else null),
             )
         }
     }
@@ -72,9 +95,11 @@ data class CategoryPreview(
     val localFiles: Int,
     val toAdd: Int,
     val toOverwrite: Int,
-    /** Files on device NOT on the backup — restore semantics will delete these. */
+    /** Files on device NOT on the backup — wipe deletes these; merge leaves them. */
     val toDelete: Int,
     val bytes: Long,
+    /** Merge-mode only: files present locally but NOT on backup (will be uploaded). */
+    val toUpload: Int? = null,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         put("category", category.wire)
@@ -84,6 +109,7 @@ data class CategoryPreview(
         put("toOverwrite", toOverwrite)
         put("toDelete", toDelete)
         put("bytes", bytes)
+        if (toUpload != null) put("toUpload", toUpload)
     }
 }
 
@@ -92,6 +118,8 @@ data class RestorePreview(
     val totalBytes: Long,
     val estimatedSeconds: Long,
     val warnings: List<String>,
+    /** Echoes the mode the preview was computed for — UI keys column labels off this. */
+    val mode: RestoreMode,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {
         val arr = JSONArray()
@@ -100,6 +128,7 @@ data class RestorePreview(
         put("totalBytes", totalBytes)
         put("estimatedSeconds", estimatedSeconds)
         put("warnings", JSONArray(warnings))
+        put("mode", mode.wire)
     }
 }
 
@@ -192,4 +221,10 @@ interface RestoreAdapter {
         onFile: ((String, Int, Int) -> Unit)? = null,
     )
     suspend fun probe(): Pair<Boolean, List<RestoreCategory>>
+    /**
+     * Optional — return a URL that opens this category's browse view on the
+     * remote backend (Drive folder, GitHub tree). Null means the adapter
+     * doesn't support browse links. Used by the preview UI.
+     */
+    suspend fun remoteBrowseUrlFor(category: RestoreCategory, versionRef: String): String? = null
 }
