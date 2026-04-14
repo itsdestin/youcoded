@@ -64,7 +64,7 @@ const PencilIcon = ({ className = 'w-3 h-3' }: { className?: string }) => (
 );
 
 export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, onPublishTheme }: Props) {
-  const { allThemes, theme: activeSlug, setTheme, reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps, setGlassOverride } = useTheme();
+  const { allThemes, activeTheme, theme: activeSlug, setTheme, reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps, setGlassOverride } = useTheme();
   // Flips the popup body to the plain-language explainer view via the (i) icon.
   const [showInfo, setShowInfo] = useState(false);
   // Slug of the theme currently being edited (pencil opened). Null = main list.
@@ -78,7 +78,15 @@ export default function ThemeScreen({ onClose, onSendInput, onOpenMarketplace, o
     setEditingSlug(slug);
   };
 
-  const editingTheme = editingSlug ? allThemes.find(t => t.slug === editingSlug) ?? null : null;
+  // Fix: read from activeTheme (which has glassOverrides merged) rather than
+  // raw allThemes, otherwise the Panel/Bubble Blur + Opacity sliders read a
+  // stale base value and the thumb appears frozen while overrides still
+  // persist + apply to the DOM. openEditor() always activates the theme being
+  // edited, so activeSlug === editingSlug here. Fall back to the raw lookup
+  // if they ever diverge (e.g. race with a concurrent setTheme).
+  const editingTheme = editingSlug
+    ? (editingSlug === activeSlug ? activeTheme : allThemes.find(t => t.slug === editingSlug) ?? null)
+    : null;
 
   if (showInfo) {
     return (
