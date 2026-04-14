@@ -167,6 +167,37 @@ function DevModeScreen({ onEnable }: { onEnable: () => void }) {
 }
 
 /* ------------------------------------------------------------------ */
+/*  CompletionCard                                                    */
+/* ------------------------------------------------------------------ */
+
+function CompletionCard() {
+  return (
+    <div className="w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col gap-4">
+      <h2 className="text-lg font-semibold text-fg text-center">You're all set.</h2>
+      <p className="text-sm text-fg-dim text-center">Here's what to try first:</p>
+      <ul className="flex flex-col gap-2 text-sm text-fg-dim">
+        <li className="flex gap-2">
+          <span className="text-accent">•</span>
+          <span><span className="text-fg">Pick a theme</span> — Settings &rarr; Appearance</span>
+        </li>
+        <li className="flex gap-2">
+          <span className="text-accent">•</span>
+          <span><span className="text-fg">Install a skill</span> — the marketplace is one click away</span>
+        </li>
+        <li className="flex gap-2">
+          <span className="text-accent">•</span>
+          <span><span className="text-fg">Sync across devices</span> — optional, but handy</span>
+        </li>
+      </ul>
+      <div className="flex items-center justify-center gap-2 text-xs text-fg-muted pt-1">
+        <BrailleSpinner size="sm" />
+        <span>Opening DestinCode…</span>
+      </div>
+    </div>
+  );
+}
+
+/* ------------------------------------------------------------------ */
 /*  FirstRunView (default export)                                     */
 /* ------------------------------------------------------------------ */
 
@@ -243,7 +274,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
       <h1 className="text-4xl font-bold mb-6">DestinCode</h1>
 
       {launching ? (
-        <p className="text-sm text-gray-400 animate-pulse">Starting your setup...</p>
+        <CompletionCard />
       ) : (
         <div className="flex flex-col items-center gap-5 w-full max-w-md px-4">
           {state && (
