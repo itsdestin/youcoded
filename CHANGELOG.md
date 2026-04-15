@@ -2,6 +2,54 @@
 
 All notable changes to DestinCode are documented in this file.
 
+## [2.4.0] — 2026-04-15
+
+Headline: marketplace auth, attention classifier, parsed tool cards, glassmorphism overhaul, and the app now owns DestinClaude toolkit reconciliation.
+
+### Added
+- **Marketplace authentication** — Sign in with GitHub via the OAuth device flow. Installs, ratings, likes, and reports are now tied to your account. Token storage hardened (cookie-bound CSRF, no raw token at rest).
+- **Attention classifier** — Replaces the old 30-second "thinking" timer with a per-second PTY-buffer classifier. New `AttentionBanner` surfaces five distinct states (`awaiting-input`, `shell-idle`, `error`, `stuck`, `session-died`) with banner copy that explains what's happening.
+- **Parsed tool-card views** — Edit / Write / Bash / Read / TodoWrite / Agent / Grep / Glob / WebFetch / TaskUpdate now render with a preview-and-expand interface instead of raw JSON blobs.
+- **Chrome-style session tear-off** — Drag a session pill out of the SessionStrip to detach it into its own window; drag back to reattach.
+- **Per-theme transparency sliders** — Panel Blur, Panel Opacity, Bubble Blur, and Bubble Opacity are now per-theme settings (with a pencil-per-theme editor in Appearance) rather than global. Reduce Effects forces blur off but preserves your opacity intent.
+- **Combined model + effort pill** — StatusBar pill collapses model and reasoning effort into a single control with a fast-mode cost warning.
+- **Game lobby reconnect** — Real reconnect path with accurate error hints when the room is full or the opponent left.
+- **Cross-destination drawer buttons** — Jump between marketplace and library (Library tile dropped in favor of explicit destination buttons).
+- **Notification sound picker** — `dialog:open-sound` IPC for choosing custom notification sounds (desktop only).
+- **Per-platform header layout** — Chat/terminal toggle moves to the side opposite the OS window controls (left on Windows/Linux, right on macOS). Header packing is space-aware, not viewport-aware.
+- **Announcement widget** — Moved from the header into a default-visible StatusBar widget under "Updates."
+- **Theme hot-swap window/dock icon** — Active theme controls the OS-level icon.
+- **Compounding wheel-scroll acceleration** — Scrolling builds momentum the longer you scroll.
+- **Dev port + userData isolation** — `scripts/run-dev.sh` shifts ports (Vite 5173→5223, remote 9900→9950) and splits Electron `userData` so dev coexists with the built app.
+
+### Changed
+- **Glassmorphism is fully variable-driven** — All glass surfaces read `--panels-blur` / `--panels-opacity` / `--bubble-blur` / `--bubble-opacity` directly. The old `[data-panels-blur]` attribute gate is gone; blur and opacity are independent knobs.
+- **Bottom chrome scroll-behind** — Input + status bars float over chat with frosted glass, padded via ResizeObserver.
+- **Plugin install paths** — Marketplace plugins now install under `~/.claude/plugins/marketplaces/destincode/plugins/<id>/` (was `~/.claude/marketplaces/...`); `installed_plugins.json` lives at `~/.claude/plugins/installed_plugins.json` (was `~/.claude/installed_plugins.json`). Both moves match Claude Code v2.1+ expectations — plugins installed against the old paths are invisible to the CLI.
+- **Plugin discovery uses four registries** — `ClaudeCodeRegistry` writes `settings.json` (`enabledPlugins`), `installed_plugins.json`, `known_marketplaces.json`, and `marketplaces/<src>/.claude-plugin/marketplace.json` atomically. Without all four, `/reload-plugins` reports zero new plugins.
+- **Theme file watcher** — `chokidar` replaces `fs.watch`; recursive directory hot-reload is now reliable on macOS and Windows.
+- **Theme publish upload** — Body piped via stdin with a pre-flight size check (no more silent failure on large themes).
+- **Network security config** — Tailscale `*.ts.net` cleartext exception now documented inline (traffic still rides inside the WireGuard tunnel).
+
+### Fixed
+- **Hook reconciler now prunes dead plugin entries** — On every app launch, `settings.json` hook entries that point inside a plugin root at a missing file are removed. Cleans up stale registrations from the DestinClaude phase-3 decomposition (sync, title-update, todo-capture, checklist-reminder, done-sound, session-end-sync, contribution-detector, check-inbox). Never touches user-added hooks.
+- **Orphan symlinks cleaned up** — New `cleanupOrphanSymlinks()` startup sweep removes broken `~/.claude/{hooks,commands,skills}/` symlinks pointing into deleted toolkit subtrees. Claude Code v2.1+ doesn't read these dirs anyway, but they were visible clutter.
+- **Wizard symlink block dropped** — The DestinCode app no longer creates `setup-wizard` symlinks in `~/.claude/skills/` or `~/.claude/commands/` during toolkit clone — those paths were broken post-decomposition and Claude Code discovers commands/skills via `plugin.json` regardless.
+- **Game presence + remote access status** — Various reliability fixes (per 2.3.2 follow-on commits).
+- **Toggle pill** — Cached endpoints survive label visibility flip.
+- **Glass UX** — Reduce Effects now lives above the Glass sliders; sliders hide entirely when Reduce Effects is on; sliders only show on themes with wallpapers.
+- **Diag panel removed** — From theme settings (was leftover debug surface).
+- **Bootstrap.kt** — Removed duplicate `bashPath` declaration that broke Android build under newer Kotlin.
+
+### Removed
+- **`gmessages` integration** — Pre-built Go binary and related setup paths.
+- **Setup-wizard symlink creation in `prerequisite-installer.ts`** — Dead code from pre-decomposition layout.
+- **`desktop/electron-debug.log`** — Was committed by accident; `*.log` now in `.gitignore`.
+
+### Backend
+- **Cloudflare Worker (marketplace)** — OAuth device flow hardened. CI deploy order locked: `migrations apply --remote` → `deploy` → `secret put` (avoids `Binding name already in use`).
+- **PartyKit** — Server changes deploy automatically via `partykit-deploy` workflow.
+
 ## [2.3.2] — 2026-04-08
 
 ### Added
