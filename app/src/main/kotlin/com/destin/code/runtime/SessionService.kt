@@ -1804,28 +1804,6 @@ class SessionService : Service() {
                 }
             }
 
-            // Experimental feature flags — written to ~/.claude/destincode-local.json
-            // to match desktop's config.ts location. File is read by the shared
-            // React app via a first-run probe.
-            "config:set-experimental-flag" -> {
-                try {
-                    val key = msg.payload.optString("key", "")
-                    val value = msg.payload.opt("value")
-                    if (key.isEmpty()) throw IllegalArgumentException("missing key")
-                    val flagsFile = File(bootstrap!!.homeDir, ".claude/destincode-local.json")
-                    flagsFile.parentFile?.mkdirs()
-                    val current = try { JSONObject(flagsFile.readText()) } catch (_: Exception) { JSONObject() }
-                    val experimental = current.optJSONObject("experimental") ?: JSONObject()
-                    if (value == null || value == JSONObject.NULL) experimental.remove(key)
-                    else experimental.put(key, value)
-                    current.put("experimental", experimental)
-                    flagsFile.writeText(current.toString(2))
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
-                } catch (e: Exception) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "set-experimental-flag failed")) }
-                }
-            }
-
             // ── Phase 5a: Theme marketplace browsing ─────────────────
             "theme-marketplace:list" -> {
                 val result = withContext(Dispatchers.IO) {

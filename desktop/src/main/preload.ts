@@ -486,11 +486,6 @@ contextBridge.exposeInMainWorld('claude', {
       },
     },
   },
-  config: {
-    // Set a DestinCode-local experimental flag (e.g. 'restoreFlow'). Machine-local.
-    setExperimentalFlag: (name: string, value: boolean) =>
-      ipcRenderer.invoke('config:set-experimental-flag', name, value),
-  },
   getFavorites: () => ipcRenderer.invoke('favorites:get'),
   setFavorites: (favorites: string[]) => ipcRenderer.invoke('favorites:set', favorites),
   getIncognito: () => ipcRenderer.invoke('game:getIncognito'),

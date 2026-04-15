@@ -799,10 +799,6 @@ export function installShim(): void {
     removeAllListeners: (channel: string) => removeAllListeners(channel),
     getGitHubAuth: () => invoke('github:auth'),
     getHomePath: () => invoke('get-home-path'),
-    config: {
-      setExperimentalFlag: (name: string, value: boolean) =>
-        invoke('config:set-experimental-flag', { name, value }),
-    },
     getFavorites: () => invoke('favorites:get'),
     setFavorites: (favorites: string[]) => invoke('favorites:set', favorites),
     getIncognito: () => invoke('game:getIncognito'),

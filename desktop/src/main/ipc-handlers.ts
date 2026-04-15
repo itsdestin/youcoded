@@ -22,7 +22,6 @@ import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dis
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { getRestoreService } from './restore-service';
-import { setExperimentalFlag } from './config';
 import type { RestoreOptions, RestoreProgressEvent } from '../shared/types';
 import { log } from './logger';
 
@@ -1581,13 +1580,6 @@ export function registerIpcHandlers(
       shell.openExternal(url).catch(() => {});
     }
     return { url };
-  });
-
-  // Experimental feature flag toggle — persists to ~/.claude/destincode-local.json.
-  // Restore UI reads this via SyncStatus.experimentalFlags; no renderer restart needed.
-  ipcMain.handle('config:set-experimental-flag', (_e, name: string, value: boolean) => {
-    setExperimentalFlag(name as any, value);
-    return { ok: true };
   });
 
   // --- Permission response (blocking hooks) ---

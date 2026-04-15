@@ -86,12 +86,6 @@ export interface SyncStatus {
   syncInProgress: boolean;
   syncingBackendId: string | null;     // Which backend is currently syncing
   syncedCategories: string[];
-  // Experimental feature flags piggy-backed on sync status so renderer code
-  // doesn't need a second IPC. Read from ~/.claude/destincode-local.json via
-  // main/config.ts. Absence == all flags off.
-  experimentalFlags?: {
-    restoreFlow?: boolean;
-  };
 }
 
 /** Config shape for the multi-instance model. */
@@ -364,17 +358,6 @@ export async function getSyncStatus(): Promise<SyncStatus> {
   ]);
   const syncedCategories = categoryChecks.filter(Boolean) as string[];
 
-  // Experimental flags — read synchronously from config.ts (tiny local file).
-  // Piggy-backed on SyncStatus so restore UI doesn't need a second IPC poll.
-  let experimentalFlags: SyncStatus['experimentalFlags'];
-  try {
-    // Lazy require avoids a top-of-file cycle between sync-state and config.
-    const { getLocalConfig } = require('./config');
-    experimentalFlags = getLocalConfig().experimental || {};
-  } catch {
-    experimentalFlags = {};
-  }
-
   return {
     backends: backendStatuses,
     lastSyncEpoch: globalMarkerEpoch,
@@ -383,7 +366,6 @@ export async function getSyncStatus(): Promise<SyncStatus> {
     syncInProgress: lockExists,
     syncingBackendId: null, // Set by SyncService at runtime via event
     syncedCategories,
-    experimentalFlags,
   };
 }
 

@@ -306,11 +306,6 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
         // the newly-created backend by label, probe it, and if data exists on
         // a backend the user hasn't confirmed fresh-start for, show the prompt.
         try {
-          // Only probe when the experimental flag is on — otherwise the UI
-          // has no surface to finish the flow anyway.
-          const status = await claude.sync.getStatus();
-          const flagOn = status?.experimentalFlags?.restoreFlow === true;
-          if (!flagOn) { setStep('done'); setSaving(false); return; }
           const cfg = await claude.sync.getConfig();
           const created = cfg.backends.find((b: any) => b.label === label && b.type === backendType);
           if (created && !created.freshStartConfirmedEpoch) {

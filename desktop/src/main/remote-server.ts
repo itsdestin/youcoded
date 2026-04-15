@@ -14,7 +14,6 @@ import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory } from './session-browser';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend } from './sync-state';
 import { getRestoreService } from './restore-service';
-import { setExperimentalFlag } from './config';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 
 const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
@@ -1226,12 +1225,6 @@ export class RemoteServer {
           payload.versionRef || 'HEAD',
         );
         this.respond(client.ws, type, id, { url });
-        break;
-      }
-
-      case 'config:set-experimental-flag': {
-        setExperimentalFlag(payload.name, payload.value);
-        this.respond(client.ws, type, id, { ok: true });
         break;
       }
 
