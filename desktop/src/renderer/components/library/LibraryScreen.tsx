@@ -16,9 +16,14 @@ interface Props {
   // Jump to the marketplace destination. Matches MarketplaceScreen's
   // onOpenLibrary — symmetric navigation between the two top-level views.
   onOpenMarketplace?(): void;
+  // Threaded through to the detail overlay so users can share/QR from Library.
+  onOpenShareSheet?(skillId: string): void;
+  onOpenThemeShare?(themeSlug: string): void;
 }
 
-export default function LibraryScreen({ onExit, onOpenMarketplace }: Props) {
+export default function LibraryScreen({
+  onExit, onOpenMarketplace, onOpenShareSheet, onOpenThemeShare,
+}: Props) {
   const mp = useMarketplace();
   const [detail, setDetail] = useState<DetailTarget | null>(null);
 
@@ -151,7 +156,14 @@ export default function LibraryScreen({ onExit, onOpenMarketplace }: Props) {
         </Section>
       </div>
 
-      {detail && <MarketplaceDetailOverlay target={detail} onClose={() => setDetail(null)} />}
+      {detail && (
+        <MarketplaceDetailOverlay
+          target={detail}
+          onClose={() => setDetail(null)}
+          onOpenShareSheet={onOpenShareSheet}
+          onOpenThemeShare={onOpenThemeShare}
+        />
+      )}
     </div>
   );
 }

@@ -24,10 +24,16 @@ interface Props {
   // Phase 2 redesign — jump to Your Library without round-tripping through
   // the command drawer. Optional so the screen still renders standalone.
   onOpenLibrary?(): void;
+  // ShareSheet (link/QR) is owned by App.tsx so it layers above this screen.
+  // Threaded down to the detail overlay via these callbacks.
+  onOpenShareSheet?(skillId: string): void;
+  onOpenThemeShare?(themeSlug: string): void;
   initialTypeChip?: "skill" | "theme";
 }
 
-export default function MarketplaceScreen({ onExit, onOpenLibrary, initialTypeChip }: Props) {
+export default function MarketplaceScreen({
+  onExit, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip,
+}: Props) {
   const mp = useMarketplace();
   const [filter, setFilter] = useState<FilterState>(() => {
     const f = emptyFilter();
@@ -289,7 +295,14 @@ export default function MarketplaceScreen({ onExit, onOpenLibrary, initialTypeCh
         )}
       </div>
 
-      {detail && <MarketplaceDetailOverlay target={detail} onClose={() => setDetail(null)} />}
+      {detail && (
+        <MarketplaceDetailOverlay
+          target={detail}
+          onClose={() => setDetail(null)}
+          onOpenShareSheet={onOpenShareSheet}
+          onOpenThemeShare={onOpenThemeShare}
+        />
+      )}
     </div>
   );
 }

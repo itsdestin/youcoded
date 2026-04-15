@@ -3,11 +3,17 @@
 // content from the same shell; the "What's inside" section only shows for
 // skills with extracted `components` data.
 
-import React, { useEffect } from "react";
+import React, { useEffect, useState } from "react";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { useMarketplace } from "../../state/marketplace-context";
+import { useMarketplaceStats } from "../../state/marketplace-stats-context";
+import { useMarketplaceAuth } from "../../state/marketplace-auth-context";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
+import StarRating from "./StarRating";
+import RatingSubmitModal from "./RatingSubmitModal";
+import ReviewList from "./ReviewList";
+import LikeButton from "./LikeButton";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -16,9 +22,16 @@ export type DetailTarget =
 interface Props {
   target: DetailTarget;
   onClose(): void;
+  // Share plumbing — App.tsx owns the ShareSheet/ThemeShareSheet components
+  // so the sheet can layer above this overlay cleanly. Optional so the screen
+  // works standalone in tests.
+  onOpenShareSheet?(skillId: string): void;
+  onOpenThemeShare?(themeSlug: string): void;
 }
 
-export default function MarketplaceDetailOverlay({ target, onClose }: Props) {
+export default function MarketplaceDetailOverlay({
+  target, onClose, onOpenShareSheet, onOpenThemeShare,
+}: Props) {
   const mp = useMarketplace();
 
   useEffect(() => {
@@ -42,13 +55,16 @@ export default function MarketplaceDetailOverlay({ target, onClose }: Props) {
       content = <NotFound label="Skill" onClose={onClose} />;
     } else {
       const installed = mp.installedSkills.some((e) => e.id === target.id);
+      const favorited = mp.favorites.includes(target.id);
       content = (
         <SkillBody
           entry={entry}
           installed={installed}
-          installing={false}
+          favorited={favorited}
           onInstall={() => mp.installSkill(entry.id).catch(() => undefined)}
           onUninstall={() => mp.uninstallSkill(entry.id).catch(() => undefined)}
+          onToggleFavorite={() => mp.setFavorite(entry.id, !favorited).catch(() => undefined)}
+          onShare={onOpenShareSheet ? () => onOpenShareSheet(entry.id) : undefined}
         />
       );
     }
@@ -62,6 +78,7 @@ export default function MarketplaceDetailOverlay({ target, onClose }: Props) {
           entry={entry}
           onInstall={() => mp.installTheme(entry.slug).catch(() => undefined)}
           onUninstall={() => mp.uninstallTheme(entry.slug).catch(() => undefined)}
+          onShare={onOpenThemeShare ? () => onOpenThemeShare(entry.slug) : undefined}
         />
       );
     }
@@ -100,17 +117,80 @@ function NotFound({ label, onClose }: { label: string; onClose(): void }) {
   );
 }
 
+// ── Icon buttons ────────────────────────────────────────────────────────────
+// Icon-only buttons for the skill/theme header. Keep small so they fit next
+// to the primary Install/Uninstall action without wrapping.
+
+function IconButton({
+  onClick, title, active = false, children, ariaPressed,
+}: {
+  onClick?(): void;
+  title: string;
+  active?: boolean;
+  ariaPressed?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      disabled={!onClick}
+      title={title}
+      aria-label={title}
+      aria-pressed={ariaPressed}
+      className={`p-2 rounded-md border transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+        active
+          ? "bg-accent/15 border-accent text-accent"
+          : "bg-inset border-edge hover:border-edge-dim text-fg-2 hover:text-fg"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StarIcon({ filled }: { filled: boolean }) {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill={filled ? "currentColor" : "none"} stroke="currentColor" strokeWidth={filled ? 0 : 1.8} strokeLinejoin="round">
+      <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
+    </svg>
+  );
+}
+
+function ShareIcon() {
+  return (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+      <circle cx="18" cy="5" r="3" />
+      <circle cx="6" cy="12" r="3" />
+      <circle cx="18" cy="19" r="3" />
+      <line x1="8.6" y1="13.5" x2="15.4" y2="17.5" />
+      <line x1="15.4" y1="6.5" x2="8.6" y2="10.5" />
+    </svg>
+  );
+}
+
 // ── Skill body ──────────────────────────────────────────────────────────────
 
 function SkillBody({
-  entry, installed, installing, onInstall, onUninstall,
+  entry, installed, favorited, onInstall, onUninstall, onToggleFavorite, onShare,
 }: {
   entry: SkillEntry;
   installed: boolean;
-  installing: boolean;
+  favorited: boolean;
   onInstall(): void;
   onUninstall(): void;
+  onToggleFavorite(): void;
+  onShare?(): void;
 }) {
+  const stats = useMarketplaceStats();
+  const pluginStats = stats.plugins[entry.id];
+  const rating = pluginStats?.rating;
+  const reviewCount = pluginStats?.review_count ?? 0;
+
+  const auth = useMarketplaceAuth();
+  const [ratingOpen, setRatingOpen] = useState(false);
+  const [reviewRefresh, setReviewRefresh] = useState(0);
+
   return (
     <article className="flex flex-col gap-4 max-w-3xl mx-auto">
       <header className="flex items-start justify-between gap-4">
@@ -119,7 +199,28 @@ function SkillBody({
           {entry.author && <p className="text-sm text-fg-dim">{entry.author}</p>}
           {entry.tagline && <p className="mt-2 text-base text-fg-2">{entry.tagline}</p>}
         </div>
-        <div className="shrink-0">
+        <div className="shrink-0 flex items-center gap-2">
+          {/* Favorite: only meaningful for installed skills (it drives the
+              command drawer starred list). Gated + tooltipped when not. */}
+          <IconButton
+            title={
+              !installed ? "Install to favorite"
+                : favorited ? "Unfavorite" : "Favorite"
+            }
+            active={favorited}
+            ariaPressed={favorited}
+            onClick={installed ? onToggleFavorite : undefined}
+          >
+            <StarIcon filled={favorited} />
+          </IconButton>
+          {/* Share: link + QR. ShareSheet needs local files, so gated on
+              installed — matches legacy marketplace behavior. */}
+          <IconButton
+            title={installed ? "Share link · QR" : "Install to share"}
+            onClick={installed && onShare ? onShare : undefined}
+          >
+            <ShareIcon />
+          </IconButton>
           {installed ? (
             <button type="button" onClick={onUninstall} className="px-4 py-2 rounded-md bg-inset text-fg border border-edge hover:border-edge-dim">
               Uninstall
@@ -128,14 +229,17 @@ function SkillBody({
             <button
               type="button"
               onClick={onInstall}
-              disabled={installing}
-              className="px-4 py-2 rounded-md bg-accent text-on-accent disabled:opacity-50 hover:opacity-90"
+              className="px-4 py-2 rounded-md bg-accent text-on-accent hover:opacity-90"
             >
-              {installing ? "Installing…" : "Install"}
+              Install
             </button>
           )}
         </div>
       </header>
+
+      {/* Tags + audience + life area — only render when at least one is set,
+          so legacy entries without these fields don't get an empty row. */}
+      <MetadataChips entry={entry} />
 
       {entry.longDescription ? (
         <section>
@@ -150,12 +254,75 @@ function SkillBody({
 
       <ComponentsPeek components={entry.components} />
 
+      {/* Reviews section — shown for all marketplace skills. Write button
+          gated behind signed-in + installed (server also enforces this). */}
+      <section>
+        <div className="flex items-center justify-between mb-2">
+          <div className="flex items-center gap-3">
+            <h2 className="text-sm uppercase tracking-wide text-fg-dim">Reviews</h2>
+            {rating != null && reviewCount > 0 && (
+              <StarRating value={rating} count={reviewCount} size="sm" />
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={() => setRatingOpen(true)}
+            disabled={!installed || !auth.signedIn}
+            className="text-sm px-3 py-1 rounded-md border border-edge-dim hover:border-edge text-fg-2 hover:text-fg disabled:opacity-50 disabled:cursor-not-allowed"
+            title={
+              !installed ? "Install to review"
+                : !auth.signedIn ? "Sign in to review"
+                : "Write a review"
+            }
+          >
+            Write a review
+          </button>
+        </div>
+        <ReviewList pluginId={entry.id} refreshKey={reviewRefresh} />
+      </section>
+
+      <RatingSubmitModal
+        pluginId={entry.id}
+        open={ratingOpen}
+        onClose={() => setRatingOpen(false)}
+        onSubmitted={() => setReviewRefresh((n) => n + 1)}
+      />
+
       {entry.repoUrl && (
         <footer className="text-xs text-fg-dim">
           Source: <a className="underline" href={entry.repoUrl} target="_blank" rel="noreferrer">{entry.repoUrl}</a>
         </footer>
       )}
     </article>
+  );
+}
+
+// Small chip row — tags (hash-style), audience, and life areas. Only renders
+// when at least one field is populated.
+function MetadataChips({ entry }: { entry: SkillEntry }) {
+  const tags = entry.tags || [];
+  const lifeAreas = entry.lifeArea || [];
+  const hasAudience = !!entry.audience;
+  if (!tags.length && !lifeAreas.length && !hasAudience) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1.5 items-center">
+      {tags.map((t) => (
+        <span key={`tag-${t}`} className="text-xs px-2 py-0.5 rounded-full bg-inset text-fg-2 border border-edge-dim">
+          #{t}
+        </span>
+      ))}
+      {lifeAreas.map((a) => (
+        <span key={`area-${a}`} className="text-xs px-2 py-0.5 rounded-full bg-accent/10 text-fg border border-accent/30 capitalize">
+          {a}
+        </span>
+      ))}
+      {hasAudience && (
+        <span className="text-xs px-2 py-0.5 rounded-full bg-inset text-fg-dim border border-edge-dim">
+          {entry.audience === "developer" ? "For developers" : "For everyone"}
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -197,12 +364,16 @@ function ComponentsPeek({ components }: { components?: SkillComponents | null })
 // ── Theme body ──────────────────────────────────────────────────────────────
 
 function ThemeBody({
-  entry, onInstall, onUninstall,
+  entry, onInstall, onUninstall, onShare,
 }: {
   entry: ThemeRegistryEntryWithStatus;
   onInstall(): void;
   onUninstall(): void;
+  onShare?(): void;
 }) {
+  const stats = useMarketplaceStats();
+  const themeStats = stats.themes[entry.slug];
+  const likes = themeStats?.likes ?? 0;
   const installed = entry.installed;
   return (
     <article className="flex flex-col gap-4 max-w-3xl mx-auto">
@@ -212,7 +383,15 @@ function ThemeBody({
           {entry.author && <p className="text-sm text-fg-dim">{entry.author}</p>}
           {entry.description && <p className="mt-2 text-fg-2">{entry.description}</p>}
         </div>
-        <div className="shrink-0">
+        <div className="shrink-0 flex items-center gap-2">
+          {/* Theme "favorite" = public like on the Worker. No local-only state. */}
+          <LikeButton themeId={entry.slug} initialCount={likes} />
+          <IconButton
+            title="Share link · QR"
+            onClick={onShare}
+          >
+            <ShareIcon />
+          </IconButton>
           {installed ? (
             <button type="button" onClick={onUninstall} className="px-4 py-2 rounded-md bg-inset text-fg border border-edge hover:border-edge-dim">
               Uninstall

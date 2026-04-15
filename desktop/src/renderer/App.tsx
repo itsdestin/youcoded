@@ -1715,12 +1715,16 @@ function AppInner() {
             <MarketplaceScreen
               onExit={() => { setActiveView('chat'); setMarketplaceInitialType(undefined); }}
               onOpenLibrary={() => { setActiveView('library'); setMarketplaceInitialType(undefined); }}
+              onOpenShareSheet={(id) => setShareSkillId(id)}
+              onOpenThemeShare={(slug) => setPublishThemeSlug(slug)}
               initialTypeChip={marketplaceInitialType}
             />
           ) : (
             <LibraryScreen
               onExit={() => setActiveView('chat')}
               onOpenMarketplace={() => setActiveView('marketplace')}
+              onOpenShareSheet={(id) => setShareSkillId(id)}
+              onOpenThemeShare={(slug) => setPublishThemeSlug(slug)}
             />
           )}
         </MarketplaceProvider>
