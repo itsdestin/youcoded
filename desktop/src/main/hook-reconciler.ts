@@ -12,7 +12,11 @@ import { listInstalledPluginDirs } from './claude-code-registry';
  *   - For existing entries, enforce MAX(user_timeout, manifest_timeout)
  *   - Update stale command paths (e.g., old core/hooks/ → hooks/ after
  *     decomposition flattens the core directory)
- *   - Never remove user-added hooks
+ *   - Prune plugin-owned entries whose target file no longer exists on disk
+ *     (e.g., hooks dropped from the manifest in phase-3 flatten: sync.sh,
+ *     title-update.sh, done-sound.sh, etc.). Never touches entries whose
+ *     command path is outside every installed plugin root — those are
+ *     user-added and preserved.
  *
  * Triggered on app launch and after core install/update.
  *
@@ -21,7 +25,10 @@ import { listInstalledPluginDirs } from './claude-code-registry';
  * Those belong to the desktop app; this one belongs to plugins.
  */
 
-const SETTINGS_PATH = path.join(os.homedir(), '.claude', 'settings.json');
+// Resolved per-call (not cached at module load) so tests that stub os.homedir work.
+function settingsPath(): string {
+  return path.join(os.homedir(), '.claude', 'settings.json');
+}
 
 interface ManifestHookSpec {
   command: string;
@@ -85,24 +92,76 @@ function listPluginManifests(): PluginHooksManifest[] {
 
 function readSettings(): Settings {
   try {
-    if (!fs.existsSync(SETTINGS_PATH)) return {};
-    return JSON.parse(fs.readFileSync(SETTINGS_PATH, 'utf8'));
+    if (!fs.existsSync(settingsPath())) return {};
+    return JSON.parse(fs.readFileSync(settingsPath(), 'utf8'));
   } catch { return {}; }
 }
 
 function writeSettingsAtomic(settings: Settings): void {
-  const dir = path.dirname(SETTINGS_PATH);
+  const dir = path.dirname(settingsPath());
   fs.mkdirSync(dir, { recursive: true });
-  const tmp = `${SETTINGS_PATH}.${process.pid}.tmp`;
+  const tmp = `${settingsPath()}.${process.pid}.tmp`;
   fs.writeFileSync(tmp, JSON.stringify(settings, null, 2), 'utf8');
-  fs.renameSync(tmp, SETTINGS_PATH);
+  fs.renameSync(tmp, settingsPath());
 }
 
 export interface ReconcileHooksResult {
   added: number;
   updatedPath: number;
   updatedTimeout: number;
+  pruned: number;
   manifestCount: number;
+}
+
+/**
+ * Extract the script path from a hook command so we can check it against
+ * the filesystem. Handles `bash ~/...`, `node ~/...`, plain paths, and
+ * commands with trailing args. Expands ~ to homedir.
+ */
+function extractScriptPath(command: string): string | null {
+  const m = command.match(/(\S+\.(sh|js|py|ts|bash))(?:\s|$|")/);
+  if (!m) return null;
+  let p = m[1];
+  // Strip surrounding quotes if present
+  if ((p.startsWith('"') && p.endsWith('"')) || (p.startsWith("'") && p.endsWith("'"))) {
+    p = p.slice(1, -1);
+  }
+  if (p.startsWith('~')) p = path.join(os.homedir(), p.slice(1));
+  return p;
+}
+
+/**
+ * Prune plugin-owned hook entries whose target file no longer exists. An
+ * entry is considered plugin-owned if its script path resolves under any
+ * installed plugin dir. User-added hooks (paths outside every plugin root)
+ * are left alone, preserving the "never remove user-added hooks" guarantee.
+ */
+function pruneDeadPluginHooks(settings: Settings, pluginRoots: string[]): number {
+  if (!settings.hooks) return 0;
+  let pruned = 0;
+  for (const event of Object.keys(settings.hooks)) {
+    const entries = settings.hooks[event];
+    if (!entries) continue;
+    for (const entry of entries) {
+      entry.hooks = entry.hooks.filter((h) => {
+        const scriptPath = extractScriptPath(h.command);
+        if (!scriptPath) return true;
+        const normalized = path.normalize(scriptPath);
+        const ownedByPlugin = pluginRoots.some((root) =>
+          normalized.startsWith(path.normalize(root) + path.sep),
+        );
+        if (!ownedByPlugin) return true;
+        // Plugin-owned: prune only if the file is actually missing.
+        if (fs.existsSync(scriptPath)) return true;
+        pruned++;
+        return false;
+      });
+    }
+    // Drop matcher entries that have no hooks left
+    settings.hooks[event] = entries.filter((e) => e.hooks.length > 0);
+    if (settings.hooks[event].length === 0) delete settings.hooks[event];
+  }
+  return pruned;
 }
 
 /**
@@ -187,13 +246,22 @@ export function reconcileHooks(): ReconcileHooksResult {
     }
   }
 
+  // Prune pass — remove plugin-owned entries whose script file is gone.
+  // Runs last so any path-rewrite from the loop above gets a chance to
+  // "save" an entry whose basename still appears in a manifest.
+  const pluginRoots = listInstalledPluginDirs();
+  const pruned = pruneDeadPluginHooks(settings, pluginRoots);
+  if (pruned > 0) changed = true;
+
   if (changed) writeSettingsAtomic(settings);
 
-  return { added, updatedPath, updatedTimeout, manifestCount: manifests.length };
+  return { added, updatedPath, updatedTimeout, pruned, manifestCount: manifests.length };
 }
 
 // Exposed for tests
 export const __test = {
   extractScriptBasename,
+  extractScriptPath,
   findMatchingEntry,
+  pruneDeadPluginHooks,
 };

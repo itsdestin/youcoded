@@ -30,6 +30,8 @@ node_modules/
 desktop/dist/
 desktop/build/
 desktop/release/
+# Electron runtime debug logs — machine-specific, leak local paths
+*.log
 
 # Built React UI bundle (copied from desktop build) — except placeholder
 app/src/main/assets/web/*

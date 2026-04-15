@@ -468,39 +468,10 @@ export async function cloneToolkit(): Promise<{ success: boolean; error?: string
       targetDir,
     ]);
 
-    // Create minimal symlinks so the setup-wizard is discoverable by Claude Code.
-    // The full set of symlinks is created by the wizard itself in Phase 5.
-    try {
-      const home = os.homedir();
-      const skillsDir = path.join(home, '.claude', 'skills');
-      const commandsDir = path.join(home, '.claude', 'commands');
-      fs.mkdirSync(skillsDir, { recursive: true });
-      fs.mkdirSync(commandsDir, { recursive: true });
-
-      // On Windows, real symlinks require Developer Mode + MSYS=winsymlinks:nativestrict.
-      // If symlinks fail, fall back — the plugin.json discovery may still work.
-      const wizardSkillSrc = path.join(targetDir, 'core', 'skills', 'setup-wizard');
-      const wizardSkillDst = path.join(skillsDir, 'setup-wizard');
-      const wizardCmdSrc = path.join(targetDir, 'core', 'commands', 'setup-wizard.md');
-      const wizardCmdDst = path.join(commandsDir, 'setup-wizard.md');
-
-      if (!fs.existsSync(wizardSkillDst)) {
-        try { fs.symlinkSync(wizardSkillSrc, wizardSkillDst, 'junction'); } catch {
-          try { fs.symlinkSync(wizardSkillSrc, wizardSkillDst, 'dir'); } catch (e) {
-            log('WARN', 'prereq', 'Could not symlink setup-wizard skill', { error: String(e) });
-          }
-        }
-      }
-      if (!fs.existsSync(wizardCmdDst)) {
-        try { fs.symlinkSync(wizardCmdSrc, wizardCmdDst, 'junction'); } catch {
-          try { fs.symlinkSync(wizardCmdSrc, wizardCmdDst, 'file'); } catch (e) {
-            log('WARN', 'prereq', 'Could not symlink setup-wizard command', { error: String(e) });
-          }
-        }
-      }
-    } catch (e) {
-      log('WARN', 'prereq', 'Symlink creation failed (wizard may still work via plugin discovery)', { error: String(e) });
-    }
+    // No ~/.claude/{skills,commands} symlinks needed. Post-decomposition the
+    // app owns the user-facing setup flow (no CLI setup-wizard to discover),
+    // and Claude Code v2.1+ loads plugin commands/skills from the plugin root
+    // via enabledPlugins + plugin.json — it no longer scans those dirs.
 
     log('INFO', 'prereq', 'Toolkit cloned successfully');
     return { success: true };

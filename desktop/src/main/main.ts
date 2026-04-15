@@ -834,15 +834,31 @@ app.whenReady().then(async () => {
 
   // Decomposition v3 §9.2: reconcile plugin hooks-manifest.json into
   // ~/.claude/settings.json. Adds missing required hooks, updates stale paths
-  // (e.g., flattened core/hooks/ → hooks/), enforces MAX timeout. Never
-  // removes user-added hooks. Runs after install-hooks.js so the app's own
-  // relay entries win any ordering contention.
+  // (e.g., flattened core/hooks/ → hooks/), enforces MAX timeout, and prunes
+  // plugin-owned entries whose script file is gone (hooks dropped from the
+  // manifest in phase-3 flatten). Never removes user-added hooks. Runs after
+  // install-hooks.js so the app's own relay entries win any ordering contention.
   try {
     const { reconcileHooks } = require('./hook-reconciler');
     const hookSummary = reconcileHooks();
     log('INFO', 'Main', 'Plugin hooks reconciled', hookSummary);
   } catch (e) {
     log('ERROR', 'Main', 'Failed to reconcile plugin hooks', { error: String(e) });
+  }
+
+  // Clean up orphan symlinks left by pre-decomposition post-update.sh —
+  // entries under ~/.claude/{hooks,commands,skills}/ that point into now-deleted
+  // core/life/productivity subtrees of the toolkit. No replacement mechanism
+  // rebuilds them; Claude Code v2.1+ discovers plugin commands/skills via
+  // plugin.json, so the symlinks are pure tombstones once the target is gone.
+  try {
+    const { cleanupOrphanSymlinks } = require('./symlink-cleanup');
+    const cleanupSummary = cleanupOrphanSymlinks();
+    if (cleanupSummary.removed > 0) {
+      log('INFO', 'Main', 'Orphan symlinks cleaned up', cleanupSummary);
+    }
+  } catch (e) {
+    log('ERROR', 'Main', 'Failed to clean up orphan symlinks', { error: String(e) });
   }
 
   // Decomposition v3 §9.3: reconcile plugin mcp-manifest.json into
