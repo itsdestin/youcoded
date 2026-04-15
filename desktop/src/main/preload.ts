@@ -152,6 +152,8 @@ const IPC = {
   SESSION_OWNERSHIP_ACQUIRED: 'session:ownership-acquired',
   SESSION_OWNERSHIP_LOST: 'session:ownership-lost',
   SESSION_DETACH_START: 'session:detach-start',
+  SESSION_DETACH_LIVE: 'session:detach-live',
+  SESSION_DRAG_WINDOW_MOVE: 'session:drag-window-move',
   SESSION_DRAG_STARTED: 'session:drag-started',
   SESSION_DRAG_ENDED: 'session:drag-ended',
   SESSION_DRAG_DROPPED: 'session:drag-dropped',
@@ -516,6 +518,12 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.send(IPC.WINDOW_OPEN_DETACHED, payload),
     detachStart: (payload: { sessionId: string; screenX: number; screenY: number }) =>
       ipcRenderer.send(IPC.SESSION_DETACH_START, payload),
+    // Chrome-style live tear-off. Spawns peer window mid-drag and returns its
+    // webContents id so the caller can stream cursor positions to it.
+    detachLive: (payload: { sessionId: string; screenX: number; screenY: number }): Promise<{ windowId: number }> =>
+      ipcRenderer.invoke(IPC.SESSION_DETACH_LIVE, payload),
+    dragWindowMove: (payload: { windowId: number; screenX: number; screenY: number }) =>
+      ipcRenderer.send(IPC.SESSION_DRAG_WINDOW_MOVE, payload),
     dragStarted: (payload: { sessionId: string }) =>
       ipcRenderer.send(IPC.SESSION_DRAG_STARTED, payload),
     dragEnded: () => ipcRenderer.send(IPC.SESSION_DRAG_ENDED),
