@@ -1016,7 +1016,7 @@ class Bootstrap(internal val context: Context) {
         statuslineDest.setExecutable(true)
 
         // Register statusline command — only if unset or pointing to our known path
-        val bashPath = File(usrDir, "bin/bash").absolutePath
+        // Fix: bashPath already declared above for auto-title hook; reuse it here
         val statuslineCommand = "$bashPath ${statuslineDest.absolutePath}"
         val currentStatuslineCmd = existingJson.optJSONObject("statusLine")
             ?.optString("command", "") ?: ""
