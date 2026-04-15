@@ -193,6 +193,11 @@ function handleMessage(data: string): void {
     case 'prompt:complete':
       dispatchEvent('prompt:complete', payload);
       break;
+    case 'sync:restore:progress':
+      // Restore progress events flow to any listener registered via
+      // window.claude.sync.restore.onProgress(). Broadcast (no sessionId).
+      dispatchEvent('sync:restore:progress', payload);
+      break;
   }
 }
 
@@ -739,6 +744,27 @@ export function installShim(): void {
         authGithub: () => invoke('sync:setup:auth-github'),
         createRepo: (repoName: string) => invoke('sync:setup:create-repo', { repoName }),
       },
+      // Restore from backup — directional, user-initiated pull. Mirrors the
+      // preload surface exactly (see preload.ts sync.restore). Browser/Android
+      // transports use WebSocket invoke + a dispatchEvent subscription for progress.
+      restore: {
+        listVersions: (backendId: string) =>
+          invoke('sync:restore:list-versions', { backendId }),
+        preview: (opts: any) => invoke('sync:restore:preview', { opts }),
+        execute: (opts: any) => invoke('sync:restore:execute', { opts }),
+        listSnapshots: () => invoke('sync:restore:list-snapshots'),
+        undo: (snapshotId: string) => invoke('sync:restore:undo', { snapshotId }),
+        deleteSnapshot: (snapshotId: string) =>
+          invoke('sync:restore:delete-snapshot', { snapshotId }),
+        probe: (backendId: string) => invoke('sync:restore:probe', { backendId }),
+        browseCategory: (backendId: string, category: string, versionRef: string) =>
+          invoke('sync:restore:browse-url', { backendId, category, versionRef }),
+        onProgress: (cb: (evt: any) => void) => {
+          const handler: Callback = (evt: any) => cb(evt);
+          addListener('sync:restore:progress', handler);
+          return () => removeListener('sync:restore:progress', handler);
+        },
+      },
     },
     folders: {
       list: () => invoke('folders:list'),
@@ -773,6 +799,10 @@ export function installShim(): void {
     removeAllListeners: (channel: string) => removeAllListeners(channel),
     getGitHubAuth: () => invoke('github:auth'),
     getHomePath: () => invoke('get-home-path'),
+    config: {
+      setExperimentalFlag: (name: string, value: boolean) =>
+        invoke('config:set-experimental-flag', { name, value }),
+    },
     getFavorites: () => invoke('favorites:get'),
     setFavorites: (favorites: string[]) => invoke('favorites:set', favorites),
     getIncognito: () => invoke('game:getIncognito'),

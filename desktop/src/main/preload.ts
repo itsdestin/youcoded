@@ -142,6 +142,16 @@ const IPC = {
   SYNC_FORCE: 'sync:force',
   SYNC_GET_LOG: 'sync:get-log',
   SYNC_DISMISS_WARNING: 'sync:dismiss-warning',
+  // Restore from backup (directional pull — see restore-service.ts)
+  SYNC_RESTORE_LIST_VERSIONS: 'sync:restore:list-versions',
+  SYNC_RESTORE_PREVIEW: 'sync:restore:preview',
+  SYNC_RESTORE_EXECUTE: 'sync:restore:execute',
+  SYNC_RESTORE_PROGRESS: 'sync:restore:progress',
+  SYNC_RESTORE_LIST_SNAPSHOTS: 'sync:restore:list-snapshots',
+  SYNC_RESTORE_UNDO: 'sync:restore:undo',
+  SYNC_RESTORE_DELETE_SNAPSHOT: 'sync:restore:delete-snapshot',
+  SYNC_RESTORE_PROBE: 'sync:restore:probe',
+  SYNC_RESTORE_BROWSE_URL: 'sync:restore:browse-url',
   // Window detach / multi-window ownership (feature: drag session to new window)
   WINDOW_GET_ID: 'window:get-id',
   WINDOW_DIRECTORY_UPDATED: 'window:directory-updated',
@@ -453,6 +463,33 @@ contextBridge.exposeInMainWorld('claude', {
       authGithub: () => ipcRenderer.invoke('sync:setup:auth-github'),
       createRepo: (repoName: string) => ipcRenderer.invoke('sync:setup:create-repo', repoName),
     },
+    // Restore from backup — directional, user-initiated pull
+    restore: {
+      listVersions: (backendId: string) =>
+        ipcRenderer.invoke(IPC.SYNC_RESTORE_LIST_VERSIONS, backendId),
+      preview: (opts: any) => ipcRenderer.invoke(IPC.SYNC_RESTORE_PREVIEW, opts),
+      execute: (opts: any) => ipcRenderer.invoke(IPC.SYNC_RESTORE_EXECUTE, opts),
+      listSnapshots: () => ipcRenderer.invoke(IPC.SYNC_RESTORE_LIST_SNAPSHOTS),
+      undo: (snapshotId: string) => ipcRenderer.invoke(IPC.SYNC_RESTORE_UNDO, snapshotId),
+      deleteSnapshot: (snapshotId: string) =>
+        ipcRenderer.invoke(IPC.SYNC_RESTORE_DELETE_SNAPSHOT, snapshotId),
+      probe: (backendId: string) => ipcRenderer.invoke(IPC.SYNC_RESTORE_PROBE, backendId),
+      browseCategory: (backendId: string, category: string, versionRef: string) =>
+        ipcRenderer.invoke(IPC.SYNC_RESTORE_BROWSE_URL, backendId, category, versionRef),
+      // Subscribe to progress events for an in-flight restore. Returns an
+      // unsubscribe function — callers MUST invoke it on unmount to avoid
+      // leaking listeners across restore attempts.
+      onProgress: (cb: (evt: any) => void) => {
+        const handler = (_e: any, evt: any) => cb(evt);
+        ipcRenderer.on(IPC.SYNC_RESTORE_PROGRESS, handler);
+        return () => ipcRenderer.removeListener(IPC.SYNC_RESTORE_PROGRESS, handler);
+      },
+    },
+  },
+  config: {
+    // Set a DestinCode-local experimental flag (e.g. 'restoreFlow'). Machine-local.
+    setExperimentalFlag: (name: string, value: boolean) =>
+      ipcRenderer.invoke('config:set-experimental-flag', name, value),
   },
   getFavorites: () => ipcRenderer.invoke('favorites:get'),
   setFavorites: (favorites: string[]) => ipcRenderer.invoke('favorites:set', favorites),

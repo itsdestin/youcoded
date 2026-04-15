@@ -205,6 +205,11 @@ function handleMessage(data) {
         case 'prompt:complete':
             dispatchEvent('prompt:complete', payload);
             break;
+        case 'sync:restore:progress':
+            // Restore progress events flow to any listener registered via
+            // window.claude.sync.restore.onProgress(). Broadcast (no sessionId).
+            dispatchEvent('sync:restore:progress', payload);
+            break;
     }
 }
 function connect(passwordOrToken, isToken = false) {
@@ -586,7 +591,6 @@ function installShim() {
             getShareLink: (id) => invoke('skills:get-share-link', { id }),
             importFromLink: (encoded) => invoke('skills:import-from-link', { encoded }),
             getCuratedDefaults: () => invoke('skills:get-curated-defaults'),
-            getFeatured: () => invoke('skills:get-featured'),
             // Decomposition v3 §9.9: shim parity for integration badges
             getIntegrationInfo: (id) => invoke('skills:get-integration-info', { id }),
             // Decomposition v3 §9.10: shim parity for onboarding helpers
@@ -595,20 +599,11 @@ function installShim() {
             // Phase 3b: update a plugin (re-installs at the same path)
             update: (id) => invoke('skills:update', { id }),
         },
-        // Marketplace redesign Phase 3 — integrations namespace.
-        integrations: {
-            list: () => invoke('integrations:list'),
-            install: (slug) => invoke('integrations:install', { slug }),
-            uninstall: (slug) => invoke('integrations:uninstall', { slug }),
-            status: (slug) => invoke('integrations:status', { slug }),
-            configure: (slug, settings) => invoke('integrations:configure', { slug, settings }),
-        },
         // Phase 3: unified marketplace (packages map + per-entry config)
         marketplace: {
             getPackages: () => invoke('marketplace:get-packages'),
             getConfig: (id) => invoke('marketplace:get-config', { id }),
             setConfig: (id, values) => invoke('marketplace:set-config', { id, values }),
-            invalidateCache: () => invoke('marketplace:invalidate-cache'),
         },
         // Marketplace sign-in (device-code OAuth flow) — same shape as preload.ts.
         // On Android the handlers live in SessionService.kt (Task 13). Until then
@@ -730,6 +725,24 @@ function installShim() {
                 authGithub: () => invoke('sync:setup:auth-github'),
                 createRepo: (repoName) => invoke('sync:setup:create-repo', { repoName }),
             },
+            // Restore from backup — directional, user-initiated pull. Mirrors the
+            // preload surface exactly (see preload.ts sync.restore). Browser/Android
+            // transports use WebSocket invoke + a dispatchEvent subscription for progress.
+            restore: {
+                listVersions: (backendId) => invoke('sync:restore:list-versions', { backendId }),
+                preview: (opts) => invoke('sync:restore:preview', { opts }),
+                execute: (opts) => invoke('sync:restore:execute', { opts }),
+                listSnapshots: () => invoke('sync:restore:list-snapshots'),
+                undo: (snapshotId) => invoke('sync:restore:undo', { snapshotId }),
+                deleteSnapshot: (snapshotId) => invoke('sync:restore:delete-snapshot', { snapshotId }),
+                probe: (backendId) => invoke('sync:restore:probe', { backendId }),
+                browseCategory: (backendId, category, versionRef) => invoke('sync:restore:browse-url', { backendId, category, versionRef }),
+                onProgress: (cb) => {
+                    const handler = (evt) => cb(evt);
+                    addListener('sync:restore:progress', handler);
+                    return () => removeListener('sync:restore:progress', handler);
+                },
+            },
         },
         folders: {
             list: () => invoke('folders:list'),
@@ -762,6 +775,9 @@ function installShim() {
         removeAllListeners: (channel) => removeAllListeners(channel),
         getGitHubAuth: () => invoke('github:auth'),
         getHomePath: () => invoke('get-home-path'),
+        config: {
+            setExperimentalFlag: (name, value) => invoke('config:set-experimental-flag', { name, value }),
+        },
         getFavorites: () => invoke('favorites:get'),
         setFavorites: (favorites) => invoke('favorites:set', favorites),
         getIncognito: () => invoke('game:getIncognito'),

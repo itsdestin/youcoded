@@ -15,6 +15,8 @@ import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './Sett
 import SyncSetupWizard from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { RestoreWizard } from './restore/RestoreWizard';
+import { SnapshotsPanel } from './restore/SnapshotsPanel';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -88,6 +90,7 @@ interface SyncStatus {
   syncInProgress: boolean;
   syncingBackendId: string | null;
   syncedCategories: string[];
+  experimentalFlags?: { restoreFlow?: boolean };
 }
 
 // --- Warning display map ---
@@ -320,14 +323,26 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   // Confirmation dialog state
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   const [confirmPullId, setConfirmPullId] = useState<string | null>(null);
+  // Restore flow: stash the backend the user picked so RestoreWizard can open.
+  // Null while closed. Experimental flag gate handled by restoreFlowEnabled below.
+  const [restoreTarget, setRestoreTarget] = useState<{ id: string; label: string; type: 'drive' | 'github' | 'icloud' } | null>(null);
+  const [showSnapshots, setShowSnapshots] = useState(false);
+  // Gated on experimental.restoreFlow in ~/.claude/destincode-local.json.
+  // Off by default — toggled from Settings → Advanced (and persists per machine,
+  // NOT synced, because flags are for iterating before shipping to everyone).
+  const restoreFlowEnabled = status?.experimentalFlags?.restoreFlow === true;
 
   const claude = (window as any).claude;
 
   useEffect(() => {
     (async () => {
       try {
+        // Always fetch fresh on popup open — initialStatus comes from the
+        // parent's compact-row state which only gets patched by status:data
+        // pushes (no experimentalFlags). Reusing it would mean a flag flip
+        // never shows up until a full page reload.
         const [s, log] = await Promise.all([
-          initialStatus ? Promise.resolve(initialStatus) : claude.sync.getStatus(),
+          claude.sync.getStatus(),
           claude.sync.getLog(30),
         ]);
         setStatus(s);
@@ -616,6 +631,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                             onClick={(e) => e.stopPropagation()}>
                             <MenuButton onClick={() => { handlePushBackend(b.id); setMenuOpenId(null); }}>Upload now</MenuButton>
                             <MenuButton onClick={() => { setConfirmPullId(b.id); setMenuOpenId(null); }}>Download now</MenuButton>
+                            {/* Restore is directional (remote wins) and distinct from Download (merge). Gated behind experimental flag until Task 13 testing. */}
+                            {restoreFlowEnabled && (
+                              <MenuButton onClick={() => { setRestoreTarget({ id: b.id, label: b.label, type: b.type }); setMenuOpenId(null); }}>Restore from backup...</MenuButton>
+                            )}
                             <MenuButton onClick={() => { claude.sync.openFolder(b.id); setMenuOpenId(null); }}>Open folder</MenuButton>
                             <MenuButton onClick={() => { setEditingId(b.id); setView('edit'); setMenuOpenId(null); }}>Edit settings</MenuButton>
                             <div className="border-t border-edge-dim my-1" />
@@ -640,6 +659,25 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               >
                 + Add backup
               </button>
+
+              {/* Restore snapshots expander — lists pre-restore backups users can undo.
+                  Collapsed by default; only surfaces when the flag is on and at least
+                  one backend exists (snapshots are pointless without a backend). */}
+              {restoreFlowEnabled && (status?.backends?.length ?? 0) > 0 && (
+                <div className="mt-2">
+                  <button
+                    onClick={() => setShowSnapshots(v => !v)}
+                    className="w-full text-left px-3 py-2 rounded-md text-[11px] text-fg-muted hover:text-fg-2 hover:bg-inset/30"
+                  >
+                    {showSnapshots ? '▾' : '▸'} Restore snapshots
+                  </button>
+                  {showSnapshots && (
+                    <div className="mt-1 px-1">
+                      <SnapshotsPanel />
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
 
             {/* 2. Sync Now bar */}
@@ -793,6 +831,17 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
         </div>
         )}
       </OverlayPanel>
+
+      {/* Restore-from-backup wizard — own modal layer so it overlays the sync popup.
+          Refreshes sync status on close so lastPush/lastError reflect the restore. */}
+      {restoreTarget && (
+        <RestoreWizard
+          backendId={restoreTarget.id}
+          backendLabel={restoreTarget.label}
+          backendType={restoreTarget.type}
+          onClose={() => { setRestoreTarget(null); refreshStatus(); }}
+        />
+      )}
 
       {/* Confirmation dialog: Remove backend */}
       {confirmRemoveId && (() => {

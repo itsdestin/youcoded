@@ -1918,6 +1918,8 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
 
         <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 
+        <ExperimentalSection />
+
         {/* Tier & directories are local-only — hide when connected to remote desktop */}
         {!remoteConnected && (
           <>
@@ -2240,6 +2242,8 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
 
         <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 
+        <ExperimentalSection />
+
         <RemoteButton
           config={config}
           tailscale={tailscale}
@@ -2438,5 +2442,60 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
         </section>
       </div>
     </>
+  );
+}
+
+// Experimental feature flags — DestinCode-local, NOT synced to cloud backends.
+// Reads current state from sync.getStatus().experimentalFlags and writes via
+// claude.config.setExperimentalFlag. Shown as a small section so it doesn't
+// dominate the settings drawer while we iterate on flag-gated features.
+function ExperimentalSection() {
+  const claude = (window as any).claude;
+  const [restoreFlow, setRestoreFlow] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    let live = true;
+    (async () => {
+      try {
+        const s = await claude.sync.getStatus();
+        if (live) setRestoreFlow(s?.experimentalFlags?.restoreFlow === true);
+      } catch {
+        if (live) setRestoreFlow(false);
+      }
+    })();
+    return () => { live = false; };
+  }, [claude]);
+
+  const toggle = useCallback(async () => {
+    if (restoreFlow == null) return;
+    const next = !restoreFlow;
+    setRestoreFlow(next);
+    try {
+      await claude.config.setExperimentalFlag('restoreFlow', next);
+    } catch {
+      setRestoreFlow(!next); // Roll back the optimistic flip on error.
+    }
+  }, [claude, restoreFlow]);
+
+  if (restoreFlow == null) return null;
+
+  return (
+    <section>
+      <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Experimental</h3>
+      <button
+        onClick={toggle}
+        className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+      >
+        <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
+          <div className={`w-8 h-4 rounded-full transition-colors ${restoreFlow ? 'bg-accent' : 'bg-edge-dim'}`}>
+            <div className={`w-3 h-3 rounded-full bg-white mt-0.5 transition-transform ${restoreFlow ? 'translate-x-[18px]' : 'translate-x-0.5'}`} />
+          </div>
+        </div>
+        <div className="flex-1 min-w-0">
+          <span className="text-xs text-fg font-medium">Restore from backup</span>
+          <p className="text-[10px] text-fg-muted">Adds a restore wizard to each cloud backend (experimental — off by default).</p>
+        </div>
+      </button>
+    </section>
   );
 }

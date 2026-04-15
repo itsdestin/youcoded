@@ -113,6 +113,13 @@ export class SyncService extends EventEmitter {
   private pulling = false;
   private pushing = false;
 
+  /**
+   * Gates pushLoop() during a restore. Pushing a half-restored state would
+   * upload mid-staging data and corrupt the backup — so RestoreService flips
+   * this true before any filesystem work, false after the final swap.
+   */
+  public restoreInProgress = false;
+
   constructor() {
     super();
     this.claudeDir = path.join(os.homedir(), '.claude');
@@ -161,6 +168,9 @@ export class SyncService extends EventEmitter {
 
     // Start background push timer
     this.pushTimer = setInterval(() => {
+      // Guard: RestoreService may be mid-way through rewriting files. Pushing now
+      // would upload a half-restored state and nuke the backup it was trying to recover.
+      if (this.restoreInProgress) return;
       this.push().catch(e => {
         this.logBackup('ERROR', `Background push failed: ${e}`, 'sync.push');
       });
@@ -224,7 +234,9 @@ export class SyncService extends EventEmitter {
   }
 
   /** Find a single backend by id (for manual push/pull). */
-  private getBackendById(id: string): BackendInstance | null {
+  // Public so RestoreService can look up the active BackendInstance by id
+  // without re-reading config.json itself.
+  public getBackendById(id: string): BackendInstance | null {
     return this.getBackendInstances().find(b => b.id === id) || null;
   }
 

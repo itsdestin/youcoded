@@ -566,6 +566,16 @@ export const IPC = {
   // in window 2 propagate to window 1 without a reload.
   APPEARANCE_BROADCAST: 'appearance:broadcast',
   APPEARANCE_SYNC: 'appearance:sync',
+  // Restore from backup — directional, user-initiated pull (separate from sync's merge semantics)
+  SYNC_RESTORE_LIST_VERSIONS: 'sync:restore:list-versions',
+  SYNC_RESTORE_PREVIEW: 'sync:restore:preview',
+  SYNC_RESTORE_EXECUTE: 'sync:restore:execute',
+  SYNC_RESTORE_PROGRESS: 'sync:restore:progress',
+  SYNC_RESTORE_LIST_SNAPSHOTS: 'sync:restore:list-snapshots',
+  SYNC_RESTORE_UNDO: 'sync:restore:undo',
+  SYNC_RESTORE_DELETE_SNAPSHOT: 'sync:restore:delete-snapshot',
+  SYNC_RESTORE_PROBE: 'sync:restore:probe',
+  SYNC_RESTORE_BROWSE_URL: 'sync:restore:browse-url',
 } as const;
 
 // --- Window registry / detach types ---
@@ -612,4 +622,93 @@ export interface DragDroppedPayload {
 export interface CrossWindowCursor {
   screenX: number;
   screenY: number;
+}
+
+// --- Restore from backup types ---
+// Restore is a one-time, directional, user-initiated pull that treats the remote as authoritative.
+// This is distinct from sync (bidirectional merge) — different invariants, different code paths.
+
+export type RestoreCategory =
+  | 'memory'
+  | 'conversations'
+  | 'encyclopedia'
+  | 'skills'
+  | 'plans'
+  | 'specs';
+
+export interface RestorePoint {
+  /** 'HEAD' for Drive/iCloud (HEAD-only backends), git SHA for GitHub (full history). */
+  ref: string;
+  timestamp: number;
+  label: string;
+  summary?: string;
+}
+
+/**
+ * Restore mode. Two very different semantics:
+ *   - 'merge': union. Remote→local adds + overwrites only (no local deletions),
+ *              then local→remote uploads anything that was local-only. Reuses
+ *              the sync loop's push/pull under the hood. Non-destructive on
+ *              both sides. toDelete in the preview is always 0.
+ *   - 'wipe':  mirror. Local tree is replaced with the backup's tree exactly.
+ *              Files on device but NOT on the backup are deleted. Snapshot-first
+ *              is forced ON so the user can always Undo within retention.
+ */
+export type RestoreMode = 'merge' | 'wipe';
+
+export interface RestoreOptions {
+  backendId: string;
+  versionRef: string;
+  categories: RestoreCategory[];
+  snapshotFirst: boolean;
+  mode: RestoreMode;
+}
+
+export interface CategoryPreview {
+  category: RestoreCategory;
+  remoteFiles: number;
+  localFiles: number;
+  toAdd: number;
+  toOverwrite: number;
+  /** Files on device NOT on the backup — wipe mode deletes these; merge leaves them. */
+  toDelete: number;
+  /** Merge-mode only: files present locally but NOT on backup (will be uploaded). */
+  toUpload?: number;
+  bytes: number;
+}
+
+export interface RestorePreview {
+  perCategory: CategoryPreview[];
+  totalBytes: number;
+  estimatedSeconds: number;
+  warnings: string[];
+  /** Echoes the mode the preview was computed for — UI keys column labels off this. */
+  mode: RestoreMode;
+}
+
+export interface RestoreResult {
+  snapshotId?: string;
+  categoriesRestored: RestoreCategory[];
+  filesWritten: number;
+  durationMs: number;
+  /** true if skills/memory restored — app restart recommended to pick up new files. */
+  requiresRestart: boolean;
+}
+
+export interface Snapshot {
+  /** ISO timestamp, also used as directory name under ~/.claude/restore-snapshots/. */
+  id: string;
+  timestamp: number;
+  categories: RestoreCategory[];
+  backendId: string;
+  sizeBytes: number;
+  triggeredBy: 'restore' | 'manual';
+}
+
+export interface RestoreProgressEvent {
+  category: RestoreCategory;
+  filesDone: number;
+  filesTotal: number;
+  currentFile?: string;
+  phase: 'snapshotting' | 'fetching' | 'staging' | 'swapping' | 'done';
 }
