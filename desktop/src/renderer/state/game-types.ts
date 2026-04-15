@@ -14,6 +14,14 @@ export interface ChatMessage {
 
 export interface GameState {
   connected: boolean;
+  /** True once we've been spinning on "Connecting…" long enough that the UI
+   * should swap in a friendlier "taking longer than usual" message. Separate
+   * from `partyError` so the spinner path stays distinct from hard failures. */
+  slowConnect: boolean;
+  /** Set by the lightweight HTTP probe in usePartyLobby when slowConnect
+   * fires — gives the spinner screen a plain-language explanation of the
+   * likely cause (offline vs server-napping vs just-slow). */
+  slowConnectHint: string | null;
   partyError: string | null;
   username: string | null;
   onlineUsers: OnlineUser[];
@@ -45,6 +53,8 @@ export type GameAction =
   | { type: 'PARTY_DISCONNECTED'; code?: number; reason?: string }
   | { type: 'PARTY_ERROR'; message: string }
   | { type: 'PARTY_ERROR_CLEARED' }
+  | { type: 'PARTY_SLOW_CONNECT'; hint?: string | null }
+  | { type: 'PARTY_SLOW_CLEARED' }
   | { type: 'PRESENCE_UPDATE'; online: OnlineUser[] }
   | { type: 'USER_JOINED'; username: string; status: string }
   | { type: 'USER_LEFT'; username: string }
@@ -84,6 +94,8 @@ export interface GameConnection {
 export function createInitialGameState(): GameState {
   return {
     connected: false,
+    slowConnect: false,
+    slowConnectHint: null,
     partyError: null,
     username: null,
     onlineUsers: [],

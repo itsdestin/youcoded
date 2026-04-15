@@ -3,7 +3,17 @@ import { GameState, GameAction, createInitialGameState } from './game-types';
 export function gameReducer(state: GameState, action: GameAction): GameState {
   switch (action.type) {
     case 'PARTY_CONNECTED':
-      return { ...state, connected: true, username: action.username, screen: 'lobby', partyError: null };
+      // Clear both hard errors AND the slow-connect hint — a fresh successful
+      // open means the earlier friendlier copy is no longer relevant.
+      return {
+        ...state,
+        connected: true,
+        username: action.username,
+        screen: 'lobby',
+        partyError: null,
+        slowConnect: false,
+        slowConnectHint: null,
+      };
 
     case 'PARTY_DISCONNECTED': {
       // Keep username — game actions guard on it, and PARTY_CONNECTED refreshes
@@ -20,12 +30,16 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       if (action.code === undefined) {
         return { ...state, connected: false, onlineUsers: [], partyError: null };
       }
+      // Keep the raw code in the message so classifyPartyError() can still
+      // pick a specific hint — but phrase the headline in plain language.
+      // "Lost the connection (code 1006) — trying again…" reads less alarming
+      // than "Disconnected from game server" while preserving the diagnostic.
       const reason = action.reason ? `: ${action.reason}` : '';
       return {
         ...state,
         connected: false,
         onlineUsers: [],
-        partyError: `Disconnected from game server (code ${action.code}${reason}) — reconnecting...`,
+        partyError: `Lost the connection (code ${action.code}${reason}) — trying again…`,
       };
     }
 
@@ -36,7 +50,16 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       // User hit Retry on the ErrorScreen — clear the banner so partysocket's
       // ongoing reconnect attempts can promote to PARTY_CONNECTED, or so the
       // lobby effect re-runs the auth fetch on next dependency change.
-      return { ...state, partyError: null };
+      return { ...state, partyError: null, slowConnect: false, slowConnectHint: null };
+
+    case 'PARTY_SLOW_CONNECT':
+      // Fired by PartyClient's slow-connect timer (10s of CONNECTING with no
+      // open). usePartyLobby may follow up with an HTTP probe to set the hint
+      // based on what the server actually returned.
+      return { ...state, slowConnect: true, slowConnectHint: action.hint ?? state.slowConnectHint };
+
+    case 'PARTY_SLOW_CLEARED':
+      return { ...state, slowConnect: false, slowConnectHint: null };
 
     case 'PRESENCE_UPDATE':
       return { ...state, onlineUsers: action.online };

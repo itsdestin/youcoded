@@ -1,8 +1,37 @@
 import { useEffect, useRef, useCallback, useState } from 'react';
 import { useGameDispatch } from '../state/game-context';
-import { PartyClient } from '../game/party-client';
+import { PartyClient, PARTYKIT_HOST } from '../game/party-client';
 
 const PING_INTERVAL = 30_000; // 30s — matches server sweep interval
+
+// Called once the socket has been stuck in CONNECTING for ~10s. Runs a
+// plain HTTP GET against the lobby room to classify *why* the socket isn't
+// opening, then returns user-facing copy with no jargon or error codes.
+//
+// Why probe separately: partysocket silently retries forever on 5xx and
+// never surfaces the response code to its consumers. The only way to tell
+// "server is down" from "server is reachable but crashing" from "you're
+// offline" is to ask the HTTPS endpoint directly.
+async function classifySlowConnect(): Promise<string> {
+  try {
+    const res = await fetch(`https://${PARTYKIT_HOST}/party/global-lobby`, {
+      method: 'GET',
+      // Short abort so we don't hang here longer than the user's patience —
+      // friendlier copy beats a second silent wait.
+      signal: AbortSignal.timeout(6_000),
+    });
+    if (res.status >= 500) {
+      return 'The game server is having a rough morning. Give it a minute and try again.';
+    }
+    // 2xx / 3xx / 4xx all mean the server answered — so the WebSocket
+    // handshake is just slow. Network is fine; encourage patience.
+    return 'Taking a little longer than usual. Hang tight…';
+  } catch {
+    // Fetch rejected → DNS failure, offline, or firewall. Avoid "network
+    // error" jargon and just describe what to check.
+    return "Can't reach the game server. Check your internet and try again.";
+  }
+}
 
 // isLeader: true when this renderer is the leader window (multi-window detach
 // feature). Only the leader maintains the lobby socket; non-leader windows
@@ -67,7 +96,7 @@ export function usePartyLobby(isLeader: boolean = true) {
       .then((auth: { username: string } | null) => {
         if (cancelled) return;
         if (!auth) {
-          dispatch({ type: 'PARTY_ERROR', message: 'GitHub CLI not authenticated. Run: gh auth login' });
+          dispatch({ type: 'PARTY_ERROR', message: "You're not signed in to GitHub yet — games use your GitHub name as your player tag." });
           return;
         }
 
@@ -110,6 +139,16 @@ export function usePartyLobby(isLeader: boolean = true) {
           onOpen: () => {
             dispatch({ type: 'PARTY_CONNECTED', username: auth.username });
           },
+          onSlowConnect: () => {
+            // Swap the bare spinner for friendlier copy immediately, then
+            // kick off an HTTP probe to refine the hint. We dispatch twice
+            // so the user sees *something* change right at the 10s mark
+            // without waiting on the probe round-trip.
+            dispatch({ type: 'PARTY_SLOW_CONNECT', hint: 'Taking a little longer than usual. Hang tight…' });
+            classifySlowConnect().then((hint) => {
+              if (!cancelled) dispatch({ type: 'PARTY_SLOW_CONNECT', hint });
+            });
+          },
           onClose: (info) => {
             // Forward the close code so the UI can show *why* (DevTools is
             // unavailable in some environments — this is the only way for
@@ -117,7 +156,7 @@ export function usePartyLobby(isLeader: boolean = true) {
             dispatch({ type: 'PARTY_DISCONNECTED', code: info.code, reason: info.reason });
           },
           onError: () => {
-            dispatch({ type: 'PARTY_ERROR', message: 'Lost connection to game server' });
+            dispatch({ type: 'PARTY_ERROR', message: "Lost the connection to the game server. We'll keep trying." });
           },
         });
 
@@ -135,7 +174,10 @@ export function usePartyLobby(isLeader: boolean = true) {
           // token call failed. The detail makes the lobby ErrorScreen useful.
           const detail = err instanceof Error ? err.message : String(err);
           console.warn('[lobby] getGitHubAuth failed:', err);
-          dispatch({ type: 'PARTY_ERROR', message: `GitHub auth failed: ${detail}` });
+          // Keep the raw detail in the console for debugging, but show the
+          // user a plain-language version. Destin is a non-dev — "GitHub auth
+          // failed: Error: spawn gh ENOENT" is meaningless to a real user.
+          dispatch({ type: 'PARTY_ERROR', message: "Couldn't check your GitHub sign-in. Make sure the GitHub CLI (gh) is installed and you've signed in." });
         }
       });
 

@@ -16,29 +16,33 @@ interface Props {
 }
 
 // Classify the lobby error so the hint matches the actual cause.
-// Old version blanket-suggested `gh auth login` for ANY connection error —
-// misleading when the real failure is server-side (PartyKit 5xx) or network.
+// Tone rules for this screen (Destin's direction):
+//  - no jargon, no "error codes" in the user-facing hint
+//  - don't catastrophize — most of these resolve themselves in seconds
+//  - tell the user what *they* can do, not what the code is doing
+// The raw code stays in the headline string (from the reducer) for
+// debugging, but the hint below it is always plain language.
 function classifyPartyError(msg: string | null): {
   hint: string;
   showAuthCmd: boolean;
 } {
   const text = (msg ?? '').toLowerCase();
-  if (text.includes('github') || text.includes('gh auth') || text.includes('auth failed')) {
+  if (text.includes('github') || text.includes('gh auth') || text.includes('auth failed') || text.includes("sign-in") || text.includes("signed in")) {
     return {
-      hint: 'Make sure GitHub CLI is installed and authenticated:',
+      hint: "Games use your GitHub name as your player tag. Sign in to GitHub from a terminal with:",
       showAuthCmd: true,
     };
   }
   if (text.includes('code 1011') || text.includes('code 500') || text.includes('code 1012') || text.includes('code 1013')) {
-    return { hint: 'The game server is having trouble. This usually clears up on its own.', showAuthCmd: false };
+    return { hint: 'The game server is taking a breather. This usually fixes itself in a minute.', showAuthCmd: false };
   }
-  if (text.includes('code 1006') || text.includes('code 1015') || text.includes('lost connection')) {
-    return { hint: 'Network looks down. Check your internet connection.', showAuthCmd: false };
+  if (text.includes('code 1006') || text.includes('code 1015') || text.includes('lost the connection') || text.includes('lost connection')) {
+    return { hint: "Looks like the internet hiccuped. We'll keep trying — you can also hit Retry.", showAuthCmd: false };
   }
   if (text.includes('code 4000')) {
-    return { hint: 'Lobby refused the connection (no username). Try reloading the app.', showAuthCmd: false };
+    return { hint: 'Something got mixed up signing in. Try reloading the app.', showAuthCmd: false };
   }
-  return { hint: 'Reconnecting automatically… if it never recovers, try reloading.', showAuthCmd: false };
+  return { hint: "Hang tight — we'll keep trying in the background.", showAuthCmd: false };
 }
 
 function ErrorScreen({ connection }: { connection: GameConnection }) {
@@ -368,12 +372,31 @@ export default function GameLobby({ connection, incognito, onToggleIncognito }: 
   if (state.partyError && !incognito) return <ErrorScreen connection={connection} />;
   if (state.screen === 'joining') return <JoiningScreen connection={connection} />;
   if (state.screen === 'waiting') return <WaitingScreen connection={connection} />;
-  // Show connecting spinner while waiting for PartyKit (setup screen, not incognito)
+  // Show connecting spinner while waiting for PartyKit (setup screen, not incognito).
+  // After ~10s of no open, `slowConnect` flips and we swap in friendlier copy
+  // plus a Reload button — prevents the infinite-silent-spinner that hid the
+  // "PartyKit crashed, partysocket retrying forever on 5xx" case.
   if (!state.connected && !incognito) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center gap-3 px-4 py-8">
+      <div className="flex-1 flex flex-col items-center justify-center gap-4 px-4 py-8">
         <BrailleSpinner size="lg" />
-        <p className="text-sm text-fg-dim">Connecting...</p>
+        <p className="text-sm text-fg-dim">
+          {state.slowConnect ? 'Still trying to connect…' : 'Connecting…'}
+        </p>
+        {state.slowConnect && (
+          <>
+            <p className="text-xs text-fg-muted text-center max-w-xs">
+              {state.slowConnectHint ?? 'Taking a little longer than usual. Hang tight…'}
+            </p>
+            <button
+              onClick={() => window.location.reload()}
+              className="text-xs text-[#66AAFF] hover:text-[#88CCFF] transition-colors"
+              title="Reload the app"
+            >
+              Reload app
+            </button>
+          </>
+        )}
       </div>
     );
   }

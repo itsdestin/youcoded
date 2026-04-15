@@ -37,3 +37,31 @@ jobs:
         env:
           PARTYKIT_LOGIN: ${{ secrets.PARTYKIT_LOGIN }}
           PARTYKIT_TOKEN: ${{ secrets.PARTYKIT_TOKEN }}
+
+      # Health check: `partykit deploy` returns success as soon as the
+      # upload is accepted, even if the deployed code throws on the first
+      # request. Probe the actual lobby room over HTTPS and fail the job
+      # on 5xx so a broken deploy can't silently slip into production
+      # (this is how v2.4.2 ended up with the lobby 500-ing).
+      - name: Verify lobby room responds
+        shell: bash
+        run: |
+          set -euo pipefail
+          HOST="destinclaude-games.itsdestin.partykit.dev"
+          URL="https://$HOST/party/global-lobby"
+          echo "Probing $URL ..."
+          # Give the edge a moment to pick up the new deployment before probing.
+          sleep 5
+          for attempt in 1 2 3 4 5; do
+            CODE=$(curl -sS -o /dev/null -w "%{http_code}" --max-time 10 "$URL" || echo "000")
+            echo "attempt $attempt: HTTP $CODE"
+            # Any non-5xx answer means the room constructed + responded —
+            # PartyKit returns 400/426 for non-WS GETs, which is fine here.
+            if [ "$CODE" != "000" ] && [ "$CODE" -lt 500 ]; then
+              echo "Lobby room is healthy."
+              exit 0
+            fi
+            sleep 5
+          done
+          echo "::error::Lobby room returned 5xx after deploy — last code: $CODE"
+          exit 1

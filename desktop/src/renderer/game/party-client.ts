@@ -25,10 +25,25 @@ export interface PartyClientOptions {
   onOpen?: () => void;
   onClose?: (info: CloseInfo) => void;
   onError?: (error: Event) => void;
+  /** Fires if the socket hasn't opened after `slowConnectMs`. Used so the UI
+   * can swap the bare "Connecting…" spinner for a friendlier "taking longer
+   * than usual" message + probe the server to classify the cause. */
+  onSlowConnect?: () => void;
+  /** Default 10_000 ms. Partysocket's own backoff is opaque to callers, so
+   * we wrap it with a single "is this dragging on?" timer. */
+  slowConnectMs?: number;
 }
+
+const DEFAULT_SLOW_MS = 10_000;
+
+// Standard WebSocket readyState constants — hoisted so this file can be
+// bundled into the Android WebView without depending on `WebSocket` globals
+// at module evaluation time.
+const WS_OPEN = 1;
 
 export class PartyClient {
   private socket: PartySocket;
+  private slowTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(options: PartyClientOptions) {
     this.socket = new PartySocket({
@@ -47,9 +62,26 @@ export class PartyClient {
       }
     });
 
-    if (options.onOpen) {
-      this.socket.addEventListener("open", options.onOpen);
+    // Start the slow-connect timer. If the socket opens first, clear it;
+    // otherwise fire onSlowConnect so callers can surface a friendlier state
+    // without waiting on partysocket's silent reconnect loop.
+    if (options.onSlowConnect) {
+      const ms = options.slowConnectMs ?? DEFAULT_SLOW_MS;
+      this.slowTimer = setTimeout(() => {
+        this.slowTimer = null;
+        if (this.socket.readyState !== WS_OPEN) {
+          options.onSlowConnect!();
+        }
+      }, ms);
     }
+
+    this.socket.addEventListener("open", () => {
+      if (this.slowTimer) {
+        clearTimeout(this.slowTimer);
+        this.slowTimer = null;
+      }
+      options.onOpen?.();
+    });
     if (options.onClose) {
       // Forward code/reason so the caller can show *why* the socket dropped
       this.socket.addEventListener("close", (event: CloseEvent) => {
@@ -66,6 +98,10 @@ export class PartyClient {
   }
 
   close(): void {
+    if (this.slowTimer) {
+      clearTimeout(this.slowTimer);
+      this.slowTimer = null;
+    }
     this.socket.close();
   }
 
