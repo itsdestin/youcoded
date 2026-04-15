@@ -9,6 +9,9 @@ on:
 jobs:
   build:
     strategy:
+      # Don't cancel in-flight Windows/Mac builds if one platform fails —
+      # we'd rather ship 2/3 platforms than 0/3.
+      fail-fast: false
       matrix:
         include:
           - os: windows-latest

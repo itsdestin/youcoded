@@ -42,8 +42,13 @@ function findExecutable(unpackedDir) {
     if (apps.length) return path.join(unpackedDir, apps[0], 'Contents', 'MacOS', apps[0].replace('.app', ''));
     return null;
   }
-  // Linux: look for the main executable (lowercase name, no extension)
+  // Linux: look for the main executable (lowercase name, no extension).
+  // Exclude Electron's bundled helpers (chrome-sandbox, chrome_crashpad_handler)
+  // which also match "extensionless + executable" but are NOT the app entrypoint.
+  // Launching chrome-sandbox directly aborts with "setuid sandbox API version" errors.
+  const HELPER_BINARIES = new Set(['chrome-sandbox', 'chrome_crashpad_handler']);
   const bins = fs.readdirSync(unpackedDir).filter(f => {
+    if (HELPER_BINARIES.has(f)) return false;
     const stat = fs.statSync(path.join(unpackedDir, f));
     return stat.isFile() && !f.includes('.') && (stat.mode & 0o111);
   });
