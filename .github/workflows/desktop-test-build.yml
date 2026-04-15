@@ -42,6 +42,20 @@ jobs:
       - name: Build
         run: npm run build
 
+      - name: Install xvfb (Linux)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y xvfb
+        working-directory: .
+
+      - name: Smoke test
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            xvfb-run --auto-servernum node scripts/smoke-test.js
+          else
+            node scripts/smoke-test.js
+          fi
+
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
