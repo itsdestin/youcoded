@@ -888,6 +888,14 @@ class SessionService : Service() {
                 File(configDir, "$id.json").writeText(values.toString(2))
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
             }
+            // In-app file viewer — Android stub. Returns an error payload so the
+            // renderer renders its "Couldn't load file" state instead of hanging.
+            // Real implementation would mirror marketplace-file-reader.ts: glob
+            // the local install dir, then fall back to raw GitHub URL.
+            "marketplace:read-component" -> {
+                val result = JSONObject().put("error", "File viewer not yet available on Android")
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
             "github:auth" -> {
                 // No GitHub auth on Android — return null
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }

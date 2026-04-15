@@ -20,6 +20,7 @@ import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService } from './sync-state';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
+import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { getRestoreService } from './restore-service';
 import type { RestoreOptions, RestoreProgressEvent } from '../shared/types';
@@ -866,6 +867,19 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.MARKETPLACE_SET_CONFIG, async (_event, id: string, values: Record<string, unknown>) => {
     setMarketplaceConfig(id, values);
     return { ok: true };
+  });
+
+  // In-app file viewer — reads a SKILL.md / command / agent file for a plugin.
+  // Tries the local install dir first, then falls back to a raw GitHub URL
+  // derived from the marketplace entry's sourceType/sourceRef.
+  ipcMain.handle(IPC.MARKETPLACE_READ_COMPONENT, async (
+    _event, args: { pluginId: string; kind: ComponentKind; name: string },
+  ) => {
+    try {
+      return await readComponent(args, () => skillProvider.listMarketplace());
+    } catch (err) {
+      return { error: (err as Error).message };
+    }
   });
 
   // --- Remote access settings ---

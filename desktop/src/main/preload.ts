@@ -115,6 +115,7 @@ const IPC = {
   SKILLS_UPDATE: 'skills:update',
   MARKETPLACE_GET_CONFIG: 'marketplace:get-config',
   MARKETPLACE_SET_CONFIG: 'marketplace:set-config',
+  MARKETPLACE_READ_COMPONENT: 'marketplace:read-component',
   FIRST_RUN_STATE: 'first-run:state',
   FIRST_RUN_RETRY: 'first-run:retry',
   FIRST_RUN_START_AUTH: 'first-run:start-auth',
@@ -318,6 +319,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.MARKETPLACE_SET_CONFIG, id, values),
     // Phase 4 — user-initiated cache bust.
     invalidateCache: (): Promise<void> => ipcRenderer.invoke(IPC.MARKETPLACE_INVALIDATE_CACHE),
+    // In-app file viewer — returns { content, source, path } or { error }.
+    readComponent: (args: { pluginId: string; kind: 'skill' | 'command' | 'agent'; name: string }): Promise<any> =>
+      ipcRenderer.invoke(IPC.MARKETPLACE_READ_COMPONENT, args),
   },
   // Marketplace redesign Phase 3 — integrations as a first-class content kind.
   // Scaffold only: list/status return real data from integrations.json, but

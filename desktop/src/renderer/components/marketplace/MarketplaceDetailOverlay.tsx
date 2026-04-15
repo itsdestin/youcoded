@@ -14,6 +14,7 @@ import StarRating from "./StarRating";
 import RatingSubmitModal from "./RatingSubmitModal";
 import ReviewList from "./ReviewList";
 import LikeButton from "./LikeButton";
+import FileViewerOverlay, { type FileViewerTarget } from "./FileViewerOverlay";
 
 export type DetailTarget =
   | { kind: "skill"; id: string }
@@ -190,6 +191,9 @@ function SkillBody({
   const auth = useMarketplaceAuth();
   const [ratingOpen, setRatingOpen] = useState(false);
   const [reviewRefresh, setReviewRefresh] = useState(0);
+  // File viewer for items in the "What's inside" peek — nested layer-3 overlay
+  // that reads local install first, remote raw URL as fallback.
+  const [fileTarget, setFileTarget] = useState<FileViewerTarget | null>(null);
 
   return (
     <article className="flex flex-col gap-4 max-w-3xl mx-auto">
@@ -252,7 +256,15 @@ function SkillBody({
         <p className="text-fg-2">{entry.description}</p>
       )}
 
-      <ComponentsPeek components={entry.components} />
+      <ComponentsPeek
+        components={entry.components}
+        onOpenFile={(kind, name) => setFileTarget({
+          pluginId: entry.id,
+          pluginName: entry.displayName,
+          kind,
+          name,
+        })}
+      />
 
       {/* Reviews section — shown for all marketplace skills. Write button
           gated behind signed-in + installed (server also enforces this). */}
@@ -293,6 +305,13 @@ function SkillBody({
           Source: <a className="underline" href={entry.repoUrl} target="_blank" rel="noreferrer">{entry.repoUrl}</a>
         </footer>
       )}
+
+      {fileTarget && (
+        <FileViewerOverlay
+          target={fileTarget}
+          onClose={() => setFileTarget(null)}
+        />
+      )}
     </article>
   );
 }
@@ -326,25 +345,56 @@ function MetadataChips({ entry }: { entry: SkillEntry }) {
   );
 }
 
-function ComponentsPeek({ components }: { components?: SkillComponents | null }) {
+function ComponentsPeek({
+  components,
+  onOpenFile,
+}: {
+  components?: SkillComponents | null;
+  onOpenFile(kind: "skill" | "command" | "agent", name: string): void;
+}) {
   // `null` = extraction failed — hide the peek entirely (don't alarm the user
   // with a scary error message). `undefined` = pre-Phase-1 cached entry;
   // same hide behavior. Empty object = plugin genuinely has nothing.
   if (!components) return null;
-  const sections: Array<[string, string[]]> = [
-    ["Skills", components.skills],
-    ["Commands", components.commands],
+
+  // Clickable kinds open the in-app file viewer. Hooks + MCP servers aren't
+  // markdown files — they stay as plain text lines.
+  const clickable: Array<{ label: string; kind: "skill" | "command" | "agent"; items: string[] }> = [
+    { label: "Skills", kind: "skill" as const, items: components.skills },
+    { label: "Commands", kind: "command" as const, items: components.commands },
+    { label: "Agents", kind: "agent" as const, items: components.agents },
+  ].filter((s) => s.items.length > 0);
+
+  const textOnly: Array<[string, string[]]> = [
     ["Hooks", components.hooks],
-    ["Agents", components.agents],
     ["MCP servers", components.mcpServers],
-  ];
-  const nonEmpty = sections.filter(([, arr]) => arr.length > 0);
-  if (!nonEmpty.length && !components.hasHooksManifest && !components.hasMcpConfig) return null;
+  ].filter(([, arr]) => arr.length > 0) as Array<[string, string[]]>;
+
+  if (!clickable.length && !textOnly.length && !components.hasHooksManifest && !components.hasMcpConfig) return null;
+
   return (
     <section>
       <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">What's inside</h2>
       <div className="layer-surface p-3 flex flex-col gap-2 text-sm">
-        {nonEmpty.map(([label, items]) => (
+        {clickable.map(({ label, kind, items }) => (
+          <div key={label} className="flex flex-wrap items-baseline gap-x-2 gap-y-1">
+            <span className="text-fg-dim">{label}:</span>
+            {items.map((name, i) => (
+              <React.Fragment key={name}>
+                <button
+                  type="button"
+                  onClick={() => onOpenFile(kind, name)}
+                  className="text-fg-2 hover:text-accent underline decoration-dotted underline-offset-2"
+                  title={`View ${name}`}
+                >
+                  {name}
+                </button>
+                {i < items.length - 1 && <span className="text-fg-dim">,</span>}
+              </React.Fragment>
+            ))}
+          </div>
+        ))}
+        {textOnly.map(([label, items]) => (
           <div key={label}>
             <span className="text-fg-dim">{label}:</span>{" "}
             <span className="text-fg-2">{items.join(", ")}</span>

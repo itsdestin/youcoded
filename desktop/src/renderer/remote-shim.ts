@@ -614,6 +614,8 @@ export function installShim(): void {
       setConfig: (id: string, values: Record<string, any>) =>
         invoke('marketplace:set-config', { id, values }),
       invalidateCache: () => invoke('marketplace:invalidate-cache'),
+      readComponent: (args: { pluginId: string; kind: 'skill' | 'command' | 'agent'; name: string }) =>
+        invoke('marketplace:read-component', args),
     },
     // Marketplace sign-in (device-code OAuth flow) — same shape as preload.ts.
     // On Android the handlers live in SessionService.kt (Task 13). Until then

@@ -150,6 +150,15 @@ export interface SkillEntry {
   // Propagated from sync.js for UI "deprecated" badges. Present only when true.
   deprecated?: boolean;
   deprecatedAt?: string;
+
+  // Source info from index.json — needed by the in-app file viewer to fetch
+  // raw SKILL.md/commands/agents content when the plugin isn't installed.
+  // 'local' = subdir in destincode-marketplace repo (sourceRef is that subdir).
+  // 'url' = git URL (sourceRef is the clone URL).
+  // 'git-subdir' = git URL with a subdir (sourceRef is clone URL, sourceSubdir is the subdir).
+  sourceType?: string;
+  sourceRef?: string;
+  sourceSubdir?: string;
 }
 
 export interface SkillDetailView extends SkillEntry {
@@ -523,6 +532,10 @@ export const IPC = {
   // Phase 4 — force-refresh the featured/index caches without waiting for
   // the 24h TTL. Useful right after /feature curation lands.
   MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
+  // In-app file viewer — reads a plugin's SKILL.md / command / agent markdown.
+  // Tries the local install dir first, falls back to a raw GitHub URL derived
+  // from the marketplace entry's sourceType/sourceRef.
+  MARKETPLACE_READ_COMPONENT: 'marketplace:read-component',
   // First-run
   FIRST_RUN_STATE: 'first-run:state',
   FIRST_RUN_RETRY: 'first-run:retry',
