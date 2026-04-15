@@ -11,6 +11,7 @@ const { execFile } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 const net = require('net');
+const os = require('os');
 
 const TIMEOUT_MS = 30_000;
 const CHECK_INTERVAL_MS = 1500;
@@ -20,13 +21,18 @@ function findUnpackedDir(customPath) {
   if (customPath && fs.existsSync(customPath)) return customPath;
 
   const releaseDir = path.join(__dirname, '..', 'release');
+  // On macOS, electron-builder produces both `mac/` (x64) and `mac-arm64/`.
+  // Prefer the arch-matching dir so we don't try to run x64 on Apple Silicon
+  // (Rosetta isn't guaranteed on macos-latest CI runners).
   const candidates = {
-    win32: 'win-unpacked',
-    darwin: 'mac',
-    linux: 'linux-unpacked',
+    win32: ['win-unpacked'],
+    darwin: os.arch() === 'arm64' ? ['mac-arm64', 'mac'] : ['mac', 'mac-arm64'],
+    linux: ['linux-unpacked'],
   };
-  const dir = path.join(releaseDir, candidates[process.platform] || 'win-unpacked');
-  if (fs.existsSync(dir)) return dir;
+  for (const sub of candidates[process.platform] || ['win-unpacked']) {
+    const dir = path.join(releaseDir, sub);
+    if (fs.existsSync(dir)) return dir;
+  }
   return null;
 }
 
@@ -85,7 +91,9 @@ async function main() {
   // The --enable-logging flag captures console errors from the renderer.
   const port = await findFreePort();
   const child = execFile(exe, [
-    '--enable-logging',
+    // `--enable-logging` alone routes to a file on macOS — must specify
+    // `=stderr` so the smoke test can read renderer/console output.
+    '--enable-logging=stderr',
     '--no-sandbox', // CI runners often need this
   ], {
     env: {
