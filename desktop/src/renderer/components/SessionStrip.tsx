@@ -181,6 +181,19 @@ export default function SessionStrip({
   const isDragging = useRef(false);
   // Suppress the click that fires after a drag release
   const suppressClick = useRef(false);
+  // Chrome-style live tear-off: once the user drags the pill far enough below
+  // the header, we spawn the new window mid-drag and stream cursor positions
+  // to it so it follows the mouse. Ref (not state) because we read/write it
+  // from pointermove without wanting a re-render per frame. `pending` guards
+  // the async spawn so we only fire the IPC once per drag.
+  const liveDetachedWindowId = useRef<number | null>(null);
+  const liveDetachPending = useRef(false);
+  // Where inside the grabbed pill the cursor sits when pointerdown fires.
+  // Reused during live tear-off to position the new window so the cursor ends
+  // up over the *same spot* on the torn-off pill, not the window's corner.
+  const grabOffsetInPill = useRef<{ x: number; y: number }>({ x: 40, y: 12 });
+  const pointerCaptureEl = useRef<HTMLElement | null>(null);
+  const pointerCaptureId = useRef<number | null>(null);
   // Cross-window re-dock: true while another window is dragging a pill and
   // the cursor is currently over this window's strip. Drives a visual drop-
   // target highlight. Cleared on any non-hover tick or when the drag ends.
@@ -342,10 +355,40 @@ export default function SessionStrip({
     setDragLabel(s.name);
     setDragColor(sessionStatuses?.get(s.id) || 'gray');
 
-    (e.target as HTMLElement).setPointerCapture(e.pointerId);
+    // Measure where in the pill the cursor landed. Used when the live-detach
+    // spawns a new window: we offset that window's screen position so the
+    // cursor stays over the pill, not the window's top-left corner.
+    const pillEl = (e.target as HTMLElement).closest('[data-session-idx]') as HTMLElement | null;
+    if (pillEl) {
+      const r = pillEl.getBoundingClientRect();
+      grabOffsetInPill.current = { x: e.clientX - r.left, y: e.clientY - r.top };
+    }
+
+    // Capture on the strip container (not the pill) so capture survives when
+    // the pill unmounts after ownership transfer during a live tear-off. If
+    // we captured on the pill itself, unmounting would release capture and
+    // the new window would stop following the cursor mid-drag.
+    const captureEl = (pillBarRef.current ?? (e.target as HTMLElement)) as HTMLElement;
+    try { captureEl.setPointerCapture(e.pointerId); } catch { /* container not capturable */ }
+    pointerCaptureEl.current = captureEl;
+    pointerCaptureId.current = e.pointerId;
   }, [sessions, sessionStatuses]);
 
   const handlePointerMove = useCallback((e: React.PointerEvent) => {
+    // Live tear-off continuation — runs even after we've cleared dragIdx so the
+    // detached window keeps following the cursor. Must be checked BEFORE the
+    // dragIdx null-guard below.
+    if (liveDetachedWindowId.current !== null) {
+      (window as any).claude?.detach?.dragWindowMove?.({
+        windowId: liveDetachedWindowId.current,
+        screenX: e.screenX,
+        screenY: e.screenY,
+        offsetX: grabOffsetInPill.current.x,
+        offsetY: grabOffsetInPill.current.y,
+      });
+      return;
+    }
+
     if (dragIdx === null || !dragOrigin.current) return;
 
     // Require 5px movement to start drag (prevents accidental drags on click)
@@ -363,8 +406,54 @@ export default function SessionStrip({
 
     setDragPos({ x: e.clientX, y: e.clientY });
 
-    // Hit-test: find nearest pill by horizontal distance (Y-independent, wide pickup range)
+    // Chrome-style live tear-off. Once the pill has been dragged past the
+    // header (cursor Y below the strip's bottom by >= 60px, or outside the
+    // source window entirely), spawn the peer window NOW instead of waiting
+    // for pointerup. Subsequent pointermove frames hit the early-return block
+    // at the top of this callback and stream cursor positions to the new window.
     const bar = pillBarRef.current;
+    // Don't allow tearing off the only session in a window — matches Chrome
+    // (a single tab can't be torn out of its window) and avoids the broken
+    // click-through state when the source window empties mid-drag.
+    if (!liveDetachPending.current && bar && dragIdx !== null && sessions.length > 1) {
+      const stripRect = bar.getBoundingClientRect();
+      const outsideOwnWindow =
+        e.clientY < 0 || e.clientY > window.innerHeight ||
+        e.clientX < 0 || e.clientX > window.innerWidth;
+      // 60px past the strip's bottom ≈ "this pill is clearly not in the strip
+      // anymore" without being so eager that a fumbled drag tears a window.
+      const belowStrip = e.clientY > stripRect.bottom + 60;
+      if (belowStrip || outsideOwnWindow) {
+        liveDetachPending.current = true;
+        const draggedSession = sessions[dragIdx];
+        const det = (window as any).claude?.detach;
+        if (det?.detachLive) {
+          det.detachLive({
+            sessionId: draggedSession.id,
+            screenX: e.screenX,
+            screenY: e.screenY,
+            offsetX: grabOffsetInPill.current.x,
+            offsetY: grabOffsetInPill.current.y,
+          }).then((res: { windowId: number }) => {
+            liveDetachedWindowId.current = res?.windowId ?? null;
+            // Clear the source window's drag UI immediately. The pill has moved
+            // to the detached window; the floating ghost shouldn't linger.
+            // Pointer capture stays on pillBarRef so the source keeps getting
+            // pointermove (via Electron's mouse passthrough on the new window)
+            // and fires pointerup when the user releases.
+            setDragIdx(null);
+            setOverIdx(null);
+            setDragPos(null);
+            setGhostTarget(null);
+          }).catch(() => {
+            liveDetachPending.current = false;
+          });
+        }
+        return;
+      }
+    }
+
+    // Hit-test: find nearest pill by horizontal distance (Y-independent, wide pickup range)
     if (!bar) return;
     const els = bar.querySelectorAll('[data-session-idx]');
 
@@ -417,6 +506,7 @@ export default function SessionStrip({
     const releasedDragIdx = dragIdx;
     const releasedOverIdx = overIdx;
     const releasedSession = releasedDragIdx !== null ? sessions[releasedDragIdx] : null;
+    const wasLiveDetached = liveDetachedWindowId.current !== null;
 
     // Reset all local drag state immediately so the UI snaps back cleanly.
     // We do the cross-window resolution async below using the captured values.
@@ -426,12 +516,22 @@ export default function SessionStrip({
     setGhostTarget(null);
     dragOrigin.current = null;
     isDragging.current = false;
+    liveDetachedWindowId.current = null;
+    liveDetachPending.current = false;
     setTimeout(() => { suppressClick.current = false; }, 0);
 
-    if (!wasDragging || !releasedSession) return;
-
+    // Always notify main that the drag ended — even when live-detach already
+    // cleared dragIdx (so releasedSession is null). Main relies on this to
+    // turn off mouse-passthrough on the detached window and focus it. Skipping
+    // it leaves the new window click-through forever.
     const det = (window as any).claude?.detach;
-    det?.dragEnded?.();
+    if (wasDragging) det?.dragEnded?.();
+
+    // Chrome-style live tear-off already spawned the new window and handed off
+    // ownership mid-drag — nothing to resolve on release.
+    if (wasLiveDetached) return;
+
+    if (!wasDragging || !releasedSession) return;
 
     // Resolve drop across all peer windows: main hit-tests [data-session-strip]
     // in each window against the current cursor. If a hit, re-dock there;
@@ -455,8 +555,10 @@ export default function SessionStrip({
         det?.dragDropped?.({ sessionId: releasedSession.id, targetWindowId: target, insertIndex: 0 });
         return;
       }
-      if (outsideOwnWindow) {
-        // Dropped outside any window's strip → spawn new peer window
+      // Dropped outside any window's strip → spawn new peer window. Skip if
+      // this would empty the source window (matches the live-tear-off rule:
+      // can't tear off a window's only session).
+      if (outsideOwnWindow && sessions.length > 1) {
         const screenX = (e as any).screenX ?? (window.screenX + clientX);
         const screenY = (e as any).screenY ?? (window.screenY + clientY);
         det?.detachStart?.({ sessionId: releasedSession.id, screenX, screenY });
@@ -566,6 +668,12 @@ export default function SessionStrip({
       <div
         ref={pillBarRef}
         data-session-strip
+        // Pointer capture is set on this container during drag (see handlePointerDown).
+        // React's event delegation still fires the pill's onPointerMove/onPointerUp
+        // because events bubble up through the captured element, but we also listen
+        // here as a safety net in case the pill unmounts mid-drag (live tear-off).
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
         className={`session-strip flex items-center gap-0.5 bg-inset rounded-full px-1.5 py-0.5 overflow-hidden min-w-0 shrink transition-shadow ${incomingDropActive ? 'ring-2 ring-accent/70' : ''}`}
       >
         {/* ── Session pills ──────────────────────────────── */}

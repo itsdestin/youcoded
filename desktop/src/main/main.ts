@@ -259,7 +259,7 @@ function registerFirstRunIpc(
 // windows spawned by the detach subsystem. Keeps webPreferences, security
 // hardening, and fullscreen relay consistent across every window so renderers
 // don't have to guess which features are available.
-function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean }): BrowserWindow {
+function createAppWindow(opts?: { x?: number; y?: number; width?: number; height?: number; maximize?: boolean; inactive?: boolean }): BrowserWindow {
   const iconPath = path.join(__dirname, '../../assets/icon.png');
   const icon = nativeImage.createFromPath(iconPath);
   const isMac = process.platform === 'darwin';
@@ -271,6 +271,10 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     y: opts?.y,
     icon,
     titleBarStyle: isMac ? 'hiddenInset' as const : 'hidden' as const,
+    // Live tear-off spawns this window mid-drag and needs the source window to
+    // keep keyboard/pointer focus. show: false + showInactive() below prevents
+    // the OS from focusing the new window on creation.
+    show: !opts?.inactive,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -278,6 +282,17 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
       sandbox: true,
     },
   });
+
+  if (opts?.inactive) {
+    win.webContents.once('did-finish-load', () => {
+      if (win.isDestroyed()) return;
+      // Re-assert the position right before showing — with show:false, some
+      // Electron versions on Windows lose the constructor x/y by the time
+      // showInactive() fires, leaving the window at default placement.
+      if (opts.x != null && opts.y != null) win.setPosition(opts.x, opts.y);
+      win.showInactive();
+    });
+  }
 
   // Security: block navigation to external origins (prevents preload API exposure)
   win.webContents.on('will-navigate', (event, url) => {
@@ -567,6 +582,104 @@ function registerDetachIpc() {
     stopCursorTicker();
   });
 
+  // Chrome-style live tear-off. Spawns a peer window mid-drag (threshold hit in
+  // SessionStrip) and returns its id so the source window can stream cursor
+  // positions to it until pointerup. Ownership transfers immediately; the new
+  // window is repositioned via SESSION_DRAG_WINDOW_MOVE as the user drags.
+  // Approx. position of the FIRST pill inside a freshly-spawned window's
+  // header, measured from the window's top-left in DIPs. Used to offset the
+  // new window so the cursor ends up over the pill, not the window corner.
+  // Tuned empirically on Windows (hidden titlebar, no REMOTE badge, chat/
+  // terminal toggle on the left); bump if the left cluster grows or shrinks.
+  const DETACHED_FIRST_PILL_X = 96;
+  const DETACHED_FIRST_PILL_Y = 12;
+
+  // Given cursor screen coords + where inside the pill the user grabbed,
+  // compute where the new window's top-left should sit so the cursor hovers
+  // over the same spot on that session's pill inside the new window.
+  const computeDetachedWindowPos = (screenX: number, screenY: number, offsetX: number, offsetY: number) => ({
+    x: Math.round(screenX - DETACHED_FIRST_PILL_X - offsetX),
+    y: Math.round(screenY - DETACHED_FIRST_PILL_Y - offsetY),
+  });
+
+  // Tracks live tear-off state so we can defer source-window auto-close until
+  // the user releases (closing mid-drag would kill the pointer-capture path
+  // and leave the new window stuck in mouse-passthrough mode).
+  let liveDragWindowId: number | null = null;
+  let liveDragSourceId: number | null = null;
+  let liveDragOffset: { x: number; y: number } = { x: 40, y: 12 };
+  // Updated by the post-spawn measurement (see SESSION_DETACH_LIVE) so the
+  // streaming setPosition uses the *real* first-pill position in the new
+  // window, not the static DETACHED_FIRST_PILL_X/Y guess.
+  let measuredFirstPillX: number = DETACHED_FIRST_PILL_X;
+  let measuredFirstPillY: number = DETACHED_FIRST_PILL_Y;
+
+  ipcMain.handle(IPC.SESSION_DETACH_LIVE, (evt, payload: { sessionId: string; offsetX?: number; offsetY?: number }) => {
+    // Read cursor position from main (DIPs, DPI-correct) instead of trusting
+    // renderer-reported screenX/screenY — those can be in physical pixels on
+    // scaled Windows displays and put the new window at the wrong screen pos.
+    const cursor = screen.getCursorScreenPoint();
+    liveDragOffset = { x: payload.offsetX ?? 40, y: payload.offsetY ?? 12 };
+    const pos = computeDetachedWindowPos(cursor.x, cursor.y, liveDragOffset.x, liveDragOffset.y);
+    // inactive: show without stealing focus so the source window keeps
+    // receiving pointer events (the drag isn't finished yet).
+    const newWin = createAppWindow({ x: pos.x, y: pos.y, width: 900, height: 700, inactive: true });
+    // Make the new window pass pointer events through to whatever sits under
+    // the cursor. Combined with setPosition() following the cursor, the source
+    // window keeps getting pointermove until the user releases — at which
+    // point SESSION_DRAG_ENDED clears this and refocuses.
+    try { newWin.setIgnoreMouseEvents(true, { forward: true }); } catch { /* older electron */ }
+    liveDragWindowId = newWin.webContents.id;
+    liveDragSourceId = evt.sender.id;
+    transferOwnership(payload.sessionId, evt.sender.id, newWin.webContents.id, /*freshWindow*/ true);
+    // Defer maybeAutoCloseEmpty(source) to SESSION_DRAG_ENDED — if we close
+    // the source mid-drag, its renderer dies and never fires pointerup, so
+    // dragEnded never reaches main and the new window stays click-through.
+
+    // Once the new window has its React tree up, measure the actual first pill
+    // position and re-anchor the window so the cursor sits exactly over the
+    // grabbed spot on that pill. The DETACHED_FIRST_PILL_X/Y constants used at
+    // initial spawn are only an approximation; this corrects any drift from
+    // varying header layouts (REMOTE badge present/absent, mac vs win toggle).
+    newWin.webContents.once('did-finish-load', () => {
+      // Small delay so React mounts and the pill paints before we measure.
+      setTimeout(async () => {
+        if (newWin.isDestroyed() || liveDragWindowId !== newWin.webContents.id) return;
+        try {
+          const pillRect = await newWin.webContents.executeJavaScript(
+            `(() => { const el = document.querySelector('[data-session-idx]'); if (!el) return null; const r = el.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; })()`,
+          );
+          if (!pillRect) return;
+          const cursor = screen.getCursorScreenPoint();
+          const correctedX = Math.round(cursor.x - pillRect.left - liveDragOffset.x);
+          const correctedY = Math.round(cursor.y - pillRect.top - liveDragOffset.y);
+          // Update the constants too so the streaming setPosition during the
+          // remaining drag uses the measured values, not the initial guess.
+          measuredFirstPillX = pillRect.left;
+          measuredFirstPillY = pillRect.top;
+          newWin.setPosition(correctedX, correctedY);
+        } catch { /* measurement is best-effort; constants fall back */ }
+      }, 80);
+    });
+
+    return { windowId: newWin.webContents.id };
+  });
+
+  // Follow-the-cursor. Renderer just signals a frame happened; main reads the
+  // authoritative cursor position from the OS and uses the *measured* first-
+  // pill position (set after the new window mounts) so the cursor stays over
+  // the pill the user grabbed, not over an estimated header offset.
+  ipcMain.on(IPC.SESSION_DRAG_WINDOW_MOVE, () => {
+    if (liveDragWindowId === null) return;
+    const win = windowFromWcId(liveDragWindowId);
+    if (!win || win.isDestroyed()) return;
+    const cursor = screen.getCursorScreenPoint();
+    win.setPosition(
+      Math.round(cursor.x - measuredFirstPillX - liveDragOffset.x),
+      Math.round(cursor.y - measuredFirstPillY - liveDragOffset.y),
+    );
+  });
+
   // Drop landed on another window's SessionStrip — move ownership there.
   ipcMain.on(IPC.SESSION_DRAG_DROPPED, (evt, payload: { sessionId: string; targetWindowId: number; insertIndex: number }) => {
     transferOwnership(payload.sessionId, evt.sender.id, payload.targetWindowId, /*freshWindow*/ false);
@@ -602,7 +715,28 @@ function registerDetachIpc() {
       }
     }, 33);
   });
-  ipcMain.on(IPC.SESSION_DRAG_ENDED, () => { stopCursorTicker(); });
+  ipcMain.on(IPC.SESSION_DRAG_ENDED, () => {
+    stopCursorTicker();
+    // Finalize any live-detached window: re-enable pointer events and focus
+    // it so the user can interact with the session they just tore off.
+    if (liveDragWindowId !== null) {
+      const win = windowFromWcId(liveDragWindowId);
+      if (win && !win.isDestroyed()) {
+        try { win.setIgnoreMouseEvents(false); } catch { /* ignore */ }
+        win.focus();
+      }
+      liveDragWindowId = null;
+    }
+    // Now safe to close the source window if it became empty during the drag.
+    // Deferred from SESSION_DETACH_LIVE so the source's renderer survives long
+    // enough to fire pointerup and reach this handler.
+    if (liveDragSourceId !== null) {
+      maybeAutoCloseEmpty(liveDragSourceId);
+      liveDragSourceId = null;
+    }
+    measuredFirstPillX = DETACHED_FIRST_PILL_X;
+    measuredFirstPillY = DETACHED_FIRST_PILL_Y;
+  });
 
   // Resolve a drop: ask each window whether its SessionStrip bounding box
   // currently contains the cursor. The source window uses the answer on

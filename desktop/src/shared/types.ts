@@ -547,6 +547,12 @@ export const IPC = {
   SESSION_OWNERSHIP_ACQUIRED: 'session:ownership-acquired',
   SESSION_OWNERSHIP_LOST: 'session:ownership-lost',
   SESSION_DETACH_START: 'session:detach-start',
+  // Chrome-style live tear-off: spawn the peer window mid-drag (before pointerup)
+  // once the pill has moved far enough from the header. Source window then
+  // streams cursor positions via SESSION_DRAG_WINDOW_MOVE so the new window
+  // tracks the cursor until the user releases.
+  SESSION_DETACH_LIVE: 'session:detach-live',
+  SESSION_DRAG_WINDOW_MOVE: 'session:drag-window-move',
   SESSION_DRAG_STARTED: 'session:drag-started',
   SESSION_DRAG_ENDED: 'session:drag-ended',
   SESSION_DRAG_DROPPED: 'session:drag-dropped',
