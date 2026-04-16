@@ -1,0 +1,8 @@
+<svg width="48" height="48" viewBox="0 0 40 40" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <rect x="1" y="1" width="38" height="38" rx="7" fill="#100e1c" stroke="rgba(232,35,74,0.35)" stroke-width="1.5"/>
+  <line x1="6" y1="6.5" x2="34" y2="6.5" stroke="rgba(232,35,74,0.3)" stroke-width="1" stroke-linecap="round"/>
+  <line x1="6" y1="33.5" x2="34" y2="33.5" stroke="rgba(232,35,74,0.3)" stroke-width="1" stroke-linecap="round"/>
+  <polygon points="5.2,17.2 7.4,17.2 10.2,20.5 7.4,23.8 5.2,23.8 8,20.5" fill="#e8234a"/>
+  <text x="12.6" y="24.6" font-family="'DM Sans','Segoe UI',Helvetica,Arial,sans-serif" font-weight="800" font-size="11" letter-spacing="-0.4" fill="#f0e8f8">Y<tspan fill="#e8234a">C</tspan></text>
+  <rect x="29.5" y="15" width="6" height="11" rx="0.5" fill="#e8234a" opacity="0.65"/>
+</svg>
