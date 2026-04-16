@@ -20,8 +20,8 @@ android {
         applicationId = "com.youcoded.app"
         minSdk = 28
         targetSdk = 35
-        versionCode = 11
-        versionName = "2.4.3"
+        versionCode = 12
+        versionName = "1.0.1"
     }
 
     signingConfigs {

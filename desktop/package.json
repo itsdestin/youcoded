@@ -1,6 +1,6 @@
 {
   "name": "youcoded",
-  "version": "2.4.3",
+  "version": "1.0.1",
   "description": "Desktop GUI for Claude Code with the YouCoded toolkit",
   "main": "dist/main/main.js",
   "scripts": {

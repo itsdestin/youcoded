@@ -1,6 +1,29 @@
 # Changelog
 
-All notable changes to DestinCode are documented in this file.
+All notable changes to YouCoded are documented in this file.
+
+## [1.0.1] — 2026-04-15
+
+### Fixed
+- **DC → YC monogram everywhere** — SkillCard badge label and Android launcher adaptive icon + monochrome variant. The "D" glyph in the launcher icons was retraced from Consolas Bold as a "Y" to match the existing "C" glyph's styling.
+- **First-party plugin prefix matching** — `skill-scanner.ts`, `sync-service.ts`, and Android `SkillScanner.kt` used `startsWith('youcoded-core')` after the rebrand sed, which missed sibling first-party plugins (`youcoded-encyclopedia`, `youcoded-inbox`, etc.). Now matches `startsWith('youcoded')`.
+
+## [1.0.0] — 2026-04-15
+
+Rebrand release. DestinCode is now YouCoded. All app identifiers, config file names, localStorage keys, IPC names, and user-visible strings updated. This is a fresh v1 line — the old v2.x series was DestinCode.
+
+### Changed
+- **App name** — DestinCode → YouCoded. Window title, installers, and menus all reflect the new name.
+- **Electron appId** — `com.destinclaude.desktop` → `com.youcoded.desktop`.
+- **Android applicationId / package** — `com.destin.code` → `com.youcoded.app`. All Kotlin sources moved to the new package tree.
+- **URI scheme** — `destincode://` → `youcoded://` for skill and plugin deep links.
+- **Marketplace ID** — The Claude Code registry key is now `youcoded` (was `destincode`). Plugin IDs carry the `@youcoded` suffix in `enabledPlugins`.
+- **Config paths** — All `~/.claude/destincode-*.json` files renamed to `~/.claude/youcoded-*.json` (remote, skills, model, appearance, defaults, folders, model-modes).
+- **localStorage keys** — `destincode-theme`, `destincode-font`, `destincode-reduced-effects`, `destincode-show-timestamps`, `destincode-statusbar-widgets`, `destincode-remote-token`, `destincode-sound-*`, etc. all renamed to the `youcoded-` prefix.
+- **Env vars** — `DESTINCODE_PORT_OFFSET`, `DESTINCODE_PROFILE`, `DESTINCODE_MARKETPLACE_BRANCH` renamed to the `YOUCODED_` prefix.
+- **PartyKit** — Multiplayer lobby moved from `destinclaude-games.itsdestin.partykit.dev` to `youcoded-games.itsdestin.partykit.dev`. Old project deleted.
+- **GitHub URLs** — All internal references updated: `itsdestin/destincode` → `itsdestin/youcoded`, `itsdestin/destincode-marketplace` → `itsdestin/wecoded-marketplace`, `itsdestin/destinclaude-themes` → `itsdestin/wecoded-themes`, `itsdestin/destinclaude` → `itsdestin/youcoded-core`.
+- **Android keystore alias** — `destincode` → `youcoded`. A fresh keystore is required for signed release builds.
 
 ## [2.4.0] — 2026-04-15
 
