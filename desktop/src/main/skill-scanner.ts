@@ -141,7 +141,7 @@ export function scanSkills(): SkillEntry[] {
   // are NOT double-counted as user skills.
   try {
     const userSkillsDir = path.join(claudeDir, 'skills');
-    const youcoded-corePluginDirs = readdirSafe(pluginsDir)
+    const youcodedCorePluginDirs = readdirSafe(pluginsDir)
       .filter(d => d.isDirectory() && d.name.startsWith('youcoded-core'))
       .map(d => path.join(pluginsDir, d.name));
 
@@ -154,7 +154,7 @@ export function scanSkills(): SkillEntry[] {
 
       // Skip if a youcoded-core-* plugin already ships a skill with this name
       // — the on-disk copy is a mirror, not user-authored content.
-      const isToolkitMirror = youcoded-corePluginDirs.some(p =>
+      const isToolkitMirror = youcodedCorePluginDirs.some(p =>
         fs.existsSync(path.join(p, 'skills', entry.name)),
       );
       if (isToolkitMirror) continue;

@@ -1611,8 +1611,8 @@ export class SyncService extends EventEmitter {
     for (const candidate of icloudCandidates) {
       if (this.dirExists(candidate)) {
         const claudeDir = path.join(candidate, 'Claude');
-        const youcoded-core = path.join(candidate, 'YouCoded');
-        if (this.dirExists(path.join(claudeDir, 'Backup')) || this.dirExists(youcoded-core)) {
+        const youcodedCore = path.join(candidate, 'YouCoded');
+        if (this.dirExists(path.join(claudeDir, 'Backup')) || this.dirExists(youcodedCore)) {
           return 'icloud';
         }
       }
@@ -1639,7 +1639,7 @@ export class SyncService extends EventEmitter {
     // lives in its own plugin directory (youcoded-core, youcoded-core-encyclopedia,
     // youcoded-core-food, etc.). A skill under ~/.claude/skills/ is considered a
     // toolkit copy if any youcoded-core-prefixed plugin ships the same skill.
-    const youcoded-corePluginDirs: string[] = (() => {
+    const youcodedCorePluginDirs: string[] = (() => {
       try {
         return fs.readdirSync(pluginsDir, { withFileTypes: true })
           .filter(d => d.isDirectory() && d.name.startsWith('youcoded-core'))
@@ -1660,7 +1660,7 @@ export class SyncService extends EventEmitter {
       // skills/ directory — that means the user's local copy is a mirror of
       // a toolkit-managed skill, not a user-authored one.
       let isToolkitCopy = false;
-      for (const pluginDir of youcoded-corePluginDirs) {
+      for (const pluginDir of youcodedCorePluginDirs) {
         if (this.dirExists(path.join(pluginDir, 'skills', skillName))) {
           isToolkitCopy = true;
           break;

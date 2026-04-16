@@ -15,7 +15,7 @@ interface Props {
 }
 
 const sourceBadgeStyles: Record<string, string> = {
-  youcoded-core: 'bg-[#4CAF50]/15 text-[#4CAF50] border border-[#4CAF50]/25',
+  'youcoded-core': 'bg-[#4CAF50]/15 text-[#4CAF50] border border-[#4CAF50]/25',
   self: 'bg-[#66AAFF]/15 text-[#66AAFF] border border-[#66AAFF]/25',
   plugin: 'bg-inset/50 text-fg-dim border border-edge/25',
   marketplace: 'bg-inset/50 text-fg-dim border border-edge/25',
@@ -49,7 +49,7 @@ export default function SkillCard({ skill, onClick, variant = 'drawer', installe
         <div className="flex justify-between items-start">
           <span className="text-sm font-medium text-fg leading-tight">{skill.displayName}</span>
           <span className={`text-[9px] font-medium px-1 py-0.5 rounded-sm shrink-0 ml-1 ${
-            skill.source === 'youcoded-core' ? sourceBadgeStyles.youcoded-core :
+            skill.source === 'youcoded-core' ? sourceBadgeStyles['youcoded-core'] :
             typeBadgeStyles[skill.type] || sourceBadgeStyles.plugin
           }`}>
             {skill.source === 'youcoded-core' ? 'DC' : typeLabels[skill.type] || 'Plugin'}
@@ -112,7 +112,7 @@ export default function SkillCard({ skill, onClick, variant = 'drawer', installe
       <span className="text-sm font-medium text-fg leading-tight">{skill.displayName}</span>
       <span className="text-[11px] text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">{skill.description}</span>
       <span className={`text-[9px] font-medium px-1 py-0.5 rounded-sm mt-2 self-start ${
-        skill.source === 'youcoded-core' ? sourceBadgeStyles.youcoded-core :
+        skill.source === 'youcoded-core' ? sourceBadgeStyles['youcoded-core'] :
         typeBadgeStyles[skill.type] || sourceBadgeStyles.plugin
       }`}>
         {skill.source === 'youcoded-core' ? 'DC' : typeLabels[skill.type] || 'Plugin'}
