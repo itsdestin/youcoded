@@ -220,6 +220,15 @@ html, body, #root {
   textarea, input[type="text"], input {
     font-size: 16px !important;
   }
+  /* Chat input uses a transparent textarea over a mirror <div> that shows the
+     animated flowing-keyword text. When the textarea above is forced to 16px
+     but the mirror stays at its Tailwind text-sm (14px) size, glyph widths
+     and line-wrap points diverge — the caret visibly drifts off the mirror's
+     text on narrow windows and on Android. Match the mirror to the same 16px
+     so both layers measure identically. */
+  .input-bar-mirror-content {
+    font-size: 16px !important;
+  }
 }
 
 /* xterm.js needs explicit height to fill its container */
@@ -858,10 +867,15 @@ html, body, #root {
   color: transparent;
   -webkit-text-fill-color: transparent;
   animation: flowing-word-pan 3s linear infinite;
-  font-weight: 600;
+  /* NOTE: font-weight intentionally omitted here. In the chat input mirror the
+     keyword renders bolder than the same characters in the transparent
+     textarea above it, which widens the keyword in the mirror only and
+     pushes every following character off the caret. Bold is scoped to the
+     user bubble rule below, where there's no textarea layered over it. */
 }
 /* Inside user bubble the surface is bg-accent, so --accent disappears into
-   the background. Flow between on-accent shades instead. */
+   the background. Flow between on-accent shades instead. Bold is safe here
+   because user bubbles have no layered textarea — nothing to stay in sync with. */
 .user-bubble .flowing-word {
   background-image: linear-gradient(
     90deg,
@@ -869,6 +883,7 @@ html, body, #root {
     color-mix(in srgb, var(--on-accent) 55%, transparent),
     var(--on-accent)
   );
+  font-weight: 600;
 }
 @media (prefers-reduced-motion: reduce) {
   .flowing-word { animation: none; }

@@ -420,7 +420,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             >
               <div
                 ref={mirrorContentRef}
-                className="text-sm text-fg leading-snug whitespace-pre-wrap break-words"
+                // input-bar-mirror-content: lets the ≤768px media query bump
+                // this div's font-size to 16px so it stays in lockstep with
+                // the textarea (which is already forced to 16px to prevent
+                // iOS auto-zoom). Without this, narrow windows and Android
+                // rendered the mirror at 14px while the caret was placed
+                // for 16px text — characters drifted off the caret.
+                className="input-bar-mirror-content text-sm text-fg leading-snug whitespace-pre-wrap break-words"
               >
                 <FlowingKeywordsText text={text} />
                 {/* Zero-width char keeps a trailing newline visible in the mirror */}
@@ -490,7 +496,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // of the text. Inherit font metrics from the parent so both
             // layers measure identically.
             style={{ caretColor: 'var(--fg)', fontFamily: 'inherit', letterSpacing: 'inherit' }}
-            className="input-bar-textarea scroll-fade relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none leading-snug p-0 m-0 align-middle"
+            // break-words makes the textarea wrap long URLs/paths at the same
+            // character position as the mirror (which also has break-words).
+            // Without this, textarea used Chromium's default algorithm and
+            // picked slightly different break points — every subsequent line's
+            // offset compounded, so the caret drift got worse the longer the
+            // message. Both layers now use overflow-wrap: break-word.
+            className="input-bar-textarea scroll-fade relative block w-full bg-transparent text-sm text-transparent placeholder-fg-muted outline-none disabled:opacity-50 resize-none leading-snug p-0 m-0 align-middle break-words"
           />
           </div>
           <button
