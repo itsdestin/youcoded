@@ -6,7 +6,7 @@ const os = require('os');
 const path = require('path');
 
 const ANNOUNCEMENTS_URL =
-  'https://raw.githubusercontent.com/itsdestin/destinclaude/master/announcements.txt';
+  'https://raw.githubusercontent.com/itsdestin/youcoded-core/master/announcements.txt';
 
 const home = os.homedir();
 const cachePath = path.join(home, '.claude', '.announcement-cache.json');

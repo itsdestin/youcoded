@@ -706,7 +706,7 @@ export class RemoteServer {
         break;
       }
       case 'model:get-preference': {
-        const modelPrefPath = path.join(os.homedir(), '.claude', 'destincode-model.json');
+        const modelPrefPath = path.join(os.homedir(), '.claude', 'youcoded-model.json');
         try {
           const raw = await fs.promises.readFile(modelPrefPath, 'utf8');
           const parsed = JSON.parse(raw);
@@ -717,7 +717,7 @@ export class RemoteServer {
         break;
       }
       case 'model:set-preference': {
-        const modelPrefPath = path.join(os.homedir(), '.claude', 'destincode-model.json');
+        const modelPrefPath = path.join(os.homedir(), '.claude', 'youcoded-model.json');
         const model = payload.model || payload;
         try {
           await fs.promises.mkdir(path.dirname(modelPrefPath), { recursive: true });
@@ -729,7 +729,7 @@ export class RemoteServer {
         break;
       }
       case 'appearance:get': {
-        const appearancePath = path.join(os.homedir(), '.claude', 'destincode-appearance.json');
+        const appearancePath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
         try {
           const raw = await fs.promises.readFile(appearancePath, 'utf8');
           this.respond(client.ws, type, id, JSON.parse(raw));
@@ -739,7 +739,7 @@ export class RemoteServer {
         break;
       }
       case 'appearance:set': {
-        const appearancePath = path.join(os.homedir(), '.claude', 'destincode-appearance.json');
+        const appearancePath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
         try {
           let existing: Record<string, any> = {};
           try {
@@ -755,7 +755,7 @@ export class RemoteServer {
         break;
       }
       case 'defaults:get': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'destincode-defaults.json');
+        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
         const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
         try {
           const raw = await fs.promises.readFile(defaultsPrefPath, 'utf8');
@@ -766,7 +766,7 @@ export class RemoteServer {
         break;
       }
       case 'defaults:set': {
-        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'destincode-defaults.json');
+        const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
         const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
         try {
           let current = { ...DEFAULTS_INITIAL };
@@ -800,7 +800,7 @@ export class RemoteServer {
       }
       // Fast + effort mode persistence — mirrors ipc-handlers.ts 'modes:get'/'modes:set'.
       case 'modes:get': {
-        const modelModesPath = path.join(os.homedir(), '.claude', 'destincode-model-modes.json');
+        const modelModesPath = path.join(os.homedir(), '.claude', 'youcoded-model-modes.json');
         try {
           const raw = await fs.promises.readFile(modelModesPath, 'utf-8');
           this.respond(client.ws, type, id, JSON.parse(raw));
@@ -810,7 +810,7 @@ export class RemoteServer {
         break;
       }
       case 'modes:set': {
-        const modelModesPath = path.join(os.homedir(), '.claude', 'destincode-model-modes.json');
+        const modelModesPath = path.join(os.homedir(), '.claude', 'youcoded-model-modes.json');
         try {
           let current = { fast: false, effort: 'auto' } as Record<string, any>;
           try { current = { ...current, ...JSON.parse(await fs.promises.readFile(modelModesPath, 'utf-8')) }; } catch {}
@@ -851,7 +851,7 @@ export class RemoteServer {
         break;
       }
       case 'folders:list': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
         try {
           const raw = await fs.promises.readFile(foldersPrefPath, 'utf8');
           let folders = JSON.parse(raw);
@@ -871,7 +871,7 @@ export class RemoteServer {
         break;
       }
       case 'folders:add': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
         try {
           let folders: any[] = [];
           try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
@@ -892,7 +892,7 @@ export class RemoteServer {
         break;
       }
       case 'folders:remove': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
         try {
           let folders: any[] = [];
           try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
@@ -908,7 +908,7 @@ export class RemoteServer {
         break;
       }
       case 'folders:rename': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
         try {
           let folders: any[] = [];
           try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
@@ -925,7 +925,7 @@ export class RemoteServer {
         break;
       }
       case 'favorites:get': {
-        const favPath = path.join(os.homedir(), '.claude', 'destinclaude-favorites.json');
+        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
         try {
           const data = await fs.promises.readFile(favPath, 'utf8');
           this.respond(client.ws, type, id, JSON.parse(data));
@@ -935,7 +935,7 @@ export class RemoteServer {
         break;
       }
       case 'favorites:set': {
-        const favPath = path.join(os.homedir(), '.claude', 'destinclaude-favorites.json');
+        const favPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
         let existing: Record<string, any> = {};
         try { existing = JSON.parse(await fs.promises.readFile(favPath, 'utf8')); } catch {}
         existing.favorites = payload.favorites ?? payload;
@@ -944,7 +944,7 @@ export class RemoteServer {
         break;
       }
       case 'game:getIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'destinclaude-favorites.json');
+        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
         try {
           const data = JSON.parse(await fs.promises.readFile(gPath, 'utf8'));
           this.respond(client.ws, type, id, data.incognito ?? false);
@@ -954,7 +954,7 @@ export class RemoteServer {
         break;
       }
       case 'game:setIncognito': {
-        const gPath = path.join(os.homedir(), '.claude', 'destinclaude-favorites.json');
+        const gPath = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
         let existing: Record<string, any> = {};
         try { existing = JSON.parse(await fs.promises.readFile(gPath, 'utf8')); } catch {}
         existing.incognito = payload;

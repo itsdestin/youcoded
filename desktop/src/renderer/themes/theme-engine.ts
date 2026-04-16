@@ -278,9 +278,13 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
     root.style.setProperty(prop, value);
   }
 
-  // 5. Background wallpaper — set directly on <body> (bypasses z-index stacking issues)
-  //    Also expose as --wallpaper-url so portaled glass overlays can render
-  //    a blurred copy via ::before (backdrop-filter doesn't work on body children)
+  // 5. Background wallpaper — [data-wallpaper] gates app-shell transparency and glass treatment.
+  //    The actual image is rendered by the React #theme-bg div (via buildBackgroundStyle),
+  //    NOT on body. Setting it on body caused position:fixed z-index:-1 elements (the pattern
+  //    overlay) to render BEHIND the body's own background, making patterns invisible on
+  //    wallpaper themes. By keeping the wallpaper on #theme-bg (z-index:-1) and the pattern
+  //    on #theme-pattern (z-index:-1, later in DOM), both sit below chat content and the
+  //    pattern correctly renders in front of the wallpaper.
   const bg = theme.background;
   // Fix: gradient backgrounds also need the app-shell transparency + glass treatment
   // gated on [data-wallpaper]. Without this, the bg-canvas app-shell paints over the
@@ -291,21 +295,13 @@ export function applyThemeToDom(theme: ThemeDefinition, reducedEffects = false):
   } else {
     root.removeAttribute('data-wallpaper');
   }
-  if (bg?.type === 'image' && bg.value) {
-    body.style.backgroundImage = `url("${bg.value}")`;
-    body.style.backgroundSize = 'cover';
-    body.style.backgroundPosition = 'center';
-    body.style.backgroundRepeat = 'no-repeat';
-    if (bg.opacity !== undefined && bg.opacity < 1) {
-      // Can't set opacity on body without affecting children, so leave at 1
-      // The slight dimming is handled by the vignette/overlay in custom_css if needed
-    }
-  } else {
-    body.style.backgroundImage = '';
-    body.style.backgroundSize = '';
-    body.style.backgroundPosition = '';
-    body.style.backgroundRepeat = '';
-  }
+  // Always clear body background — the #theme-bg React div owns the wallpaper image.
+  // Previously this was set on body, but that caused the pattern layer (z-index:-1) to
+  // render behind body's own background-image, hiding patterns on all wallpaper themes.
+  body.style.backgroundImage = '';
+  body.style.backgroundSize = '';
+  body.style.backgroundPosition = '';
+  body.style.backgroundRepeat = '';
 
   // 6. Layout data attributes on body — clear previous first
   for (const attr of LAYOUT_ATTRS) {

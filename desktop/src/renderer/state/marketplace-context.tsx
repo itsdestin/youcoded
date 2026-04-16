@@ -2,7 +2,7 @@
  * MarketplaceContext — unified data layer for the marketplace modal.
  *
  * Fetches both skills/index.json and themes/index.json on mount,
- * loads package state from destincode-skills.json, and exposes
+ * loads package state from youcoded-skills.json, and exposes
  * install/uninstall methods that work for any content type.
  *
  * Does NOT replace SkillContext (command drawer) or ThemeContext (DOM theming).
@@ -67,7 +67,7 @@ interface MarketplaceState {
   // Marketplace redesign Phase 1: hero + rails curation. Empty-default so UIs
   // that don't need it can ignore this field entirely.
   featured: FeaturedData;
-  // Phase 3a: packages map from destincode-skills.json — tracks installed
+  // Phase 3a: packages map from youcoded-skills.json — tracks installed
   // versions, sources, and component paths for update detection + uninstall
   packages: Record<string, PackageInfo>;
   // Phase 3b: map of entry id → whether a newer version is in the marketplace
@@ -215,7 +215,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
 
   // Phase 3b: update an installed package (skill plugin or theme) by re-downloading
   // from source and overwriting files at the same install path. Config in
-  // ~/.claude/destincode-config/<id>.json is untouched.
+  // ~/.claude/youcoded-config/<id>.json is untouched.
   const update = useCallback(async (id: string, type: 'skill' | 'theme') => {
     let result: any;
     if (type === 'theme') {

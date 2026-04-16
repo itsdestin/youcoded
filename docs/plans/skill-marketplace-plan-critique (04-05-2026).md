@@ -7,23 +7,23 @@
 ## Critical Issues
 
 **1. Hidden prerequisite: marketplace registry repo doesn't exist**
-`REGISTRY_BASE` points to `anthropics/destincode-marketplace` which isn't a real repo. Every `listMarketplace`, `fetchIndex`, `fetchStats`, `getCuratedDefaults` call silently returns `[]`. The plan has no task to create this repo or even flag it as a prerequisite. Marketplace UX will be a ghost town until that repo exists.
+`REGISTRY_BASE` points to `anthropics/wecoded-marketplace` which isn't a real repo. Every `listMarketplace`, `fetchIndex`, `fetchStats`, `getCuratedDefaults` call silently returns `[]`. The plan has no task to create this repo or even flag it as a prerequisite. Marketplace UX will be a ghost town until that repo exists.
 
 **2. Android `onCreate` deep link won't fire on re-launch (Task 10)**
 The plan stores `pendingImportUrl` and sends it via bridge once connected. But for a `singleTask` or `singleTop` activity, tapping a link when the app is *already running* calls `onNewIntent`, not `onCreate`. The pending import is silently dropped. `onNewIntent` must be overridden, or the pending URL must be reprocessed from the override.
 
 **3. `Environment.getExternalStorageDirectory()` is wrong for Android config path (Task 9)**
-Per `CLAUDE.md`, config lives under the relocated Termux prefix at `context.filesDir.parentFile` — not external storage. Using `getExternalStorageDirectory()` would put `destincode-skills.json` in the wrong place on Android, breaking config persistence entirely. The plan needs to explicitly say: use `Bootstrap.getHomePath()`.
+Per `CLAUDE.md`, config lives under the relocated Termux prefix at `context.filesDir.parentFile` — not external storage. Using `getExternalStorageDirectory()` would put `youcoded-skills.json` in the wrong place on Android, breaking config persistence entirely. The plan needs to explicitly say: use `Bootstrap.getHomePath()`.
 
 ---
 
 ## Moderate Issues
 
 **4. Silent config corruption on bad JSON (Task 2)**
-If `destincode-skills.json` is corrupted, `SkillConfigStore.load()` silently calls `migrate([])`, wiping all user favorites and chips. Should log the error and throw, not auto-reset.
+If `youcoded-skills.json` is corrupted, `SkillConfigStore.load()` silently calls `migrate([])`, wiping all user favorites and chips. Should log the error and throw, not auto-reset.
 
 **5. Non-atomic config writes (Task 2)**
-`fs.writeFileSync` is not atomic. A crash mid-write corrupts the file and triggers the silent reset above. Should write to `destincode-skills.json.tmp` then rename.
+`fs.writeFileSync` is not atomic. A crash mid-write corrupts the file and triggers the silent reset above. Should write to `youcoded-skills.json.tmp` then rename.
 
 **6. `search()` only searches marketplace, not installed skills (Task 3)**
 `search(query)` calls `listMarketplace({ query })`, which fetches from GitHub. If the network is down or the registry doesn't exist yet, searching your own installed skills returns nothing. The installed-skill search should run locally first, merged with marketplace results.

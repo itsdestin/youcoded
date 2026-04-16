@@ -1,9 +1,9 @@
 /**
  * Phase 3c: Per-entry config storage for marketplace packages.
- * Reads/writes ~/.claude/destincode-config/<id>.json.
+ * Reads/writes ~/.claude/youcoded-config/<id>.json.
  *
  * This is separate from the plugin's own config (if any) and from the
- * unified destincode-skills.json. Each marketplace entry that declares
+ * unified youcoded-skills.json. Each marketplace entry that declares
  * a configSchema gets its own JSON file keyed by entry id.
  */
 
@@ -11,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-const CONFIG_DIR = path.join(os.homedir(), '.claude', 'destincode-config');
+const CONFIG_DIR = path.join(os.homedir(), '.claude', 'youcoded-config');
 
 /**
  * Get the config values for a marketplace entry.

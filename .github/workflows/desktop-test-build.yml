@@ -59,6 +59,6 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: destincode-desktop-${{ matrix.name }}
+          name: youcoded-desktop-${{ matrix.name }}
           path: ${{ matrix.artifact }}
           retention-days: 7

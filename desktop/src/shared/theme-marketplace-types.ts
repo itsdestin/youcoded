@@ -26,8 +26,8 @@ export interface ThemeRegistryEntry {
   version?: string;
   created?: string;
   updated?: string;
-  /** 'destinclaude' = official theme, 'community' = user-submitted */
-  source: 'destinclaude' | 'community';
+  /** 'youcoded-core' = official theme, 'community' = user-submitted */
+  source: 'youcoded-core' | 'community';
   /** Auto-detected features: wallpaper, particles, glassmorphism, custom-font, custom-icons, mascot, custom-css */
   features: string[];
   /** URL to the raw manifest.json for download */
@@ -67,7 +67,7 @@ export interface ThemeRegistryIndex {
 
 export interface ThemeMarketplaceFilters {
   query?: string;
-  source?: 'destinclaude' | 'community' | 'all';
+  source?: 'youcoded-core' | 'community' | 'all';
   mode?: 'dark' | 'light' | 'all';
   features?: string[];
   sort?: 'newest' | 'name';

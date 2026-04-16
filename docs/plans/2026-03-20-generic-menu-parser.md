@@ -166,7 +166,7 @@ typealias PromptButton = com.destin.code.ui.PromptButton
 
 - [ ] **Step 2: Verify it compiles**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 3: Commit**
@@ -274,7 +274,7 @@ import com.destin.code.parser.InkSelectParser
 
 - [ ] **Step 3: Verify it compiles**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 4: Commit**
@@ -309,7 +309,7 @@ fun TerminalKeyboardRow(
     modifier: Modifier = Modifier,
 ) {
     var ctrlActive by remember { mutableStateOf(false) }
-    val borderColor = DestinCodeTheme.extended.surfaceBorder
+    val borderColor = YouCodedTheme.extended.surfaceBorder
 
     Row(
         modifier = modifier
@@ -368,7 +368,7 @@ private fun TerminalInputBar(
     onAttachImage: (() -> Unit)? = null,
     attachmentPath: String? = null,
 ) {
-    val borderColor = com.destin.code.ui.theme.DestinCodeTheme.extended.surfaceBorder
+    val borderColor = com.destin.code.ui.theme.YouCodedTheme.extended.surfaceBorder
 
     Column {
         // Input row + floating arrows
@@ -528,7 +528,7 @@ import androidx.compose.material.icons.filled.KeyboardArrowDown
 
 - [ ] **Step 4: Verify it compiles**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 5: Commit**
@@ -545,7 +545,7 @@ git commit -m "feat: floating up/down arrows above send button, add Shift+Tab pi
 
 - [ ] **Step 1: Build debug APK**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -10`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 2: Manual verification checklist**

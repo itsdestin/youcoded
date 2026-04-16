@@ -1,12 +1,12 @@
 // Dev-mode orchestrator: starts Vite renderer, waits for it, then starts Electron main.
-// Reads DESTINCODE_PORT_OFFSET to stay in sync with src/shared/ports.ts so dev can
+// Reads YOUCODED_PORT_OFFSET to stay in sync with src/shared/ports.ts so dev can
 // coexist with a running built app (see docs/local-dev.md in the workspace repo).
 //
 // Replaces the previous one-liner that hardcoded `wait-on http://localhost:5173` —
 // with a port offset the wait-on URL must shift too, or Electron hangs forever.
 const { spawn } = require('child_process');
 
-const offset = Number(process.env.DESTINCODE_PORT_OFFSET ?? 0);
+const offset = Number(process.env.YOUCODED_PORT_OFFSET ?? 0);
 const vitePort = 5173 + (Number.isFinite(offset) ? offset : 0);
 const viteUrl = `http://localhost:${vitePort}`;
 

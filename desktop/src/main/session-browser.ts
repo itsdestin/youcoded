@@ -48,8 +48,8 @@ async function withRetry<T>(fn: () => Promise<T>, attempts: number = 3, delayMs:
 /**
  * Resolves a project slug back to a real filesystem path by walking the
  * directory tree. The naive approach (replace all dashes with separators)
- * breaks when directory names contain hyphens (e.g. "destinclaude-dev"
- * becomes "destinclaude/dev"). This function tries each segment greedily
+ * breaks when directory names contain hyphens (e.g. "youcoded-core-dev"
+ * becomes "youcoded-core/dev"). This function tries each segment greedily
  * against the filesystem, extending with hyphens when a single part
  * doesn't match a real directory.
  */

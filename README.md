@@ -1,4 +1,4 @@
-# DestinCode
+# YouCoded
 
 **Claude Code on every device.** A cross-platform app for Windows, macOS, Linux, and Android — with remote access from any web browser.
 
@@ -6,13 +6,13 @@
 
 ---
 
-## What is DestinCode?
+## What is YouCoded?
 
-DestinCode is an open-source app that puts [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding and AI assistant tool — into a real app with a chat interface, themes, a skill marketplace, and multiplayer games. Sign in with your Claude Pro or Max plan and start using it.
+YouCoded is an open-source app that puts [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding and AI assistant tool — into a real app with a chat interface, themes, a skill marketplace, and multiplayer games. Sign in with your Claude Pro or Max plan and start using it.
 
 It's designed for students, professionals, and anyone who uses AI regularly — not just developers.
 
-**Disclaimer:** DestinCode is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
+**Disclaimer:** YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
 
 ## Features
 
@@ -40,22 +40,22 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 - Build your own themes with `/theme-builder`
 
 **Remote Access**
-- Access DestinCode from any web browser on your network
+- Access YouCoded from any web browser on your network
 - Use it from your phone, tablet, or another computer
 - Same full UI — just open a URL
 
-**Powered by DestinClaude**
-- Optional [DestinClaude toolkit](https://github.com/itsdestin/destinclaude) adds journaling, a personal encyclopedia, task inbox processing, text messaging, and cross-device sync
+**Powered by YouCoded**
+- Optional [YouCoded toolkit](https://github.com/itsdestin/youcoded-core) adds journaling, a personal encyclopedia, task inbox processing, text messaging, and cross-device sync
 - Heavily encouraged but not required — install what you want
 
 ## Platforms
 
 | Platform | Status | Install |
 |----------|--------|---------|
-| Windows | Available | Download `.exe` from [Releases](https://github.com/itsdestin/destincode/releases) |
-| macOS | Available | Download `.dmg` from [Releases](https://github.com/itsdestin/destincode/releases) |
-| Linux | Available | Download `.AppImage` from [Releases](https://github.com/itsdestin/destincode/releases) |
-| Android | Available | Download `.apk` from [Releases](https://github.com/itsdestin/destincode/releases) |
+| Windows | Available | Download `.exe` from [Releases](https://github.com/itsdestin/youcoded/releases) |
+| macOS | Available | Download `.dmg` from [Releases](https://github.com/itsdestin/youcoded/releases) |
+| Linux | Available | Download `.AppImage` from [Releases](https://github.com/itsdestin/youcoded/releases) |
+| Android | Available | Download `.apk` from [Releases](https://github.com/itsdestin/youcoded/releases) |
 | Web browser | Via remote access | Open the app on any device, then access from any browser on your network |
 
 ## Requirements
@@ -69,8 +69,8 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 ### Desktop (Electron)
 
 ```bash
-git clone https://github.com/itsdestin/destincode.git
-cd destincode/desktop
+git clone https://github.com/itsdestin/youcoded.git
+cd youcoded/desktop
 npm ci
 npm run dev       # Development mode with hot reload
 npm test          # Run tests
@@ -80,8 +80,8 @@ npm run build     # Build distributable installer
 ### Android
 
 ```bash
-git clone https://github.com/itsdestin/destincode.git
-cd destincode
+git clone https://github.com/itsdestin/youcoded.git
+cd youcoded
 ./gradlew assembleDebug
 ```
 
@@ -90,7 +90,7 @@ Debug APK at `app/build/outputs/apk/debug/app-debug.apk`.
 ## Project Structure
 
 ```
-destincode/
+youcoded/
   desktop/     # Electron app (Windows, macOS, Linux)
   app/         # Android app (Kotlin + Jetpack Compose)
   scripts/     # Shared build scripts
@@ -107,9 +107,9 @@ Contributions welcome — bug fixes, features, documentation, testing on differe
 
 ## Related Projects
 
-- [DestinClaude](https://github.com/itsdestin/destinclaude) — The plugin toolkit that powers DestinCode's personalization features
-- [DestinCode Themes](https://github.com/itsdestin/destinclaude-themes) — Community theme registry
-- [DestinCode Marketplace](https://github.com/itsdestin/destincode-marketplace) — Skill marketplace registry
+- [YouCoded](https://github.com/itsdestin/youcoded-core) — The plugin toolkit that powers YouCoded's personalization features
+- [YouCoded Themes](https://github.com/itsdestin/wecoded-themes) — Community theme registry
+- [YouCoded Marketplace](https://github.com/itsdestin/wecoded-marketplace) — Skill marketplace registry
 
 ## License
 

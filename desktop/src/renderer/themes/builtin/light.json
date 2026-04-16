@@ -2,7 +2,7 @@
   "name": "Light",
   "slug": "light",
   "dark": false,
-  "source": "destinclaude",
+  "source": "youcoded-core",
   "tokens": {
     "canvas": "#F2F2F2",
     "panel": "#EAEAEA",

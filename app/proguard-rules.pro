@@ -1,4 +1,4 @@
-# DestinCode ProGuard Rules
+# YouCoded ProGuard Rules
 
 # Termux terminal libraries — native JNI and reflection usage
 -keep class com.termux.terminal.** { *; }
@@ -28,5 +28,5 @@
 -dontwarn org.joda.time.**
 
 # Keep our hook event and session classes (used with JSON parsing)
--keep class com.destin.code.parser.HookEvent { *; }
--keep class com.destin.code.parser.HookEvent$* { *; }
+-keep class com.youcoded.app.parser.HookEvent { *; }
+-keep class com.youcoded.app.parser.HookEvent$* { *; }

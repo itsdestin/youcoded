@@ -9,7 +9,7 @@ import React from "react";
 export type TypeChip = "skill" | "theme";
 export type MetaChip = "new" | "popular" | "picks";
 
-// Kept in sync with destincode-marketplace/scripts/schema.js ALLOWED_LIFE_AREAS.
+// Kept in sync with wecoded-marketplace/scripts/schema.js ALLOWED_LIFE_AREAS.
 // If this list drifts, chips will still render but won't filter — the intersection
 // is server-truth via the `lifeArea` entry field.
 const VIBES = ["school", "work", "creative", "health", "personal", "finance", "home"] as const;

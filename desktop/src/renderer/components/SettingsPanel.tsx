@@ -17,7 +17,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 // taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
 const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "Remote Access lets you use DestinCode from any phone, tablet, or other computer — even when you're across the world. Your main computer keeps doing all the actual work; the other device just shows you what's happening and lets you type.",
+    "Remote Access lets you use YouCoded from any phone, tablet, or other computer — even when you're across the world. Your main computer keeps doing all the actual work; the other device just shows you what's happening and lets you type.",
   sections: [
     {
       heading: 'What is Tailscale?',
@@ -786,7 +786,7 @@ function RemoteButton({
                     {!hasClients && (
                       <div className="bg-blue-500/10 border border-blue-500/25 rounded-lg p-3">
                         <p className="text-xs text-blue-400 mb-2">
-                          Remote access lets you use DestinCode from any device — phone, tablet, or another computer.
+                          Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
 
                         {tailscale?.installed && tailscale.url && config?.hasPassword ? (
@@ -1030,7 +1030,7 @@ function RemoteButton({
                       ) : (
                         <div className="py-2">
                           <p className="text-xs text-fg-muted mb-2">
-                            Tailscale is not installed. It creates a secure private network so you can access DestinCode from anywhere.
+                            Tailscale is not installed. It creates a secure private network so you can access YouCoded from anywhere.
                           </p>
                           <button
                             onClick={onRunSetup}
@@ -1189,7 +1189,7 @@ function SkipPermissionsSection({ defaults, onDefaultsChange }: {
                 </div>
                 <div className="px-4 py-3 space-y-2">
                   <p className="text-[10px] text-fg-dim leading-relaxed">
-                    <strong className="text-[#DD4444]">This setting is not recommended or condoned by Claude, Anthropic, or DestinCode.</strong>{' '}
+                    <strong className="text-[#DD4444]">This setting is not recommended or condoned by Claude, Anthropic, or YouCoded.</strong>{' '}
                     Do not enable this unless you fully understand the consequences.
                   </p>
                   <p className="text-[10px] text-fg-dim leading-relaxed">
@@ -1835,7 +1835,7 @@ function ConnectToDesktopButton() {
               )}
 
               <p className="text-[10px] text-fg-faint">
-                Connect to the DestinCode desktop app on your computer. Set up remote access in the desktop app's settings first.
+                Connect to the YouCoded desktop app on your computer. Set up remote access in the desktop app's settings first.
               </p>
             </div>
           </div>
@@ -1946,7 +1946,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
               </div>
               <div className="flex-1 min-w-0">
                 <span className="text-xs text-fg font-medium">Donate</span>
-                <p className="text-[10px] text-fg-muted">Support DestinCode development</p>
+                <p className="text-[10px] text-fg-muted">Support YouCoded development</p>
               </div>
               <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -2006,7 +2006,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
                   </div>
                   <div className="flex-1 min-w-0">
                     <span className="text-xs text-fg font-medium">About</span>
-                    <p className="text-[10px] text-fg-muted">DestinCode {aboutInfo.version}{aboutInfo.build ? ` · ${aboutInfo.build}` : ''}</p>
+                    <p className="text-[10px] text-fg-muted">YouCoded {aboutInfo.version}{aboutInfo.build ? ` · ${aboutInfo.build}` : ''}</p>
                   </div>
                   <svg className={`w-3.5 h-3.5 text-fg-muted shrink-0 transition-transform ${showAbout ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -2019,7 +2019,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
                     <div className="space-y-1.5">
                       <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Disclaimer</h4>
                       <p className="text-[10px] text-fg-dim leading-relaxed">
-                        DestinCode is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
+                        YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
                       </p>
                       <p className="text-[10px] text-fg-dim leading-relaxed">
                         "Claude" and "Claude Code" are trademarks of Anthropic, PBC.
@@ -2035,10 +2035,10 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
                     <div className="space-y-1.5">
                       <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Privacy</h4>
                       <p className="text-[10px] text-fg-dim leading-relaxed">
-                        Your API key is stored locally on your device using Android Keystore encryption. It is never transmitted to or collected by DestinCode.
+                        Your API key is stored locally on your device using Android Keystore encryption. It is never transmitted to or collected by YouCoded.
                       </p>
                       <p className="text-[10px] text-fg-dim leading-relaxed">
-                        DestinCode does not collect, transmit, or store any personal data. All Claude Code interactions happen directly between the on-device CLI and Anthropic's API servers using your own API key.
+                        YouCoded does not collect, transmit, or store any personal data. All Claude Code interactions happen directly between the on-device CLI and Anthropic's API servers using your own API key.
                       </p>
                       <p className="text-[10px] text-fg-dim leading-relaxed">
                         During initial setup, Termux runtime packages are downloaded from packages.termux.dev over HTTPS with SHA256 verification.
@@ -2051,7 +2051,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
                     <div className="space-y-1.5">
                       <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Licenses</h4>
                       <p className="text-[10px] text-fg-dim leading-relaxed">
-                        DestinCode is licensed under the GNU General Public License v3.0 (GPLv3).
+                        YouCoded is licensed under the GNU General Public License v3.0 (GPLv3).
                       </p>
                       <div className="mt-1 space-y-1 pl-2">
                         {[
@@ -2305,7 +2305,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
               </div>
               <div className="flex-1 min-w-0">
                 <span className="text-xs text-fg font-medium">Donate</span>
-                <p className="text-[10px] text-fg-muted">Support DestinCode development</p>
+                <p className="text-[10px] text-fg-muted">Support YouCoded development</p>
               </div>
               <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -2365,7 +2365,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
                 </div>
                 <div className="flex-1 min-w-0">
                   <span className="text-xs text-fg font-medium">About</span>
-                  <p className="text-[10px] text-fg-muted">DestinCode {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''}</p>
+                  <p className="text-[10px] text-fg-muted">YouCoded {typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''}</p>
                 </div>
                 <svg className={`w-3.5 h-3.5 text-fg-muted shrink-0 transition-transform ${showAbout ? 'rotate-90' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                   <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
@@ -2378,7 +2378,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
                   <div className="space-y-1.5">
                     <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Disclaimer</h4>
                     <p className="text-[10px] text-fg-dim leading-relaxed">
-                      DestinCode is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
+                      YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
                     </p>
                     <p className="text-[10px] text-fg-dim leading-relaxed">
                       "Claude" and "Claude Code" are trademarks of Anthropic, PBC.
@@ -2394,7 +2394,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
                   <div className="space-y-1.5">
                     <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Privacy</h4>
                     <p className="text-[10px] text-fg-dim leading-relaxed">
-                      DestinCode does not collect, transmit, or store any telemetry or personal data. All Claude interactions happen between the Claude Code CLI on your machine and Anthropic's servers using your own sign-in.
+                      YouCoded does not collect, transmit, or store any telemetry or personal data. All Claude interactions happen between the Claude Code CLI on your machine and Anthropic's servers using your own sign-in.
                     </p>
                     <p className="text-[10px] text-fg-dim leading-relaxed">
                       Remote access (when enabled) serves the UI over your local network or Tailscale. Remote connections are NOT TLS-encrypted — use Tailscale for sensitive conversations since it provides WireGuard encryption end-to-end.
@@ -2410,7 +2410,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
                   <div className="space-y-1.5">
                     <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Licenses</h4>
                     <p className="text-[10px] text-fg-dim leading-relaxed">
-                      DestinCode is licensed under the GNU General Public License v3.0 (GPLv3).
+                      YouCoded is licensed under the GNU General Public License v3.0 (GPLv3).
                     </p>
                     <div className="mt-1 space-y-1 pl-2">
                       {[

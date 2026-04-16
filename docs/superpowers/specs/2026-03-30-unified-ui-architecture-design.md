@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-30
 **Status:** Proposed
-**Scope:** Both repos — `destincode` (mobile) and `destinclaude` (desktop)
+**Scope:** Both repos — `youcoded` (mobile) and `youcoded-core` (desktop)
 
 ## Summary
 

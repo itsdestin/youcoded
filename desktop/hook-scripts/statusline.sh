@@ -272,9 +272,9 @@ if [[ -f "$UPDATE_FILE" ]] && command -v node &>/dev/null; then
     if [[ -n "$TOOLKIT_INFO" ]]; then
         IFS=$'\t' read -r TK_VER TK_UPD <<< "$TOOLKIT_INFO"
         if [[ "$TK_UPD" == "1" ]]; then
-            printf '%b' "${YELLOW}DestinClaude v${TK_VER} (Update Available)${RESET}  | ${DIM}Run /update${RESET}  "
+            printf '%b' "${YELLOW}YouCoded v${TK_VER} (Update Available)${RESET}  | ${DIM}Run /update${RESET}  "
         else
-            printf '%b' "${DIM}DestinClaude v${TK_VER}${RESET}  "
+            printf '%b' "${DIM}YouCoded v${TK_VER}${RESET}  "
         fi
         # Announcement fragment contains raw ANSI bytes from node — use %s
         # (literal string) not %b (escape-interpreting) to avoid reinterpretation

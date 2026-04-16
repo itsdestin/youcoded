@@ -14,9 +14,9 @@ import path from "path";
 import os from "os";
 import type { IntegrationEntry, IntegrationIndex, IntegrationState } from "../shared/types";
 
-const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/destincode-marketplace/${process.env.DESTINCODE_MARKETPLACE_BRANCH || "master"}`;
+const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${process.env.YOUCODED_MARKETPLACE_BRANCH || "master"}`;
 
-const CACHE_DIR = path.join(os.homedir(), ".claude", "destincode-marketplace-cache");
+const CACHE_DIR = path.join(os.homedir(), ".claude", "youcoded-marketplace-cache");
 const INTEGRATIONS_CACHE = path.join(CACHE_DIR, "integrations.json");
 const MANIFEST_PATH = path.join(os.homedir(), ".claude", "integrations.json");
 const CACHE_TTL = 24 * 60 * 60 * 1000;

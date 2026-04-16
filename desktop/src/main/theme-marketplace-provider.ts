@@ -21,17 +21,17 @@ try { const w = require('which'); ghPath = w.sync('gh'); } catch { /* use bare '
 
 // Registry is fetched from this URL (GitHub Pages or raw GitHub)
 const REGISTRY_URL =
-  'https://raw.githubusercontent.com/itsdestin/destinclaude-themes/main/registry/theme-registry.json';
+  'https://raw.githubusercontent.com/itsdestin/wecoded-themes/main/registry/theme-registry.json';
 
 // Local cache for offline use
-const CACHE_DIR = path.join(os.homedir(), '.claude', 'destincode-cache');
+const CACHE_DIR = path.join(os.homedir(), '.claude', 'youcoded-cache');
 const CACHE_PATH = path.join(CACHE_DIR, 'theme-registry.json');
 const CACHE_TTL_MS = 15 * 60 * 1000; // 15 minutes
 
 // Max total download size per theme (10 MB)
 const MAX_THEME_SIZE_BYTES = 10 * 1024 * 1024;
 
-// Max size per individual file when publishing. Matches the destinclaude-themes
+// Max size per individual file when publishing. Matches the wecoded-themes
 // CI rule — any file over this will be rejected at PR review anyway, so we
 // surface it as a clear pre-flight error instead of a cryptic mid-upload failure.
 const MAX_PUBLISH_FILE_BYTES = 10 * 1024 * 1024;
@@ -68,7 +68,7 @@ export class ThemeMarketplaceProvider {
   private cacheTimestamp = 0;
   // Phase 3a: optional config store for unified package tracking across
   // skills + themes. Passed by ipc-handlers so we write to the same
-  // destincode-skills.json "packages" map.
+  // youcoded-skills.json "packages" map.
   private configStore: SkillConfigStore | null = null;
 
   constructor(configStore?: SkillConfigStore) {
@@ -237,7 +237,7 @@ export class ThemeMarketplaceProvider {
 
   /**
    * Phase 3b: update a theme by re-downloading from registry, overwriting
-   * files at the same slug path. Config in ~/.claude/destincode-config/ is
+   * files at the same slug path. Config in ~/.claude/youcoded-config/ is
    * NOT touched. Returns the new version on success.
    */
   async updateTheme(slug: string): Promise<{ ok: boolean; newVersion?: string; error?: string }> {
@@ -293,12 +293,12 @@ export class ThemeMarketplaceProvider {
   }
 
   /**
-   * Publish a user theme to the destinclaude-themes repo via GitHub PR.
+   * Publish a user theme to the wecoded-themes repo via GitHub PR.
    * Requires `gh` CLI to be authenticated.
    *
    * Flow:
    * 1. Verify gh auth
-   * 2. Fork itsdestin/destinclaude-themes (idempotent — gh handles existing forks)
+   * 2. Fork itsdestin/wecoded-themes (idempotent — gh handles existing forks)
    * 3. Create a branch, commit theme files, push, and open a PR
    */
   async publishTheme(
@@ -332,7 +332,7 @@ export class ThemeMarketplaceProvider {
       throw new Error('GitHub CLI not authenticated. Run `gh auth login` first.');
     }
 
-    const UPSTREAM_REPO = 'itsdestin/destinclaude-themes';
+    const UPSTREAM_REPO = 'itsdestin/wecoded-themes';
     const isUpdate = !!opts.existingEntry;
     const branchName = isUpdate
       ? `update-theme/${slug}-${Date.now()}`
@@ -346,7 +346,7 @@ export class ThemeMarketplaceProvider {
       if (err.code === 'ENOENT') throw new Error('gh CLI not found');
     }
 
-    const FORK_REPO = `${username}/destinclaude-themes`;
+    const FORK_REPO = `${username}/wecoded-themes`;
 
     // 3. Use the GitHub API to create/update files on a branch
     // First, get the default branch SHA
@@ -357,7 +357,7 @@ export class ThemeMarketplaceProvider {
       ]);
       baseSha = stdout.trim();
     } catch {
-      throw new Error('Failed to read upstream repo. Does itsdestin/destinclaude-themes exist?');
+      throw new Error('Failed to read upstream repo. Does itsdestin/wecoded-themes exist?');
     }
 
     // Create the branch on the fork
@@ -391,7 +391,7 @@ export class ThemeMarketplaceProvider {
 
     // Compute a stable content hash of manifest + assets (excluding preview.png
     // and the three ephemeral fields stripped below). Baked into the manifest so
-    // destinclaude-themes CI can copy it into the registry entry without
+    // wecoded-themes CI can copy it into the registry entry without
     // recomputing — this is what lets the app later detect local drift.
     const { computeThemeContentHash } = await import('./theme-content-hash');
     const contentHash = await computeThemeContentHash(themeDir);
@@ -517,8 +517,8 @@ export class ThemeMarketplaceProvider {
       `- **Content hash:** \`${contentHash}\``,
       '',
       isUpdate
-        ? '_Update submitted via DestinCode Theme Marketplace_'
-        : '_Submitted via DestinCode Theme Marketplace_',
+        ? '_Update submitted via YouCoded Theme Marketplace_'
+        : '_Submitted via YouCoded Theme Marketplace_',
     ].join('\n');
 
     try {

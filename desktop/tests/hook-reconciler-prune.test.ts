@@ -21,8 +21,8 @@ describe('extractScriptPath', () => {
   });
 
   it('expands leading ~ to home', () => {
-    const p = extractScriptPath('bash ~/.claude/plugins/destinclaude/hooks/foo.sh');
-    expect(p).toBe(path.join(os.homedir(), '.claude', 'plugins', 'destinclaude', 'hooks', 'foo.sh'));
+    const p = extractScriptPath('bash ~/.claude/plugins/youcoded-core/hooks/foo.sh');
+    expect(p).toBe(path.join(os.homedir(), '.claude', 'plugins', 'youcoded-core', 'hooks', 'foo.sh'));
   });
 
   it('handles commands with trailing args', () => {
@@ -40,7 +40,7 @@ describe('pruneDeadPluginHooks', () => {
   let origHomedir: typeof os.homedir;
 
   beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'destincode-hook-prune-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-hook-prune-'));
     origHomedir = os.homedir;
     (os as any).homedir = () => tmpHome;
   });
@@ -54,7 +54,7 @@ describe('pruneDeadPluginHooks', () => {
   function write(p: string, content: string) { mkdir(path.dirname(p)); fs.writeFileSync(p, content); }
 
   it('prunes a plugin-owned hook whose target file is gone', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     mkdir(pluginRoot);
     // File is intentionally NOT created — simulates a dropped hook
     const settings: any = {
@@ -77,7 +77,7 @@ describe('pruneDeadPluginHooks', () => {
   });
 
   it('keeps a plugin-owned hook whose target file exists', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     const hookPath = path.join(pluginRoot, 'hooks', 'session-start.sh');
     write(hookPath, '#!/bin/bash\n');
     const settings: any = {
@@ -91,7 +91,7 @@ describe('pruneDeadPluginHooks', () => {
   });
 
   it('never prunes a user-added hook outside the plugin root', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     mkdir(pluginRoot);
     // User-added hook points somewhere OUTSIDE the plugin root, and the file is missing.
     // We must NOT touch it — the "never remove user-added hooks" guarantee.
@@ -109,7 +109,7 @@ describe('pruneDeadPluginHooks', () => {
   });
 
   it('prunes one dead hook but keeps sibling hooks in the same matcher entry', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     const liveHook = path.join(pluginRoot, 'hooks', 'session-start.sh');
     write(liveHook, '#!/bin/bash\n');
     const deadHook = path.join(pluginRoot, 'hooks', 'sync.sh'); // file not created
@@ -137,7 +137,7 @@ describe('reconcileHooks integration: prune runs after reconcile', () => {
   let origHomedir: typeof os.homedir;
 
   beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'destincode-hook-reconcile-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-hook-reconcile-'));
     origHomedir = os.homedir;
     (os as any).homedir = () => tmpHome;
   });
@@ -152,7 +152,7 @@ describe('reconcileHooks integration: prune runs after reconcile', () => {
 
   it('returns pruned count in the result', () => {
     // Install a plugin with a manifest that lists session-start.sh only
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     pluginDirsForTest = [pluginRoot];
     const sessionStart = path.join(pluginRoot, 'hooks', 'session-start.sh');
     write(sessionStart, '#!/bin/bash\n');

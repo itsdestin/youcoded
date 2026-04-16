@@ -5,7 +5,7 @@ import chokidar, { type FSWatcher } from 'chokidar';
 import type { BrowserWindow } from 'electron';
 import { migrateBarJsonFiles } from './theme-migration';
 
-const THEMES_DIR = path.join(os.homedir(), '.claude', 'destinclaude-themes');
+const THEMES_DIR = path.join(os.homedir(), '.claude', 'wecoded-themes');
 const WATCHED_EXTS = new Set(['.json', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.css']);
 
 /** Ensures themes dir exists and migrates any bare JSON files to folder format. */
@@ -19,7 +19,7 @@ function ensureAndMigrate(): void {
   }
 }
 
-/** Watches ~/.claude/destinclaude-themes/ for changes.
+/** Watches ~/.claude/wecoded-themes/ for changes.
  *  Sends theme:reload to the renderer when a manifest.json or asset changes. */
 export function startThemeWatcher(win: BrowserWindow): () => void {
   ensureAndMigrate();

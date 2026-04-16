@@ -129,7 +129,7 @@ function AppInner() {
   const [preferencesOpen, setPreferencesOpen] = useState(false);
   // Model/effort/fast picker — opened by bare /model, /fast, /effort (and future status-bar chip clicks)
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
-  // Fast + effort state — surfaced via status bar chips. Persisted to ~/.claude/destincode-model-modes.json.
+  // Fast + effort state — surfaced via status bar chips. Persisted to ~/.claude/youcoded-model-modes.json.
   const [fastMode, setFastMode] = useState(false);
   const [effortLevel, setEffortLevel] = useState<string>('auto');
   // Load persisted modes on mount, and re-load when popup closes (picks up
@@ -150,14 +150,18 @@ function AppInner() {
   const [marketplaceInitialType, setMarketplaceInitialType] = useState<'skill' | 'theme' | undefined>(undefined);
 
   // Open the marketplace destination; `installed` routes to the Library
-  // sibling. Signature preserved so legacy call sites don't need to branch.
-  const openMarketplace = useCallback((tab: 'installed' | 'skills' | 'themes' = 'skills') => {
+  // sibling. Omit `tab` (or pass undefined) to land on the discovery page
+  // with no type chip pre-selected — the command drawer uses this so the
+  // user sees the hero + rails, not a pre-filtered grid.
+  const openMarketplace = useCallback((tab?: 'installed' | 'skills' | 'themes') => {
     if (tab === 'installed') {
       setActiveView('library');
-    } else {
-      setMarketplaceInitialType(tab === 'themes' ? 'theme' : 'skill');
-      setActiveView('marketplace');
+      return;
     }
+    if (tab === 'skills') setMarketplaceInitialType('skill');
+    else if (tab === 'themes') setMarketplaceInitialType('theme');
+    else setMarketplaceInitialType(undefined);
+    setActiveView('marketplace');
   }, []);
   const [publishThemeSlug, setPublishThemeSlug] = useState<string | null>(null);
   const [editorSkillId, setEditorSkillId] = useState<string | null>(null);
@@ -726,7 +730,7 @@ function AppInner() {
       setMyWindowId(id);
       // Stash globally so non-React code (SessionStrip drop resolution) can
       // identify this window without threading a prop through every consumer.
-      (window as any).__destincodeWindowId = id;
+      (window as any).__youcodedWindowId = id;
     }).catch(() => {});
     if (!det) return;
 
@@ -816,7 +820,7 @@ function AppInner() {
         description: 'Resume a previous conversation',
         category: 'personal',
         prompt: '',
-        source: 'destinclaude',
+        source: 'youcoded-core',
         type: 'prompt',
         visibility: 'published',
       };
@@ -1493,7 +1497,7 @@ function AppInner() {
                   onSelect={handleSelectSkill}
                   onClose={handleCloseDrawer}
                   onOpenManager={() => openMarketplace('installed')}
-                  onOpenMarketplace={() => openMarketplace('skills')}
+                  onOpenMarketplace={() => openMarketplace()}
                   onOpenLibrary={() => setActiveView('library')}
                 />
               )}
@@ -1850,7 +1854,7 @@ class RootErrorBoundary extends React.Component<
         }}>
           <div style={{ fontSize: 36, marginBottom: 12 }}>:(</div>
           <div style={{ fontSize: 14, fontWeight: 600, color: '#e55' }}>
-            DestinCode failed to start
+            YouCoded failed to start
           </div>
           <div style={{
             fontSize: 12, color: '#888', marginTop: 8, maxWidth: 400,

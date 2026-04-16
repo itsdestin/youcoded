@@ -146,7 +146,7 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
         {/* Info */}
         <p className="text-[11px] text-fg-muted mb-4 leading-relaxed">
           This will create a pull request to the{' '}
-          <span className="text-fg-2 font-medium">destinclaude-themes</span>{' '}
+          <span className="text-fg-2 font-medium">wecoded-themes</span>{' '}
           repository on GitHub. Your theme will be reviewed and, if approved, added to the marketplace for all users.
           {previewPath && ' A preview image will be included in the submission.'}
         </p>

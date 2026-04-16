@@ -1,4 +1,4 @@
-# DestinCode Plugin Marketplace — Implementation Plan
+# YouCoded Plugin Marketplace — Implementation Plan
 
 **Date:** 2026-04-06
 **Design doc:** `plugin-marketplace-design (04-06-2026).md`
@@ -17,12 +17,12 @@ Three workstreams, buildable in sequence:
 
 ## Workstream 1: Sync Script
 
-**Goal:** Auto-populate `destincode-marketplace/index.json` with all ~123 official Anthropic plugins.
+**Goal:** Auto-populate `wecoded-marketplace/index.json` with all ~123 official Anthropic plugins.
 
 ### Step 1.1: Create overrides directory
 
 ```
-destincode-marketplace/
+wecoded-marketplace/
 +-- index.json          (existing - 29 entries)
 +-- overrides/          (NEW)
 |   +-- .gitkeep
@@ -32,7 +32,7 @@ destincode-marketplace/
 
 ### Step 1.2: Build sync.js
 
-**File:** `destincode-marketplace/scripts/sync.js`
+**File:** `wecoded-marketplace/scripts/sync.js`
 
 The script:
 1. Fetches `marketplace.json` from the official registry via GitHub raw URL:
@@ -54,8 +54,8 @@ The script:
    - `source.source === "git-subdir"` -> `sourceType: "git-subdir"`, `sourceRef: source.url`, `sourceSubdir: source.path`
    - `source.source === "github"` -> `sourceType: "url"`, `sourceRef: "https://github.com/" + source.repo + ".git"`
 4. Checks for `overrides/<id>.json` and merges any custom fields on top
-5. Loads existing `index.json`, separates DestinClaude entries (`sourceMarketplace: "destinclaude"` or no `sourceMarketplace`)
-6. Combines: DestinClaude entries first, then upstream entries
+5. Loads existing `index.json`, separates YouCoded entries (`sourceMarketplace: "youcoded-core"` or no `sourceMarketplace`)
+6. Combines: YouCoded entries first, then upstream entries
 7. Validates: no duplicate ids, all entries have id + type + displayName + description
 8. Writes `index.json`
 
@@ -65,13 +65,13 @@ The script:
 
 ### Step 1.3: Backfill sourceMarketplace on existing entries
 
-Add `"sourceMarketplace": "destinclaude"` to all 29 existing entries in `index.json` so the sync script can distinguish them from upstream imports.
+Add `"sourceMarketplace": "youcoded-core"` to all 29 existing entries in `index.json` so the sync script can distinguish them from upstream imports.
 
 ### Step 1.4: Category handling
 
 Upstream uses: `productivity`, `security`, `database`, `deployment`, `monitoring`, `learning`, `design`, `testing`, `automation`, `location`, `math`, `development`.
 
-Current DestinCode categories: `personal`, `work`, `development`, `admin`, `other`.
+Current YouCoded categories: `personal`, `work`, `development`, `admin`, `other`.
 
 **Action:** Keep all upstream categories as-is. The React UI filter component should build the filter list dynamically from categories present in the index, not from a hardcoded list.
 
@@ -91,7 +91,7 @@ class PluginInstaller(
     private val configStore: SkillConfigStore,
 ) {
     private val pluginsDir = File(homeDir, ".claude/plugins")
-    private val cacheDir = File(homeDir, ".claude/destincode-marketplace-cache")
+    private val cacheDir = File(homeDir, ".claude/wecoded-marketplace-cache")
     private val installsInProgress = mutableSetOf<String>()
 
     sealed class InstallResult {
@@ -113,7 +113,7 @@ class PluginInstaller(
 `install(entry)`:
 1. Check `installsInProgress` — return `InProgress` if already installing this id
 2. Check `hasConflict(id)` — return `AlreadyInstalled("Claude Code")` if in `installed_plugins.json`
-3. Check `isInstalled(id)` — return `AlreadyInstalled("DestinCode")` if already at `plugins/<id>/`
+3. Check `isInstalled(id)` — return `AlreadyInstalled("YouCoded")` if already at `plugins/<id>/`
 4. Add to `installsInProgress`
 5. Dispatch based on `sourceType`:
    - `"local"` -> `installFromLocal(entry)`
@@ -212,7 +212,7 @@ For each installed plugin, check if the directory still exists at the recorded `
 Changes needed:
 - **Install button states:** `Get` -> `Installing...` (disabled) -> `Installed` / `Error`
 - **Handle new response statuses:** `"installing"`, `"already_installed"`, `"failed"`
-- **Show `sourceMarketplace` badge** on plugin cards (e.g., "Official", "Community", "DestinClaude")
+- **Show `sourceMarketplace` badge** on plugin cards (e.g., "Official", "Community", "YouCoded")
 - **Category filter:** dynamically build filter list from categories present in the index
 - **Conflict warning:** if `already_installed` with `via: "Claude Code"`, show informative message
 
@@ -230,7 +230,7 @@ TypeScript port of the same logic. Uses safe process execution for git operation
 
 ### Step 3.1: Add step to /update command
 
-**File:** `~/.claude/plugins/destinclaude/core/commands/update.md`
+**File:** `~/.claude/plugins/youcoded-core/core/commands/update.md`
 
 Add a new step after step 17 (Register missing plugins) and before step 18 (Verify):
 
@@ -245,11 +245,11 @@ Add a new step after step 17 (Register missing plugins) and before step 18 (Veri
 
 ### Step 3.2: Add phase_marketplace_plugins to post-update.sh
 
-**File:** `~/.claude/plugins/destinclaude/scripts/post-update.sh`
+**File:** `~/.claude/plugins/youcoded-core/scripts/post-update.sh`
 
 New phase function that:
 
-1. Reads `installed_plugins` from `destincode-skills.json`
+1. Reads `installed_plugins` from `youcoded-skills.json`
 2. If none installed, emits `[INFO]` and returns
 3. Updates the marketplace repo cache (`git pull` in the cache dir)
 4. For each installed plugin based on `sourceType`:
@@ -303,7 +303,7 @@ Add `marketplace-plugins` case to the dispatcher `case` statement and to the ver
 ## Testing Checklist
 
 - [ ] Sync script produces valid index.json with all ~123 upstream entries
-- [ ] Sync preserves all 29 existing DestinClaude entries unchanged
+- [ ] Sync preserves all 29 existing YouCoded entries unchanged
 - [ ] Override files merge correctly (custom description overrides upstream)
 - [ ] "local" source plugin installs from cache copy
 - [ ] "url" source plugin installs via git clone
@@ -331,6 +331,6 @@ Add `marketplace-plugins` case to the dispatcher `case` statement and to the ver
 | Git clone fails on Android (SELinux/linker64) | Medium | Test early in Phase B. Fallback: download tarball via GitHub API |
 | Large plugin repos slow to clone | Low | `--depth 1` keeps clones shallow. Sparse checkout for git-subdir |
 | Anthropic changes marketplace.json schema | Low | Sync script validates schema; aborts on unexpected format |
-| Plugin not discovered at ~/.claude/plugins/<name>/ | Very Low | Verified empirically (DestinClaude pattern). Fallback: write to installed_plugins.json |
-| Two plugins with same name from different sources | Low | Sync script deduplicates; DestinClaude entries always win |
+| Plugin not discovered at ~/.claude/plugins/<name>/ | Very Low | Verified empirically (YouCoded pattern). Fallback: write to installed_plugins.json |
+| Two plugins with same name from different sources | Low | Sync script deduplicates; YouCoded entries always win |
 | Plugin has post-install setup (npm install, etc.) | Medium | Most MCP plugins use npx (auto-downloads). Document any that need manual setup |

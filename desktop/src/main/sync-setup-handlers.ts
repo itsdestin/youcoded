@@ -138,8 +138,8 @@ export async function checkSyncPrereqs(backend: 'drive' | 'github' | 'icloud'): 
       try {
         const stat = fs.statSync(candidate);
         if (stat.isDirectory()) {
-          // Return the DestinClaude subfolder path (create if parent exists)
-          result.icloudPath = path.join(candidate, 'DestinClaude');
+          // Return the YouCoded subfolder path (create if parent exists)
+          result.icloudPath = path.join(candidate, 'YouCoded');
           break;
         }
       } catch { /* not found, try next */ }
@@ -301,7 +301,7 @@ export async function createGithubRepo(repoName: string): Promise<{
     'repo', 'create',
     `${username}/${repoName}`,
     '--private',
-    '--description', 'Personal Claude data backup (managed by DestinCode)',
+    '--description', 'Personal Claude data backup (managed by YouCoded)',
   ], { timeout: REPO_TIMEOUT });
 
   if (result.code !== 0) {

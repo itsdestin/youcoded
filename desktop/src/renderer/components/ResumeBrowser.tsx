@@ -83,11 +83,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Show Complete: when off, sessions marked complete are hidden (default).
   // Persists across opens via localStorage so Destin doesn't re-toggle each time.
   const [showComplete, setShowComplete] = useState<boolean>(() => {
-    try { return localStorage.getItem('destincode-resume-show-complete') === '1'; }
+    try { return localStorage.getItem('youcoded-resume-show-complete') === '1'; }
     catch { return false; }
   });
   useEffect(() => {
-    try { localStorage.setItem('destincode-resume-show-complete', showComplete ? '1' : '0'); } catch {}
+    try { localStorage.setItem('youcoded-resume-show-complete', showComplete ? '1' : '0'); } catch {}
   }, [showComplete]);
 
   // Sessions the user flagged Complete during the current open. They stay

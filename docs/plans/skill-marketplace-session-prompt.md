@@ -6,19 +6,19 @@ Copy everything below the line into a new Claude Code session.
 
 Execute the skill marketplace implementation plan using subagent-driven development.
 
-**Plan:** `~/destincode/docs/plans/skill-marketplace-plan (04-05-2026).md`
-**Design spec:** `~/destincode/docs/specs/skill-marketplace-design (04-05-2026).md`
-**Plan critique (all fixes already applied):** `~/destincode/docs/plans/skill-marketplace-plan-critique (04-05-2026).md`
+**Plan:** `~/youcoded/docs/plans/skill-marketplace-plan (04-05-2026).md`
+**Design spec:** `~/youcoded/docs/specs/skill-marketplace-design (04-05-2026).md`
+**Plan critique (all fixes already applied):** `~/youcoded/docs/plans/skill-marketplace-plan-critique (04-05-2026).md`
 
 **Worktree already set up:**
-- Path: `~/destinclaude/.worktrees/feat-skill-marketplace`
+- Path: `~/youcoded-core/.worktrees/feat-skill-marketplace`
 - Branch: `feat/skill-marketplace`
-- Desktop source: `~/destinclaude/.worktrees/feat-skill-marketplace/desktop/src/`
+- Desktop source: `~/youcoded-core/.worktrees/feat-skill-marketplace/desktop/src/`
 - npm install already done, TypeScript compiles clean
 
-**Android repo (not in worktree):** `~/destincode/app/src/main/` — Tasks 9-10 modify this repo directly.
+**Android repo (not in worktree):** `~/youcoded/app/src/main/` — Tasks 9-10 modify this repo directly.
 
-**Visual mockups** (for Tasks 7-8): `~/destincode/.superpowers/brainstorm/49790-1775375392/content/marketplace-hybrid-v2.html`
+**Visual mockups** (for Tasks 7-8): `~/youcoded/.superpowers/brainstorm/49790-1775375392/content/marketplace-hybrid-v2.html`
 
 ## Execution order
 
@@ -27,7 +27,7 @@ Task 12 (GitHub registry scaffold) has NO code dependencies — run it in parall
 
 ## Key implementation notes
 
-- **Always edit source files** in the worktree (`~/destinclaude/.worktrees/feat-skill-marketplace/desktop/src/`), never the Vite bundles in `~/destincode/app/src/main/assets/web/`
+- **Always edit source files** in the worktree (`~/youcoded-core/.worktrees/feat-skill-marketplace/desktop/src/`), never the Vite bundles in `~/youcoded/app/src/main/assets/web/`
 - **IPC constants are duplicated by design** — Electron sandbox prevents imports in preload.ts. Update BOTH `shared/types.ts` and `preload.ts` when adding channels.
 - **Android config path** must use `Bootstrap.getHomePath()`, NOT `Environment.getExternalStorageDirectory()`
 - **QR code**: use `qrcode` npm package, not inline generation

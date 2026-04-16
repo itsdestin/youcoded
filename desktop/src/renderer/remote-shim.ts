@@ -248,7 +248,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           setConnectionState('connected');
           // Store token for reconnection
           const token = msg.token;
-          localStorage.setItem('destincode-remote-token', token);
+          localStorage.setItem('youcoded-remote-token', token);
           // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
           // the desktop server responds with platform:"electron" but we're still on a phone
           if (!preservePlatform) {
@@ -287,7 +287,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       if (isLocalBridge) {
         retryLocalBridge();
       } else {
-        const storedToken = localStorage.getItem('destincode-remote-token');
+        const storedToken = localStorage.getItem('youcoded-remote-token');
         if (storedToken) {
           scheduleReconnect(storedToken);
         }
@@ -306,8 +306,8 @@ function scheduleReconnect(token: string): void {
     reconnectAttempts = 0;
     reconnectDelay = 1000;
     targetUrl = null;
-    localStorage.removeItem('destincode-remote-target');
-    localStorage.removeItem('destincode-remote-token');
+    localStorage.removeItem('youcoded-remote-target');
+    localStorage.removeItem('youcoded-remote-token');
     // Reconnect to local bridge
     connect('android-local', false).catch(() => {});
     import('./platform').then(({ setConnectionMode }) => setConnectionMode('local'));
@@ -364,7 +364,7 @@ export function disconnect(): void {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
   if (ws) { ws.close(); ws = null; }
   setConnectionState('disconnected');
-  localStorage.removeItem('destincode-remote-token');
+  localStorage.removeItem('youcoded-remote-token');
 }
 
 /**
@@ -416,7 +416,7 @@ export async function connectToHost(host: string, port: number, password: string
   try {
     await connect(password, false);
     // Connection succeeded — persist remote target for session restore
-    localStorage.setItem('destincode-remote-target', targetUrl);
+    localStorage.setItem('youcoded-remote-target', targetUrl);
     preservePlatform = false;
     setConnectionMode('remote');
   } catch (err) {
@@ -424,7 +424,7 @@ export async function connectToHost(host: string, port: number, password: string
     // Reset remote state and reconnect to local bridge
     targetUrl = null;
     preservePlatform = false;
-    localStorage.removeItem('destincode-remote-target');
+    localStorage.removeItem('youcoded-remote-target');
     connect('android-local', false).catch(() => {});
     throw err;
   }
@@ -446,7 +446,7 @@ export async function disconnectFromHost(): Promise<void> {
 
   // Clear remote target — getWsUrl() falls back to localhost:9901
   targetUrl = null;
-  localStorage.removeItem('destincode-remote-target');
+  localStorage.removeItem('youcoded-remote-target');
   preservePlatform = false;
 
   // Reconnect to local bridge
@@ -518,11 +518,11 @@ export function installShim(): void {
   // Android WebView (file://) always starts in local mode — clear any stale remote target
   // that could redirect connect('android-local') to a dead remote server
   if (location.protocol === 'file:') {
-    localStorage.removeItem('destincode-remote-target');
-    localStorage.removeItem('destincode-remote-token');
+    localStorage.removeItem('youcoded-remote-target');
+    localStorage.removeItem('youcoded-remote-token');
   } else {
     // Browser: restore remote target from previous session (e.g., page reload while in remote mode)
-    const savedTarget = localStorage.getItem('destincode-remote-target');
+    const savedTarget = localStorage.getItem('youcoded-remote-target');
     if (savedTarget) {
       targetUrl = savedTarget;
       preservePlatform = true; // Will be set on next auth:ok

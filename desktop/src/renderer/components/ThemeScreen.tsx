@@ -9,7 +9,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 // the (i) icon in the popup header — see ThemeScreen's `showInfo` state.
 const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "Appearance lets you customize how DestinCode looks — colors, fonts, animations, and visual effects. You can use a built-in theme, download one from the marketplace, or build your own just by describing it to Claude.",
+    "Appearance lets you customize how YouCoded looks — colors, fonts, animations, and visual effects. You can use a built-in theme, download one from the marketplace, or build your own just by describing it to Claude.",
   sections: [
     {
       heading: "What's a theme?",
@@ -36,7 +36,7 @@ const APPEARANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
         { term: 'App feels slow or laggy', text: 'Turn on "Reduce Visual Effects". Particles and glass blur use the most power — disabling them usually fixes it instantly.' },
         { term: "Can't edit most of a theme", text: "Only themes you made yourself can have their accent/roundness/particles changed. Built-in themes are read-only aside from glass tuning. Tap 'Build New Theme with Claude' to make your own copy." },
         { term: "Theme cycle isn't switching", text: 'Open the status bar widget editor and use the pencil next to "Theme" to pick at least 2 themes for the cycle.' },
-        { term: 'Custom font not showing', text: "DestinCode reads fonts installed on your computer. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
+        { term: 'Custom font not showing', text: "YouCoded reads fonts installed on your computer. If the font you want isn't installed system-wide, it can't be selected here. Install it through your operating system first." },
         { term: 'Published theme not appearing in marketplace', text: 'Theme submissions are reviewed before they go live. Yours should appear within a day or two if it passes the safety checks.' },
       ],
     },

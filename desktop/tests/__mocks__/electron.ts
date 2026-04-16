@@ -10,7 +10,7 @@ export const app = {
   on: vi.fn(),
   quit: vi.fn(),
   isReady: vi.fn(() => true),
-  getName: vi.fn(() => 'destincode-test'),
+  getName: vi.fn(() => 'youcoded-test'),
 };
 
 export const protocol = {

@@ -26,7 +26,7 @@ export function computeOnAccent(accentHex: string): '#FFFFFF' | '#000000' {
  *  Most common: a fixed/absolute rule at z-index 0+ rendering ABOVE chat bubbles.
  *  The old body::before/::after wallpaper+pattern template prescribed z-index: 0,
  *  which stopped being correct when the terminal switched to container-opacity
- *  (Apr 8, destincode commit e3cc7ce2). Negative z-index is the right value now. */
+ *  (Apr 8, youcoded commit e3cc7ce2). Negative z-index is the right value now. */
 export function lintCustomCss(css: string | undefined, slug: string): void {
   if (!css) return;
   // Match rule blocks with position:fixed|absolute AND z-index: 0 or positive integer.

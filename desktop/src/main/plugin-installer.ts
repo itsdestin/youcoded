@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import { execFile } from 'child_process';
 import {
-  DESTINCODE_PLUGINS_DIR,
+  YOUCODED_PLUGINS_DIR,
   pluginInstallDir,
   registerPluginInstall,
   unregisterPluginInstall,
@@ -11,7 +11,7 @@ import {
 
 /**
  * Installs Claude Code plugins under our own marketplace root at
- * ~/.claude/marketplaces/destincode/plugins/<name>/ and wires them into all
+ * ~/.claude/marketplaces/youcoded/plugins/<name>/ and wires them into all
  * four Claude Code registries (settings.json, installed_plugins.json,
  * known_marketplaces.json, marketplace.json) so /reload-plugins picks them
  * up as first-class plugins.
@@ -27,10 +27,10 @@ import {
  * - "git-subdir": git clone + sparse checkout a subdirectory
  */
 
-// All DestinCode-installed plugins now live under the marketplace root so
+// All YouCoded-installed plugins now live under the marketplace root so
 // Claude Code's non-cache plugin loader (t71) can resolve `<marketplace>/<source>`.
-const PLUGINS_DIR = DESTINCODE_PLUGINS_DIR;
-const CACHE_DIR = path.join(os.homedir(), '.claude', 'destincode-marketplace-cache');
+const PLUGINS_DIR = YOUCODED_PLUGINS_DIR;
+const CACHE_DIR = path.join(os.homedir(), '.claude', 'youcoded-marketplace-cache');
 const MARKETPLACE_REPO = 'https://github.com/anthropics/claude-plugins-official.git';
 const GIT_TIMEOUT = 120_000; // 2 minutes
 
@@ -46,19 +46,19 @@ function isContainedIn(child: string, parent: string): boolean {
 
 /**
  * Phase 3a: Map sourceMarketplace to its git repo URL.
- * DestinCode/DestinClaude local entries live in the itsdestin/destincode-marketplace
+ * YouCoded/YouCoded local entries live in the itsdestin/wecoded-marketplace
  * repo, while Anthropic upstream entries live in anthropics/claude-plugins-official.
  */
 export function getMarketplaceRepo(sourceMarketplace?: string): string {
-  if (sourceMarketplace === 'destincode' || sourceMarketplace === 'destinclaude') {
-    return 'https://github.com/itsdestin/destincode-marketplace.git';
+  if (sourceMarketplace === 'youcoded' || sourceMarketplace === 'youcoded-core') {
+    return 'https://github.com/itsdestin/wecoded-marketplace.git';
   }
   return MARKETPLACE_REPO;
 }
 
 function getCacheRepoName(sourceMarketplace?: string): string {
-  if (sourceMarketplace === 'destincode' || sourceMarketplace === 'destinclaude') {
-    return 'destincode-marketplace';
+  if (sourceMarketplace === 'youcoded' || sourceMarketplace === 'youcoded-core') {
+    return 'wecoded-marketplace';
   }
   return 'claude-plugins-official';
 }
@@ -159,7 +159,7 @@ function copyDirSync(src: string, dest: string): void {
 /** Check if a plugin is already installed via Claude Code's /plugin install.
  * Claude Code's plugin cache dir (`tW()` in the CLI) is `~/.claude/plugins/`,
  * so `installed_plugins.json` lives there — not at `~/.claude/`. Skip keys
- * ending in `@destincode` since those are ours, not a foreign conflict. */
+ * ending in `@youcoded` since those are ours, not a foreign conflict. */
 export function hasConflict(id: string): boolean {
   try {
     const installedPath = path.join(os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
@@ -167,7 +167,7 @@ export function hasConflict(id: string): boolean {
     const data = JSON.parse(fs.readFileSync(installedPath, 'utf8'));
     const plugins = data.plugins || {};
     return Object.keys(plugins).some(key =>
-      key.startsWith(`${id}@`) && !key.endsWith('@destincode')
+      key.startsWith(`${id}@`) && !key.endsWith('@youcoded')
     );
   } catch {
     return false;
@@ -203,7 +203,7 @@ const CACHE_REFRESH_MS = 60 * 60 * 1000; // 1 hour
 
 function getCacheTimestamp(cacheRepo: string): number {
   try {
-    const stampFile = path.join(cacheRepo, '.destincode-last-pull');
+    const stampFile = path.join(cacheRepo, '.youcoded-last-pull');
     if (!fs.existsSync(stampFile)) return 0;
     return parseInt(fs.readFileSync(stampFile, 'utf8'), 10) || 0;
   } catch { return 0; }
@@ -211,7 +211,7 @@ function getCacheTimestamp(cacheRepo: string): number {
 
 function setCacheTimestamp(cacheRepo: string): void {
   try {
-    fs.writeFileSync(path.join(cacheRepo, '.destincode-last-pull'), String(Date.now()));
+    fs.writeFileSync(path.join(cacheRepo, '.youcoded-last-pull'), String(Date.now()));
   } catch { /* non-fatal — just means we'll retry next install */ }
 }
 
@@ -232,13 +232,13 @@ function readCachedPluginVersion(sourceDir: string): string | null {
 }
 
 async function installFromLocal(id: string, sourceRef: string, sourceMarketplace?: string, expectedVersion?: string): Promise<InstallResult> {
-  // Phase 3a: source-aware repo selection — DestinCode entries clone from
-  // itsdestin/destincode-marketplace, not the Anthropic upstream repo.
-  // DESTINCODE_MARKETPLACE_BRANCH overrides the branch for test harnesses
+  // Phase 3a: source-aware repo selection — YouCoded entries clone from
+  // itsdestin/wecoded-marketplace, not the Anthropic upstream repo.
+  // YOUCODED_MARKETPLACE_BRANCH overrides the branch for test harnesses
   // (e.g., running the decomposition-v3 branch on a scratch machine).
   const cacheRepo = path.join(CACHE_DIR, getCacheRepoName(sourceMarketplace));
   const repoUrl = getMarketplaceRepo(sourceMarketplace);
-  const marketplaceBranch = process.env.DESTINCODE_MARKETPLACE_BRANCH || 'master';
+  const marketplaceBranch = process.env.YOUCODED_MARKETPLACE_BRANCH || 'master';
 
   // Ensure marketplace repo is cloned, or refresh it if:
   //   (a) it's been >1h since the last pull (time-based refresh), OR
@@ -268,7 +268,7 @@ async function installFromLocal(id: string, sourceRef: string, sourceMarketplace
   if (shouldRefresh) {
     const fetchResult = await runGit('-C', cacheRepo, 'fetch', 'origin');
     if (fetchResult.ok) {
-      // Default branch is master per workspace convention; DESTINCODE_MARKETPLACE_BRANCH
+      // Default branch is master per workspace convention; YOUCODED_MARKETPLACE_BRANCH
       // overrides. If a marketplace repo later standardizes on `main`, detect
       // origin/HEAD here.
       const resetResult = await runGit('-C', cacheRepo, 'reset', '--hard', `origin/${marketplaceBranch}`);
@@ -353,11 +353,11 @@ export async function installPlugin(entry: MarketplaceEntry): Promise<InstallRes
     // both fail if parent dirs are missing.
     fs.mkdirSync(PLUGINS_DIR, { recursive: true });
 
-    // Guard: already installed via DestinCode
+    // Guard: already installed via YouCoded
     const targetDir = path.join(PLUGINS_DIR, id);
     const dotJson = path.join(targetDir, '.claude-plugin', 'plugin.json');
     if (fs.existsSync(targetDir) && (fs.existsSync(dotJson) || fs.existsSync(path.join(targetDir, 'plugin.json')))) {
-      return { status: 'already_installed', via: 'DestinCode' };
+      return { status: 'already_installed', via: 'YouCoded' };
     }
 
     let result: InstallResult;
@@ -428,12 +428,12 @@ export async function uninstallPlugin(id: string): Promise<boolean> {
     if (fs.existsSync(targetDir)) {
       fs.rmSync(targetDir, { recursive: true, force: true });
     }
-    // Clean up stale install locations from earlier DestinCode versions:
+    // Clean up stale install locations from earlier YouCoded versions:
     //   (a) ~/.claude/plugins/<id>/                         (pre-registry)
-    //   (b) ~/.claude/marketplaces/destincode/plugins/<id>/ (first registry fix, wrong path)
+    //   (b) ~/.claude/marketplaces/youcoded/plugins/<id>/ (first registry fix, wrong path)
     const legacyDirs = [
       path.join(os.homedir(), '.claude', 'plugins', id),
-      path.join(os.homedir(), '.claude', 'marketplaces', 'destincode', 'plugins', id),
+      path.join(os.homedir(), '.claude', 'marketplaces', 'youcoded', 'plugins', id),
     ];
     for (const legacyDir of legacyDirs) {
       const parent = path.dirname(legacyDir);

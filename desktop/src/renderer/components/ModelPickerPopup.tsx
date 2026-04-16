@@ -10,7 +10,7 @@ import { FastIcon } from './Icons';
 //   • Typing /model, /fast, or /effort with no args
 //   • Future: status bar fast/effort chips
 //
-// Effort and fast are DestinCode-local state (Claude Code doesn't transcribe
+// Effort and fast are YouCoded-local state (Claude Code doesn't transcribe
 // them) — we trust the popup as source of truth and forward to PTY on change.
 
 const MODELS: { id: ModelAlias; label: string }[] = [

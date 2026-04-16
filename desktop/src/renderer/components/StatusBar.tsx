@@ -300,7 +300,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         label: 'Sync Warnings',
         defaultVisible: true,
         description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
-        bestFor: 'DestinClaude toolkit users. Keeps you aware of sync issues that could cause data loss.',
+        bestFor: 'YouCoded toolkit users. Keeps you aware of sync issues that could cause data loss.',
       },
       {
         id: 'theme',
@@ -313,7 +313,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'version',
         label: 'Version',
         defaultVisible: true,
-        description: 'Current DestinCode version. Glows when an update is available.',
+        description: 'Current YouCoded version. Glows when an update is available.',
         bestFor: 'Everyone. Stay up to date with the latest features and fixes.',
       },
     ],
@@ -325,7 +325,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'announcement',
         label: 'Announcement',
         defaultVisible: true,
-        description: 'Platform announcements from the DestinCode team — new releases, outages, tips. Pulled every 6 hours from the announcement cache.',
+        description: 'Platform announcements from the YouCoded team — new releases, outages, tips. Pulled every 6 hours from the announcement cache.',
         bestFor: 'Everyone. Hides automatically when there is no active announcement.',
       },
     ],
@@ -336,7 +336,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
 const ALL_WIDGET_DEFS = WIDGET_CATEGORIES.flatMap((c) => c.widgets);
 const DEFAULT_VISIBLE = new Set<WidgetId>(ALL_WIDGET_DEFS.filter((w) => w.defaultVisible).map((w) => w.id));
 
-const STORAGE_KEY = 'destincode-statusbar-widgets';
+const STORAGE_KEY = 'youcoded-statusbar-widgets';
 
 function loadVisibility(): Set<WidgetId> {
   try {
@@ -876,7 +876,7 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
         </span>
       )}
 
-      {/* Version pill — shows DestinCode app version, glows yellow when update available */}
+      {/* Version pill — shows YouCoded app version, glows yellow when update available */}
       {show('version') && updateStatus && (
         <button
           onClick={() => {
@@ -891,7 +891,7 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
               ? 'bg-[rgba(234,179,8,0.12)] border-[rgba(234,179,8,0.5)] hover:bg-[rgba(234,179,8,0.22)] animate-[version-glow_2s_ease-in-out_infinite]'
               : 'bg-panel border-edge-dim hover:bg-inset'
           }`}
-          title={updateStatus.update_available ? `Update available: v${updateStatus.latest} — click to download` : `DestinCode v${updateStatus.current}`}
+          title={updateStatus.update_available ? `Update available: v${updateStatus.latest} — click to download` : `YouCoded v${updateStatus.current}`}
         >
           {updateStatus.update_available ? (
             <span className="text-[#EAB308] font-medium">

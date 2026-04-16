@@ -1,5 +1,5 @@
-appId: com.destinclaude.desktop
-productName: DestinCode
+appId: com.youcoded.desktop
+productName: YouCoded
 directories:
   output: release
   buildResources: assets

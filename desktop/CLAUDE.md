@@ -1,4 +1,4 @@
-# DestinCode
+# YouCoded
 
 Electron + React app that wraps Claude Code CLI in a GUI.
 
@@ -20,14 +20,14 @@ Electron + React app that wraps Claude Code CLI in a GUI.
 - **TerminalRegistry** (`src/renderer/hooks/terminal-registry.ts`) — Coordinates xterm.js instances, screen buffer reads, and write-completion notifications. Permission prompt detection depends on the write-callback pub/sub here — do not bypass it by reading the buffer on raw `pty:output` events
 - **PermissionMode** (`src/shared/types.ts`) — `'normal' | 'auto-accept' | 'plan' | 'bypass'`. The HeaderBar badge cycles through these on click by sending Shift+Tab (`\x1b[Z`) to the PTY. Bypass mode only appears in sessions created with `skipPermissions: true`
 - **RemoteServer** (`src/main/remote-server.ts`) — HTTP + WebSocket server for remote browser access. Handles auth tokens, PTY buffer replay, hook event relay, transcript event relay, and cross-device session sync
-- **RemoteConfig** (`src/main/remote-config.ts`) — Reads/writes `~/.claude/destincode-remote.json` for port, password hash, and Tailscale trust settings
-- **SkillScanner** (`src/main/skill-scanner.ts`) — Scans installed skills: (1) DestinClaude skills at `~/.claude/plugins/destinclaude/skills/`, (2) marketplace plugins via `~/.claude/plugins/installed_plugins.json` (inside the plugin cache dir — an earlier version wrote to `~/.claude/installed_plugins.json`, fixed in the marketplace-paths refactor)
+- **RemoteConfig** (`src/main/remote-config.ts`) — Reads/writes `~/.claude/youcoded-remote.json` for port, password hash, and Tailscale trust settings
+- **SkillScanner** (`src/main/skill-scanner.ts`) — Scans installed skills: (1) YouCoded skills at `~/.claude/plugins/youcoded-core/skills/`, (2) marketplace plugins via `~/.claude/plugins/installed_plugins.json` (inside the plugin cache dir — an earlier version wrote to `~/.claude/installed_plugins.json`, fixed in the marketplace-paths refactor)
 - **LocalSkillProvider** (`src/main/skill-provider.ts`) — Skill marketplace backend: discovery, search, install, uninstall, overrides, sharing. Implements the `SkillProvider` interface used by both IPC handlers and RemoteServer
-- **PluginInstaller** (`src/main/plugin-installer.ts`) — Installs Claude Code plugins to `~/.claude/plugins/marketplaces/destincode/plugins/<name>/` and wires them into all four Claude Code registries via `ClaudeCodeRegistry`. Source types: git clone (url), copy from cache (local), sparse checkout (git-subdir)
-- **ClaudeCodeRegistry** (`src/main/claude-code-registry.ts`) — Writes the four on-disk registries that Claude Code v2.1+ requires to recognize a plugin: `settings.json` (`enabledPlugins["id@destincode"]: true`), `installed_plugins.json` (v2 entry with absolute `installPath`), `known_marketplaces.json` (marketplace source), and `marketplaces/destincode/.claude-plugin/marketplace.json` (plugin manifest list). Without entries in all four, `/reload-plugins` silently reports 0 new plugins and the plugin is invisible to the CLI
-- **SkillConfigStore** (`src/main/skill-config-store.ts`) — Reads/writes `~/.claude/destincode-skills.json`: favorites, chips, overrides, private prompt skills, and marketplace-installed plugin tracking
+- **PluginInstaller** (`src/main/plugin-installer.ts`) — Installs Claude Code plugins to `~/.claude/plugins/marketplaces/youcoded/plugins/<name>/` and wires them into all four Claude Code registries via `ClaudeCodeRegistry`. Source types: git clone (url), copy from cache (local), sparse checkout (git-subdir)
+- **ClaudeCodeRegistry** (`src/main/claude-code-registry.ts`) — Writes the four on-disk registries that Claude Code v2.1+ requires to recognize a plugin: `settings.json` (`enabledPlugins["id@youcoded"]: true`), `installed_plugins.json` (v2 entry with absolute `installPath`), `known_marketplaces.json` (marketplace source), and `marketplaces/youcoded/.claude-plugin/marketplace.json` (plugin manifest list). Without entries in all four, `/reload-plugins` silently reports 0 new plugins and the plugin is invisible to the CLI
+- **SkillConfigStore** (`src/main/skill-config-store.ts`) — Reads/writes `~/.claude/youcoded-skills.json`: favorites, chips, overrides, private prompt skills, and marketplace-installed plugin tracking
 - **SettingsPanel** (`src/renderer/components/SettingsPanel.tsx`) — Settings UI for remote access config, appearance popup (theme + font)
-- **ThemeProvider** (`src/renderer/state/theme-context.tsx`) — Appearance state: active theme, cycle list, font family, reducedEffects, showTimestamps. Persists to localStorage (`destincode-theme`, `destincode-theme-cycle`, `destincode-font`, `destincode-reduced-effects`, `destincode-show-timestamps`), applies `data-theme` attribute on `<html>`, swaps highlight.js stylesheet, sets font CSS variables. See `docs/theme-spec.md` for details
+- **ThemeProvider** (`src/renderer/state/theme-context.tsx`) — Appearance state: active theme, cycle list, font family, reducedEffects, showTimestamps. Persists to localStorage (`youcoded-theme`, `youcoded-theme-cycle`, `youcoded-font`, `youcoded-reduced-effects`, `youcoded-show-timestamps`), applies `data-theme` attribute on `<html>`, swaps highlight.js stylesheet, sets font CSS variables. See `docs/theme-spec.md` for details
 
 ## Chat View Data Flow
 
@@ -57,9 +57,9 @@ The Chat View timeline is built from four event sources:
 
 ## Remote Access
 
-DestinCode includes a built-in remote access server that serves the UI to any web browser.
+YouCoded includes a built-in remote access server that serves the UI to any web browser.
 
-- **Config:** `~/.claude/destincode-remote.json` — port, password, Tailscale trust
+- **Config:** `~/.claude/youcoded-remote.json` — port, password, Tailscale trust
 - **Set password:** Create config file with bcrypt hash, or use the settings UI
 - **Access:** Open `http://<host>:9900` in any browser
 - **Security:** Password auth + optional Tailscale network-level trust. **Privacy note:** Remote access transmits full conversation content (transcript events) over WebSocket. The connection is NOT TLS-encrypted — use Tailscale (which provides WireGuard encryption) rather than plain network access for sensitive conversations.
@@ -68,7 +68,7 @@ DestinCode includes a built-in remote access server that serves the UI to any we
 
 ## Multiplayer Games
 
-DestinCode includes a multiplayer game system (currently Connect 4) powered by PartyKit (Cloudflare Durable Objects).
+YouCoded includes a multiplayer game system (currently Connect 4) powered by PartyKit (Cloudflare Durable Objects).
 
 - **Server:** `partykit/` — separate deployable project with per-game room classes
   - `LobbyRoom` (`src/lobby-room.ts`) — global presence, online users, challenge relay
@@ -82,7 +82,7 @@ DestinCode includes a multiplayer game system (currently Connect 4) powered by P
 - **Game logic:** `src/renderer/game/connect-four.ts` — pure functions (`dropPiece`, `checkWin`, `checkDraw`), runs client-side only
 - **State:** `src/renderer/state/game-types.ts` — `GameState`, `GameAction`, `GameConnection` interface
 - **Persistent stats:** Planned via PartyKit server-side storage (not yet implemented)
-- **Favorites:** Local file `~/.claude/destinclaude-favorites.json`, read/written via IPC (`favorites:get`, `favorites:set`)
+- **Favorites:** Local file `~/.claude/youcoded-favorites.json`, read/written via IPC (`favorites:get`, `favorites:set`)
 - **Identity:** GitHub username via `gh auth token` IPC
 - **Spec:** `docs/superpowers/specs/2026-03-27-partykit-game-backend-design.md`
 
@@ -97,7 +97,7 @@ The app uses a semantic CSS token system for theming. All colors are CSS custom 
 - **Adding a theme:** Add a `[data-theme="name"]` block in globals.css with all variables, add the name to `THEMES` array in `theme-context.tsx`, add label/description/swatches to `SettingsPanel.tsx`
 - **Font (chat):** User-selectable via `queryLocalFonts()` API. Applied via `--font-sans`/`--font-mono` CSS variables. Only affects the chat UI.
 - **Font (terminal):** Hardcoded to Cascadia Code (`'Cascadia Code', 'Cascadia Mono', Consolas, monospace`). User font selection does not apply to xterm — proportional fonts break the character cell grid.
-- **Persistence:** `localStorage` keys: `destincode-theme`, `destincode-theme-cycle`, `destincode-font`
+- **Persistence:** `localStorage` keys: `youcoded-theme`, `youcoded-theme-cycle`, `youcoded-font`
 - **Status bar pill:** Cycles through user-configured subset of themes (configurable in appearance popup)
 - **highlight.js:** Dynamically swaps between `github-dark.css` and `github.css` via inline `?inline` CSS imports managed in ThemeProvider
 - **xterm.js:** Reads `--canvas` and `--fg` CSS variables for terminal colors, syncs reactively on theme change. WebGL renderer is always loaded for performance. When a wallpaper, gradient, or glassmorphism background is active, the terminal container uses `opacity: 0.88` to let the background peek through (xterm itself stays opaque — WebGL requires it).

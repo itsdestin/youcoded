@@ -1,7 +1,7 @@
 import type { ThemeTokens } from './theme-types';
 
 /**
- * Builds a theme-tinted variant of the default DestinCode app icon as an SVG
+ * Builds a theme-tinted variant of the default YouCoded app icon as an SVG
  * string. Same shape as desktop/assets/icon.svg — the canonical D/C terminal
  * glyph — recolored with the active theme's own tokens so every theme gets a
  * matching window + dock icon without shipping per-theme artwork.

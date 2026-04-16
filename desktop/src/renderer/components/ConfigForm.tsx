@@ -2,7 +2,7 @@
  * Phase 3c: Settings form for marketplace entries that declare a configSchema.
  *
  * Renders fields based on the schema (string, boolean, number, select) and
- * debounces writes to ~/.claude/destincode-config/<id>.json via IPC. Only
+ * debounces writes to ~/.claude/youcoded-config/<id>.json via IPC. Only
  * shown when the entry is installed AND has a configSchema — Anthropic
  * plugins using their own native config.json are left alone.
  */

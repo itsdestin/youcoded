@@ -9,7 +9,7 @@ describe('scanSkills', () => {
   let origHomedir: typeof os.homedir;
 
   beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'destincode-skill-scan-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-skill-scan-'));
     origHomedir = os.homedir;
     (os as any).homedir = () => tmpHome;
   });
@@ -38,15 +38,15 @@ describe('scanSkills', () => {
   });
 
   it('discovers a plugin with a plugin.json and skills/ subdir', () => {
-    const root = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
-    write(path.join(root, 'plugin.json'), '{"name":"destinclaude"}');
+    const root = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
+    write(path.join(root, 'plugin.json'), '{"name":"youcoded-core"}');
     mkdir(path.join(root, 'skills', 'setup-wizard'));
     mkdir(path.join(root, 'skills', 'remote-setup'));
 
     const skills = scanSkills();
     const ids = skills.map((s: any) => s.id).sort();
     expect(ids).toEqual(['remote-setup', 'setup-wizard']);
-    expect(skills.every((s: any) => s.source === 'destinclaude')).toBe(true);
+    expect(skills.every((s: any) => s.source === 'youcoded-core')).toBe(true);
   });
 
   it('tags user-authored skills under ~/.claude/skills/ with source:"self"', () => {
@@ -66,9 +66,9 @@ describe('scanSkills', () => {
     });
   });
 
-  it('skips ~/.claude/skills/<name> when a destinclaude-* plugin ships the same skill (toolkit mirror)', () => {
-    const plugin = path.join(tmpHome, '.claude', 'plugins', 'destinclaude-journaling');
-    write(path.join(plugin, 'plugin.json'), '{"name":"destinclaude-journaling"}');
+  it('skips ~/.claude/skills/<name> when a youcoded-core-* plugin ships the same skill (toolkit mirror)', () => {
+    const plugin = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core-journaling');
+    write(path.join(plugin, 'plugin.json'), '{"name":"youcoded-core-journaling"}');
     mkdir(path.join(plugin, 'skills', 'journaling-assistant'));
 
     const mirror = path.join(tmpHome, '.claude', 'skills', 'journaling-assistant');
@@ -77,6 +77,6 @@ describe('scanSkills', () => {
     const skills = scanSkills();
     // Plugin wins; mirror is NOT added again as a 'self' skill
     expect(skills.filter((s: any) => s.id === 'journaling-assistant')).toHaveLength(1);
-    expect(skills.find((s: any) => s.id === 'journaling-assistant').source).toBe('destinclaude');
+    expect(skills.find((s: any) => s.id === 'journaling-assistant').source).toBe('youcoded-core');
   });
 });

@@ -8,7 +8,7 @@ import { log } from './logger';
  *
  * Replaces the legacy hooks/announcement-fetch.js — announcements are now
  * owned by the app, not by a toolkit hook. Fetches the first non-comment
- * line from the destinclaude repo's announcements.txt and caches it at
+ * line from the youcoded-core repo's announcements.txt and caches it at
  * ~/.claude/.announcement-cache.json so session-start.sh (or the app's
  * session preamble, post-decomposition) can inject it.
  *
@@ -20,7 +20,7 @@ import { log } from './logger';
  */
 
 const ANNOUNCEMENTS_URL =
-  'https://raw.githubusercontent.com/itsdestin/destinclaude/master/announcements.txt';
+  'https://raw.githubusercontent.com/itsdestin/youcoded-core/master/announcements.txt';
 const CACHE_PATH = path.join(os.homedir(), '.claude', '.announcement-cache.json');
 const TMP_PATH = `${CACHE_PATH}.tmp`;
 const REFRESH_MS = 24 * 60 * 60 * 1000; // 24 hours

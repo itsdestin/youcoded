@@ -9,14 +9,14 @@
 
 // ── Storage keys ─────────────────────────────────────────────────────────────
 
-export const SOUND_MUTED_KEY     = 'destincode-sound-muted';
-export const SOUND_VOLUME_KEY    = 'destincode-sound-volume';
-export const SOUND_ATTENTION_KEY = 'destincode-sound-attention';    // red status preset
-export const SOUND_READY_KEY     = 'destincode-sound-ready';        // blue status preset
-export const SOUND_ATTENTION_ENABLED_KEY = 'destincode-sound-attention-enabled';
-export const SOUND_READY_ENABLED_KEY     = 'destincode-sound-ready-enabled';
+export const SOUND_MUTED_KEY     = 'youcoded-sound-muted';
+export const SOUND_VOLUME_KEY    = 'youcoded-sound-volume';
+export const SOUND_ATTENTION_KEY = 'youcoded-sound-attention';    // red status preset
+export const SOUND_READY_KEY     = 'youcoded-sound-ready';        // blue status preset
+export const SOUND_ATTENTION_ENABLED_KEY = 'youcoded-sound-attention-enabled';
+export const SOUND_READY_ENABLED_KEY     = 'youcoded-sound-ready-enabled';
 // Custom sound file paths per category
-export const SOUND_CUSTOM_PATH_PREFIX = 'destincode-sound-custom-path-'; // + category
+export const SOUND_CUSTOM_PATH_PREFIX = 'youcoded-sound-custom-path-'; // + category
 
 // ── Types ────────────────────────────────────────────────────────────────────
 

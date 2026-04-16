@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-03
 **Status:** Approved
-**Scope:** DestinCode Android app + DestinCode Desktop app
+**Scope:** YouCoded Android app + YouCoded Desktop app
 
 ## Overview
 
@@ -35,7 +35,7 @@ Short aliases are used (`sonnet`, `opus`, `haiku`). Claude Code resolves these t
 
 ### At Session Launch
 
-1. Read the user's default model from DestinCode's own preference store (e.g., `~/.claude-mobile/model-preference.json` on Android, app-level storage on desktop)
+1. Read the user's default model from YouCoded's own preference store (e.g., `~/.claude-mobile/model-preference.json` on Android, app-level storage on desktop)
 2. Pass `--model <selected>` as a flag in the launch command (`PtyBridge.start()` on Android, session spawn on desktop)
 3. Chip displays the selected model immediately — no verification needed since we control the launch
 
@@ -56,8 +56,8 @@ Short aliases are used (`sonnet`, `opus`, `haiku`). Claude Code resolves these t
 
 ### Persisting the Default
 
-- Every confirmed switch writes to DestinCode's own preference file
-- This is NOT `~/.claude/settings.json` (Claude Code's config) — it's DestinCode's own preference
+- Every confirmed switch writes to YouCoded's own preference file
+- This is NOT `~/.claude/settings.json` (Claude Code's config) — it's YouCoded's own preference
 - New sessions use the persisted default automatically
 
 ## Transcript Verification Mechanism
@@ -91,7 +91,7 @@ This substring match is resilient to version changes without requiring a lookup 
 
 ## Integration Points
 
-### Android (`destincode` repo)
+### Android (`youcoded` repo)
 
 | File | Change |
 |------|--------|
@@ -102,7 +102,7 @@ This substring match is resilient to version changes without requiring a lookup 
 | `web/remote-shim.js` | Add `model:switch` message type for chip → native communication |
 | New: model preference store | Persist default model selection |
 
-### Desktop (`destinclaude/desktop` repo)
+### Desktop (`youcoded-core/desktop` repo)
 
 | File | Change |
 |------|--------|

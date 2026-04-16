@@ -17,7 +17,7 @@ describe('cleanupOrphanSymlinks', () => {
   let origHomedir: typeof os.homedir;
 
   beforeEach(() => {
-    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'destincode-symlink-cleanup-'));
+    tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'youcoded-symlink-cleanup-'));
     origHomedir = os.homedir;
     (os as any).homedir = () => tmpHome;
     pluginDirsForTest = [];
@@ -48,10 +48,10 @@ describe('cleanupOrphanSymlinks', () => {
   });
 
   it('removes a broken symlink whose target is inside a plugin root', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     pluginDirsForTest = [pluginRoot];
     // plugin.json makes the plugin dir discoverable (test uses a stub regardless)
-    write(path.join(pluginRoot, 'plugin.json'), '{"name":"destinclaude"}');
+    write(path.join(pluginRoot, 'plugin.json'), '{"name":"youcoded-core"}');
 
     // Create a real file inside the plugin so the symlink has a valid target at setup time,
     // then delete the target to simulate a post-decomposition orphan.
@@ -67,9 +67,9 @@ describe('cleanupOrphanSymlinks', () => {
   });
 
   it('leaves a valid symlink alone', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     pluginDirsForTest = [pluginRoot];
-    write(path.join(pluginRoot, 'plugin.json'), '{"name":"destinclaude"}');
+    write(path.join(pluginRoot, 'plugin.json'), '{"name":"youcoded-core"}');
     const liveHook = path.join(pluginRoot, 'hooks', 'session-start.sh');
     write(liveHook, '#!/bin/bash\n');
     const link = path.join(tmpHome, '.claude', 'hooks', 'session-start.sh');
@@ -81,9 +81,9 @@ describe('cleanupOrphanSymlinks', () => {
   });
 
   it('leaves a broken symlink alone when its target is outside every plugin root', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     pluginDirsForTest = [pluginRoot];
-    write(path.join(pluginRoot, 'plugin.json'), '{"name":"destinclaude"}');
+    write(path.join(pluginRoot, 'plugin.json'), '{"name":"youcoded-core"}');
 
     // Create a symlink under ~/.claude/hooks/ pointing outside the plugin root to a missing target
     const userTarget = path.join(tmpHome, 'custom', 'my-hook.sh');
@@ -98,9 +98,9 @@ describe('cleanupOrphanSymlinks', () => {
   });
 
   it('leaves regular (non-symlink) files alone', () => {
-    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'destinclaude');
+    const pluginRoot = path.join(tmpHome, '.claude', 'plugins', 'youcoded-core');
     pluginDirsForTest = [pluginRoot];
-    write(path.join(pluginRoot, 'plugin.json'), '{"name":"destinclaude"}');
+    write(path.join(pluginRoot, 'plugin.json'), '{"name":"youcoded-core"}');
 
     const realFile = path.join(tmpHome, '.claude', 'hooks', 'regular.sh');
     write(realFile, '#!/bin/bash\n');

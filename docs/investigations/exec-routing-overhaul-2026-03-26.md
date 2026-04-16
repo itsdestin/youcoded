@@ -8,7 +8,7 @@
 
 ## Context
 
-This investigation began as a comparative analysis of the DestinCode mobile app vs the DestinCode desktop app, evolved into a deep diagnosis of a `gh repo clone` SELinux failure, and ultimately led to a fundamental architectural change: stripping redundant exec routing layers and properly configuring `termux-exec` as the primary execution mechanism.
+This investigation began as a comparative analysis of the YouCoded mobile app vs the YouCoded desktop app, evolved into a deep diagnosis of a `gh repo clone` SELinux failure, and ultimately led to a fundamental architectural change: stripping redundant exec routing layers and properly configuring `termux-exec` as the primary execution mechanism.
 
 ---
 
@@ -107,16 +107,16 @@ Only 4 Go binaries out of 50+ total are affected. `rclone`'s browser-open is alr
 |-----|-----------------|------------------------|
 | Official Termux (F-Droid) | 28 | **No** — `untrusted_app_27` domain is exempted |
 | Termux Play Store fork | 35 | Yes |
-| DestinCode | 35 | Yes |
+| YouCoded | 35 | Yes |
 
-Stock Termux (F-Droid) avoids the entire SELinux exec problem by targeting SDK 28, which puts it in an exempted SELinux domain. The Play Store has a **separate fork** (by the original creator @fornwall, not endorsed by the current Termux team) that targets SDK 35 and uses the same `system_linker_exec` approach as DestinCode.
+Stock Termux (F-Droid) avoids the entire SELinux exec problem by targeting SDK 28, which puts it in an exempted SELinux domain. The Play Store has a **separate fork** (by the original creator @fornwall, not endorsed by the current Termux team) that targets SDK 35 and uses the same `system_linker_exec` approach as YouCoded.
 
 ### Were the layers redundant with termux-exec?
 
 **Initial assessment: "Yes, largely redundant."**
 **Revised assessment: "They were necessary when written; one env var makes them redundant now."**
 
-The commit history revealed that termux-exec **genuinely didn't work** for DestinCode's relocated prefix when the layers were built (commit `d84302e`, March 17, 2026). The design doc explicitly states: "termux-exec is retained in case a future custom build resolves the prefix issue."
+The commit history revealed that termux-exec **genuinely didn't work** for YouCoded's relocated prefix when the layers were built (commit `d84302e`, March 17, 2026). The design doc explicitly states: "termux-exec is retained in case a future custom build resolves the prefix issue."
 
 ### The Root Cause: Missing `TERMUX_APP__LEGACY_DATA_DIR`
 
@@ -128,7 +128,7 @@ termux-exec v2.4 does a **string prefix match** to check if a binary is under th
 
 Setting `TERMUX_APP__LEGACY_DATA_DIR=/data/data/com.destin.code/files` provides the alternate path form. Verified with `TERMUX_EXEC__LOG_LEVEL=5` diagnostic output — exec routing now works for all C/Rust programs.
 
-### What termux-exec handles vs what DestinCode still needs
+### What termux-exec handles vs what YouCoded still needs
 
 **termux-exec handles (no longer need custom code for):**
 - ELF binary exec routing through linker64
@@ -136,7 +136,7 @@ Setting `TERMUX_APP__LEGACY_DATA_DIR=/data/data/com.destin.code/files` provides 
 - `/bin/*` and `/usr/bin/*` prefix rewriting → `$PREFIX/bin/*`
 - Environment management (strips LD_PRELOAD for system binaries)
 
-**DestinCode still needs custom code for:**
+**YouCoded still needs custom code for:**
 - `/tmp` path rewriting (Android has no `/tmp` — affects both fs and exec args)
 - `fs.accessSync` X_OK bypass (SELinux denies execute check on app data)
 - Shell path fixing (Termux Node.js has hardcoded `/data/data/com.termux/` shell path)
@@ -219,4 +219,4 @@ Setting `TERMUX_APP__LEGACY_DATA_DIR=/data/data/com.destin.code/files` provides 
 
 4. **Go's raw syscall design is a known, unsolved platform limitation.** The Go team rejected using libc execve in 2012. Termux documents it as an unsolved problem. The targeted bash wrappers are the practical answer.
 
-5. **The Play Store Termux is a separate fork.** The official Termux avoids SELinux exec restrictions via `targetSdkVersion=28`. DestinCode and the Play Store fork both target modern SDKs and must use `system_linker_exec`.
+5. **The Play Store Termux is a separate fork.** The official Termux avoids SELinux exec restrictions via `targetSdkVersion=28`. YouCoded and the Play Store fork both target modern SDKs and must use `system_linker_exec`.

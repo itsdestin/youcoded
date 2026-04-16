@@ -143,12 +143,12 @@ export interface ThemeDefinition {
  * A loaded theme — same as ThemeDefinition but guaranteed slug is kebab-case.
  *
  * source values:
- *   'destinclaude' — ships natively with the app (official themes)
+ *   'youcoded-core' — ships natively with the app (official themes)
  *   'community'    — installed from the theme marketplace (user-submitted, approved)
  *   'user'         — created locally by the user on their machine
  */
 export type LoadedTheme = ThemeDefinition & {
-  source: 'destinclaude' | 'community' | 'user';
+  source: 'youcoded-core' | 'community' | 'user';
   /** Absolute path to the theme folder on disk (community and user themes) */
   basePath?: string;
 };

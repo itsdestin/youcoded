@@ -132,7 +132,7 @@ const IPC = {
   // Claude Code settings.json bridge — used by Preferences panel (/config intercept)
   SETTINGS_GET: 'settings:get',
   SETTINGS_SET: 'settings:set',
-  // Fast mode + effort level — DestinCode-local state (Claude Code doesn't transcribe these)
+  // Fast mode + effort level — YouCoded-local state (Claude Code doesn't transcribe these)
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   SESSION_SWITCH: 'session:switch',

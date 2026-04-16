@@ -3,7 +3,7 @@
 // on-disk copy; non-installed fall back to a raw GitHub URL derived from the
 // marketplace entry's sourceType/sourceRef.
 //
-// We glob for the file instead of assuming a fixed layout — destinclaude lays
+// We glob for the file instead of assuming a fixed layout — youcoded-core lays
 // skills out under core/skills/, life/skills/, productivity/skills/, while
 // single-layer plugins like civic-report use skills/<name>/SKILL.md flat.
 
@@ -11,7 +11,7 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 import type { SkillEntry } from '../shared/types';
-import { DESTINCODE_PLUGINS_DIR } from './claude-code-registry';
+import { YOUCODED_PLUGINS_DIR } from './claude-code-registry';
 
 export type ComponentKind = 'skill' | 'command' | 'agent';
 
@@ -28,14 +28,14 @@ export interface ReadComponentResult {
 }
 
 const CLAUDE_PLUGINS_ROOT = path.join(os.homedir(), '.claude', 'plugins');
-const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/destincode-marketplace/${process.env.DESTINCODE_MARKETPLACE_BRANCH || 'master'}`;
+const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${process.env.YOUCODED_MARKETPLACE_BRANCH || 'master'}`;
 
 function resolvePluginDir(id: string): string | null {
-  // Core toolkit lives at ~/.claude/plugins/destinclaude (not the marketplace
-  // subtree); marketplace-installed plugins live under DESTINCODE_PLUGINS_DIR.
+  // Core toolkit lives at ~/.claude/plugins/youcoded-core (not the marketplace
+  // subtree); marketplace-installed plugins live under YOUCODED_PLUGINS_DIR.
   const topLevel = path.join(CLAUDE_PLUGINS_ROOT, id);
   if (fs.existsSync(topLevel)) return topLevel;
-  const marketplace = path.join(DESTINCODE_PLUGINS_DIR, id);
+  const marketplace = path.join(YOUCODED_PLUGINS_DIR, id);
   if (fs.existsSync(marketplace)) return marketplace;
   return null;
 }
@@ -48,7 +48,7 @@ function relativePathsFor(kind: ComponentKind, name: string): string[] {
 }
 
 // Walk up to `maxDepth` levels looking for any candidate relative path.
-// Depth 4 covers destinclaude's `core/skills/...` / `life/skills/...` /
+// Depth 4 covers youcoded-core's `core/skills/...` / `life/skills/...` /
 // `productivity/skills/...` layouts without descending into node_modules
 // or other deep trees.
 function findLocalFile(rootDir: string, relative: string, maxDepth = 4): string | null {
@@ -76,7 +76,7 @@ function findLocalFile(rootDir: string, relative: string, maxDepth = 4): string 
 
 // Build raw.githubusercontent.com URLs for the given relative path. We return
 // multiple candidates and try them in order — covers both flat layouts and
-// destinclaude's layered core/life/productivity prefixes.
+// youcoded-core's layered core/life/productivity prefixes.
 function buildRemoteCandidates(entry: SkillEntry, relative: string): string[] {
   const prefixes = ['', 'core/', 'life/', 'productivity/'];
 

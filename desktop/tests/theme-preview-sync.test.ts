@@ -9,8 +9,8 @@ import path from 'path';
 
 const ROOT = path.resolve(__dirname, '..', '..');
 const GLOBALS_PATH = path.join(ROOT, 'desktop', 'src', 'renderer', 'styles', 'globals.css');
-// theme-preview.css lives in the destinclaude repo (sibling workspace directory)
-const PREVIEW_PATH = path.resolve(ROOT, '..', 'destinclaude', 'core', 'skills', 'theme-builder', 'theme-preview.css');
+// theme-preview.css lives in the youcoded-core repo (sibling workspace directory)
+const PREVIEW_PATH = path.resolve(ROOT, '..', 'youcoded-core', 'core', 'skills', 'theme-builder', 'theme-preview.css');
 
 const previewExists = fs.existsSync(PREVIEW_PATH);
 const globals = fs.readFileSync(GLOBALS_PATH, 'utf8');

@@ -270,7 +270,7 @@ export class FirstRunManager extends EventEmitter {
     }
 
     this.updatePrereq('toolkit', { status: 'installing' });
-    this.updateState({ statusMessage: 'Cloning DestinClaude toolkit...' });
+    this.updateState({ statusMessage: 'Cloning YouCoded toolkit...' });
 
     const result = await cloneToolkit();
 

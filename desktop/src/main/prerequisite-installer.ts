@@ -48,19 +48,19 @@ export interface DetectionResult {
 // ---------------------------------------------------------------------------
 
 const NODE_VERSION = 'v20.19.0';
-const PATH_MARKER = '# Added by DestinCode first-run installer';
+const PATH_MARKER = '# Added by YouCoded first-run installer';
 
-/** Root dir for DestinCode-managed user-local tools (macOS). */
-function destincodeDataDir(): string {
+/** Root dir for YouCoded-managed user-local tools (macOS). */
+function youcodedDataDir(): string {
   if (process.platform === 'darwin') {
-    return path.join(os.homedir(), 'Library', 'Application Support', 'DestinCode');
+    return path.join(os.homedir(), 'Library', 'Application Support', 'YouCoded');
   }
-  return path.join(os.homedir(), '.destincode');
+  return path.join(os.homedir(), '.youcoded');
 }
 
 /** Where we extract Node's tarball on macOS. */
 export function userLocalNodeDir(): string {
-  return path.join(destincodeDataDir(), 'node');
+  return path.join(youcodedDataDir(), 'node');
 }
 
 /** Node's bin dir (contains node, npm, npx — and later, claude from `npm i -g`). */
@@ -250,14 +250,14 @@ export async function detectClaude(): Promise<DetectionResult> {
   }
 }
 
-/** Detect DestinClaude toolkit by checking for VERSION file. No command execution. */
+/** Detect YouCoded toolkit by checking for VERSION file. No command execution. */
 export async function detectToolkit(): Promise<DetectionResult> {
   try {
     const versionFile = path.join(
       os.homedir(),
       '.claude',
       'plugins',
-      'destinclaude',
+      'youcoded-core',
       'VERSION',
     );
     const version = fs.readFileSync(versionFile, 'utf8').trim();
@@ -437,14 +437,14 @@ export async function installClaude(): Promise<{ success: boolean; error?: strin
   }
 }
 
-/** Clone the DestinClaude toolkit into ~/.claude/plugins/destinclaude. */
+/** Clone the YouCoded toolkit into ~/.claude/plugins/youcoded-core. */
 export async function cloneToolkit(): Promise<{ success: boolean; error?: string }> {
   try {
     const targetDir = path.join(
       os.homedir(),
       '.claude',
       'plugins',
-      'destinclaude',
+      'youcoded-core',
     );
     const versionFile = path.join(targetDir, 'VERSION');
 
@@ -454,7 +454,7 @@ export async function cloneToolkit(): Promise<{ success: boolean; error?: string
       return { success: true };
     }
 
-    log('INFO', 'prereq', 'Cloning DestinClaude toolkit...');
+    log('INFO', 'prereq', 'Cloning YouCoded toolkit...');
 
     // Ensure parent directory exists
     fs.mkdirSync(path.join(os.homedir(), '.claude', 'plugins'), {
@@ -464,7 +464,7 @@ export async function cloneToolkit(): Promise<{ success: boolean; error?: string
     const gitPath = resolveCommand('git');
     await execFileAsync(gitPath, [
       'clone',
-      'https://github.com/itsdestin/destinclaude.git',
+      'https://github.com/itsdestin/youcoded-core.git',
       targetDir,
     ]);
 

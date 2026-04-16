@@ -1,7 +1,7 @@
 #!/bin/bash
 # PostToolUse hook: reminds Claude to update the conversation topic periodically.
-# Mobile-bundled version — deployed by DestinCode when DestinClaude is not installed.
-# Defers to DestinClaude's version if both are present (Bootstrap handles this).
+# Mobile-bundled version — deployed by YouCoded when YouCoded is not installed.
+# Defers to YouCoded's version if both are present (Bootstrap handles this).
 
 SESSION_ID=$(sed -n 's/.*"session_id" *: *"\([^"]*\)".*/\1/p' | head -1)
 

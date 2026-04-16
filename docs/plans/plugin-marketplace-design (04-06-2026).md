@@ -1,4 +1,4 @@
-# DestinCode Plugin Marketplace — Design Document
+# YouCoded Plugin Marketplace — Design Document
 
 **Date:** 2026-04-06
 **Status:** Draft
@@ -8,9 +8,9 @@
 
 ## Summary
 
-DestinCode manages its own plugin distribution system. Instead of injecting `/plugin install` commands into the Claude Code PTY, DestinCode installs plugins by placing files directly at `~/.claude/plugins/<name>/` — the same mechanism that DestinClaude itself uses. This gives full control over the install/update/uninstall lifecycle with no dependency on an active Claude Code session.
+YouCoded manages its own plugin distribution system. Instead of injecting `/plugin install` commands into the Claude Code PTY, YouCoded installs plugins by placing files directly at `~/.claude/plugins/<name>/` — the same mechanism that YouCoded itself uses. This gives full control over the install/update/uninstall lifecycle with no dependency on an active Claude Code session.
 
-The DestinCode Marketplace catalog (`destincode-marketplace` repo) auto-imports all plugins from Anthropic's official registry and labels each by source. Custom DestinClaude prompt shortcuts and plugin references coexist in the same catalog. Plugin updates are handled during `/update` alongside the rest of the toolkit.
+The YouCoded Marketplace catalog (`wecoded-marketplace` repo) auto-imports all plugins from Anthropic's official registry and labels each by source. Custom YouCoded prompt shortcuts and plugin references coexist in the same catalog. Plugin updates are handled during `/update` alongside the rest of the toolkit.
 
 ---
 
@@ -25,20 +25,20 @@ The DestinCode Marketplace catalog (`destincode-marketplace` repo) auto-imports 
 - No timing hacks or fire-and-forget commands
 - Deterministic completion — the app controls the entire operation
 - Works identically on Android and desktop
-- Same mechanism that installs DestinClaude itself (proven pattern)
+- Same mechanism that installs YouCoded itself (proven pattern)
 - Full control over error handling and user feedback
 
 **How Claude Code discovers these plugins:** Claude Code auto-discovers any directory under `~/.claude/plugins/` containing `.claude-plugin/plugin.json` (or `plugin.json` at root). It scans for `commands/`, `agents/`, `skills/`, `hooks/hooks.json`, and `.mcp.json` at load time. No registration in `installed_plugins.json` is needed.
 
-**Trade-off:** Plugins installed this way won't be tracked by Claude Code's built-in `/plugin update` mechanism. Updates are handled by DestinCode's `/update` flow instead (see AD-4).
+**Trade-off:** Plugins installed this way won't be tracked by Claude Code's built-in `/plugin update` mechanism. Updates are handled by YouCoded's `/update` flow instead (see AD-4).
 
 ### AD-2: Own marketplace repo clone, independent of Claude Code's
 
-**Decision:** DestinCode maintains its own clone of the Anthropic marketplace repo at a DestinCode-managed path (e.g., `~/.claude/destincode-marketplace-cache/`), separate from Claude Code's clone at `~/.claude/plugins/marketplaces/`.
+**Decision:** YouCoded maintains its own clone of the Anthropic marketplace repo at a YouCoded-managed path (e.g., `~/.claude/wecoded-marketplace-cache/`), separate from Claude Code's clone at `~/.claude/plugins/marketplaces/`.
 
 **Rationale:**
 - No dependency on Claude Code's internal file layout (which could change)
-- DestinCode controls clone freshness, location, and lifecycle
+- YouCoded controls clone freshness, location, and lifecycle
 - Avoids accidental interference if both systems try to update the same repo
 
 ### AD-3: Auto-import everything, label by source
@@ -48,12 +48,12 @@ The DestinCode Marketplace catalog (`destincode-marketplace` repo) auto-imports 
 **Rationale:**
 - Zero maintenance burden for catalog freshness
 - Users can see and filter by source
-- DestinCode can override any field (description, category, tags) per-plugin via the overrides system
+- YouCoded can override any field (description, category, tags) per-plugin via the overrides system
 - If a plugin is low quality, it can be blocklisted rather than requiring an allowlist
 
 ### AD-4: Plugin updates via /update
 
-**Decision:** When `/update` runs and merges a new DestinClaude version, a new post-update phase (`phase_marketplace_plugins`) updates all marketplace-installed plugins by pulling the latest upstream code.
+**Decision:** When `/update` runs and merges a new YouCoded version, a new post-update phase (`phase_marketplace_plugins`) updates all marketplace-installed plugins by pulling the latest upstream code.
 
 **Rationale:**
 - Single update mechanism for the entire toolkit
@@ -67,7 +67,7 @@ The DestinCode Marketplace catalog (`destincode-marketplace` repo) auto-imports 
 
 **Rationale:**
 - Claude Code loads every discovered plugin. Two copies of the same plugin at different paths means double-loaded hooks, duplicate commands, duplicate MCP servers.
-- The user may have installed plugins via the CLI before using the DestinCode marketplace.
+- The user may have installed plugins via the CLI before using the YouCoded marketplace.
 
 ---
 
@@ -95,16 +95,16 @@ The DestinCode Marketplace catalog (`destincode-marketplace` repo) auto-imports 
 ```
 
 **Fields added for upstream plugins:**
-- `sourceMarketplace` — Which registry this came from (e.g., `"claude-plugins-official"`, `"claude-plugins-community"`, `"destinclaude"`)
+- `sourceMarketplace` — Which registry this came from (e.g., `"claude-plugins-official"`, `"claude-plugins-community"`, `"youcoded-core"`)
 - `sourceType` — How to download it: `"local"` (copy from marketplace repo), `"url"` (git clone external repo), `"git-subdir"` (clone + extract subdirectory), `"prompt"` (self-contained prompt shortcut — no download)
 - `sourceRef` — The download reference: relative path for local, git URL for url/git-subdir
 - `repoUrl` — For linking to homepage/docs in the UI
 
-**Existing DestinClaude entries** keep `sourceMarketplace: "destinclaude"` and `sourceType: "prompt"` (or `"local"` for DestinClaude plugin references).
+**Existing YouCoded entries** keep `sourceMarketplace: "youcoded-core"` and `sourceType: "prompt"` (or `"local"` for YouCoded plugin references).
 
-### Install state tracking (destincode-skills.json)
+### Install state tracking (youcoded-skills.json)
 
-Marketplace-installed plugins are tracked in `destincode-skills.json` alongside prompt shortcuts:
+Marketplace-installed plugins are tracked in `youcoded-skills.json` alongside prompt shortcuts:
 
 ```json
 {
@@ -120,7 +120,7 @@ Marketplace-installed plugins are tracked in `destincode-skills.json` alongside 
 }
 ```
 
-This is DestinCode's own bookkeeping — it does NOT write to Claude Code's `installed_plugins.json`.
+This is YouCoded's own bookkeeping — it does NOT write to Claude Code's `installed_plugins.json`.
 
 ---
 
@@ -193,21 +193,21 @@ Used by 14 plugins (e.g., AWS plugins that live in a monorepo).
    - `type: "prompt"` -> existing `configStore.createPromptSkill()` path (unchanged)
    - `type: "plugin"` -> new `PluginInstaller.install()` path
 6. `PluginInstaller` executes the download strategy based on `sourceType`
-7. Records install in `destincode-skills.json` under `installed_plugins`
+7. Records install in `youcoded-skills.json` under `installed_plugins`
 8. Responds with `{ status: "installed" }`
 9. If a Claude Code session is active, sends `/reload-plugins\r` as a convenience (not required — plugin will be discovered on next session start)
 
 ### Uninstall flow
 
 1. Delete `~/.claude/plugins/<name>/` directory
-2. Remove from `destincode-skills.json`
+2. Remove from `youcoded-skills.json`
 3. If session active, send `/reload-plugins\r`
 
 ### Update flow (during /update)
 
 New phase in `post-update.sh`: `phase_marketplace_plugins`
 
-For each plugin in `destincode-skills.json`'s `installed_plugins`:
+For each plugin in `youcoded-skills.json`'s `installed_plugins`:
 - **local** source: marketplace repo was already updated by git merge. Re-copy from updated repo clone to `~/.claude/plugins/<name>/`.
 - **url** source: `git -C ~/.claude/plugins/<name>/ pull --ff-only` (or re-clone if pull fails)
 - **git-subdir** source: re-clone + sparse checkout (same as initial install)
@@ -216,13 +216,13 @@ Report updated plugins: `[UPDATED] code-review — pulled latest from claude-plu
 
 ### Marketplace repo cache management
 
-DestinCode maintains its own clone of the official marketplace repo:
-- Location: `~/.claude/destincode-marketplace-cache/claude-plugins-official/`
+YouCoded maintains its own clone of the official marketplace repo:
+- Location: `~/.claude/wecoded-marketplace-cache/claude-plugins-official/`
 - Cloned on first plugin install that needs it (lazy)
 - Updated during `/update` via `git pull`
 - Used for "local" source type installs (copy from clone to plugins dir)
 
-### Sync script (destincode-marketplace repo)
+### Sync script (wecoded-marketplace repo)
 
 ```
 scripts/sync.js
@@ -232,8 +232,8 @@ scripts/sync.js
 |   +-- Map to our schema: name->id, add displayName, sourceMarketplace, sourceType, sourceRef
 |   +-- Check for override file: overrides/<id>.json -> merge custom fields
 |   +-- Add to output array
-+-- Merge with existing DestinClaude entries (always preserved first)
-+-- Sort: destinclaude entries first, then by sourceMarketplace, then alphabetical
++-- Merge with existing YouCoded entries (always preserved first)
++-- Sort: youcoded-core entries first, then by sourceMarketplace, then alphabetical
 +-- Validate: no duplicate ids, required fields present
 +-- Write index.json
 ```
@@ -272,7 +272,7 @@ Override fields are merged on top of upstream data. Unoverridden fields use upst
 ### Shared
 
 - React UI is identical on both platforms (remote-shim abstraction)
-- `destincode-skills.json` is the shared state file (last-write-wins)
+- `youcoded-skills.json` is the shared state file (last-write-wins)
 - Install/uninstall/update operations are filesystem-only (no session required)
 
 ---

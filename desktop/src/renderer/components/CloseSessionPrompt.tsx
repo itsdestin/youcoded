@@ -22,7 +22,7 @@ interface Props {
 
 // localStorage key used to suppress this prompt permanently. Exported so
 // App.tsx can check it before deciding whether to show the prompt.
-export const CLOSE_PROMPT_SUPPRESS_KEY = 'destincode-close-prompt-disabled';
+export const CLOSE_PROMPT_SUPPRESS_KEY = 'youcoded-close-prompt-disabled';
 const SUPPRESS_KEY = CLOSE_PROMPT_SUPPRESS_KEY;
 
 // Shown when the user closes an active session. Lets them tag the session with

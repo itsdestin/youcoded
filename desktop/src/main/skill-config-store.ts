@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import type { UserSkillConfig, ChipConfig, MetadataOverride, SkillEntry, PackageInfo } from '../shared/types';
 
-const CONFIG_PATH = path.join(os.homedir(), '.claude', 'destincode-skills.json');
+const CONFIG_PATH = path.join(os.homedir(), '.claude', 'youcoded-skills.json');
 
 const DEFAULT_CHIPS: ChipConfig[] = [
   { skillId: 'journaling-assistant', label: 'Journal', prompt: "let's journal" },

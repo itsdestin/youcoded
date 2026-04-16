@@ -1,4 +1,4 @@
-# DestinCode Chat View Rebuild — Design Spec
+# YouCoded Chat View Rebuild — Design Spec
 
 **Version:** 1.1
 **Date:** 2026-03-15

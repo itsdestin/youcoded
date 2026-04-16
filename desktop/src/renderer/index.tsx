@@ -4,7 +4,7 @@ import './styles/globals.css';
 import App from './App';
 
 // Apply theme before React mounts to prevent FOUC (flash of unstyled content)
-const storedTheme = localStorage.getItem('destincode-theme') || 'midnight';
+const storedTheme = localStorage.getItem('youcoded-theme') || 'midnight';
 document.documentElement.setAttribute('data-theme', storedTheme);
 
 // macOS traffic lights need left padding on the header bar.
@@ -49,7 +49,7 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
   return (
     <div className="flex items-center justify-center h-full bg-panel text-fg">
       <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-72">
-        <h1 className="text-xl font-bold text-center mb-2">DestinCode Remote</h1>
+        <h1 className="text-xl font-bold text-center mb-2">YouCoded Remote</h1>
         <input
           type="password"
           placeholder="Password"
@@ -114,10 +114,10 @@ function Root() {
       }
 
       // Auto-login with stored token
-      const storedToken = localStorage.getItem('destincode-remote-token');
+      const storedToken = localStorage.getItem('youcoded-remote-token');
       if (storedToken) {
         connect(storedToken, true).catch(() => {
-          localStorage.removeItem('destincode-remote-token');
+          localStorage.removeItem('youcoded-remote-token');
         });
       }
     });

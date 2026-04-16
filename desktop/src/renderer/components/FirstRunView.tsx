@@ -123,7 +123,7 @@ function AuthScreen({
           />
           <p className="text-xs text-fg-muted text-center leading-relaxed">
             Your key is passed directly to Claude Code and stored in its secure config.
-            DestinCode never stores, logs, or backs up your key.
+            YouCoded never stores, logs, or backs up your key.
           </p>
           <button
             onClick={() => onApiKey(apiKey)}
@@ -146,7 +146,7 @@ function DevModeScreen({ onEnable }: { onEnable: () => void }) {
   return (
     <div className="mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4 text-center">
       <p className="text-sm text-fg leading-relaxed">
-        Windows Developer Mode allows DestinCode to create symbolic links, which
+        Windows Developer Mode allows YouCoded to create symbolic links, which
         the toolkit uses for configuration files. This is a one-time system setting.
       </p>
       <button
@@ -191,7 +191,7 @@ function CompletionCard() {
       </ul>
       <div className="flex items-center justify-center gap-2 text-xs text-fg-muted pt-1">
         <BrailleSpinner size="sm" />
-        <span>Opening DestinCode…</span>
+        <span>Opening YouCoded…</span>
       </div>
     </div>
   );
@@ -271,7 +271,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
 
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-canvas text-fg">
-      <h1 className="text-4xl font-semibold tracking-tight mb-6 text-fg">DestinCode</h1>
+      <h1 className="text-4xl font-semibold tracking-tight mb-6 text-fg">YouCoded</h1>
 
       {launching ? (
         <CompletionCard />

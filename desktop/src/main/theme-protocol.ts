@@ -3,7 +3,7 @@ import path from 'path';
 import os from 'os';
 import { readFile } from 'fs/promises';
 
-const THEMES_DIR = path.join(os.homedir(), '.claude', 'destinclaude-themes');
+const THEMES_DIR = path.join(os.homedir(), '.claude', 'wecoded-themes');
 
 const MIME_TYPES: Record<string, string> = {
   '.jpg': 'image/jpeg',

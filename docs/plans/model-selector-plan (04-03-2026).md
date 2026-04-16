@@ -14,7 +14,7 @@
 
 ## File Map
 
-### Desktop (`destinclaude/desktop`)
+### Desktop (`youcoded-core/desktop`)
 
 | File | Action | Responsibility |
 |------|--------|---------------|
@@ -25,7 +25,7 @@
 | `src/renderer/components/StatusBar.tsx` | Modify | Add model cycling chip |
 | `src/renderer/components/App.tsx` | Modify | Wire model state, verification logic, persistence |
 
-### Android (`destincode`)
+### Android (`youcoded`)
 
 | File | Action | Responsibility |
 |------|--------|---------------|
@@ -38,7 +38,7 @@
 
 ---
 
-## Part 1: Desktop App (`destinclaude/desktop`)
+## Part 1: Desktop App (`youcoded-core/desktop`)
 
 ### Task 1: Add `--model` flag to session launch
 
@@ -82,7 +82,7 @@ if (opts.resumeSessionId) {
 
 - [ ] **Step 3: Verify build compiles**
 
-Run: `cd destinclaude/desktop && npx tsc --noEmit`
+Run: `cd youcoded-core/desktop && npx tsc --noEmit`
 Expected: No new errors
 
 - [ ] **Step 4: Commit**
@@ -100,14 +100,14 @@ git commit -m "feat(session): pass --model flag to Claude Code on session launch
 - Modify: `src/main/ipc-handlers.ts`
 - Modify: `src/main/preload.ts`
 
-The desktop stores the user's preferred model in a JSON file at `~/.claude/destincode-model.json`. Format: `{ "model": "sonnet" }`.
+The desktop stores the user's preferred model in a JSON file at `~/.claude/youcoded-model.json`. Format: `{ "model": "sonnet" }`.
 
 - [ ] **Step 1: Add model preference read/write to ipc-handlers.ts**
 
 At the top of the `registerIpcHandlers` function, after the existing file path constants (around line 13), add:
 
 ```typescript
-const modelPrefPath = path.join(os.homedir(), '.claude', 'destincode-model.json');
+const modelPrefPath = path.join(os.homedir(), '.claude', 'youcoded-model.json');
 ```
 
 Then add two IPC handlers after the existing session handlers:
@@ -154,7 +154,7 @@ model: {
 
 - [ ] **Step 3: Verify build compiles**
 
-Run: `cd destinclaude/desktop && npx tsc --noEmit`
+Run: `cd youcoded-core/desktop && npx tsc --noEmit`
 Expected: No new errors
 
 - [ ] **Step 4: Commit**
@@ -217,7 +217,7 @@ readLastModel: (transcriptPath: string): Promise<string | null> =>
 
 - [ ] **Step 3: Verify build compiles**
 
-Run: `cd destinclaude/desktop && npx tsc --noEmit`
+Run: `cd youcoded-core/desktop && npx tsc --noEmit`
 Expected: No new errors
 
 - [ ] **Step 4: Commit**
@@ -295,7 +295,7 @@ After the context percent pill and before the sync warnings, add:
 
 - [ ] **Step 4: Verify build compiles**
 
-Run: `cd destinclaude/desktop && npx tsc --noEmit`
+Run: `cd youcoded-core/desktop && npx tsc --noEmit`
 Expected: No new errors (App.tsx will need updating in the next task to pass the new props, but StatusBar itself should compile)
 
 - [ ] **Step 5: Commit**
@@ -490,7 +490,7 @@ Remove this block. Also remove the `model` prop from the HeaderBar props interfa
 
 - [ ] **Step 11: Verify it runs**
 
-Run: `cd destinclaude/desktop && npm run dev`
+Run: `cd youcoded-core/desktop && npm run dev`
 - StatusBar should show a "Sonnet" chip (default)
 - Clicking should cycle through Sonnet → Opus → Haiku
 - Creating a new session should pass `--model` to Claude Code
@@ -504,7 +504,7 @@ git commit -m "feat(model): wire model cycling state, verification, and persiste
 
 ---
 
-## Part 2: Android App (`destincode`)
+## Part 2: Android App (`youcoded`)
 
 ### Task 6: Add `--model` flag to PtyBridge
 
@@ -544,7 +544,7 @@ val launchCmd = "exec /system/bin/linker64 ${nodePath.absolutePath} ${wrapperPat
 
 - [ ] **Step 3: Verify build**
 
-Run: `cd destincode && ./gradlew assembleDebug`
+Run: `cd youcoded && ./gradlew assembleDebug`
 Expected: Build succeeds
 
 - [ ] **Step 4: Commit**
@@ -620,7 +620,7 @@ fun resumeSession(
 
 - [ ] **Step 4: Verify build**
 
-Run: `cd destincode && ./gradlew assembleDebug`
+Run: `cd youcoded && ./gradlew assembleDebug`
 Expected: Build succeeds
 
 - [ ] **Step 5: Commit**
@@ -706,7 +706,7 @@ Find where `session:create` is handled in SessionService.kt and pass the model f
 
 - [ ] **Step 4: Verify build**
 
-Run: `cd destincode && ./gradlew assembleDebug`
+Run: `cd youcoded && ./gradlew assembleDebug`
 Expected: Build succeeds
 
 - [ ] **Step 5: Commit**
@@ -843,7 +843,7 @@ model && ((0, jsx_runtime_1.jsx)("span", { className: "text-[10px] text-gray-500
 
 - [ ] **Step 6: Verify build**
 
-Run: `cd destincode && ./gradlew assembleDebug`
+Run: `cd youcoded && ./gradlew assembleDebug`
 Expected: Build succeeds
 
 - [ ] **Step 7: Commit**
@@ -956,7 +956,7 @@ Now that transcript events include the model, update the verification in App.js:
 
 - [ ] **Step 5: Verify build**
 
-Run: `cd destincode && ./gradlew assembleDebug`
+Run: `cd youcoded && ./gradlew assembleDebug`
 Expected: Build succeeds
 
 - [ ] **Step 6: Commit**
@@ -1023,7 +1023,7 @@ git commit -m "feat(ui): add error toast for failed model switches"
 - [ ] **Step 1: Test Android — session launch with model**
 
 1. Build and deploy: `./gradlew installDebug`
-2. Open DestinCode, create a new session
+2. Open YouCoded, create a new session
 3. StatusBar should show "Sonnet" chip (default)
 4. Ask Claude "what model are you?" — should report Sonnet
 

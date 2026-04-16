@@ -28,7 +28,7 @@ export function scanSkills(): SkillEntry[] {
     id: string,
     fallbackName: string,
     fallbackDesc: string,
-    inferredSource: 'destinclaude' | 'self' | 'plugin',
+    inferredSource: 'youcoded-core' | 'self' | 'plugin',
     pluginName?: string,
   ) {
     if (discoveredIds.has(id)) return;
@@ -80,13 +80,13 @@ export function scanSkills(): SkillEntry[] {
         const skillEntries = fs.readdirSync(skillsDir, { withFileTypes: true });
         for (const e of skillEntries) {
           if (e.isDirectory() || e.isSymbolicLink()) {
-            // For destinclaude-prefixed packages, keep the bare skill id so
+            // For youcoded-core-prefixed packages, keep the bare skill id so
             // existing favorites/curated defaults referencing bare names
             // (e.g. "journaling-assistant") continue to resolve.
-            const skillId = pluginEntry.name.startsWith('destinclaude')
+            const skillId = pluginEntry.name.startsWith('youcoded-core')
               ? e.name
               : `${pluginEntry.name}:${e.name}`;
-            const source = pluginEntry.name.startsWith('destinclaude') ? 'destinclaude' : 'plugin';
+            const source = pluginEntry.name.startsWith('youcoded-core') ? 'youcoded-core' : 'plugin';
             addSkill(skillId, e.name, '', source, pluginEntry.name);
           }
         }
@@ -137,12 +137,12 @@ export function scanSkills(): SkillEntry[] {
   // shipped by any plugin). Tagged source: 'self' so the UI can render a
   // "User Skill" badge instead of "Installed". Mirrors the skip rules in
   // sync-service.findUnroutedSkills() so toolkit-shipped skill mirrors
-  // (symlinks, or directories also shipped by a destinclaude-* plugin)
+  // (symlinks, or directories also shipped by a youcoded-core-* plugin)
   // are NOT double-counted as user skills.
   try {
     const userSkillsDir = path.join(claudeDir, 'skills');
-    const destinclaudePluginDirs = readdirSafe(pluginsDir)
-      .filter(d => d.isDirectory() && d.name.startsWith('destinclaude'))
+    const youcoded-corePluginDirs = readdirSafe(pluginsDir)
+      .filter(d => d.isDirectory() && d.name.startsWith('youcoded-core'))
       .map(d => path.join(pluginsDir, d.name));
 
     for (const entry of readdirSafe(userSkillsDir)) {
@@ -152,9 +152,9 @@ export function scanSkills(): SkillEntry[] {
       // Skip symlinks — those are toolkit-managed mirrors (legacy layout).
       try { if (fs.lstatSync(skillDir).isSymbolicLink()) continue; } catch { continue; }
 
-      // Skip if a destinclaude-* plugin already ships a skill with this name
+      // Skip if a youcoded-core-* plugin already ships a skill with this name
       // — the on-disk copy is a mirror, not user-authored content.
-      const isToolkitMirror = destinclaudePluginDirs.some(p =>
+      const isToolkitMirror = youcoded-corePluginDirs.some(p =>
         fs.existsSync(path.join(p, 'skills', entry.name)),
       );
       if (isToolkitMirror) continue;

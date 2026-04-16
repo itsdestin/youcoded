@@ -13,11 +13,11 @@ val keystoreProperties = Properties().apply {
 }
 
 android {
-    namespace = "com.destin.code"
+    namespace = "com.youcoded.app"
     compileSdk = 35
 
     defaultConfig {
-        applicationId = "com.destin.code"
+        applicationId = "com.youcoded.app"
         minSdk = 28
         targetSdk = 35
         versionCode = 11
@@ -28,7 +28,7 @@ android {
         create("release") {
             storeFile = file(keystoreProperties.getProperty("storeFile", "release-keystore.jks"))
             storePassword = keystoreProperties.getProperty("storePassword", "")
-            keyAlias = keystoreProperties.getProperty("keyAlias", "destincode")
+            keyAlias = keystoreProperties.getProperty("keyAlias", "youcoded")
             keyPassword = keystoreProperties.getProperty("keyPassword", "")
         }
     }

@@ -17,19 +17,19 @@ import midnightJson from '../themes/builtin/midnight.json';
 import cremeJson from '../themes/builtin/creme.json';
 
 const BUILTIN_THEMES: LoadedTheme[] = [
-  { ...(lightJson as unknown as ThemeDefinition), source: 'destinclaude' },
-  { ...(darkJson as unknown as ThemeDefinition), source: 'destinclaude' },
-  { ...(midnightJson as unknown as ThemeDefinition), source: 'destinclaude' },
-  { ...(cremeJson as unknown as ThemeDefinition), source: 'destinclaude' },
+  { ...(lightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
+  { ...(darkJson as unknown as ThemeDefinition), source: 'youcoded-core' },
+  { ...(midnightJson as unknown as ThemeDefinition), source: 'youcoded-core' },
+  { ...(cremeJson as unknown as ThemeDefinition), source: 'youcoded-core' },
 ];
 
 export const DEFAULT_FONT_FAMILY = "'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace";
 
-const STORAGE_KEY = 'destincode-theme';
-const CYCLE_KEY = 'destincode-theme-cycle';
-const REDUCED_EFFECTS_KEY = 'destincode-reduced-effects';
-const SHOW_TIMESTAMPS_KEY = 'destincode-show-timestamps';
-const GLASS_OVERRIDES_KEY = 'destincode-glass-overrides';
+const STORAGE_KEY = 'youcoded-theme';
+const CYCLE_KEY = 'youcoded-theme-cycle';
+const REDUCED_EFFECTS_KEY = 'youcoded-reduced-effects';
+const SHOW_TIMESTAMPS_KEY = 'youcoded-show-timestamps';
+const GLASS_OVERRIDES_KEY = 'youcoded-glass-overrides';
 const DEFAULT_THEME = 'midnight';
 const DEFAULT_CYCLE = ['midnight', 'dark'];
 
@@ -352,7 +352,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // the Android WebView shim deliberately omits window.* (launcher icons can't
     // be swapped at runtime), so this is a no-op there.
     // If the theme declares its own appIcon we use it directly; otherwise we
-    // synthesize a theme-tinted variant of the default DestinCode glyph so every
+    // synthesize a theme-tinted variant of the default YouCoded glyph so every
     // theme (built-in, community, user, marketplace) gets a matching icon without
     // shipping per-theme artwork.
     let iconCancelled = false;

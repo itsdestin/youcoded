@@ -131,7 +131,7 @@ export interface SkillEntry {
   description: string;
   category: 'personal' | 'work' | 'development' | 'admin' | 'other';
   prompt: string;
-  source: 'destinclaude' | 'self' | 'plugin' | 'marketplace';
+  source: 'youcoded-core' | 'self' | 'plugin' | 'marketplace';
   pluginName?: string;
 
   // New — marketplace fields
@@ -171,7 +171,7 @@ export interface SkillEntry {
 
   // Source info from index.json — needed by the in-app file viewer to fetch
   // raw SKILL.md/commands/agents content when the plugin isn't installed.
-  // 'local' = subdir in destincode-marketplace repo (sourceRef is that subdir).
+  // 'local' = subdir in wecoded-marketplace repo (sourceRef is that subdir).
   // 'url' = git URL (sourceRef is the clone URL).
   // 'git-subdir' = git URL with a subdir (sourceRef is clone URL, sourceSubdir is the subdir).
   sourceType?: string;
@@ -289,7 +289,7 @@ export interface SkillProvider {
 }
 
 // Marketplace redesign Phase 1 — discovery curation. Driven by featured.json
-// in the destincode-marketplace repo; edited via /feature admin skill.
+// in the wecoded-marketplace repo; edited via /feature admin skill.
 export interface FeaturedHeroSlot {
   id: string;
   blurb: string;

@@ -36,7 +36,7 @@ interface SkillContextValue extends SkillState, SkillActions {
 // one-time seeded into favorites. Once an id is in this list we never re-seed it,
 // so unfavoriting it sticks. Adding NEW curated defaults later still seeds them
 // the next time the app loads.
-const SEEDED_KEY = 'destincode-seeded-favorites';
+const SEEDED_KEY = 'youcoded-seeded-favorites';
 
 const SkillContext = createContext<SkillContextValue | null>(null);
 
@@ -131,7 +131,7 @@ export function SkillProvider({ children }: { children: ReactNode }) {
 
   // Drawer shows only user favorites. Curated defaults seed favorites on first run
   // (see initial-load effect); after that the user fully controls what's in the drawer.
-  // Favorites may hold PACKAGE ids (e.g. "destinclaude-encyclopedia") post-decomposition,
+  // Favorites may hold PACKAGE ids (e.g. "youcoded-core-encyclopedia") post-decomposition,
   // so also match skill.pluginName — a single favorited package surfaces all its skills.
   const drawerSkills = useMemo(() => {
     const favSet = new Set(favorites);

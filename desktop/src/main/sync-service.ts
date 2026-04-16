@@ -1,7 +1,7 @@
 /**
- * sync-service.ts — Native sync engine for DestinCode.
+ * sync-service.ts — Native sync engine for YouCoded.
  *
- * Ports the DestinClaude toolkit's sync orchestration from bash (sync.sh,
+ * Ports the YouCoded toolkit's sync orchestration from bash (sync.sh,
  * session-start.sh, session-end-sync.sh, backup-common.sh) into a Node.js
  * service running in the Electron main process.
  *
@@ -905,12 +905,12 @@ export class SyncService extends EventEmitter {
 
     // Auto-detect by platform
     const candidates = [
-      path.join(os.homedir(), 'Library/Mobile Documents/com~apple~CloudDocs/DestinClaude'),
-      path.join(os.homedir(), 'iCloudDrive/DestinClaude'),
-      path.join(os.homedir(), 'Apple/CloudDocs/DestinClaude'),
+      path.join(os.homedir(), 'Library/Mobile Documents/com~apple~CloudDocs/YouCoded'),
+      path.join(os.homedir(), 'iCloudDrive/YouCoded'),
+      path.join(os.homedir(), 'Apple/CloudDocs/YouCoded'),
     ];
     for (const c of candidates) {
-      // Check parent dir exists (DestinClaude subdir may not yet)
+      // Check parent dir exists (YouCoded subdir may not yet)
       if (this.dirExists(path.dirname(c))) return c;
     }
     return null;
@@ -1611,8 +1611,8 @@ export class SyncService extends EventEmitter {
     for (const candidate of icloudCandidates) {
       if (this.dirExists(candidate)) {
         const claudeDir = path.join(candidate, 'Claude');
-        const destinclaude = path.join(candidate, 'DestinClaude');
-        if (this.dirExists(path.join(claudeDir, 'Backup')) || this.dirExists(destinclaude)) {
+        const youcoded-core = path.join(candidate, 'YouCoded');
+        if (this.dirExists(path.join(claudeDir, 'Backup')) || this.dirExists(youcoded-core)) {
           return 'icloud';
         }
       }
@@ -1635,14 +1635,14 @@ export class SyncService extends EventEmitter {
     const pluginsDir = path.join(this.claudeDir, 'plugins');
 
     // Decomposition v3 §9.7: after decomposition there are no more core/life/
-    // productivity layers inside the monolith — every destinclaude-owned skill
-    // lives in its own plugin directory (destinclaude, destinclaude-encyclopedia,
-    // destinclaude-food, etc.). A skill under ~/.claude/skills/ is considered a
-    // toolkit copy if any destinclaude-prefixed plugin ships the same skill.
-    const destinclaudePluginDirs: string[] = (() => {
+    // productivity layers inside the monolith — every youcoded-core-owned skill
+    // lives in its own plugin directory (youcoded-core, youcoded-core-encyclopedia,
+    // youcoded-core-food, etc.). A skill under ~/.claude/skills/ is considered a
+    // toolkit copy if any youcoded-core-prefixed plugin ships the same skill.
+    const youcoded-corePluginDirs: string[] = (() => {
       try {
         return fs.readdirSync(pluginsDir, { withFileTypes: true })
-          .filter(d => d.isDirectory() && d.name.startsWith('destinclaude'))
+          .filter(d => d.isDirectory() && d.name.startsWith('youcoded-core'))
           .map(d => path.join(pluginsDir, d.name));
       } catch { return []; }
     })();
@@ -1656,11 +1656,11 @@ export class SyncService extends EventEmitter {
       // Skip symlinks (toolkit-managed — legacy, pre-decomposition)
       try { if (fs.lstatSync(skillDir).isSymbolicLink()) continue; } catch { continue; }
 
-      // Skip if any destinclaude-prefixed plugin ships this skill under its
+      // Skip if any youcoded-core-prefixed plugin ships this skill under its
       // skills/ directory — that means the user's local copy is a mirror of
       // a toolkit-managed skill, not a user-authored one.
       let isToolkitCopy = false;
-      for (const pluginDir of destinclaudePluginDirs) {
+      for (const pluginDir of youcoded-corePluginDirs) {
         if (this.dirExists(path.join(pluginDir, 'skills', skillName))) {
           isToolkitCopy = true;
           break;

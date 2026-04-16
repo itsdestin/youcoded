@@ -16,7 +16,7 @@ export interface ResolverInputs {
   degradedReason?: string;
 }
 
-const MARKETPLACE_BASE = 'https://github.com/itsdestin/destinclaude-themes/tree/main/themes';
+const MARKETPLACE_BASE = 'https://github.com/itsdestin/wecoded-themes/tree/main/themes';
 
 export function resolvePublishState(inputs: ResolverInputs): PublishState {
   // Degraded mode: gh CLI unavailable or unauthenticated — we can't trust PR state.

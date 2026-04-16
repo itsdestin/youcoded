@@ -63,9 +63,9 @@ describe('resolveAllAssetPaths', () => {
     expect(resolved.cursor).toBe('theme-asset://test/assets/cursor.svg');
   });
 
-  it('does not modify destinclaude themes', () => {
+  it('does not modify youcoded-core themes', () => {
     const theme = {
-      name: 'Light', slug: 'light', dark: false, source: 'destinclaude' as const,
+      name: 'Light', slug: 'light', dark: false, source: 'youcoded-core' as const,
       tokens: {} as any,
     };
     const resolved = resolveAllAssetPaths(theme);

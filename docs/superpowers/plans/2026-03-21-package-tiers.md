@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add a tiered package system so developers can opt into additional CLI tools (ripgrep, jq, tmux, neovim, etc.) during bootstrap, transforming DestinCode from a personal-assistant wrapper into a capable mobile development environment.
+**Goal:** Add a tiered package system so developers can opt into additional CLI tools (ripgrep, jq, tmux, neovim, etc.) during bootstrap, transforming YouCoded from a personal-assistant wrapper into a capable mobile development environment.
 
 **Architecture:** Package tiers are stored in SharedPreferences and read by Bootstrap during `installPackages()`. The existing dynamic package resolution system (`fetchPackagesIndex()`, `parsePackagesIndex()`, SHA256 verification) handles all installation — we just expand `requiredPackages` to a function that returns packages based on the selected tier. A tier picker screen shows during first-run setup (before bootstrap), and a settings entry point in the session header allows changing tiers post-setup (triggering re-bootstrap for new packages).
 
@@ -163,7 +163,7 @@ enum class PackageTier(
 
 - [x] **Step 2: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -5`
 
 Expected: BUILD SUCCESSFUL
 
@@ -193,7 +193,7 @@ import android.content.Context
  * Not encrypted — tier selection is not sensitive data.
  */
 class TierStore(context: Context) {
-    private val prefs = context.getSharedPreferences("destincode_tiers", Context.MODE_PRIVATE)
+    private val prefs = context.getSharedPreferences("youcoded_tiers", Context.MODE_PRIVATE)
 
     var selectedTier: PackageTier
         get() {
@@ -210,7 +210,7 @@ class TierStore(context: Context) {
 
 - [x] **Step 2: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -5`
 
 Expected: BUILD SUCCESSFUL
 
@@ -396,7 +396,7 @@ to:
 
 - [x] **Step 7: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -5`
 
 Expected: BUILD SUCCESSFUL
 
@@ -455,7 +455,7 @@ fun TierPickerScreen(
     ) {
         Spacer(modifier = Modifier.height(48.dp))
         Text(
-            "DestinCode",
+            "YouCoded",
             style = MaterialTheme.typography.headlineLarge,
             color = MaterialTheme.colorScheme.primary,
         )
@@ -543,7 +543,7 @@ private fun TierCard(
 
 - [x] **Step 2: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -5`
 
 Expected: BUILD SUCCESSFUL
 
@@ -638,7 +638,7 @@ In the `else` block (app already bootstrapped), before the self-test, add a `Lau
 
 - [x] **Step 3: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -5`
 
 Expected: BUILD SUCCESSFUL
 
@@ -747,7 +747,7 @@ Note: For v1, changing the tier takes effect on next app restart (bootstrap re-r
 
 - [x] **Step 4: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -5`
 
 Expected: BUILD SUCCESSFUL
 
@@ -810,7 +810,7 @@ Read QuickChips.kt to find where `defaultChips` is referenced, and update it to 
 
 - [x] **Step 3: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew assembleDebug 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew assembleDebug 2>&1 | tail -5`
 
 Expected: BUILD SUCCESSFUL
 

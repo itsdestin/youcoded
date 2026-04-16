@@ -6,7 +6,7 @@
  * The host popup keeps a `showInfo` boolean and renders this component instead
  * of its main content, so the user can back out to the original settings.
  *
- * Content is intentionally written in plain layman's terms — DestinCode is
+ * Content is intentionally written in plain layman's terms — YouCoded is
  * built for non-developers and these explainers double as in-app help.
  */
 

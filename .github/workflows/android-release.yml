@@ -38,7 +38,7 @@ jobs:
         run: |
           echo "storeFile=release-keystore.jks" > keystore.properties
           echo "storePassword=${{ secrets.KEYSTORE_PASSWORD }}" >> keystore.properties
-          echo "keyAlias=destincode" >> keystore.properties
+          echo "keyAlias=youcoded" >> keystore.properties
           echo "keyPassword=${{ secrets.KEYSTORE_PASSWORD }}" >> keystore.properties
 
       - name: Decode keystore
@@ -53,14 +53,14 @@ jobs:
       - name: Upload APK artifact
         uses: actions/upload-artifact@v4
         with:
-          name: destincode-release-apk
+          name: youcoded-release-apk
           path: app/build/outputs/apk/release/*.apk
           retention-days: 30
 
       - name: Upload AAB artifact
         uses: actions/upload-artifact@v4
         with:
-          name: destincode-release-aab
+          name: youcoded-release-aab
           path: app/build/outputs/bundle/release/*.aab
           retention-days: 30
 

@@ -9,7 +9,7 @@ date: 2026-04-05
 
 ## Overview
 
-Transform the DestinCode command menu/dashboard into a comprehensive skill management system and marketplace. Users can browse, install, create, edit, share, and publish skills. The CommandDrawer becomes a curated quick-launch surface; a new full-screen Marketplace handles discovery; and a SkillManager provides local management and chip configuration.
+Transform the YouCoded command menu/dashboard into a comprehensive skill management system and marketplace. Users can browse, install, create, edit, share, and publish skills. The CommandDrawer becomes a curated quick-launch surface; a new full-screen Marketplace handles discovery; and a SkillManager provides local management and chip configuration.
 
 ## Key Decisions
 
@@ -44,7 +44,7 @@ Private vs Shared is a user-facing distinction: Private skills have sharing disa
 
 The drawer is no longer "show everything." It shows:
 - Skills the user has favorited
-- Skills in `curated-defaults.json` from the registry (the DestinClaude default set)
+- Skills in `curated-defaults.json` from the registry (the YouCoded default set)
 - Deduplicated, grouped by category
 
 A pencil icon in the drawer header opens the SkillManager for customization.
@@ -67,7 +67,7 @@ interface SkillEntry {
   description: string;
   category: 'personal' | 'work' | 'development' | 'admin' | 'other';
   prompt: string;
-  source: 'destinclaude' | 'self' | 'plugin' | 'marketplace';
+  source: 'youcoded-core' | 'self' | 'plugin' | 'marketplace';
   pluginName?: string;
 
   // New
@@ -86,7 +86,7 @@ interface SkillEntry {
 
 ### UserSkillConfig
 
-Stored at `~/.claude/destincode-skills.json`. Shared between desktop and Android via filesystem.
+Stored at `~/.claude/youcoded-skills.json`. Shared between desktop and Android via filesystem.
 
 ```typescript
 interface UserSkillConfig {
@@ -204,7 +204,7 @@ desktop/src/
 app/src/main/kotlin/com/destin/code/skills/
 ├── LocalSkillProvider.kt           # Kotlin port of desktop provider
 ├── SkillScanner.kt                 # Walks ~/.claude/plugins/
-├── SkillConfigStore.kt             # Reads/writes destincode-skills.json
+├── SkillConfigStore.kt             # Reads/writes youcoded-skills.json
 ├── MarketplaceFetcher.kt           # HTTP fetch + cache of registry
 └── SkillShareCodec.kt              # Encode/decode share links
 ```
@@ -228,7 +228,7 @@ React UI (CommandDrawer, Marketplace, SkillManager)
   LocalSkillProvider
         │
         ├── SkillScanner → ~/.claude/plugins/ (installed skills)
-        ├── SkillConfigStore → ~/.claude/destincode-skills.json (preferences)
+        ├── SkillConfigStore → ~/.claude/youcoded-skills.json (preferences)
         └── MarketplaceFetcher → GitHub raw URLs (registry + stats)
 ```
 
@@ -319,14 +319,14 @@ window.claude.skills = {
 
 **Prompt shortcuts** (self-contained):
 ```
-destincode://skill/<base64url-encoded JSON payload>
+youcoded://skill/<base64url-encoded JSON payload>
 ```
 
 Payload: `{ v, type, displayName, description, prompt, category, author }`
 
 **Full plugins** (pointer to repo):
 ```
-destincode://plugin/<base64url-encoded JSON payload>
+youcoded://plugin/<base64url-encoded JSON payload>
 ```
 
 Payload: `{ v, type, name, displayName, description, repoUrl, pluginPath, author }`
@@ -337,9 +337,9 @@ Generated client-side from the deep link URL. Scanned with existing `QrScannerOv
 
 ### Import flow
 
-1. Parse `destincode://` URL
+1. Parse `youcoded://` URL
 2. Validate and sanitize payload (length limits: 100 chars name, 500 desc, 2000 prompt)
-3. Prompt shortcuts → written to `destincode-skills.json`, Toast confirmation
+3. Prompt shortcuts → written to `youcoded-skills.json`, Toast confirmation
 4. Plugins → deferred to V2 (clone from repo)
 
 > **V1 note:** Skips confirmation sheet — imports directly. Android handles via `MainActivity.handleDeepLink()`.
@@ -355,7 +355,7 @@ Generated client-side from the deep link URL. Scanned with existing `QrScannerOv
 
 ### Android deep link registration
 
-Intent filter in `AndroidManifest.xml` for `destincode://` scheme. `MainActivity.kt` routes to import flow.
+Intent filter in `AndroidManifest.xml` for `youcoded://` scheme. `MainActivity.kt` routes to import flow.
 
 ---
 
@@ -364,7 +364,7 @@ Intent filter in `AndroidManifest.xml` for `destincode://` scheme. `MainActivity
 ### Repository structure
 
 ```
-destincode-marketplace/
+wecoded-marketplace/
 ├── featured.json         # hand-curated featured list
 ├── curated-defaults.json # CommandDrawer default skill IDs
 ├── stats.json            # rebuilt daily by GitHub Action
@@ -421,7 +421,7 @@ GitHub Action rebuilds `stats.json` daily. V1: install counts approximated from 
 
 - User metadata overrides always win over registry data. "Reset to default" restores originals.
 - Curated default removed from registry: disappears from drawer unless favorited.
-- Desktop vs Android config: last write wins (same `destincode-skills.json` file).
+- Desktop vs Android config: last write wins (same `youcoded-skills.json` file).
 
 ### Limits
 
@@ -432,7 +432,7 @@ GitHub Action rebuilds `stats.json` daily. V1: install counts approximated from 
 
 ### Migration (first launch after update)
 
-1. Create `destincode-skills.json` if missing
+1. Create `youcoded-skills.json` if missing
 2. Populate `favorites` with all current `skill-registry.json` entries
 3. Populate `chips` with current hardcoded `defaultChips`
 4. No overrides or private skills initially

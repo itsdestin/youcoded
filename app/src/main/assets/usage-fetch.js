@@ -1,5 +1,5 @@
 // Fetches Claude Code usage limits from the OAuth API and caches the result.
-// Mobile-bundled version — deployed by DestinCode to keep .usage-cache.json fresh.
+// Mobile-bundled version — deployed by YouCoded to keep .usage-cache.json fresh.
 const fs = require('fs');
 const path = require('path');
 

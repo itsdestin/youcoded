@@ -192,7 +192,7 @@
   --color-red-500: #DD4444;
   --color-amber-700: #FF9800;
 
-  /* All-monospace typography (matches DestinCode's Cascadia Mono everywhere) */
+  /* All-monospace typography (matches YouCoded's Cascadia Mono everywhere) */
   --font-sans: 'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace;
   --font-mono: 'Cascadia Mono', 'Cascadia Code', 'Fira Code', monospace;
 }

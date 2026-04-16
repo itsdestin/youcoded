@@ -560,7 +560,7 @@ export default function SessionStrip({
       let resolved: { targetWindowId: number | null } = { targetWindowId: null };
       try { resolved = await det?.dropResolve?.(); } catch { /* fall through */ }
 
-      const myId = (window as any).__destincodeWindowId;
+      const myId = (window as any).__youcodedWindowId;
       const target = resolved?.targetWindowId;
 
       if (target != null && target !== myId) {

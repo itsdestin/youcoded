@@ -9,7 +9,7 @@ function state(overrides: Partial<FirstRunState> = {}): FirstRunState {
       { name: 'node', displayName: 'Node.js', status: 'waiting' },
       { name: 'git', displayName: 'Git', status: 'waiting' },
       { name: 'claude', displayName: 'Claude Code', status: 'waiting' },
-      { name: 'toolkit', displayName: 'DestinClaude Toolkit', status: 'waiting' },
+      { name: 'toolkit', displayName: 'YouCoded Toolkit', status: 'waiting' },
       { name: 'auth', displayName: 'Sign in', status: 'waiting' },
     ],
     overallProgress: 0,
@@ -34,7 +34,7 @@ describe('describeStep', () => {
         { name: 'node', displayName: 'Node.js', status: 'installing' },
         { name: 'git', displayName: 'Git', status: 'waiting' },
         { name: 'claude', displayName: 'Claude Code', status: 'waiting' },
-        { name: 'toolkit', displayName: 'DestinClaude Toolkit', status: 'waiting' },
+        { name: 'toolkit', displayName: 'YouCoded Toolkit', status: 'waiting' },
         { name: 'auth', displayName: 'Sign in', status: 'waiting' },
       ],
     });
@@ -50,12 +50,12 @@ describe('describeStep', () => {
         { name: 'node', displayName: 'Node.js', status: 'installed', version: 'v20.11.0' },
         { name: 'git', displayName: 'Git', status: 'installing' },
         { name: 'claude', displayName: 'Claude Code', status: 'waiting' },
-        { name: 'toolkit', displayName: 'DestinClaude Toolkit', status: 'waiting' },
+        { name: 'toolkit', displayName: 'YouCoded Toolkit', status: 'waiting' },
         { name: 'auth', displayName: 'Sign in', status: 'waiting' },
       ],
     });
     expect(describeStep(s)).toBe(
-      'Installing Git — used to keep DestinCode and your skills up to date.',
+      'Installing Git — used to keep YouCoded and your skills up to date.',
     );
   });
 
@@ -66,12 +66,12 @@ describe('describeStep', () => {
         { name: 'node', displayName: 'Node.js', status: 'installed' },
         { name: 'git', displayName: 'Git', status: 'installed' },
         { name: 'claude', displayName: 'Claude Code', status: 'installing' },
-        { name: 'toolkit', displayName: 'DestinClaude Toolkit', status: 'waiting' },
+        { name: 'toolkit', displayName: 'YouCoded Toolkit', status: 'waiting' },
         { name: 'auth', displayName: 'Sign in', status: 'waiting' },
       ],
     });
     expect(describeStep(s)).toBe(
-      'Installing Claude Code — the AI that powers DestinCode.',
+      'Installing Claude Code — the AI that powers YouCoded.',
     );
   });
 
@@ -82,12 +82,12 @@ describe('describeStep', () => {
         { name: 'node', displayName: 'Node.js', status: 'installed' },
         { name: 'git', displayName: 'Git', status: 'installed' },
         { name: 'claude', displayName: 'Claude Code', status: 'installed' },
-        { name: 'toolkit', displayName: 'DestinClaude Toolkit', status: 'installing' },
+        { name: 'toolkit', displayName: 'YouCoded Toolkit', status: 'installing' },
         { name: 'auth', displayName: 'Sign in', status: 'waiting' },
       ],
     });
     expect(describeStep(s)).toBe(
-      'Installing the DestinClaude toolkit — skills, themes, and sync.',
+      'Installing the YouCoded toolkit — skills, themes, and sync.',
     );
   });
 
@@ -103,9 +103,9 @@ describe('describeStep', () => {
 
   it('describes the completion step', () => {
     expect(describeStep(state({ currentStep: 'LAUNCH_WIZARD' })))
-      .toBe('All set. Opening DestinCode…');
+      .toBe('All set. Opening YouCoded…');
     expect(describeStep(state({ currentStep: 'COMPLETE' })))
-      .toBe('All set. Opening DestinCode…');
+      .toBe('All set. Opening YouCoded…');
   });
 
   it('describes an error state when lastError is set', () => {

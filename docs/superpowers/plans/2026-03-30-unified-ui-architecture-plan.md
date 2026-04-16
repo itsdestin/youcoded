@@ -170,7 +170,7 @@ private class ServerWebSocket : AutoCloseable {
 
 - [ ] **Step 4: Sync Gradle and verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 5: Commit**
@@ -308,7 +308,7 @@ class TranscriptSerializerTest {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.TranscriptSerializerTest" 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.TranscriptSerializerTest" 2>&1 | tail -10`
 Expected: FAIL — `TranscriptSerializer` class not found
 
 - [ ] **Step 3: Implement TranscriptSerializer**
@@ -413,7 +413,7 @@ object TranscriptSerializer {
 
 - [ ] **Step 4: Run TranscriptSerializer tests**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.TranscriptSerializerTest" 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.TranscriptSerializerTest" 2>&1 | tail -10`
 Expected: ALL PASS
 
 - [ ] **Step 5: Write HookSerializer tests**
@@ -476,7 +476,7 @@ class HookSerializerTest {
 
 - [ ] **Step 6: Run HookSerializer tests to verify they fail**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.HookSerializerTest" 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.HookSerializerTest" 2>&1 | tail -10`
 Expected: FAIL — `HookSerializer` class not found
 
 - [ ] **Step 7: Implement HookSerializer**
@@ -545,7 +545,7 @@ object HookSerializer {
 
 - [ ] **Step 8: Run all serializer tests**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.*" 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.*" 2>&1 | tail -10`
 Expected: ALL PASS
 
 - [ ] **Step 9: Commit**
@@ -643,7 +643,7 @@ class MessageRouterTest {
 
 - [ ] **Step 2: Run tests to verify they fail**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.MessageRouterTest" 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.MessageRouterTest" 2>&1 | tail -10`
 Expected: FAIL — `MessageRouter` class not found
 
 - [ ] **Step 3: Implement MessageRouter**
@@ -729,7 +729,7 @@ object MessageRouter {
 
 - [ ] **Step 4: Run MessageRouter tests**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.MessageRouterTest" 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.MessageRouterTest" 2>&1 | tail -10`
 Expected: ALL PASS
 
 - [ ] **Step 5: Implement the full WebSocket server in LocalBridgeServer**
@@ -878,12 +878,12 @@ In `app/build.gradle.kts`, replace the OkHttp mockwebserver line with:
 
 - [ ] **Step 7: Sync Gradle and verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 8: Run all bridge tests**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.*" 2>&1 | tail -10`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:testDebugUnitTest --tests "com.destin.code.bridge.*" 2>&1 | tail -10`
 Expected: ALL PASS
 
 - [ ] **Step 9: Commit**
@@ -1038,7 +1038,7 @@ class PlatformBridge(
 
 - [ ] **Step 2: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 3: Commit**
@@ -1282,7 +1282,7 @@ In `SessionRegistry.createSession()`, after `ManagedSession` is constructed, add
 
 - [ ] **Step 7: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 8: Commit**
@@ -1399,7 +1399,7 @@ fun WebViewHost(
 
 - [ ] **Step 2: Verify build**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:compileDebugKotlin 2>&1 | tail -5`
 Expected: BUILD SUCCESSFUL
 
 - [ ] **Step 3: Commit**
@@ -1423,12 +1423,12 @@ git commit -m "feat(ui): add WebViewHost composable for React chat UI"
 - Modify: `desktop/src/renderer/components/QuickChips.tsx`
 - Modify: `desktop/src/main/remote-server.ts`
 
-This task is done in the **desktop repo** (`destinclaude`), on a matching branch.
+This task is done in the **desktop repo** (`youcoded-core`), on a matching branch.
 
 - [ ] **Step 1: Create branch in desktop repo**
 
 ```bash
-cd /path/to/destinclaude
+cd /path/to/youcoded-core
 git checkout -b unified-ui-architecture
 ```
 
@@ -1594,7 +1594,7 @@ window.claude.on.uiAction((action: any) => {
 - [ ] **Step 11: Build and verify**
 
 ```bash
-cd /path/to/destinclaude/desktop
+cd /path/to/youcoded-core/desktop
 npm run build
 ```
 Expected: Build succeeds with no errors
@@ -1619,7 +1619,7 @@ This is the big migration step. We gut `ChatScreen.kt` and replace the Compose c
 - [ ] **Step 1: Delete Compose chat UI files**
 
 ```bash
-cd /c/Users/desti/destincode
+cd /c/Users/desti/youcoded
 rm app/src/main/kotlin/com/destin/code/ui/state/ChatReducer.kt
 rm app/src/main/kotlin/com/destin/code/ui/state/ChatTypes.kt
 rm app/src/main/kotlin/com/destin/code/ui/AssistantTurnBubble.kt
@@ -1750,7 +1750,7 @@ var permissionMode: String = "Normal"
 
 - [ ] **Step 4: Verify build compiles**
 
-Run: `cd /c/Users/desti/destincode && ./gradlew app:compileDebugKotlin 2>&1 | tail -20`
+Run: `cd /c/Users/desti/youcoded && ./gradlew app:compileDebugKotlin 2>&1 | tail -20`
 Expected: BUILD SUCCESSFUL (may require iterating on compilation fixes)
 
 - [ ] **Step 5: Commit**
@@ -1781,9 +1781,9 @@ Create `scripts/build-web-ui.sh` at the mobile repo root:
 set -euo pipefail
 
 # Build the React UI from the desktop repo and copy into mobile assets.
-# Usage: ./scripts/build-web-ui.sh /path/to/destinclaude
+# Usage: ./scripts/build-web-ui.sh /path/to/youcoded-core
 
-DESKTOP_REPO="${1:?Usage: $0 /path/to/destinclaude}"
+DESKTOP_REPO="${1:?Usage: $0 /path/to/youcoded-core}"
 ASSETS_DIR="app/src/main/assets/web"
 
 echo "Building React UI from $DESKTOP_REPO/desktop..."
@@ -1817,7 +1817,7 @@ Create `app/src/main/assets/web/index.html`:
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, maximum-scale=1, user-scalable=no">
-    <title>DestinCode</title>
+    <title>YouCoded</title>
     <style>
         body {
             background: #111111;
@@ -1834,7 +1834,7 @@ Create `app/src/main/assets/web/index.html`:
 <body>
     <div>
         <p>React UI not bundled yet.</p>
-        <p>Run: <code>./scripts/build-web-ui.sh /path/to/destinclaude</code></p>
+        <p>Run: <code>./scripts/build-web-ui.sh /path/to/youcoded-core</code></p>
     </div>
 </body>
 </html>
@@ -1858,8 +1858,8 @@ This task verifies the full pipeline works end-to-end.
 - [ ] **Step 1: Build the React UI**
 
 ```bash
-cd /c/Users/desti/destincode
-./scripts/build-web-ui.sh /path/to/destinclaude
+cd /c/Users/desti/youcoded
+./scripts/build-web-ui.sh /path/to/youcoded-core
 ```
 
 - [ ] **Step 2: Build and install the APK**

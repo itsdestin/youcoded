@@ -2,7 +2,7 @@
   "name": "Midnight",
   "slug": "midnight",
   "dark": true,
-  "source": "destinclaude",
+  "source": "youcoded-core",
   "tokens": {
     "canvas": "#0D1117",
     "panel": "#161B22",

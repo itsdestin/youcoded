@@ -1,6 +1,6 @@
 // theme-pr-lookup.ts
 // Thin wrapper around `gh pr list` to check whether a theme submission has an
-// open or recently-merged PR in the destinclaude-themes repo.
+// open or recently-merged PR in the wecoded-themes repo.
 //
 // Used by publish-state-resolver to bridge the post-merge / pre-registry-CI
 // window: after a PR merges, the registry hasn't rebuilt yet, so the theme
@@ -16,7 +16,7 @@
 import { execFile as _execFile } from 'child_process';
 import { promisify } from 'util';
 
-const REPO = 'itsdestin/destinclaude-themes';
+const REPO = 'itsdestin/wecoded-themes';
 const DEFAULT_TTL_MS = 60_000;
 // How far back to look when searching for recently-merged PRs.
 const MERGED_WINDOW_MIN = 5;

@@ -99,9 +99,9 @@ async function main() {
     env: {
       ...process.env,
       // Prevent port conflicts with any running instance
-      DESTINCODE_REMOTE_PORT: String(port),
+      YOUCODED_REMOTE_PORT: String(port),
       // Signal to the app that this is a smoke test (not used yet, but useful for future)
-      DESTINCODE_SMOKE_TEST: '1',
+      YOUCODED_SMOKE_TEST: '1',
     },
     timeout: TIMEOUT_MS,
   });

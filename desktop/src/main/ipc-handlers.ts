@@ -149,7 +149,7 @@ export function registerIpcHandlers(
   //      compromised renderer from flooding main with huge buffers.
   // Anything else (or null, or failure) resets to the bundled default icon.
   const DEFAULT_ICON_PATH = path.join(__dirname, '../../assets/icon.png');
-  const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'destinclaude-themes');
+  const THEMES_DIR_FOR_ICON = path.join(os.homedir(), '.claude', 'wecoded-themes');
   const MAX_DATA_ICON_BYTES = 1024 * 1024; // 1 MB — a 256px PNG is typically <100KB
   ipcMain.handle(IPC.WINDOW_SET_ICON, (_e, url: string | null) => {
     if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -216,7 +216,7 @@ export function registerIpcHandlers(
 
   // --- Theme marketplace ---
   // Phase 3a: pass the shared config store so theme installs also record into
-  // the unified destincode-skills.json packages map used for update tracking.
+  // the unified youcoded-skills.json packages map used for update tracking.
   const themeMarketplace = new ThemeMarketplaceProvider(skillProvider.configStore);
   // Phase 3 scaffold — kept inline (not a constructor arg) so this file is
   // the only thing that changes when the installer grows real OAuth wiring.
@@ -407,9 +407,9 @@ export function registerIpcHandlers(
     return filePath;
   });
 
-  // Open the DestinClaude CHANGELOG on GitHub in the default browser
+  // Open the YouCoded CHANGELOG on GitHub in the default browser
   ipcMain.handle(IPC.OPEN_CHANGELOG, async () => {
-    await shell.openExternal('https://github.com/itsdestin/destincode/blob/master/CHANGELOG.md');
+    await shell.openExternal('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md');
   });
 
   // Open any URL in the default browser (allowlisted to https only)
@@ -453,10 +453,10 @@ export function registerIpcHandlers(
   });
 
   // --- Model modes (fast + effort) persistence ---
-  // ~/.claude/destincode-model-modes.json holds `{ fast, effort }`. These aren't
+  // ~/.claude/youcoded-model-modes.json holds `{ fast, effort }`. These aren't
   // verified from transcripts (Claude Code doesn't include them there) — we
   // trust our local state and rely on the user's ModelPickerPopup as the source of truth.
-  const modelModesPath = path.join(os.homedir(), '.claude', 'destincode-model-modes.json');
+  const modelModesPath = path.join(os.homedir(), '.claude', 'youcoded-model-modes.json');
 
   ipcMain.handle('modes:get', async () => {
     try {
@@ -628,7 +628,7 @@ export function registerIpcHandlers(
   });
 
   // --- Folder switcher persistence ---
-  const foldersPrefPath = path.join(os.homedir(), '.claude', 'destincode-folders.json');
+  const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
 
   interface SavedFolder {
     path: string;
@@ -842,7 +842,7 @@ export function registerIpcHandlers(
 
   // Phase 3b: update an installed plugin/prompt to the latest marketplace
   // version. Re-downloads files, overwrites at the same path, and bumps the
-  // version in destincode-skills.json. Config is NOT touched.
+  // version in youcoded-skills.json. Config is NOT touched.
   ipcMain.handle(IPC.SKILLS_UPDATE, async (_event, id: string) => {
     const result = await skillProvider.update(id);
     // Reload plugins in active sessions so Claude Code picks up updated code
@@ -858,7 +858,7 @@ export function registerIpcHandlers(
     return themeMarketplace.updateTheme(slug);
   });
 
-  // Phase 3c: per-entry config — reads/writes ~/.claude/destincode-config/<id>.json.
+  // Phase 3c: per-entry config — reads/writes ~/.claude/youcoded-config/<id>.json.
   // Only entries that declare configSchema in their marketplace JSON use this.
   ipcMain.handle(IPC.MARKETPLACE_GET_CONFIG, async (_event, id: string) => {
     return getMarketplaceConfig(id);
@@ -1069,11 +1069,11 @@ export function registerIpcHandlers(
   } catch { /* directory doesn't exist or unreadable — fine */ }
 
   // --- Status data poller ---
-  // Reads DestinClaude cache files and pushes status updates to the renderer
+  // Reads YouCoded cache files and pushes status updates to the renderer
   const usageCachePath = path.join(os.homedir(), '.claude', '.usage-cache.json');
   const announcementCachePath = path.join(os.homedir(), '.claude', '.announcement-cache.json');
 
-  // --- DestinCode app update checker via GitHub Releases API ---
+  // --- YouCoded app update checker via GitHub Releases API ---
   // Caches the latest release info and refreshes every 30 minutes.
   let cachedUpdateStatus: { current: string; latest: string; update_available: boolean; download_url: string | null } | null = null;
   let lastReleaseCheck = 0;
@@ -1081,13 +1081,13 @@ export function registerIpcHandlers(
 
   function fetchLatestRelease(): Promise<void> {
     return new Promise((resolve) => {
-      const req = https.get('https://api.github.com/repos/itsdestin/destincode/releases/latest', {
-        headers: { 'User-Agent': 'DestinCode', 'Accept': 'application/vnd.github.v3+json' },
+      const req = https.get('https://api.github.com/repos/itsdestin/youcoded/releases/latest', {
+        headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' },
         timeout: 10000,
       }, (res) => {
         if (res.statusCode === 301 || res.statusCode === 302) {
           // Follow redirect (GitHub sometimes redirects)
-          https.get(res.headers.location!, { headers: { 'User-Agent': 'DestinCode', 'Accept': 'application/vnd.github.v3+json' }, timeout: 10000 }, (rRes) => {
+          https.get(res.headers.location!, { headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' }, timeout: 10000 }, (rRes) => {
             let body = '';
             rRes.on('data', (chunk: Buffer) => { body += chunk.toString(); });
             rRes.on('end', () => { parseReleaseResponse(body); resolve(); });
@@ -1164,9 +1164,9 @@ export function registerIpcHandlers(
 
   // Initial fetch on startup
   fetchLatestRelease().catch(() => {});
-  const modelPrefPath = path.join(os.homedir(), '.claude', 'destincode-model.json');
-  const appearancePrefPath = path.join(os.homedir(), '.claude', 'destincode-appearance.json');
-  const defaultsPrefPath = path.join(os.homedir(), '.claude', 'destincode-defaults.json');
+  const modelPrefPath = path.join(os.homedir(), '.claude', 'youcoded-model.json');
+  const appearancePrefPath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
+  const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
 
   function readJsonFile(filePath: string): any {
     try {
@@ -1252,7 +1252,7 @@ export function registerIpcHandlers(
 
   // --- Usage cache refresher ---
   // Runs usage-fetch.js periodically to keep .usage-cache.json fresh
-  // even when the DestinClaude toolkit's statusline isn't running.
+  // even when the YouCoded toolkit's statusline isn't running.
   const rawUsageFetchPath = path.resolve(__dirname, '../../hook-scripts/usage-fetch.js');
   const unpackedUsageFetchPath = rawUsageFetchPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
   const usageFetchScript = fs.existsSync(unpackedUsageFetchPath) ? unpackedUsageFetchPath : rawUsageFetchPath;
@@ -1464,7 +1464,7 @@ export function registerIpcHandlers(
   });
 
   // --- Sync management ---
-  // Control plane for DestinClaude toolkit sync — reads state files written
+  // Control plane for YouCoded toolkit sync — reads state files written
   // by sync.sh / session-start.sh and triggers sync via the existing scripts.
   ipcMain.handle(IPC.SYNC_GET_STATUS, () => getSyncStatus());
   ipcMain.handle(IPC.SYNC_GET_CONFIG, () => getSyncConfig());

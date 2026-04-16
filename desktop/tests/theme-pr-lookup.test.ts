@@ -23,7 +23,7 @@ describe('ThemePRLookup', () => {
   });
 
   it('returns first matching PR', async () => {
-    const args = ['pr', 'list', '--repo', 'itsdestin/destinclaude-themes',
+    const args = ['pr', 'list', '--repo', 'itsdestin/wecoded-themes',
       '--author', 'alice', '--state', 'open', '--search', 'sunset',
       '--json', 'number,url'];
     stubResults[args.join(' ')] = JSON.stringify([{ number: 42, url: 'https://x/42' }]);

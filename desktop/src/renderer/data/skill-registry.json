@@ -90,52 +90,52 @@
     "prompt": "search the web for",
     "source": "plugin"
   },
-  "destinclaude": {
-    "displayName": "DestinClaude Core",
+  "youcoded-core": {
+    "displayName": "YouCoded Core",
     "description": "Foundation toolkit — safety hooks, commands, sync infrastructure",
     "category": "productivity",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   },
-  "destinclaude-encyclopedia": {
+  "youcoded-core-encyclopedia": {
     "displayName": "Encyclopedia",
     "description": "Personal knowledge system — journaling, encyclopedia, interviewer, librarian, compiler",
     "category": "personal",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   },
-  "destinclaude-food": {
+  "youcoded-core-food": {
     "displayName": "Food",
     "description": "Fork-file: track recipes, meals, and food preferences",
     "category": "personal",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   },
-  "destinclaude-inbox": {
+  "youcoded-core-inbox": {
     "displayName": "Inbox",
     "description": "Process notes and screenshots from Todoist, Drive, Gmail, and more",
     "category": "personal",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   },
-  "destinclaude-themes-plugin": {
+  "wecoded-themes-plugin": {
     "displayName": "Theme Builder",
     "description": "Build and share custom themes — AI-generated or from scratch",
     "category": "design",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   },
-  "destinclaude-drive": {
+  "youcoded-core-drive": {
     "displayName": "Google Drive",
     "description": "Google Drive access via rclone",
     "category": "personal",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   },
-  "destinclaude-messaging": {
+  "youcoded-core-messaging": {
     "displayName": "Messaging",
     "description": "Send and read SMS/iMessage via MCP servers",
     "category": "personal",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   },
-  "destinclaude-output-styles": {
+  "youcoded-core-output-styles": {
     "displayName": "Output Styles",
     "description": "Tone presets — casual, conversational, academic, professional",
     "category": "productivity",
-    "source": "destinclaude"
+    "source": "youcoded-core"
   }
 }

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# install-app.sh — Downloads and installs the DestinCode desktop app
+# install-app.sh — Downloads and installs the YouCoded desktop app
 # from GitHub Releases. Called by the setup wizard and /update.
 #
 # Usage: bash install-app.sh [--version X.Y.Z] [--unattended]
@@ -8,8 +8,8 @@
 
 set -e
 
-REPO="itsdestin/destincode"
-TOOLKIT_ROOT="${TOOLKIT_ROOT:-$HOME/.claude/plugins/destinclaude}"
+REPO="itsdestin/youcoded"
+TOOLKIT_ROOT="${TOOLKIT_ROOT:-$HOME/.claude/plugins/youcoded-core}"
 VERSION=""
 UNATTENDED=false
 
@@ -52,7 +52,7 @@ if [[ "$PLATFORM" == "unknown" ]]; then
 fi
 
 echo ""
-echo "  Installing DestinCode $TAG for $PLATFORM..."
+echo "  Installing YouCoded $TAG for $PLATFORM..."
 
 # Create temp directory
 WORK_DIR=$(mktemp -d)
@@ -83,24 +83,24 @@ download() {
   curl -sL -o "$WORK_DIR/$(basename "$asset_url")" "$asset_url"
 }
 
-# Close running DestinCode instances (macOS/Linux only — NSIS handles this on Windows)
+# Close running YouCoded instances (macOS/Linux only — NSIS handles this on Windows)
 close_running_app() {
   case "$PLATFORM" in
     macos)
-      if pgrep -x "DestinCode" >/dev/null 2>&1; then
-        echo "  Closing running DestinCode..."
-        osascript -e 'tell application "DestinCode" to quit' 2>/dev/null || true
+      if pgrep -x "YouCoded" >/dev/null 2>&1; then
+        echo "  Closing running YouCoded..."
+        osascript -e 'tell application "YouCoded" to quit' 2>/dev/null || true
         # Wait up to 5s for graceful quit
         for i in 1 2 3 4 5; do
-          pgrep -x "DestinCode" >/dev/null 2>&1 || break
+          pgrep -x "YouCoded" >/dev/null 2>&1 || break
           sleep 1
         done
         # Force kill if still running
-        pkill -9 -x "DestinCode" 2>/dev/null || true
+        pkill -9 -x "YouCoded" 2>/dev/null || true
       fi
       ;;
     linux)
-      pkill -f "DestinCode.AppImage" 2>/dev/null || true
+      pkill -f "YouCoded.AppImage" 2>/dev/null || true
       sleep 1
       ;;
   esac
@@ -124,16 +124,16 @@ case "$PLATFORM" in
     echo "  Waiting for installer to finish..."
     sleep 2
     for i in $(seq 1 60); do
-      if ! tasklist 2>/dev/null | grep -qi "DestinCode.Setup"; then
+      if ! tasklist 2>/dev/null | grep -qi "YouCoded.Setup"; then
         break
       fi
       sleep 1
     done
 
     echo ""
-    echo "  DestinCode $TAG installed!"
+    echo "  YouCoded $TAG installed!"
     echo "  - Start Menu shortcut created automatically"
-    echo "  - Launch from Start Menu or search for 'DestinCode'"
+    echo "  - Launch from Start Menu or search for 'YouCoded'"
     ;;
 
   macos)
@@ -151,14 +151,14 @@ case "$PLATFORM" in
     echo "  Installing to /Applications..."
     hdiutil attach "$DMG" -quiet -nobrowse -mountpoint "$WORK_DIR/mnt"
     # Remove old app first to avoid cp -R failing on locked files
-    rm -rf /Applications/DestinCode.app
+    rm -rf /Applications/YouCoded.app
     cp -R "$WORK_DIR/mnt/"*.app /Applications/
     hdiutil detach "$WORK_DIR/mnt" -quiet
 
     echo ""
-    echo "  DestinCode $TAG installed to /Applications!"
-    echo "  - Launch from Spotlight (Cmd+Space → 'DestinCode')"
-    echo "  - Or open /Applications/DestinCode.app"
+    echo "  YouCoded $TAG installed to /Applications!"
+    echo "  - Launch from Spotlight (Cmd+Space → 'YouCoded')"
+    echo "  - Or open /Applications/YouCoded.app"
     echo ""
     echo "  Note: On first launch, right-click → Open to bypass Gatekeeper."
     ;;
@@ -177,32 +177,32 @@ case "$PLATFORM" in
 
     # Install to ~/.local/bin
     mkdir -p "$HOME/.local/bin"
-    cp "$APPIMAGE" "$HOME/.local/bin/DestinCode.AppImage"
-    chmod +x "$HOME/.local/bin/DestinCode.AppImage"
+    cp "$APPIMAGE" "$HOME/.local/bin/YouCoded.AppImage"
+    chmod +x "$HOME/.local/bin/YouCoded.AppImage"
 
     # Copy icon for app launcher
     mkdir -p "$HOME/.local/share/icons"
     # Extract icon from AppImage if possible, otherwise skip
     if command -v wrestool &>/dev/null; then
-      wrestool -x -t 14 "$HOME/.local/bin/DestinCode.AppImage" > "$HOME/.local/share/icons/destincode.png" 2>/dev/null || true
+      wrestool -x -t 14 "$HOME/.local/bin/YouCoded.AppImage" > "$HOME/.local/share/icons/youcoded.png" 2>/dev/null || true
     fi
 
     # Create .desktop file for app launcher
     mkdir -p "$HOME/.local/share/applications"
-    cat > "$HOME/.local/share/applications/destincode.desktop" << DESKTOP
+    cat > "$HOME/.local/share/applications/youcoded.desktop" << DESKTOP
 [Desktop Entry]
-Name=DestinCode
+Name=YouCoded
 Comment=Claude Code on every device
-Exec=$HOME/.local/bin/DestinCode.AppImage
-Icon=$HOME/.local/share/icons/destincode.png
+Exec=$HOME/.local/bin/YouCoded.AppImage
+Icon=$HOME/.local/share/icons/youcoded.png
 Type=Application
 Categories=Development;
 DESKTOP
 
     echo ""
-    echo "  DestinCode $TAG installed!"
+    echo "  YouCoded $TAG installed!"
     echo "  - Added to app launcher"
-    echo "  - Or run: ~/.local/bin/DestinCode.AppImage"
+    echo "  - Or run: ~/.local/bin/YouCoded.AppImage"
     ;;
 esac
 
@@ -210,22 +210,22 @@ esac
 echo ""
 case "$PLATFORM" in
   windows)
-    if [[ -f "$LOCALAPPDATA/Programs/DestinCode/DestinCode.exe" ]]; then
-      echo "  Verified: DestinCode installed at $LOCALAPPDATA/Programs/DestinCode"
+    if [[ -f "$LOCALAPPDATA/Programs/YouCoded/YouCoded.exe" ]]; then
+      echo "  Verified: YouCoded installed at $LOCALAPPDATA/Programs/YouCoded"
     else
-      echo "  WARNING: DestinCode.exe not found. The installer may have failed." >&2
+      echo "  WARNING: YouCoded.exe not found. The installer may have failed." >&2
     fi
     ;;
   macos)
-    if [[ -d "/Applications/DestinCode.app" ]]; then
-      echo "  Verified: /Applications/DestinCode.app exists"
+    if [[ -d "/Applications/YouCoded.app" ]]; then
+      echo "  Verified: /Applications/YouCoded.app exists"
     else
-      echo "  WARNING: /Applications/DestinCode.app not found after install." >&2
+      echo "  WARNING: /Applications/YouCoded.app not found after install." >&2
     fi
     ;;
   linux)
-    if [[ -x "$HOME/.local/bin/DestinCode.AppImage" ]]; then
-      echo "  Verified: ~/.local/bin/DestinCode.AppImage exists and is executable"
+    if [[ -x "$HOME/.local/bin/YouCoded.AppImage" ]]; then
+      echo "  Verified: ~/.local/bin/YouCoded.AppImage exists and is executable"
     else
       echo "  WARNING: AppImage not found or not executable after install." >&2
     fi

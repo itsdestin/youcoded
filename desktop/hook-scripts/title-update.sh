@@ -1,6 +1,6 @@
 #!/bin/bash
 # PostToolUse hook: reminds Claude to update the conversation topic periodically.
-# App-owned — always deployed by DestinCode's install-hooks.js.
+# App-owned — always deployed by YouCoded's install-hooks.js.
 
 INPUT=$(cat)
 SESSION_ID=$(echo "$INPUT" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).session_id||'')}catch{console.log('')}})" 2>/dev/null)

@@ -7,7 +7,7 @@ import { scanSkills } from './skill-scanner';
 import { SkillConfigStore } from './skill-config-store';
 import { encodeSkillLink, decodeSkillLink } from './skill-share';
 import { installPlugin, uninstallPlugin, isPluginInstalled, type InstallResult } from './plugin-installer';
-import { pluginInstallDir, DESTINCODE_PLUGINS_DIR, listInstalledPluginDirs } from './claude-code-registry';
+import { pluginInstallDir, YOUCODED_PLUGINS_DIR, listInstalledPluginDirs } from './claude-code-registry';
 import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
 import { reconcileIntegrations } from './integration-reconciler';
 import { reconcileHooks } from './hook-reconciler';
@@ -28,13 +28,13 @@ const CLAUDE_PLUGINS_ROOT = path.join(os.homedir(), '.claude', 'plugins');
 
 /**
  * Resolve a plugin id to its on-disk directory. Checks the top-level toolkit
- * clone path first (for the core `destinclaude` id cloned by install.sh)
+ * clone path first (for the core `youcoded-core` id cloned by install.sh)
  * and falls back to the marketplace subtree (for plugin-installer packages).
  */
 function resolvePluginDir(id: string): string | null {
   const topLevel = path.join(CLAUDE_PLUGINS_ROOT, id);
   if (fs.existsSync(topLevel)) return topLevel;
-  const marketplace = path.join(DESTINCODE_PLUGINS_DIR, id);
+  const marketplace = path.join(YOUCODED_PLUGINS_DIR, id);
   if (fs.existsSync(marketplace)) return marketplace;
   return null;
 }
@@ -50,14 +50,14 @@ const SENSITIVE_PATTERNS = [
   /token(s)?\.(json|txt)$/i,
 ];
 
-const CACHE_DIR = path.join(os.homedir(), '.claude', 'destincode-marketplace-cache');
+const CACHE_DIR = path.join(os.homedir(), '.claude', 'youcoded-marketplace-cache');
 const INDEX_CACHE = path.join(CACHE_DIR, 'index.json');
 const DEFAULTS_CACHE = path.join(CACHE_DIR, 'curated-defaults.json');
 const FEATURED_CACHE = path.join(CACHE_DIR, 'featured.json');
 
 // GitHub raw content base URL — set this to your marketplace repo
-// DESTINCODE_MARKETPLACE_BRANCH overrides the branch for test harnesses.
-const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/destincode-marketplace/${process.env.DESTINCODE_MARKETPLACE_BRANCH || 'master'}`;
+// YOUCODED_MARKETPLACE_BRANCH overrides the branch for test harnesses.
+const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${process.env.YOUCODED_MARKETPLACE_BRANCH || 'master'}`;
 
 const INDEX_TTL = 24 * 60 * 60 * 1000; // 24 hours
 
@@ -65,7 +65,7 @@ interface CacheMeta { fetchedAt: number; }
 
 export class LocalSkillProvider implements SkillProvider {
   // Phase 3a: made public so ThemeMarketplaceProvider can share the same
-  // destincode-skills.json packages map and marketplace IPC can read it
+  // youcoded-skills.json packages map and marketplace IPC can read it
   public configStore = new SkillConfigStore();
   private installedCache: SkillEntry[] | null = null;
 
@@ -153,8 +153,8 @@ export class LocalSkillProvider implements SkillProvider {
       const scanned = scanSkills();
       const privateSkills = this.configStore.getPrivateSkills();
 
-      // Fix: scanSkills() only discovers DestinClaude skills and Claude Code's
-      // installed_plugins.json entries. Plugins installed via the DestinCode
+      // Fix: scanSkills() only discovers YouCoded skills and Claude Code's
+      // installed_plugins.json entries. Plugins installed via the YouCoded
       // marketplace are tracked in configStore packages — merge them so the UI
       // marks them as "Installed" and fetchAll() sees them right after install.
       const installedPackages = this.configStore.getInstalledPlugins();
@@ -255,7 +255,7 @@ export class LocalSkillProvider implements SkillProvider {
       // required hooks that need to land in settings.json before the user's
       // next Claude session starts.
       try { reconcileHooks(); } catch (e) { log('ERROR', 'SkillProvider', 'hook reconcile after install failed', { error: String(e) }); }
-      // Also reconcile MCP servers — packages like destinclaude-messaging
+      // Also reconcile MCP servers — packages like youcoded-core-messaging
       // declare MCP servers that need to land in .claude.json on install.
       try { reconcileMcp(); } catch (e) { log('ERROR', 'SkillProvider', 'MCP reconcile after install failed', { error: String(e) }); }
     }
@@ -267,7 +267,7 @@ export class LocalSkillProvider implements SkillProvider {
   /**
    * Phase 3b: update an installed plugin by re-running the install logic with
    * the latest marketplace entry, overwriting files at the same path. Config
-   * in ~/.claude/destincode-config/<id>.json is NOT touched.
+   * in ~/.claude/youcoded-config/<id>.json is NOT touched.
    */
   async update(id: string): Promise<{ ok: boolean; newVersion?: string; error?: string; missingRequiredFields?: string[] }> {
     const index = await this.fetchIndex();
@@ -379,13 +379,13 @@ export class LocalSkillProvider implements SkillProvider {
   // --- Sharing ---
 
   /**
-   * Phase 4a: Publish a user-created plugin to the destincode-marketplace repo
+   * Phase 4a: Publish a user-created plugin to the wecoded-marketplace repo
    * via GitHub PR. Mirrors the theme publish flow in theme-marketplace-provider.ts.
    *
    * Flow:
    * 1. Verify gh CLI auth
    * 2. Verify the skill is user-created (source 'self' or visibility 'private')
-   * 3. Fork itsdestin/destincode-marketplace (idempotent)
+   * 3. Fork itsdestin/wecoded-marketplace (idempotent)
    * 4. Create branch, upload plugin files via GitHub Contents API
    * 5. Open PR with auto-populated description
    */
@@ -417,7 +417,7 @@ export class LocalSkillProvider implements SkillProvider {
       throw new Error('GitHub CLI not authenticated. Run `gh auth login` first.');
     }
 
-    const UPSTREAM_REPO = 'itsdestin/destincode-marketplace';
+    const UPSTREAM_REPO = 'itsdestin/wecoded-marketplace';
     const branchName = `plugin/${id}`;
 
     // 2. Fork the marketplace repo (idempotent — gh returns existing fork)
@@ -428,7 +428,7 @@ export class LocalSkillProvider implements SkillProvider {
       // gh repo fork returns exit 0 even if fork exists; only throw on real errors
     }
 
-    const FORK_REPO = `${username}/destincode-marketplace`;
+    const FORK_REPO = `${username}/wecoded-marketplace`;
 
     // 3. Get the default branch SHA from upstream
     let baseSha: string;
@@ -438,7 +438,7 @@ export class LocalSkillProvider implements SkillProvider {
       ]);
       baseSha = stdout.trim();
     } catch {
-      throw new Error('Failed to read upstream repo. Does itsdestin/destincode-marketplace exist?');
+      throw new Error('Failed to read upstream repo. Does itsdestin/wecoded-marketplace exist?');
     }
 
     // Create branch on the fork (or update if it already exists)
@@ -537,7 +537,7 @@ export class LocalSkillProvider implements SkillProvider {
       `### Files`,
       filesToUpload.map(f => `- \`${f.repoPath}\``).join('\n'),
       '',
-      '_Submitted via DestinCode Marketplace_',
+      '_Submitted via YouCoded Marketplace_',
     ].join('\n');
 
     try {
@@ -822,14 +822,14 @@ export class LocalSkillProvider implements SkillProvider {
 
   /**
    * Decomposition v3 §9.10: apply an output style by writing its id to
-   * ~/.claude/destincode-config/destinclaude-output-styles.json. Session-start
+   * ~/.claude/youcoded-config/youcoded-core-output-styles.json. Session-start
    * reads this file and injects the corresponding style markdown into the
    * preamble. Onboarding calls this with "casual" after first-run install.
    */
   applyOutputStyle(styleId: string): void {
-    const configDir = path.join(os.homedir(), '.claude', 'destincode-config');
+    const configDir = path.join(os.homedir(), '.claude', 'youcoded-config');
     fs.mkdirSync(configDir, { recursive: true });
-    const configFile = path.join(configDir, 'destinclaude-output-styles.json');
+    const configFile = path.join(configDir, 'youcoded-core-output-styles.json');
     fs.writeFileSync(configFile, JSON.stringify({ activeStyle: styleId }, null, 2));
   }
 

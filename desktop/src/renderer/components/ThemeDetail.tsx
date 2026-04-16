@@ -182,12 +182,12 @@ export default function ThemeDetail({ entry, onBack, onInstallComplete }: ThemeD
           <div className="flex items-center gap-2 flex-wrap">
             <span
               className={`text-[10px] font-medium px-2 py-1 rounded-full ${
-                entry.source === 'destinclaude'
+                entry.source === 'youcoded-core'
                   ? 'bg-accent/15 text-accent'
                   : 'bg-fg-faint/20 text-fg-muted'
               }`}
             >
-              {entry.source === 'destinclaude' ? 'Official' : 'Community'}
+              {entry.source === 'youcoded-core' ? 'Official' : 'Community'}
             </span>
             <span
               className="text-[10px] px-2 py-1 rounded-full border border-edge-dim text-fg-muted"

@@ -259,7 +259,7 @@ function connect(passwordOrToken, isToken = false) {
                     setConnectionState('connected');
                     // Store token for reconnection
                     const token = msg.token;
-                    localStorage.setItem('destincode-remote-token', token);
+                    localStorage.setItem('youcoded-remote-token', token);
                     // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
                     // the desktop server responds with platform:"electron" but we're still on a phone
                     if (!preservePlatform) {
@@ -297,7 +297,7 @@ function connect(passwordOrToken, isToken = false) {
                 retryLocalBridge();
             }
             else {
-                const storedToken = localStorage.getItem('destincode-remote-token');
+                const storedToken = localStorage.getItem('youcoded-remote-token');
                 if (storedToken) {
                     scheduleReconnect(storedToken);
                 }
@@ -314,8 +314,8 @@ function scheduleReconnect(token) {
         reconnectAttempts = 0;
         reconnectDelay = 1000;
         targetUrl = null;
-        localStorage.removeItem('destincode-remote-target');
-        localStorage.removeItem('destincode-remote-token');
+        localStorage.removeItem('youcoded-remote-target');
+        localStorage.removeItem('youcoded-remote-token');
         // Reconnect to local bridge
         connect('android-local', false).catch(() => { });
         Promise.resolve().then(() => __importStar(require('./platform'))).then(({ setConnectionMode }) => setConnectionMode('local'));
@@ -377,7 +377,7 @@ function disconnect() {
         ws = null;
     }
     setConnectionState('disconnected');
-    localStorage.removeItem('destincode-remote-token');
+    localStorage.removeItem('youcoded-remote-token');
 }
 /**
  * Check if a host IP is in the Tailscale CGNAT range (100.64.0.0/10)
@@ -425,7 +425,7 @@ async function connectToHost(host, port, password) {
     try {
         await connect(password, false);
         // Connection succeeded — persist remote target for session restore
-        localStorage.setItem('destincode-remote-target', targetUrl);
+        localStorage.setItem('youcoded-remote-target', targetUrl);
         preservePlatform = false;
         setConnectionMode('remote');
     }
@@ -434,7 +434,7 @@ async function connectToHost(host, port, password) {
         // Reset remote state and reconnect to local bridge
         targetUrl = null;
         preservePlatform = false;
-        localStorage.removeItem('destincode-remote-target');
+        localStorage.removeItem('youcoded-remote-target');
         connect('android-local', false).catch(() => { });
         throw err;
     }
@@ -452,7 +452,7 @@ async function disconnectFromHost() {
     pending.clear();
     // Clear remote target — getWsUrl() falls back to localhost:9901
     targetUrl = null;
-    localStorage.removeItem('destincode-remote-target');
+    localStorage.removeItem('youcoded-remote-target');
     preservePlatform = false;
     // Reconnect to local bridge
     await connect('android-local', false);
@@ -522,12 +522,12 @@ function installShim() {
     // Android WebView (file://) always starts in local mode — clear any stale remote target
     // that could redirect connect('android-local') to a dead remote server
     if (location.protocol === 'file:') {
-        localStorage.removeItem('destincode-remote-target');
-        localStorage.removeItem('destincode-remote-token');
+        localStorage.removeItem('youcoded-remote-target');
+        localStorage.removeItem('youcoded-remote-token');
     }
     else {
         // Browser: restore remote target from previous session (e.g., page reload while in remote mode)
-        const savedTarget = localStorage.getItem('destincode-remote-target');
+        const savedTarget = localStorage.getItem('youcoded-remote-target');
         if (savedTarget) {
             targetUrl = savedTarget;
             preservePlatform = true; // Will be set on next auth:ok

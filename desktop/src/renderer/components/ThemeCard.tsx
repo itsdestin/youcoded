@@ -94,12 +94,12 @@ export default function ThemeCard({ entry, onClick, updateAvailable }: ThemeCard
           <span className="text-[9px] text-fg-muted truncate flex-1">{entry.author}</span>
           <span
             className={`text-[8px] font-medium px-1.5 py-0.5 rounded-full shrink-0 ${
-              entry.source === 'destinclaude'
+              entry.source === 'youcoded-core'
                 ? 'bg-accent/15 text-accent'
                 : 'bg-fg-faint/20 text-fg-muted'
             }`}
           >
-            {entry.source === 'destinclaude' ? 'Official' : 'Community'}
+            {entry.source === 'youcoded-core' ? 'Official' : 'Community'}
           </span>
           {/* Task 12: like button with optimistic reconciliation from /stats API */}
           <LikeButton themeId={entry.slug} initialCount={likes} />

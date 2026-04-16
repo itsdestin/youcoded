@@ -10,9 +10,9 @@ Be adversarial. Find the failure modes, race conditions, UX dead ends, and archi
 
 ---
 
-## Context: What DestinCode is
+## Context: What YouCoded is
 
-DestinCode is an Android app (with a companion Electron desktop app) that runs Claude Code natively. It has a React-based chat UI that communicates with Claude Code sessions running in a PTY. The app recently added a **Skill Marketplace** — a visual browse/install/manage layer over Claude Code's plugin and skill ecosystem.
+YouCoded is an Android app (with a companion Electron desktop app) that runs Claude Code natively. It has a React-based chat UI that communicates with Claude Code sessions running in a PTY. The app recently added a **Skill Marketplace** — a visual browse/install/manage layer over Claude Code's plugin and skill ecosystem.
 
 The marketplace has two skill tiers:
 - **Prompt shortcuts** — a display name + description + prompt string. Self-contained. Install = write to a JSON config file. **Fully working today.**
@@ -33,7 +33,7 @@ The official marketplace (`claude-plugins-official`) is auto-registered. Other m
 
 After install, Claude Code writes to `~/.claude/plugins/installed_plugins.json`. Our existing `SkillScanner` already reads this file to discover installed plugins.
 
-## Context: How DestinCode sends commands to Claude Code
+## Context: How YouCoded sends commands to Claude Code
 
 Both platforms have an established pattern of injecting slash commands into the Claude Code PTY:
 
@@ -98,11 +98,11 @@ Our `index.json` entry format:
 
 ## Context: Current marketplace state
 
-Our `destincode-marketplace` repo has 29 entries in `index.json`, all are DestinClaude-specific prompt shortcuts and local plugin references. Zero entries from upstream Claude Code registries.
+Our `wecoded-marketplace` repo has 29 entries in `index.json`, all are YouCoded-specific prompt shortcuts and local plugin references. Zero entries from upstream Claude Code registries.
 
 The `MarketplaceFetcher` on both platforms fetches from:
 ```
-https://raw.githubusercontent.com/anthropics/destincode-marketplace/main/index.json
+https://raw.githubusercontent.com/anthropics/wecoded-marketplace/main/index.json
 ```
 with 24-hour cache TTL for the index and 1-hour for stats.
 
@@ -123,7 +123,7 @@ with 24-hour cache TTL for the index and 1-hour for stats.
 - `desktop/src/renderer/state/skill-context.tsx` — `installAction` calls `window.claude.skills.install()`
 
 **Registry:**
-- `~/destincode-marketplace/index.json` — 29 entries, flat JSON array
+- `~/wecoded-marketplace/index.json` — 29 entries, flat JSON array
 
 ---
 
@@ -169,14 +169,14 @@ Build a sync script (Node.js or Python) that:
 1. Fetches `marketplace.json` from all 3 Anthropic registries (bundled, official, community)
 2. Deduplicates (same plugin name across registries → prefer official > bundled > community)
 3. Maps each entry to our `index.json` schema (name → id, category remapping, add repoUrl, marketplace field)
-4. Merges with our existing DestinClaude-specific entries
+4. Merges with our existing YouCoded-specific entries
 5. Outputs updated `index.json`
 
 Run via GitHub Action on a schedule (daily) or manually.
 
 **Category mapping:**
 - Claude Code: productivity, security, database, deployment, monitoring, learning, design, testing, automation, location, math
-- DestinCode: personal, work, development, admin, other
+- YouCoded: personal, work, development, admin, other
 - Proposed mapping: productivity/monitoring → work, security/testing → development, learning → other, etc.
 
 **Filtering (for quality):**
@@ -198,7 +198,7 @@ Before plugin install commands work, the marketplace source must be registered w
 2. **Timing** — The 3-second delay before `/reload-plugins` is arbitrary. What if the plugin is large and takes 10 seconds to clone? What if it's instant? Is there a better signal?
 3. **Session requirement** — Plugin install requires an active Claude Code session. What if the user is browsing the marketplace before starting a session? What if they're in a DirectShellBridge (standalone bash) instead of PtyBridge?
 4. **Completion feedback** — How does the UI know the install succeeded or failed? `writeInput` returns void. The PTY output goes to the terminal, not back to the React UI.
-5. **Uninstall** — Currently `uninstall()` only removes from `destincode-skills.json`. Should it also send `/plugin uninstall <name>@<marketplace>\r`?
+5. **Uninstall** — Currently `uninstall()` only removes from `youcoded-skills.json`. Should it also send `/plugin uninstall <name>@<marketplace>\r`?
 6. **Desktop parity** — The desktop `LocalSkillProvider` has no session reference. How should it get one? Constructor injection? Callback? Different architecture?
 7. **Registry sync** — Is a daily GitHub Action the right approach? Should we fetch upstream directly at runtime instead? What about staleness vs. freshness vs. our ability to curate?
 8. **Category mapping** — Is the lossy mapping acceptable? Should we expand our category set instead?
@@ -212,7 +212,7 @@ Before plugin install commands work, the marketplace source must be registered w
 - Android uses Kotlin + org.json (no Gson/Moshi/kotlinx.serialization)
 - Desktop uses TypeScript + Electron
 - IPC constants must be duplicated (Electron sandbox prevents imports in preload)
-- Both platforms share `~/.claude/destincode-skills.json` (last-write-wins)
+- Both platforms share `~/.claude/youcoded-skills.json` (last-write-wins)
 - The React UI is the same codebase for both platforms (remote-shim swaps IPC for WebSocket)
 - No new npm dependencies without justification
 - The app targets non-developer "normie" users — complexity must be hidden

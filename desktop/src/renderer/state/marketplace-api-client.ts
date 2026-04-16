@@ -1,9 +1,9 @@
-// Typed fetch wrapper for the DestinCode marketplace Cloudflare Worker backend.
+// Typed fetch wrapper for the YouCoded marketplace Cloudflare Worker backend.
 // Lives in renderer/ because the same React bundle runs on both desktop and Android —
 // fetch calls go directly to the Worker (CORS allowlist covers both platforms).
 // No IPC needed for read endpoints; write endpoints gate on token which callers supply via getToken().
 
-export const MARKETPLACE_API_HOST = "https://destincode-marketplace-api.destinj101.workers.dev";
+export const MARKETPLACE_API_HOST = "https://wecoded-marketplace-api.destinj101.workers.dev";
 
 export class MarketplaceApiError extends Error {
   constructor(public readonly status: number, message: string) {

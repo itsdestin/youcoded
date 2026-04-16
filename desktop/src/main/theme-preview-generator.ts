@@ -6,7 +6,7 @@ const PREVIEW_WIDTH = 800;
 const PREVIEW_HEIGHT = 500;
 
 /**
- * Generates a preview PNG for a theme by rendering a mock DestinCode UI
+ * Generates a preview PNG for a theme by rendering a mock YouCoded UI
  * with the theme's tokens applied, then capturing it as an image.
  *
  * Uses Electron's offscreen rendering to avoid flashing a visible window.
@@ -120,7 +120,7 @@ async function waitForPreviewReady(
 }
 
 /**
- * Builds a self-contained HTML string that mocks the DestinCode UI
+ * Builds a self-contained HTML string that mocks the YouCoded UI
  * using the theme's color tokens.
  */
 function buildPreviewHTML(manifest: Record<string, any>, themeDir: string): string {

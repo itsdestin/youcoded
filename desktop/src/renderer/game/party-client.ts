@@ -5,7 +5,7 @@ import PartySocket from "partysocket";
 declare const __PARTYKIT_HOST__: string | undefined;
 export const PARTYKIT_HOST =
   (typeof __PARTYKIT_HOST__ !== 'undefined' ? __PARTYKIT_HOST__ : null)
-  ?? "destinclaude-games.itsdestin.partykit.dev";
+  ?? "youcoded-games.itsdestin.partykit.dev";
 
 export type MessageHandler = (data: any) => void;
 

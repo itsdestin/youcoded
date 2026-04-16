@@ -1,5 +1,5 @@
 /**
- * SyncPanel.tsx — Sync Management UI for DestinCode.
+ * SyncPanel.tsx — Sync Management UI for YouCoded.
  *
  * V2 redesign: Supports multiple named backend instances with per-instance
  * sync/storage mode. Replaces the old 3-card grid with a dynamic instance
@@ -22,12 +22,12 @@ import { SnapshotsPanel } from './restore/SnapshotsPanel';
 
 const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
   intro:
-    "Sync saves your DestinClaude data — journal entries, encyclopedia, conversations, custom skills, and settings — to a cloud service. It's both a backup and a way to pick up where you left off on a different device.",
+    "Sync saves your YouCoded data — journal entries, encyclopedia, conversations, custom skills, and settings — to a cloud service. It's both a backup and a way to pick up where you left off on a different device.",
   sections: [
     {
       heading: 'What gets synced',
       paragraphs: [
-        "Your journal, encyclopedia, conversations, custom skills, system config, plans, and specs — basically everything personal that DestinClaude stores in your .claude folder.",
+        "Your journal, encyclopedia, conversations, custom skills, system config, plans, and specs — basically everything personal that YouCoded stores in your .claude folder.",
         'Your project code is NOT synced here — that\'s what GitHub is for.',
       ],
     },
@@ -811,7 +811,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             {!status && !loading && (
               <div className="text-center py-6">
                 <div className="text-fg-muted text-sm mb-1">No Sync Data</div>
-                <div className="text-fg-faint text-[11px]">Install the DestinClaude toolkit to enable sync.</div>
+                <div className="text-fg-faint text-[11px]">Install the YouCoded toolkit to enable sync.</div>
               </div>
             )}
           </div>

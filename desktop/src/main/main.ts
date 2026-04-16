@@ -42,7 +42,7 @@ if (process.platform === 'darwin' || process.platform === 'linux') {
     // no sudo). Must be on PATH at startup so node/npm/claude resolve on
     // subsequent launches without re-running the installer.
     extraPaths.unshift(
-      `${home}/Library/Application Support/DestinCode/node/bin`,
+      `${home}/Library/Application Support/YouCoded/node/bin`,
     );
   }
   process.env.PATH = `${extraPaths.join(path.delimiter)}${path.delimiter}${process.env.PATH}`;
@@ -113,16 +113,16 @@ const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
 const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider);
 
-// Dev server URL — env override wins; otherwise compute from DESTINCODE_PORT_OFFSET
+// Dev server URL — env override wins; otherwise compute from YOUCODED_PORT_OFFSET
 // (via shared/ports.ts) so Vite and main stay in sync without a second env var.
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VITE_DEV_PORT}`;
 
-// Dev-profile isolation: when DESTINCODE_PROFILE=dev, split Electron userData so
+// Dev-profile isolation: when YOUCODED_PROFILE=dev, split Electron userData so
 // a dev instance doesn't clobber the built app's localStorage, cookies, cache,
 // or window state. Must be called before app.whenReady().
-if (process.env.DESTINCODE_PROFILE === 'dev') {
-  app.setPath('userData', path.join(app.getPath('appData'), 'destincode-dev'));
-  app.setName('DestinCode Dev');
+if (process.env.YOUCODED_PROFILE === 'dev') {
+  app.setPath('userData', path.join(app.getPath('appData'), 'youcoded-dev'));
+  app.setName('YouCoded Dev');
 }
 
 // Must be called before app.whenReady() — Electron requirement
@@ -790,7 +790,7 @@ app.whenReady().then(async () => {
   // so simply calling it repairs any stale paths. We scan first only to log a
   // visible warning when staleness is detected — useful for diagnosing the
   // "stuck on Initializing" symptom that follows a removed dev worktree.
-  if (process.env.DESTINCODE_PROFILE !== 'dev') {
+  if (process.env.YOUCODED_PROFILE !== 'dev') {
     try {
       const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
       try {
@@ -888,7 +888,7 @@ app.whenReady().then(async () => {
     log('ERROR', 'Main', 'Failed to start remote server', { error: String(e) });
   }
 
-  const FAVORITES_PATH = path.join(os.homedir(), '.claude', 'destinclaude-favorites.json');
+  const FAVORITES_PATH = path.join(os.homedir(), '.claude', 'youcoded-favorites.json');
 
   function readGamePrefs(): Record<string, any> {
     try { return JSON.parse(fs.readFileSync(FAVORITES_PATH, 'utf8')); }

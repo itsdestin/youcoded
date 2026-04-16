@@ -54,7 +54,7 @@ interface Settings {
 /**
  * Extract the last path component (basename) from a hook command so we can
  * identify the same logical hook even if the full path changed. For
- * `bash ~/.claude/plugins/destinclaude/hooks/session-start.sh` the
+ * `bash ~/.claude/plugins/youcoded-core/hooks/session-start.sh` the
  * identity is `session-start.sh`.
  */
 function extractScriptBasename(command: string): string | null {

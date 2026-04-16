@@ -1,7 +1,7 @@
 {
-  "name": "destincode",
+  "name": "youcoded",
   "version": "2.4.3",
-  "description": "Desktop GUI for Claude Code with the DestinClaude toolkit",
+  "description": "Desktop GUI for Claude Code with the YouCoded toolkit",
   "main": "dist/main/main.js",
   "scripts": {
     "dev": "node scripts/run-dev.js",

@@ -250,9 +250,9 @@ describe('cwdToProjectSlug', () => {
     expect(cwdToProjectSlug('/home/user/project')).toBe('-home-user-project');
   });
 
-  it('converts nested Windows path: C:\\Users\\alice\\destinclaude\\desktop → C--Users-alice-destinclaude-desktop', () => {
-    expect(cwdToProjectSlug('C:\\Users\\alice\\destinclaude\\desktop')).toBe(
-      'C--Users-alice-destinclaude-desktop'
+  it('converts nested Windows path: C:\\Users\\alice\\youcoded-core\\desktop → C--Users-alice-youcoded-core-desktop', () => {
+    expect(cwdToProjectSlug('C:\\Users\\alice\\youcoded-core\\desktop')).toBe(
+      'C--Users-alice-youcoded-core-desktop'
     );
   });
 });

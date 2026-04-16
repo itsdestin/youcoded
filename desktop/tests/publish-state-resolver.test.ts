@@ -37,7 +37,7 @@ describe('resolvePublishState', () => {
       localHash: 'sha256:abc',
     })).toEqual({
       kind: 'published-current',
-      marketplaceUrl: 'https://github.com/itsdestin/destinclaude-themes/tree/main/themes/sunset',
+      marketplaceUrl: 'https://github.com/itsdestin/wecoded-themes/tree/main/themes/sunset',
     });
   });
 
@@ -47,7 +47,7 @@ describe('resolvePublishState', () => {
       localHash: 'sha256:DIFFERENT',
     })).toEqual({
       kind: 'published-drift',
-      marketplaceUrl: 'https://github.com/itsdestin/destinclaude-themes/tree/main/themes/sunset',
+      marketplaceUrl: 'https://github.com/itsdestin/wecoded-themes/tree/main/themes/sunset',
     });
   });
 

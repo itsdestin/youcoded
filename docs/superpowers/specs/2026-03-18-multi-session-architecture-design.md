@@ -6,7 +6,7 @@
 
 ## Overview
 
-Transforms DestinCode from a single-session app into a multi-session client with process persistence and improved terminal quality. Inspired by Termux's session management model while preserving DestinCode's chat-primary interface, tool cards, approval widgets, and distinct chat/terminal views.
+Transforms YouCoded from a single-session app into a multi-session client with process persistence and improved terminal quality. Inspired by Termux's session management model while preserving YouCoded's chat-primary interface, tool cards, approval widgets, and distinct chat/terminal views.
 
 ### Goals
 

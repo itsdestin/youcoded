@@ -153,7 +153,7 @@ When you see an \`[Auto-Title]\` reminder, **immediately** use Bash to write a 3
 
   // --- Statusline ---
   // Always use the app-bundled statusline script (app owns context % display).
-  // Only set if unset or pointing to a known destinclaude/app path — don't overwrite
+  // Only set if unset or pointing to a known youcoded-core/app path — don't overwrite
   // custom user scripts.
   const rawStatuslinePath = path.resolve(__dirname, '..', 'hook-scripts', 'statusline.sh');
   const unpackedStatuslinePath = rawStatuslinePath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
@@ -161,8 +161,8 @@ When you see an \`[Auto-Title]\` reminder, **immediately** use Bash to write a 3
   const currentStatuslineCmd = settings.statusLine?.command || '';
   const isOurStatusline = !currentStatuslineCmd
     || currentStatuslineCmd.includes('statusline.sh')
-    || currentStatuslineCmd.includes('destinclaude')
-    || currentStatuslineCmd.includes('destincode');
+    || currentStatuslineCmd.includes('youcoded-core')
+    || currentStatuslineCmd.includes('youcoded');
 
   if (isOurStatusline) {
     settings.statusLine = {

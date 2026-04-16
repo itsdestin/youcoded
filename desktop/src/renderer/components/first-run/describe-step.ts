@@ -3,9 +3,9 @@ import type { FirstRunState, PrerequisiteState } from '../../../shared/first-run
 // Per-prerequisite copy. Keys match PrerequisiteState.name.
 const PREREQ_COPY: Record<string, string> = {
   node: 'Installing Node.js — this runs the AI engine under the hood.',
-  git: 'Installing Git — used to keep DestinCode and your skills up to date.',
-  claude: 'Installing Claude Code — the AI that powers DestinCode.',
-  toolkit: 'Installing the DestinClaude toolkit — skills, themes, and sync.',
+  git: 'Installing Git — used to keep YouCoded and your skills up to date.',
+  claude: 'Installing Claude Code — the AI that powers YouCoded.',
+  toolkit: 'Installing the YouCoded toolkit — skills, themes, and sync.',
 };
 
 function activePrerequisite(prereqs: PrerequisiteState[]): PrerequisiteState | undefined {
@@ -44,7 +44,7 @@ export function describeStep(state: FirstRunState): string {
 
     case 'LAUNCH_WIZARD':
     case 'COMPLETE':
-      return 'All set. Opening DestinCode…';
+      return 'All set. Opening YouCoded…';
 
     default: {
       // Exhaustiveness check — if a new FirstRunStep is added the compiler flags this.

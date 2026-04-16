@@ -17,7 +17,7 @@ import os from 'os';
  *
  * If any of these are missing, /reload-plugins silently fails to pick the
  * plugin up (reporting "0 new plugins"). This module writes all four so
- * DestinCode-marketplace installs surface inside Claude Code as real plugins
+ * YouCoded-marketplace installs surface inside Claude Code as real plugins
  * with live slash-command support.
  *
  * The non-cache code path (`t71`) used by /reload-plugins requires the actual
@@ -39,9 +39,9 @@ import os from 'os';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PLUGIN_CACHE_DIR = path.join(CLAUDE_DIR, 'plugins'); // tW() in the CLI
 
-export const DESTINCODE_MARKETPLACE_ID = 'destincode';
-export const DESTINCODE_MARKETPLACE_ROOT = path.join(PLUGIN_CACHE_DIR, 'marketplaces', DESTINCODE_MARKETPLACE_ID);
-export const DESTINCODE_PLUGINS_DIR = path.join(DESTINCODE_MARKETPLACE_ROOT, 'plugins');
+export const YOUCODED_MARKETPLACE_ID = 'youcoded';
+export const YOUCODED_MARKETPLACE_ROOT = path.join(PLUGIN_CACHE_DIR, 'marketplaces', YOUCODED_MARKETPLACE_ID);
+export const YOUCODED_PLUGINS_DIR = path.join(YOUCODED_MARKETPLACE_ROOT, 'plugins');
 
 /**
  * Enumerate every directory that should be treated as an "installed plugin"
@@ -49,10 +49,10 @@ export const DESTINCODE_PLUGINS_DIR = path.join(DESTINCODE_MARKETPLACE_ROOT, 'pl
  *
  * Two sources produce installed plugins:
  *   1. `bootstrap/install.sh` clones the core toolkit to
- *      `~/.claude/plugins/destinclaude/` directly (not via plugin-installer),
+ *      `~/.claude/plugins/youcoded-core/` directly (not via plugin-installer),
  *      so top-level children of PLUGIN_CACHE_DIR with a plugin.json count.
  *   2. `plugin-installer.ts` writes marketplace-installed packages to
- *      `DESTINCODE_PLUGINS_DIR` — every direct child there is a plugin.
+ *      `YOUCODED_PLUGINS_DIR` — every direct child there is a plugin.
  *
  * PLUGIN_CACHE_DIR also contains `installed_plugins.json`,
  * `known_marketplaces.json`, and the `marketplaces/` subtree. The plugin.json
@@ -77,17 +77,17 @@ export function listInstalledPluginDirs(): string[] {
     }
   }
 
-  if (fs.existsSync(DESTINCODE_PLUGINS_DIR)) {
-    for (const entry of fs.readdirSync(DESTINCODE_PLUGINS_DIR, { withFileTypes: true })) {
+  if (fs.existsSync(YOUCODED_PLUGINS_DIR)) {
+    for (const entry of fs.readdirSync(YOUCODED_PLUGINS_DIR, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
-      dirs.push(path.join(DESTINCODE_PLUGINS_DIR, entry.name));
+      dirs.push(path.join(YOUCODED_PLUGINS_DIR, entry.name));
     }
   }
 
   return dirs;
 }
 
-const MARKETPLACE_MANIFEST = path.join(DESTINCODE_MARKETPLACE_ROOT, '.claude-plugin', 'marketplace.json');
+const MARKETPLACE_MANIFEST = path.join(YOUCODED_MARKETPLACE_ROOT, '.claude-plugin', 'marketplace.json');
 const KNOWN_MARKETPLACES = path.join(PLUGIN_CACHE_DIR, 'known_marketplaces.json');
 const INSTALLED_PLUGINS = path.join(PLUGIN_CACHE_DIR, 'installed_plugins.json');
 const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
@@ -96,12 +96,12 @@ const SETTINGS = path.join(CLAUDE_DIR, 'settings.json');
 
 /** The @-qualified key Claude Code uses in enabledPlugins & installed_plugins.json. */
 export function pluginKey(id: string): string {
-  return `${id}@${DESTINCODE_MARKETPLACE_ID}`;
+  return `${id}@${YOUCODED_MARKETPLACE_ID}`;
 }
 
 /** Absolute install dir for a plugin under our marketplace. */
 export function pluginInstallDir(id: string): string {
-  return path.join(DESTINCODE_PLUGINS_DIR, id);
+  return path.join(YOUCODED_PLUGINS_DIR, id);
 }
 
 // --- JSON file helpers (tolerant, atomic-ish) ---
@@ -139,14 +139,14 @@ function ensureMarketplaceRegistered(): void {
   const existing: Record<string, KnownMarketplaceEntry> = readJson(KNOWN_MARKETPLACES) || {};
 
   // Only write if missing or the installLocation has drifted (e.g. different OS home)
-  const current = existing[DESTINCODE_MARKETPLACE_ID];
-  if (current && current.installLocation === DESTINCODE_MARKETPLACE_ROOT) return;
+  const current = existing[YOUCODED_MARKETPLACE_ID];
+  if (current && current.installLocation === YOUCODED_MARKETPLACE_ROOT) return;
 
-  existing[DESTINCODE_MARKETPLACE_ID] = {
+  existing[YOUCODED_MARKETPLACE_ID] = {
     // `autoUpdate: false` — we manage marketplace.json ourselves, don't let
     // Claude Code try to refetch it over the network.
-    source: { source: 'github', repo: 'itsdestin/destincode-marketplace' },
-    installLocation: DESTINCODE_MARKETPLACE_ROOT,
+    source: { source: 'github', repo: 'itsdestin/wecoded-marketplace' },
+    installLocation: YOUCODED_MARKETPLACE_ROOT,
     lastUpdated: now,
     autoUpdate: false,
   };
@@ -177,8 +177,8 @@ function readMarketplaceManifest(): MarketplaceManifest {
   const existing = readJson(MARKETPLACE_MANIFEST);
   if (existing && Array.isArray(existing.plugins)) return existing;
   return {
-    name: DESTINCODE_MARKETPLACE_ID,
-    owner: { name: 'DestinCode', url: 'https://github.com/itsdestin/destincode' },
+    name: YOUCODED_MARKETPLACE_ID,
+    owner: { name: 'YouCoded', url: 'https://github.com/itsdestin/youcoded' },
     plugins: [],
   };
 }
@@ -286,7 +286,7 @@ export interface RegisterInstallInput {
 }
 
 /**
- * Wires a DestinCode-installed plugin into all four Claude Code registries
+ * Wires a YouCoded-installed plugin into all four Claude Code registries
  * so /reload-plugins (and session start) loads it as a first-class plugin.
  */
 export function registerPluginInstall(input: RegisterInstallInput): void {

@@ -688,7 +688,7 @@ function PrereqCheckStep({
         {needsRclone && !checking && (
           <div className="pt-2 space-y-2">
             <div className="text-[11px] text-fg-dim">
-              DestinCode needs a small helper tool to connect to Google Drive.
+              YouCoded needs a small helper tool to connect to Google Drive.
             </div>
             <button
               onClick={handleInstall}
@@ -798,7 +798,7 @@ function GhInstallHelp({ onRecheck }: { onRecheck: () => void }) {
   return (
     <div className="pt-2 space-y-2">
       <div className="text-[11px] text-fg-dim">
-        DestinCode needs GitHub's command-line tool (gh) to connect your account.
+        YouCoded needs GitHub's command-line tool (gh) to connect your account.
       </div>
       {os === 'mac' && (
         <div className="text-[10px] text-fg-faint space-y-1">
