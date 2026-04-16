@@ -57,9 +57,9 @@ class SkillScanner(private val homeDir: File, private val context: Context) {
                     if (entry.isDirectory) {
                         // youcoded-core-prefixed packages use bare skill ids for
                         // backward compat with existing favorites/curated defaults
-                        val skillId = if (pluginRoot.name.startsWith("youcoded-core")) entry.name
+                        val skillId = if (pluginRoot.name.startsWith("youcoded")) entry.name
                             else "${pluginRoot.name}:${entry.name}"
-                        val source = if (pluginRoot.name.startsWith("youcoded-core")) "youcoded-core" else "plugin"
+                        val source = if (pluginRoot.name.startsWith("youcoded")) "youcoded-core" else "plugin"
                         addSkill(skillId, entry.name, "", source, pluginRoot.name)
                     }
                 }

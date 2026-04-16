@@ -1642,7 +1642,7 @@ export class SyncService extends EventEmitter {
     const youcodedCorePluginDirs: string[] = (() => {
       try {
         return fs.readdirSync(pluginsDir, { withFileTypes: true })
-          .filter(d => d.isDirectory() && d.name.startsWith('youcoded-core'))
+          .filter(d => d.isDirectory() && d.name.startsWith('youcoded'))
           .map(d => path.join(pluginsDir, d.name));
       } catch { return []; }
     })();

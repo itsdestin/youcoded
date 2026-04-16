@@ -83,10 +83,10 @@ export function scanSkills(): SkillEntry[] {
             // For youcoded-core-prefixed packages, keep the bare skill id so
             // existing favorites/curated defaults referencing bare names
             // (e.g. "journaling-assistant") continue to resolve.
-            const skillId = pluginEntry.name.startsWith('youcoded-core')
+            const skillId = pluginEntry.name.startsWith('youcoded')
               ? e.name
               : `${pluginEntry.name}:${e.name}`;
-            const source = pluginEntry.name.startsWith('youcoded-core') ? 'youcoded-core' : 'plugin';
+            const source = pluginEntry.name.startsWith('youcoded') ? 'youcoded-core' : 'plugin';
             addSkill(skillId, e.name, '', source, pluginEntry.name);
           }
         }
@@ -142,7 +142,7 @@ export function scanSkills(): SkillEntry[] {
   try {
     const userSkillsDir = path.join(claudeDir, 'skills');
     const youcodedCorePluginDirs = readdirSafe(pluginsDir)
-      .filter(d => d.isDirectory() && d.name.startsWith('youcoded-core'))
+      .filter(d => d.isDirectory() && d.name.startsWith('youcoded'))
       .map(d => path.join(pluginsDir, d.name));
 
     for (const entry of readdirSafe(userSkillsDir)) {
