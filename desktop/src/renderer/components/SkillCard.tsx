@@ -52,7 +52,7 @@ export default function SkillCard({ skill, onClick, variant = 'drawer', installe
             skill.source === 'youcoded-core' ? sourceBadgeStyles['youcoded-core'] :
             typeBadgeStyles[skill.type] || sourceBadgeStyles.plugin
           }`}>
-            {skill.source === 'youcoded-core' ? 'DC' : typeLabels[skill.type] || 'Plugin'}
+            {skill.source === 'youcoded-core' ? 'YC' : typeLabels[skill.type] || 'Plugin'}
           </span>
         </div>
         <span className="text-[11px] text-fg-muted mt-1 leading-snug line-clamp-2 flex-1">
@@ -115,7 +115,7 @@ export default function SkillCard({ skill, onClick, variant = 'drawer', installe
         skill.source === 'youcoded-core' ? sourceBadgeStyles['youcoded-core'] :
         typeBadgeStyles[skill.type] || sourceBadgeStyles.plugin
       }`}>
-        {skill.source === 'youcoded-core' ? 'DC' : typeLabels[skill.type] || 'Plugin'}
+        {skill.source === 'youcoded-core' ? 'YC' : typeLabels[skill.type] || 'Plugin'}
       </span>
     </button>
   );

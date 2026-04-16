@@ -41,7 +41,7 @@
       android:pathData="M5.2,17.2 L7.4,17.2 L10.2,20.5 L7.4,23.8 L5.2,23.8 L8,20.5 Z"
       android:fillColor="#E0E0E0"/>
 
-  <!-- D letter (traced glyph) -->
+  <!-- Y letter (traced glyph from Consolas Bold) -->
   <group
       android:translateX="12.8"
       android:translateY="24.0"
@@ -50,7 +50,7 @@
       android:pivotX="0"
       android:pivotY="0">
     <path
-        android:pathData="M1073,670 Q1073,518 1035.5,394 Q998,270 918.5,182.5 Q839,95 715,47.5 Q591,0 418,0 L86,0 L86,1307 L473,1307 Q623,1307 735.5,1269.5 Q848,1232 923,1154 Q998,1076 1035.5,956 Q1073,836 1073,670 Z M809,654 Q809,760 792,843 Q775,926 734.5,983.5 Q694,1041 626,1071 Q558,1101 457,1101 L332,1101 L332,206 L440,206 Q621,206 715,314 Q809,422 809,654 Z"
+        android:pathData="M1114,1307 L685,463 L685,0 L435,0 L435,461 L10,1307 L283,1307 L475,903 L563,705 L651,909 L852,1307 L1114,1307 Z"
         android:fillColor="#F0F0F0"
         android:strokeColor="#F0F0F0"
         android:strokeWidth="25"
