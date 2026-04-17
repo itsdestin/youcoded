@@ -344,6 +344,20 @@ export class RestoreService {
         emit({ category, filesDone: 1, filesTotal: 1, phase: 'done' });
       }
 
+      // --- 3. Pull conversation-index.json (conversation tags) ---
+      // Tags (complete/priority/helpful flags) live in system-backup, not any
+      // restore category. Merge-mode gets them via syncService.pull(); wipe-
+      // mode has to fetch explicitly because we can't run the full pull here
+      // (it would overwrite the categories we just atomically swapped in).
+      // Non-fatal — the core restore already succeeded.
+      if (opts.categories.includes('conversations')) {
+        try {
+          await this.syncService.pullConversationIndexOnly(opts.backendId);
+        } catch (e) {
+          // swallow: tags are an enrichment, not a hard requirement
+        }
+      }
+
       return {
         snapshotId,
         categoriesRestored: opts.categories,
