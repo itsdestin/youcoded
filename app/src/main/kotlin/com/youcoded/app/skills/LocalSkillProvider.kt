@@ -21,11 +21,6 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
     // Callback to reload plugins in active Claude Code session after install/uninstall
     var onPluginsChanged: (() -> Unit)? = null
 
-    // Decomposition v3: regenerates ~/.claude/integration-context.md after
-    // install/uninstall so new `provides` capabilities take effect immediately.
-    // Injected after construction (same pattern as pluginInstaller).
-    var integrationReconciler: IntegrationReconciler? = null
-
     // Decomposition v3 §9.2: reconciles plugin hooks-manifest.json into
     // settings.json after install. Injected from SessionService (lives in
     // the runtime package, not skills).
@@ -241,11 +236,6 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
                 installedCache = null
                 // Notify active sessions so Claude Code discovers the new plugin
                 onPluginsChanged?.invoke()
-                // Decomposition v3: regenerate integration-context.md so new
-                // `provides` capabilities are visible on next session start
-                try { integrationReconciler?.reconcile() } catch (e: Exception) {
-                    android.util.Log.w("LocalSkillProvider", "integration reconcile after install failed", e)
-                }
                 // Also reconcile plugin hooks — the newly-installed package may
                 // declare required hooks that need to land in settings.json.
                 try { hookReconciler?.reconcile() } catch (e: Exception) {
@@ -313,11 +303,6 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
             if (ok) {
                 // Notify active sessions so Claude Code drops the plugin
                 onPluginsChanged?.invoke()
-                // Decomposition v3: regenerate integration-context.md so the
-                // uninstalled package's capabilities fall back to whenUnavailable
-                try { integrationReconciler?.reconcile() } catch (e: Exception) {
-                    android.util.Log.w("LocalSkillProvider", "integration reconcile after uninstall failed", e)
-                }
             }
             return JSONObject().put("ok", ok).put("type", "plugin")
         }

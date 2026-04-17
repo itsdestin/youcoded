@@ -9,7 +9,6 @@ import { encodeSkillLink, decodeSkillLink } from './skill-share';
 import { installPlugin, uninstallPlugin, isPluginInstalled, type InstallResult } from './plugin-installer';
 import { pluginInstallDir, YOUCODED_PLUGINS_DIR, listInstalledPluginDirs } from './claude-code-registry';
 import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
-import { reconcileIntegrations } from './integration-reconciler';
 import { reconcileHooks } from './hook-reconciler';
 import { reconcileMcp } from './mcp-reconciler';
 import { log } from './logger';
@@ -248,9 +247,6 @@ export class LocalSkillProvider implements SkillProvider {
         }],
       });
       this.installedCache = null;
-      // Decomposition v3: regenerate integration-context.md so newly-installed
-      // `provides` capabilities are visible to Claude on the next session start.
-      try { reconcileIntegrations(); } catch (e) { log('ERROR', 'SkillProvider', 'integration reconcile after install failed', { error: String(e) }); }
       // Also reconcile hooks — the newly-installed plugin may declare
       // required hooks that need to land in settings.json before the user's
       // next Claude session starts.
@@ -341,9 +337,6 @@ export class LocalSkillProvider implements SkillProvider {
       await uninstallPlugin(id);
       this.configStore.removePluginInstall(id);
       this.installedCache = null;
-      // Decomposition v3: regenerate integration-context.md so removed
-      // capabilities fall back to their `whenUnavailable` instruction.
-      try { reconcileIntegrations(); } catch (e) { log('ERROR', 'SkillProvider', 'integration reconcile after uninstall failed', { error: String(e) }); }
       return { type: 'plugin' };
     } else {
       this.configStore.deletePromptSkill(id);
@@ -759,8 +752,7 @@ export class LocalSkillProvider implements SkillProvider {
     }>;
     provides: Array<{ capability: string; description: string; skill: string }>;
   }> {
-    // Build a map of capability → providing package by scanning all installed
-    // plugin manifests. Same logic as integration-reconciler but read-only.
+    // Build a map of capability → providing package by scanning all installed plugin manifests.
     const providerMap = new Map<string, string>();
     for (const pluginDir of listInstalledPluginDirs()) {
       const manifest = this.readPluginManifest(pluginDir);

@@ -194,17 +194,6 @@ class SessionService : Service() {
                 ?.takeIf { !it.shellMode && it.isRunning }
                 ?.writeInput("/reload-plugins\r")
         }
-        // Decomposition v3: wire integration reconciler + run once on launch so
-        // ~/.claude/integration-context.md reflects currently-installed packages
-        // before any session starts. Also re-runs after every install/uninstall.
-        val reconciler = com.youcoded.app.skills.IntegrationReconciler(bs.homeDir)
-        skillProvider?.integrationReconciler = reconciler
-        try {
-            val summary = reconciler.reconcile()
-            android.util.Log.i("SessionService", "Integration context generated: rows=${summary.rowCount} providers=${summary.providerCount}")
-        } catch (e: Exception) {
-            android.util.Log.w("SessionService", "Initial integration reconcile failed", e)
-        }
 
         // Decomposition v3 §9.2: reconcile plugin hooks-manifest.json into
         // settings.json. Adds required hooks, updates stale paths (e.g.,

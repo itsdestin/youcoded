@@ -214,35 +214,16 @@ export interface PackageComponent {
   path: string;
 }
 
-// --- Plugin integration manifest (decomposition v3) ---
-//
-// Packages declare capabilities they `provide` and `optionalIntegrations`
-// they can use if available. The app merges these across all installed
-// plugins into ~/.claude/integration-context.md which Claude reads at
-// session start to route cross-skill references correctly.
-//
-// See TOOLKIT-DECOMPOSITION-v2.md §4 for the full design.
-
-export interface ProvidedCapability {
-  description: string;
-  skill: string; // name of the skill that fulfills this capability
-}
-
-export interface OptionalIntegration {
-  whenAvailable: string;   // instruction Claude follows if the capability is installed
-  whenUnavailable: string; // fallback instruction if no installed package provides it
-}
-
 export interface PluginManifest {
   name: string;
   version?: string;
   description?: string;
   author?: { name?: string } | string;
   license?: string;
-  recommends?: string[];                                    // soft recommendation — package works without these
-  provides?: Record<string, ProvidedCapability>;            // capability name -> fulfillment
-  optionalIntegrations?: Record<string, OptionalIntegration>; // capability name -> routing
-  postInstall?: string;                                     // shell command run after install (trusted-org only)
+  recommends?: string[];   // soft recommendation — package works without these
+  provides?: Record<string, { description: string; skill: string }>;
+  optionalIntegrations?: Record<string, { whenAvailable: string; whenUnavailable: string }>;
+  postInstall?: string;    // shell command run after install (trusted-org only)
 }
 
 // Tracked marketplace package — records what the marketplace installed
