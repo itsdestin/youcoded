@@ -92,6 +92,7 @@ export class SessionManager extends EventEmitter {
       status: 'active',
       createdAt: Date.now(),
       provider,
+      model: opts.model,
     };
 
     const session: ManagedSession = { info, worker };

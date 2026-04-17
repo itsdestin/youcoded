@@ -49,6 +49,25 @@ describe('SessionManager', () => {
     expect(info.status).toBe('active');
   });
 
+  it('includes model in session info when provided', () => {
+    const info = manager.createSession({
+      name: 'model-test',
+      cwd: tmpDir,
+      skipPermissions: false,
+      model: 'claude-sonnet-4-6',
+    });
+    expect(info.model).toBe('claude-sonnet-4-6');
+  });
+
+  it('has undefined model in session info when not provided', () => {
+    const info = manager.createSession({
+      name: 'no-model-test',
+      cwd: tmpDir,
+      skipPermissions: false,
+    });
+    expect(info.model).toBeUndefined();
+  });
+
   it('lists all active sessions', () => {
     manager.createSession({ name: 's1', cwd: tmpDir, skipPermissions: false });
     manager.createSession({ name: 's2', cwd: tmpDir, skipPermissions: false });

@@ -176,7 +176,9 @@ function AppInner() {
   const [welcomeModel, setWelcomeModel] = useState('sonnet');
   const [welcomeDangerous, setWelcomeDangerous] = useState(false);
 
-  const [model, setModel] = useState<ModelAlias>('sonnet');
+  // Per-session model state — keyed by sessionId, same pattern as permissionModes
+  const [sessionModels, setSessionModels] = useState<Map<string, ModelAlias>>(new Map());
+  const currentModel: ModelAlias = sessionId ? (sessionModels.get(sessionId) ?? 'sonnet') : 'sonnet';
   const [pendingModel, setPendingModel] = useState<ModelAlias | null>(null);
   const consecutiveFailures = useRef(0);
   // Fix: track whether a new user turn has started after the model switch.
@@ -213,15 +215,6 @@ function AppInner() {
       .catch(() => { clearTimeout(timeout); resolve(false); });
 
     return () => clearTimeout(timeout);
-  }, []);
-
-  // Load persisted model preference on mount
-  useEffect(() => {
-    (window.claude as any).model?.getPreference().then((m: string) => {
-      if (MODELS.includes(m as any)) {
-        setModel(m as ModelAlias);
-      }
-    }).catch(() => {});
   }, []);
 
   // Load session defaults on mount and whenever settings panel closes
@@ -373,6 +366,12 @@ function AppInner() {
       const defaultView = (info.provider && info.provider !== 'claude') ? 'terminal' : 'chat';
       setViewModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, defaultView));
       setPermissionModes((prev) => prev.has(info.id) ? prev : new Map(prev).set(info.id, info.permissionMode || 'normal'));
+      setSessionModels((prev) => {
+        if (prev.has(info.id)) return prev;
+        // Match the model string from SessionInfo back to a ModelAlias (e.g. 'claude-sonnet-4-6' → 'sonnet')
+        const alias = MODELS.find((m) => info.model?.includes(m.replace(/\[.*\]/, ''))) ?? 'sonnet';
+        return new Map(prev).set(info.id, alias);
+      });
       // Non-Claude providers (e.g. Gemini) don't emit hook events, so they'd
       // never trigger the "first hook = initialized" gate. Mark them ready immediately.
       if (info.provider && info.provider !== 'claude') {
@@ -405,6 +404,11 @@ function AppInner() {
         return next;
       });
       setPermissionModes((prev) => {
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      setSessionModels((prev) => {
         const next = new Map(prev);
         next.delete(id);
         return next;
@@ -926,9 +930,10 @@ function AppInner() {
   // Shift+Space cycles model in chat view
   const cycleModelRef = useRef<(() => void) | null>(null);
   const cycleModel = useCallback(() => {
-    const idx = MODELS.indexOf(model);
+    if (!sessionId) return;
+    const idx = MODELS.indexOf(currentModel);
     const next = MODELS[(idx + 1) % MODELS.length];
-    setModel(next);
+    setSessionModels((prev) => new Map(prev).set(sessionId, next));
     setPendingModel(next);
     // Fix: don't verify against in-flight events from the current turn —
     // wait until a new user turn starts so we know Claude is using the new model.
@@ -937,10 +942,8 @@ function AppInner() {
     // verification is just a safety net. If verification later shows a
     // mismatch, the failure handler overwrites with the actual model.
     (window.claude as any).model?.setPreference(next);
-    if (sessionId) {
-      window.claude.session.sendInput(sessionId, `/model ${next}\r`);
-    }
-  }, [model, sessionId]);
+    window.claude.session.sendInput(sessionId, `/model ${next}\r`);
+  }, [currentModel, sessionId]);
   cycleModelRef.current = cycleModel;
 
   useEffect(() => {
@@ -989,9 +992,9 @@ function AppInner() {
         // Preference already persisted optimistically in cycleModel
       } else {
         const actual = MODELS.find(m => actualModel.includes(baseKey(m)));
-        // Revert both UI and persisted preference to what Claude is actually using
+        // Revert this session's model and persisted preference to what Claude is actually using
         if (actual) {
-          setModel(actual);
+          if (sessionId) setSessionModels((prev) => new Map(prev).set(sessionId, actual));
           (window.claude as any).model?.setPreference(actual);
         }
         const failures = consecutiveFailures.current + 1;
@@ -1096,11 +1099,8 @@ function AppInner() {
   );
 
   const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'gemini', launchInNewWindow?: boolean) => {
-    const m = sessionModel || model;
-    // Update the active model to match what was chosen in the form
-    if (sessionModel && MODELS.includes(sessionModel as any)) {
-      setModel(sessionModel as ModelAlias);
-    }
+    // Use the explicitly chosen model; fall back to the current session's model
+    const m = sessionModel || currentModel;
     const info = await (window.claude.session.create as any)({
       name: provider === 'gemini' ? 'Gemini Session' : 'New Session',
       cwd,
@@ -1113,14 +1113,12 @@ function AppInner() {
     if (launchInNewWindow && info?.id) {
       (window as any).claude?.detach?.openDetached?.({ sessionId: info.id });
     }
-  }, [model]);
+  }, [currentModel]);
 
   const handleResumeSession = useCallback(async (claudeSessionId: string, projectSlug: string, projectPath: string, resumeModel?: string, resumeDangerous?: boolean, launchInNewWindow?: boolean) => {
     const cwd = projectPath;
-    const m = resumeModel || model;
-    if (resumeModel && MODELS.includes(resumeModel as any)) {
-      setModel(resumeModel as ModelAlias);
-    }
+    // Use explicitly chosen resume model; fall back to the current session's model
+    const m = resumeModel || currentModel;
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
     const newSession = await (window.claude.session.create as any)({
@@ -1153,7 +1151,7 @@ function AppInner() {
     } catch (err) {
       console.error('Failed to load history:', err);
     }
-  }, [dispatch, model]);
+  }, [dispatch, currentModel]);
 
   const currentViewMode = sessionId ? (viewModes.get(sessionId) || 'chat') : 'chat';
 
@@ -1533,7 +1531,7 @@ function AppInner() {
                     dispatch({ type: 'USER_PROMPT', sessionId, content: '/sync', timestamp: Date.now() });
                     window.claude.session.sendInput(sessionId, '/sync\r');
                   } : undefined}
-                  model={model}
+                  model={currentModel}
                   onCycleModel={cycleModel}
                   permissionMode={currentPermissionMode}
                   onCyclePermission={cyclePermission}
@@ -1699,16 +1697,14 @@ function AppInner() {
         open={modelPickerOpen}
         onClose={() => setModelPickerOpen(false)}
         sessionId={sessionId}
-        currentModel={model}
+        currentModel={currentModel}
         onSelectModel={(m) => {
-          // Reuse the existing cycle plumbing but with an explicit target.
-          // pendingModel + setModel + PTY send matches the cycleModel flow.
-          setModel(m);
+          if (!sessionId) return;
+          setSessionModels((prev) => new Map(prev).set(sessionId, m));
           setPendingModel(m);
+          postSwitchTurnReady.current = false;
           (window.claude as any).model?.setPreference(m);
-          if (sessionId) {
-            window.claude.session.sendInput(sessionId, `/model ${m}\r`);
-          }
+          window.claude.session.sendInput(sessionId, `/model ${m}\r`);
         }}
       />
       {/* Full-screen glass marketplace + library destinations. Shares a

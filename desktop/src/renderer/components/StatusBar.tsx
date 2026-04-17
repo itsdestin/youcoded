@@ -45,7 +45,7 @@ type ModelAlias = typeof MODELS[number];
 
 const MODEL_DISPLAY: Record<ModelAlias, { label: string; color: string; bg: string; border: string }> = {
   sonnet:      { label: 'Sonnet 4.6', color: '#9CA3AF', bg: 'rgba(156,163,175,0.15)', border: 'rgba(156,163,175,0.25)' },
-  'opus[1m]':  { label: 'Opus 4.6',   color: '#818CF8', bg: 'rgba(129,140,248,0.15)', border: 'rgba(129,140,248,0.25)' },
+  'opus[1m]':  { label: 'Opus 4.7',   color: '#818CF8', bg: 'rgba(129,140,248,0.15)', border: 'rgba(129,140,248,0.25)' },
   haiku:       { label: 'Haiku 4.5',  color: '#2DD4BF', bg: 'rgba(45,212,191,0.15)',  border: 'rgba(45,212,191,0.25)' },
 };
 
