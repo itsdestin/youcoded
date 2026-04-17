@@ -25,7 +25,7 @@
   --edge-dim: #DCDCDC80;
   --scrollbar-thumb: #C0C0C0;
   --scrollbar-hover: #999999;
-  --code: #8B6914;
+  /* --code is computed per-theme by theme-engine.ts from --accent / --fg-2 so community themes get a palette-matched inline-code color instead of inheriting a hardcoded yellow from :root. */
   --link: #2563EB;
   --link-hover: #1D4ED8;
   --hl-theme: light;
@@ -57,7 +57,6 @@
   --edge-dim: #37373780;
   --scrollbar-thumb: #333333;
   --scrollbar-hover: #555555;
-  --code: #D4A843;
   --link: #66AAFF;
   --link-hover: #88CCFF;
   --hl-theme: dark;
@@ -89,7 +88,6 @@
   --edge-dim: #30363D80;
   --scrollbar-thumb: #30363D;
   --scrollbar-hover: #484F58;
-  --code: #C9A84C;
   --link: #58A6FF;
   --link-hover: #79C0FF;
   --hl-theme: dark;
@@ -121,7 +119,6 @@
   --edge-dim: #D4C8B580;
   --scrollbar-thumb: #CBBFB0;
   --scrollbar-hover: #A89A8A;
-  --code: #7A5D2E;
   --link: #5B4A1E;
   --link-hover: #3D3219;
   --hl-theme: light;
