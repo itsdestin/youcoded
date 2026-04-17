@@ -129,6 +129,7 @@ const configPath = path.join(claudeDir, 'toolkit-state', 'config.json');
 const syncMarkerPath = path.join(claudeDir, 'toolkit-state', '.sync-marker');
 const backupMetaPath = path.join(claudeDir, 'backup-meta.json');
 const syncWarningsPath = path.join(claudeDir, '.sync-warnings');
+const syncWarningsJsonPath = path.join(claudeDir, '.sync-warnings.json');
 const syncLockDir = path.join(claudeDir, 'toolkit-state', '.sync-lock');
 const backupLogPath = path.join(claudeDir, 'backup.log');
 
@@ -298,6 +299,57 @@ async function readBackendInstances(): Promise<BackendInstance[]> {
   syncLegacyKeys(config);
   await atomicWrite(configPath, JSON.stringify(config, null, 2));
   return migrated;
+}
+
+// --- Warning store ---
+
+/** Read .sync-warnings.json. Returns [] if missing or unparseable. */
+export async function readWarnings(): Promise<SyncWarning[]> {
+  const text = await readText(syncWarningsJsonPath);
+  if (!text) return [];
+  try {
+    const parsed = JSON.parse(text);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Write warnings array atomically. Empty array → unlink the file. */
+export async function writeWarnings(warnings: SyncWarning[]): Promise<void> {
+  if (warnings.length === 0) {
+    try { await fs.promises.unlink(syncWarningsJsonPath); } catch {}
+    return;
+  }
+  await atomicWrite(syncWarningsJsonPath, JSON.stringify(warnings, null, 2));
+}
+
+/**
+ * Add or replace a warning. De-dupes by (code, backendId) — only one warning
+ * per (code, backendId) pair exists at a time, so repeated push failures
+ * don't stack up.
+ */
+export async function addOrReplaceWarning(w: SyncWarning): Promise<void> {
+  const all = await readWarnings();
+  const filtered = all.filter(
+    (x) => !(x.code === w.code && x.backendId === w.backendId),
+  );
+  filtered.push(w);
+  await writeWarnings(filtered);
+}
+
+/** Remove all warnings with a given backendId (e.g., on successful push). */
+export async function clearWarningsByBackend(backendId: string): Promise<void> {
+  const all = await readWarnings();
+  const filtered = all.filter((x) => x.backendId !== backendId);
+  if (filtered.length !== all.length) await writeWarnings(filtered);
+}
+
+/** Remove a warning by code (used by runHealthCheck to clear resolved codes). */
+export async function clearWarningsByCode(code: string): Promise<void> {
+  const all = await readWarnings();
+  const filtered = all.filter((x) => x.code !== code);
+  if (filtered.length !== all.length) await writeWarnings(filtered);
 }
 
 // --- Public API ---
