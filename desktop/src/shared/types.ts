@@ -367,6 +367,22 @@ export interface IntegrationState {
   error?: string;
 }
 
+export interface AttentionSummary {
+  anyNeedsAttention: boolean;
+  perSession: Record<string, { attentionState: string; awaitingApproval: boolean }>;
+}
+
+export interface BuddyApi {
+  show(): Promise<void>;
+  hide(): Promise<void>;
+  toggleChat(): Promise<void>;
+  setSession(sessionId: string): Promise<void>;
+  subscribe(sessionId: string): Promise<void>;
+  unsubscribe(sessionId: string): Promise<void>;
+  getViewedSession(): Promise<string | null>;
+  onAttentionSummary(cb: (summary: AttentionSummary) => void): () => void;
+}
+
 // Marketplace redesign Phase 1 — per-entry component inventory for the
 // "What's inside" peek on cards and detail overlays. Extracted at sync time
 // by scripts/extract-components.js; `null` on the entry signals extraction
@@ -622,6 +638,15 @@ export const IPC = {
   SYNC_RESTORE_DELETE_SNAPSHOT: 'sync:restore:delete-snapshot',
   SYNC_RESTORE_PROBE: 'sync:restore:probe',
   SYNC_RESTORE_BROWSE_URL: 'sync:restore:browse-url',
+  // Buddy floater (desktop-only MVP)
+  BUDDY_SHOW: 'buddy:show',
+  BUDDY_HIDE: 'buddy:hide',
+  BUDDY_TOGGLE_CHAT: 'buddy:toggle-chat',
+  BUDDY_SET_SESSION: 'buddy:set-session',
+  BUDDY_SUBSCRIBE: 'buddy:subscribe',
+  BUDDY_UNSUBSCRIBE: 'buddy:unsubscribe',
+  BUDDY_GET_VIEWED_SESSION: 'buddy:get-viewed-session',
+  SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
 } as const;
 
 // --- Window registry / detach types ---

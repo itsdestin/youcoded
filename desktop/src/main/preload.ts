@@ -184,6 +184,15 @@ const IPC = {
   MARKETPLACE_RATE_DELETE: 'marketplace:rate:delete',
   MARKETPLACE_THEME_LIKE: 'marketplace:theme:like',
   MARKETPLACE_REPORT: 'marketplace:report',
+  // Buddy floater (desktop-only MVP)
+  BUDDY_SHOW: 'buddy:show',
+  BUDDY_HIDE: 'buddy:hide',
+  BUDDY_TOGGLE_CHAT: 'buddy:toggle-chat',
+  BUDDY_SET_SESSION: 'buddy:set-session',
+  BUDDY_SUBSCRIBE: 'buddy:subscribe',
+  BUDDY_UNSUBSCRIBE: 'buddy:unsubscribe',
+  BUDDY_GET_VIEWED_SESSION: 'buddy:get-viewed-session',
+  SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
 } as const;
 
 contextBridge.exposeInMainWorld('claude', {
@@ -627,5 +636,19 @@ contextBridge.exposeInMainWorld('claude', {
     zoomOut: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_OUT),
     reset: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_RESET),
     get: (): Promise<number> => ipcRenderer.invoke(IPC.ZOOM_GET),
+  },
+  buddy: {
+    show: () => ipcRenderer.invoke('buddy:show'),
+    hide: () => ipcRenderer.invoke('buddy:hide'),
+    toggleChat: () => ipcRenderer.invoke('buddy:toggle-chat'),
+    setSession: (sessionId: string) => ipcRenderer.invoke('buddy:set-session', sessionId),
+    subscribe: (sessionId: string) => ipcRenderer.invoke('buddy:subscribe', sessionId),
+    unsubscribe: (sessionId: string) => ipcRenderer.invoke('buddy:unsubscribe', sessionId),
+    getViewedSession: () => ipcRenderer.invoke('buddy:get-viewed-session'),
+    onAttentionSummary: (cb: (summary: unknown) => void) => {
+      const listener = (_: unknown, summary: unknown) => cb(summary);
+      ipcRenderer.on('session:attention-summary', listener);
+      return () => ipcRenderer.removeListener('session:attention-summary', listener);
+    },
   },
 });

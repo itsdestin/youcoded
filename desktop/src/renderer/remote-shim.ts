@@ -876,5 +876,17 @@ export function installShim(): void {
       requestTranscriptReplay: (_sid: string) => {},
       dropResolve: () => Promise.resolve({ targetWindowId: null as number | null }),
     },
+    // Buddy floater is desktop-Electron only (MVP). Browser/Android get
+    // error-throwing stubs except onAttentionSummary which returns a no-op unsubscribe.
+    buddy: {
+      show: () => { throw new Error('Buddy is desktop-only in this version'); },
+      hide: () => { throw new Error('Buddy is desktop-only in this version'); },
+      toggleChat: () => { throw new Error('Buddy is desktop-only in this version'); },
+      setSession: () => { throw new Error('Buddy is desktop-only in this version'); },
+      subscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
+      unsubscribe: () => { throw new Error('Buddy is desktop-only in this version'); },
+      getViewedSession: () => { throw new Error('Buddy is desktop-only in this version'); },
+      onAttentionSummary: () => () => { /* no-op unsubscribe */ },
+    },
   };
 }
