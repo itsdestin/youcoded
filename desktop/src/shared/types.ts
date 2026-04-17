@@ -78,6 +78,21 @@ export interface TranscriptEvent {
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
+    // Task 1.1: widened turn-complete payload so the reducer can attach the
+    // per-turn model, token/cache usage, and the Anthropic requestId to the
+    // completing AssistantTurn for UI surfacing. All optional — the field is
+    // shared across event types, and turn-complete is the only current writer.
+    /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
+    model?: string;
+    /** Anthropic API request id from the JSONL line's top-level `requestId`. */
+    anthropicRequestId?: string;
+    /** Token + cache usage snapshot from message.usage. */
+    usage?: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
+    };
   };
 }
 

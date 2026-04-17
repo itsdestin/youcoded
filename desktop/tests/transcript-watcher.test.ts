@@ -236,6 +236,32 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toEqual([]);
   });
+
+  it('emits stopReason on turn-complete for max_tokens stops', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      sessionId: 's1',
+      uuid: 'u1',
+      timestamp: '2026-04-17T00:00:00.000Z',
+      requestId: 'req_abc',
+      message: {
+        model: 'claude-opus-4-7',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'truncated...' }],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 10, output_tokens: 4096, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 },
+      },
+    });
+    const events = parseTranscriptLine(line, 's1');
+    const turnComplete = events.find((e) => e.type === 'turn-complete');
+    expect(turnComplete).toBeDefined();
+    expect(turnComplete!.data).toEqual({
+      stopReason: 'max_tokens',
+      model: 'claude-opus-4-7',
+      anthropicRequestId: 'req_abc',
+      usage: { inputTokens: 10, outputTokens: 4096, cacheReadTokens: 5, cacheCreationTokens: 2 },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------

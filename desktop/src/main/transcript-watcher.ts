@@ -194,14 +194,27 @@ export function parseTranscriptLine(line: string, sessionId: string): Transcript
   }
 
   // Emit turn-complete for any definitive stop reason except tool_use
-  // (tool_use means Claude is waiting for tool results, not actually done)
+  // (tool_use means Claude is waiting for tool results, not actually done).
+  // Enrich with model + usage + anthropicRequestId so the reducer can attach
+  // them to the completing AssistantTurn for UI surfacing.
   if (message.stop_reason && message.stop_reason !== 'tool_use') {
+    const usage = message.usage && {
+      inputTokens: message.usage.input_tokens ?? 0,
+      outputTokens: message.usage.output_tokens ?? 0,
+      cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+      cacheCreationTokens: message.usage.cache_creation_input_tokens ?? 0,
+    };
     events.push({
       type: 'turn-complete',
       sessionId,
       uuid,
       timestamp,
-      data: { stopReason: message.stop_reason },
+      data: {
+        stopReason: message.stop_reason,
+        ...(messageModel ? { model: messageModel } : {}),
+        ...(parsed.requestId ? { anthropicRequestId: parsed.requestId } : {}),
+        ...(usage ? { usage } : {}),
+      },
     });
   }
 
