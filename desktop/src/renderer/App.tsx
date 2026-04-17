@@ -21,6 +21,7 @@ import { ChatProvider, useChatDispatch, useChatState, useChatStateMap } from './
 import { dispatchSlashCommand } from './state/slash-command-dispatcher';
 import { GameProvider, useGameState, useGameDispatch } from './state/game-context';
 import { hookEventToAction } from './state/hook-dispatcher';
+import type { SyncWarning } from '../main/sync-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
 import { usePartyLobby } from './hooks/usePartyLobby';
 import { usePartyGame } from './hooks/usePartyGame';
@@ -79,7 +80,7 @@ interface StatusDataState {
   gitBranchMap: Record<string, string>;
   sessionStatsMap: Record<string, SessionStats>;
   syncStatus: string | null;
-  syncWarnings: string | null;
+  syncWarnings: SyncWarning[] | null;
   lastSyncEpoch: number | null;
   syncInProgress: boolean;
   backupMeta: any;
@@ -100,7 +101,7 @@ function AppInner() {
   const [statusData, setStatusData] = useState<StatusDataState>({
     usage: null, announcement: null, updateStatus: null,
     model: null, contextMap: {}, gitBranchMap: {}, sessionStatsMap: {},
-    syncStatus: null, syncWarnings: null,
+    syncStatus: null, syncWarnings: [],
     lastSyncEpoch: null, syncInProgress: false, backupMeta: null,
   });
 
@@ -592,7 +593,7 @@ function AppInner() {
         announcement: data.announcement,
         updateStatus: data.updateStatus,
         syncStatus: data.syncStatus,
-        syncWarnings: data.syncWarnings,
+        syncWarnings: Array.isArray(data.syncWarnings) ? data.syncWarnings : [],
         lastSyncEpoch: data.lastSyncEpoch ?? prev.lastSyncEpoch,
         syncInProgress: data.syncInProgress ?? prev.syncInProgress,
         backupMeta: data.backupMeta ?? prev.backupMeta,

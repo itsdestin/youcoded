@@ -18,7 +18,7 @@ import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService, type SyncWarning } from './sync-state';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
@@ -1190,7 +1190,8 @@ export function registerIpcHandlers(
   }
 
   const syncStatusPath = path.join(os.homedir(), '.claude', '.sync-status');
-  const syncWarningsPath = path.join(os.homedir(), '.claude', '.sync-warnings');
+  // Legacy .sync-warnings text file is no longer read; typed warnings come from .sync-warnings.json.
+  const syncWarningsJsonPath = path.join(os.homedir(), '.claude', '.sync-warnings.json');
 
   function readTextFile(filePath: string): string | null {
     try {
@@ -1200,12 +1201,23 @@ export function registerIpcHandlers(
     }
   }
 
+  /** Read typed sync warnings synchronously — returns [] if missing or unparseable. */
+  function readSyncWarningsSync(): SyncWarning[] {
+    try {
+      const text = fs.readFileSync(syncWarningsJsonPath, 'utf8');
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
   function buildStatusData() {
     const usage = readJsonFile(usageCachePath);
     const announcement = readJsonFile(announcementCachePath);
     const updateStatus = getUpdateStatus();
     const syncStatus = readTextFile(syncStatusPath);
-    const syncWarnings = readTextFile(syncWarningsPath);
+    const syncWarnings = readSyncWarningsSync();
 
     // Sync state for live updates — SyncPanel also fetches via IPC,
     // but these fields let the compact section row update in real-time.
