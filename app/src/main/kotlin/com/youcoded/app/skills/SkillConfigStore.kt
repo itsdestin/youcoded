@@ -17,10 +17,19 @@ class SkillConfigStore(private val homeDir: File) {
         private const val MAX_CHIPS = 10
         private const val MAX_PRIVATE_SKILLS = 100
 
-        private val DEFAULT_CHIPS = listOf(
-            "Journal", "Inbox", "Git Status", "Review PR",
-            "Fix Tests", "Briefing", "Draft Text"
-        )
+        // Shape mirrors desktop/src/main/skill-config-store.ts DEFAULT_CHIPS —
+        // React's QuickChips maps c.label and c.prompt, so chips MUST be
+        // objects, not bare strings. Seeding strings (the old shape) produced
+        // chips with undefined labels on fresh Android installs.
+        private fun defaultChipsJson(): JSONArray = JSONArray().apply {
+            put(JSONObject().put("skillId", "journaling-assistant").put("label", "Journal").put("prompt", "let's journal"))
+            put(JSONObject().put("skillId", "claudes-inbox").put("label", "Inbox").put("prompt", "check my inbox"))
+            put(JSONObject().put("label", "Git Status").put("prompt", "run git status and summarize what's changed"))
+            put(JSONObject().put("label", "Review PR").put("prompt", "review the latest PR on this repo"))
+            put(JSONObject().put("label", "Fix Tests").put("prompt", "run the tests and fix any failures"))
+            put(JSONObject().put("skillId", "encyclopedia-librarian").put("label", "Briefing").put("prompt", "brief me on "))
+            put(JSONObject().put("label", "Draft Text").put("prompt", "help me draft a text to "))
+        }
     }
 
     fun configExists(): Boolean = configFile.exists()
@@ -46,6 +55,10 @@ class SkillConfigStore(private val homeDir: File) {
             if (!config.optBoolean("migrated", false)) {
                 migrateExistingInstalls()
             }
+            // Fix: existing installs have chips stored as bare label strings
+            // (old migrate() bug). React expects {label, prompt} objects —
+            // promote the legacy string-chips to the canonical shape once.
+            migrateLegacyStringChips()
         } catch (_: Exception) {
             // Back up corrupt file
             val bak = File(configFile.absolutePath + ".bak")
@@ -203,6 +216,40 @@ class SkillConfigStore(private val homeDir: File) {
         save()
     }
 
+    /**
+     * Promote legacy bare-string chips (e.g. ["Journal", "Inbox", ...]) to
+     * the canonical `{label, prompt, skillId?}` shape React expects. Matches
+     * entries to defaultChipsJson() by label so users keep their seeded
+     * prompts and skillIds; unknown labels keep the label with an empty
+     * prompt. Idempotent — does nothing if chips are already objects.
+     */
+    private fun migrateLegacyStringChips() {
+        val current = config.optJSONArray("chips") ?: return
+        if (current.length() == 0) return
+        // Sniff first element — if it's already a JSONObject, nothing to do.
+        if (current.opt(0) is JSONObject) return
+
+        val defaults = defaultChipsJson()
+        val defaultsByLabel = mutableMapOf<String, JSONObject>()
+        for (i in 0 until defaults.length()) {
+            val c = defaults.getJSONObject(i)
+            defaultsByLabel[c.optString("label")] = c
+        }
+
+        val upgraded = JSONArray()
+        for (i in 0 until current.length()) {
+            val label = current.optString(i).takeIf { it.isNotEmpty() } ?: continue
+            val seeded = defaultsByLabel[label]
+            if (seeded != null) {
+                upgraded.put(JSONObject(seeded.toString()))
+            } else {
+                upgraded.put(JSONObject().put("label", label).put("prompt", ""))
+            }
+        }
+        config.put("chips", upgraded)
+        save()
+    }
+
     fun reload() {
         load()
     }
@@ -210,7 +257,7 @@ class SkillConfigStore(private val homeDir: File) {
     fun migrate(existingSkillIds: JSONArray) {
         config = JSONObject().apply {
             put("favorites", JSONArray())
-            put("chips", JSONArray(DEFAULT_CHIPS))
+            put("chips", defaultChipsJson())
             put("overrides", JSONObject())
             put("privateSkills", JSONArray())
         }
@@ -245,7 +292,7 @@ class SkillConfigStore(private val homeDir: File) {
 
     // ── Chips ──────────────────────────────────────────────────────
 
-    fun getChips(): JSONArray = config.optJSONArray("chips") ?: JSONArray(DEFAULT_CHIPS)
+    fun getChips(): JSONArray = config.optJSONArray("chips") ?: defaultChipsJson()
 
     fun setChips(chips: JSONArray) {
         val limited = JSONArray()

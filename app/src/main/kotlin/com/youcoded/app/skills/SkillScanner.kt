@@ -47,8 +47,10 @@ class SkillScanner(private val homeDir: File, private val context: Context) {
         // was special-cased (scanned at ~/.claude/plugins/youcoded-core/skills/).
         // After decomposition every package lives under a sibling directory,
         // so we scan every plugin directory that has a plugin.json manifest.
+        // Walk BOTH the toolkit root and the marketplace subtree via the
+        // shared helper — marketplace plugins would otherwise be invisible.
         try {
-            pluginsDir.listFiles { f -> f.isDirectory }?.forEach { pluginRoot ->
+            ClaudeCodeRegistry.listInstalledPluginDirs(homeDir).forEach { pluginRoot ->
                 val hasManifest = File(pluginRoot, "plugin.json").exists() ||
                     File(pluginRoot, ".claude-plugin/plugin.json").exists()
                 if (!hasManifest) return@forEach

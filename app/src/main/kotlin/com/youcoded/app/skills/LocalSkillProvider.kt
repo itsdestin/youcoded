@@ -334,23 +334,25 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
      * falls back to the marketplace index entry.
      */
     fun getIntegrationInfo(id: String): JSONObject {
-        val pluginsRoot = File(homeDir, ".claude/plugins")
+        // Scan both the core-toolkit clone root (~/.claude/plugins/<id>) AND
+        // the marketplace subtree (~/.claude/plugins/marketplaces/youcoded/plugins/<id>).
+        // See ClaudeCodeRegistry.listInstalledPluginDirs for why both matter.
+        val pluginDirs = ClaudeCodeRegistry.listInstalledPluginDirs(homeDir)
         // Build capability → providing-package map across all installed plugins
         val providerMap = mutableMapOf<String, String>()
-        if (pluginsRoot.exists()) {
-            pluginsRoot.listFiles { f -> f.isDirectory }?.forEach { pluginDir ->
-                val manifest = readPluginManifest(pluginDir) ?: return@forEach
-                val provides = manifest.optJSONObject("provides") ?: return@forEach
-                val keys = provides.keys()
-                while (keys.hasNext()) {
-                    val cap = keys.next()
-                    providerMap.putIfAbsent(cap, manifest.optString("name"))
-                }
+        pluginDirs.forEach { pluginDir ->
+            val manifest = readPluginManifest(pluginDir) ?: return@forEach
+            val provides = manifest.optJSONObject("provides") ?: return@forEach
+            val keys = provides.keys()
+            while (keys.hasNext()) {
+                val cap = keys.next()
+                providerMap.putIfAbsent(cap, manifest.optString("name"))
             }
         }
 
-        // Try installed plugin manifest first; fall back to marketplace entry
-        val manifest = readPluginManifest(File(pluginsRoot, id))
+        // Try installed plugin manifest first; fall back to marketplace entry.
+        // Match id against directory names from both roots.
+        val manifest = pluginDirs.firstOrNull { it.name == id }?.let { readPluginManifest(it) }
         val rawProvides: JSONObject
         val rawOptional: JSONObject
         if (manifest != null) {

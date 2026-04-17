@@ -22,7 +22,6 @@ class HookReconciler(private val homeDir: File) {
 
     data class Result(val added: Int, val updatedPath: Int, val updatedTimeout: Int, val manifestCount: Int)
 
-    private val pluginsDir = File(homeDir, ".claude/plugins")
     private val settingsFile = File(homeDir, ".claude/settings.json")
 
     // Matches the last path component of a script reference inside a command
@@ -46,13 +45,12 @@ class HookReconciler(private val homeDir: File) {
         return null
     }
 
-    private fun listManifests(): List<JSONObject> {
-        if (!pluginsDir.exists()) return emptyList()
-        return pluginsDir.listFiles { f -> f.isDirectory }
-            ?.mapNotNull { readManifest(it) }
-            ?.filter { it.has("hooks") }
-            ?: emptyList()
-    }
+    private fun listManifests(): List<JSONObject> =
+        // Scan both the toolkit root and the marketplace subtree — ClaudeCodeRegistry
+        // handles the "both roots" walk so marketplace plugins contribute hooks too.
+        com.youcoded.app.skills.ClaudeCodeRegistry.listInstalledPluginDirs(homeDir)
+            .mapNotNull { readManifest(it) }
+            .filter { it.has("hooks") }
 
     private fun readSettings(): JSONObject =
         try { if (settingsFile.exists()) JSONObject(settingsFile.readText()) else JSONObject() }

@@ -1812,6 +1812,63 @@ class SessionService : Service() {
                 }
             }
 
+            // ── Theme file IPC — parity with desktop's theme:list /
+            // theme:read-file / theme:write-file handlers. theme-context.tsx
+            // calls these to populate the appearance picker with installed
+            // themes (both user-created and marketplace-installed). Without
+            // them, remote-shim's .catch(() => []) swallows the error and
+            // community theme installs appear to do nothing. ────────────
+            "theme:list" -> {
+                val slugs = org.json.JSONArray()
+                try {
+                    if (themesDir.exists() && themesDir.isDirectory) {
+                        themesDir.listFiles()?.forEach { child ->
+                            if (child.isDirectory && File(child, "manifest.json").exists()) {
+                                slugs.put(child.name)
+                            }
+                        }
+                    }
+                } catch (e: Exception) {
+                    android.util.Log.w("SessionService", "theme:list failed", e)
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, slugs) }
+            }
+            "theme:read-file" -> {
+                val slug = msg.payload.optString("slug", "")
+                val result: Any = if (!safeSlugRe.matches(slug)) {
+                    "" // remote-shim normalizes empty/null to null — React falls through
+                } else {
+                    try {
+                        val manifest = File(themesDir, "$slug/manifest.json")
+                        // Path-traversal guard: resolved path must stay inside themesDir
+                        val canonical = manifest.canonicalFile
+                        if (!canonical.path.startsWith(themesDir.canonicalPath + File.separator)) ""
+                        else if (!canonical.exists()) ""
+                        else canonical.readText()
+                    } catch (e: Exception) {
+                        android.util.Log.w("SessionService", "theme:read-file failed for $slug", e)
+                        ""
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            "theme:write-file" -> {
+                val slug = msg.payload.optString("slug", "")
+                val content = msg.payload.optString("content", "")
+                if (safeSlugRe.matches(slug)) {
+                    try {
+                        val themeDir = File(themesDir, slug).canonicalFile
+                        if (themeDir.path.startsWith(themesDir.canonicalPath + File.separator)) {
+                            File(themeDir, "assets").mkdirs()
+                            File(themeDir, "manifest.json").writeText(content)
+                        }
+                    } catch (e: Exception) {
+                        android.util.Log.w("SessionService", "theme:write-file failed for $slug", e)
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
+            }
+
             // ── Phase 5a: Theme marketplace browsing ─────────────────
             "theme-marketplace:list" -> {
                 val result = withContext(Dispatchers.IO) {
@@ -2164,8 +2221,12 @@ class SessionService : Service() {
     private suspend fun publishPluginViaGh(pluginId: String): JSONObject = withContext(Dispatchers.IO) {
         val bs = bootstrap ?: throw IllegalStateException("Bootstrap not initialized")
         val env = bs.buildRuntimeEnv().toMutableMap()
-        val pluginDir = File(bs.homeDir, ".claude/plugins/$pluginId")
-        if (!pluginDir.exists()) throw IllegalStateException("Plugin directory not found: $pluginId")
+        // Look for the plugin in both the legacy toolkit root and the
+        // marketplace subtree — match whichever directory actually exists.
+        val pluginDir = com.youcoded.app.skills.ClaudeCodeRegistry
+            .listInstalledPluginDirs(bs.homeDir)
+            .firstOrNull { it.name == pluginId }
+            ?: throw IllegalStateException("Plugin directory not found: $pluginId")
 
         val ghBin = File(bs.usrDir, "bin/gh").absolutePath
 

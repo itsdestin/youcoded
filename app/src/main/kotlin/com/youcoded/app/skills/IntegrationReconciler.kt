@@ -27,7 +27,6 @@ class IntegrationReconciler(private val homeDir: File) {
         val instruction: String,
     )
 
-    private val pluginsDir = File(homeDir, ".claude/plugins")
     private val outputFile = File(homeDir, ".claude/integration-context.md")
 
     /** Read either <plugin>/.claude-plugin/plugin.json or <plugin>/plugin.json */
@@ -48,12 +47,11 @@ class IntegrationReconciler(private val homeDir: File) {
         return null
     }
 
-    private fun listManifests(): List<JSONObject> {
-        if (!pluginsDir.exists()) return emptyList()
-        return pluginsDir.listFiles { f -> f.isDirectory }?.mapNotNull { readManifest(it) }
-            ?.filter { it.optString("name").isNotEmpty() }
-            ?: emptyList()
-    }
+    private fun listManifests(): List<JSONObject> =
+        // Walk both the toolkit root and the marketplace subtree.
+        ClaudeCodeRegistry.listInstalledPluginDirs(homeDir)
+            .mapNotNull { readManifest(it) }
+            .filter { it.optString("name").isNotEmpty() }
 
     /** First-write-wins on capability collisions (shouldn't happen in practice). */
     private fun buildProviderMap(manifests: List<JSONObject>): Map<String, ProviderEntry> {

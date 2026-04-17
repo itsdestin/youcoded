@@ -25,7 +25,6 @@ class McpReconciler(private val homeDir: File) {
         val manifestCount: Int,
     )
 
-    private val pluginsDir = File(homeDir, ".claude/plugins")
     private val claudeJson = File(homeDir, ".claude.json")
 
     // Android always counts as linux for MCP platform filtering
@@ -56,12 +55,10 @@ class McpReconciler(private val homeDir: File) {
         }
     }
 
-    private fun listManifests(): List<Pair<JSONArray, File>> {
-        if (!pluginsDir.exists()) return emptyList()
-        return pluginsDir.listFiles { f -> f.isDirectory }
-            ?.mapNotNull { readManifest(it) }
-            ?: emptyList()
-    }
+    private fun listManifests(): List<Pair<JSONArray, File>> =
+        // Scan both roots — marketplace plugins can declare MCP servers too.
+        ClaudeCodeRegistry.listInstalledPluginDirs(homeDir)
+            .mapNotNull { readManifest(it) }
 
     private fun readClaudeJson(): JSONObject =
         try { if (claudeJson.exists()) JSONObject(claudeJson.readText()) else JSONObject() }

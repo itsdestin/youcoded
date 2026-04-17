@@ -8,8 +8,14 @@ import java.io.File
 import java.util.concurrent.TimeUnit
 
 /**
- * Installs Claude Code plugins by placing files at ~/.claude/plugins/<name>/.
- * Claude Code auto-discovers plugins via .claude-plugin/plugin.json at session start.
+ * Installs Claude Code plugins to
+ * ~/.claude/plugins/marketplaces/youcoded/plugins/<id>/ and wires them into
+ * the four registries Claude Code v2.1+ reads (settings.json enabledPlugins,
+ * installed_plugins.json, known_marketplaces.json, marketplace.json).
+ *
+ * Dropping files at ~/.claude/plugins/<id>/ is not enough — the CLI's
+ * plugin loader iterates enabledPlugins from settings.json, not the
+ * filesystem. See ClaudeCodeRegistry.kt for the full registry contract.
  *
  * Three source types are supported:
  * - "local": copy from a cached clone of the marketplace repo
@@ -21,7 +27,13 @@ class PluginInstaller(
     private val bootstrap: Any, // Bootstrap instance — used for buildRuntimeEnv()
     private val configStore: SkillConfigStore,
 ) {
-    private val pluginsDir = File(homeDir, ".claude/plugins")
+    // Marketplace-installed plugins live at
+    // ~/.claude/plugins/marketplaces/youcoded/plugins/<id>/, NOT the legacy
+    // ~/.claude/plugins/<id>/. Claude Code's non-cache loader computes the
+    // plugin path as <marketplaceInstallLocation>/<source> and errors if
+    // that directory doesn't exist.
+    private val pluginsDir = ClaudeCodeRegistry.youcodedPluginsDir(homeDir)
+    private val pluginCacheDir = ClaudeCodeRegistry.pluginCacheDir(homeDir)
     private val cacheDir = File(homeDir, ".claude/youcoded-marketplace-cache")
     private val installsInProgress = mutableSetOf<String>()
 
@@ -112,6 +124,21 @@ class PluginInstaller(
                     val ok = runShell(cmd, targetDir)
                     if (!ok) Log.w(TAG, "postInstall failed for $id")
                 }
+                // Wire into the four Claude Code registries. Without this,
+                // /reload-plugins ignores the plugin even though its files
+                // are on disk. Matches desktop's PluginInstaller flow.
+                try {
+                    ClaudeCodeRegistry.registerPluginInstall(homeDir, ClaudeCodeRegistry.RegisterInput(
+                        id = id,
+                        installPath = targetDir.absolutePath,
+                        version = entry.optString("version", "1.0.0"),
+                        description = entry.optString("description").takeIf { it.isNotEmpty() },
+                        author = entry.optJSONObject("author")?.optString("name")?.takeIf { it.isNotEmpty() },
+                        category = entry.optString("category").takeIf { it.isNotEmpty() },
+                    ))
+                } catch (e: Exception) {
+                    Log.w(TAG, "Claude Code registry write failed for $id — plugin may be invisible to /reload-plugins", e)
+                }
                 // Phase 3a: record as a PackageInfo carrying the marketplace version
                 // so update detection can compare against the latest index.
                 configStore.recordPackageInstall(id, JSONObject().apply {
@@ -144,6 +171,11 @@ class PluginInstaller(
             if (targetDir.exists()) {
                 targetDir.deleteRecursively()
             }
+            // Drop the plugin from the four Claude Code registries so
+            // /reload-plugins stops trying to load a now-missing path.
+            try { ClaudeCodeRegistry.unregisterPluginInstall(homeDir, id) } catch (e: Exception) {
+                Log.w(TAG, "Claude Code registry unregister failed for $id", e)
+            }
             configStore.removePluginInstall(id)
             true
         } catch (e: Exception) {
@@ -159,18 +191,22 @@ class PluginInstaller(
     }
 
     /**
-     * Check if a plugin already exists in Claude Code's installed_plugins.json.
-     * This would cause double-loading if we also install at ~/.claude/plugins/<id>/.
+     * Check if a plugin already exists in Claude Code's installed_plugins.json
+     * under a different `id@marketplace` key than ours. YouCoded-installed
+     * plugins register themselves there too, so ignore our own key.
      */
     fun hasConflict(id: String): Boolean {
         try {
-            val installedFile = File(pluginsDir, "installed_plugins.json")
+            // installed_plugins.json lives under the plugin cache dir
+            val installedFile = File(pluginCacheDir, "installed_plugins.json")
             if (!installedFile.exists()) return false
             val json = JSONObject(installedFile.readText())
             val plugins = json.optJSONObject("plugins") ?: return false
+            val ourKey = ClaudeCodeRegistry.pluginKey(id)
             val keys = plugins.keys()
             while (keys.hasNext()) {
                 val key = keys.next()
+                if (key == ourKey) continue
                 if (key.startsWith("$id@")) return true
             }
         } catch (_: Exception) {}
