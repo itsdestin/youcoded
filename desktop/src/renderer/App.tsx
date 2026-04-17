@@ -52,8 +52,15 @@ import { MarketplaceStatsProvider } from './state/marketplace-stats-context';
 import { WorkerHealthProvider, useWorkerHealth } from './state/worker-health-context';
 import ThemeEffects from './components/ThemeEffects';
 import { ZoomOverlay } from './components/ZoomOverlay';
+import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
+import { BuddyChatApp } from './components/buddy/BuddyChatApp';
 
 type ViewMode = 'chat' | 'terminal';
+
+// Detect buddy mode from URL query param — computed at module scope, before component render
+const buddyMode = new URLSearchParams(
+  typeof window !== 'undefined' ? window.location.search : ''
+).get('mode');
 
 // --- Sound notifications (shared engine) ---
 import { playSound } from './utils/sounds';
@@ -1913,6 +1920,11 @@ function StatsWithHealthBridge({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // Buddy windows render as isolated placeholders without main-app providers
+  if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
+  if (buddyMode === 'buddy-chat') return <BuddyChatApp />;
+
+  // Main app wrapped in providers
   return (
     // Root boundary catches provider-level crashes that sub-tree boundaries can't.
     // Uses inline styles only — no theme tokens, no context — so it renders even
