@@ -24,6 +24,8 @@ import os from 'os';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
 import { type BackendInstance, migrateConfigToV2, syncLegacyKeys } from './sync-state';
+import { classifyPushError, truncateStderr } from './sync-error-classifier';
+import { addOrReplaceWarning, clearWarningsByBackend } from './sync-state';
 
 const execFileAsync = promisify(execFile);
 
@@ -251,14 +253,25 @@ export class SyncService extends EventEmitter {
     return path.join(this.claudeDir, 'toolkit-state', `.sync-marker-${backendId}`);
   }
 
-  /** Write per-backend error message (or clear it on success). */
-  private writeBackendError(backendId: string, error: string | null): void {
-    const errorPath = path.join(this.claudeDir, 'toolkit-state', `.sync-error-${backendId}`);
-    if (error) {
-      this.atomicWrite(errorPath, error);
-    } else {
-      try { fs.unlinkSync(errorPath); } catch {}
-    }
+  /**
+   * Record a push-cycle failure for a backend: classify stderr and write a
+   * SyncWarning (one per backend per cycle — de-duped by addOrReplaceWarning).
+   * Also logs the classified code to backup.log for future diagnosis.
+   */
+  private async recordBackendFailure(instance: BackendInstance, stderr: string): Promise<void> {
+    const warning = classifyPushError(stderr, instance.type, instance);
+    await addOrReplaceWarning(warning);
+    this.logBackup(
+      warning.level === 'danger' ? 'WARN' : 'INFO',
+      `${instance.id} classified as ${warning.code}`,
+      'sync.push.classify',
+      { code: warning.code, stderr: truncateStderr(stderr) },
+    );
+  }
+
+  /** Clear all push-failure warnings for a backend (call on successful push). */
+  private async clearBackendFailures(backendId: string): Promise<void> {
+    await clearWarningsByBackend(backendId);
   }
 
   // Legacy helpers kept for health check auto-detect (reads flat keys)
@@ -569,6 +582,7 @@ export class SyncService extends EventEmitter {
     const remoteBase = `${rcloneRemote}:${driveRoot}/Backup/personal`;
     const sysRemote = `${remoteBase}/system-backup`;
     let errors = 0;
+    let firstFailStderr = '';
 
     // Memory files — per project key
     const projectsDir = path.join(this.claudeDir, 'projects');
@@ -577,7 +591,11 @@ export class SyncService extends EventEmitter {
         const memoryDir = path.join(projectsDir, projectKey, 'memory');
         if (!this.dirExists(memoryDir)) continue;
         const r = await this.rclone(['copy', memoryDir + '/', `${remoteBase}/memory/${projectKey}/`, '--update', '--skip-links']);
-        if (r.code !== 0) { this.logBackup('WARN', `Drive push memory/${projectKey} failed`, 'sync.push.drive'); errors++; }
+        if (r.code !== 0) {
+          this.logBackup('WARN', `Drive push memory/${projectKey} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+          if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+          errors++;
+        }
       }
     }
 
@@ -585,7 +603,11 @@ export class SyncService extends EventEmitter {
     const claudeMd = path.join(this.claudeDir, 'CLAUDE.md');
     if (this.fileExists(claudeMd)) {
       const r = await this.rclone(['copyto', claudeMd, `${remoteBase}/CLAUDE.md`, '--update']);
-      if (r.code !== 0) { this.logBackup('WARN', 'Drive push CLAUDE.md failed', 'sync.push.drive'); errors++; }
+      if (r.code !== 0) {
+        this.logBackup('WARN', 'Drive push CLAUDE.md failed', 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+        if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+        errors++;
+      }
     }
 
     // Encyclopedia
@@ -631,7 +653,11 @@ export class SyncService extends EventEmitter {
           }
 
           const r = await this.rclone(['copy', snapSlugDir + '/', `${remoteBase}/conversations/${slugName}/`, '--checksum', '--include', '*.jsonl']);
-          if (r.code !== 0) { this.logBackup('WARN', `Drive push conversations/${slugName} failed`, 'sync.push.drive'); errors++; }
+          if (r.code !== 0) {
+            this.logBackup('WARN', `Drive push conversations/${slugName} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+            if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+            errors++;
+          }
         }
       } finally {
         fs.rmSync(snapDir, { recursive: true, force: true });
@@ -649,7 +675,11 @@ export class SyncService extends EventEmitter {
     for (const [local, remote] of sysFiles) {
       if (this.fileExists(local)) {
         const r = await this.rclone(['copyto', local, remote, '--update']);
-        if (r.code !== 0) { this.logBackup('WARN', `Drive push ${path.basename(local)} failed`, 'sync.push.drive'); errors++; }
+        if (r.code !== 0) {
+          this.logBackup('WARN', `Drive push ${path.basename(local)} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+          if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+          errors++;
+        }
       }
     }
     // Plans and specs directories
@@ -665,6 +695,11 @@ export class SyncService extends EventEmitter {
       await this.rclone(['copyto', this.conversationIndexPath, `${sysRemote}/conversation-index.json`, '--checksum']);
     }
 
+    if (errors > 0) {
+      await this.recordBackendFailure(instance, firstFailStderr);
+    } else {
+      await this.clearBackendFailures(instance.id);
+    }
     this.logBackup(errors > 0 ? 'WARN' : 'INFO', `Drive sync completed (${errors} error(s))`, 'sync.push.drive');
     return errors;
   }
@@ -679,6 +714,7 @@ export class SyncService extends EventEmitter {
     // Per-instance clone directory so multiple GitHub backends don't collide
     const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
     let errors = 0;
+    let firstFailStderr = '';
 
     // Init repo if missing
     if (!this.dirExists(path.join(repoDir, '.git'))) {
@@ -795,11 +831,17 @@ export class SyncService extends EventEmitter {
       await this.gitExec(['commit', '-m', 'auto: sync', '--no-gpg-sign'], repoDir);
       const pushResult = await this.gitExec(['push', 'personal-sync', 'main'], repoDir);
       if (pushResult.code !== 0) {
-        this.logBackup('WARN', 'Push to personal-sync repo failed', 'sync.push.github');
+        this.logBackup('WARN', 'Push to personal-sync repo failed', 'sync.push.github', { stderr: truncateStderr(pushResult.stderr || '') });
+        if (!firstFailStderr && pushResult.stderr) firstFailStderr = pushResult.stderr;
         errors++;
       }
     }
 
+    if (errors > 0) {
+      await this.recordBackendFailure(instance, firstFailStderr);
+    } else {
+      await this.clearBackendFailures(instance.id);
+    }
     this.logBackup(errors > 0 ? 'WARN' : 'INFO', 'GitHub sync completed', 'sync.push.github');
     return errors;
   }
@@ -818,6 +860,7 @@ export class SyncService extends EventEmitter {
 
     fs.mkdirSync(icloudPath, { recursive: true });
     let errors = 0;
+    let firstFailStderr = '';
 
     // Memory files
     const projectsDir = path.join(this.claudeDir, 'projects');
@@ -827,7 +870,13 @@ export class SyncService extends EventEmitter {
         if (!this.dirExists(memoryDir)) continue;
         const dest = path.join(icloudPath, 'memory', projectKey);
         fs.mkdirSync(dest, { recursive: true });
-        try { await this.rsyncOrCp(memoryDir, dest); } catch { errors++; }
+        try {
+          await this.rsyncOrCp(memoryDir, dest);
+        } catch (e) {
+          this.logBackup('WARN', `iCloud push memory/${projectKey} failed`, 'sync.push.icloud', { stderr: truncateStderr(String(e)) });
+          if (!firstFailStderr) firstFailStderr = String(e);
+          errors++;
+        }
       }
     }
 
@@ -900,7 +949,12 @@ export class SyncService extends EventEmitter {
       try { fs.copyFileSync(this.conversationIndexPath, path.join(sysPath, 'conversation-index.json')); } catch {}
     }
 
-    this.logBackup('INFO', 'iCloud sync complete', 'sync.push.icloud');
+    if (errors > 0) {
+      await this.recordBackendFailure(instance, firstFailStderr);
+    } else {
+      await this.clearBackendFailures(instance.id);
+    }
+    this.logBackup(errors > 0 ? 'WARN' : 'INFO', 'iCloud sync complete', 'sync.push.icloud');
     return errors;
   }
 
@@ -977,11 +1031,14 @@ export class SyncService extends EventEmitter {
 
             // Write per-backend marker for individual status tracking
             this.debounceTouch(this.perBackendMarkerPath(instance.id));
-            // Clear per-backend error on success
-            if (backendErrors === 0) this.writeBackendError(instance.id, null);
+            // pushDrive/pushGithub/pushiCloud now handle their own warning clear on success
           } catch (e) {
-            this.logBackup('ERROR', `${instance.id} push failed: ${e}`, 'sync.push');
-            this.writeBackendError(instance.id, String(e));
+            this.logBackup('ERROR', `${instance.id} push failed: ${e}`, 'sync.push', { stderr: String(e).slice(0, 500) });
+            // Synthesize an UNKNOWN warning from the exception string so the UI
+            // sees something even when the push throws before reaching rclone.
+            // String(e) includes 'ENOENT' for spawn failures, letting the classifier
+            // catch RCLONE_MISSING via its stderr substring match.
+            await this.recordBackendFailure(instance, String(e));
             totalErrors++;
           }
         }
