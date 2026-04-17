@@ -33,6 +33,8 @@ export interface SessionInfo {
   createdAt: number;
   /** Which CLI backend this session runs — 'claude' (default) or 'gemini' */
   provider: SessionProvider;
+  /** Model alias the session was started with (e.g. 'claude-sonnet-4-6') */
+  model?: string;
 }
 
 export interface HookEvent {
