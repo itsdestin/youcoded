@@ -167,6 +167,19 @@ export class SyncService extends EventEmitter {
       }
     } catch {}
 
+    // V2 cleanup: stale .sync-error-* files from the pre-warnings-refactor era.
+    // The typed .sync-warnings.json replaces them; old files would confuse
+    // anyone debugging and serve no purpose.
+    try {
+      const toolkitStateDir = path.join(this.claudeDir, 'toolkit-state');
+      const entries = fs.readdirSync(toolkitStateDir);
+      for (const name of entries) {
+        if (name.startsWith('.sync-error-')) {
+          try { fs.unlinkSync(path.join(toolkitStateDir, name)); } catch {}
+        }
+      }
+    } catch {}
+
     // Write .app-sync-active marker so bash hooks skip sync
     try {
       fs.mkdirSync(path.dirname(this.appSyncMarkerPath), { recursive: true });

@@ -127,3 +127,34 @@ describe('dismissWarning', () => {
     await writeWarnings([]);
   });
 });
+
+describe('SyncService start() cleanup', () => {
+  it('removes stale .sync-error-* files on start', async () => {
+    // This test pokes at the shared ~/.claude/toolkit-state/ directory,
+    // same approach as the other tests in this file. Safe because
+    // .sync-error-* files are retired and never otherwise written.
+    const toolkitStateDir = path.join(os.homedir(), '.claude', 'toolkit-state');
+    fs.mkdirSync(toolkitStateDir, { recursive: true });
+
+    const staleA = path.join(toolkitStateDir, '.sync-error-drive-test-stale-a');
+    const staleB = path.join(toolkitStateDir, '.sync-error-github-test-stale-b');
+    fs.writeFileSync(staleA, 'old error');
+    fs.writeFileSync(staleB, 'another old error');
+    expect(fs.existsSync(staleA)).toBe(true);
+    expect(fs.existsSync(staleB)).toBe(true);
+
+    // Import lazily to avoid kicking off a full SyncService elsewhere in the test suite.
+    const { SyncService } = await import('../src/main/sync-service');
+    const svc = new SyncService();
+    try {
+      await svc.start();
+      expect(fs.existsSync(staleA)).toBe(false);
+      expect(fs.existsSync(staleB)).toBe(false);
+    } finally {
+      svc.stop();
+      // Defensive: clean up if start() didn't.
+      try { fs.unlinkSync(staleA); } catch {}
+      try { fs.unlinkSync(staleB); } catch {}
+    }
+  });
+});
