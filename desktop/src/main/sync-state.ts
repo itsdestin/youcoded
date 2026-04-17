@@ -101,7 +101,7 @@ export interface SyncStatus {
     platform: string;
     toolkit_version: string;
   } | null;
-  warnings: string[];
+  warnings: SyncWarning[];
   syncInProgress: boolean;
   syncingBackendId: string | null;     // Which backend is currently syncing
   syncedCategories: string[];
@@ -364,37 +364,33 @@ export async function clearWarningsByCode(code: string): Promise<void> {
  * This is the primary data source for the Sync Management UI.
  */
 export async function getSyncStatus(): Promise<SyncStatus> {
-  const [backends, markerText, meta, warningsText, lockExists] =
+  const [backends, markerText, meta, warnings, lockExists] =
     await Promise.all([
       readBackendInstances(),
       readText(syncMarkerPath),
       readJson(backupMetaPath),
-      readText(syncWarningsPath),
+      readWarnings(),
       dirExists(syncLockDir),
     ]);
 
-  // Enrich each backend with per-instance runtime status
   const backendStatuses: BackendInstanceStatus[] = await Promise.all(
     backends.map(async (b) => {
       const bMarkerText = await readText(perBackendMarkerPath(b.id));
       const lastPushEpoch = bMarkerText ? parseInt(bMarkerText, 10) || null : null;
 
-      // Read per-backend error file if it exists (written by SyncService)
-      const errorPath = path.join(claudeDir, 'toolkit-state', `.sync-error-${b.id}`);
-      const lastError = await readText(errorPath) || null;
-
-      // A backend is "connected" if it's configured with valid details
-      // and hasn't had a persistent error on its last attempt
+      // lastError is now derived from warnings scoped to this backend id.
+      // Takes the first danger-level warning's title for backwards compat
+      // with UI paths that still read lastError.
+      const pushFailure = warnings.find((w) => w.backendId === b.id && w.level === 'danger');
+      const lastError = pushFailure ? pushFailure.title : null;
       const connected = !lastError;
 
       return { ...b, connected, lastPushEpoch, lastError };
-    })
+    }),
   );
 
-  // Global last sync = most recent push across all backends
   const globalMarkerEpoch = markerText ? parseInt(markerText, 10) || null : null;
 
-  // Parse backup metadata
   const backupMeta = meta
     ? {
         last_backup: meta.last_backup || meta.timestamp || '',
@@ -403,36 +399,30 @@ export async function getSyncStatus(): Promise<SyncStatus> {
       }
     : null;
 
-  // Parse warnings (newline-separated codes)
-  const warnings = warningsText
-    ? warningsText.split('\n').filter((l: string) => l.trim())
-    : [];
-
   // Detect synced data categories by checking directory/file existence
   const categoryChecks = await Promise.all([
     dirExists(path.join(claudeDir, 'projects')).then((exists) =>
-      exists ? 'memory' : null
+      exists ? 'memory' : null,
     ),
     dirExists(path.join(claudeDir, 'projects')).then((exists) =>
-      exists ? 'conversations' : null
+      exists ? 'conversations' : null,
     ),
     dirExists(path.join(claudeDir, 'encyclopedia')).then((exists) =>
-      exists ? 'encyclopedia' : null
+      exists ? 'encyclopedia' : null,
     ),
     dirExists(path.join(claudeDir, 'skills')).then((exists) =>
-      exists ? 'skills' : null
+      exists ? 'skills' : null,
     ),
     fileExists(path.join(claudeDir, 'settings.json')).then((exists) =>
-      exists ? 'system-config' : null
+      exists ? 'system-config' : null,
     ),
     dirExists(path.join(claudeDir, 'plans')).then((exists) =>
-      exists ? 'plans' : null
+      exists ? 'plans' : null,
     ),
     dirExists(path.join(claudeDir, 'specs')).then((exists) =>
-      exists ? 'specs' : null
+      exists ? 'specs' : null,
     ),
   ]);
-  const syncedCategories = categoryChecks.filter(Boolean) as string[];
 
   return {
     backends: backendStatuses,
@@ -441,7 +431,7 @@ export async function getSyncStatus(): Promise<SyncStatus> {
     warnings,
     syncInProgress: lockExists,
     syncingBackendId: null, // Set by SyncService at runtime via event
-    syncedCategories,
+    syncedCategories: categoryChecks.filter(Boolean) as string[],
   };
 }
 
@@ -666,23 +656,13 @@ export async function getSyncLog(
 }
 
 /**
- * Remove a specific warning code from .sync-warnings.
+ * Remove a warning by code. No-op if the warning has dismissible: false
+ * (enforced server-side so UI bugs can't silence danger-level push failures).
  */
-export async function dismissWarning(warning: string): Promise<void> {
-  const content = await readText(syncWarningsPath);
-  if (!content) return;
-  const remaining = content
-    .split('\n')
-    .filter((l: string) => l.trim() && l.trim() !== warning.trim())
-    .join('\n');
-  if (remaining) {
-    await fs.promises.writeFile(syncWarningsPath, remaining + '\n', 'utf8');
-  } else {
-    // No warnings left — remove the file
-    try {
-      await fs.promises.unlink(syncWarningsPath);
-    } catch {
-      // File may already be gone
-    }
-  }
+export async function dismissWarning(code: string): Promise<void> {
+  const all = await readWarnings();
+  const target = all.find((w) => w.code === code);
+  if (!target || !target.dismissible) return;
+  const filtered = all.filter((w) => w !== target);
+  await writeWarnings(filtered);
 }

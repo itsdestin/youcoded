@@ -8,6 +8,7 @@ import {
   addOrReplaceWarning,
   clearWarningsByBackend,
   clearWarningsByCode,
+  dismissWarning,
 } from '../src/main/sync-state';
 import type { SyncWarning } from '../src/main/sync-state';
 
@@ -106,6 +107,23 @@ describe('sync warning store', () => {
     await clearWarningsByCode('OFFLINE');
     const out = await readWarnings();
     expect(out.every((w) => w.code !== 'OFFLINE')).toBe(true);
+    await writeWarnings([]);
+  });
+});
+
+describe('dismissWarning', () => {
+  it('removes a dismissible warning', async () => {
+    await writeWarnings([mkWarning({ code: 'PERSONAL_STALE', dismissible: true })]);
+    await dismissWarning('PERSONAL_STALE');
+    const out = await readWarnings();
+    expect(out.find((w) => w.code === 'PERSONAL_STALE')).toBeUndefined();
+  });
+
+  it('refuses to remove a non-dismissible warning', async () => {
+    await writeWarnings([mkWarning({ code: 'CONFIG_MISSING', dismissible: false })]);
+    await dismissWarning('CONFIG_MISSING');
+    const out = await readWarnings();
+    expect(out.find((w) => w.code === 'CONFIG_MISSING')).toBeDefined();
     await writeWarnings([]);
   });
 });
