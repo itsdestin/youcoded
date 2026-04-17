@@ -91,6 +91,11 @@ const PUSH_INTERVAL_MS = 15 * 60 * 1000;   // 15 minutes
 const PUSH_DEBOUNCE_MIN = 15;
 const PULL_DEBOUNCE_MIN = 10;
 const INDEX_PRUNE_DAYS = 30;
+// Tags set via setSessionFlag should reach the backend within seconds, not
+// wait for the 15-minute cycle. Debounce coalesces rapid tagging into one
+// upload. A full push in flight preempts the index-only push (it will upload
+// the index anyway), so the net cost is at most one extra small upload.
+const INDEX_PUSH_DEBOUNCE_MS = 30_000;
 const RCLONE_TIMEOUT = 60_000;
 const GIT_TIMEOUT = 60_000;
 const SESSION_PUSH_TIMEOUT = 15_000;
@@ -110,6 +115,7 @@ export class SyncService extends EventEmitter {
   private indexStagingDir: string;
 
   private pushTimer: NodeJS.Timeout | null = null;
+  private indexPushTimer: NodeJS.Timeout | null = null;
   private pulling = false;
   private pushing = false;
 
@@ -1298,9 +1304,14 @@ export class SyncService extends EventEmitter {
       } catch {}
     }
 
-    // Prune old entries
+    // Prune old entries, but skip epoch-sentinel entries. Those are seeded by
+    // setSessionFlag() when a user tags a session before its topic file exists;
+    // epoch is older than any prune threshold, so without this guard the
+    // pending entry (and its flag) would be deleted immediately on next push.
     for (const [sid, entry] of Object.entries(index.sessions)) {
-      if (new Date(entry.lastActive).getTime() < pruneThreshold) {
+      const ts = new Date(entry.lastActive).getTime();
+      if (ts === 0) continue;
+      if (ts < pruneThreshold) {
         delete index.sessions[sid];
       }
     }
@@ -1376,7 +1387,15 @@ export class SyncService extends EventEmitter {
   }
 
   /** Set a named flag on a session. Fresh updatedAt timestamp so cross-device
-   *  merge honors latest-writer-wins per-flag. Creates the entry if missing. */
+   *  merge honors latest-writer-wins per-flag. Creates the entry if missing.
+   *
+   *  Seeding an unknown session is the tricky case: a naive "lastActive: now"
+   *  seed corrupted cross-device merge (local bare stub beat real remote entry
+   *  by mere seconds) and blocked the next topic scan from writing the real
+   *  topic (scan skips when existing.lastActive >= file.mtime). Fix: try the
+   *  topic file first; if absent, seed lastActive=epoch so the next scan wins
+   *  and cross-device merge picks the peer's real entry. Epoch-seeded entries
+   *  are protected from the age-based prune in updateConversationIndex(). */
   setSessionFlag(sessionId: string, flag: string, value: boolean): void {
     const index: ConversationIndex = this.readJson(this.conversationIndexPath) || { version: 1, sessions: {} };
     if (!index.sessions) index.sessions = {};
@@ -1391,17 +1410,144 @@ export class SyncService extends EventEmitter {
       flags[flag] = { value: !!value, updatedAt: now };
       index.sessions[sessionId] = { ...existing, flags };
     } else {
-      // First time seeing this session — seed a minimal entry.
+      // Try to populate from the topic file if it already exists on disk.
+      const topicFilePath = path.join(this.claudeDir, 'topics', `topic-${sessionId}`);
+      let topic = 'Untitled';
+      let lastActive = new Date(0).toISOString();   // epoch = "pending topic scan"
+      let slug = '';
+      try {
+        const stat = fs.statSync(topicFilePath);
+        const content = fs.readFileSync(topicFilePath, 'utf8').trim();
+        if (content && content !== 'New Session') {
+          topic = content;
+          lastActive = stat.mtime.toISOString();
+          slug = this.getCurrentSlug();
+        }
+      } catch {
+        // Topic file doesn't exist yet — stick with the epoch sentinel.
+      }
+
       index.sessions[sessionId] = {
-        topic: 'Untitled',
-        lastActive: now,
-        slug: '',
+        topic,
+        lastActive,
+        slug,
         device: os.hostname(),
         flags: { [flag]: { value: !!value, updatedAt: now } },
       };
     }
 
     this.atomicWrite(this.conversationIndexPath, JSON.stringify(index, null, 2));
+
+    // Tags are high-value metadata with a narrow window — if the user closes
+    // the app before the 15-min push, the tag never reaches the backup and is
+    // lost forever on reinstall. A 30s debounce gets them off-device quickly
+    // without bombarding the backend on every click.
+    this.scheduleIndexPush();
+  }
+
+  /** Schedule a 30s-debounced index-only push. Resets the timer on each call. */
+  private scheduleIndexPush(): void {
+    if (this.indexPushTimer) clearTimeout(this.indexPushTimer);
+    this.indexPushTimer = setTimeout(() => {
+      this.indexPushTimer = null;
+      // A full push in flight will upload the index as part of its run — skip
+      // to avoid redundant writes (and any rclone contention on the same file).
+      if (this.pushing) return;
+      this.pushIndexOnly().catch(e => {
+        this.logBackup('ERROR', `Index-only push failed: ${e}`, 'sync.push.index');
+      });
+    }, INDEX_PUSH_DEBOUNCE_MS);
+  }
+
+  /** Pull just conversation-index.json from a single backend and merge it
+   *  into the local index via mergeConversationIndex(). Used by the restore
+   *  wipe flow, which stages categories atomically and cannot invoke the full
+   *  pull() without clobbering those just-restored dirs. */
+  async pullConversationIndexOnly(backendId: string): Promise<void> {
+    const instance = this.getBackendById(backendId);
+    if (!instance) return;
+    fs.mkdirSync(this.indexStagingDir, { recursive: true });
+    // Clean any stale staged file so a failed fetch doesn't re-merge old data.
+    const stagedIndex = path.join(this.indexStagingDir, 'conversation-index.json');
+    try { fs.unlinkSync(stagedIndex); } catch {}
+
+    try {
+      await this.fetchIndexFromBackend(instance);
+    } catch (e) {
+      this.logBackup('WARN', `Index fetch from ${instance.id} failed: ${e}`, 'sync.pull.index');
+      return;
+    }
+
+    if (this.fileExists(stagedIndex)) {
+      this.mergeConversationIndex(stagedIndex);
+    }
+  }
+
+  /** Per-backend implementation of conversation-index fetch into staging. */
+  private async fetchIndexFromBackend(instance: BackendInstance): Promise<void> {
+    const stagedDir = this.indexStagingDir;
+    switch (instance.type) {
+      case 'drive': {
+        const rcloneRemote = instance.config.rcloneRemote || 'gdrive';
+        const driveRoot = instance.config.DRIVE_ROOT || 'Claude';
+        await this.rclone(['copy', `${rcloneRemote}:${driveRoot}/Backup/system-backup/conversation-index.json`, stagedDir + '/', '--checksum']);
+        break;
+      }
+      case 'github': {
+        const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
+        if (!this.dirExists(path.join(repoDir, '.git'))) return;
+        await this.gitExec(['pull', 'personal-sync', 'main'], repoDir);
+        const src = path.join(repoDir, 'system-backup', 'conversation-index.json');
+        if (this.fileExists(src)) fs.copyFileSync(src, path.join(stagedDir, 'conversation-index.json'));
+        break;
+      }
+      case 'icloud': {
+        const icloudPath = this.resolveICloudPath(instance);
+        if (!icloudPath) return;
+        const src = path.join(icloudPath, 'system-backup', 'conversation-index.json');
+        if (this.fileExists(src)) fs.copyFileSync(src, path.join(stagedDir, 'conversation-index.json'));
+        break;
+      }
+    }
+  }
+
+  /** Push just conversation-index.json to each sync-enabled backend's
+   *  system-backup/. Narrow counterpart to push() — used by the 30s tag
+   *  debouncer so tags propagate faster than the 15-min full-push cycle. */
+  async pushIndexOnly(): Promise<void> {
+    if (!this.fileExists(this.conversationIndexPath)) return;
+    const instances = this.getSyncEnabledBackends();
+    for (const instance of instances) {
+      try {
+        switch (instance.type) {
+          case 'drive': {
+            const rcloneRemote = instance.config.rcloneRemote || 'gdrive';
+            const driveRoot = instance.config.DRIVE_ROOT || 'Claude';
+            await this.rclone(['copyto', this.conversationIndexPath, `${rcloneRemote}:${driveRoot}/Backup/system-backup/conversation-index.json`, '--checksum']);
+            break;
+          }
+          case 'github': {
+            const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
+            if (!this.dirExists(path.join(repoDir, '.git'))) break;
+            fs.mkdirSync(path.join(repoDir, 'system-backup'), { recursive: true });
+            fs.copyFileSync(this.conversationIndexPath, path.join(repoDir, 'system-backup', 'conversation-index.json'));
+            await this.gitExec(['add', 'system-backup/conversation-index.json'], repoDir);
+            await this.gitExec(['commit', '-m', 'sync: conversation-index (tags)'], repoDir);
+            await this.gitExec(['push', 'personal-sync', 'main'], repoDir);
+            break;
+          }
+          case 'icloud': {
+            const icloudPath = this.resolveICloudPath(instance);
+            if (!icloudPath) break;
+            fs.mkdirSync(path.join(icloudPath, 'system-backup'), { recursive: true });
+            fs.copyFileSync(this.conversationIndexPath, path.join(icloudPath, 'system-backup', 'conversation-index.json'));
+            break;
+          }
+        }
+      } catch (e) {
+        this.logBackup('WARN', `Index push to ${instance.id} failed: ${e}`, 'sync.push.index');
+      }
+    }
   }
 
   /** Create topic cache files from index for cross-device sessions. */
