@@ -57,6 +57,8 @@ export class WindowRegistry extends EventEmitter {
     for (const [sessionId, ownerId] of this.ownership) {
       if (ownerId === id) this.ownership.delete(sessionId);
     }
+    // Release subscriptions too — buddy windows subscribe without owning.
+    this.releaseAllSubscriptionsForWindow(id, /* silent */ true);
     this.emit('changed');
   }
 

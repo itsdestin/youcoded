@@ -69,4 +69,13 @@ describe('WindowRegistry subscriptions', () => {
     expect(reg.getSubscribers('sess-1').size).toBe(0);
     expect(reg.getSubscribers('sess-2').size).toBe(0);
   });
+
+  it('unregisterWindow releases all its subscriptions', () => {
+    reg.subscribe('sess-1', 100);
+    reg.subscribe('sess-2', 100);
+    reg.subscribe('sess-1', 200);
+    reg.unregisterWindow(100);
+    expect(reg.getSubscribers('sess-1')).toEqual(new Set([200]));
+    expect(reg.getSubscribers('sess-2')).toEqual(new Set());
+  });
 });
