@@ -279,6 +279,9 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
         alwaysOnTop: true,
         hasShadow: false,
         skipTaskbar: true,
+        // Frameless windows still render a menu bar on Win/Linux if the app
+        // has a default menu — hide it so buddy stays minimal.
+        autoHideMenuBar: true,
         // Exclude buddy windows from macOS Dock + Mission Control
         ...(isMac ? { type: 'panel' as const } : {}),
       }
@@ -389,6 +392,10 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // prompt from re-firing after the user confirms.
   let confirmedClose = false;
   win.on('close', async (ev) => {
+    // Buddy windows never own sessions (they only subscribe). Skip the
+    // close-confirmation entirely so a floating widget never gets blocked
+    // by a "kill sessions?" dialog that wouldn't make sense in that UI.
+    if (opts?.buddy) return;
     if (confirmedClose) return;
     const ownedSessions = windowRegistry.sessionsForWindow(wid);
     if (ownedSessions.length === 0) return; // no sessions — close freely
