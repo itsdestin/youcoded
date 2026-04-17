@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
-import type { AttentionSummary } from '../shared/types';
+import type { AttentionSummary, AttentionReport } from '../shared/types';
 
 // IPC channel names inlined here because Electron's sandboxed preload
 // cannot resolve relative imports to other modules
@@ -652,5 +652,11 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.SESSION_ATTENTION_SUMMARY, listener);
       return () => ipcRenderer.removeListener(IPC.SESSION_ATTENTION_SUMMARY, listener);
     },
+  },
+  // Renderer pushes per-session attention state to main whenever the chat
+  // reducer's ATTENTION_STATE_CHANGED fires. Main aggregates across all windows
+  // and broadcasts a global AttentionSummary to buddy subscribers.
+  attention: {
+    report: (payload: AttentionReport) => ipcRenderer.send(IPC.ATTENTION_REPORT, payload),
   },
 });

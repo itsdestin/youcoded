@@ -11,7 +11,7 @@ import { registerIpcHandlers } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
-import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT } from '../shared/types';
+import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { log, rotateLog } from './logger';
 import { registerThemeProtocol } from './theme-protocol';
@@ -262,6 +262,48 @@ function registerFirstRunIpc(
   });
 }
 
+// Module-scope attention aggregator. Declared here (not inside app.whenReady)
+// so both createAppWindow's 'closed' handler and the ipcMain.on handler inside
+// app.whenReady can close over the same references.
+//
+// Key: webContents.id of the reporting window.
+// Value: Map from sessionId → { attentionState, awaitingApproval }.
+//
+// Each renderer pushes updates via attention:report whenever the chat reducer's
+// ATTENTION_STATE_CHANGED fires. Main aggregates and broadcasts
+// session:attention-summary to all windows so buddy mascot can react.
+const attentionReports = new Map<number, Map<string, { attentionState: AttentionState; awaitingApproval: boolean }>>();
+
+function recomputeAndBroadcastAttention(): void {
+  const perSession: Record<string, { attentionState: AttentionState; awaitingApproval: boolean }> = {};
+  let anyNeedsAttention = false;
+  for (const byWin of attentionReports.values()) {
+    for (const [sid, state] of byWin) {
+      perSession[sid] = state;
+      // 'ok' and 'session-died' are passive states — only non-ok, non-died
+      // states (stuck, awaiting-input, shell-idle, error) plus active
+      // awaiting-approval tools count as needing attention.
+      if (state.awaitingApproval || (state.attentionState !== 'ok' && state.attentionState !== 'session-died')) {
+        anyNeedsAttention = true;
+      }
+    }
+  }
+  const summary: AttentionSummary = { anyNeedsAttention, perSession };
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(IPC.SESSION_ATTENTION_SUMMARY, summary);
+  }
+}
+
+// 100ms debounce — coalesces bursts of classifier transitions so buddy
+// doesn't get flooded when multiple sessions update in quick succession.
+const debouncedBroadcastAttention = (() => {
+  let t: NodeJS.Timeout | null = null;
+  return () => {
+    if (t) clearTimeout(t);
+    t = setTimeout(recomputeAndBroadcastAttention, 100);
+  };
+})();
+
 // Shared BrowserWindow factory — used for the primary window AND for peer
 // windows spawned by the detach subsystem. Keeps webPreferences, security
 // hardening, and fullscreen relay consistent across every window so renderers
@@ -384,6 +426,10 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   const wid = win.webContents.id;
   windowRegistry.registerWindow(wid, Date.now());
   win.on('closed', () => {
+    // Drop attention reports contributed by this window so stale session
+    // states from a closed window don't persist in the aggregated summary.
+    attentionReports.delete(wid);
+    debouncedBroadcastAttention();
     windowRegistry.unregisterWindow(wid);
   });
 
@@ -1031,6 +1077,24 @@ app.whenReady().then(async () => {
     windowRegistry.unsubscribe(sessionId, evt.sender.id);
   });
   ipcMain.handle(IPC.BUDDY_GET_VIEWED_SESSION, () => buddyManager.getViewedSession());
+
+  // Wire the attention:report IPC channel. Renderers push per-session states
+  // here; module-scope attentionReports + debouncedBroadcastAttention aggregate
+  // and fan out the summary. The Map and debouncer are module-scope so the
+  // 'closed' handler in createAppWindow can also clean up on window removal.
+  ipcMain.on(IPC.ATTENTION_REPORT, (evt, payload: AttentionReport) => {
+    let byWin = attentionReports.get(evt.sender.id);
+    if (!byWin) { byWin = new Map(); attentionReports.set(evt.sender.id, byWin); }
+    if ('clear' in payload) {
+      byWin.delete(payload.sessionId);
+    } else {
+      byWin.set(payload.sessionId, {
+        attentionState: payload.attentionState,
+        awaitingApproval: payload.awaitingApproval,
+      });
+    }
+    debouncedBroadcastAttention();
+  });
 
   // Start native sync service — owns push/pull lifecycle, background timer,
   // session-end sync. Replaces bash hook sync when app is running.

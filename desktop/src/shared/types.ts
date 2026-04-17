@@ -384,6 +384,17 @@ export interface AttentionSummary {
   perSession: Record<string, { attentionState: AttentionState; awaitingApproval: boolean }>;
 }
 
+// Payload sent by renderer → main via the attention:report IPC channel.
+// Main aggregates these across all windows and broadcasts an AttentionSummary.
+// The 'clear' variant fires when a session is removed from the renderer.
+export type AttentionReport =
+  | { sessionId: string; attentionState: AttentionState; awaitingApproval: boolean }
+  | { sessionId: string; clear: true };
+
+export interface AttentionApi {
+  report(payload: AttentionReport): void;
+}
+
 export interface BuddyApi {
   show(): Promise<void>;
   hide(): Promise<void>;

@@ -272,6 +272,40 @@ function AppInner() {
       }
     }
   }, [chatStateMap, dispatch]);
+
+  // Attention reporter: push per-session attention state to main whenever
+  // chatStateMap changes. Main aggregates across all windows and broadcasts
+  // session:attention-summary so the buddy mascot can react in real time.
+  //
+  // A ref-based diff ensures we only report when state actually changes —
+  // chatStateMap is a new Map reference on every dispatch, so we compare
+  // the derived {attentionState, awaitingApproval} pair before sending.
+  // Session removal sends { clear: true } so main drops stale entries.
+  const lastAttentionReportedRef = useRef<Map<string, { attentionState: string; awaitingApproval: boolean }>>(new Map());
+  useEffect(() => {
+    const prev = lastAttentionReportedRef.current;
+    const currentIds = new Set<string>();
+    for (const [sessionId, state] of chatStateMap) {
+      currentIds.add(sessionId);
+      const awaitingApproval = !!(state.activeTurnToolIds && [...state.toolCalls.values()].some(
+        (t) => t.status === 'awaiting-approval' && state.activeTurnToolIds.has(t.toolUseId)
+      ));
+      const next = { attentionState: state.attentionState, awaitingApproval };
+      const last = prev.get(sessionId);
+      if (!last || last.attentionState !== next.attentionState || last.awaitingApproval !== next.awaitingApproval) {
+        (window as any).claude?.attention?.report({ sessionId, ...next });
+        prev.set(sessionId, next);
+      }
+    }
+    // Session removal — send clear so main drops the stale entry
+    for (const sid of prev.keys()) {
+      if (!currentIds.has(sid)) {
+        (window as any).claude?.attention?.report({ sessionId: sid, clear: true });
+        prev.delete(sid);
+      }
+    }
+  }, [chatStateMap]);
+
   const gameState = useGameState();
   const gameDispatch = useGameDispatch();
   // Gate on isLeader so only the first-launched window opens the lobby

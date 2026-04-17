@@ -888,5 +888,10 @@ export function installShim(): void {
       getViewedSession: () => { throw new Error('Buddy is desktop-only in this version'); },
       onAttentionSummary: () => () => { /* no-op unsubscribe */ },
     },
+    // Remote clients do not participate in buddy attention aggregation —
+    // main-process aggregation is desktop-Electron only.
+    attention: {
+      report: () => { /* no-op: buddy attention summary is desktop-only */ },
+    },
   };
 }
