@@ -978,6 +978,43 @@ export class RemoteServer {
         }
         break;
       }
+      case 'model:read-last': {
+        // Mirror of ipc-handlers.ts model:read-last — reads the last assistant
+        // message's model field from a JSONL transcript. Accepts either a raw
+        // string or { transcriptPath } so the same shim wrapping works on
+        // Android (wraps in object) and remote browsers (passes string).
+        const transcriptPath = (payload && typeof payload === 'object' && 'transcriptPath' in payload)
+          ? payload.transcriptPath
+          : payload;
+        if (typeof transcriptPath !== 'string') {
+          this.respond(client.ws, type, id, null);
+          break;
+        }
+        try {
+          const claudeProjects = path.join(os.homedir(), '.claude', 'projects');
+          const resolved = path.resolve(transcriptPath);
+          if (!resolved.startsWith(claudeProjects + path.sep)) {
+            this.respond(client.ws, type, id, null);
+            break;
+          }
+          const content = await fs.promises.readFile(transcriptPath, 'utf-8');
+          const lines = content.trim().split('\n');
+          let model: string | null = null;
+          for (let i = lines.length - 1; i >= 0; i--) {
+            try {
+              const entry = JSON.parse(lines[i]);
+              if (entry.type === 'assistant' && entry.message?.model) {
+                model = entry.message.model;
+                break;
+              }
+            } catch { /* skip malformed line */ }
+          }
+          this.respond(client.ws, type, id, model);
+        } catch {
+          this.respond(client.ws, type, id, null);
+        }
+        break;
+      }
       case 'github:auth': {
         try {
           const { execFile } = require('child_process');

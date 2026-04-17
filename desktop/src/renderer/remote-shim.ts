@@ -683,7 +683,13 @@ export function installShim(): void {
       saveClipboardImage: async () => null,
     },
     shell: {
-      openChangelog: async () => {},
+      // Matches the URL hardcoded in desktop's ipc-handlers.ts OPEN_CHANGELOG
+      // handler. On Android, WebViewHost.shouldOverrideUrlLoading intercepts
+      // the non-file:// URL and launches an Intent.ACTION_VIEW — same net
+      // effect as Electron's shell.openExternal.
+      openChangelog: async () => {
+        window.open('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md', '_blank');
+      },
       openExternal: async (url: string) => { window.open(url, '_blank'); },
     },
     remote: {
@@ -700,7 +706,11 @@ export function installShim(): void {
     model: {
       getPreference: () => invoke('model:get-preference'),
       setPreference: (model: string) => invoke('model:set-preference', { model }),
-      readLastModel: async () => null,
+      // Desktop's handler returns the last-used model name from a JSONL
+      // transcript file. Android's SessionService mirrors the read; we wrap
+      // the path in an object because the WebSocket protocol's payload
+      // field is always parsed as a JSON object on the Kotlin side.
+      readLastModel: (transcriptPath: string) => invoke('model:read-last', { transcriptPath }),
     },
     appearance: {
       get: () => invoke('appearance:get'),

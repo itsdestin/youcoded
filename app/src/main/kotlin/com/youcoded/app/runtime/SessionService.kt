@@ -877,17 +877,91 @@ class SessionService : Service() {
                 File(configDir, "$id.json").writeText(values.toString(2))
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
             }
-            // In-app file viewer — Android stub. Returns an error payload so the
-            // renderer renders its "Couldn't load file" state instead of hanging.
-            // Real implementation would mirror marketplace-file-reader.ts: glob
-            // the local install dir, then fall back to raw GitHub URL.
+            // In-app file viewer — reads a plugin's SKILL.md / command / agent.
+            // Tries on-disk install first, falls back to raw.githubusercontent.com.
+            // Mirrors desktop's readComponent() from marketplace-file-reader.ts
+            // (same {content, source, path} / {error} response shape).
             "marketplace:read-component" -> {
-                val result = JSONObject().put("error", "File viewer not yet available on Android")
+                val pluginId = msg.payload.optString("pluginId")
+                val kind = msg.payload.optString("kind")
+                val name = msg.payload.optString("name")
+                val result = withContext(Dispatchers.IO) {
+                    try {
+                        val home = bootstrap?.homeDir ?: filesDir
+                        val index = skillProvider?.listMarketplace(null) ?: org.json.JSONArray()
+                        com.youcoded.app.skills.MarketplaceFileReader.readComponent(
+                            home, pluginId, kind, name, index
+                        )
+                    } catch (e: Exception) {
+                        JSONObject().put("error", e.message ?: "read-component failed")
+                    }
+                }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
+            // GitHub identity via `gh api user` — same as desktop's github:auth,
+            // which is used by the multiplayer lobby to name the player. The gh
+            // binary is installed through Termux bootstrap and reads ~/.netrc
+            // (set up by Bootstrap after the user signs in).
             "github:auth" -> {
-                // No GitHub auth on Android — return null
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }
+                val bs = bootstrap
+                val result: Any = if (bs == null) {
+                    JSONObject.NULL
+                } else withContext(Dispatchers.IO) {
+                    try {
+                        // gh is a Go binary — bypasses termux-exec LD_PRELOAD, so
+                        // we invoke it through linker64 directly (matches the bash
+                        // wrapper in Bootstrap.buildBashEnvSh's gh() function).
+                        val ghPath = File(bs.usrDir, "bin/gh").absolutePath
+                        val pb = ProcessBuilder("/system/bin/linker64", ghPath, "api", "user", "--jq", ".login")
+                            .directory(bs.homeDir)
+                            .redirectErrorStream(true)
+                        pb.environment().putAll(bs.buildRuntimeEnv())
+                        val process = pb.start()
+                        val output = process.inputStream.bufferedReader().readText().trim()
+                        val ok = process.waitFor() == 0 && output.isNotEmpty() && !output.contains("not logged")
+                        if (ok) JSONObject().put("username", output) else JSONObject.NULL
+                    } catch (_: Exception) {
+                        JSONObject.NULL
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            // Reads the last model name from a Claude Code JSONL transcript —
+            // used by the model picker to remember which model the session was
+            // running. Mirrors desktop's model:read-last in ipc-handlers.ts.
+            "model:read-last" -> {
+                val transcriptPath = msg.payload.optString("transcriptPath")
+                val result: Any = withContext(Dispatchers.IO) {
+                    try {
+                        val home = bootstrap?.homeDir ?: filesDir
+                        val projectsDir = File(home, ".claude/projects").canonicalFile
+                        val file = File(transcriptPath).canonicalFile
+                        // Security: confine reads to ~/.claude/projects (no arbitrary paths)
+                        if (!file.absolutePath.startsWith(projectsDir.absolutePath + File.separator)) {
+                            JSONObject.NULL
+                        } else if (!file.exists()) {
+                            JSONObject.NULL
+                        } else {
+                            val lines = file.readLines()
+                            var model: String? = null
+                            for (i in lines.indices.reversed()) {
+                                val line = lines[i].trim()
+                                if (line.isEmpty()) continue
+                                try {
+                                    val entry = JSONObject(line)
+                                    if (entry.optString("type") == "assistant") {
+                                        val m = entry.optJSONObject("message")?.optString("model", "")
+                                        if (!m.isNullOrEmpty()) { model = m; break }
+                                    }
+                                } catch (_: Exception) { /* skip malformed line */ }
+                            }
+                            if (model != null) model else JSONObject.NULL
+                        }
+                    } catch (_: Exception) {
+                        JSONObject.NULL
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "favorites:get" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("favorites", org.json.JSONArray())) }
