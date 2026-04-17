@@ -159,7 +159,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       // upstream plugins that no longer exist (e.g. pre-decomposition
       // journaling-assistant prompt stubs). Metadata is preserved in the
       // registry but shouldn't surface in the install UI.
-      setSkillEntries((marketplaceSkills || []).filter((e: any) => !e.deprecated));
+      // Also filter integrationOnly entries — those plugins (e.g. imessage,
+      // google-services) are surfaced through the Integrations tile instead
+      // and would double-list if shown in the plugins grid too.
+      setSkillEntries(
+        (marketplaceSkills || []).filter((e: any) => !e.deprecated && !e.integrationOnly),
+      );
       setThemeEntries(themes || []);
       setInstalledSkills(installed || []);
       setFavoritesState(favs || []);

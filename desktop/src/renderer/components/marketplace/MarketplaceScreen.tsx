@@ -69,7 +69,30 @@ export default function MarketplaceScreen({
         // safe placeholder so users can recover from a stuck state.
         await (window as any).claude.integrations.uninstall(item.slug);
       } else {
-        await (window as any).claude.integrations.install(item.slug);
+        const result = await (window as any).claude.integrations.install(item.slug);
+        // setup.type === 'plugin' entries can carry a post-install slash
+        // command (e.g. /google-services-setup). Run it in a fresh Sonnet
+        // session so the user's active chat isn't hijacked by a multi-step
+        // OAuth walkthrough.
+        if (result?.postInstallCommand) {
+          const info = await (window as any).claude.session.create({
+            name: `Set up ${item.displayName}`,
+            cwd: "", // main falls back to home dir when blank
+            skipPermissions: false,
+            model: "claude-sonnet-4-6",
+          });
+          if (info?.id) {
+            // Pragmatic fixed delay — the CLI takes ~1–2s to reach the
+            // prompt. Claude Code buffers stdin until ready, so an early
+            // send is tolerated; a late send is the common case.
+            setTimeout(() => {
+              try {
+                (window as any).claude.session.sendInput(info.id, result.postInstallCommand + "\r");
+              } catch { /* user can type the command themselves */ }
+            }, 3000);
+            onExit(); // land on the new session
+          }
+        }
       }
       await refreshIntegrations();
     } finally {

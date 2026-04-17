@@ -1,18 +1,20 @@
-// Integration installer — Phase 3 scaffold.
+// Integration installer — plugin-wrapping flow.
 //
-// Today this reads the integrations index from the marketplace registry and
-// returns stub state. The actual install/uninstall/connect work is deferred
-// to a follow-up PR that ships Google Workspace as the first vertical slice.
+// setup.type === 'plugin' routes through the existing PluginInstaller +
+// ClaudeCodeRegistry rather than inventing a parallel install pipeline. After
+// a successful install, the returned state carries an optional
+// `postInstallCommand` so the renderer can spin up a fresh Sonnet session
+// that runs the setup command (e.g. /google-services-setup) without
+// interrupting the user's active session.
 //
-// Why ship a scaffold now:
-//   - Locks down the IPC shape + 4-file parity (no breaking changes later).
-//   - Lets the marketplace UI render an Integrations rail with real cards.
-//   - Makes the follow-up PR a purely "wire up the script runner + OAuth" job.
+// api-key / macos-only / script setup types are still stubs — tracked as
+// follow-ups once OAuth + keyring work lands.
 
 import fs from "fs";
 import path from "path";
 import os from "os";
-import type { IntegrationEntry, IntegrationIndex, IntegrationState } from "../shared/types";
+import type { IntegrationEntry, IntegrationIndex, IntegrationState, SkillEntry } from "../shared/types";
+import { installPlugin, uninstallPlugin } from "./plugin-installer";
 
 const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${process.env.YOUCODED_MARKETPLACE_BRANCH || "master"}`;
 
@@ -21,8 +23,32 @@ const INTEGRATIONS_CACHE = path.join(CACHE_DIR, "integrations.json");
 const MANIFEST_PATH = path.join(os.homedir(), ".claude", "integrations.json");
 const CACHE_TTL = 24 * 60 * 60 * 1000;
 
+// Install response = state + optional post-install hint. The renderer consumes
+// `postInstallCommand` to spawn a new Sonnet session and run the command.
+export interface IntegrationInstallResult extends IntegrationState {
+  postInstallCommand?: string;
+}
+
+// The installer looks up plugin entries through a provider-shaped callback so
+// it doesn't have a hard dep on the SkillProvider class (keeps this file
+// unit-testable with a fake).
+export interface IntegrationInstallerDeps {
+  getPluginEntryById?: (id: string) => Promise<SkillEntry | null>;
+}
+
+// Map the current platform to the string the registry uses in `platforms`.
+function currentPlatform(): "darwin" | "linux" | "win32" | "unknown" {
+  if (process.platform === "darwin") return "darwin";
+  if (process.platform === "linux") return "linux";
+  if (process.platform === "win32") return "win32";
+  return "unknown";
+}
+
 export class IntegrationInstaller {
-  constructor() {
+  private deps: IntegrationInstallerDeps;
+
+  constructor(deps: IntegrationInstallerDeps = {}) {
+    this.deps = deps;
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
   }
 
@@ -39,6 +65,13 @@ export class IntegrationInstaller {
     } catch {
       return this.readCache(INTEGRATIONS_CACHE, Infinity) ?? empty();
     }
+  }
+
+  // Bust the cache — used after a cross-version schema bump so old cached
+  // entries without the new fields (iconUrl, platforms, plugin setup type)
+  // don't linger for 24h.
+  invalidateCatalogCache(): void {
+    try { fs.rmSync(INTEGRATIONS_CACHE, { force: true }); } catch { /* ignore */ }
   }
 
   // Manifest = ~/.claude/integrations.json. Single source of truth for which
@@ -66,39 +99,114 @@ export class IntegrationInstaller {
     return manifest[slug] ?? { slug, installed: false, connected: false };
   }
 
-  // STUB: installer. Records intent in the manifest and returns needs-auth so
-  // the card can show the right state. The actual OAuth/script execution ships
-  // with the Google Workspace vertical slice.
-  async install(slug: string): Promise<IntegrationState> {
+  async install(slug: string): Promise<IntegrationInstallResult> {
+    const catalog = await this.listCatalog();
+    const entry = (catalog.integrations || []).find((e) => e.slug === slug);
+    if (!entry) return this.recordFailure(slug, `Integration not found: ${slug}`);
+
+    // Refuse to install a planned ("Coming soon") entry even if the UI is
+    // out of sync — avoids a corrupted manifest that claims it's installed.
+    if (entry.status !== "available") {
+      return this.recordFailure(slug, `Integration is not available: status=${entry.status}`);
+    }
+
+    // Platform gate — honour entry.platforms if present.
+    if (entry.platforms && entry.platforms.length > 0) {
+      const cur = currentPlatform();
+      if (cur === "unknown" || !entry.platforms.includes(cur as any)) {
+        return this.recordFailure(slug, `Not supported on this platform (needs ${entry.platforms.join("/")})`);
+      }
+    }
+
+    if (entry.setup.type === "plugin") {
+      return this.installPluginBacked(entry);
+    }
+
+    // Non-plugin setup types — still stubs. Keep the manifest in sync with
+    // the UI so the user sees a clear error rather than a success that silently
+    // does nothing.
+    return this.recordFailure(slug, `setup.type "${entry.setup.type}" not yet implemented`);
+  }
+
+  private async installPluginBacked(entry: IntegrationEntry): Promise<IntegrationInstallResult> {
+    const pluginId = entry.setup.pluginId;
+    if (!pluginId) return this.recordFailure(entry.slug, "setup.pluginId missing");
+    if (!this.deps.getPluginEntryById) {
+      return this.recordFailure(entry.slug, "plugin lookup unavailable");
+    }
+
+    const plugin = await this.deps.getPluginEntryById(pluginId);
+    if (!plugin) return this.recordFailure(entry.slug, `Plugin not found in marketplace: ${pluginId}`);
+
+    // Hand off to the real plugin installer. It wires up all four Claude Code
+    // registries so /reload-plugins picks the plugin up.
+    const result = await installPlugin({
+      id: plugin.id,
+      sourceType: plugin.sourceType || "local",
+      sourceRef: plugin.sourceRef || plugin.id,
+      sourceSubdir: plugin.sourceSubdir,
+      sourceMarketplace: (plugin as any).sourceMarketplace,
+      description: plugin.description,
+      author: plugin.author,
+      version: plugin.version,
+    });
+
+    if (result.status === "failed") {
+      return this.recordFailure(entry.slug, result.error || "Plugin install failed");
+    }
+
     const manifest = this.readManifest();
     const state: IntegrationState = {
-      slug,
+      slug: entry.slug,
       installed: true,
-      connected: false,
-      error: "not-implemented: install flow lands with Google Workspace",
+      // `connected` stays false until the post-install setup actually wires
+      // up credentials. For plugins without a postInstallCommand we flip it
+      // true immediately since there's nothing else to do.
+      connected: !entry.setup.postInstallCommand,
+      lastSync: new Date().toISOString(),
     };
-    manifest[slug] = state;
+    manifest[entry.slug] = state;
     this.writeManifest(manifest);
-    return state;
+
+    return { ...state, postInstallCommand: entry.setup.postInstallCommand };
   }
 
   async uninstall(slug: string): Promise<IntegrationState> {
     const manifest = this.readManifest();
+    // Best-effort plugin removal. If the catalog lookup fails we still clear
+    // the manifest so the UI isn't stuck with an "installed" label.
+    try {
+      const catalog = await this.listCatalog();
+      const entry = (catalog.integrations || []).find((e) => e.slug === slug);
+      if (entry?.setup.type === "plugin" && entry.setup.pluginId) {
+        await uninstallPlugin(entry.setup.pluginId);
+      }
+    } catch { /* ignore — clear state below regardless */ }
+
     delete manifest[slug];
     this.writeManifest(manifest);
     return { slug, installed: false, connected: false };
   }
 
   async configure(slug: string, _settings: Record<string, unknown>): Promise<IntegrationState> {
-    // Deferred; real configure per-integration in the follow-up.
     const manifest = this.readManifest();
     const current = manifest[slug] ?? { slug, installed: false, connected: false };
     return { ...current, error: "not-implemented: configure" };
   }
 
-  // ── cache helpers (duplicated from skill-provider intentionally — keeping
-  // them small + local avoids coupling the two surfaces before we see if they
-  // actually want to share one utility) ──────────────────────────────────────
+  private recordFailure(slug: string, error: string): IntegrationInstallResult {
+    const manifest = this.readManifest();
+    const state: IntegrationState = {
+      slug,
+      installed: manifest[slug]?.installed ?? false,
+      connected: false,
+      error,
+    };
+    manifest[slug] = state;
+    this.writeManifest(manifest);
+    return state;
+  }
+
   private readCache(filePath: string, ttl: number): any {
     try {
       const raw = fs.readFileSync(filePath, "utf8");

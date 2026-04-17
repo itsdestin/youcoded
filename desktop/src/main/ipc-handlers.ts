@@ -218,9 +218,22 @@ export function registerIpcHandlers(
   // Phase 3a: pass the shared config store so theme installs also record into
   // the unified youcoded-skills.json packages map used for update tracking.
   const themeMarketplace = new ThemeMarketplaceProvider(skillProvider.configStore);
-  // Phase 3 scaffold — kept inline (not a constructor arg) so this file is
-  // the only thing that changes when the installer grows real OAuth wiring.
-  const integrationInstaller = new IntegrationInstaller();
+  // Phase 4: installer is now plugin-backed. Wire in a plugin lookup so the
+  // installer can resolve an integration's setup.pluginId to the marketplace
+  // entry that installPlugin() needs.
+  const integrationInstaller = new IntegrationInstaller({
+    getPluginEntryById: async (id: string) => {
+      try {
+        const entries = await skillProvider.listMarketplace();
+        return entries.find((e) => e.id === id) ?? null;
+      } catch {
+        return null;
+      }
+    },
+  });
+  // Drop any stale cached integrations index so the new schema fields
+  // (iconUrl, platforms, plugin setup) are picked up on first read.
+  integrationInstaller.invalidateCatalogCache();
 
   ipcMain.handle(IPC.THEME_MARKETPLACE_LIST, async (_event, filters) => {
     return themeMarketplace.listThemes(filters);

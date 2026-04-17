@@ -2,10 +2,20 @@
 // on the right. Never mixed into a skill/theme grid (per design doc): only
 // rendered inside the dedicated integrations rail.
 
-import React from "react";
+import React, { useState } from "react";
 import type { IntegrationEntry, IntegrationState } from "../../../shared/types";
 
 export type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
+
+// Icons live in the marketplace repo at integrations/icons/. We resolve the
+// stored relative path against the same raw.githubusercontent.com base that
+// the rest of the registry fetches from, keeping app + registry in lockstep.
+const MARKETPLACE_BRANCH = "master";
+const ICON_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${MARKETPLACE_BRANCH}/integrations`;
+function resolveIconUrl(rel?: string): string | null {
+  if (!rel) return null;
+  return `${ICON_BASE}/${rel}`;
+}
 
 interface Props {
   item: IntegrationCardItem;
@@ -33,17 +43,31 @@ const TONE_CLASS: Record<string, string> = {
 export default function IntegrationCard({ item, onPrimary, busy }: Props) {
   const status = statusLabel(item);
   const planned = item.status === "planned";
+  const iconUrl = resolveIconUrl(item.iconUrl);
+  // Fall back to the letter tile if the icon fails to load — keeps the grid
+  // from breaking when a new entry is added without its asset yet.
+  const [iconFailed, setIconFailed] = useState(false);
+  const showIcon = iconUrl && !iconFailed;
   return (
     <div
       className="layer-surface flex items-start gap-4 p-4 min-w-[320px]"
       style={item.accentColor ? { borderColor: item.accentColor } : undefined}
     >
       <div
-        className="w-10 h-10 rounded-md shrink-0 flex items-center justify-center text-on-accent text-sm font-semibold"
-        style={{ background: item.accentColor || "var(--accent)" }}
+        className={`w-10 h-10 rounded-md shrink-0 flex items-center justify-center text-on-accent text-sm font-semibold overflow-hidden ${showIcon ? "bg-inset" : ""}`}
+        style={showIcon ? undefined : { background: item.accentColor || "var(--accent)" }}
         aria-hidden
       >
-        {item.displayName.slice(0, 1)}
+        {showIcon ? (
+          <img
+            src={iconUrl!}
+            alt=""
+            className="w-full h-full object-contain"
+            onError={() => setIconFailed(true)}
+          />
+        ) : (
+          item.displayName.slice(0, 1)
+        )}
       </div>
       <div className="flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">

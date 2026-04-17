@@ -171,6 +171,11 @@ export interface SkillEntry {
   deprecated?: boolean;
   deprecatedAt?: string;
 
+  // When true, the plugins grid should hide this entry because it is surfaced
+  // through the dedicated Integrations tile instead (e.g. google-services,
+  // imessage). The entry is still installable — just not double-listed.
+  integrationOnly?: boolean;
+
   // Source info from index.json — needed by the in-app file viewer to fetch
   // raw SKILL.md/commands/agents content when the plugin isn't installed.
   // 'local' = subdir in wecoded-marketplace repo (sourceRef is that subdir).
@@ -294,7 +299,9 @@ export interface FeaturedData {
 }
 
 // Marketplace redesign Phase 3 — integrations as a first-class kind.
-export type IntegrationKind = 'mcp' | 'shell' | 'http';
+// 'plugin' kind wraps an existing marketplace plugin + optional post-install
+// slash command, avoiding a second install pipeline.
+export type IntegrationKind = 'mcp' | 'shell' | 'http' | 'plugin';
 export type IntegrationStatusValue =
   | 'not-installed'
   | 'installing'
@@ -303,11 +310,15 @@ export type IntegrationStatusValue =
   | 'error';
 
 export interface IntegrationSetup {
-  type: 'script' | 'api-key' | 'macos-only';
+  type: 'script' | 'api-key' | 'macos-only' | 'plugin';
   path?: string;
   requiresOAuth?: boolean;
   oauthProvider?: string;
   keyName?: string;
+  // setup.type === 'plugin' — the marketplace plugin id to install and an
+  // optional slash command the app runs in a fresh session after install.
+  pluginId?: string;
+  postInstallCommand?: string;
 }
 
 export interface IntegrationEntry {
@@ -320,6 +331,12 @@ export interface IntegrationEntry {
   status: 'available' | 'planned' | 'deprecated';
   accentColor?: string;
   lifeArea?: string[];
+  // Relative path under integrations/icons/ in the marketplace repo; the UI
+  // resolves this against the raw.githubusercontent.com base URL.
+  iconUrl?: string;
+  // Platforms where this integration can run. When present and the current
+  // platform isn't listed, the card shows a "<platform>-only" affordance.
+  platforms?: Array<'darwin' | 'linux' | 'win32'>;
 }
 
 export interface IntegrationIndex {
