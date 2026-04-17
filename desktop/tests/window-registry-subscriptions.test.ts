@@ -77,5 +77,7 @@ describe('WindowRegistry subscriptions', () => {
     reg.unregisterWindow(100);
     expect(reg.getSubscribers('sess-1')).toEqual(new Set([200]));
     expect(reg.getSubscribers('sess-2')).toEqual(new Set());
+    // Survivor window 200 is still registered and usable (not accidentally unregistered as a side effect).
+    expect(() => reg.subscribe('sess-3', 200)).not.toThrow();
   });
 });
