@@ -57,26 +57,30 @@ export function registerIpcHandlers(
     }
   };
 
-  // Route a session-scoped emit to the window that owns the session. Falls
-  // back to the primary `mainWindow` if ownership is unknown (remote-created
-  // sessions during Phase 1; remote clients still get their copy via the
-  // parallel remoteServer.broadcast() calls). This is the single seam that
-  // makes per-session IPC multi-window-aware — adding a new session-scoped
-  // event type should use sendForSession, not send.
+  // Route a session-scoped emit to the owner AND any buddy subscribers.
+  // Ownership and subscription are independent (a buddy window observes a
+  // session without claiming ownership), so events must reach both. Falls
+  // back to the primary mainWindow when neither owner nor subscribers
+  // exist (preserves the existing pre-buddy fallback behavior for
+  // remote-created sessions during Phase 1).
   const sendForSession = (sessionId: string, channel: string, ...args: any[]) => {
-    const wid = windowRegistry?.getOwner(sessionId);
-    if (wid != null) {
-      // wid is a webContents.id, NOT a BrowserWindow.id — use webContents.fromId
-      // (different ID space; BrowserWindow.fromId silently returns null and we
-      // fall through to mainWindow, which made every peer-window event land in
-      // window 1).
-      const wc = webContents.fromId(wid);
-      if (wc && !wc.isDestroyed()) {
-        wc.send(channel, ...args);
-        return;
-      }
+    const ids = new Set<number>();
+    const ownerId = windowRegistry?.getOwner(sessionId);
+    if (ownerId != null) ids.add(ownerId);
+    if (windowRegistry) {
+      for (const subId of windowRegistry.getSubscribers(sessionId)) ids.add(subId);
     }
-    // Fallback: no known owner (e.g., remote-created session pre-assignment).
+    if (ids.size > 0) {
+      for (const wid of ids) {
+        // wid is a webContents.id, NOT a BrowserWindow.id — see the original
+        // comment in this file for why that distinction matters.
+        const wc = webContents.fromId(wid);
+        if (wc && !wc.isDestroyed()) wc.send(channel, ...args);
+      }
+      return;
+    }
+    // Fallback: no known owner and no subscribers (e.g., remote-created
+    // session pre-assignment). Send to mainWindow to preserve existing behavior.
     if (!mainWindow.isDestroyed()) mainWindow.webContents.send(channel, ...args);
   };
 
