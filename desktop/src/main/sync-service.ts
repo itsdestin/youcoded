@@ -23,9 +23,14 @@ import path from 'path';
 import os from 'os';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { type BackendInstance, migrateConfigToV2, syncLegacyKeys } from './sync-state';
+import {
+  type BackendInstance,
+  migrateConfigToV2,
+  syncLegacyKeys,
+  addOrReplaceWarning,
+  clearWarningsByBackend,
+} from './sync-state';
 import { classifyPushError, truncateStderr } from './sync-error-classifier';
-import { addOrReplaceWarning, clearWarningsByBackend } from './sync-state';
 
 const execFileAsync = promisify(execFile);
 
@@ -883,7 +888,13 @@ export class SyncService extends EventEmitter {
     // CLAUDE.md
     const claudeMd = path.join(this.claudeDir, 'CLAUDE.md');
     if (this.fileExists(claudeMd)) {
-      try { fs.copyFileSync(claudeMd, path.join(icloudPath, 'CLAUDE.md')); } catch {}
+      try {
+        fs.copyFileSync(claudeMd, path.join(icloudPath, 'CLAUDE.md'));
+      } catch (e) {
+        this.logBackup('WARN', 'iCloud push CLAUDE.md failed', 'sync.push.icloud', { stderr: truncateStderr(String(e)) });
+        if (!firstFailStderr) firstFailStderr = String(e);
+        errors++;
+      }
     }
 
     // Encyclopedia
@@ -891,24 +902,46 @@ export class SyncService extends EventEmitter {
     if (this.dirExists(encDir)) {
       const dest = path.join(icloudPath, 'encyclopedia');
       fs.mkdirSync(dest, { recursive: true });
-      try { await this.rsyncOrCp(encDir, dest); } catch {}
+      try {
+        await this.rsyncOrCp(encDir, dest);
+      } catch (e) {
+        this.logBackup('WARN', 'iCloud push encyclopedia failed', 'sync.push.icloud', { stderr: truncateStderr(String(e)) });
+        if (!firstFailStderr) firstFailStderr = String(e);
+        errors++;
+      }
     }
 
-    // Skills
+    // Skills — aggregate errors across individual skills so one bad skill
+    // doesn't spam per-skill WARN entries. The classifier only needs one
+    // representative stderr to pick a code.
     const skillsDir = path.join(this.claudeDir, 'skills');
     if (this.dirExists(skillsDir)) {
+      let skillsStderr = '';
+      let skillsErrors = 0;
       for (const skillName of fs.readdirSync(skillsDir)) {
         const skillDir = path.join(skillsDir, skillName);
         if (!this.dirExists(skillDir) || this.isToolkitOwned(skillDir)) continue;
         if (!this.shouldSyncSkill(skillName)) continue;
         const dest = path.join(icloudPath, 'skills', skillName);
         fs.mkdirSync(dest, { recursive: true });
-        try { await this.rsyncOrCp(skillDir, dest); } catch {}
+        try {
+          await this.rsyncOrCp(skillDir, dest);
+        } catch (e) {
+          if (!skillsStderr) skillsStderr = String(e);
+          skillsErrors++;
+        }
+      }
+      if (skillsErrors > 0) {
+        this.logBackup('WARN', `iCloud push skills failed (${skillsErrors} skill(s))`, 'sync.push.icloud', { stderr: truncateStderr(skillsStderr) });
+        if (!firstFailStderr) firstFailStderr = skillsStderr;
+        errors++;
       }
     }
 
-    // Conversations
+    // Conversations — aggregate per-conversation-file errors the same way as skills.
     if (this.dirExists(projectsDir)) {
+      let convStderr = '';
+      let convErrors = 0;
       for (const slugName of fs.readdirSync(projectsDir)) {
         const slugDir = path.join(projectsDir, slugName);
         if (!this.dirExists(slugDir)) continue;
@@ -920,14 +953,27 @@ export class SyncService extends EventEmitter {
         for (const f of jsonlFiles) {
           const dest = path.join(icloudPath, 'conversations', slugName);
           fs.mkdirSync(dest, { recursive: true });
-          try { fs.copyFileSync(path.join(slugDir, f), path.join(dest, f)); } catch {}
+          try {
+            fs.copyFileSync(path.join(slugDir, f), path.join(dest, f));
+          } catch (e) {
+            if (!convStderr) convStderr = String(e);
+            convErrors++;
+          }
         }
+      }
+      if (convErrors > 0) {
+        this.logBackup('WARN', `iCloud push conversations failed (${convErrors} file(s))`, 'sync.push.icloud', { stderr: truncateStderr(convStderr) });
+        if (!firstFailStderr) firstFailStderr = convStderr;
+        errors++;
       }
     }
 
-    // System config
+    // System config — aggregate sys-file and plans/specs/index errors into
+    // one "system-config" warning since they share a fix path (disk/permission).
     const sysPath = path.join(icloudPath, 'system-backup');
     fs.mkdirSync(sysPath, { recursive: true });
+    let sysStderr = '';
+    let sysErrors = 0;
     for (const [src, name] of [
       [this.configPath, 'config.json'],
       [path.join(this.claudeDir, 'settings.json'), 'settings.json'],
@@ -935,18 +981,40 @@ export class SyncService extends EventEmitter {
       [path.join(this.claudeDir, 'mcp.json'), 'mcp.json'],
       [path.join(this.claudeDir, 'history.jsonl'), 'history.jsonl'],
     ] as const) {
-      if (this.fileExists(src)) { try { fs.copyFileSync(src, path.join(sysPath, name)); } catch {} }
+      if (this.fileExists(src)) {
+        try {
+          fs.copyFileSync(src, path.join(sysPath, name));
+        } catch (e) {
+          if (!sysStderr) sysStderr = String(e);
+          sysErrors++;
+        }
+      }
     }
     for (const dir of ['plans', 'specs']) {
       const srcDir = path.join(this.claudeDir, dir);
       if (this.dirExists(srcDir)) {
         const dest = path.join(sysPath, dir);
         fs.mkdirSync(dest, { recursive: true });
-        try { await this.rsyncOrCp(srcDir, dest); } catch {}
+        try {
+          await this.rsyncOrCp(srcDir, dest);
+        } catch (e) {
+          if (!sysStderr) sysStderr = String(e);
+          sysErrors++;
+        }
       }
     }
     if (this.fileExists(this.conversationIndexPath)) {
-      try { fs.copyFileSync(this.conversationIndexPath, path.join(sysPath, 'conversation-index.json')); } catch {}
+      try {
+        fs.copyFileSync(this.conversationIndexPath, path.join(sysPath, 'conversation-index.json'));
+      } catch (e) {
+        if (!sysStderr) sysStderr = String(e);
+        sysErrors++;
+      }
+    }
+    if (sysErrors > 0) {
+      this.logBackup('WARN', `iCloud push system-config failed (${sysErrors} item(s))`, 'sync.push.icloud', { stderr: truncateStderr(sysStderr) });
+      if (!firstFailStderr) firstFailStderr = sysStderr;
+      errors++;
     }
 
     if (errors > 0) {
