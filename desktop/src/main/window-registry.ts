@@ -75,6 +75,54 @@ export class WindowRegistry extends EventEmitter {
     this.emit('changed');
   }
 
+  // sessionId -> Set of subscriber windowIds. Separate from `ownership`:
+  // a window can subscribe to a session it does NOT own (e.g. the buddy
+  // mirrors the active session while main still owns it). Session events
+  // are routed to owner UNION subscribers in the IPC router.
+  private readonly subscriptions = new Map<string, Set<number>>();
+
+  /** Add a subscription. Idempotent. Emits 'changed' on mutation. */
+  subscribe(sessionId: string, windowId: number): void {
+    let set = this.subscriptions.get(sessionId);
+    if (!set) {
+      set = new Set();
+      this.subscriptions.set(sessionId, set);
+    }
+    const before = set.size;
+    set.add(windowId);
+    if (set.size !== before) this.emit('changed');
+  }
+
+  /** Remove a subscription. Idempotent. Emits 'changed' on mutation. */
+  unsubscribe(sessionId: string, windowId: number): void {
+    const set = this.subscriptions.get(sessionId);
+    if (!set) return;
+    const removed = set.delete(windowId);
+    if (set.size === 0) this.subscriptions.delete(sessionId);
+    if (removed) this.emit('changed');
+  }
+
+  /** Read-only view of subscribers for a session. */
+  getSubscribers(sessionId: string): Set<number> {
+    const set = this.subscriptions.get(sessionId);
+    return set ? new Set(set) : new Set();
+  }
+
+  /**
+   * Remove a window from every subscription.
+   * @param silent - if true, suppresses the 'changed' emission so callers
+   *                 that want to bundle it into a larger mutation (e.g.
+   *                 unregisterWindow) can emit exactly one event.
+   */
+  releaseAllSubscriptionsForWindow(windowId: number, silent = false): void {
+    let mutated = false;
+    for (const [sid, set] of this.subscriptions) {
+      if (set.delete(windowId)) mutated = true;
+      if (set.size === 0) this.subscriptions.delete(sid);
+    }
+    if (mutated && !silent) this.emit('changed');
+  }
+
   getOwner(sessionId: string): number | undefined {
     return this.ownership.get(sessionId);
   }
