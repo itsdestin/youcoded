@@ -3,7 +3,7 @@ import { useChatState, useChatDispatch } from '../../state/chat-context';
 import { hookEventToAction } from '../../state/hook-dispatcher';
 import UserMessage from '../UserMessage';
 import AssistantTurnBubble from '../AssistantTurnBubble';
-import ToolCard from '../ToolCard';
+import { CompactToolStrip } from './CompactToolStrip';
 import PromptCard from '../PromptCard';
 import UsageCard from '../UsageCard';
 import SystemMarker from '../SystemMarker';
@@ -307,14 +307,19 @@ export function BubbleFeed({ sessionId }: Props) {
             });
           })()}
 
-          {/* Awaiting-approval tool cards pop out at the bottom — mirrors ChatView */}
-          {awaitingTools.map((tool) => (
-            <div key={tool.toolUseId} className="flex justify-start px-4 py-0.5">
-              <div className="assistant-bubble max-w-[85%] rounded-2xl rounded-bl-sm bg-inset px-5 py-3">
-                <ToolCard tool={tool} sessionId={sessionId} />
-              </div>
+          {/* Awaiting-approval tools rendered as a compact strip — buddy-specific.
+              CompactToolStrip shows a slim pill when idle and auto-expands with
+              inline Allow/Deny/Always buttons when approval is needed. Uses the
+              same IPC + reducer dispatch path as main's <ToolCard> so there is
+              no divergence between the two permission-response code paths. */}
+          {awaitingTools.length > 0 && (
+            <div style={{ padding: '4px 16px' }}>
+              <CompactToolStrip
+                tools={awaitingTools}
+                sessionId={sessionId}
+              />
             </div>
-          ))}
+          )}
 
           {/* Thinking indicator — only shown when no tool is pending.
               Buddy is a passive viewer so we only show 'ok' state (no attention
