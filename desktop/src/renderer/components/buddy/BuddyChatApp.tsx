@@ -1,4 +1,6 @@
 import { useEffect } from 'react';
+import { ThemeProvider } from '../../state/theme-context';
+import { BuddyChat } from './BuddyChat';
 
 export function BuddyChatApp() {
   useEffect(() => {
@@ -6,8 +8,8 @@ export function BuddyChatApp() {
   }, []);
 
   return (
-    <div style={{ width: 320, height: 480, background: 'transparent', color: '#fff' }}>
-      buddy chat placeholder
-    </div>
+    <ThemeProvider>
+      <BuddyChat />
+    </ThemeProvider>
   );
 }

@@ -1,0 +1,45 @@
+/* Buddy-specific CSS scopes. Loaded globally but only apply when
+   body[data-mode="buddy-chat"] or buddy-mascot is active. */
+
+body[data-mode="buddy-chat"],
+body[data-mode="buddy-mascot"] {
+  background: transparent !important;
+  --canvas: transparent;
+}
+
+body[data-mode="buddy-chat"] {
+  font-size: 13px;
+  overflow: hidden;
+}
+
+/* Compact bubbles inside buddy chat */
+body[data-mode="buddy-chat"] .user-bubble,
+body[data-mode="buddy-chat"] .assistant-bubble {
+  padding: 9px 13px;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+/* Strip tables / headings / blockquotes in buddy markdown */
+body[data-mode="buddy-chat"] .prose h1,
+body[data-mode="buddy-chat"] .prose h2,
+body[data-mode="buddy-chat"] .prose h3,
+body[data-mode="buddy-chat"] .prose h4 {
+  font-size: inherit;
+  font-weight: 700;
+  margin: 0;
+}
+body[data-mode="buddy-chat"] .prose table { display: none; }
+body[data-mode="buddy-chat"] .prose blockquote {
+  font-style: italic;
+  border: none;
+  padding: 0;
+  margin: 0;
+}
+
+/* Thin scrollbar in buddy chat */
+body[data-mode="buddy-chat"] ::-webkit-scrollbar { width: 4px; }
+body[data-mode="buddy-chat"] ::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.15);
+  border-radius: 2px;
+}

@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./buddy.css";
 
 @source "../../";
 
@@ -337,12 +338,8 @@ html, body, #root {
 }
 
 /* Buddy window transparency override.
-   Buddy mascot and chat windows are transparent frameless windows; they should
-   not render the theme background layer or default body background. */
-body[data-mode="buddy-mascot"],
-body[data-mode="buddy-chat"] {
-  background: transparent !important;
-}
+   Buddy mascot and chat windows should not render the theme background layer.
+   (body background handled by buddy.css) */
 
 body[data-mode="buddy-mascot"] #theme-bg,
 body[data-mode="buddy-chat"] #theme-bg {
