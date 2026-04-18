@@ -64,6 +64,9 @@ export class SubagentIndex {
       p => p.description === meta.description && p.subagentType === meta.agentType,
     );
     if (i < 0) return null;
+    // splice removes the parent so it can't be bound to a second subagent
+    // (FIFO collision fallback: subsequent subagents with the same meta
+    // pick the next-oldest unmatched parent).
     const [parent] = this.unmatchedParents.splice(i, 1);
     this.bindings.set(agentId, parent.toolUseId);
     return parent.toolUseId;
@@ -84,6 +87,9 @@ export class SubagentIndex {
   bufferPendingEvent(agentId: string, meta: SubagentMeta, event: unknown): void {
     const existing = this.pending.get(agentId);
     if (existing) {
+      // meta is stable per agentId (sourced from the same .meta.json), so we
+      // only capture it on the first call. Re-reads of meta after buffering
+      // don't affect correlation.
       existing.events.push(event);
       return;
     }
@@ -107,6 +113,7 @@ export class SubagentIndex {
       description: entry.description,
       agentType: entry.agentType,
     });
+    // Parent Agent tool_use not yet recorded — leave buffered, caller may retry later.
     if (!parentToolUseId) return null;
     this.pending.delete(agentId);
     return { parentToolUseId, events: entry.events };
@@ -115,6 +122,10 @@ export class SubagentIndex {
   /** Drop pending entries older than 30s. Caller invokes periodically. */
   pruneExpired(): void {
     const cutoff = this.nowMs() - PENDING_TTL_MS;
+    // Deleting from a Map during for...of iteration is well-defined per
+    // the ECMAScript spec (already-visited keys are skipped on delete).
+    // NOTE: Kotlin's MutableMap does NOT allow this — the Kotlin mirror in
+    // Task 10 needs a separate keys snapshot before deleting.
     for (const [agentId, entry] of this.pending) {
       if (entry.firstSeenAt < cutoff) this.pending.delete(agentId);
     }

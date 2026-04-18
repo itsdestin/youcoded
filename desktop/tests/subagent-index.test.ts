@@ -8,7 +8,7 @@ describe('SubagentIndex', () => {
     idx = new SubagentIndex({ nowMs: () => 1000 });
   });
 
-  it('binds a subagent to the most recent matching parent', () => {
+  it('binds a subagent to the oldest unmatched matching parent (FIFO)', () => {
     idx.recordParentAgentToolUse('toolu_A', 'Find bug', 'Explore');
     const bound = idx.bindSubagent('agent1', { description: 'Find bug', agentType: 'Explore' });
     expect(bound).toBe('toolu_A');
