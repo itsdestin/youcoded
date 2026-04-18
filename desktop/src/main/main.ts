@@ -117,12 +117,17 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
 // (via shared/ports.ts) so Vite and main stay in sync without a second env var.
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VITE_DEV_PORT}`;
 
-// Dev-profile isolation: when YOUCODED_PROFILE=dev, split Electron userData so
-// a dev instance doesn't clobber the built app's localStorage, cookies, cache,
-// or window state. Must be called before app.whenReady().
-if (process.env.YOUCODED_PROFILE === 'dev') {
-  app.setPath('userData', path.join(app.getPath('appData'), 'youcoded-dev'));
-  app.setName('YouCoded Dev');
+// Dev-profile isolation: any non-empty YOUCODED_PROFILE marks this as a dev
+// instance. userData is named after the profile so concurrent dev instances
+// (e.g. YOUCODED_PROFILE=dev2) don't share state with each other or with the
+// built app. The install-hooks gate below uses the same "profile set" test —
+// positive match instead of a strict string compare so typos or variants
+// (dev2, feature-x, etc.) can't accidentally re-enable hook installation.
+// Must be called before app.whenReady().
+const DEV_PROFILE = process.env.YOUCODED_PROFILE;
+if (DEV_PROFILE) {
+  app.setPath('userData', path.join(app.getPath('appData'), `youcoded-${DEV_PROFILE}`));
+  app.setName(DEV_PROFILE === 'dev' ? 'YouCoded Dev' : `YouCoded Dev (${DEV_PROFILE})`);
 }
 
 // Must be called before app.whenReady() — Electron requirement
@@ -790,7 +795,7 @@ app.whenReady().then(async () => {
   // so simply calling it repairs any stale paths. We scan first only to log a
   // visible warning when staleness is detected — useful for diagnosing the
   // "stuck on Initializing" symptom that follows a removed dev worktree.
-  if (process.env.YOUCODED_PROFILE !== 'dev') {
+  if (!process.env.YOUCODED_PROFILE) {
     try {
       const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
       try {
@@ -813,7 +818,7 @@ app.whenReady().then(async () => {
       log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
     }
   } else {
-    log('INFO', 'Main', 'Dev profile — skipping install-hooks (using built app paths)');
+    log('INFO', 'Main', `Dev profile '${process.env.YOUCODED_PROFILE}' — skipping install-hooks (using built app paths)`);
   }
 
   try {

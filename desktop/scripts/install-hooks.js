@@ -20,6 +20,21 @@ const rawBlockingRelayPath = path.resolve(__dirname, '..', 'hook-scripts', 'rela
 const unpackedBlockingRelayPath = rawBlockingRelayPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
 const BLOCKING_RELAY_PATH = fs.existsSync(unpackedBlockingRelayPath) ? unpackedBlockingRelayPath : rawBlockingRelayPath;
 
+// Safety: refuse to install hooks whose paths point inside a worktree. The
+// ~/.claude/settings.json file is a shared resource — if we write a worktree
+// path and the worktree is later removed, every hook call fails with ENOENT
+// until the built app is relaunched. This is a belt-and-suspenders backstop
+// for the YOUCODED_PROFILE gate in main.ts; if any future refactor breaks
+// that gate, this guard still prevents corruption.
+if (RELAY_PATH.includes(`${path.sep}.worktrees${path.sep}`)) {
+  console.log(
+    'install-hooks: script path is inside a worktree (' + RELAY_PATH + ') — ' +
+    'refusing to write worktree paths to ~/.claude/settings.json. ' +
+    'If this was unexpected, check that YOUCODED_PROFILE is set when running dev.'
+  );
+  process.exit(0);
+}
+
 // Fire-and-forget events use the standard relay
 const FIRE_AND_FORGET_EVENTS = [
   'PreToolUse',

@@ -10,10 +10,13 @@ const execFileAsync = promisify(execFile);
 
 const CONFIG_PATH = () => path.join(os.homedir(), '.claude', 'youcoded-remote.json');
 const BCRYPT_ROUNDS = 10;
-// Dev profile shares ~/.claude/youcoded-remote.json with the built app, but
-// must NOT bind the built app's saved port and must NOT overwrite that saved
-// port on user actions. Offset-shift on read; no-op on save.
-const IS_DEV_PROFILE = process.env.YOUCODED_PROFILE === 'dev';
+// Any non-empty YOUCODED_PROFILE marks this as a dev instance — shift the
+// remote port by PORT_OFFSET so we don't fight the built app on 9900, and
+// never overwrite the saved (built-app) port on save. Treating every non-empty
+// value as dev (not just the literal 'dev') means concurrent dev instances
+// with distinct profiles (e.g. 'dev2') also get the offset; otherwise they'd
+// silently bind to the built app's port and crash with EADDRINUSE.
+const IS_DEV_PROFILE = !!process.env.YOUCODED_PROFILE;
 
 interface ConfigData {
   enabled: boolean;
