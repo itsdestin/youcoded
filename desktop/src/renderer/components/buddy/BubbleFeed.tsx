@@ -42,6 +42,14 @@ export function BubbleFeed({ sessionId }: Props) {
   const bottomRef = useRef<HTMLDivElement>(null);
   const atBottomRef = useRef(true);
 
+  // Mirror state in a ref so async event handlers see fresh values
+  // without needing to list state in useEffect deps (which would cause
+  // the handler to re-subscribe every render).
+  const stateRef = useRef(state);
+  useEffect(() => {
+    stateRef.current = state;
+  }, [state]);
+
   // ── Transcript event subscription ─────────────────────────────────────────
   // The buddy window receives transcript:event IPC for the subscribed session
   // (WindowRegistry routes to owner + all subscribers). Wire them into the
@@ -67,7 +75,7 @@ export function BubbleFeed({ sessionId }: Props) {
       if (rafId === null) rafId = requestAnimationFrame(flush);
     }
 
-    const unsubTranscript = (window.claude.on as any).transcriptEvent?.((event: any) => {
+    const unsubTranscript = window.claude.on.transcriptEvent((event: any) => {
       // Only process events for the session this feed is watching
       if (!event?.type || event?.sessionId !== sessionId) return;
 
@@ -129,7 +137,7 @@ export function BubbleFeed({ sessionId }: Props) {
         // but we still need to close any pending compaction spinner if it was opened
         // because the owner session triggered compaction.
         case 'compact-summary':
-          if (state.compactionPending) {
+          if (stateRef.current.compactionPending) {
             batchDispatch({
               type: 'COMPACTION_COMPLETE',
               sessionId: event.sessionId,
@@ -145,9 +153,7 @@ export function BubbleFeed({ sessionId }: Props) {
       cancelled = true;
       if (rafId !== null) cancelAnimationFrame(rafId);
       // Unregister: preload returns the raw handler for removeListener
-      if (unsubTranscript) {
-        (window as any).claude?.off?.('transcript:event', unsubTranscript);
-      }
+      window.claude.off('transcript:event', unsubTranscript);
     };
   }, [sessionId, dispatch]);
 
@@ -158,16 +164,14 @@ export function BubbleFeed({ sessionId }: Props) {
   useEffect(() => {
     if (!sessionId) return;
 
-    const unsubHook = (window.claude.on as any).hookEvent?.((event: any) => {
+    const unsubHook = window.claude.on.hookEvent((event: any) => {
       if (event?.sessionId !== sessionId) return;
       const action = hookEventToAction(event);
       if (action) dispatch(action);
     });
 
     return () => {
-      if (unsubHook) {
-        (window as any).claude?.off?.('hook:event', unsubHook);
-      }
+      window.claude.off('hook:event', unsubHook);
     };
   }, [sessionId, dispatch]);
 
