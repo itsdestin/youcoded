@@ -1,4 +1,5 @@
 import { useCallback, useRef } from 'react';
+import type { MascotVariant } from '../../themes/theme-types';
 import { useThemeMascot } from '../../hooks/useThemeMascot';
 import { useAnyAttentionNeeded } from '../../hooks/useAnyAttentionNeeded';
 
@@ -6,10 +7,10 @@ const DRAG_THRESHOLD_PX = 4;
 
 export function BuddyMascot() {
   const attention = useAnyAttentionNeeded();
-  // When attention is needed, try to use the theme's 'welcome' variant as a
-  // "shocked" equivalent (most themes won't override it, so emoji fallback).
-  // When idle, use the standard 'idle' variant.
-  const variant = attention ? 'welcome' : 'idle';
+  // When attention is needed, use the theme's 'shocked' variant. When idle,
+  // use the standard 'idle' variant. Theme authors provide mascot assets via
+  // mascot-shocked.svg, or fallback to emoji.
+  const variant: MascotVariant = attention ? 'shocked' : 'idle';
   const customMascot = useThemeMascot(variant);
 
   // Track pointer travel so drag doesn't register as click.

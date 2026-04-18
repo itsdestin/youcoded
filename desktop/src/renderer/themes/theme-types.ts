@@ -85,7 +85,7 @@ export type IconSlot = 'send' | 'new-chat' | 'settings' | 'theme-cycle' | 'close
 
 export type ThemeIcons = Partial<Record<IconSlot, string>>;
 
-export type MascotVariant = 'idle' | 'welcome' | 'inquisitive';
+export type MascotVariant = 'idle' | 'welcome' | 'inquisitive' | 'shocked';
 
 export type ThemeMascot = Partial<Record<MascotVariant, string>>;
 
