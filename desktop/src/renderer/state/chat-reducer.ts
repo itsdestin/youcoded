@@ -535,7 +535,30 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'TRANSCRIPT_TURN_COMPLETE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      next.set(action.sessionId, { ...session, ...endTurn(session) });
+
+      // Attach completion metadata to the completing turn before clearing
+      // turn-scoped state via endTurn(). currentTurnId is the in-flight turn;
+      // if it's already null (edge case: turn-complete arrived before any
+      // assistant text), skip metadata attachment but still call endTurn.
+      const completingTurnId = session.currentTurnId;
+      const assistantTurns = new Map(session.assistantTurns);
+      if (completingTurnId) {
+        const turn = assistantTurns.get(completingTurnId);
+        if (turn) {
+          assistantTurns.set(completingTurnId, {
+            ...turn,
+            stopReason: action.stopReason,
+            // Preserve any model already captured on the turn (e.g. from
+            // assistant-text in Task 2.4) — only override when the action
+            // carries one. The two should agree when both are present.
+            model: action.model ?? turn.model,
+            anthropicRequestId: action.anthropicRequestId,
+            usage: action.usage,
+          });
+        }
+      }
+
+      next.set(action.sessionId, { ...session, assistantTurns, ...endTurn(session) });
       return next;
     }
 
