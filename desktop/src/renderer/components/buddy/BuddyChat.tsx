@@ -52,7 +52,9 @@ export function BuddyChat() {
       setViewedSession(sid);
       if (sid) {
         window.claude.buddy.subscribe(sid);
-        window.claude.detach.requestTranscriptReplay(sid);
+        // requestTranscriptReplay is now owned by BubbleFeed's effect, which
+        // runs AFTER the transcript:event listener is wired. Calling it here
+        // would race past the listener-registration and drop replay events.
         subscribedId = sid;
       }
     })();

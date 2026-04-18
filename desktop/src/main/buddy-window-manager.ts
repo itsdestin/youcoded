@@ -79,10 +79,37 @@ export class BuddyWindowManager {
   toggleChat(): void {
     if (!this.chat || this.chat.isDestroyed()) {
       this.createChat();
+      // On first-open only: dock the mascot to the chat's bottom-left so the
+      // chat window doesn't cover the mascot (spec §7.5 anchors chat above the
+      // mascot, but workArea clamping near the right edge pulls chat left,
+      // causing overlap — which then blocks click-to-toggle-off). Subsequent
+      // show/hide does NOT reposition, so a user's drag preference persists.
+      this.dockMascotToChatBottomLeft();
       return;
     }
     if (this.chat.isVisible()) this.chat.hide();
     else this.chat.show();
+  }
+
+  private dockMascotToChatBottomLeft(): void {
+    if (!this.mascot || this.mascot.isDestroyed()) return;
+    if (!this.chat || this.chat.isDestroyed()) return;
+    const cb = this.chat.getBounds();
+    // Sit the mascot just outside the chat's bottom-left corner, aligned with
+    // the chat's bottom edge. 8px gap so they visually associate without
+    // touching. Fallback to chat's bottom-right if there's no room on the left.
+    const leftRaw = { x: cb.x - MASCOT_SIZE.width - 8, y: cb.y + cb.height - MASCOT_SIZE.height };
+    const display = screen.getDisplayMatching({ ...leftRaw, ...MASCOT_SIZE }) ?? screen.getPrimaryDisplay();
+    const leftClamped = clampToWorkArea(leftRaw, MASCOT_SIZE, display.workArea);
+    // If clamping moved the mascot INTO the chat horizontally (i.e., not
+    // enough workArea to the left), try the right side instead.
+    const overlapsX = leftClamped.x + MASCOT_SIZE.width > cb.x && leftClamped.x < cb.x + cb.width;
+    const target = overlapsX
+      ? clampToWorkArea({ x: cb.x + cb.width + 8, y: cb.y + cb.height - MASCOT_SIZE.height }, MASCOT_SIZE, display.workArea)
+      : leftClamped;
+    this.mascot.setPosition(target.x, target.y);
+    // Persist so next launch respects the docked position.
+    this.deps.setPersistedPosition('mascot', target);
   }
 
   /** Move the chat's subscription from the previous session to the new one. */

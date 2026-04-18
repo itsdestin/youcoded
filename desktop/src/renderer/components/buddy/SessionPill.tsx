@@ -37,12 +37,12 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
   }, []);
 
   // Switch the buddy view to a different session: tell main, subscribe to its
-  // events, request a transcript replay so the bubble feed can catch up, and
-  // notify the parent so it can unsubscribe the previous session.
+  // events, and notify the parent so it can unsubscribe the previous session.
+  // requestTranscriptReplay is owned by BubbleFeed's effect — calling it here
+  // would race past listener-registration and drop replay events.
   const selectSession = useCallback(async (sid: string) => {
     await window.claude.buddy.setSession(sid);
     await window.claude.buddy.subscribe(sid);
-    window.claude.detach.requestTranscriptReplay(sid);
     onChange(sid);
     setOpen(false);
   }, [onChange]);

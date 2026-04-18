@@ -57,6 +57,16 @@ export function BubbleFeed({ sessionId }: Props) {
   useEffect(() => {
     if (!sessionId) return;
 
+    // Bootstrap the reducer's per-session state entry. Every chat-reducer
+    // handler that touches session state bails with `if (!session) return
+    // state` when state.get(sessionId) is undefined — so without SESSION_INIT,
+    // USER_PROMPT and every TRANSCRIPT_* event is silently dropped and the
+    // bubble feed never populates. Main's App.tsx dispatches SESSION_INIT via
+    // the sessionCreated listener and the session-list load; buddy has
+    // neither, so we initialize on-demand here for the session being viewed.
+    // SESSION_INIT is idempotent (no-op if already initialized).
+    dispatch({ type: 'SESSION_INIT', sessionId });
+
     // Batch dispatches into animation frames — mirrors App.tsx batching pattern
     // to avoid N re-renders per PTY flush.
     const pending: any[] = [];
@@ -148,6 +158,12 @@ export function BubbleFeed({ sessionId }: Props) {
           break;
       }
     });
+
+    // Request replay AFTER the listener is wired so no historical events can
+    // race past us. The callers in SessionPill/BuddyChat used to call this —
+    // they no longer do (removed in the same commit) so this is the sole
+    // request-replay site for the buddy window.
+    window.claude.detach.requestTranscriptReplay(sessionId);
 
     return () => {
       cancelled = true;
