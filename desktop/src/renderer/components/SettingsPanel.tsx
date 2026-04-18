@@ -646,6 +646,43 @@ function ThemeButton({ onSendInput, onOpenMarketplace, onPublishTheme }: { onSen
   );
 }
 
+// ─── Buddy floater toggle ─────────────────────────────────────────────────
+// Small section row that controls the buddy mascot window: off by default,
+// persists via localStorage['youcoded-buddy-enabled'] (matches theme/font
+// persistence pattern). Toggling fires window.claude.buddy.show/hide;
+// App.tsx also reads the flag on mount to auto-show if previously enabled.
+function BuddyToggle() {
+  const [enabled, setEnabled] = useState<boolean>(() =>
+    localStorage.getItem('youcoded-buddy-enabled') === '1',
+  );
+
+  const toggle = useCallback(() => {
+    const next = !enabled;
+    setEnabled(next);
+    localStorage.setItem('youcoded-buddy-enabled', next ? '1' : '0');
+    if (next) window.claude.buddy?.show?.();
+    else window.claude.buddy?.hide?.();
+  }, [enabled]);
+
+  return (
+    <section>
+      <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Buddy</h3>
+      <label className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left cursor-pointer select-none">
+        <input
+          type="checkbox"
+          checked={enabled}
+          onChange={toggle}
+          className="shrink-0"
+        />
+        <div className="flex-1 min-w-0">
+          <div className="text-xs text-fg font-medium">Show buddy floater</div>
+          <div className="text-[10px] text-fg-muted mt-0.5">A small always-on-top mascot that stays visible even when the app is minimized.</div>
+        </div>
+      </label>
+    </section>
+  );
+}
+
 // ─── Remote settings popup button ─────────────────────────────────────────
 
 interface RemoteButtonProps {
@@ -1916,6 +1953,8 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
 
         <ThemeButton onSendInput={onSendInput} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
+        <BuddyToggle />
+
         <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 
         {/* Tier & directories are local-only — hide when connected to remote desktop */}
@@ -2235,6 +2274,8 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
       <div className="flex-1 px-4 py-4 space-y-6">
 
         <ThemeButton onSendInput={onSendInput} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
+
+        <BuddyToggle />
 
         <SoundButton />
 

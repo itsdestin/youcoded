@@ -1920,6 +1920,17 @@ function StatsWithHealthBridge({ children }: { children: React.ReactNode }) {
 }
 
 export default function App() {
+  // Auto-show buddy on launch if the user previously enabled it. The effect
+  // is called unconditionally (React rules-of-hooks) but no-ops inside
+  // buddy windows themselves — only the main window should re-open the
+  // buddy. Optional chaining guards against preload not being ready.
+  useEffect(() => {
+    if (buddyMode) return;
+    if (localStorage.getItem('youcoded-buddy-enabled') === '1') {
+      window.claude.buddy?.show?.();
+    }
+  }, []);
+
   // Buddy windows render as isolated placeholders without main-app providers
   if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
   if (buddyMode === 'buddy-chat') return <BuddyChatApp />;
