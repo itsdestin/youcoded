@@ -145,10 +145,11 @@ describe('SubagentWatcher', () => {
     writeMeta(subagentsDir, 'def', 'Other', 'Plan');
     appendLine(subagentsDir, 'def', toolUseLine('u2', 'toolu_Y', 'Grep', { pattern: 'foo' }));
 
-    index.recordParentAgentToolUse('toolu_P1', 'Find bug', 'Explore');
-    index.recordParentAgentToolUse('toolu_P2', 'Other', 'Plan');
+    const historyIndex = new SubagentIndex();
+    historyIndex.recordParentAgentToolUse('toolu_P1', 'Find bug', 'Explore');
+    historyIndex.recordParentAgentToolUse('toolu_P2', 'Other', 'Plan');
 
-    const events = watcher.getHistory();
+    const events = watcher.getHistory(historyIndex);
     expect(events.length).toBe(2);
     const byTool: Record<string, TranscriptEvent> = {};
     for (const e of events) byTool[e.data.toolName!] = e;
@@ -156,5 +157,28 @@ describe('SubagentWatcher', () => {
     expect(byTool['Read'].data.agentId).toBe('abc');
     expect(byTool['Grep'].data.parentAgentToolUseId).toBe('toolu_P2');
     expect(byTool['Grep'].data.agentId).toBe('def');
+  });
+
+  it('live-path flush: buffered subagent events emit in order after parent arrives', async () => {
+    writeMeta(subagentsDir, 'abc', 'Find bug', 'Explore');
+    appendLine(subagentsDir, 'abc', toolUseLine('u1', 'toolu_X', 'Read', { file_path: '/a' }));
+    appendLine(subagentsDir, 'abc', toolUseLine('u2', 'toolu_Y', 'Grep', { pattern: 'foo' }));
+
+    watcher.start();
+    await wait(100);
+    expect(emitted).toHaveLength(0); // both lines buffered, no parent yet
+
+    index.recordParentAgentToolUse('toolu_parent', 'Find bug', 'Explore');
+    watcher.flushAllPending();
+    await wait(50);
+
+    expect(emitted).toHaveLength(2);
+    // Preserved order: first buffered event still emits first.
+    expect(emitted[0].data.toolName).toBe('Read');
+    expect(emitted[1].data.toolName).toBe('Grep');
+    // Both stamped with the correct parent.
+    expect(emitted[0].data.parentAgentToolUseId).toBe('toolu_parent');
+    expect(emitted[1].data.parentAgentToolUseId).toBe('toolu_parent');
+    expect(emitted[0].data.agentId).toBe('abc');
   });
 });

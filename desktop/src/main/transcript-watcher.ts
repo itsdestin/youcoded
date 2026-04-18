@@ -372,6 +372,8 @@ export class TranscriptWatcher extends EventEmitter {
     const session = this.sessions.get(desktopSessionId);
     if (!session) return [];
     const events: TranscriptEvent[] = [];
+    // Fresh, throwaway index so replay doesn't corrupt live correlation.
+    const replayIndex = new SubagentIndex();
     if (fs.existsSync(session.jsonlPath)) {
       let raw: string;
       try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
@@ -381,7 +383,7 @@ export class TranscriptWatcher extends EventEmitter {
         const parsed = parseTranscriptLine(line, desktopSessionId);
         for (const ev of parsed) {
           if (ev.type === 'tool-use' && ev.data.toolName === 'Agent') {
-            session.subagentIndex.recordParentAgentToolUse(
+            replayIndex.recordParentAgentToolUse(
               ev.data.toolUseId!,
               (ev.data.toolInput?.description as string) || '',
               (ev.data.toolInput?.subagent_type as string) || '',
@@ -391,7 +393,7 @@ export class TranscriptWatcher extends EventEmitter {
         }
       }
     }
-    for (const ev of session.subagentWatcher.getHistory()) events.push(ev);
+    for (const ev of session.subagentWatcher.getHistory(replayIndex)) events.push(ev);
     return events;
   }
 
@@ -534,6 +536,11 @@ export class TranscriptWatcher extends EventEmitter {
 
       for (const event of events) {
         if (isRepeat && event.type === 'assistant-text') continue;
+        // Emit the parent event first so reducer subscribers create the parent
+        // ToolCallState before any buffered subagent events flush into it —
+        // otherwise subagent events for a brand-new parent arrive before the
+        // parent and get silently dropped by applySubagentEvent.
+        this.emit('transcript-event', event);
         if (event.type === 'tool-use' && event.data.toolName === 'Agent') {
           const description = (event.data.toolInput?.description as string) || '';
           const subagentType = (event.data.toolInput?.subagent_type as string) || '';
@@ -542,7 +549,6 @@ export class TranscriptWatcher extends EventEmitter {
           );
           session.subagentWatcher.flushAllPending();
         }
-        this.emit('transcript-event', event);
       }
     }
   }

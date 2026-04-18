@@ -83,12 +83,13 @@ export class SubagentWatcher {
    * Full-history replay. Called by TranscriptWatcher.getHistory() so a
    * detach/re-dock or remote-access replay can rebuild nested state.
    *
-   * CAUTION: This consumes `unmatchedParents` from the shared SubagentIndex.
-   * Call on a freshly constructed watcher instance paired with a fresh index,
-   * NOT alongside an actively-running start() — otherwise live tracking will
-   * miss parent bindings the replay already popped.
+   * Takes a REQUIRED `index` parameter — the caller supplies a fresh,
+   * throwaway SubagentIndex primed with the parent Agent tool_uses from
+   * the current replay. The live `this.index` is NEVER consulted, so
+   * replay can safely run alongside an active start() without corrupting
+   * live correlation.
    */
-  getHistory(): TranscriptEvent[] {
+  getHistory(index: SubagentIndex): TranscriptEvent[] {
     if (!fs.existsSync(this.subagentsDir)) return [];
     const events: TranscriptEvent[] = [];
     for (const name of fs.readdirSync(this.subagentsDir)) {
@@ -96,7 +97,7 @@ export class SubagentWatcher {
       const agentId = name.slice('agent-'.length, -'.jsonl'.length);
       const meta = this.readMeta(agentId);
       if (!meta) continue;
-      const parentToolUseId = this.index.bindSubagent(agentId, meta);
+      const parentToolUseId = index.bindSubagent(agentId, meta);
       if (!parentToolUseId) continue;
       const jsonlPath = path.join(this.subagentsDir, name);
       let raw: string;
