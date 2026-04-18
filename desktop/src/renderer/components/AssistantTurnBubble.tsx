@@ -6,6 +6,7 @@ import ToolCard from './ToolCard';
 import { CheckIcon, FailIcon, ChevronIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { formatBubbleTime } from '../utils/format-time';
+import { useTheme } from '../state/theme-context';
 
 interface Props {
   turn: AssistantTurn;
@@ -33,6 +34,34 @@ function StopReasonFooter({ reason }: { reason: string }) {
   return (
     <div className="text-xs text-fg-muted italic mt-1 pl-1 border-l-2 border-edge-dim" role="status">
       {copy}
+    </div>
+  );
+}
+
+// Opt-in per-turn transcript metadata. Gated in the bubble render by
+// `showTurnMetadata` (default false) — most users never see it. Mono for
+// scannable numbers; muted tokens only so it stays unobtrusive across themes.
+function TurnMetadataStrip({ turn }: { turn: AssistantTurn }) {
+  if (!turn.usage && !turn.model) return null;
+  const u = turn.usage;
+  const total = u ? u.inputTokens + u.outputTokens + u.cacheReadTokens + u.cacheCreationTokens : 0;
+  const cacheHitPct = u && total > 0
+    ? Math.round((u.cacheReadTokens / total) * 100)
+    : null;
+
+  return (
+    <div
+      className="text-[10.5px] text-fg-muted mt-1 pl-1 flex flex-wrap gap-x-3 gap-y-0.5 font-mono select-text"
+      title="Per-turn metadata from transcript"
+    >
+      {turn.model && <span>{turn.model}</span>}
+      {u && (
+        <>
+          <span>in {u.inputTokens.toLocaleString()}</span>
+          <span>out {u.outputTokens.toLocaleString()}</span>
+          {cacheHitPct !== null && <span>cache {cacheHitPct}%</span>}
+        </>
+      )}
     </div>
   );
 }
@@ -142,6 +171,9 @@ function splitIntoBubbles(turn: AssistantTurn): VisualBubble[] {
 }
 
 export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, showTimestamps }: Props) {
+  // Read opt-in metadata preference here so the strip below only renders when
+  // the user has explicitly turned it on in PreferencesPopup (default false).
+  const { showTurnMetadata } = useTheme();
   const bubbles = splitIntoBubbles(turn);
 
   return (
@@ -177,6 +209,10 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                   ))}
                 </div>
               )}
+              {/* Opt-in metadata strip. Renders once per turn (last bubble only) and
+                  only when the user has enabled `showTurnMetadata`. Placed above the
+                  stopReason footer so a truncated turn still shows both, in that order. */}
+              {isLastBubble && showTurnMetadata && <TurnMetadataStrip turn={turn} />}
               {/* Render stopReason explainer only once per turn — on the last bubble.
                   Gate out `end_turn` (normal completion) — it reaches the reducer but
                   carries no abnormal signal worth surfacing to the user. */}
