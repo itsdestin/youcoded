@@ -1107,7 +1107,10 @@ export class RemoteServer {
         break;
       }
       case 'sync:dismiss-warning': {
-        await dismissWarning(payload.warning || payload);
+        // The remote-shim always sends { warning }, so payload.warning is
+        // the authoritative path. Guard against missing payload rather than
+        // falling back to the whole object (which would be a silent no-op).
+        await dismissWarning(payload?.warning ?? '');
         this.respond(client.ws, type, id, { ok: true });
         break;
       }

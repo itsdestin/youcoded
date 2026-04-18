@@ -540,11 +540,14 @@ export async function removeBackend(id: string): Promise<void> {
   syncLegacyKeys(config);
   await atomicWrite(configPath, JSON.stringify(config, null, 2));
 
-  // Clean up per-backend marker and error files
-  for (const suffix of [`.sync-marker-${id}`, `.sync-error-${id}`]) {
-    const filePath = path.join(claudeDir, 'toolkit-state', suffix);
-    try { await fs.promises.unlink(filePath); } catch { /* may not exist */ }
-  }
+  // Clean up per-backend marker file. The legacy .sync-error-<id> file is
+  // retired as of the sync-warnings refactor — startup cleanup handles it.
+  const markerPath = path.join(claudeDir, 'toolkit-state', `.sync-marker-${id}`);
+  try { await fs.promises.unlink(markerPath); } catch { /* may not exist */ }
+
+  // Clear any outstanding warnings scoped to this backend so a removed backend
+  // doesn't leave a phantom red dot forever.
+  await clearWarningsByBackend(id);
 }
 
 /**
