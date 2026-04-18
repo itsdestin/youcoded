@@ -3,6 +3,8 @@ import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
 import { TranscriptEvent } from '../shared/types';
+import { SubagentIndex } from './subagent-index';
+import { SubagentWatcher } from './subagent-watcher';
 
 // ---------------------------------------------------------------------------
 // cwdToProjectSlug
@@ -266,6 +268,8 @@ interface WatchedSession {
   seenUuids: Set<string>;
   watcher: fs.FSWatcher | null;
   pollTimer: ReturnType<typeof setInterval> | null;
+  subagentIndex: SubagentIndex;
+  subagentWatcher: SubagentWatcher;
 }
 
 /**
@@ -287,27 +291,35 @@ export class TranscriptWatcher extends EventEmitter {
    * Start watching the transcript for a session.
    */
   startWatching(desktopSessionId: string, claudeSessionId: string, cwd: string): void {
-    // Don't double-watch
     if (this.sessions.has(desktopSessionId)) {
       this.stopWatching(desktopSessionId);
     }
 
     const slug = cwdToProjectSlug(cwd);
     const jsonlPath = path.join(this.claudeConfigDir, slug, `${claudeSessionId}.jsonl`);
+    const subagentsDir = path.join(this.claudeConfigDir, slug, claudeSessionId, 'subagents');
+
+    const subagentIndex = new SubagentIndex();
+    const subagentWatcher = new SubagentWatcher({
+      sessionId: desktopSessionId,
+      subagentsDir,
+      index: subagentIndex,
+      emit: (event) => this.emit('transcript-event', event),
+    });
 
     const session: WatchedSession = {
-      desktopSessionId,
-      claudeSessionId,
-      cwd,
-      jsonlPath,
+      desktopSessionId, claudeSessionId, cwd, jsonlPath,
       offset: 0,
       partialLine: '',
       seenUuids: new Set(),
       watcher: null,
       pollTimer: null,
+      subagentIndex,
+      subagentWatcher,
     };
-
     this.sessions.set(desktopSessionId, session);
+
+    subagentWatcher.start();
 
     // Try to start an fs.watch; fall back to polling if file doesn't exist yet
     if (fs.existsSync(jsonlPath)) {
@@ -359,17 +371,27 @@ export class TranscriptWatcher extends EventEmitter {
   getHistory(desktopSessionId: string): TranscriptEvent[] {
     const session = this.sessions.get(desktopSessionId);
     if (!session) return [];
-    if (!fs.existsSync(session.jsonlPath)) return [];
-    let raw: string;
-    try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
-    catch { return []; }
     const events: TranscriptEvent[] = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      for (const ev of parseTranscriptLine(line, desktopSessionId)) {
-        events.push(ev);
+    if (fs.existsSync(session.jsonlPath)) {
+      let raw: string;
+      try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
+      catch { raw = ''; }
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        const parsed = parseTranscriptLine(line, desktopSessionId);
+        for (const ev of parsed) {
+          if (ev.type === 'tool-use' && ev.data.toolName === 'Agent') {
+            session.subagentIndex.recordParentAgentToolUse(
+              ev.data.toolUseId!,
+              (ev.data.toolInput?.description as string) || '',
+              (ev.data.toolInput?.subagent_type as string) || '',
+            );
+          }
+          events.push(ev);
+        }
       }
     }
+    for (const ev of session.subagentWatcher.getHistory()) events.push(ev);
     return events;
   }
 
@@ -423,11 +445,9 @@ export class TranscriptWatcher extends EventEmitter {
   }
 
   private cleanupSession(session: WatchedSession): void {
-    if (session.watcher) {
-      session.watcher.close();
-      session.watcher = null;
-    }
+    if (session.watcher) { session.watcher.close(); session.watcher = null; }
     this.stopPolling(session);
+    session.subagentWatcher.stop();
   }
 
   private async readNewLines(session: WatchedSession): Promise<void> {
@@ -514,6 +534,14 @@ export class TranscriptWatcher extends EventEmitter {
 
       for (const event of events) {
         if (isRepeat && event.type === 'assistant-text') continue;
+        if (event.type === 'tool-use' && event.data.toolName === 'Agent') {
+          const description = (event.data.toolInput?.description as string) || '';
+          const subagentType = (event.data.toolInput?.subagent_type as string) || '';
+          session.subagentIndex.recordParentAgentToolUse(
+            event.data.toolUseId!, description, subagentType,
+          );
+          session.subagentWatcher.flushAllPending();
+        }
         this.emit('transcript-event', event);
       }
     }
