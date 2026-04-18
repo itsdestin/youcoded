@@ -184,6 +184,10 @@ const IPC = {
   MARKETPLACE_RATE_DELETE: 'marketplace:rate:delete',
   MARKETPLACE_THEME_LIKE: 'marketplace:theme:like',
   MARKETPLACE_REPORT: 'marketplace:report',
+  // Remote-access state sync — chat snapshot export and attention state relay
+  CHAT_EXPORT_SNAPSHOT: 'chat:export-snapshot',
+  CHAT_SNAPSHOT_RESPONSE: 'chat:snapshot-response',
+  REMOTE_ATTENTION_CHANGED: 'remote:attention-changed',
 } as const;
 
 contextBridge.exposeInMainWorld('claude', {
@@ -281,6 +285,23 @@ contextBridge.exposeInMainWorld('claude', {
       return handler;
     },
   },
+  // Remote-access state sync — Electron-only surfaces (not in remote-shim.ts).
+  // The remote server handles chat:hydrate via WebSocket directly; remote
+  // browsers receive attentionMap via status:data. These bindings are only
+  // needed on the desktop side of the snapshot export / attention relay pipeline.
+  //
+  // onChatExportSnapshot: main pushes a requestId; renderer replies via sendChatSnapshotResponse.
+  // sendChatSnapshotResponse: renderer→main reply carrying the serialized chat state.
+  // fireRemoteAttentionChanged: renderer→main fire when attentionState diffs (Task 8).
+  onChatExportSnapshot: (cb: (requestId: string) => void) => {
+    const handler = (_e: IpcRendererEvent, requestId: string) => cb(requestId);
+    ipcRenderer.on(IPC.CHAT_EXPORT_SNAPSHOT, handler);
+    return () => ipcRenderer.off(IPC.CHAT_EXPORT_SNAPSHOT, handler);
+  },
+  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown }) =>
+    ipcRenderer.send(IPC.CHAT_SNAPSHOT_RESPONSE, payload),
+  fireRemoteAttentionChanged: (payload: { sessionId: string; state: string }) =>
+    ipcRenderer.send(IPC.REMOTE_ATTENTION_CHANGED, payload),
   skills: {
     list: (): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_LIST),
     listMarketplace: (filters?: any): Promise<any[]> => ipcRenderer.invoke(IPC.SKILLS_LIST_MARKETPLACE, filters),
