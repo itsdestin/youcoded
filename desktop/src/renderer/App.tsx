@@ -485,6 +485,8 @@ function AppInner() {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-use':
@@ -495,6 +497,8 @@ function AppInner() {
             toolUseId: event.data.toolUseId,
             toolName: event.data.toolName,
             toolInput: event.data.toolInput || {},
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-result':
@@ -506,6 +510,8 @@ function AppInner() {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'turn-complete':
