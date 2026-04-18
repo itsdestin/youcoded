@@ -187,8 +187,14 @@ function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
       input: action.toolInput,
       status: 'running',
     };
-    if (existingIdx >= 0) segments[existingIdx] = next;
-    else segments.push(next);
+    if (existingIdx >= 0) {
+      // Duplicate tool_use emit — JSONL FIFO order guarantees the
+      // tool_result hasn't been emitted yet, so overwriting back to
+      // 'running' is safe and keeps the segment's input fresh.
+      segments[existingIdx] = next;
+    } else {
+      segments.push(next);
+    }
   } else if (action.type === 'TRANSCRIPT_TOOL_RESULT') {
     const idx = segments.findIndex(
       s => s.type === 'tool' && s.toolUseId === action.toolUseId,
@@ -415,6 +421,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_ASSISTANT_TEXT': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
       if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
@@ -439,6 +446,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_TOOL_USE': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
       if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
@@ -564,6 +572,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_TOOL_RESULT': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
       if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
