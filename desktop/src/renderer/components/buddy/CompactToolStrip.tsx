@@ -1,4 +1,4 @@
-import { useState, useCallback } from 'react';
+import { useState, useCallback, useEffect } from 'react';
 import { useChatDispatch } from '../../state/chat-context';
 import type { ToolCallState } from '../../../shared/types';
 
@@ -62,6 +62,12 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
   // Auto-expand when any tool needs approval so user sees prompts immediately
   const [expanded, setExpanded] = useState(awaiting.length > 0);
 
+  // Fix: Reactive auto-expand — if a new tool transitions to awaiting-approval after mount,
+  // auto-open the strip so the user sees the new approval prompt
+  useEffect(() => {
+    if (awaiting.length > 0) setExpanded(true);
+  }, [awaiting.length]);
+
   if (tools.length === 0) return null;
 
   // Derive a short display "target" from input for common tools (Read/Edit/Grep/Bash etc.)
@@ -102,7 +108,8 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
     <div className="layer-surface" style={{ padding: 6, borderRadius: 10, alignSelf: 'stretch' }}>
       {/* Collapse toggle */}
       <button
-        onClick={() => setExpanded((e) => !e)}
+        onClick={() => { if (awaiting.length === 0) setExpanded((e) => !e); }}
+        disabled={awaiting.length > 0}
         style={{
           display: 'block',
           width: '100%',
@@ -111,11 +118,12 @@ export function CompactToolStrip({ tools, sessionId }: Props) {
           border: 'none',
           fontSize: 10,
           color: 'var(--fg-dim)',
-          cursor: 'pointer',
+          cursor: awaiting.length > 0 ? 'default' : 'pointer',
+          opacity: awaiting.length > 0 ? 0.5 : 1,
           marginBottom: 4,
         }}
       >
-        {tools.length} tool{tools.length === 1 ? '' : 's'} used ▴
+        {tools.length} tool{tools.length === 1 ? '' : 's'} used {awaiting.length > 0 ? '▴' : '▾'}
       </button>
 
       {tools.map((t) => (
@@ -160,7 +168,9 @@ function ToolRow({
           decision,
         );
         if (delivered === false) {
-          // Socket already closed — mark expired so the UI unsticks
+          // Fix: Socket already closed — mark expired so the UI unsticks.
+          // Reset responding so user can retry if needed.
+          setResponding(false);
           const action = {
             type: 'PERMISSION_EXPIRED' as const,
             sessionId,
