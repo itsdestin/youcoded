@@ -126,7 +126,6 @@ declare global {
         getDirectory: () => Promise<import('../../shared/types').WindowDirectory>;
         onDirectoryUpdated: (cb: (dir: import('../../shared/types').WindowDirectory) => void) => () => void;
         requestTranscriptReplay: (sessionId: string) => void;
-        [key: string]: unknown;
       };
       // App-level defaults (skipPermissions, model, projectFolder).
       defaults: {

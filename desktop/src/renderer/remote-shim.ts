@@ -862,6 +862,7 @@ export function installShim(): void {
     // without runtime errors. dropResolve resolves to null (no hit) so the
     // source's pointerUp falls through to the local reorder path.
     detach: {
+      getDirectory: () => Promise.resolve({ leaderWindowId: -1, windows: [] }),
       onDirectoryUpdated: (_cb: (dir: any) => void) => () => {},
       onLeaderChanged: (_cb: (id: number) => void) => () => {},
       onOwnershipAcquired: (_cb: (p: any) => void) => () => {},

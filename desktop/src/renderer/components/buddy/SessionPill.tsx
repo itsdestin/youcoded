@@ -60,7 +60,7 @@ export function SessionPill({ viewedSessionId, onChange, attentionSummary }: Pro
       skipPermissions: defaults?.skipPermissions ?? false,
     });
     // session.create returns SessionInfo — pull the id directly.
-    if (info?.id) selectSession(info.id);
+    if (info?.id) await selectSession(info.id);
   }, [selectSession]);
 
   const viewed = sessions.find((s) => s.id === viewedSessionId) ?? null;
