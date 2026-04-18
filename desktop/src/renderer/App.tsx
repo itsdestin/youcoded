@@ -483,6 +483,9 @@ function AppInner() {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            // Task 2.4: forward the per-message model from the transcript so the
+            // reducer can stamp turn.model on the first text of each turn.
+            model: event.data.model,
           });
           break;
         case 'tool-use':

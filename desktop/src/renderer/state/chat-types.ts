@@ -246,6 +246,10 @@ export type ChatAction =
       uuid: string;
       text: string;
       timestamp: number;
+      // Task 2.4: model from the transcript's `message.model` field, captured
+      // on the first assistant-text of a turn so the model pill/metadata is
+      // visible on in-flight turns (before turn-complete stamps it definitively).
+      model?: string;
     }
   | {
       type: 'TRANSCRIPT_TOOL_USE';

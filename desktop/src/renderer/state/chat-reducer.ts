@@ -361,12 +361,17 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
       const turn = assistantTurns.get(currentTurnId)!;
+      // Task 2.4: Capture model on first text of the turn so the model pill is
+      // visible while the turn is in-flight. `?? turn.model` preserves the
+      // existing value when a later text chunk arrives without a model, so we
+      // never clobber a previously-captured model with null.
       assistantTurns.set(currentTurnId, {
         ...turn,
         segments: [
           ...turn.segments,
           { type: 'text', content: action.text, messageId: nextMessageId() },
         ],
+        model: action.model ?? turn.model,
       });
 
       next.set(action.sessionId, {
