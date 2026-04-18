@@ -14,12 +14,22 @@ export function BuddyChat() {
 
   useEffect(() => {
     let cancelled = false;
+    let subscribedId: string | null = null;
     window.claude.buddy?.getViewedSession?.().then((sid) => {
       if (cancelled) return;
       setViewedSession(sid);
-      if (sid) window.claude.buddy.subscribe(sid);
+      if (sid) {
+        window.claude.buddy.subscribe(sid);
+        subscribedId = sid;
+      }
     });
-    return () => { cancelled = true; };
+    return () => {
+      cancelled = true;
+      // Release main's subscription record when this component unmounts
+      // (buddy window close, or React strict-mode double-mount). Without
+      // this, session events would keep flowing to a destroyed webContents.
+      if (subscribedId) window.claude.buddy?.unsubscribe?.(subscribedId);
+    };
   }, []);
 
   useEffect(() => {
