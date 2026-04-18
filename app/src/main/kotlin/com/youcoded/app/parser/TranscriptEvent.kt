@@ -32,6 +32,9 @@ sealed class TranscriptEvent {
         override val timestamp: Long,
         val text: String,
         val model: String? = null,
+        // Subagent threading: set when this output originated inside a Tool (subagent) call
+        val parentAgentToolUseId: String? = null,
+        val agentId: String? = null,
     ) : TranscriptEvent()
 
     /** Assistant invoked a tool */
@@ -42,6 +45,9 @@ sealed class TranscriptEvent {
         val toolUseId: String,
         val toolName: String,
         val toolInput: JSONObject,
+        // Subagent threading: set when this tool use originated inside a subagent turn
+        val parentAgentToolUseId: String? = null,
+        val agentId: String? = null,
     ) : TranscriptEvent()
 
     /** Tool execution produced a result (user-type line with tool_result content) */
@@ -52,6 +58,9 @@ sealed class TranscriptEvent {
         val toolUseId: String,
         val result: String,
         val isError: Boolean,
+        // Subagent threading: set when this result originated inside a subagent turn
+        val parentAgentToolUseId: String? = null,
+        val agentId: String? = null,
     ) : TranscriptEvent()
 
     /** Assistant turn completed (stop_reason == "end_turn") */
