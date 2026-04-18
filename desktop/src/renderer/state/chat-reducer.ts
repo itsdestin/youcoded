@@ -6,6 +6,7 @@ import {
   SessionChatState,
   TimelineEntry,
   createSessionChatState,
+  deserializeChatState,
 } from './chat-types';
 
 let messageCounter = 0;
@@ -152,6 +153,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
     case 'RESET': {
       return new Map();
+    }
+
+    case 'HYDRATE_CHAT_STATE': {
+      try {
+        // Replace the entire ChatState with a deserialized snapshot from the
+        // desktop renderer. Fired once per remote-access connect so browser
+        // clients see the full chat history immediately instead of rebuilding
+        // it from replayed transcript events.
+        return deserializeChatState(action.sessions);
+      } catch (err) {
+        console.error('[chat-reducer] HYDRATE_CHAT_STATE deserialize failed:', err);
+        return state;
+      }
     }
 
     case 'SESSION_INIT': {

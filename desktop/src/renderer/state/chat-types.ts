@@ -150,6 +150,10 @@ export function createSessionChatState(): SessionChatState {
 
 export type ChatAction =
   | { type: 'RESET' }
+  // Replaces the entire ChatState Map with a deserialized snapshot. Fired once
+  // per remote-access connect so browser clients get the full chat history
+  // immediately rather than rebuilding it from replayed transcript events.
+  | { type: 'HYDRATE_CHAT_STATE'; sessions: SerializedChatState }
   | { type: 'SESSION_INIT'; sessionId: string }
   | { type: 'SESSION_REMOVE'; sessionId: string }
   | {
