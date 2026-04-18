@@ -1213,6 +1213,19 @@ export function registerIpcHandlers(
     }
   }
 
+  // Fix: per-session status bar chips were disappearing for a few seconds after
+  // switching back to an idle session. Root cause: statusline.sh writes the
+  // three session files (.context-, .session-stats-, .gitbranch-) with
+  // truncate-then-write (fs.writeFileSync / shell `>`). If a 10s status poll
+  // lands inside that truncate window, readTextFile returns null and the entry
+  // is omitted from the rebuilt map, which the renderer then replaces wholesale
+  // — wiping the chips until the next successful poll. These caches preserve
+  // the last-known good value so a transient read miss doesn't blank the UI.
+  // Entries are purged on session-exit below.
+  const lastContextByDesktopId: Record<string, number> = {};
+  const lastGitBranchByDesktopId: Record<string, string> = {};
+  const lastSessionStatsByDesktopId: Record<string, any> = {};
+
   function buildStatusData() {
     const usage = readJsonFile(usageCachePath);
     const announcement = readJsonFile(announcementCachePath);
@@ -1234,7 +1247,12 @@ export function registerIpcHandlers(
       const raw = readTextFile(path.join(os.homedir(), '.claude', `.context-${claudeId}`));
       if (raw != null) {
         const num = parseInt(raw, 10);
-        if (!isNaN(num)) contextMap[desktopId] = num;
+        if (!isNaN(num)) {
+          contextMap[desktopId] = num;
+          lastContextByDesktopId[desktopId] = num;
+        }
+      } else if (desktopId in lastContextByDesktopId) {
+        contextMap[desktopId] = lastContextByDesktopId[desktopId];
       }
     }
 
@@ -1242,14 +1260,24 @@ export function registerIpcHandlers(
     const gitBranchMap: Record<string, string> = {};
     for (const [desktopId, claudeId] of sessionIdMap) {
       const raw = readTextFile(path.join(os.homedir(), '.claude', `.gitbranch-${claudeId}`));
-      if (raw) gitBranchMap[desktopId] = raw;
+      if (raw) {
+        gitBranchMap[desktopId] = raw;
+        lastGitBranchByDesktopId[desktopId] = raw;
+      } else if (desktopId in lastGitBranchByDesktopId) {
+        gitBranchMap[desktopId] = lastGitBranchByDesktopId[desktopId];
+      }
     }
 
     // Read per-session stats (cost, tokens, code changes — written by statusline.sh)
     const sessionStatsMap: Record<string, any> = {};
     for (const [desktopId, claudeId] of sessionIdMap) {
       const stats = readJsonFile(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`));
-      if (stats) sessionStatsMap[desktopId] = stats;
+      if (stats) {
+        sessionStatsMap[desktopId] = stats;
+        lastSessionStatsByDesktopId[desktopId] = stats;
+      } else if (desktopId in lastSessionStatsByDesktopId) {
+        sessionStatsMap[desktopId] = lastSessionStatsByDesktopId[desktopId];
+      }
     }
 
     return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap, sessionStatsMap };
@@ -1459,6 +1487,11 @@ export function registerIpcHandlers(
       fs.unlink(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`), () => {});
     }
     sessionIdMap.delete(sessionId);
+    // Drop the last-known status values so buildStatusData doesn't keep
+    // broadcasting chips for a session that's gone.
+    delete lastContextByDesktopId[sessionId];
+    delete lastGitBranchByDesktopId[sessionId];
+    delete lastSessionStatsByDesktopId[sessionId];
   });
 
   // Set a named flag on a session (complete, priority, helpful). Persists in
