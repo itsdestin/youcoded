@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useTheme } from '../state/theme-context';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
 // ~/.claude/settings.json via the settings:* IPC bridge.
@@ -53,6 +54,9 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
   const [prefs, setPrefs] = useState<PrefsState>(DEFAULTS);
   const [loaded, setLoaded] = useState(false);
   const scrollRef = useScrollFade<HTMLDivElement>();
+  // Per-turn metadata toggle is a theme-context preference (localStorage-backed),
+  // not a Claude Code settings.json field — source state from useTheme(), not prefs.
+  const { showTurnMetadata, setShowTurnMetadata } = useTheme();
 
   // Load all fields in parallel when opening. Fields missing from settings.json
   // return undefined; we fall back to DEFAULTS so the UI always has values.
@@ -202,6 +206,12 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
                 desc={'Displays "Cooked for Xs" after each response'}
                 checked={prefs.showTurnDuration}
                 onChange={(v) => save('showTurnDuration', v)}
+              />
+              <ToggleRow
+                label="Show per-turn metadata"
+                desc="Display model, token usage, and cache hits below each assistant response. Helpful for debugging long sessions or comparing model efficiency. Off by default."
+                checked={showTurnMetadata}
+                onChange={(v) => setShowTurnMetadata(v)}
               />
               <ToggleRow
                 label="Reduced motion"
