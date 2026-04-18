@@ -1349,7 +1349,6 @@ export function registerIpcHandlers(
   transcriptWatcher.on('transcript-event', (event: any) => {
     sendForSession(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     if (remoteServer) {
-      remoteServer.bufferTranscriptEvent(event);
       remoteServer.broadcast({ type: 'transcript:event', payload: event });
     }
   });
