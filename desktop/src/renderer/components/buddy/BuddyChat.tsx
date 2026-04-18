@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import type { AttentionSummary } from '../../../shared/types';
+import InputBar from '../InputBar';
 import { SessionPill } from './SessionPill';
 import { BubbleFeed } from './BubbleFeed';
+import { AttentionStrip } from './AttentionStrip';
 
 /**
  * Compact chat surface rendered inside the buddy chat BrowserWindow.
@@ -102,29 +104,10 @@ export function BuddyChat() {
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         <BubbleFeed sessionId={viewedSession} />
       </div>
-      <InputBarPlaceholder sessionId={viewedSession} />
-      <AttentionStripPlaceholder sessionId={viewedSession} />
+      {viewedSession ? (
+        <InputBar sessionId={viewedSession} compact />
+      ) : null}
+      <AttentionStrip sessionId={viewedSession} summary={attentionSummary} />
     </div>
   );
-}
-
-// Placeholders — E3–E5 replace each with the real component.
-
-function BubbleFeedPlaceholder({ sessionId }: { sessionId: string | null }) {
-  return <div style={{ color: 'var(--fg)' }}>bubble feed for {sessionId ?? '(none)'}</div>;
-}
-
-function InputBarPlaceholder({ sessionId: _sessionId }: { sessionId: string | null }) {
-  return (
-    <div
-      className="layer-surface"
-      style={{ padding: 8, borderRadius: 14 }}
-    >
-      input placeholder
-    </div>
-  );
-}
-
-function AttentionStripPlaceholder({ sessionId: _sessionId }: { sessionId: string | null }) {
-  return null;
 }

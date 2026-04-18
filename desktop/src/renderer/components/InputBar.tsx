@@ -18,6 +18,7 @@ interface Props {
   sessionId: string;
   disabled?: boolean;
   minimal?: boolean;
+  compact?: boolean;                // NEW: hides QuickChips for buddy chat
   view?: ViewMode;                  // Current view mode — forwarded to dispatcher (e.g. /config behaves differently in terminal view)
   onOpenDrawer?: (searchMode: boolean) => void;
   onCloseDrawer?: () => void;
@@ -52,7 +53,7 @@ function fileNameFromPath(p: string): string {
   return p.replace(/\\/g, '/').split('/').pop() || p;
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const inputRef = useRef<HTMLTextAreaElement>(null);
@@ -359,7 +360,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
-      {!minimal && <QuickChips onChipTap={handleChip} />}
+      {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
 
       {attachments.length > 0 && (
         <div className="flex gap-2 px-3 py-2 overflow-x-auto">
