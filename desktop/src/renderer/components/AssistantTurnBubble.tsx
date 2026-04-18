@@ -16,10 +16,11 @@ interface Props {
 }
 
 // Non-end_turn stop reasons rendered inline under the affected turn.
-// `end_turn` and `tool_use` never reach the UI (filtered at transcript-watcher.ts:198),
-// so the only values we see here are the ones worth explaining.
-// WHY: makes abnormal completions (truncation, refusal, paused thinking) legible
-// to non-technical users instead of showing a chopped-off response with no context.
+// `tool_use` is filtered upstream at transcript-watcher.ts (it means "awaiting
+// tool result", not a real completion). `end_turn` — the normal completion —
+// reaches the reducer but is filtered at the render gate below, because it
+// carries no abnormal signal worth surfacing. The four keys below are the
+// ones that ARE worth surfacing (truncation / refusal / etc.).
 const STOP_REASON_COPY: Record<string, string> = {
   max_tokens: 'Response truncated — Claude hit the output token limit.',
   stop_sequence: 'Response stopped at a configured stop sequence.',
@@ -176,8 +177,10 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                   ))}
                 </div>
               )}
-              {/* Render stopReason explainer only once per turn — on the last bubble. */}
-              {isLastBubble && turn.stopReason && <StopReasonFooter reason={turn.stopReason} />}
+              {/* Render stopReason explainer only once per turn — on the last bubble.
+                  Gate out `end_turn` (normal completion) — it reaches the reducer but
+                  carries no abnormal signal worth surfacing to the user. */}
+              {isLastBubble && turn.stopReason && turn.stopReason !== 'end_turn' && <StopReasonFooter reason={turn.stopReason} />}
               {showTimestamps && isLastBubble && turn.timestamp && (
                 <div className="bubble-timestamp text-[9px] text-fg-muted/60 text-right mt-1 -mb-0.5 select-none leading-none">
                   {formatBubbleTime(turn.timestamp)}
