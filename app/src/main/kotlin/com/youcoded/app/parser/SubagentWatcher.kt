@@ -17,10 +17,6 @@ import java.io.RandomAccessFile
  * Uses FileObserver on the directory (when a Looper is available) plus a
  * polling coroutine. Tests drive scanDirectoryForTest() / readNewLinesForTest()
  * directly so they don't depend on FileObserver delivery.
- *
- * TODO(Task 12): `perFile` is accessed from both the poll coroutine (Dispatchers.IO)
- * and callers of flushAllPending() / getHistory(). Replace with ConcurrentHashMap
- * or guard with a Mutex when wiring into TranscriptWatcher's coroutine scope.
  */
 class SubagentWatcher(
     private val sessionId: String,
@@ -39,7 +35,10 @@ class SubagentWatcher(
         val seenUuids: MutableSet<String> = mutableSetOf(),
     )
 
-    private val perFile = mutableMapOf<String, PerFileState>()
+    // Concurrent: accessed from the poll coroutine AND caller coroutines
+    // (flushAllPending from TranscriptWatcher). ConcurrentHashMap provides
+    // weakly-consistent iteration (no CME) and atomic putIfAbsent.
+    private val perFile = java.util.concurrent.ConcurrentHashMap<String, PerFileState>()
     private var dirObserver: FileObserver? = null
     private var pollJob: Job? = null
     private var pruneJob: Job? = null
@@ -100,6 +99,10 @@ class SubagentWatcher(
     /**
      * Full-history replay. Intended for detach/re-dock or remote-access replay.
      *
+     * TODO(Android parity): Currently unused — the Android TranscriptWatcher
+     * doesn't have a detach/re-dock path the way the desktop one does. Wire this
+     * in when resume-from-disk is added to ManagedSession.
+     *
      * CAUTION: The caller must supply a FRESH [replayIndex] — one that has been
      * populated from the parent-session JSONL replay but is NOT shared with the
      * live [index] used by [start]. Using the live index here would consume
@@ -150,7 +153,11 @@ class SubagentWatcher(
             jsonlFile = jsonlFile,
             meta = meta,
         )
-        perFile[agentId] = state
+        // putIfAbsent prevents a race where two callers each readMeta + put
+        // for the same agentId — the second put is a no-op so we don't
+        // readNewLines twice, and the first state wins.
+        val existing = perFile.putIfAbsent(agentId, state)
+        if (existing != null) return
         // Try immediate bind; if no parent yet, reads will buffer until flushAllPending() is called.
         index.bindSubagent(agentId, meta.first, meta.second)
         readNewLines(state)

@@ -293,9 +293,9 @@ class ManagedSession(
                 bridgeServer?.let { server ->
                     val serialized = when (event) {
                         is TranscriptEvent.UserMessage -> TranscriptSerializer.userMessage(event.sessionId, event.uuid, event.timestamp, event.text)
-                        is TranscriptEvent.AssistantText -> TranscriptSerializer.assistantText(event.sessionId, event.uuid, event.timestamp, event.text, event.model)
-                        is TranscriptEvent.ToolUse -> TranscriptSerializer.toolUse(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.toolName, event.toolInput)
-                        is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError)
+                        is TranscriptEvent.AssistantText -> TranscriptSerializer.assistantText(event.sessionId, event.uuid, event.timestamp, event.text, event.model, event.parentAgentToolUseId, event.agentId)
+                        is TranscriptEvent.ToolUse -> TranscriptSerializer.toolUse(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.toolName, event.toolInput, event.parentAgentToolUseId, event.agentId)
+                        is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError, event.parentAgentToolUseId, event.agentId)
                         is TranscriptEvent.TurnComplete -> TranscriptSerializer.turnComplete(event.sessionId, event.uuid, event.timestamp)
                         is TranscriptEvent.StreamingText -> TranscriptSerializer.streamingText(event.sessionId, event.text)
                         is TranscriptEvent.CompactSummary -> TranscriptSerializer.compactSummary(event.sessionId, event.uuid, event.timestamp)
