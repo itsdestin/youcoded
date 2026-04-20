@@ -56,6 +56,7 @@ import { ZoomOverlay } from './components/ZoomOverlay';
 import { RemoteSnapshotExporter } from './components/RemoteSnapshotExporter';
 import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
 import { BuddyChatApp } from './components/buddy/BuddyChatApp';
+import { BuddyCaptureApp } from './components/buddy/BuddyCaptureApp';
 
 type ViewMode = 'chat' | 'terminal';
 
@@ -294,40 +295,10 @@ function AppInner() {
     }
   }, [chatStateMap, dispatch]);
 
-  // Attention reporter: push per-session attention state to main whenever
-  // chatStateMap changes. Main aggregates across all windows and broadcasts
-  // session:attention-summary so the buddy mascot can react in real time.
-  //
-  // A ref-based diff ensures we only report when state actually changes —
-  // chatStateMap is a new Map reference on every dispatch, so we compare
-  // the derived {attentionState, awaitingApproval} pair before sending.
-  // Session removal sends { clear: true } so main drops stale entries.
-  const lastAttentionReportedRef = useRef<Map<string, { attentionState: AttentionState; awaitingApproval: boolean }>>(new Map());
-  useEffect(() => {
-    const prev = lastAttentionReportedRef.current;
-    const currentIds = new Set<string>();
-    for (const [sessionId, state] of chatStateMap) {
-      currentIds.add(sessionId);
-      let awaitingApproval = false;
-      for (const id of state.activeTurnToolIds) {
-        const t = state.toolCalls.get(id);
-        if (t?.status === 'awaiting-approval') { awaitingApproval = true; break; }
-      }
-      const next = { attentionState: state.attentionState, awaitingApproval };
-      const last = prev.get(sessionId);
-      if (!last || last.attentionState !== next.attentionState || last.awaitingApproval !== next.awaitingApproval) {
-        window.claude.attention.report({ sessionId, ...next });
-        prev.set(sessionId, next);
-      }
-    }
-    // Session removal — send clear so main drops the stale entry
-    for (const sid of prev.keys()) {
-      if (!currentIds.has(sid)) {
-        window.claude.attention.report({ sessionId: sid, clear: true });
-        prev.delete(sid);
-      }
-    }
-  }, [chatStateMap]);
+  // Attention-reporter ref declared up here so hooks-order stays deterministic;
+  // the useEffect that writes to it lives AFTER sessionStatuses is computed
+  // (search for "Attention reporter effect" below).
+  const lastAttentionReportedRef = useRef<Map<string, { attentionState: AttentionState; awaitingApproval: boolean; status: SessionStatusColor }>>(new Map());
 
   const gameState = useGameState();
   const gameDispatch = useGameDispatch();
@@ -416,6 +387,51 @@ function AppInner() {
     }
     prevStatusSoundRef.current = new Map(sessionStatuses);
   }, [sessionStatuses]);
+
+  // Attention reporter effect: pushes per-session attention state + the
+  // derived dot color to main whenever chatStateMap or sessionStatuses
+  // changes. Main aggregates across all windows and broadcasts
+  // session:attention-summary so buddy surfaces can render the same dots.
+  //
+  // A ref-based diff ensures we only report when state actually changes —
+  // chatStateMap is a new Map reference on every dispatch, so we compare
+  // the derived triple before sending. Session removal sends
+  // { clear: true } so main drops stale entries.
+  //
+  // Declared here (not where the ref is) because the status comes from
+  // sessionStatuses, which is computed above — running the effect before
+  // that would read `undefined`.
+  useEffect(() => {
+    const prev = lastAttentionReportedRef.current;
+    const currentIds = new Set<string>();
+    for (const [sid, state] of chatStateMap) {
+      currentIds.add(sid);
+      let awaitingApproval = false;
+      for (const id of state.activeTurnToolIds) {
+        const t = state.toolCalls.get(id);
+        if (t?.status === 'awaiting-approval') { awaitingApproval = true; break; }
+      }
+      // Thread the same dot color the main switcher renders for this
+      // session so the buddy pill's dot is visually identical.
+      const status = sessionStatuses.get(sid) ?? 'gray';
+      const next = { attentionState: state.attentionState, awaitingApproval, status };
+      const last = prev.get(sid);
+      if (!last
+        || last.attentionState !== next.attentionState
+        || last.awaitingApproval !== next.awaitingApproval
+        || last.status !== next.status
+      ) {
+        window.claude.attention.report({ sessionId: sid, ...next });
+        prev.set(sid, next);
+      }
+    }
+    for (const sid of prev.keys()) {
+      if (!currentIds.has(sid)) {
+        window.claude.attention.report({ sessionId: sid, clear: true });
+        prev.delete(sid);
+      }
+    }
+  }, [chatStateMap, sessionStatuses]);
 
   useEffect(() => {
     const createdHandler = window.claude.on.sessionCreated((info) => {
@@ -2024,6 +2040,7 @@ export default function App() {
   // Buddy windows render as isolated placeholders without main-app providers
   if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
   if (buddyMode === 'buddy-chat') return <BuddyChatApp />;
+  if (buddyMode === 'buddy-capture') return <BuddyCaptureApp />;
 
   // Main app wrapped in providers
   return (

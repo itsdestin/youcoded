@@ -2,7 +2,8 @@
    body[data-mode="buddy-chat"] or buddy-mascot is active. */
 
 body[data-mode="buddy-chat"],
-body[data-mode="buddy-mascot"] {
+body[data-mode="buddy-mascot"],
+body[data-mode="buddy-capture"] {
   background: transparent !important;
   --canvas: transparent;
 }
@@ -20,15 +21,18 @@ body[data-mode="buddy-mascot"] {
    a dark-square flash that would otherwise persist on the transparent
    Electron window. */
 html[data-mode="buddy-mascot"],
-html[data-mode="buddy-chat"] {
+html[data-mode="buddy-chat"],
+html[data-mode="buddy-capture"] {
   background: transparent !important;
   color-scheme: normal !important;
 }
 html[data-mode="buddy-mascot"] body,
-html[data-mode="buddy-chat"] body {
+html[data-mode="buddy-chat"] body,
+html[data-mode="buddy-capture"] body {
   background: transparent !important;
 }
-html[data-mode="buddy-mascot"] #root {
+html[data-mode="buddy-mascot"] #root,
+html[data-mode="buddy-capture"] #root {
   background: transparent !important;
 }
 
@@ -131,7 +135,8 @@ html[data-mode="buddy-chat"] #root::before {
    rule here — but leaving the existing body[data-mode=...] #theme-bg rule
    in globals.css as a belt-and-suspenders guard.) */
 html[data-mode="buddy-mascot"] #theme-effects-overlay,
-html[data-mode="buddy-chat"] #theme-effects-overlay {
+html[data-mode="buddy-chat"] #theme-effects-overlay,
+html[data-mode="buddy-capture"] #theme-effects-overlay {
   display: none !important;
 }
 

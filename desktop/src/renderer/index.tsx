@@ -21,7 +21,7 @@ document.documentElement.setAttribute('data-theme', storedTheme);
 // Setting on <html> also means the selector doesn't need :has(), which has
 // had subtle ordering bugs with color-scheme in some Chromium versions.
 const __buddyMode = new URLSearchParams(location.search).get('mode');
-if (__buddyMode === 'buddy-mascot' || __buddyMode === 'buddy-chat') {
+if (__buddyMode === 'buddy-mascot' || __buddyMode === 'buddy-chat' || __buddyMode === 'buddy-capture') {
   document.documentElement.setAttribute('data-mode', __buddyMode);
 }
 

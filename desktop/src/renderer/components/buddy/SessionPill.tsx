@@ -212,20 +212,23 @@ function basename(path: string): string {
 }
 
 /**
- * Map a session's attention state to a status dot color.
- * Purple = active/ok, amber = waiting, red = error/stuck, blue = idle shell,
- * grey = dead. Colors are hardcoded per project convention (theme-independent).
+ * Map a session's status dot to its hex color. We just forward the color
+ * the main window's session switcher computed for this session (pushed via
+ * AttentionReport.status) so the buddy dot is visually identical to the
+ * same session's dot in the main window. Hex values here match the main
+ * window's INDICATOR_COLOR map in SessionStrip.tsx — keep them in sync.
+ * Default is gray for sessions that haven't reported yet.
+ *
+ * Colors match main convention and are theme-independent per project rule:
+ * status colors (green/red/blue/amber) stay hardcoded across all themes.
  */
 function attentionColorFromSummary(sessionId: string, summary: AttentionSummary | null): string {
-  const attn = summary?.perSession?.[sessionId];
-  if (!attn) return '#9575ff'; // purple: active, no attention data yet
-  if (attn.awaitingApproval) return '#f5a623'; // amber: needs permission
-  switch (attn.attentionState) {
-    case 'error':
-    case 'stuck':         return '#ef4444'; // red: something's wrong
-    case 'awaiting-input': return '#f5a623'; // amber: waiting for user input
-    case 'shell-idle':    return '#60a5fa'; // blue: idle at shell prompt
-    case 'session-died':  return '#6b7280'; // grey: dead
-    default:              return '#9575ff'; // purple: ok / running
+  const status = summary?.perSession?.[sessionId]?.status;
+  switch (status) {
+    case 'green': return '#4CAF50';  // thinking or running tool
+    case 'red':   return '#DD4444';  // awaiting approval
+    case 'blue':  return '#60A5FA';  // has unseen activity
+    case 'gray':
+    default:      return '#666666';  // idle / no report yet
   }
 }

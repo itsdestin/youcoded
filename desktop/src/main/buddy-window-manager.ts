@@ -20,9 +20,13 @@ export function clampToWorkArea(pos: Point, size: Size, workArea: Rect): Point {
 
 const MASCOT_SIZE: Size = { width: 80, height: 80 };
 const CHAT_SIZE: Size = { width: 320, height: 480 };
+// Screenshot capture icon — small action button pinned directly below
+// the mascot. Size + gap mirror main.ts's buddyDimensions — keep in sync.
+const CAPTURE_SIZE: Size = { width: 44, height: 44 };
+const CAPTURE_GAP_PX = 6;
 
 export interface BuddyWindowManagerDeps {
-  createBuddyWindow(variant: 'mascot' | 'chat', opts: { x: number; y: number }): BrowserWindow;
+  createBuddyWindow(variant: 'mascot' | 'chat' | 'capture', opts: { x: number; y: number }): BrowserWindow;
   getPersistedPosition(key: 'mascot' | 'chat'): Point | null;
   setPersistedPosition(key: 'mascot' | 'chat', pos: Point): void;
   registry: WindowRegistry;
@@ -44,6 +48,10 @@ export interface BuddyWindowManagerDeps {
 export class BuddyWindowManager {
   private mascot: BrowserWindow | null = null;
   private chat: BrowserWindow | null = null;
+  // Small action-button window pinned below the mascot while the chat is
+  // open. Hidden (not destroyed) on chat-close so toggling doesn't rebuild
+  // the renderer every time.
+  private capture: BrowserWindow | null = null;
   private viewedSessionId: string | null = null;
 
   constructor(private readonly deps: BuddyWindowManagerDeps) {}
@@ -67,8 +75,10 @@ export class BuddyWindowManager {
   }
 
   hide(): void {
+    if (this.capture && !this.capture.isDestroyed()) this.capture.destroy();
     if (this.chat && !this.chat.isDestroyed()) this.chat.destroy();
     if (this.mascot && !this.mascot.isDestroyed()) this.mascot.destroy();
+    this.capture = null;
     this.chat = null;
     this.mascot = null;
     // Reset so a subsequent show() + setViewedSession(sameId) doesn't
@@ -79,10 +89,12 @@ export class BuddyWindowManager {
   toggleChat(): void {
     if (!this.chat || this.chat.isDestroyed()) {
       this.createChat();
+      this.showCapture();
       return;
     }
     if (this.chat.isVisible()) {
       this.chat.hide();
+      this.hideCapture();
     } else {
       // Re-anchor to current mascot position before showing — the user may
       // have dragged the mascot while the chat was hidden, and the chat
@@ -91,6 +103,7 @@ export class BuddyWindowManager {
       const pos = this.computeChatAnchoredPosition();
       this.chat.setPosition(Math.round(pos.x), Math.round(pos.y));
       this.chat.show();
+      this.showCapture();
     }
   }
 
@@ -136,12 +149,19 @@ export class BuddyWindowManager {
     return this.viewedSessionId;
   }
 
-  /** True iff `win` is one of the two buddy windows this manager owns.
-   *  main.ts uses this to decide when to tear the buddy down — spec §7.6
-   *  says buddy closes with the last main window. */
+  /** True iff `win` is one of the buddy windows this manager owns
+   *  (mascot, chat, or the capture-icon action window). main.ts uses this
+   *  to decide when to tear the buddy down — spec §7.6 says buddy closes
+   *  with the last main window. */
   isBuddyWindow(win: BrowserWindow): boolean {
-    return win === this.mascot || win === this.chat;
+    return win === this.mascot || win === this.chat || win === this.capture;
   }
+
+  /** Read-only accessors for the main-process capture handler, which needs
+   *  to hide every buddy window before calling desktopCapturer. */
+  getMascotWindow(): BrowserWindow | null { return this.mascot; }
+  getChatWindow(): BrowserWindow | null { return this.chat; }
+  getCaptureWindow(): BrowserWindow | null { return this.capture; }
 
   /**
    * Move the mascot window by a pointer-drag delta, clamped to the visible
@@ -184,6 +204,70 @@ export class BuddyWindowManager {
       const chatClamped = clampToWorkArea(chatRaw, CHAT_SIZE, chatDisplay.workArea);
       this.chat.setPosition(Math.round(chatClamped.x), Math.round(chatClamped.y));
     }
+    // Capture icon always follows the mascot (pinned directly below).
+    // Recompute from scratch so it re-clamps against the mascot's new
+    // edge placement — if the mascot ends up at the bottom edge, the
+    // icon flips to above the mascot automatically.
+    if (this.capture && !this.capture.isDestroyed()) {
+      const pos = this.computeCapturePosition();
+      this.capture.setPosition(Math.round(pos.x), Math.round(pos.y));
+    }
+  }
+
+  /**
+   * Position for the capture-icon window — centered horizontally on the
+   * mascot, CAPTURE_GAP_PX below it. Flips to above when below would
+   * clip the workArea. Always clamped to the visible workArea.
+   */
+  private computeCapturePosition(): Point {
+    if (!this.mascot || this.mascot.isDestroyed()) {
+      const primary = screen.getPrimaryDisplay().workArea;
+      return {
+        x: primary.x + primary.width - CAPTURE_SIZE.width - 24,
+        y: primary.y + primary.height - CAPTURE_SIZE.height - 24,
+      };
+    }
+    const mb = this.mascot.getBounds();
+    const display = screen.getDisplayMatching(mb) ?? screen.getPrimaryDisplay();
+    const wa = display.workArea;
+    const centerX = mb.x + Math.round(mb.width / 2) - Math.round(CAPTURE_SIZE.width / 2);
+    const belowY = mb.y + mb.height + CAPTURE_GAP_PX;
+    const belowFits = belowY + CAPTURE_SIZE.height <= wa.y + wa.height;
+    const raw = belowFits
+      ? { x: centerX, y: belowY }
+      : { x: centerX, y: mb.y - CAPTURE_SIZE.height - CAPTURE_GAP_PX };
+    return clampToWorkArea(raw, CAPTURE_SIZE, wa);
+  }
+
+  /** Create-if-needed and show the capture-icon window. Called whenever
+   *  the chat becomes visible; no-op if already visible. */
+  private showCapture(): void {
+    if (!this.capture || this.capture.isDestroyed()) {
+      const pos = this.computeCapturePosition();
+      this.capture = this.deps.createBuddyWindow('capture', {
+        x: Math.round(pos.x),
+        y: Math.round(pos.y),
+      });
+      this.wireCaptureLifecycle(this.capture);
+    }
+    if (this.capture && !this.capture.isDestroyed() && !this.capture.isVisible()) {
+      this.capture.showInactive();
+    }
+  }
+
+  /** Hide (not destroy) the capture icon when the chat closes. Preserves
+   *  the renderer so re-opening the chat doesn't spin up a fresh one. */
+  private hideCapture(): void {
+    if (this.capture && !this.capture.isDestroyed() && this.capture.isVisible()) {
+      this.capture.hide();
+    }
+  }
+
+  private wireCaptureLifecycle(win: BrowserWindow): void {
+    win.webContents.on('render-process-gone', (_evt, details) => {
+      if (details.reason !== 'clean-exit') this.hide();
+    });
+    win.on('closed', () => { this.capture = null; });
   }
 
   private createChat(): void {

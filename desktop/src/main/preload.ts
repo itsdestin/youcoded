@@ -198,6 +198,8 @@ const IPC = {
   BUDDY_UNSUBSCRIBE: 'buddy:unsubscribe',
   BUDDY_GET_VIEWED_SESSION: 'buddy:get-viewed-session',
   BUDDY_MOVE_MASCOT: 'buddy:move-mascot',
+  BUDDY_CAPTURE_DESKTOP: 'buddy:capture-desktop',
+  BUDDY_ATTACH_FILE: 'buddy:attach-file',
   SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
   ATTENTION_REPORT: 'attention:report',
 } as const;
@@ -676,6 +678,22 @@ contextBridge.exposeInMainWorld('claude', {
       const listener = (_: unknown, summary: AttentionSummary) => cb(summary);
       ipcRenderer.on(IPC.SESSION_ATTENTION_SUMMARY, listener);
       return () => ipcRenderer.removeListener(IPC.SESSION_ATTENTION_SUMMARY, listener);
+    },
+    // Capture-icon renderer invokes this. Main hides the three buddy windows,
+    // captures the screen the mascot sits on, saves the PNG to temp, then
+    // pushes the path to the chat renderer on BUDDY_ATTACH_FILE. Returns
+    // the path for renderers that want to await success, but the chat side
+    // picks it up via the listener below — don't thread the path through
+    // window-to-window IPC by hand.
+    captureDesktop: (): Promise<string | null> =>
+      ipcRenderer.invoke(IPC.BUDDY_CAPTURE_DESKTOP),
+    // Chat renderer subscribes to receive file paths that should be added
+    // as attachments (e.g. desktop screenshots). InputBar listens on
+    // window 'buddy:attach-file' CustomEvent so we re-emit from here.
+    onAttachFile: (cb: (filePath: string) => void) => {
+      const listener = (_: unknown, filePath: string) => cb(filePath);
+      ipcRenderer.on(IPC.BUDDY_ATTACH_FILE, listener);
+      return () => ipcRenderer.removeListener(IPC.BUDDY_ATTACH_FILE, listener);
     },
   },
   // Renderer pushes per-session attention state to main whenever the chat

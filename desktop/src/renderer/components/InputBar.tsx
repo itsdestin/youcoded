@@ -162,6 +162,21 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     });
   }, []);
 
+  // External attach-file entry point. Used by the buddy floater's
+  // desktop-capture action — main writes the screenshot to a temp PNG and
+  // pushes the path via BUDDY_ATTACH_FILE; BuddyChat re-dispatches as this
+  // window CustomEvent so InputBar picks it up without prop threading.
+  // The same addFiles path handles it (identical to clipboard-image paste),
+  // so no special-casing for capture vs paste.
+  useEffect(() => {
+    const listener = (e: Event) => {
+      const detail = (e as CustomEvent<{ filePath?: string }>).detail;
+      if (detail?.filePath) addFiles([detail.filePath]);
+    };
+    window.addEventListener('buddy:attach-file', listener);
+    return () => window.removeEventListener('buddy:attach-file', listener);
+  }, [addFiles]);
+
   const removeAttachment = useCallback((path: string) => {
     setAttachments((prev) => prev.filter((a) => a.path !== path));
   }, []);

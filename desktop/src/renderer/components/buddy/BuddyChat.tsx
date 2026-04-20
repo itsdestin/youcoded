@@ -30,6 +30,19 @@ export function BuddyChat() {
     return unsub;
   }, []);
 
+  // Desktop-capture action: main pushes the saved PNG path here after the
+  // user clicks the capture icon. Re-emit as a window CustomEvent so the
+  // InputBar (which lives several nested components deep and doesn't
+  // receive props from BuddyChat) can pick it up without prop threading.
+  // The InputBar's listener calls addFiles([path]), which is the same
+  // code path as clipboard-image paste — no special-casing for buddy.
+  useEffect(() => {
+    const unsub = (window as any).claude?.buddy?.onAttachFile?.((filePath: string) => {
+      window.dispatchEvent(new CustomEvent('buddy:attach-file', { detail: { filePath } }));
+    });
+    return unsub;
+  }, []);
+
   // Mount effect: pick the session to view. Prefer whatever main already
   // recorded for this buddy window; fall back to the leader window's first
   // session, then any first session in the directory.
