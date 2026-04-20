@@ -246,6 +246,17 @@ function AppInner() {
   // user saw "may have failed" even though compaction succeeded.
   const compactWatchdogs = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(() => {
+    // Perf: this effect fires on every reducer dispatch. Steady state (no
+    // compaction in flight, no live watchdogs) short-circuits without walking
+    // the session map. When a compaction is live we still iterate — preserving
+    // the activity-awareness described above (timer resets on every dispatch).
+    if (compactWatchdogs.current.size === 0) {
+      let anyPending = false;
+      for (const session of chatStateMap.values()) {
+        if (session.compactionPending) { anyPending = true; break; }
+      }
+      if (!anyPending) return;
+    }
     for (const [sid, session] of chatStateMap) {
       const existing = compactWatchdogs.current.get(sid);
       if (session.compactionPending) {
@@ -583,24 +594,11 @@ function AppInner() {
       );
     });
 
-    // Sync permission mode by reading Claude Code's mode indicator from PTY output.
-    // Same approach as the mobile app — just check for mode text in the output.
-    const ptyModeHandler = window.claude.on.ptyOutput((sid: string, data: string) => {
-      const lower = data.toLowerCase();
-      let mode: PermissionMode | null = null;
-      if (lower.includes('bypass permissions on')) mode = 'bypass';
-      else if (lower.includes('accept edits on')) mode = 'auto-accept';
-      else if (lower.includes('plan mode on')) mode = 'plan';
-      else if (lower.includes('bypass permissions off')
-            || lower.includes('accept edits off')
-            || lower.includes('plan mode off')) mode = 'normal';
-      if (mode) {
-        setPermissionModes((prev) => {
-          if (prev.get(sid) === mode) return prev;
-          return new Map(prev).set(sid, mode!);
-        });
-      }
-    });
+    // Permission-mode detection (per-session) is wired up in a dedicated
+    // effect below, scoped to the current sessions list. Previously this used
+    // a global pty:output listener; that channel is no longer broadcast
+    // (every PTY chunk used to be double-sent to pay for a single listener —
+    // see ipc-handlers.ts pty-output comments).
 
     const statusHandler = window.claude.on.statusData((data) => {
       setStatusData((prev) => ({
@@ -700,7 +698,6 @@ function AppInner() {
       window.claude.off('session:destroyed', destroyedHandler);
       window.claude.off('hook:event', hookHandler);
       window.claude.off('session:renamed', renamedHandler);
-      window.claude.off('pty:output', ptyModeHandler);
       window.claude.off('status:data', statusHandler);
       if (transcriptHandler) window.claude.off('transcript:event', transcriptHandler);
       if (shrinkHandler) window.claude.off('transcript:shrink', shrinkHandler);
@@ -711,6 +708,46 @@ function AppInner() {
       if (sessionPermissionModeHandler) window.claude.off('session:permission-mode', sessionPermissionModeHandler);
     };
   }, [dispatch]);
+
+  // Desktop permission-mode detection, scoped per-session. Watches for Claude
+  // Code's in-terminal mode indicator strings ("bypass permissions on", etc.)
+  // and updates the HeaderBar badge. Previously a single global pty:output
+  // listener handled this, forcing every PTY chunk to be dual-broadcast.
+  // Subscribing per-session halves steady-state IPC traffic.
+  //
+  // Android doesn't forward raw PTY bytes — it emits 'session:permission-mode'
+  // instead (handled in the big effect above), so this effect is effectively
+  // desktop-only. On Android the ptyOutputForSession call is still safe but
+  // will never deliver data matching the mode strings.
+  useEffect(() => {
+    const claudeOn = (window.claude.on as any);
+    if (typeof claudeOn.ptyOutputForSession !== 'function') return;
+    const handles: Array<{ sid: string; remove: () => void }> = [];
+    for (const s of sessions) {
+      const remove = claudeOn.ptyOutputForSession(s.id, (data: string) => {
+        const lower = data.toLowerCase();
+        let mode: PermissionMode | null = null;
+        if (lower.includes('bypass permissions on')) mode = 'bypass';
+        else if (lower.includes('accept edits on')) mode = 'auto-accept';
+        else if (lower.includes('plan mode on')) mode = 'plan';
+        else if (lower.includes('bypass permissions off')
+              || lower.includes('accept edits off')
+              || lower.includes('plan mode off')) mode = 'normal';
+        if (mode) {
+          setPermissionModes((prev) => {
+            if (prev.get(s.id) === mode) return prev;
+            return new Map(prev).set(s.id, mode!);
+          });
+        }
+      });
+      handles.push({ sid: s.id, remove });
+    }
+    return () => {
+      for (const h of handles) {
+        try { h.remove(); } catch { /* unsubscribe API may no-op */ }
+      }
+    };
+  }, [sessions]);
 
   // Fetch session list on mount — catches sessions that existed before event handlers were registered
   // (e.g., remote browser reconnecting after the replay buffer events already fired)

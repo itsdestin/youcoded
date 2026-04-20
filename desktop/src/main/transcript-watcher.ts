@@ -271,6 +271,11 @@ function extractToolResultContent(content: any): string {
 // TranscriptWatcher
 // ---------------------------------------------------------------------------
 
+// Dedup window: retain at least this many recent UUIDs. Actual retention
+// ranges from DEDUP_CAP to 2*DEDUP_CAP due to two-Set rotation. Slightly
+// wider than the old exact-500 prune, strictly safer for dedup correctness.
+const DEDUP_CAP = 500;
+
 interface WatchedSession {
   desktopSessionId: string;
   claudeSessionId: string;
@@ -278,9 +283,18 @@ interface WatchedSession {
   jsonlPath: string;
   offset: number;
   partialLine: string;
-  seenUuids: Set<string>;
+  // Perf: rotating two-Set dedup. `has` checks both; `add` writes to recent.
+  // When recent exceeds DEDUP_CAP, we rotate (discard old, promote recent to
+  // old, start a fresh recent). Replaces the old "build an array, slice it,
+  // rebuild the Set" prune which was O(DEDUP_CAP) per prune event.
+  seenUuidsRecent: Set<string>;
+  seenUuidsOld: Set<string>;
   watcher: fs.FSWatcher | null;
-  pollTimer: ReturnType<typeof setInterval> | null;
+  // Whether this session still needs the global poll: true until fs.watch
+  // is attached, then stays true as a safety-net (fs.watch on Windows can
+  // silently miss notifications). A single class-level timer iterates all
+  // sessions rather than each session owning its own setInterval.
+  needsPoll: boolean;
   subagentIndex: SubagentIndex;
   subagentWatcher: SubagentWatcher;
 }
@@ -294,10 +308,17 @@ interface WatchedSession {
 export class TranscriptWatcher extends EventEmitter {
   private sessions = new Map<string, WatchedSession>();
   private claudeConfigDir: string;
+  // One global poll timer shared across sessions. Previously each session owned
+  // its own setInterval, which meant N sessions → N independent timer ticks +
+  // N fs.stat calls per second. The global timer ticks at pollIntervalMs and
+  // iterates the sessions map, skipping any that don't need polling.
+  private globalPollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollIntervalMs: number;
 
-  constructor(claudeConfigDir?: string) {
+  constructor(claudeConfigDir?: string, pollIntervalMs = 2000) {
     super();
     this.claudeConfigDir = claudeConfigDir || path.join(os.homedir(), '.claude', 'projects');
+    this.pollIntervalMs = pollIntervalMs;
   }
 
   /**
@@ -324,9 +345,10 @@ export class TranscriptWatcher extends EventEmitter {
       desktopSessionId, claudeSessionId, cwd, jsonlPath,
       offset: 0,
       partialLine: '',
-      seenUuids: new Set(),
+      seenUuidsRecent: new Set(),
+      seenUuidsOld: new Set(),
       watcher: null,
-      pollTimer: null,
+      needsPoll: true,
       subagentIndex,
       subagentWatcher,
     };
@@ -334,13 +356,15 @@ export class TranscriptWatcher extends EventEmitter {
 
     subagentWatcher.start();
 
-    // Try to start an fs.watch; fall back to polling if file doesn't exist yet
+    // Try to start an fs.watch; fall back to the global poll if the file
+    // doesn't exist yet. needsPoll stays true either way — when fs.watch is
+    // attached the global poll acts as a safety net (fs.watch on Windows can
+    // silently miss notifications).
     if (fs.existsSync(jsonlPath)) {
       this.readNewLines(session);
       this.attachFsWatch(session);
-    } else {
-      this.startPolling(session);
     }
+    this.ensureGlobalPoll();
   }
 
   /**
@@ -351,6 +375,7 @@ export class TranscriptWatcher extends EventEmitter {
     if (!session) return;
     this.cleanupSession(session);
     this.sessions.delete(desktopSessionId);
+    this.stopGlobalPollIfIdle();
   }
 
   /**
@@ -361,6 +386,7 @@ export class TranscriptWatcher extends EventEmitter {
       this.cleanupSession(session);
     }
     this.sessions.clear();
+    this.stopGlobalPollIfIdle();
   }
 
   /**
@@ -420,48 +446,59 @@ export class TranscriptWatcher extends EventEmitter {
         this.readNewLines(session);
       });
       session.watcher.on('error', () => {
-        // If the watcher errors, fall back to polling
+        // If the watcher errors, fall back to the global poll (already running)
         if (session.watcher) {
           session.watcher.close();
           session.watcher = null;
         }
-        this.startPolling(session);
+        session.needsPoll = true;
       });
-      // Safety-net poll alongside fs.watch — on Windows, fs.watch can
-      // silently miss change notifications. A 2s poll catches stragglers
-      // without adding meaningful overhead (readNewLines is a no-op when
-      // the file hasn't grown).
-      this.startPolling(session);
+      // Global poll continues alongside fs.watch as a safety net — on Windows,
+      // fs.watch can silently miss change notifications. readNewLines is a
+      // no-op when the file hasn't grown, so this is cheap.
     } catch {
-      // fs.watch can throw on some platforms — fall back to polling
-      this.startPolling(session);
+      // fs.watch can throw on some platforms — global poll will cover it.
+      session.needsPoll = true;
     }
   }
 
-  private startPolling(session: WatchedSession): void {
-    if (session.pollTimer) return;
-    session.pollTimer = setInterval(() => {
-      if (fs.existsSync(session.jsonlPath)) {
+  /**
+   * Start the class-level poll timer if it isn't already running. Runs every
+   * GLOBAL_POLL_MS, iterating all sessions that still need polling. Replaces
+   * the prior per-session setInterval (N timers → 1 timer).
+   */
+  private ensureGlobalPoll(): void {
+    if (this.globalPollTimer) return;
+    this.globalPollTimer = setInterval(() => {
+      for (const session of this.sessions.values()) {
+        if (!session.needsPoll) continue;
+        if (!fs.existsSync(session.jsonlPath)) continue;
         this.readNewLines(session);
-        // If fs.watch isn't attached yet, upgrade from poll-only to watch+poll
+        // If fs.watch isn't attached yet, upgrade from poll-only to watch+poll.
         if (!session.watcher) {
-          this.stopPolling(session);
           this.attachFsWatch(session);
         }
       }
-    }, session.watcher ? 2000 : 1000);
+    }, this.pollIntervalMs);
   }
 
-  private stopPolling(session: WatchedSession): void {
-    if (session.pollTimer) {
-      clearInterval(session.pollTimer);
-      session.pollTimer = null;
+  /**
+   * Stop the global poll when no sessions remain. Important so tests and the
+   * normal stopAll() path don't leak a timer into Node's event loop.
+   */
+  private stopGlobalPollIfIdle(): void {
+    if (this.sessions.size === 0 && this.globalPollTimer) {
+      clearInterval(this.globalPollTimer);
+      this.globalPollTimer = null;
     }
   }
 
   private cleanupSession(session: WatchedSession): void {
-    if (session.watcher) { session.watcher.close(); session.watcher = null; }
-    this.stopPolling(session);
+    if (session.watcher) {
+      session.watcher.close();
+      session.watcher = null;
+    }
+    session.needsPoll = false;
     session.subagentWatcher.stop();
   }
 
@@ -537,13 +574,17 @@ export class TranscriptWatcher extends EventEmitter {
       //   critical for clearing the "thinking" state)
       // - user-message: EMIT (reducer has its own text-based dedup)
       const lineUuid = events[0].uuid;
-      const isRepeat = lineUuid && session.seenUuids.has(lineUuid);
+      const isRepeat =
+        !!lineUuid && (session.seenUuidsRecent.has(lineUuid) || session.seenUuidsOld.has(lineUuid));
       if (lineUuid) {
-        session.seenUuids.add(lineUuid);
-        // Sliding window: prune to last 500 UUIDs to prevent unbounded memory growth
-        if (session.seenUuids.size > 500) {
-          const entries = [...session.seenUuids];
-          session.seenUuids = new Set(entries.slice(-500));
+        session.seenUuidsRecent.add(lineUuid);
+        // Rotate instead of rebuild when the recent set fills. Old set is
+        // discarded, recent promotes to old, a fresh recent is allocated.
+        // Effective dedup window is [DEDUP_CAP, 2*DEDUP_CAP] UUIDs — strictly
+        // >= the old exact-500 window, so no missed dedups.
+        if (session.seenUuidsRecent.size > DEDUP_CAP) {
+          session.seenUuidsOld = session.seenUuidsRecent;
+          session.seenUuidsRecent = new Set();
         }
       }
 

@@ -1031,10 +1031,17 @@ export function registerIpcHandlers(
   const pendingOutput = new Map<string, string[]>();
   const readySessions = new Set<string>();
 
+  // Perf: previously we dual-sent every PTY chunk to BOTH the per-session
+  // channel AND the global IPC.PTY_OUTPUT channel. The global channel existed
+  // solely so App.tsx could watch permission-mode strings ("bypass permissions
+  // on" etc.) across all sessions with one listener. With many sessions
+  // streaming that doubled IPC traffic and forced every BrowserWindow to
+  // deserialize output for sessions it may not own. App.tsx now subscribes
+  // per-session in sync with session:created / session:destroyed events, so
+  // the global broadcast is no longer needed.
   sessionManager.on('pty-output', (sessionId: string, data: string) => {
     if (readySessions.has(sessionId)) {
-      sendForSession(sessionId, `pty:output:${sessionId}`, data);  // per-session (TerminalView)
-      sendForSession(sessionId, IPC.PTY_OUTPUT, sessionId, data);  // global (App.tsx mode detection)
+      sendForSession(sessionId, `pty:output:${sessionId}`, data);
     } else {
       let buf = pendingOutput.get(sessionId);
       if (!buf) {
@@ -1051,8 +1058,7 @@ export function registerIpcHandlers(
     const buffered = pendingOutput.get(sessionId);
     if (buffered) {
       for (const data of buffered) {
-        sendForSession(sessionId, `pty:output:${sessionId}`, data);  // per-session (TerminalView)
-        sendForSession(sessionId, IPC.PTY_OUTPUT, sessionId, data);  // global (App.tsx mode detection)
+        sendForSession(sessionId, `pty:output:${sessionId}`, data);
       }
       pendingOutput.delete(sessionId);
     }

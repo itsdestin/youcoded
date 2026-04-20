@@ -292,7 +292,9 @@ describe('TranscriptWatcher', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-test-'));
-    watcher = new TranscriptWatcher(tmpDir);
+    // Short poll interval so the "falls back to polling" test still passes
+    // within ~1s. Production default is 2000ms.
+    watcher = new TranscriptWatcher(tmpDir, 500);
   });
 
   afterEach(() => {
