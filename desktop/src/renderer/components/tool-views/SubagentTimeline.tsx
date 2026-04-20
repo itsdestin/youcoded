@@ -2,15 +2,18 @@ import React, { useState } from 'react';
 import type { SubagentSegment, ToolCallState } from '../../../shared/types';
 import MarkdownContent from '../MarkdownContent';
 import ToolBody from './ToolBody';
+import { friendlyToolDisplay } from '../ToolCard';
 
 /**
  * Renders a subagent's inline timeline inside the parent AgentView card.
  *
- * Mirrors the chat view's structure: consecutive tool calls are bundled
- * into a tool group that renders compact one-line summaries; text
- * segments between groups render as prose (including the subagent's
- * final message, which is the tail of the timeline). Each tool row
- * click-expands to show its full ToolBody on demand.
+ * Mirrors the main chat view's structure: consecutive tool calls bundle
+ * into a tool group rendered as compact one-line rows with the same
+ * natural-language titles the main ChatView uses (via `friendlyToolDisplay`
+ * — so "Read" becomes "Reading config.ts", "Grep" becomes "Searching for
+ * 'pattern'", etc.). Text segments between groups render as prose,
+ * including the subagent's final message at the tail. Each tool row
+ * click-expands to reveal its full ToolBody output on demand.
  *
  * The left vertical border frames the nested work visually so a dense
  * subagent (20+ tool calls) doesn't dominate the parent AgentView card.
@@ -71,7 +74,7 @@ function SubagentText({ content }: { content: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tool group — compact one-line summary per tool, click-to-expand.
+// Tool group — one card containing compact rows, click-to-expand per row.
 // ---------------------------------------------------------------------------
 
 function SubagentToolGroup({ tools }: { tools: ToolSegment[] }) {
@@ -107,7 +110,12 @@ function SubagentToolRow({
   onToggle: () => void;
   separatorAbove: boolean;
 }) {
-  const { label, detail } = toolSummary(segment);
+  const tool = segmentToToolState(segment);
+  // Reuse the same natural-language title derivation the main ChatView uses
+  // for its ToolCards, so subagent rows read like "Reading config.ts" instead
+  // of "READ /path/to/config.ts".
+  const { label, detail } = friendlyToolDisplay(tool);
+
   const statusIndicator =
     segment.status === 'running' ? <StatusDot color="amber" pulse /> :
     segment.status === 'failed'  ? <StatusDot color="red" /> :
@@ -122,14 +130,12 @@ function SubagentToolRow({
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="w-full flex items-center gap-2 px-2 py-1 hover:bg-panel/40 text-left"
+        className="w-full flex items-baseline gap-2 px-2 py-1 hover:bg-panel/40 text-left"
       >
-        {statusIndicator}
-        <span className="text-[10px] uppercase tracking-wider text-fg-muted font-medium shrink-0">
-          {label}
-        </span>
+        <span className="translate-y-[2px]">{statusIndicator}</span>
+        <span className="text-xs text-fg-2 font-medium truncate">{label}</span>
         {detail && (
-          <span className="text-xs text-fg-dim truncate">{detail}</span>
+          <span className="text-[11px] text-fg-muted truncate">{detail}</span>
         )}
         <span className="ml-auto text-[10px] text-fg-muted shrink-0">
           {expanded ? '▾' : '▸'}
@@ -137,7 +143,7 @@ function SubagentToolRow({
       </button>
       {expanded && (
         <div className="px-2 pb-2 pt-1 border-t border-edge-dim/40">
-          <ToolBody tool={segmentToToolState(segment)} />
+          <ToolBody tool={tool} />
         </div>
       )}
     </div>
@@ -155,54 +161,6 @@ function StatusDot({ color, pulse }: { color: 'amber' | 'red' | 'green'; pulse?:
       className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${fill} ${pulse ? 'animate-pulse' : ''}`}
     />
   );
-}
-
-// ---------------------------------------------------------------------------
-// Per-tool summary — compact one-line label for the row header.
-// Keeps the timeline scannable; full output is revealed on expand.
-// ---------------------------------------------------------------------------
-
-function toolSummary(seg: ToolSegment): { label: string; detail?: string } {
-  const input = seg.input || {};
-  const str = (k: string) => (typeof input[k] === 'string' ? (input[k] as string) : undefined);
-
-  switch (seg.toolName) {
-    case 'Read':          return { label: 'Read',    detail: shortPath(str('file_path')) };
-    case 'Write':         return { label: 'Write',   detail: shortPath(str('file_path')) };
-    case 'Edit':          return { label: 'Edit',    detail: shortPath(str('file_path')) };
-    case 'MultiEdit':     return { label: 'Edit*',   detail: shortPath(str('file_path')) };
-    case 'NotebookEdit':  return { label: 'NbEdit',  detail: shortPath(str('notebook_path')) };
-    case 'Grep': {
-      const pattern = str('pattern');
-      const path    = str('path');
-      const glob    = str('glob');
-      const where   = path ? ` in ${shortPath(path)}` : (glob ? ` (${glob})` : '');
-      return { label: 'Grep', detail: pattern ? `"${truncate(pattern, 40)}"${where}` : undefined };
-    }
-    case 'Glob':          return { label: 'Glob',    detail: str('pattern') };
-    case 'Bash':          return { label: 'Bash',    detail: truncate(str('command') || '', 70) };
-    case 'WebFetch':      return { label: 'Fetch',   detail: str('url') };
-    case 'WebSearch':     return { label: 'Search',  detail: str('query') };
-    case 'Agent':
-    case 'Task': {
-      const sub  = str('subagent_type');
-      const desc = str('description');
-      const detail = [sub, desc].filter(Boolean).join(': ');
-      return { label: 'Agent', detail: detail || undefined };
-    }
-    default:              return { label: seg.toolName };
-  }
-}
-
-function shortPath(p: string | undefined): string | undefined {
-  if (!p) return undefined;
-  // Keep last two path segments so long absolute paths don't eat the row.
-  const parts = p.split(/[\/\\]/);
-  return parts.length <= 2 ? p : `…/${parts.slice(-2).join('/')}`;
-}
-
-function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n - 1) + '…' : s;
 }
 
 // ---------------------------------------------------------------------------
