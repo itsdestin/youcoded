@@ -355,6 +355,24 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     return result;
   }, [skillEntries, themeEntries, packages]);
 
+  // Multi-window sync: when another Electron window toggles a theme favorite,
+  // the main-process handler broadcasts `{themeFavoritesChanged: Date.now()}`
+  // on `appearance:sync`. Refetch the list to stay in sync — the payload is
+  // just a signal, not the updated data.
+  useEffect(() => {
+    const onSync = (window as any).claude?.appearance?.onSync;
+    if (typeof onSync !== 'function') return;
+    const unsub = onSync(async (prefs: any) => {
+      if (prefs?.themeFavoritesChanged) {
+        try {
+          const favs = await (window as any).claude.appearance.getFavoriteThemes();
+          setThemeFavoritesState(favs || []);
+        } catch { /* best-effort refresh */ }
+      }
+    });
+    return () => { try { unsub?.(); } catch {} };
+  }, []);
+
   // ── Memoized value ───────────────────────────────────────────────────────
 
   const value = useMemo<MarketplaceContextValue>(() => ({
