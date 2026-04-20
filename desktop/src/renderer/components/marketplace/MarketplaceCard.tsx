@@ -6,7 +6,10 @@ import React from "react";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
+import { useMarketplace } from "../../state/marketplace-context";
 import StarRating from "./StarRating";
+import FavoriteStar from "./FavoriteStar";
+import InstallingPill from "./InstallingPill";
 
 export type MarketplaceCardEntry =
   | { kind: "skill"; entry: SkillEntry }
@@ -32,6 +35,21 @@ function componentSummary(c: SkillComponents | null | undefined): string | null 
 
 export default function MarketplaceCard({ item, onOpen, installed, updateAvailable }: Props) {
   const stats = useMarketplaceStats();
+  const mp = useMarketplace();
+  // Derive the installing-state key: themes use "theme:<slug>", skills use the plugin id.
+  const kind = item.kind;
+  const installKey = kind === "theme" ? `theme:${item.entry.slug}` : item.entry.id;
+  const isInstalling = mp.installingIds.has(installKey);
+  const isFavorited =
+    kind === "theme"
+      ? mp.themeFavorites.includes(item.entry.slug)
+      : mp.favorites.includes(item.entry.id);
+  const isInstalled = !!installed;
+
+  const toggleFavorite = () => {
+    if (kind === "theme") mp.favoriteTheme(item.entry.slug, !isFavorited).catch(() => {});
+    else mp.setFavorite(item.entry.id, !isFavorited).catch(() => {});
+  };
 
   const id = item.kind === "skill" ? item.entry.id : `theme:${item.entry.slug}`;
   const pluginStats = item.kind === "skill" ? stats.plugins[item.entry.id] : undefined;
@@ -60,9 +78,18 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
     <button
       type="button"
       onClick={onOpen}
-      className="layer-surface text-left flex flex-col overflow-hidden transition-transform duration-200 hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+      className="relative layer-surface text-left flex flex-col overflow-hidden transition-transform duration-200 hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       data-marketplace-card={id}
     >
+      {/* Corner star — only visible for installed items; e.stopPropagation handled inside FavoriteStar */}
+      {isInstalled && (
+        <FavoriteStar
+          filled={isFavorited}
+          onToggle={toggleFavorite}
+          size="sm"
+          corner
+        />
+      )}
       {themePreviewUrl && (
         <img
           src={themePreviewUrl}
@@ -77,11 +104,18 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
           <h3 className="font-medium text-fg truncate">{title}</h3>
           {author && <p className="text-xs text-fg-dim truncate">{author}</p>}
         </div>
-        {installed && (
+        {/* Installing pill takes priority; falls back to Update / Installed badge */}
+        {isInstalling ? (
+          <InstallingPill />
+        ) : updateAvailable ? (
           <span className="text-[10px] uppercase tracking-wide text-fg-dim shrink-0 mt-0.5">
-            {updateAvailable ? "Update" : "Installed"}
+            Update
           </span>
-        )}
+        ) : isInstalled ? (
+          <span className="text-[10px] uppercase tracking-wide text-fg-dim shrink-0 mt-0.5">
+            Installed
+          </span>
+        ) : null}
       </div>
       {blurb && <p className="text-sm text-fg-2 line-clamp-2">{blurb}</p>}
       <div className="mt-auto flex items-center gap-3 text-xs text-fg-dim pt-1">
