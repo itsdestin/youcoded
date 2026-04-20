@@ -227,7 +227,7 @@ export default function MarketplaceScreen({
       </div>
 
       {mode === "discovery" && mp.featured.hero && mp.featured.hero.length > 0 && (
-        <div className="px-4">
+        <div className="px-3 sm:px-4">
           <MarketplaceHero
             slots={mp.featured.hero}
             lookup={(id) => skillById.get(id)}
@@ -236,13 +236,38 @@ export default function MarketplaceScreen({
         </div>
       )}
 
-      <div className="px-4 mt-4">
+      <div className="px-3 sm:px-4 mt-4">
         <MarketplaceFilterBar value={filter} onChange={setFilter} />
       </div>
 
-      <div className="px-4 mt-4 flex flex-col gap-6 pb-12">
+      <div className="px-3 sm:px-4 mt-4 flex flex-col gap-6 pb-12">
         {mode === "discovery" ? (
           <>
+            {/* Integrations rail — purpose-built cards only. Never mixed with
+                skill/theme cards. Rendered above Destin's picks so users see
+                OAuth-based connections (Gmail, Drive, etc.) before curated
+                plugin rails — these are the highest-value setup step. Hidden
+                when the catalog hasn't loaded. */}
+            {integrations.length > 0 && (
+              <MarketplaceRail title="Connect your stuff" description="Bring your data in.">
+                {integrations.map((item) => (
+                  // Width caps at 360px on desktop but shrinks to 90vw on
+                  // narrow screens (splitscreen / mobile) so a single card
+                  // doesn't overflow the viewport. `!` needed because the
+                  // rail's `[&>*]:w-[...]` child selector outranks a plain
+                  // w- class by specificity — integration cards are wider
+                  // than plugin/theme cards by design.
+                  <div key={item.slug} className="shrink-0 !w-[min(360px,90vw)]">
+                    <IntegrationCard
+                      item={item}
+                      busy={integrationBusy === item.slug}
+                      onPrimary={() => handleIntegration(item)}
+                    />
+                  </div>
+                ))}
+              </MarketplaceRail>
+            )}
+
             {(mp.featured.rails || []).map((rail) => {
               const items = rail.slugs
                 .map((slug) => {
@@ -276,22 +301,6 @@ export default function MarketplaceScreen({
                 </MarketplaceRail>
               );
             })}
-
-            {/* Integrations rail — purpose-built cards only. Never mixed with
-                skill/theme cards. Hidden when the catalog hasn't loaded. */}
-            {integrations.length > 0 && (
-              <MarketplaceRail title="Connect your stuff" description="Bring your data in.">
-                {integrations.map((item) => (
-                  <div key={item.slug} style={{ width: 360 }} className="shrink-0">
-                    <IntegrationCard
-                      item={item}
-                      busy={integrationBusy === item.slug}
-                      onPrimary={() => handleIntegration(item)}
-                    />
-                  </div>
-                ))}
-              </MarketplaceRail>
-            )}
 
             {/* Bottom catalog — denser surface; all skills + themes in default sort. */}
             <section className="flex flex-col gap-2 mt-4">

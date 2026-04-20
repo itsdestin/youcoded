@@ -113,7 +113,10 @@ Contributions welcome — bug fixes, features, documentation, testing on differe
 
 ## License
 
-- Desktop app: MIT
-- Android app: GPLv3 (due to Termux library dependencies)
+YouCoded is dual-licensed to reflect the distinct obligations of its two distributions:
 
-See [desktop/LICENSE](desktop/LICENSE) and [LICENSE](LICENSE) for details.
+- **Desktop application** (`desktop/`): **MIT** — see [desktop/LICENSE](desktop/LICENSE).
+- **Android application** (`app/`): **GPLv3** — see [app/LICENSE](app/LICENSE). Android is GPLv3 because it links against Termux terminal components, which are GPLv3.
+- **Shared source, build scripts, and docs**: **MIT** — see the root [LICENSE](LICENSE) for the full explanation of how the dual license works.
+
+The React UI that powers both platforms is MIT-licensed at the source level. When it is aggregated into the Android APK alongside Termux, GPLv3 governs the resulting Android distribution as a whole; the underlying source, as offered in this repository, retains its MIT license (GPLv3 Section 5, aggregation).

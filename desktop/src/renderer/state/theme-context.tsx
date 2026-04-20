@@ -29,6 +29,7 @@ const STORAGE_KEY = 'youcoded-theme';
 const CYCLE_KEY = 'youcoded-theme-cycle';
 const REDUCED_EFFECTS_KEY = 'youcoded-reduced-effects';
 const SHOW_TIMESTAMPS_KEY = 'youcoded-show-timestamps';
+const SHOW_TURN_METADATA_KEY = 'youcoded-show-turn-metadata';
 const GLASS_OVERRIDES_KEY = 'youcoded-glass-overrides';
 const DEFAULT_THEME = 'midnight';
 const DEFAULT_CYCLE = ['midnight', 'dark'];
@@ -60,6 +61,8 @@ interface ThemeContextValue {
   setReducedEffects: (v: boolean) => void;
   showTimestamps: boolean;
   setShowTimestamps: (v: boolean) => void;
+  showTurnMetadata: boolean;
+  setShowTurnMetadata: (v: boolean) => void;
   allThemes: LoadedTheme[];
   activeTheme: LoadedTheme;
   bgStyle: Record<string, string> | null;
@@ -79,6 +82,7 @@ const ThemeContext = createContext<ThemeContextValue>({
   font: DEFAULT_FONT_FAMILY,
   reducedEffects: false, setReducedEffects: () => {},
   showTimestamps: true, setShowTimestamps: () => {},
+  showTurnMetadata: false, setShowTurnMetadata: () => {},
   allThemes: BUILTIN_THEMES, activeTheme: BUILTIN_THEMES[0], bgStyle: null, patternStyle: null,
   setGlassOverride: () => {},
   reloadUserThemes: async () => {},
@@ -117,6 +121,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const [font, setFontState] = useState(DEFAULT_FONT_FAMILY);
   const [reducedEffects, setReducedEffectsState] = useState(() => getStored(REDUCED_EFFECTS_KEY, '') === '1');
   const [showTimestamps, setShowTimestampsState] = useState(() => getStored(SHOW_TIMESTAMPS_KEY, '1') !== '0');
+  // Task 5.1: opt-in per-turn metadata strip (model, tokens, cache hit %).
+  // Defaults to false — advanced diagnostic signal, mirrors the "default hidden"
+  // treatment of StatusBar's derived-metric widgets (commit da18ee7).
+  const [showTurnMetadata, setShowTurnMetadataState] = useState(() => getStored(SHOW_TURN_METADATA_KEY, '') === '1');
   const [userThemes, setUserThemes] = useState<LoadedTheme[]>([]);
   const [userThemesLoaded, setUserThemesLoaded] = useState(false);
   // Glass overrides for non-user themes — keyed by theme slug, persisted to
@@ -220,6 +228,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
           setShowTimestampsState(prefs.showTimestamps);
           try { localStorage.setItem(SHOW_TIMESTAMPS_KEY, prefs.showTimestamps ? '1' : '0'); } catch {}
         }
+        if (typeof prefs.showTurnMetadata === 'boolean') {
+          setShowTurnMetadataState(prefs.showTurnMetadata);
+          try { localStorage.setItem(SHOW_TURN_METADATA_KEY, prefs.showTurnMetadata ? '1' : '0'); } catch {}
+        }
         // Load per-theme glass overrides from disk (same pattern as theme/cycle)
         if (prefs.glassOverrides && typeof prefs.glassOverrides === 'object') {
           setGlassOverrides(prefs.glassOverrides);
@@ -253,6 +265,10 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       if (typeof prefs.showTimestamps === 'boolean') {
         setShowTimestampsState(prefs.showTimestamps);
         try { localStorage.setItem(SHOW_TIMESTAMPS_KEY, prefs.showTimestamps ? '1' : '0'); } catch {}
+      }
+      if (typeof prefs.showTurnMetadata === 'boolean') {
+        setShowTurnMetadataState(prefs.showTurnMetadata);
+        try { localStorage.setItem(SHOW_TURN_METADATA_KEY, prefs.showTurnMetadata ? '1' : '0'); } catch {}
       }
       if (prefs.glassOverrides && typeof prefs.glassOverrides === 'object') {
         setGlassOverrides(prefs.glassOverrides);
@@ -407,6 +423,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     persistAppearance({ showTimestamps: v });
   }, []);
 
+  // Task 5.1: setter for per-turn metadata strip. Mirrors setShowTimestamps —
+  // localStorage + disk persistence; empty deps array because persistAppearance
+  // is module-scope and setShowTurnMetadataState is a stable React setter.
+  const setShowTurnMetadata = useCallback((v: boolean) => {
+    setShowTurnMetadataState(v);
+    try { localStorage.setItem(SHOW_TURN_METADATA_KEY, v ? '1' : '0'); } catch {}
+    persistAppearance({ showTurnMetadata: v });
+  }, []);
+
   // Update a glass field for a non-user theme. Persists per-slug so the
   // user's glass preferences survive theme switches and app restarts.
   const setGlassOverride = useCallback((slug: string, field: string, value: number) => {
@@ -451,10 +476,12 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     cycleList, setCycleList, font,
     reducedEffects, setReducedEffects,
     showTimestamps, setShowTimestamps,
+    showTurnMetadata, setShowTurnMetadata,
     allThemes, activeTheme, bgStyle, patternStyle,
     setGlassOverride, reloadUserThemes,
   }), [activeSlug, setTheme, cycleTheme, cycleList, setCycleList, font,
        reducedEffects, setReducedEffects, showTimestamps, setShowTimestamps,
+       showTurnMetadata, setShowTurnMetadata,
        allThemes, activeTheme, bgStyle, patternStyle, setGlassOverride, reloadUserThemes]);
 
   return (

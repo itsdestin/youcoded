@@ -10,6 +10,7 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
+import type { SyncWarning } from '../../main/sync-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
 import SyncSetupWizard from './SyncSetupWizard';
@@ -86,29 +87,11 @@ interface SyncStatus {
   backends: BackendInstanceStatus[];
   lastSyncEpoch: number | null;
   backupMeta: { last_backup: string; platform: string; toolkit_version: string } | null;
-  warnings: string[];
+  // Fix: was string[] — now matches getSyncStatus() which returns SyncWarning[].
+  warnings: SyncWarning[];
   syncInProgress: boolean;
   syncingBackendId: string | null;
   syncedCategories: string[];
-}
-
-// --- Warning display map ---
-
-const WARNING_DISPLAY: Record<string, { text: string; level: 'danger' | 'warn' }> = {
-  'OFFLINE': { text: 'No Internet Connection', level: 'danger' },
-  'PERSONAL:NOT_CONFIGURED': { text: 'No Sync Backend Configured', level: 'danger' },
-  'PERSONAL:STALE': { text: 'No Recent Sync (>24h)', level: 'warn' },
-};
-
-function getWarningDisplay(code: string): { text: string; level: 'danger' | 'warn' } {
-  if (WARNING_DISPLAY[code]) return WARNING_DISPLAY[code];
-  if (code.startsWith('SKILLS:')) return { text: 'Unrouted Skills', level: 'danger' };
-  if (code.startsWith('PROJECTS:')) return { text: 'Unsynced Projects', level: 'danger' };
-  if (code.startsWith('PERSONAL:PULL_FAILED')) return { text: 'Pull Failed on Last Start', level: 'warn' };
-  if (code.startsWith('GIT:')) return { text: code.replace('GIT:', 'Git: '), level: 'warn' };
-  if (code.startsWith('MIGRATION:')) return { text: 'Migration Issue', level: 'warn' };
-  // Fallback: don't expose raw internal codes to users — point them at the log instead
-  return { text: 'Sync issue detected \u2014 check Sync Log for details', level: 'warn' };
 }
 
 // --- Helpers ---
@@ -396,10 +379,11 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     setSyncing(false);
   }, [claude, refreshStatus]);
 
-  const handleDismiss = useCallback(async (warning: string) => {
+  const handleDismiss = useCallback(async (code: string) => {
     try {
-      await claude.sync.dismissWarning(warning);
-      setStatus(prev => prev ? { ...prev, warnings: prev.warnings.filter(w => w !== warning) } : prev);
+      await claude.sync.dismissWarning(code);
+      // Fix: filter by w.code now that warnings are SyncWarning objects, not strings.
+      setStatus(prev => prev ? { ...prev, warnings: prev.warnings.filter(w => w.code !== code) } : prev);
     } catch {}
   }, [claude]);
 
@@ -442,6 +426,45 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     } catch {}
     setMenuOpenId(null);
   }, [claude, refreshStatus]);
+
+  // Wizard preselect: when a warning fix-action opens the wizard for a specific backend,
+  // we stash the backend id+type here so SyncSetupWizard jumps straight to the right flow.
+  const [wizardPreselect, setWizardPreselect] = useState<{ id: string; type: 'drive' | 'github' | 'icloud' } | undefined>();
+
+  const handleFixAction = useCallback(async (w: SyncWarning) => {
+    const action = w.fixAction;
+    if (!action) return;
+    switch (action.kind) {
+      case 'open-sync-setup': {
+        const backendId = action.payload?.backendId;
+        if (backendId) {
+          const backend = status?.backends.find(b => b.id === backendId);
+          if (backend) {
+            setWizardPreselect({ id: backend.id, type: backend.type });
+          }
+        }
+        setView('add-config');
+        break;
+      }
+      case 'open-external':
+        await (window as any).claude.shell.openExternal(action.payload.url);
+        break;
+      case 'retry': {
+        setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'uploading' }));
+        try {
+          await claude.sync.pushBackend(action.payload.backendId);
+          setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'uploaded' }));
+        } catch {
+          setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'error' }));
+        }
+        await refreshStatus();
+        break;
+      }
+      case 'dismiss':
+        await handleDismiss(w.code);
+        break;
+    }
+  }, [status, claude, refreshStatus, handleDismiss]);
 
   // Close overflow menu on outside click
   useEffect(() => {
@@ -501,7 +524,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 await refreshStatus();
               } catch {}
             }}
-            onClose={() => { setView('main'); setAddType(null); }}
+            onClose={() => { setView('main'); setAddType(null); setWizardPreselect(undefined); }}
+            preselectedBackendId={wizardPreselect?.id}
+            preselectedBackendType={wizardPreselect?.type}
           />
         ) : view === 'edit' && editingId ? (
           <EditBackendForm
@@ -539,7 +564,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
               {status && status.backends.length > 0 ? (
                 <div className="space-y-2">
-                  {(() => { const isOffline = status.warnings.includes('OFFLINE'); return status.backends.map(b => {
+                  {(() => {
+                    // Fix: warnings are now SyncWarning objects, not strings — check by .code.
+                    const isOffline = status.warnings.some(w => w.code === 'OFFLINE');
+                    return status.backends.map(b => {
                   // Pending = sync-enabled backend that can't currently push (offline or errored)
                   const isPending = b.syncEnabled && (b.lastError != null || isOffline);
                   return (
@@ -585,14 +613,20 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         )}
                       </div>
 
-                      {/* Status dot */}
-                      <div className={`w-2 h-2 rounded-full shrink-0 ${
-                        b.lastError ? 'bg-red-500' :
-                        actionFeedback[b.id]?.includes('ing') ? 'bg-blue-400 animate-pulse' :
-                        b.syncEnabled && b.connected && b.lastPushEpoch && (Date.now() / 1000 - b.lastPushEpoch) < 86400 ? 'bg-green-500' :
-                        b.syncEnabled && b.connected ? 'bg-yellow-500' :
-                        'bg-fg-muted/40'
-                      }`} />
+                      {/* Status dot — color derived from scoped warnings for this backend. */}
+                      {(() => {
+                        const scoped = status.warnings.filter(w => w.backendId === b.id);
+                        const hasDanger = scoped.some(w => w.level === 'danger');
+                        const hasWarn = scoped.some(w => w.level === 'warn');
+                        const dotClass =
+                          hasDanger ? 'bg-red-500'
+                          : hasWarn ? 'bg-amber-500'
+                          : actionFeedback[b.id]?.includes('ing') ? 'bg-blue-400 animate-pulse'
+                          : b.syncEnabled && b.connected && b.lastPushEpoch && (Date.now() / 1000 - b.lastPushEpoch) < 86400 ? 'bg-green-500'
+                          : b.syncEnabled && b.connected ? 'bg-yellow-500'
+                          : 'bg-fg-muted/40';
+                        return <div className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} />;
+                      })()}
 
                       {/* Sync toggle — green when auto-sync, gray when storage-only */}
                       <button
@@ -701,36 +735,53 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
               </button>
             </div>
 
-            {/* 3. Warnings */}
+            {/* 3. Warnings — typed SyncWarning objects with title/body/fix-action/stderr */}
             {status && status.warnings.length > 0 && (
               <div>
                 <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Warnings</h3>
-                <div className="space-y-1.5">
-                  {status.warnings.map((w, i) => {
-                    const display = getWarningDisplay(w);
-                    return (
-                      <div
-                        key={i}
-                        className={`flex items-center justify-between px-3 py-2 rounded-lg border ${
-                          display.level === 'danger'
-                            ? 'bg-[#DD4444]/8 border-[#DD4444]/20'
-                            : 'bg-[#FF9800]/8 border-[#FF9800]/20'
-                        }`}
-                      >
-                        <span className={`text-[11px] font-medium ${
-                          display.level === 'danger' ? 'text-[#DD4444]' : 'text-[#FF9800]'
-                        }`}>
-                          {display.text}
-                        </span>
-                        <button
-                          onClick={() => handleDismiss(w)}
-                          className="text-[10px] text-fg-muted hover:text-fg-2 px-2 py-0.5 rounded hover:bg-inset transition-colors"
-                        >
-                          Dismiss
-                        </button>
+                <div className="space-y-2">
+                  {status.warnings.map((w) => (
+                    <div
+                      key={`${w.code}:${w.backendId ?? ''}`}
+                      className={`rounded-lg border px-3 py-2 ${
+                        w.level === 'danger'
+                          ? 'border-red-500/30 bg-red-500/5'
+                          : 'border-amber-500/30 bg-amber-500/5'
+                      }`}
+                    >
+                      <div className="text-xs font-medium text-fg">{w.title}</div>
+                      <div className="text-[11px] text-fg-muted mt-0.5">{w.body}</div>
+                      {/* Collapsible stderr for UNKNOWN-code warnings where raw output helps diagnose */}
+                      {w.code === 'UNKNOWN' && w.stderr && (
+                        <details className="mt-1">
+                          <summary className="text-[10px] text-fg-faint cursor-pointer">
+                            Show error details
+                          </summary>
+                          <pre className="mt-1 p-2 bg-inset rounded text-[10px] whitespace-pre-wrap font-mono">
+                            {w.stderr}
+                          </pre>
+                        </details>
+                      )}
+                      <div className="flex gap-2 mt-2">
+                        {w.fixAction && (
+                          <button
+                            onClick={() => handleFixAction(w)}
+                            className="text-[11px] px-2 py-0.5 rounded bg-accent text-on-accent hover:brightness-110"
+                          >
+                            {w.fixAction.label}
+                          </button>
+                        )}
+                        {w.dismissible && (
+                          <button
+                            onClick={() => handleDismiss(w.code)}
+                            className="text-[11px] px-2 py-0.5 rounded border border-edge-dim text-fg-muted hover:bg-inset"
+                          >
+                            Dismiss
+                          </button>
+                        )}
                       </div>
-                    );
-                  })}
+                    </div>
+                  ))}
                 </div>
               </div>
             )}

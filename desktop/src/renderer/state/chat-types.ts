@@ -1,4 +1,7 @@
 import { ChatMessage, ToolCallState, ToolGroupState } from '../../shared/types';
+// Re-export so test files and future consumers can import ToolCallState from
+// chat-types directly, without reaching into the shared/types boundary.
+export type { ToolCallState };
 
 export interface InteractivePrompt {
   promptId: string;
@@ -18,11 +21,26 @@ export type AssistantTurnSegment =
   // Linked to the tool via toolUseId so the reducer can dedup across re-emits.
   | { type: 'plan'; messageId: string; toolUseId: string; content: string; planFilePath?: string; allowedPrompts?: unknown };
 
+export interface TurnUsage {
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheCreationTokens: number;
+}
+
 export interface AssistantTurn {
   id: string;
   segments: AssistantTurnSegment[];
   /** Epoch ms — captured from the first segment's transcript event */
   timestamp?: number;
+  /** Only set when stop_reason is non-end_turn (max_tokens, refusal, etc.). Null for normal completions. */
+  stopReason: string | null;
+  /** Model ID from the transcript (e.g. 'claude-opus-4-7'). Drives per-turn model chip + drift detection. */
+  model: string | null;
+  /** Token + cache usage from message.usage. Rendered in the opt-in metadata strip. */
+  usage: TurnUsage | null;
+  /** Anthropic API request ID (req_…). Surfaced in error banners for support correlation. */
+  anthropicRequestId: string | null;
 }
 
 // Snapshot of session stats + rate limits captured when /cost or /usage was typed.
@@ -67,7 +85,12 @@ export interface CopyPickerOption {
 }
 
 export type TimelineEntry =
-  | { kind: 'user'; message: ChatMessage }
+  // pending: true means the bubble was added optimistically by USER_PROMPT and
+  // is waiting for a matching TRANSCRIPT_USER_MESSAGE to confirm. When transcript
+  // catches up, it consumes the oldest matching pending entry (clears the flag)
+  // rather than dedup'ing via content-match against the last 10 entries (which
+  // silently dropped legitimate rapid-fire duplicates like "yes yes yes").
+  | { kind: 'user'; message: ChatMessage; pending?: boolean }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -150,6 +173,10 @@ export function createSessionChatState(): SessionChatState {
 
 export type ChatAction =
   | { type: 'RESET' }
+  // Replaces the entire ChatState Map with a deserialized snapshot. Fired once
+  // per remote-access connect so browser clients get the full chat history
+  // immediately rather than rebuilding it from replayed transcript events.
+  | { type: 'HYDRATE_CHAT_STATE'; sessions: SerializedChatState }
   | { type: 'SESSION_INIT'; sessionId: string }
   | { type: 'SESSION_REMOVE'; sessionId: string }
   | {
@@ -231,6 +258,12 @@ export type ChatAction =
       uuid: string;
       text: string;
       timestamp: number;
+      // Task 2.4: model from the transcript's `message.model` field, captured
+      // on the first assistant-text of a turn so the model pill/metadata is
+      // visible on in-flight turns (before turn-complete stamps it definitively).
+      model?: string;
+      parentAgentToolUseId?: string;
+      agentId?: string;
     }
   | {
       type: 'TRANSCRIPT_TOOL_USE';
@@ -239,6 +272,8 @@ export type ChatAction =
       toolUseId: string;
       toolName: string;
       toolInput: Record<string, unknown>;
+      parentAgentToolUseId?: string;
+      agentId?: string;
     }
   | {
       type: 'TRANSCRIPT_TOOL_RESULT';
@@ -248,12 +283,18 @@ export type ChatAction =
       result: string;
       isError: boolean;
       structuredPatch?: import('../../shared/types').StructuredPatchHunk[];
+      parentAgentToolUseId?: string;
+      agentId?: string;
     }
   | {
       type: 'TRANSCRIPT_TURN_COMPLETE';
       sessionId: string;
       uuid: string;
       timestamp: number;
+      stopReason: string | null;
+      model: string | null;
+      anthropicRequestId: string | null;
+      usage: TurnUsage | null;
     }
   | {
       type: 'HISTORY_LOADED';
@@ -309,3 +350,77 @@ export type ChatAction =
     };
 
 export type ChatState = Map<string, SessionChatState>;
+
+// ───────────────────────── Serialization ─────────────────────────
+// Maps and Sets are not JSON-safe. These helpers flatten a ChatState
+// into tuple arrays for transport over IPC / WebSocket, and restore
+// the live structure on the other side. Used by remote-access hydration
+// so a newly-connected browser can receive the desktop's full chat state
+// in a single message.
+
+export interface SerializedSessionChatState {
+  timeline: TimelineEntry[];
+  toolCalls: Array<[string, ToolCallState]>;
+  toolGroups: Array<[string, ToolGroupState]>;
+  assistantTurns: Array<[string, AssistantTurn]>;
+  isThinking: boolean;
+  streamingText: string;
+  currentGroupId: string | null;
+  currentTurnId: string | null;
+  lastActivityAt: number;
+  activeTurnToolIds: string[];
+  attentionState: AttentionState;
+  lastBufferActivityAt: number;
+  compactionPending: { startedAt: number; beforeContextTokens: number | null } | null;
+}
+
+export interface SerializedChatState {
+  sessions: Array<[string, SerializedSessionChatState]>;
+}
+
+export function serializeChatState(state: ChatState): SerializedChatState {
+  const sessions: Array<[string, SerializedSessionChatState]> = [];
+  for (const [sessionId, s] of state) {
+    sessions.push([
+      sessionId,
+      {
+        timeline: s.timeline,
+        toolCalls: Array.from(s.toolCalls.entries()),
+        toolGroups: Array.from(s.toolGroups.entries()),
+        assistantTurns: Array.from(s.assistantTurns.entries()),
+        isThinking: s.isThinking,
+        streamingText: s.streamingText,
+        currentGroupId: s.currentGroupId,
+        currentTurnId: s.currentTurnId,
+        lastActivityAt: s.lastActivityAt,
+        activeTurnToolIds: Array.from(s.activeTurnToolIds),
+        attentionState: s.attentionState,
+        lastBufferActivityAt: s.lastBufferActivityAt,
+        compactionPending: s.compactionPending,
+      },
+    ]);
+  }
+  return { sessions };
+}
+
+export function deserializeChatState(s: SerializedChatState): ChatState {
+  const result: ChatState = new Map();
+  for (const [sessionId, ser] of s.sessions) {
+    result.set(sessionId, {
+      timeline: ser.timeline,
+      toolCalls: new Map(ser.toolCalls),
+      toolGroups: new Map(ser.toolGroups),
+      assistantTurns: new Map(ser.assistantTurns),
+      isThinking: ser.isThinking,
+      streamingText: ser.streamingText,
+      currentGroupId: ser.currentGroupId,
+      currentTurnId: ser.currentTurnId,
+      lastActivityAt: ser.lastActivityAt,
+      activeTurnToolIds: new Set(ser.activeTurnToolIds),
+      attentionState: ser.attentionState,
+      lastBufferActivityAt: ser.lastBufferActivityAt,
+      compactionPending: ser.compactionPending,
+    });
+  }
+  return result;
+}

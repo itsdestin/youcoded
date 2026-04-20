@@ -137,6 +137,10 @@ describe('Attention state reducer actions', () => {
       sessionId: SESSION,
       uuid: 'u1',
       timestamp: 3000,
+      stopReason: null,
+      model: null,
+      anthropicRequestId: null,
+      usage: null,
     });
     expect(state.get(SESSION)!.attentionState).toBe('ok');
   });

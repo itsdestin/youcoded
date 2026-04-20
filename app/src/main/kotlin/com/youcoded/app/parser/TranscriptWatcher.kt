@@ -78,6 +78,12 @@ class TranscriptWatcher(
         var fileObserver: FileObserver? = null,
         val mutex: Mutex = Mutex(),
         var accumulatedStreamingText: String = "",
+        // Subagent threading: shared index for parent-Agent correlation. All
+        // recordParentAgentToolUse() + bindSubagent() calls go through this.
+        val subagentIndex: SubagentIndex = SubagentIndex(),
+        // Subagent threading: watches <parentSessionId>/subagents/ for streaming
+        // subagent work and emits stamped TranscriptEvents via _events.
+        var subagentWatcher: SubagentWatcher? = null,
     )
 
     /**
@@ -121,6 +127,26 @@ class TranscriptWatcher(
                 }
             }
             state.fileObserver?.startWatching()
+
+            // Subagent threading: watch <parent-session-id>/subagents/ for
+            // streaming subagent work. The subagents/ dir sits next to the
+            // parent .jsonl file as a directory named after the session.
+            val parentSessionId = jsonlFile.nameWithoutExtension
+            val projectDir = jsonlFile.parentFile
+            if (projectDir != null) {
+                val subagentsDir = File(File(projectDir, parentSessionId), "subagents")
+                val sw = SubagentWatcher(
+                    sessionId = mobileSessionId,
+                    subagentsDir = subagentsDir,
+                    index = state.subagentIndex,
+                    // Use scope.launch so emit() (a suspend fun) can be called
+                    // from the non-suspending SubagentWatcher callback.
+                    emit = { event -> scope.launch { _events.emit(event) } },
+                    scope = scope,
+                )
+                state.subagentWatcher = sw
+                sw.start()
+            }
 
             // Polling fallback — FileObserver can miss events on some Android devices
             while (isActive) {
@@ -192,7 +218,7 @@ class TranscriptWatcher(
 
         when (type) {
             "user" -> parseUserLine(obj, sessionId, uuid, timestamp, state)
-            "assistant" -> parseAssistantLine(obj, sessionId, uuid, timestamp)
+            "assistant" -> parseAssistantLine(obj, sessionId, uuid, timestamp, state)
             "progress" -> parseProgressLine(obj, sessionId, state)
             // "file-history-snapshot" — skip
         }
@@ -284,6 +310,7 @@ class TranscriptWatcher(
         sessionId: String,
         uuid: String,
         timestamp: Long,
+        state: WatcherState? = null,
     ) {
         val message = obj.optJSONObject("message") ?: return
         val content = message.optJSONArray("content") ?: return
@@ -308,9 +335,19 @@ class TranscriptWatcher(
                     val toolName = block.optString("name", "")
                     val toolInput = block.optJSONObject("input") ?: JSONObject()
                     if (toolUseId.isNotBlank()) {
+                        // Emit the parent event FIRST so the reducer creates the
+                        // parent ToolCallState before any buffered subagent events arrive.
                         _events.tryEmit(TranscriptEvent.ToolUse(
                             sessionId, uuid, timestamp, toolUseId, toolName, toolInput,
                         ))
+                        // After emitting, register Agent tool_uses for subagent correlation
+                        // and flush any subagent events that were buffered waiting for this parent.
+                        if (toolName == "Agent" && state != null) {
+                            val desc = toolInput.optString("description", "")
+                            val subagentType = toolInput.optString("subagent_type", "")
+                            state.subagentIndex.recordParentAgentToolUse(toolUseId, desc, subagentType)
+                            state.subagentWatcher?.flushAllPending()
+                        }
                     }
                 }
                 "thinking" -> {
@@ -372,6 +409,9 @@ class TranscriptWatcher(
         val state = watchers.remove(mobileSessionId) ?: return
         state.fileObserver?.stopWatching()
         state.job?.cancel()
+        // Subagent threading: stop the subagent watcher and release its resources.
+        state.subagentWatcher?.stop()
+        state.subagentWatcher = null
     }
 
 }

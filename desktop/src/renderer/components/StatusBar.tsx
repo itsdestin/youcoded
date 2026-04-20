@@ -3,6 +3,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import type { PermissionMode } from '../../shared/types';
+import type { SyncWarning } from '../../main/sync-state';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { FastIcon } from './Icons';
 
@@ -37,7 +38,7 @@ interface StatusData {
   gitBranch: string | null;
   sessionStats: SessionStats | null;
   syncStatus: string | null;
-  syncWarnings: string | null;
+  syncWarnings: SyncWarning[] | null;
 }
 
 const MODELS = ['haiku', 'sonnet', 'opus[1m]'] as const;
@@ -129,28 +130,6 @@ interface Props {
   onOpenModelPicker?: () => void;
 }
 
-// Map raw warning codes to the same descriptive text used in the terminal statusline
-const WARNING_MAP: Record<string, { text: string; level: 'danger' | 'warn' }> = {
-  'OFFLINE': { text: 'DANGER: No Internet Connection', level: 'danger' },
-  'PERSONAL:NOT_CONFIGURED': { text: 'DANGER: No Sync Act. for Personal Data', level: 'danger' },
-  'PERSONAL:STALE': { text: 'WARN: No Recent Personal Sync (>24h)', level: 'warn' },
-};
-
-function parseSyncWarnings(raw: string | null): { text: string; level: 'danger' | 'warn' }[] {
-  if (!raw) return [];
-  return raw.split('\n').filter(Boolean).map((line) => {
-    // Check for exact match first
-    if (WARNING_MAP[line]) return WARNING_MAP[line];
-    // Prefix match for SKILLS:* and PROJECTS:*
-    if (line.startsWith('SKILLS:')) return { text: 'DANGER: Unsynced Skills', level: 'danger' as const };
-    if (line.startsWith('PROJECTS:')) return { text: 'DANGER: Projects Excluded From Sync', level: 'danger' as const };
-    // Fallback: pass through raw text
-    if (line.startsWith('DANGER:') || line.startsWith('OFFLINE')) {
-      return { text: line, level: 'danger' as const };
-    }
-    return { text: line, level: 'warn' as const };
-  });
-}
 
 const warnStyles = {
   danger: 'bg-[#DD4444]/15 text-[#DD4444] border-[#DD4444]/25',
@@ -598,7 +577,8 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
 
 export default function StatusBar({ statusData, onRunSync, onOpenSync, model, onCycleModel, permissionMode, onCyclePermission, fast, effort, onOpenModelPicker }: Props) {
   const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncStatus, syncWarnings } = statusData;
-  const warnings = parseSyncWarnings(syncWarnings);
+  // SyncWarning[] comes pre-typed; render title + level directly.
+  const warnings = (syncWarnings ?? []).map((w) => ({ text: w.title, level: w.level }));
   const { activeTheme, cycleTheme } = useTheme();
   const { visible, toggle } = useWidgetVisibility();
   const [popupOpen, setPopupOpen] = useState(false);

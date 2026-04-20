@@ -103,20 +103,12 @@ class SkillScanner(private val homeDir: File, private val context: Context) {
             }
         } catch (_: Exception) {}
 
-        // 3. Curated-only entries
-        val registryKeys = registry.keys()
-        while (registryKeys.hasNext()) {
-            val id = registryKeys.next()
-            if (!discoveredIds.contains(id)) {
-                val meta = registry.getJSONObject(id)
-                val entry = JSONObject(meta.toString())
-                entry.put("id", id)
-                entry.put("type", meta.optString("type", "plugin"))
-                entry.put("visibility", meta.optString("visibility", "published"))
-                skills.put(entry)
-            }
-        }
-
+        // Fix: do NOT inject curated-registry entries as if they were installed.
+        // skill-registry.json is enrichment-only metadata. Injecting its entries
+        // here was surfacing ~21 "pre-installed" skills on fresh installs whose
+        // plugins weren't actually on disk — clicking them fired unknown slash
+        // commands. Desktop already removed this behavior; see the comment on
+        // desktop/src/main/skill-scanner.ts loadCuratedRegistry().
         return skills
     }
 

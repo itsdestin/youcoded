@@ -109,6 +109,14 @@ interface SyncSetupWizardProps {
     config: Record<string, string>;
   }) => Promise<void>;
   onClose: () => void;
+  /**
+   * When set, skip the provider picker and land directly on the reconnect
+   * step for this backend. Used when invoked from a push-failure warning's
+   * "Fix it" button so the user doesn't have to re-pick Google Drive.
+   */
+  preselectedBackendId?: string;
+  /** Must be set when preselectedBackendId is set; determines which auth flow to jump to. */
+  preselectedBackendType?: 'drive' | 'github' | 'icloud';
 }
 
 // Normalize a GitHub repo URL for duplicate comparison (strip trailing slash and .git)
@@ -116,14 +124,28 @@ function normalizeRepoUrl(url: string): string {
   return url.trim().replace(/\.git$/, '').replace(/\/+$/, '').toLowerCase();
 }
 
-export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose }: SyncSetupWizardProps) {
-  const [step, setStep] = useState<WizardStep>(initialType ? 'prereqs' : 'type');
-  const [backendType, setBackendType] = useState<BackendType | null>(initialType ?? null);
+export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose, preselectedBackendId, preselectedBackendType }: SyncSetupWizardProps) {
+  // If a specific backend needs reconnecting, jump straight to auth for that type.
+  // iCloud has no auth step (no OAuth flow), so land at 'prereqs' for it instead.
+  // Falls back to the initialType behavior (skip type-picker → prereqs) if set,
+  // or the default 'type' picker if neither preselect nor initialType is provided.
+  const [step, setStep] = useState<WizardStep>(() => {
+    if (preselectedBackendId && preselectedBackendType) {
+      return preselectedBackendType === 'icloud' ? 'prereqs' : 'auth';
+    }
+    return initialType ? 'prereqs' : 'type';
+  });
+  const [backendType, setBackendType] = useState<BackendType | null>(
+    preselectedBackendType ?? initialType ?? null
+  );
   const [prereqs, setPrereqs] = useState<PrereqStatus | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Config fields
-  const [label, setLabel] = useState('');
+  // Config fields — pre-populate label when jumping straight to auth/reconnect
+  // so the Configure step has a sensible default even though selectType() was skipped.
+  const [label, setLabel] = useState(
+    preselectedBackendType ? `My ${BACKEND_LABELS[preselectedBackendType]}` : ''
+  );
   const [driveFolder, setDriveFolder] = useState('Claude');
   const [remoteName, setRemoteName] = useState<string | null>(null);
   const [ghUsername, setGhUsername] = useState<string | null>(null);
@@ -248,11 +270,19 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
 
   // --- Step: OAuth / Sign-In ---
   if (step === 'auth' && backendType) {
-    const isAdditionalDrive = backendType === 'drive' && existingBackends.some(b => b.type === 'drive');
+    // Reconnect mode: preselectedBackendId is set when the user arrived via
+    // a push-failure warning's "Fix it" button. Copy must steer them to
+    // sign in with the SAME Google account — not a different one, and not
+    // the "add another account" flow.
+    const isReconnect = !!preselectedBackendId;
+    const isAdditionalDrive = !isReconnect
+      && backendType === 'drive'
+      && existingBackends.some(b => b.type === 'drive');
     return (
       <AuthStep
         backendType={backendType}
         isAdditionalDrive={isAdditionalDrive}
+        isReconnect={isReconnect}
         onSuccess={(authResult) => {
           if (backendType === 'drive') {
             setRemoteName(authResult.remoteName || 'gdrive');
@@ -857,12 +887,18 @@ function PrereqRow({ label, status }: { label: string; status: 'checking' | 'rea
 function AuthStep({
   backendType,
   isAdditionalDrive = false,
+  isReconnect = false,
   onSuccess,
   onBack,
   onClose,
 }: {
   backendType: BackendType;
   isAdditionalDrive?: boolean;
+  // True when the user arrived via a push-failure warning's "Fix it" button.
+  // In that case we want them to sign in with the SAME account they used
+  // before (we don't yet store the email — that's a follow-up) rather than
+  // seeing the "connect another account" copy intended for a second Drive.
+  isReconnect?: boolean;
   onSuccess: (result: { remoteName?: string; username?: string }) => void;
   onBack: () => void;
   onClose: () => void;
@@ -898,9 +934,13 @@ function AuthStep({
   };
 
   const title = backendType === 'drive'
-    ? (isAdditionalDrive ? 'Connect another Google account' : 'Connect your Google account')
-    : 'Sign in to GitHub';
-  const buttonLabel = backendType === 'drive' ? 'Connect to Google' : 'Sign in to GitHub';
+    ? (isReconnect ? 'Reconnect Google Drive'
+       : isAdditionalDrive ? 'Connect another Google account'
+       : 'Connect your Google account')
+    : (isReconnect ? 'Reconnect to GitHub' : 'Sign in to GitHub');
+  const buttonLabel = backendType === 'drive'
+    ? (isReconnect ? 'Reconnect to Google' : 'Connect to Google')
+    : (isReconnect ? 'Reconnect to GitHub' : 'Sign in to GitHub');
 
   return (
     <div className="flex flex-col h-full">
@@ -915,6 +955,11 @@ function AuthStep({
           <>
             <div className="text-fg-dim text-[11px] mb-6 max-w-xs space-y-2">
               <div>A browser window will open for you to sign in. After you sign in, come back here — it'll update automatically.</div>
+              {isReconnect && backendType === 'drive' && (
+                <div className="text-amber-400 text-[10px] pt-1">
+                  Important: sign in with the <strong>same Google account</strong> you originally connected. Picking a different account would start a new backup instead of restoring the existing one.
+                </div>
+              )}
               {isAdditionalDrive && (
                 <div className="text-amber-400 text-[10px] pt-1">
                   Tip: make sure you pick the <strong>other</strong> Google account (e.g., work vs. personal vs. school) in the browser — not the same one you already connected. You may need to sign out of Google in your browser first, or use an incognito window.

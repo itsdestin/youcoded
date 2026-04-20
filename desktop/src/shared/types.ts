@@ -78,6 +78,28 @@ export interface TranscriptEvent {
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
+    // Task 1.1: widened turn-complete payload so the reducer can attach the
+    // per-turn model, token/cache usage, and the Anthropic requestId to the
+    // completing AssistantTurn for UI surfacing. All optional — the field is
+    // shared across event types, and turn-complete is the only current writer.
+    /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
+    model?: string;
+    /** Anthropic API request id from the JSONL line's top-level `requestId`. */
+    anthropicRequestId?: string;
+    /** Token + cache usage snapshot from message.usage. */
+    usage?: {
+      inputTokens: number;
+      outputTokens: number;
+      cacheReadTokens: number;
+      cacheCreationTokens: number;
+    };
+    /**
+     * Populated only on events emitted from a subagent JSONL — identifies
+     * the parent Agent tool_use that this subagent's work threads into.
+     */
+    parentAgentToolUseId?: string;
+    /** Stable subagent ID — matches the filename agent-<agentId>.jsonl on disk. */
+    agentId?: string;
   };
 }
 
@@ -99,6 +121,26 @@ export interface StructuredPatchHunk {
   lines: string[];
 }
 
+/**
+ * One entry in a subagent's nested timeline rendered inside AgentView.
+ * Narrower than ToolCallState — no awaiting-approval, no tool groups,
+ * no turn tracking (subagents don't hit the permission hook flow and
+ * don't have user-typed messages).
+ */
+export type SubagentSegment =
+  | { type: 'text'; id: string; content: string }
+  | {
+      type: 'tool';
+      id: string;
+      toolUseId: string;
+      toolName: string;
+      input: Record<string, unknown>;
+      status: 'running' | 'complete' | 'failed';
+      response?: string;
+      error?: string;
+      structuredPatch?: StructuredPatchHunk[];
+    };
+
 export interface ToolCallState {
   toolUseId: string;
   toolName: string;
@@ -110,6 +152,13 @@ export interface ToolCallState {
   error?: string;
   /** Set when the tool result carries a structuredPatch (Edit/MultiEdit). */
   structuredPatch?: StructuredPatchHunk[];
+  // Populated for Agent tools only (toolName === 'Agent'):
+  // - subagentSegments: appended to as the subagent's JSONL streams in; drives AgentView timeline
+  // - agentType: copied from meta.json once the subagent is bound (e.g. 'Explore', 'Plan')
+  // - agentId: stable subagent ID, matches the filename agent-<agentId>.jsonl on disk
+  subagentSegments?: SubagentSegment[];
+  agentType?: string;
+  agentId?: string;
 }
 
 export interface ToolGroupState {

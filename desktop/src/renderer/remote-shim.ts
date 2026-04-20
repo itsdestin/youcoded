@@ -198,6 +198,18 @@ function handleMessage(data: string): void {
       // window.claude.sync.restore.onProgress(). Broadcast (no sessionId).
       dispatchEvent('sync:restore:progress', payload);
       break;
+    case 'chat:hydrate':
+      // Full chat state snapshot sent by the host when a remote client connects.
+      // Dispatched into the chat reducer via window.claude.on.chatHydrate in App.tsx.
+      dispatchEvent('chat:hydrate', payload);
+      break;
+    case 'theme:reload':
+      // Fix: without this case, Android theme installs never refreshed the
+      // appearance picker. SessionService broadcasts {type:'theme:reload',
+      // payload:{slug}} after install + on file-watcher events; we unwrap
+      // slug to match theme-context's onReload(slug) signature.
+      dispatchEvent('theme:reload', payload?.slug);
+      break;
   }
 }
 
@@ -569,6 +581,8 @@ export function installShim(): void {
       promptShow: (cb: Callback) => addListener('prompt:show', cb),
       promptDismiss: (cb: Callback) => addListener('prompt:dismiss', cb),
       promptComplete: (cb: Callback) => addListener('prompt:complete', cb),
+      // Full chat state snapshot received from host on connect (remote browsers only).
+      chatHydrate: (cb: Callback) => addListener('chat:hydrate', cb),
     },
     skills: {
       list: () => invoke('skills:list'),
@@ -652,7 +666,14 @@ export function installShim(): void {
       list: () => invoke('theme:list').catch(() => []),
       readFile: (slug: string) => invoke('theme:read-file', { slug }).catch(() => null),
       writeFile: (slug: string, content: string) => invoke('theme:write-file', { slug, content }).catch(() => {}),
-      onReload: (_cb: Callback) => (() => {}),
+      // Fix: previously a no-op stub, which silently dropped theme:reload
+      // events from the Android file-watcher and post-install broadcasts.
+      // theme-context calls this with (slug) => readFile(slug) to refresh the
+      // appearance picker when a theme is installed/edited externally.
+      onReload: (cb: Callback) => {
+        const handler = addListener('theme:reload', cb);
+        return () => removeListener('theme:reload', handler);
+      },
       marketplace: {
         list: (filters?: any) => invoke('theme-marketplace:list', filters),
         detail: (slug: string) => invoke('theme-marketplace:detail', { slug }),

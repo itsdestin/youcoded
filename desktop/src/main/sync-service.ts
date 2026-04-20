@@ -23,7 +23,17 @@ import path from 'path';
 import os from 'os';
 import { execFile, execFileSync } from 'child_process';
 import { promisify } from 'util';
-import { type BackendInstance, migrateConfigToV2, syncLegacyKeys } from './sync-state';
+import {
+  type BackendInstance,
+  type SyncWarning,
+  addOrReplaceWarning,
+  clearWarningsByBackend,
+  migrateConfigToV2,
+  readWarnings,
+  syncLegacyKeys,
+  writeWarnings,
+} from './sync-state';
+import { classifyPushError, truncateStderr } from './sync-error-classifier';
 
 const execFileAsync = promisify(execFile);
 
@@ -157,6 +167,8 @@ export class SyncService extends EventEmitter {
       }
     } catch {}
 
+    this.cleanupStaleBackendErrorFiles();
+
     // Write .app-sync-active marker so bash hooks skip sync
     try {
       fs.mkdirSync(path.dirname(this.appSyncMarkerPath), { recursive: true });
@@ -251,14 +263,44 @@ export class SyncService extends EventEmitter {
     return path.join(this.claudeDir, 'toolkit-state', `.sync-marker-${backendId}`);
   }
 
-  /** Write per-backend error message (or clear it on success). */
-  private writeBackendError(backendId: string, error: string | null): void {
-    const errorPath = path.join(this.claudeDir, 'toolkit-state', `.sync-error-${backendId}`);
-    if (error) {
-      this.atomicWrite(errorPath, error);
-    } else {
-      try { fs.unlinkSync(errorPath); } catch {}
-    }
+  /**
+   * Record a push-cycle failure for a backend: classify stderr and write a
+   * SyncWarning (one per backend per cycle — de-duped by addOrReplaceWarning).
+   * Also logs the classified code to backup.log for future diagnosis.
+   */
+  private async recordBackendFailure(instance: BackendInstance, stderr: string): Promise<void> {
+    const warning = classifyPushError(stderr, instance.type, instance);
+    await addOrReplaceWarning(warning);
+    this.logBackup(
+      warning.level === 'danger' ? 'WARN' : 'INFO',
+      `${instance.id} classified as ${warning.code}`,
+      'sync.push.classify',
+      { code: warning.code, stderr: truncateStderr(stderr) },
+    );
+  }
+
+  /** Clear all push-failure warnings for a backend (call on successful push). */
+  private async clearBackendFailures(backendId: string): Promise<void> {
+    await clearWarningsByBackend(backendId);
+  }
+
+  /**
+   * Delete leftover .sync-error-* files from the pre-warnings-refactor era.
+   * The typed .sync-warnings.json replaces them; old files would confuse
+   * anyone debugging and serve no purpose. Called from start() — extracted
+   * to its own method so tests can exercise just this migration without
+   * spinning up the whole sync service.
+   */
+  cleanupStaleBackendErrorFiles(): void {
+    try {
+      const toolkitStateDir = path.join(this.claudeDir, 'toolkit-state');
+      const entries = fs.readdirSync(toolkitStateDir);
+      for (const name of entries) {
+        if (name.startsWith('.sync-error-')) {
+          try { fs.unlinkSync(path.join(toolkitStateDir, name)); } catch {}
+        }
+      }
+    } catch {}
   }
 
   // Legacy helpers kept for health check auto-detect (reads flat keys)
@@ -569,6 +611,7 @@ export class SyncService extends EventEmitter {
     const remoteBase = `${rcloneRemote}:${driveRoot}/Backup/personal`;
     const sysRemote = `${remoteBase}/system-backup`;
     let errors = 0;
+    let firstFailStderr = '';
 
     // Memory files — per project key
     const projectsDir = path.join(this.claudeDir, 'projects');
@@ -577,7 +620,11 @@ export class SyncService extends EventEmitter {
         const memoryDir = path.join(projectsDir, projectKey, 'memory');
         if (!this.dirExists(memoryDir)) continue;
         const r = await this.rclone(['copy', memoryDir + '/', `${remoteBase}/memory/${projectKey}/`, '--update', '--skip-links']);
-        if (r.code !== 0) { this.logBackup('WARN', `Drive push memory/${projectKey} failed`, 'sync.push.drive'); errors++; }
+        if (r.code !== 0) {
+          this.logBackup('WARN', `Drive push memory/${projectKey} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+          if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+          errors++;
+        }
       }
     }
 
@@ -585,7 +632,11 @@ export class SyncService extends EventEmitter {
     const claudeMd = path.join(this.claudeDir, 'CLAUDE.md');
     if (this.fileExists(claudeMd)) {
       const r = await this.rclone(['copyto', claudeMd, `${remoteBase}/CLAUDE.md`, '--update']);
-      if (r.code !== 0) { this.logBackup('WARN', 'Drive push CLAUDE.md failed', 'sync.push.drive'); errors++; }
+      if (r.code !== 0) {
+        this.logBackup('WARN', 'Drive push CLAUDE.md failed', 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+        if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+        errors++;
+      }
     }
 
     // Encyclopedia
@@ -631,7 +682,11 @@ export class SyncService extends EventEmitter {
           }
 
           const r = await this.rclone(['copy', snapSlugDir + '/', `${remoteBase}/conversations/${slugName}/`, '--checksum', '--include', '*.jsonl']);
-          if (r.code !== 0) { this.logBackup('WARN', `Drive push conversations/${slugName} failed`, 'sync.push.drive'); errors++; }
+          if (r.code !== 0) {
+            this.logBackup('WARN', `Drive push conversations/${slugName} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+            if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+            errors++;
+          }
         }
       } finally {
         fs.rmSync(snapDir, { recursive: true, force: true });
@@ -649,7 +704,11 @@ export class SyncService extends EventEmitter {
     for (const [local, remote] of sysFiles) {
       if (this.fileExists(local)) {
         const r = await this.rclone(['copyto', local, remote, '--update']);
-        if (r.code !== 0) { this.logBackup('WARN', `Drive push ${path.basename(local)} failed`, 'sync.push.drive'); errors++; }
+        if (r.code !== 0) {
+          this.logBackup('WARN', `Drive push ${path.basename(local)} failed`, 'sync.push.drive', { stderr: truncateStderr(r.stderr || '') });
+          if (!firstFailStderr && r.stderr) firstFailStderr = r.stderr;
+          errors++;
+        }
       }
     }
     // Plans and specs directories
@@ -665,6 +724,11 @@ export class SyncService extends EventEmitter {
       await this.rclone(['copyto', this.conversationIndexPath, `${sysRemote}/conversation-index.json`, '--checksum']);
     }
 
+    if (errors > 0) {
+      await this.recordBackendFailure(instance, firstFailStderr);
+    } else {
+      await this.clearBackendFailures(instance.id);
+    }
     this.logBackup(errors > 0 ? 'WARN' : 'INFO', `Drive sync completed (${errors} error(s))`, 'sync.push.drive');
     return errors;
   }
@@ -679,6 +743,7 @@ export class SyncService extends EventEmitter {
     // Per-instance clone directory so multiple GitHub backends don't collide
     const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
     let errors = 0;
+    let firstFailStderr = '';
 
     // Init repo if missing
     if (!this.dirExists(path.join(repoDir, '.git'))) {
@@ -795,11 +860,17 @@ export class SyncService extends EventEmitter {
       await this.gitExec(['commit', '-m', 'auto: sync', '--no-gpg-sign'], repoDir);
       const pushResult = await this.gitExec(['push', 'personal-sync', 'main'], repoDir);
       if (pushResult.code !== 0) {
-        this.logBackup('WARN', 'Push to personal-sync repo failed', 'sync.push.github');
+        this.logBackup('WARN', 'Push to personal-sync repo failed', 'sync.push.github', { stderr: truncateStderr(pushResult.stderr || '') });
+        if (!firstFailStderr && pushResult.stderr) firstFailStderr = pushResult.stderr;
         errors++;
       }
     }
 
+    if (errors > 0) {
+      await this.recordBackendFailure(instance, firstFailStderr);
+    } else {
+      await this.clearBackendFailures(instance.id);
+    }
     this.logBackup(errors > 0 ? 'WARN' : 'INFO', 'GitHub sync completed', 'sync.push.github');
     return errors;
   }
@@ -818,6 +889,7 @@ export class SyncService extends EventEmitter {
 
     fs.mkdirSync(icloudPath, { recursive: true });
     let errors = 0;
+    let firstFailStderr = '';
 
     // Memory files
     const projectsDir = path.join(this.claudeDir, 'projects');
@@ -827,14 +899,26 @@ export class SyncService extends EventEmitter {
         if (!this.dirExists(memoryDir)) continue;
         const dest = path.join(icloudPath, 'memory', projectKey);
         fs.mkdirSync(dest, { recursive: true });
-        try { await this.rsyncOrCp(memoryDir, dest); } catch { errors++; }
+        try {
+          await this.rsyncOrCp(memoryDir, dest);
+        } catch (e) {
+          this.logBackup('WARN', `iCloud push memory/${projectKey} failed`, 'sync.push.icloud', { stderr: truncateStderr(String(e)) });
+          if (!firstFailStderr) firstFailStderr = String(e);
+          errors++;
+        }
       }
     }
 
     // CLAUDE.md
     const claudeMd = path.join(this.claudeDir, 'CLAUDE.md');
     if (this.fileExists(claudeMd)) {
-      try { fs.copyFileSync(claudeMd, path.join(icloudPath, 'CLAUDE.md')); } catch {}
+      try {
+        fs.copyFileSync(claudeMd, path.join(icloudPath, 'CLAUDE.md'));
+      } catch (e) {
+        this.logBackup('WARN', 'iCloud push CLAUDE.md failed', 'sync.push.icloud', { stderr: truncateStderr(String(e)) });
+        if (!firstFailStderr) firstFailStderr = String(e);
+        errors++;
+      }
     }
 
     // Encyclopedia
@@ -842,24 +926,46 @@ export class SyncService extends EventEmitter {
     if (this.dirExists(encDir)) {
       const dest = path.join(icloudPath, 'encyclopedia');
       fs.mkdirSync(dest, { recursive: true });
-      try { await this.rsyncOrCp(encDir, dest); } catch {}
+      try {
+        await this.rsyncOrCp(encDir, dest);
+      } catch (e) {
+        this.logBackup('WARN', 'iCloud push encyclopedia failed', 'sync.push.icloud', { stderr: truncateStderr(String(e)) });
+        if (!firstFailStderr) firstFailStderr = String(e);
+        errors++;
+      }
     }
 
-    // Skills
+    // Skills — aggregate errors across individual skills so one bad skill
+    // doesn't spam per-skill WARN entries. The classifier only needs one
+    // representative stderr to pick a code.
     const skillsDir = path.join(this.claudeDir, 'skills');
     if (this.dirExists(skillsDir)) {
+      let skillsStderr = '';
+      let skillsErrors = 0;
       for (const skillName of fs.readdirSync(skillsDir)) {
         const skillDir = path.join(skillsDir, skillName);
         if (!this.dirExists(skillDir) || this.isToolkitOwned(skillDir)) continue;
         if (!this.shouldSyncSkill(skillName)) continue;
         const dest = path.join(icloudPath, 'skills', skillName);
         fs.mkdirSync(dest, { recursive: true });
-        try { await this.rsyncOrCp(skillDir, dest); } catch {}
+        try {
+          await this.rsyncOrCp(skillDir, dest);
+        } catch (e) {
+          if (!skillsStderr) skillsStderr = String(e);
+          skillsErrors++;
+        }
+      }
+      if (skillsErrors > 0) {
+        this.logBackup('WARN', `iCloud push skills failed (${skillsErrors} skill(s))`, 'sync.push.icloud', { stderr: truncateStderr(skillsStderr) });
+        if (!firstFailStderr) firstFailStderr = skillsStderr;
+        errors++;
       }
     }
 
-    // Conversations
+    // Conversations — aggregate per-conversation-file errors the same way as skills.
     if (this.dirExists(projectsDir)) {
+      let convStderr = '';
+      let convErrors = 0;
       for (const slugName of fs.readdirSync(projectsDir)) {
         const slugDir = path.join(projectsDir, slugName);
         if (!this.dirExists(slugDir)) continue;
@@ -871,14 +977,27 @@ export class SyncService extends EventEmitter {
         for (const f of jsonlFiles) {
           const dest = path.join(icloudPath, 'conversations', slugName);
           fs.mkdirSync(dest, { recursive: true });
-          try { fs.copyFileSync(path.join(slugDir, f), path.join(dest, f)); } catch {}
+          try {
+            fs.copyFileSync(path.join(slugDir, f), path.join(dest, f));
+          } catch (e) {
+            if (!convStderr) convStderr = String(e);
+            convErrors++;
+          }
         }
+      }
+      if (convErrors > 0) {
+        this.logBackup('WARN', `iCloud push conversations failed (${convErrors} file(s))`, 'sync.push.icloud', { stderr: truncateStderr(convStderr) });
+        if (!firstFailStderr) firstFailStderr = convStderr;
+        errors++;
       }
     }
 
-    // System config
+    // System config — aggregate sys-file and plans/specs/index errors into
+    // one "system-config" warning since they share a fix path (disk/permission).
     const sysPath = path.join(icloudPath, 'system-backup');
     fs.mkdirSync(sysPath, { recursive: true });
+    let sysStderr = '';
+    let sysErrors = 0;
     for (const [src, name] of [
       [this.configPath, 'config.json'],
       [path.join(this.claudeDir, 'settings.json'), 'settings.json'],
@@ -886,21 +1005,48 @@ export class SyncService extends EventEmitter {
       [path.join(this.claudeDir, 'mcp.json'), 'mcp.json'],
       [path.join(this.claudeDir, 'history.jsonl'), 'history.jsonl'],
     ] as const) {
-      if (this.fileExists(src)) { try { fs.copyFileSync(src, path.join(sysPath, name)); } catch {} }
+      if (this.fileExists(src)) {
+        try {
+          fs.copyFileSync(src, path.join(sysPath, name));
+        } catch (e) {
+          if (!sysStderr) sysStderr = String(e);
+          sysErrors++;
+        }
+      }
     }
     for (const dir of ['plans', 'specs']) {
       const srcDir = path.join(this.claudeDir, dir);
       if (this.dirExists(srcDir)) {
         const dest = path.join(sysPath, dir);
         fs.mkdirSync(dest, { recursive: true });
-        try { await this.rsyncOrCp(srcDir, dest); } catch {}
+        try {
+          await this.rsyncOrCp(srcDir, dest);
+        } catch (e) {
+          if (!sysStderr) sysStderr = String(e);
+          sysErrors++;
+        }
       }
     }
     if (this.fileExists(this.conversationIndexPath)) {
-      try { fs.copyFileSync(this.conversationIndexPath, path.join(sysPath, 'conversation-index.json')); } catch {}
+      try {
+        fs.copyFileSync(this.conversationIndexPath, path.join(sysPath, 'conversation-index.json'));
+      } catch (e) {
+        if (!sysStderr) sysStderr = String(e);
+        sysErrors++;
+      }
+    }
+    if (sysErrors > 0) {
+      this.logBackup('WARN', `iCloud push system-config failed (${sysErrors} item(s))`, 'sync.push.icloud', { stderr: truncateStderr(sysStderr) });
+      if (!firstFailStderr) firstFailStderr = sysStderr;
+      errors++;
     }
 
-    this.logBackup('INFO', 'iCloud sync complete', 'sync.push.icloud');
+    if (errors > 0) {
+      await this.recordBackendFailure(instance, firstFailStderr);
+    } else {
+      await this.clearBackendFailures(instance.id);
+    }
+    this.logBackup(errors > 0 ? 'WARN' : 'INFO', 'iCloud sync complete', 'sync.push.icloud');
     return errors;
   }
 
@@ -977,11 +1123,14 @@ export class SyncService extends EventEmitter {
 
             // Write per-backend marker for individual status tracking
             this.debounceTouch(this.perBackendMarkerPath(instance.id));
-            // Clear per-backend error on success
-            if (backendErrors === 0) this.writeBackendError(instance.id, null);
+            // pushDrive/pushGithub/pushiCloud now handle their own warning clear on success
           } catch (e) {
-            this.logBackup('ERROR', `${instance.id} push failed: ${e}`, 'sync.push');
-            this.writeBackendError(instance.id, String(e));
+            this.logBackup('ERROR', `${instance.id} push failed: ${e}`, 'sync.push', { stderr: String(e).slice(0, 500) });
+            // Synthesize an UNKNOWN warning from the exception string so the UI
+            // sees something even when the push throws before reaching rclone.
+            // String(e) includes 'ENOENT' for spawn failures, letting the classifier
+            // catch RCLONE_MISSING via its stderr substring match.
+            await this.recordBackendFailure(instance, String(e));
             totalErrors++;
           }
         }
@@ -1664,11 +1813,11 @@ export class SyncService extends EventEmitter {
    *   SKILLS:unrouted:name1,name2, PROJECTS:N
    * Called after pull completes and on app startup.
    */
-  async runHealthCheck(): Promise<string[]> {
-    const warningsFile = path.join(this.claudeDir, '.sync-warnings');
-    const warnings: string[] = [];
+  async runHealthCheck(): Promise<SyncWarning[]> {
+    const warnings: SyncWarning[] = [];
+    const now = Math.floor(Date.now() / 1000);
 
-    // 0. Internet connectivity check (DNS lookup)
+    // 0. Internet connectivity
     try {
       const dns = await import('dns');
       await new Promise<void>((resolve, reject) => {
@@ -1679,16 +1828,21 @@ export class SyncService extends EventEmitter {
         });
       });
     } catch {
-      warnings.push('OFFLINE');
+      warnings.push({
+        code: 'OFFLINE',
+        level: 'danger',
+        title: 'No internet',
+        body: "Can't reach the network. Syncing will resume automatically when you're back online.",
+        dismissible: true,
+        createdEpoch: now,
+      });
     }
 
     // 1. Personal data sync backend status
     const syncBackends = this.getSyncEnabledBackends();
     if (syncBackends.length === 0) {
-      // Auto-detect: check if a known sync provider works
       const detected = await this.autoDetectBackend();
       if (detected) {
-        // Self-heal: write detected backend to config
         try {
           const config = this.readJson(this.configPath) || {};
           config.PERSONAL_SYNC_BACKEND = detected;
@@ -1696,48 +1850,72 @@ export class SyncService extends EventEmitter {
           this.logBackup('INFO', `Auto-detected sync backend: ${detected}`, 'sync.health');
         } catch {}
       } else {
-        warnings.push('PERSONAL:NOT_CONFIGURED');
+        warnings.push({
+          code: 'PERSONAL_NOT_CONFIGURED',
+          level: 'danger',
+          title: 'No sync configured',
+          body: "Your backups aren't set up. Connect a cloud provider so your data is protected.",
+          fixAction: { label: 'Set up sync', kind: 'open-sync-setup' },
+          dismissible: false,
+          createdEpoch: now,
+        });
       }
     } else {
-      // Check if last sync is stale (>24 hours)
       try {
         const markerText = fs.readFileSync(this.syncMarkerPath, 'utf8').trim();
         const lastEpoch = parseInt(markerText, 10);
         if (!isNaN(lastEpoch)) {
           const age = Math.floor(Date.now() / 1000) - lastEpoch;
           if (age >= 86400) {
-            warnings.push('PERSONAL:STALE');
+            warnings.push({
+              code: 'PERSONAL_STALE',
+              level: 'warn',
+              title: 'Sync is stale',
+              body: "Backups haven't succeeded in over 24 hours. Check the sync panel for details.",
+              dismissible: true,
+              createdEpoch: now,
+            });
           }
         }
-      } catch {
-        // No marker file — first run, not stale
-      }
+      } catch {}
     }
 
-    // 2. Unrouted user skills (not toolkit symlinks, not in skill-routes.json)
+    // 2. Unrouted user skills
     const unroutedSkills = this.findUnroutedSkills();
     if (unroutedSkills.length > 0) {
-      warnings.push(`SKILLS:unrouted:${unroutedSkills.join(',')}`);
+      warnings.push({
+        code: 'SKILLS_UNROUTED',
+        level: 'warn',
+        title: 'Unsynced skills',
+        body: `Some skills aren't being backed up: ${unroutedSkills.join(', ')}. Route them through the toolkit to include them.`,
+        dismissible: true,
+        createdEpoch: now,
+      });
     }
 
-    // 3. Unsynced projects — discover git repos not tracked
+    // 3. Unsynced projects
     const discoveredProjects = this.discoverProjects();
     if (discoveredProjects.length > 0) {
-      // Write discovered paths for /sync skill to consume
       const unsyncedFile = path.join(this.claudeDir, '.unsynced-projects');
       this.atomicWrite(unsyncedFile, discoveredProjects.join('\n'));
-      warnings.push(`PROJECTS:${discoveredProjects.length}`);
+      warnings.push({
+        code: 'PROJECTS_UNSYNCED',
+        level: 'warn',
+        title: 'Projects excluded',
+        body: `${discoveredProjects.length} project(s) aren't being synced. Check the sync panel to include them.`,
+        dismissible: true,
+        createdEpoch: now,
+      });
     } else {
-      // Clean up stale file
       try { fs.unlinkSync(path.join(this.claudeDir, '.unsynced-projects')); } catch {}
     }
 
-    // Write warnings file (or remove if empty)
-    if (warnings.length > 0) {
-      fs.writeFileSync(warningsFile, warnings.join('\n') + '\n');
-    } else {
-      try { fs.unlinkSync(warningsFile); } catch {}
-    }
+    // Merge with existing push-failure warnings (preserve them; only replace
+    // the health-check-owned codes).
+    const existing = await readWarnings();
+    const healthCodes = new Set(['OFFLINE', 'PERSONAL_NOT_CONFIGURED', 'PERSONAL_STALE', 'SKILLS_UNROUTED', 'PROJECTS_UNSYNCED']);
+    const preserved = existing.filter((w) => !healthCodes.has(w.code));
+    await writeWarnings([...preserved, ...warnings]);
 
     return warnings;
   }

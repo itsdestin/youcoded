@@ -3,6 +3,8 @@ import path from 'path';
 import os from 'os';
 import { EventEmitter } from 'events';
 import { TranscriptEvent } from '../shared/types';
+import { SubagentIndex } from './subagent-index';
+import { SubagentWatcher } from './subagent-watcher';
 
 // ---------------------------------------------------------------------------
 // cwdToProjectSlug
@@ -194,14 +196,27 @@ export function parseTranscriptLine(line: string, sessionId: string): Transcript
   }
 
   // Emit turn-complete for any definitive stop reason except tool_use
-  // (tool_use means Claude is waiting for tool results, not actually done)
+  // (tool_use means Claude is waiting for tool results, not actually done).
+  // Enrich with model + usage + anthropicRequestId so the reducer can attach
+  // them to the completing AssistantTurn for UI surfacing.
   if (message.stop_reason && message.stop_reason !== 'tool_use') {
+    const usage = message.usage && {
+      inputTokens: message.usage.input_tokens ?? 0,
+      outputTokens: message.usage.output_tokens ?? 0,
+      cacheReadTokens: message.usage.cache_read_input_tokens ?? 0,
+      cacheCreationTokens: message.usage.cache_creation_input_tokens ?? 0,
+    };
     events.push({
       type: 'turn-complete',
       sessionId,
       uuid,
       timestamp,
-      data: { stopReason: message.stop_reason },
+      data: {
+        stopReason: message.stop_reason,
+        ...(messageModel ? { model: messageModel } : {}),
+        ...(parsed.requestId ? { anthropicRequestId: parsed.requestId } : {}),
+        ...(usage ? { usage } : {}),
+      },
     });
   }
 
@@ -256,6 +271,11 @@ function extractToolResultContent(content: any): string {
 // TranscriptWatcher
 // ---------------------------------------------------------------------------
 
+// Dedup window: retain at least this many recent UUIDs. Actual retention
+// ranges from DEDUP_CAP to 2*DEDUP_CAP due to two-Set rotation. Slightly
+// wider than the old exact-500 prune, strictly safer for dedup correctness.
+const DEDUP_CAP = 500;
+
 interface WatchedSession {
   desktopSessionId: string;
   claudeSessionId: string;
@@ -263,9 +283,20 @@ interface WatchedSession {
   jsonlPath: string;
   offset: number;
   partialLine: string;
-  seenUuids: Set<string>;
+  // Perf: rotating two-Set dedup. `has` checks both; `add` writes to recent.
+  // When recent exceeds DEDUP_CAP, we rotate (discard old, promote recent to
+  // old, start a fresh recent). Replaces the old "build an array, slice it,
+  // rebuild the Set" prune which was O(DEDUP_CAP) per prune event.
+  seenUuidsRecent: Set<string>;
+  seenUuidsOld: Set<string>;
   watcher: fs.FSWatcher | null;
-  pollTimer: ReturnType<typeof setInterval> | null;
+  // Whether this session still needs the global poll: true until fs.watch
+  // is attached, then stays true as a safety-net (fs.watch on Windows can
+  // silently miss notifications). A single class-level timer iterates all
+  // sessions rather than each session owning its own setInterval.
+  needsPoll: boolean;
+  subagentIndex: SubagentIndex;
+  subagentWatcher: SubagentWatcher;
 }
 
 /**
@@ -277,45 +308,63 @@ interface WatchedSession {
 export class TranscriptWatcher extends EventEmitter {
   private sessions = new Map<string, WatchedSession>();
   private claudeConfigDir: string;
+  // One global poll timer shared across sessions. Previously each session owned
+  // its own setInterval, which meant N sessions → N independent timer ticks +
+  // N fs.stat calls per second. The global timer ticks at pollIntervalMs and
+  // iterates the sessions map, skipping any that don't need polling.
+  private globalPollTimer: ReturnType<typeof setInterval> | null = null;
+  private pollIntervalMs: number;
 
-  constructor(claudeConfigDir?: string) {
+  constructor(claudeConfigDir?: string, pollIntervalMs = 2000) {
     super();
     this.claudeConfigDir = claudeConfigDir || path.join(os.homedir(), '.claude', 'projects');
+    this.pollIntervalMs = pollIntervalMs;
   }
 
   /**
    * Start watching the transcript for a session.
    */
   startWatching(desktopSessionId: string, claudeSessionId: string, cwd: string): void {
-    // Don't double-watch
     if (this.sessions.has(desktopSessionId)) {
       this.stopWatching(desktopSessionId);
     }
 
     const slug = cwdToProjectSlug(cwd);
     const jsonlPath = path.join(this.claudeConfigDir, slug, `${claudeSessionId}.jsonl`);
+    const subagentsDir = path.join(this.claudeConfigDir, slug, claudeSessionId, 'subagents');
+
+    const subagentIndex = new SubagentIndex();
+    const subagentWatcher = new SubagentWatcher({
+      sessionId: desktopSessionId,
+      subagentsDir,
+      index: subagentIndex,
+      emit: (event) => this.emit('transcript-event', event),
+    });
 
     const session: WatchedSession = {
-      desktopSessionId,
-      claudeSessionId,
-      cwd,
-      jsonlPath,
+      desktopSessionId, claudeSessionId, cwd, jsonlPath,
       offset: 0,
       partialLine: '',
-      seenUuids: new Set(),
+      seenUuidsRecent: new Set(),
+      seenUuidsOld: new Set(),
       watcher: null,
-      pollTimer: null,
+      needsPoll: true,
+      subagentIndex,
+      subagentWatcher,
     };
-
     this.sessions.set(desktopSessionId, session);
 
-    // Try to start an fs.watch; fall back to polling if file doesn't exist yet
+    subagentWatcher.start();
+
+    // Try to start an fs.watch; fall back to the global poll if the file
+    // doesn't exist yet. needsPoll stays true either way — when fs.watch is
+    // attached the global poll acts as a safety net (fs.watch on Windows can
+    // silently miss notifications).
     if (fs.existsSync(jsonlPath)) {
       this.readNewLines(session);
       this.attachFsWatch(session);
-    } else {
-      this.startPolling(session);
     }
+    this.ensureGlobalPoll();
   }
 
   /**
@@ -326,6 +375,7 @@ export class TranscriptWatcher extends EventEmitter {
     if (!session) return;
     this.cleanupSession(session);
     this.sessions.delete(desktopSessionId);
+    this.stopGlobalPollIfIdle();
   }
 
   /**
@@ -336,6 +386,7 @@ export class TranscriptWatcher extends EventEmitter {
       this.cleanupSession(session);
     }
     this.sessions.clear();
+    this.stopGlobalPollIfIdle();
   }
 
   /**
@@ -359,17 +410,29 @@ export class TranscriptWatcher extends EventEmitter {
   getHistory(desktopSessionId: string): TranscriptEvent[] {
     const session = this.sessions.get(desktopSessionId);
     if (!session) return [];
-    if (!fs.existsSync(session.jsonlPath)) return [];
-    let raw: string;
-    try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
-    catch { return []; }
     const events: TranscriptEvent[] = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      for (const ev of parseTranscriptLine(line, desktopSessionId)) {
-        events.push(ev);
+    // Fresh, throwaway index so replay doesn't corrupt live correlation.
+    const replayIndex = new SubagentIndex();
+    if (fs.existsSync(session.jsonlPath)) {
+      let raw: string;
+      try { raw = fs.readFileSync(session.jsonlPath, 'utf8'); }
+      catch { raw = ''; }
+      for (const line of raw.split('\n')) {
+        if (!line.trim()) continue;
+        const parsed = parseTranscriptLine(line, desktopSessionId);
+        for (const ev of parsed) {
+          if (ev.type === 'tool-use' && ev.data.toolName === 'Agent') {
+            replayIndex.recordParentAgentToolUse(
+              ev.data.toolUseId!,
+              (ev.data.toolInput?.description as string) || '',
+              (ev.data.toolInput?.subagent_type as string) || '',
+            );
+          }
+          events.push(ev);
+        }
       }
     }
+    for (const ev of session.subagentWatcher.getHistory(replayIndex)) events.push(ev);
     return events;
   }
 
@@ -383,42 +446,50 @@ export class TranscriptWatcher extends EventEmitter {
         this.readNewLines(session);
       });
       session.watcher.on('error', () => {
-        // If the watcher errors, fall back to polling
+        // If the watcher errors, fall back to the global poll (already running)
         if (session.watcher) {
           session.watcher.close();
           session.watcher = null;
         }
-        this.startPolling(session);
+        session.needsPoll = true;
       });
-      // Safety-net poll alongside fs.watch — on Windows, fs.watch can
-      // silently miss change notifications. A 2s poll catches stragglers
-      // without adding meaningful overhead (readNewLines is a no-op when
-      // the file hasn't grown).
-      this.startPolling(session);
+      // Global poll continues alongside fs.watch as a safety net — on Windows,
+      // fs.watch can silently miss change notifications. readNewLines is a
+      // no-op when the file hasn't grown, so this is cheap.
     } catch {
-      // fs.watch can throw on some platforms — fall back to polling
-      this.startPolling(session);
+      // fs.watch can throw on some platforms — global poll will cover it.
+      session.needsPoll = true;
     }
   }
 
-  private startPolling(session: WatchedSession): void {
-    if (session.pollTimer) return;
-    session.pollTimer = setInterval(() => {
-      if (fs.existsSync(session.jsonlPath)) {
+  /**
+   * Start the class-level poll timer if it isn't already running. Runs every
+   * GLOBAL_POLL_MS, iterating all sessions that still need polling. Replaces
+   * the prior per-session setInterval (N timers → 1 timer).
+   */
+  private ensureGlobalPoll(): void {
+    if (this.globalPollTimer) return;
+    this.globalPollTimer = setInterval(() => {
+      for (const session of this.sessions.values()) {
+        if (!session.needsPoll) continue;
+        if (!fs.existsSync(session.jsonlPath)) continue;
         this.readNewLines(session);
-        // If fs.watch isn't attached yet, upgrade from poll-only to watch+poll
+        // If fs.watch isn't attached yet, upgrade from poll-only to watch+poll.
         if (!session.watcher) {
-          this.stopPolling(session);
           this.attachFsWatch(session);
         }
       }
-    }, session.watcher ? 2000 : 1000);
+    }, this.pollIntervalMs);
   }
 
-  private stopPolling(session: WatchedSession): void {
-    if (session.pollTimer) {
-      clearInterval(session.pollTimer);
-      session.pollTimer = null;
+  /**
+   * Stop the global poll when no sessions remain. Important so tests and the
+   * normal stopAll() path don't leak a timer into Node's event loop.
+   */
+  private stopGlobalPollIfIdle(): void {
+    if (this.sessions.size === 0 && this.globalPollTimer) {
+      clearInterval(this.globalPollTimer);
+      this.globalPollTimer = null;
     }
   }
 
@@ -427,7 +498,8 @@ export class TranscriptWatcher extends EventEmitter {
       session.watcher.close();
       session.watcher = null;
     }
-    this.stopPolling(session);
+    session.needsPoll = false;
+    session.subagentWatcher.stop();
   }
 
   private async readNewLines(session: WatchedSession): Promise<void> {
@@ -502,19 +574,50 @@ export class TranscriptWatcher extends EventEmitter {
       //   critical for clearing the "thinking" state)
       // - user-message: EMIT (reducer has its own text-based dedup)
       const lineUuid = events[0].uuid;
-      const isRepeat = lineUuid && session.seenUuids.has(lineUuid);
+      const isRepeat =
+        !!lineUuid && (session.seenUuidsRecent.has(lineUuid) || session.seenUuidsOld.has(lineUuid));
       if (lineUuid) {
-        session.seenUuids.add(lineUuid);
-        // Sliding window: prune to last 500 UUIDs to prevent unbounded memory growth
-        if (session.seenUuids.size > 500) {
-          const entries = [...session.seenUuids];
-          session.seenUuids = new Set(entries.slice(-500));
+        session.seenUuidsRecent.add(lineUuid);
+        // Rotate instead of rebuild when the recent set fills. Old set is
+        // discarded, recent promotes to old, a fresh recent is allocated.
+        // Effective dedup window is [DEDUP_CAP, 2*DEDUP_CAP] UUIDs — strictly
+        // >= the old exact-500 window, so no missed dedups.
+        if (session.seenUuidsRecent.size > DEDUP_CAP) {
+          session.seenUuidsOld = session.seenUuidsRecent;
+          session.seenUuidsRecent = new Set();
         }
       }
 
       for (const event of events) {
         if (isRepeat && event.type === 'assistant-text') continue;
-        this.emit('transcript-event', event);
+        // Isolate each emit: a throwing listener must NOT abort the batch.
+        // session.offset has already advanced — if a throw skipped remaining
+        // chunks, they'd be permanently stranded (next readNewLines reads
+        // from the advanced offset forward). This is the root cause of the
+        // "rare missing Claude message" symptom we investigated.
+        //
+        // Emit the parent event first so reducer subscribers create the
+        // parent Agent ToolCallState before any buffered subagent events
+        // flush into it — otherwise subagent events for a brand-new parent
+        // arrive before the parent and get silently dropped by
+        // applySubagentEvent.
+        try {
+          this.emit('transcript-event', event);
+        } catch (err) {
+          // Surface to the process's unhandled-exception path without
+          // breaking the loop. console.error preserves stack; the main
+          // process logs it alongside other diagnostics.
+          // eslint-disable-next-line no-console
+          console.error('[TranscriptWatcher] listener threw for', event.type, err);
+        }
+        if (event.type === 'tool-use' && event.data.toolName === 'Agent') {
+          const description = (event.data.toolInput?.description as string) || '';
+          const subagentType = (event.data.toolInput?.subagent_type as string) || '';
+          session.subagentIndex.recordParentAgentToolUse(
+            event.data.toolUseId!, description, subagentType,
+          );
+          session.subagentWatcher.flushAllPending();
+        }
       }
     }
   }

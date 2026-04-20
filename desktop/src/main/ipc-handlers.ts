@@ -18,7 +18,7 @@ import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
-import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService } from './sync-state';
+import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService, type SyncWarning } from './sync-state';
 import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } from './marketplace-config-store';
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
@@ -358,8 +358,9 @@ export function registerIpcHandlers(
     const result = await dialog.showOpenDialog(mainWindow, {
       properties: ['openFile', 'multiSelections'],
       filters: [
-        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] },
+        // All Files first so the picker opens in unrestricted mode by default
         { name: 'All Files', extensions: ['*'] },
+        { name: 'Images', extensions: ['png', 'jpg', 'jpeg', 'gif', 'webp', 'bmp'] },
       ],
     });
     return result.canceled ? [] : result.filePaths;
@@ -1030,10 +1031,17 @@ export function registerIpcHandlers(
   const pendingOutput = new Map<string, string[]>();
   const readySessions = new Set<string>();
 
+  // Perf: previously we dual-sent every PTY chunk to BOTH the per-session
+  // channel AND the global IPC.PTY_OUTPUT channel. The global channel existed
+  // solely so App.tsx could watch permission-mode strings ("bypass permissions
+  // on" etc.) across all sessions with one listener. With many sessions
+  // streaming that doubled IPC traffic and forced every BrowserWindow to
+  // deserialize output for sessions it may not own. App.tsx now subscribes
+  // per-session in sync with session:created / session:destroyed events, so
+  // the global broadcast is no longer needed.
   sessionManager.on('pty-output', (sessionId: string, data: string) => {
     if (readySessions.has(sessionId)) {
-      sendForSession(sessionId, `pty:output:${sessionId}`, data);  // per-session (TerminalView)
-      sendForSession(sessionId, IPC.PTY_OUTPUT, sessionId, data);  // global (App.tsx mode detection)
+      sendForSession(sessionId, `pty:output:${sessionId}`, data);
     } else {
       let buf = pendingOutput.get(sessionId);
       if (!buf) {
@@ -1050,8 +1058,7 @@ export function registerIpcHandlers(
     const buffered = pendingOutput.get(sessionId);
     if (buffered) {
       for (const data of buffered) {
-        sendForSession(sessionId, `pty:output:${sessionId}`, data);  // per-session (TerminalView)
-        sendForSession(sessionId, IPC.PTY_OUTPUT, sessionId, data);  // global (App.tsx mode detection)
+        sendForSession(sessionId, `pty:output:${sessionId}`, data);
       }
       pendingOutput.delete(sessionId);
     }
@@ -1190,7 +1197,8 @@ export function registerIpcHandlers(
   }
 
   const syncStatusPath = path.join(os.homedir(), '.claude', '.sync-status');
-  const syncWarningsPath = path.join(os.homedir(), '.claude', '.sync-warnings');
+  // Legacy .sync-warnings text file is no longer read; typed warnings come from .sync-warnings.json.
+  const syncWarningsJsonPath = path.join(os.homedir(), '.claude', '.sync-warnings.json');
 
   function readTextFile(filePath: string): string | null {
     try {
@@ -1200,12 +1208,36 @@ export function registerIpcHandlers(
     }
   }
 
+  /** Read typed sync warnings synchronously — returns [] if missing or unparseable. */
+  function readSyncWarningsSync(): SyncWarning[] {
+    try {
+      const text = fs.readFileSync(syncWarningsJsonPath, 'utf8');
+      const parsed = JSON.parse(text);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Fix: per-session status bar chips were disappearing for a few seconds after
+  // switching back to an idle session. Root cause: statusline.sh writes the
+  // three session files (.context-, .session-stats-, .gitbranch-) with
+  // truncate-then-write (fs.writeFileSync / shell `>`). If a 10s status poll
+  // lands inside that truncate window, readTextFile returns null and the entry
+  // is omitted from the rebuilt map, which the renderer then replaces wholesale
+  // — wiping the chips until the next successful poll. These caches preserve
+  // the last-known good value so a transient read miss doesn't blank the UI.
+  // Entries are purged on session-exit below.
+  const lastContextByDesktopId: Record<string, number> = {};
+  const lastGitBranchByDesktopId: Record<string, string> = {};
+  const lastSessionStatsByDesktopId: Record<string, any> = {};
+
   function buildStatusData() {
     const usage = readJsonFile(usageCachePath);
     const announcement = readJsonFile(announcementCachePath);
     const updateStatus = getUpdateStatus();
     const syncStatus = readTextFile(syncStatusPath);
-    const syncWarnings = readTextFile(syncWarningsPath);
+    const syncWarnings = readSyncWarningsSync();
 
     // Sync state for live updates — SyncPanel also fetches via IPC,
     // but these fields let the compact section row update in real-time.
@@ -1221,7 +1253,12 @@ export function registerIpcHandlers(
       const raw = readTextFile(path.join(os.homedir(), '.claude', `.context-${claudeId}`));
       if (raw != null) {
         const num = parseInt(raw, 10);
-        if (!isNaN(num)) contextMap[desktopId] = num;
+        if (!isNaN(num)) {
+          contextMap[desktopId] = num;
+          lastContextByDesktopId[desktopId] = num;
+        }
+      } else if (desktopId in lastContextByDesktopId) {
+        contextMap[desktopId] = lastContextByDesktopId[desktopId];
       }
     }
 
@@ -1229,17 +1266,36 @@ export function registerIpcHandlers(
     const gitBranchMap: Record<string, string> = {};
     for (const [desktopId, claudeId] of sessionIdMap) {
       const raw = readTextFile(path.join(os.homedir(), '.claude', `.gitbranch-${claudeId}`));
-      if (raw) gitBranchMap[desktopId] = raw;
+      if (raw) {
+        gitBranchMap[desktopId] = raw;
+        lastGitBranchByDesktopId[desktopId] = raw;
+      } else if (desktopId in lastGitBranchByDesktopId) {
+        gitBranchMap[desktopId] = lastGitBranchByDesktopId[desktopId];
+      }
     }
 
     // Read per-session stats (cost, tokens, code changes — written by statusline.sh)
     const sessionStatsMap: Record<string, any> = {};
     for (const [desktopId, claudeId] of sessionIdMap) {
       const stats = readJsonFile(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`));
-      if (stats) sessionStatsMap[desktopId] = stats;
+      if (stats) {
+        sessionStatsMap[desktopId] = stats;
+        lastSessionStatsByDesktopId[desktopId] = stats;
+      } else if (desktopId in lastSessionStatsByDesktopId) {
+        sessionStatsMap[desktopId] = lastSessionStatsByDesktopId[desktopId];
+      }
     }
 
-    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap, sessionStatsMap };
+    // Per-session attention state populated by the `remote:attention-changed`
+    // IPC listener. Remote browsers diff this on receipt to update StatusDot
+    // colors for sessions that have diffed since the last broadcast.
+    const attentionMap: Record<string, string> = {};
+    for (const [desktopId] of sessionIdMap) {
+      const state = lastAttentionBySession.get(desktopId);
+      if (state) attentionMap[desktopId] = state;
+    }
+
+    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap };
   }
 
   // Push status data every 10s — store handle so it can be cleared on shutdown
@@ -1305,12 +1361,28 @@ export function registerIpcHandlers(
   const topicDir = path.join(os.homedir(), '.claude', 'topics');
   // Maps desktop session ID → Claude Code session ID
   const sessionIdMap = new Map<string, string>();
+
+  // Per-session attention state, updated by the renderer via
+  // `remote:attention-changed` and read by buildStatusData() so remote
+  // browsers see matching StatusDot colors.
+  const lastAttentionBySession = new Map<string, string>();
+
+  ipcMain.on('remote:attention-changed', (_e, payload: { sessionId: string; state: string }) => {
+    if (!payload?.sessionId) return;
+    lastAttentionBySession.set(payload.sessionId, payload.state);
+    // Broadcast immediately so remote clients see the change without waiting
+    // for the 10s status:data timer. Payload rebuild is cheap.
+    if (remoteServer) {
+      const data = buildStatusData();
+      remoteServer.broadcastStatusData(data);
+    }
+  });
+
   const transcriptWatcher = new TranscriptWatcher();
 
   transcriptWatcher.on('transcript-event', (event: any) => {
     sendForSession(event.sessionId, IPC.TRANSCRIPT_EVENT, event);
     if (remoteServer) {
-      remoteServer.bufferTranscriptEvent(event);
       remoteServer.broadcast({ type: 'transcript:event', payload: event });
     }
   });
@@ -1446,6 +1518,12 @@ export function registerIpcHandlers(
       fs.unlink(path.join(os.homedir(), '.claude', `.session-stats-${claudeId}.json`), () => {});
     }
     sessionIdMap.delete(sessionId);
+    lastAttentionBySession.delete(sessionId);
+    // Drop the last-known status values so buildStatusData doesn't keep
+    // broadcasting chips for a session that's gone.
+    delete lastContextByDesktopId[sessionId];
+    delete lastGitBranchByDesktopId[sessionId];
+    delete lastSessionStatsByDesktopId[sessionId];
   });
 
   // Set a named flag on a session (complete, priority, helpful). Persists in

@@ -9,6 +9,7 @@ import type { SessionManager } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
 import type { LocalSkillProvider } from './skill-provider';
+import type { SerializedChatState } from '../renderer/state/chat-types';
 import { BrowserWindow } from 'electron';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory } from './session-browser';
@@ -44,22 +45,28 @@ export class RemoteServer {
   private tokensPath: string;
   private ptyBuffers = new Map<string, string>(); // sessionId → rolling PTY output
   private hookBuffers = new Map<string, any[]>(); // sessionId → rolling hook events
-  private transcriptBuffers = new Map<string, any[]>();
   // statusInterval removed — status data now fed by ipc-handlers.ts via broadcastStatusData()
   private failedAttempts = new Map<string, { count: number; resetAt: number }>();
   // Last-known topic names, fed by ipc-handlers.ts via setLastTopic()
   private lastTopics = new Map<string, string>();
   // Last-known context remaining %, fed by ipc-handlers.ts via broadcastStatusData()
   private contextMap: Record<string, number> = {};
+  // Provider injected at construction — called when new clients connect to get the full chat state.
+  // Task 6 wires this into replayBuffers(); declared here so the field exists before that step.
+  private requestSnapshot: () => Promise<SerializedChatState>;
 
   constructor(
     private sessionManager: SessionManager,
     private hookRelay: HookRelay,
     private config: RemoteConfig,
     private skillProvider?: LocalSkillProvider,
+    opts?: { requestSnapshot?: () => Promise<SerializedChatState> },
   ) {
     this.tokensPath = path.join(os.homedir(), '.claude', '.remote-tokens.json');
     this.loadTokens();
+    // Default is a no-op that returns an empty snapshot — allows the server to
+    // be constructed before the main window exists (e.g. during first-run setup).
+    this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
   }
 
   private loadTokens(): void {
@@ -178,7 +185,6 @@ export class RemoteServer {
 
   stop(): void {
     this.lastTopics.clear();
-    this.transcriptBuffers.clear();
     this.sessionManager.off('pty-output', this.onPtyOutput);
     this.hookRelay.off('hook-event', this.onHookEvent);
     this.sessionManager.off('session-exit', this.onSessionExit);
@@ -267,22 +273,11 @@ export class RemoteServer {
   private onSessionExit = (sessionId: string, exitCode: number = 0) => {
     this.ptyBuffers.delete(sessionId);
     this.hookBuffers.delete(sessionId);
-    this.transcriptBuffers.delete(sessionId);
     this.lastTopics.delete(sessionId);
     // Forward exitCode so the remote shim can surface 'session-died' banners
     // when Claude's process dies mid-turn on the host machine.
     this.broadcast({ type: 'session:destroyed', payload: { sessionId, exitCode } });
   };
-
-  bufferTranscriptEvent(event: any): void {
-    const sessionId = event.sessionId || '';
-    let buf = this.transcriptBuffers.get(sessionId) || [];
-    buf.push(event);
-    if (buf.length > HOOK_BUFFER_SIZE) {
-      buf = buf.slice(buf.length - HOOK_BUFFER_SIZE);
-    }
-    this.transcriptBuffers.set(sessionId, buf);
-  }
 
   // --- HTTP static file serving ---
 
@@ -375,7 +370,9 @@ export class RemoteServer {
       this.config.markPaired();
       this.addClient(ws, token, ip);
       ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
-      this.replayBuffers(ws);
+      this.replayBuffers(ws).catch((err) => {
+        console.error('[remote-server] replayBuffers failed:', err);
+      });
       return;
     }
 
@@ -420,7 +417,9 @@ export class RemoteServer {
           this.config.markPaired();
           this.addClient(ws, token, ip);
           ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
-          this.replayBuffers(ws);
+          this.replayBuffers(ws).catch((err) => {
+            console.error('[remote-server] replayBuffers failed:', err);
+          });
         } else {
           this.recordFailedAttempt(ip);
           ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' }));
@@ -446,7 +445,7 @@ export class RemoteServer {
 
   // --- Replay buffers on new connection ---
 
-  private replayBuffers(ws: WebSocket): void {
+  private async replayBuffers(ws: WebSocket): Promise<void> {
     // Session list — sent immediately so client can initialize chat state
     const sessions = this.sessionManager.listSessions();
     ws.send(JSON.stringify({
@@ -464,9 +463,25 @@ export class RemoteServer {
       ws.send(JSON.stringify({ type: 'session:renamed', payload: { sessionId: desktopId, name } }));
     }
 
+    // NEW: request a snapshot of the desktop's chat reducer state and push it
+    // to the connecting client so they see the full chat history immediately.
+    // Must happen before PTY/hook replay so the reducer has state to merge
+    // subsequent transcript events into.
+    try {
+      const snapshot = await this.requestSnapshot();
+      if (ws.readyState === WebSocket.OPEN) {
+        ws.send(JSON.stringify({ type: 'chat:hydrate', payload: snapshot }));
+      }
+    } catch (err) {
+      console.error('[remote-server] chat:hydrate failed:', err);
+    }
+
     // Delay PTY + hook replay to give the client time to process SESSION_INIT.
     // Without this delay, hook events arrive before the chat reducer has
     // initialized the session state, and all events are silently dropped.
+    // Note: the preceding `requestSnapshot()` await can take up to 2000ms
+    // (its internal timeout), so the worst-case total delay before PTY/hook
+    // replay starts is ~2500ms for a connect when the renderer is unresponsive.
     setTimeout(() => {
       if (ws.readyState !== WebSocket.OPEN) return;
 
@@ -484,12 +499,6 @@ export class RemoteServer {
         }
       }
 
-      // Transcript event buffers
-      for (const [_sessionId, events] of this.transcriptBuffers) {
-        for (const event of events) {
-          ws.send(JSON.stringify({ type: 'transcript:event', payload: event }));
-        }
-      }
     }, 500); // 500ms gives React time to render App and register SESSION_INIT
   }
 
@@ -1107,7 +1116,10 @@ export class RemoteServer {
         break;
       }
       case 'sync:dismiss-warning': {
-        await dismissWarning(payload.warning || payload);
+        // The remote-shim always sends { warning }, so payload.warning is
+        // the authoritative path. Guard against missing payload rather than
+        // falling back to the whole object (which would be a silent no-op).
+        await dismissWarning(payload?.warning ?? '');
         this.respond(client.ws, type, id, { ok: true });
         break;
       }

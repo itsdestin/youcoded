@@ -21,6 +21,7 @@ import { setSyncService } from './sync-state';
 import { initRestoreService } from './restore-service';
 import { createAuthStore } from './marketplace-auth-store';
 import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
+import { requestChatSnapshot } from './chat-snapshot';
 
 // macOS and Linux Electron apps may inherit a minimal PATH that's missing
 // common tool locations (Homebrew, nvm, Volta, pipx, cargo). macOS Finder/Dock
@@ -111,21 +112,44 @@ const hookRelay = new HookRelay(pipeName);
 const remoteConfig = new RemoteConfig();
 const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
-const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider);
+// Pass a snapshot provider so RemoteServer can request the full chat state from
+// the renderer when new remote clients connect. The closure captures mainWindow
+// by reference — mainWindow is null here but will be set before any client
+// can connect (the server only starts after the window is created).
+const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider, {
+  requestSnapshot: () => {
+    if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve({ sessions: [] });
+    return requestChatSnapshot(mainWindow.webContents);
+  },
+});
 
 // Dev server URL — env override wins; otherwise compute from YOUCODED_PORT_OFFSET
 // (via shared/ports.ts) so Vite and main stay in sync without a second env var.
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VITE_DEV_PORT}`;
 
-// Dev-profile isolation: when YOUCODED_PROFILE starts with "dev" (dev, dev2,
-// dev3, …), split Electron userData so a dev instance doesn't clobber the
-// built app's localStorage, cookies, cache, or window state. Multiple
-// concurrent dev instances get distinct userData dirs (youcoded-dev,
-// youcoded-dev2, …). Must be called before app.whenReady().
-const YOUCODED_DEV_PROFILE = process.env.YOUCODED_PROFILE ?? '';
-if (YOUCODED_DEV_PROFILE.startsWith('dev')) {
-  app.setPath('userData', path.join(app.getPath('appData'), `youcoded-${YOUCODED_DEV_PROFILE}`));
-  app.setName(YOUCODED_DEV_PROFILE === 'dev' ? 'YouCoded Dev' : `YouCoded ${YOUCODED_DEV_PROFILE}`);
+// Dev-profile isolation: any non-empty YOUCODED_PROFILE marks this as a dev
+// instance. userData is named after the profile so concurrent dev instances
+// (e.g. YOUCODED_PROFILE=dev2) don't share state with each other or with the
+// built app. The install-hooks gate below uses the same "profile set" test —
+// positive match instead of a strict string compare so typos or variants
+// (dev2, feature-x, etc.) can't accidentally re-enable hook installation.
+// Must be called before app.whenReady().
+const DEV_PROFILE = process.env.YOUCODED_PROFILE;
+if (DEV_PROFILE) {
+  app.setPath('userData', path.join(app.getPath('appData'), `youcoded-${DEV_PROFILE}`));
+  app.setName(DEV_PROFILE === 'dev' ? 'YouCoded Dev' : `YouCoded Dev (${DEV_PROFILE})`);
+}
+
+// Windows AUMID alignment: electron-builder's NSIS installer stamps the Start
+// Menu shortcut with an AppUserModelID derived from `appId`. If the runtime
+// process's AUMID doesn't match, Windows resolves the taskbar button's icon
+// via the shortcut's AUMID (i.e. the embedded exe .ico) and silently ignores
+// BrowserWindow.setIcon() updates. That's why theme-driven icon hot-swap
+// worked in dev (no installer shortcut, so setIcon wins) but not in packaged
+// builds. Must be called before any BrowserWindow is created.
+// See: electron-builder NSIS docs + electron/electron#28581.
+if (process.platform === 'win32') {
+  app.setAppUserModelId('com.youcoded.desktop');
 }
 
 // Must be called before app.whenReady() — Electron requirement
@@ -793,7 +817,7 @@ app.whenReady().then(async () => {
   // so simply calling it repairs any stale paths. We scan first only to log a
   // visible warning when staleness is detected — useful for diagnosing the
   // "stuck on Initializing" symptom that follows a removed dev worktree.
-  if (!YOUCODED_DEV_PROFILE.startsWith('dev')) {
+  if (!process.env.YOUCODED_PROFILE) {
     try {
       const settingsPath = path.join(os.homedir(), '.claude', 'settings.json');
       try {
@@ -816,7 +840,7 @@ app.whenReady().then(async () => {
       log('ERROR', 'Main', 'Failed to install hooks', { error: String(e) });
     }
   } else {
-    log('INFO', 'Main', 'Dev profile — skipping install-hooks (using built app paths)');
+    log('INFO', 'Main', `Dev profile '${process.env.YOUCODED_PROFILE}' — skipping install-hooks (using built app paths)`);
   }
 
   try {

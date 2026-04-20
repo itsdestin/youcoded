@@ -195,12 +195,25 @@ export function computeOverlayTokens(
   // dark themes rely more on borders so shadows can be subtle.
   const shadowStrength = overlay?.['shadow-strength'] ?? (lum > 0.2 ? 0.2 : 0.1);
 
+  // Inline-code color — prefer the theme's accent so code picks up palette
+  // character, but fall back to fg-2 when accent is too close to fg (some
+  // themes use accent == fg for high-contrast buttons, which would make code
+  // invisible against prose). Previously this was a hardcoded yellow/gold in
+  // globals.css that community themes silently inherited from :root.
+  const [fgR, fgG, fgB] = parseHex(tokens.fg);
+  const [accR, accG, accB] = parseHex(tokens.accent);
+  const accentFgDistance = Math.sqrt(
+    (accR - fgR) ** 2 + (accG - fgG) ** 2 + (accB - fgB) ** 2,
+  );
+  const code = accentFgDistance > 40 ? tokens.accent : tokens['fg-2'];
+
   const result: Record<string, string> = {
     '--scrim': overlay?.scrim ?? `rgba(${scrimR}, ${scrimG}, ${scrimB}, 0.5)`,
     '--scrim-heavy': overlay?.['scrim-heavy'] ?? `rgba(${scrimR}, ${scrimG}, ${scrimB}, 0.7)`,
     '--shadow-strength': String(shadowStrength),
     '--destructive': overlay?.destructive ?? '#DD4444',
     '--destructive-dim': `rgba(${parseHex(overlay?.destructive ?? '#DD4444').join(', ')}, 0.15)`,
+    '--code': code,
   };
 
   return result;

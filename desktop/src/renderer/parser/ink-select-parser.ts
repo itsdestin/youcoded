@@ -8,6 +8,10 @@ const TITLE_OVERRIDES: Record<string, string> = {
   'skip all permission': 'Skip Permissions Warning',
   // Resume session prompt — shown when resuming a stale/large session
   'resuming from a summary': 'Resume Session',
+  // Usage-limit prompt — shown when the user hits their plan's usage cap.
+  // Key on "limit to reset" (unique to option 1) rather than the generic
+  // "What do you want to do?" title to avoid false matches on future menus.
+  'limit to reset': 'Usage Limit Reached',
 };
 
 export interface ParsedMenu {

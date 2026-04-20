@@ -2051,7 +2051,10 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
                     <div className="space-y-1.5">
                       <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Licenses</h4>
                       <p className="text-[10px] text-fg-dim leading-relaxed">
-                        YouCoded is licensed under the GNU General Public License v3.0 (GPLv3).
+                        The YouCoded Android application is distributed under the GNU General Public License v3.0 (GPLv3) because it links against Termux terminal components, which are GPLv3.
+                      </p>
+                      <p className="text-[10px] text-fg-dim leading-relaxed">
+                        The YouCoded source code itself — including the shared React interface that powers this app — is offered under the MIT License. The Android distribution as a whole is GPLv3; the underlying source remains MIT upstream.
                       </p>
                       <div className="mt-1 space-y-1 pl-2">
                         {[
@@ -2410,7 +2413,10 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
                   <div className="space-y-1.5">
                     <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Licenses</h4>
                     <p className="text-[10px] text-fg-dim leading-relaxed">
-                      YouCoded is licensed under the GNU General Public License v3.0 (GPLv3).
+                      The YouCoded desktop application is licensed under the MIT License.
+                    </p>
+                    <p className="text-[10px] text-fg-dim leading-relaxed">
+                      Note: The YouCoded Android application is distributed under GPLv3 because it links against Termux. The desktop application has no such dependency and is MIT throughout.
                     </p>
                     <div className="mt-1 space-y-1 pl-2">
                       {[

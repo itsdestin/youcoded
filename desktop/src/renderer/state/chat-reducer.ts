@@ -6,7 +6,9 @@ import {
   SessionChatState,
   TimelineEntry,
   createSessionChatState,
+  deserializeChatState,
 } from './chat-types';
+import { SubagentSegment, ToolCallState } from '../../shared/types';
 
 let messageCounter = 0;
 function nextMessageId(): string {
@@ -41,7 +43,16 @@ function getOrCreateTurn(session: SessionChatState): {
   }
 
   currentTurnId = nextTurnId();
-  assistantTurns.set(currentTurnId, { id: currentTurnId, segments: [], timestamp: Date.now() });
+  // Metadata fields default to null here; turn-complete populates them later (see TRANSCRIPT_TURN_COMPLETE).
+  assistantTurns.set(currentTurnId, {
+    id: currentTurnId,
+    segments: [],
+    timestamp: Date.now(),
+    stopReason: null,
+    model: null,
+    usage: null,
+    anthropicRequestId: null,
+  });
   timeline = [...timeline, { kind: 'assistant-turn' as const, turnId: currentTurnId }];
   return { assistantTurns, timeline, currentTurnId };
 }
@@ -146,12 +157,98 @@ function endTurn(session: SessionChatState): Partial<SessionChatState> {
   };
 }
 
+/**
+ * Route a subagent-originated transcript event into the parent Agent
+ * tool's `subagentSegments`. Returns the original state when the parent
+ * tool is missing (the subagent event arrived before the parent tool_use
+ * was dispatched — reducer bails; next event will succeed).
+ */
+function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
+  if (action.type !== 'TRANSCRIPT_TOOL_USE'
+      && action.type !== 'TRANSCRIPT_TOOL_RESULT'
+      && action.type !== 'TRANSCRIPT_ASSISTANT_TEXT') {
+    return state;
+  }
+  const parentId = (action as any).parentAgentToolUseId as string | undefined;
+  if (!parentId) return state;
+
+  const session = state.get(action.sessionId);
+  if (!session) return state;
+  const parent = session.toolCalls.get(parentId);
+  if (!parent) return state;
+
+  const segments: SubagentSegment[] = parent.subagentSegments ? [...parent.subagentSegments] : [];
+
+  if (action.type === 'TRANSCRIPT_ASSISTANT_TEXT') {
+    segments.push({
+      type: 'text',
+      id: `sa-text-${action.uuid}`,
+      content: action.text,
+    });
+  } else if (action.type === 'TRANSCRIPT_TOOL_USE') {
+    const existingIdx = segments.findIndex(
+      s => s.type === 'tool' && s.toolUseId === action.toolUseId,
+    );
+    const next: SubagentSegment = {
+      type: 'tool',
+      id: `sa-tool-${action.toolUseId}`,
+      toolUseId: action.toolUseId,
+      toolName: action.toolName,
+      input: action.toolInput,
+      status: 'running',
+    };
+    if (existingIdx >= 0) {
+      // Duplicate tool_use emit — JSONL FIFO order guarantees the
+      // tool_result hasn't been emitted yet, so overwriting back to
+      // 'running' is safe and keeps the segment's input fresh.
+      segments[existingIdx] = next;
+    } else {
+      segments.push(next);
+    }
+  } else if (action.type === 'TRANSCRIPT_TOOL_RESULT') {
+    const idx = segments.findIndex(
+      s => s.type === 'tool' && s.toolUseId === action.toolUseId,
+    );
+    if (idx >= 0 && segments[idx].type === 'tool') {
+      const existing = segments[idx] as Extract<SubagentSegment, { type: 'tool' }>;
+      segments[idx] = action.isError
+        ? { ...existing, status: 'failed', error: action.result }
+        : {
+            ...existing,
+            status: 'complete',
+            response: action.result,
+            ...(action.structuredPatch ? { structuredPatch: action.structuredPatch } : {}),
+          };
+    }
+  }
+
+  const toolCalls = new Map(session.toolCalls);
+  const updated: ToolCallState = { ...parent, subagentSegments: segments };
+  toolCalls.set(parentId, updated);
+  const next = new Map(state);
+  next.set(action.sessionId, { ...session, toolCalls });
+  return next;
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   const next = new Map(state);
 
   switch (action.type) {
     case 'RESET': {
       return new Map();
+    }
+
+    case 'HYDRATE_CHAT_STATE': {
+      try {
+        // Replace the entire ChatState with a deserialized snapshot from the
+        // desktop renderer. Fired once per remote-access connect so browser
+        // clients see the full chat history immediately instead of rebuilding
+        // it from replayed transcript events.
+        return deserializeChatState(action.sessions);
+      } catch (err) {
+        console.error('[chat-reducer] HYDRATE_CHAT_STATE deserialize failed:', err);
+        return state;
+      }
     }
 
     case 'SESSION_INIT': {
@@ -170,27 +267,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
 
-      // Deduplicate — if any of the last 10 timeline entries is a user message
-      // with the same content (InputBar optimistic + hook/transcript event
-      // arriving later, possibly with many intervening entries), skip
-      let isDuplicate = false;
-      for (let i = session.timeline.length - 1; i >= Math.max(0, session.timeline.length - 10); i--) {
-        const entry = session.timeline[i];
-        if (entry.kind === 'user' && 'message' in entry && entry.message.content === action.content) {
-          isDuplicate = true;
-          break;
-        }
-      }
-      if (isDuplicate) {
-        if (!session.isThinking) {
-          next.set(action.sessionId, {
-            ...session, isThinking: true, currentGroupId: null, currentTurnId: null,
-          });
-          return next;
-        }
-        return state;
-      }
-
+      // ALWAYS append a pending bubble — no content-based dedup. The prior
+      // last-10-entries content match silently dropped legitimate rapid-fire
+      // duplicates (e.g. "yes" twice within five turns). TRANSCRIPT_USER_MESSAGE
+      // confirms this entry by finding the oldest matching pending and
+      // clearing its flag.
       const message = {
         id: nextMessageId(),
         role: 'user' as const,
@@ -200,7 +281,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'user', message }],
+        timeline: [...session.timeline, { kind: 'user', message, pending: true }],
         isThinking: true,
         currentGroupId: null,
         currentTurnId: null,
@@ -306,26 +387,50 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
 
-      // Dedup against last 10 timeline entries (optimistic USER_PROMPT may
-      // have many intervening assistant-turn or tool entries before transcript arrives)
-      let isDuplicateT = false;
-      for (let i = session.timeline.length - 1; i >= Math.max(0, session.timeline.length - 10); i--) {
+      // Find the OLDEST pending entry with matching content and confirm it
+      // (clear the `pending` flag). This replaces the old last-10-entries
+      // content-match dedup, which suppressed legitimate rapid-fire repeats.
+      // Oldest-first so two identical optimistic bubbles get confirmed by two
+      // transcript events in order.
+      let confirmedIdx = -1;
+      for (let i = 0; i < session.timeline.length; i++) {
         const entry = session.timeline[i];
-        if (entry.kind === 'user' && 'message' in entry && entry.message.content === action.text) {
-          isDuplicateT = true;
+        if (
+          entry.kind === 'user' &&
+          entry.pending === true &&
+          entry.message.content === action.text
+        ) {
+          confirmedIdx = i;
           break;
         }
       }
-      if (isDuplicateT) {
-        if (!session.isThinking) {
-          next.set(action.sessionId, {
-            ...session, isThinking: true, currentGroupId: null, currentTurnId: null,
-          });
-          return next;
-        }
-        return state;
+
+      if (confirmedIdx >= 0) {
+        const entry = session.timeline[confirmedIdx];
+        if (entry.kind !== 'user') return state; // type-narrowing safety
+        const confirmed: TimelineEntry = {
+          kind: 'user',
+          message: entry.message,
+          pending: false,
+        };
+        const timeline = [
+          ...session.timeline.slice(0, confirmedIdx),
+          confirmed,
+          ...session.timeline.slice(confirmedIdx + 1),
+        ];
+        next.set(action.sessionId, {
+          ...session,
+          timeline,
+          isThinking: true,
+          currentGroupId: null,
+          currentTurnId: null,
+          attentionState: 'ok',
+        });
+        return next;
       }
 
+      // No pending match — remote/replay client, or user typed directly into
+      // the terminal. Append as a new confirmed entry.
       const message = {
         id: nextMessageId(),
         role: 'user' as const,
@@ -335,7 +440,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'user', message }],
+        timeline: [...session.timeline, { kind: 'user', message, pending: false }],
         isThinking: true,
         currentGroupId: null,
         currentTurnId: null,
@@ -347,17 +452,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_ASSISTANT_TEXT': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
+      if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
 
       const { assistantTurns, timeline, currentTurnId } = getOrCreateTurn(session);
       const turn = assistantTurns.get(currentTurnId)!;
+      // Task 2.4: Capture model on first text of the turn so the model pill is
+      // visible while the turn is in-flight. `?? turn.model` preserves the
+      // existing value when a later text chunk arrives without a model, so we
+      // never clobber a previously-captured model with null.
       assistantTurns.set(currentTurnId, {
         ...turn,
         segments: [
           ...turn.segments,
           { type: 'text', content: action.text, messageId: nextMessageId() },
         ],
+        model: action.model ?? turn.model,
       });
 
       next.set(action.sessionId, {
@@ -370,6 +482,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_TOOL_USE': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
+      if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
 
@@ -494,6 +608,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_TOOL_RESULT': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
+      if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
 
@@ -526,7 +642,30 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case 'TRANSCRIPT_TURN_COMPLETE': {
       const session = next.get(action.sessionId);
       if (!session) return state;
-      next.set(action.sessionId, { ...session, ...endTurn(session) });
+
+      // Attach completion metadata to the completing turn before clearing
+      // turn-scoped state via endTurn(). currentTurnId is the in-flight turn;
+      // if it's already null (edge case: turn-complete arrived before any
+      // assistant text), skip metadata attachment but still call endTurn.
+      const completingTurnId = session.currentTurnId;
+      const assistantTurns = new Map(session.assistantTurns);
+      if (completingTurnId) {
+        const turn = assistantTurns.get(completingTurnId);
+        if (turn) {
+          assistantTurns.set(completingTurnId, {
+            ...turn,
+            stopReason: action.stopReason,
+            // Preserve any model already captured on the turn (e.g. from
+            // assistant-text in Task 2.4) — only override when the action
+            // carries one. The two should agree when both are present.
+            model: action.model ?? turn.model,
+            anthropicRequestId: action.anthropicRequestId,
+            usage: action.usage,
+          });
+        }
+      }
+
+      next.set(action.sessionId, { ...session, assistantTurns, ...endTurn(session) });
       return next;
     }
 
@@ -707,10 +846,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         } else {
           const turnId = `hist-turn-${historyMsgCounter}`;
           const msgId = `hist-msg-${historyMsgCounter}`;
+          // History-loaded turns never saw a turn-complete, so metadata fields stay null.
           historyTurns.set(turnId, {
             id: turnId,
             segments: [{ type: 'text', content: msg.content, messageId: msgId }],
             timestamp: msg.timestamp,
+            stopReason: null,
+            model: null,
+            usage: null,
+            anthropicRequestId: null,
           });
           historyTimeline.push({ kind: 'assistant-turn', turnId });
         }
