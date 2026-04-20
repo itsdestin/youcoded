@@ -41,7 +41,7 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
           ref={scrollRef}
           role="list"
           className="flex gap-3 overflow-x-auto scroll-smooth pb-2 snap-x snap-mandatory
-                     [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[280px]"
+                     [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[min(280px,85vw)]"
         >
           {children}
         </div>

@@ -69,13 +69,17 @@ export default function MarketplaceFilterBar({ value, onChange }: Props) {
         <Chip active={value.meta.has("popular")} onClick={() => toggleMulti("meta", "popular")}>Popular</Chip>
         <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Destin's picks</Chip>
       </ChipGroup>
-      <div className="ml-auto">
+      {/* Search wrapper: full-width when the chip bar wraps onto its own
+          line on narrow screens (mobile / splitscreen), fixed 12rem on
+          sm+. Without w-full on narrow, the search input stays its 12rem
+          width and floats awkwardly on a near-empty row. */}
+      <div className="w-full sm:w-auto sm:ml-auto">
         <input
           type="search"
           placeholder="Search…"
           value={value.query}
           onChange={(e) => onChange({ ...value, query: e.target.value })}
-          className="bg-inset border border-edge rounded-md px-3 py-1.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent w-48"
+          className="bg-inset border border-edge rounded-md px-3 py-1.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent w-full sm:w-48"
         />
       </div>
     </div>
