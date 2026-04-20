@@ -318,7 +318,33 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   const icon = nativeImage.createFromPath(iconPath);
   const isMac = process.platform === 'darwin';
 
-  // Buddy-specific window options: transparent, frameless, always-on-top, etc.
+  // Buddy windows use a pure-transparent Electron surface — the "glass"
+  // effect is produced entirely in CSS (see buddy.css). We explored native
+  // OS glass (Win 11 backgroundMaterial:'acrylic', macOS vibrancy) but
+  // every path had deal-breakers:
+  //   - Electron 41 frameless bug #38466/#39959: backgroundMaterial silently
+  //     fails when applied at construction on frameless windows
+  //   - OS-level fallback: Windows "Transparency effects" OFF or Energy
+  //     Saver ON silently drops acrylic to a solid dark fallback, and we
+  //     can't depend on user OS settings
+  //   - Corner-sliver mismatch: OS ~8px radius vs CSS 18px radius leaves
+  //     visible acrylic strips in the 4 corners
+  // Instead, glass is faked in CSS via theme-driven panel tint + gradient
+  // overlay + inner-edge highlight + drop shadow. Modern design systems
+  // (Fluent, Material, Apple HIG) do this too — the "glass" readability
+  // comes from surface tonality, not from crisp real-blur of content behind.
+  // Tradeoff: the ~10% of the user's desktop visible through the bubble is
+  // unblurred. Acceptable; nothing else is OS-independent.
+  //
+  // These flags together kill every OS paint source that could show as a
+  // faint rectangle around transparent web content:
+  //  - transparent:true + backgroundColor:'#00000000' = RGBA (0,0,0,0)
+  //    native surface (Electron on some Win builds paints an opaque default
+  //    behind web content without this)
+  //  - thickFrame:false drops WS_THICKFRAME, which otherwise leaves a DWM
+  //    shadow + window-animation chrome visible as a faint rectangle
+  //  - roundedCorners:false: Windows 11 rounds frameless windows by default;
+  //    on the 80×80 mascot that reads as a visible 8px radius border
   const buddyExtras: Electron.BrowserWindowConstructorOptions = opts?.buddy
     ? {
         transparent: true,
@@ -327,26 +353,9 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
         alwaysOnTop: true,
         hasShadow: false,
         skipTaskbar: true,
-        // Force the native window surface to fully-transparent alpha. Without
-        // this, Electron on some Windows builds paints an opaque default
-        // (#FFF or theme-tinted) behind the web content, which shows up as a
-        // visible rectangle around the mascot even after all CSS
-        // transparency is applied. `#00000000` = RGBA (0,0,0,0).
         backgroundColor: '#00000000',
-        // Windows-only: thickFrame defaults to TRUE and adds the WS_THICKFRAME
-        // style to frameless windows — which keeps a subtle DWM shadow +
-        // window animations visible as a faint rectangle around the content.
-        // DevTools-confirmed via `getComputedStyle` audit: every DOM element
-        // is rgba(0,0,0,0) with no filter/shadow, yet the user still saw a
-        // "slightly transparent square." The only remaining paint source was
-        // DWM's thick-frame chrome. thickFrame: false removes it.
-        // Also disable rounded corners — Windows 11 rounds frameless windows
-        // by default, which reads as a visible 8 px radius border on
-        // transparent 80×80 content.
         thickFrame: false,
         roundedCorners: false,
-        // Frameless windows still render a menu bar on Win/Linux if the app
-        // has a default menu — hide it so buddy stays minimal.
         autoHideMenuBar: true,
         // Exclude buddy windows from macOS Dock + Mission Control
         ...(isMac ? { type: 'panel' as const } : {}),
@@ -388,6 +397,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   if (opts?.buddy) {
     win.setAlwaysOnTop(true, 'screen-saver');
   }
+
 
   if (opts?.inactive) {
     win.webContents.once('did-finish-load', () => {
@@ -445,9 +455,13 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   });
 
   // Register with the ownership registry so per-session events can route here
-  // and the switcher in other windows sees this window in its directory.
+  // and (main windows only) the switcher in other windows sees this window in
+  // its directory. Buddy windows register as kind 'buddy' so they stay out of
+  // the switcher's "Sessions in other windows" group — the floater is not
+  // "another window" from the user's point of view — but subscriptions still
+  // work (subscribe() rejects unknown ids).
   const wid = win.webContents.id;
-  windowRegistry.registerWindow(wid, Date.now());
+  windowRegistry.registerWindow(wid, Date.now(), opts?.buddy ? 'buddy' : 'main');
   win.on('closed', () => {
     // Drop attention reports contributed by this window so stale session
     // states from a closed window don't persist in the aggregated summary.

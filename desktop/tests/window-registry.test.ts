@@ -126,4 +126,53 @@ describe('WindowRegistry', () => {
   it('leaderWindowId is -1 when no windows registered', () => {
     expect(reg.getDirectory(() => undefined).leaderWindowId).toBe(-1);
   });
+
+  // Buddy windows (the floating mascot + compact chat) are registered so
+  // subscriptions work, but must be invisible to the switcher's "Sessions in
+  // other windows" group and ineligible for leadership.
+  describe('buddy windows', () => {
+    it('getDirectory omits buddy windows', () => {
+      reg.registerWindow(100, 1, 'main');
+      reg.registerWindow(200, 2, 'buddy');
+      reg.registerWindow(201, 3, 'buddy');
+      const dir = reg.getDirectory(() => undefined);
+      expect(dir.windows.map((w) => w.window.id)).toEqual([100]);
+    });
+
+    it('getLeaderId ignores buddy windows even when they are older', () => {
+      reg.registerWindow(200, 1, 'buddy');
+      reg.registerWindow(100, 2, 'main');
+      expect(reg.getLeaderId()).toBe(100);
+    });
+
+    it('getLeaderId is undefined when only buddies are registered', () => {
+      reg.registerWindow(200, 1, 'buddy');
+      expect(reg.getLeaderId()).toBeUndefined();
+    });
+
+    it('getKind reports kind for registered windows', () => {
+      reg.registerWindow(100, 1, 'main');
+      reg.registerWindow(200, 2, 'buddy');
+      expect(reg.getKind(100)).toBe('main');
+      expect(reg.getKind(200)).toBe('buddy');
+      expect(reg.getKind(999)).toBeUndefined();
+    });
+
+    it('buddy windows can still subscribe to sessions', () => {
+      reg.registerWindow(100, 1, 'main');
+      reg.registerWindow(200, 2, 'buddy');
+      reg.assignSession('s1', 100);
+      // subscribe() throws if the window id is unknown — must not throw for buddy.
+      expect(() => reg.subscribe('s1', 200)).not.toThrow();
+      expect(reg.getSubscribers('s1').has(200)).toBe(true);
+    });
+
+    it('main window labels are not consumed by buddy registrations', () => {
+      reg.registerWindow(200, 1, 'buddy'); // no label bump
+      reg.registerWindow(100, 2, 'main');  // → "window 1"
+      reg.registerWindow(101, 3, 'main');  // → "window 2"
+      const dir = reg.getDirectory(() => undefined);
+      expect(dir.windows.map((w) => w.window.label)).toEqual(['window 1', 'window 2']);
+    });
+  });
 });

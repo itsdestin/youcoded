@@ -312,8 +312,19 @@ export function registerIpcHandlers(
     const info = sessionManager.createSession(opts);
     // Assign the new session to the calling window so per-session events (transcript,
     // pty output, permission prompts) route here once Task 1.4 migrates the emits.
+    //
+    // Exception: if the sender is a buddy window (the floater's compact chat),
+    // assign to the leader main window instead. Buddies don't appear in the
+    // switcher directory and shouldn't own sessions — otherwise the session
+    // would be invisible to every main window's session list. The buddy still
+    // sees the session via its subscribe() call in SessionPill.selectSession.
     if (windowRegistry) {
-      try { windowRegistry.assignSession(info.id, event.sender.id); }
+      let targetId = event.sender.id;
+      if (windowRegistry.getKind(event.sender.id) === 'buddy') {
+        const leader = windowRegistry.getLeaderId();
+        if (leader != null) targetId = leader;
+      }
+      try { windowRegistry.assignSession(info.id, targetId); }
       catch (e) { log('WARN', 'IPC', 'assignSession failed', { error: String(e) }); }
     }
     return info;
@@ -1394,6 +1405,15 @@ export function registerIpcHandlers(
     if (session) session.name = name;
     remoteServer?.broadcast({ type: 'session:renamed', payload: { sessionId: desktopId, name } });
     remoteServer?.setLastTopic(desktopId, name);
+    // Fan out a directory refresh so any renderer that reads session names
+    // from WINDOW_DIRECTORY_UPDATED (buddy SessionPill, main SessionStrip)
+    // picks up the new name. sendForSession(SESSION_RENAMED) only reaches
+    // the session's owner + subscribers — the buddy only subscribes to its
+    // ONE viewed session, so without this its dropdown shows stale names
+    // for every OTHER session. getDirectory() is the lazy snapshot; emit
+    // 'changed' triggers broadcastWindowState() in main.ts which rebuilds
+    // and pushes it.
+    windowRegistry?.emit('changed');
   }
 
   function readTopicFile(claudeSessionId: string): string | null {
