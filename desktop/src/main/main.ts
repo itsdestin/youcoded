@@ -322,6 +322,12 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
         alwaysOnTop: true,
         hasShadow: false,
         skipTaskbar: true,
+        // Force the native window surface to fully-transparent alpha. Without
+        // this, Electron on some Windows builds paints an opaque default
+        // (#FFF or theme-tinted) behind the web content, which shows up as a
+        // visible rectangle around the mascot even after all CSS
+        // transparency is applied. `#00000000` = RGBA (0,0,0,0).
+        backgroundColor: '#00000000',
         // Frameless windows still render a menu bar on Win/Linux if the app
         // has a default menu — hide it so buddy stays minimal.
         autoHideMenuBar: true,
