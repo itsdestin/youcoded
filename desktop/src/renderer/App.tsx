@@ -488,6 +488,8 @@ function AppInner() {
             // Task 2.4: forward the per-message model from the transcript so the
             // reducer can stamp turn.model on the first text of each turn.
             model: event.data.model,
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-use':
@@ -498,6 +500,8 @@ function AppInner() {
             toolUseId: event.data.toolUseId,
             toolName: event.data.toolName,
             toolInput: event.data.toolInput || {},
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-result':
@@ -509,6 +513,8 @@ function AppInner() {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'turn-complete':

@@ -26,7 +26,7 @@ function truncate(s: string, max: number): string {
   return s.length > max ? s.slice(0, max) + '…' : s;
 }
 
-function friendlyToolDisplay(tool: ToolCallState): { label: string; detail: string } {
+export function friendlyToolDisplay(tool: ToolCallState): { label: string; detail: string } {
   const { toolName, input } = tool;
 
   switch (toolName) {

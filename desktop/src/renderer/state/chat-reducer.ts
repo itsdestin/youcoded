@@ -7,6 +7,7 @@ import {
   TimelineEntry,
   createSessionChatState,
 } from './chat-types';
+import { SubagentSegment, ToolCallState } from '../../shared/types';
 
 let messageCounter = 0;
 function nextMessageId(): string {
@@ -153,6 +154,79 @@ function endTurn(session: SessionChatState): Partial<SessionChatState> {
     // AFTER spreading endTurn() so it overrides this reset.
     attentionState: 'ok' as const,
   };
+}
+
+/**
+ * Route a subagent-originated transcript event into the parent Agent
+ * tool's `subagentSegments`. Returns the original state when the parent
+ * tool is missing (the subagent event arrived before the parent tool_use
+ * was dispatched — reducer bails; next event will succeed).
+ */
+function applySubagentEvent(state: ChatState, action: ChatAction): ChatState {
+  if (action.type !== 'TRANSCRIPT_TOOL_USE'
+      && action.type !== 'TRANSCRIPT_TOOL_RESULT'
+      && action.type !== 'TRANSCRIPT_ASSISTANT_TEXT') {
+    return state;
+  }
+  const parentId = (action as any).parentAgentToolUseId as string | undefined;
+  if (!parentId) return state;
+
+  const session = state.get(action.sessionId);
+  if (!session) return state;
+  const parent = session.toolCalls.get(parentId);
+  if (!parent) return state;
+
+  const segments: SubagentSegment[] = parent.subagentSegments ? [...parent.subagentSegments] : [];
+
+  if (action.type === 'TRANSCRIPT_ASSISTANT_TEXT') {
+    segments.push({
+      type: 'text',
+      id: `sa-text-${action.uuid}`,
+      content: action.text,
+    });
+  } else if (action.type === 'TRANSCRIPT_TOOL_USE') {
+    const existingIdx = segments.findIndex(
+      s => s.type === 'tool' && s.toolUseId === action.toolUseId,
+    );
+    const next: SubagentSegment = {
+      type: 'tool',
+      id: `sa-tool-${action.toolUseId}`,
+      toolUseId: action.toolUseId,
+      toolName: action.toolName,
+      input: action.toolInput,
+      status: 'running',
+    };
+    if (existingIdx >= 0) {
+      // Duplicate tool_use emit — JSONL FIFO order guarantees the
+      // tool_result hasn't been emitted yet, so overwriting back to
+      // 'running' is safe and keeps the segment's input fresh.
+      segments[existingIdx] = next;
+    } else {
+      segments.push(next);
+    }
+  } else if (action.type === 'TRANSCRIPT_TOOL_RESULT') {
+    const idx = segments.findIndex(
+      s => s.type === 'tool' && s.toolUseId === action.toolUseId,
+    );
+    if (idx >= 0 && segments[idx].type === 'tool') {
+      const existing = segments[idx] as Extract<SubagentSegment, { type: 'tool' }>;
+      segments[idx] = action.isError
+        ? { ...existing, status: 'failed', error: action.result }
+        : {
+            ...existing,
+            status: 'complete',
+            response: action.result,
+            ...(action.structuredPatch ? { structuredPatch: action.structuredPatch } : {}),
+          };
+    }
+  }
+
+  const toolCalls = new Map(session.toolCalls);
+  const updated: ToolCallState = { ...parent, subagentSegments: segments };
+  toolCalls.set(parentId, updated);
+  const next = new Map(state);
+  next.set(action.sessionId, { ...session, toolCalls });
+  return next;
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -364,6 +438,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_ASSISTANT_TEXT': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
+      if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
 
@@ -392,6 +468,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_TOOL_USE': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
+      if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
 
@@ -516,6 +594,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     }
 
     case 'TRANSCRIPT_TOOL_RESULT': {
+      // Subagent event: route into the parent Agent tool's nested timeline.
+      if (action.parentAgentToolUseId) return applySubagentEvent(state, action);
       const session = next.get(action.sessionId);
       if (!session) return state;
 

@@ -551,4 +551,59 @@ describe('TranscriptWatcher', () => {
     expect(received).toContain('msg A');
     expect(received).toContain('msg C');
   });
+
+  it('records Agent tool_use in SubagentIndex for correlation', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-agent-'));
+    const slug = 'C--tmp-project';
+    const projectDir = path.join(tmpRoot, slug);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const sessionId = 'sess-abc';
+    const parentJsonl = path.join(projectDir, `${sessionId}.jsonl`);
+    const subagentsDir = path.join(projectDir, sessionId, 'subagents');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+
+    fs.writeFileSync(parentJsonl, JSON.stringify({
+      type: 'assistant',
+      uuid: 'uuid-1',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use', id: 'toolu_P1', name: 'Agent',
+          input: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' },
+        }],
+        stop_reason: null,
+      },
+    }) + '\n');
+
+    fs.writeFileSync(
+      path.join(subagentsDir, 'agent-abc.meta.json'),
+      JSON.stringify({ description: 'Find bug', agentType: 'Explore' }),
+    );
+    fs.writeFileSync(
+      path.join(subagentsDir, 'agent-abc.jsonl'),
+      JSON.stringify({
+        type: 'assistant', uuid: 'uuid-s1', isSidechain: true,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_S1', name: 'Read', input: { file_path: '/a' } }],
+          stop_reason: null,
+        },
+      }) + '\n',
+    );
+
+    const tw = new TranscriptWatcher(tmpRoot);
+    tw.startWatching('desktop-sess-1', sessionId, 'C:/tmp/project');
+
+    const history = tw.getHistory('desktop-sess-1');
+    tw.stopWatching('desktop-sess-1');
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+
+    const parentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Agent');
+    const subagentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Read');
+    expect(parentToolUse).toBeDefined();
+    expect(parentToolUse!.data.parentAgentToolUseId).toBeUndefined();
+    expect(subagentToolUse).toBeDefined();
+    expect(subagentToolUse!.data.parentAgentToolUseId).toBe('toolu_P1');
+    expect(subagentToolUse!.data.agentId).toBe('abc');
+  });
 });

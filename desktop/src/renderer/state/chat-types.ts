@@ -255,6 +255,8 @@ export type ChatAction =
       // on the first assistant-text of a turn so the model pill/metadata is
       // visible on in-flight turns (before turn-complete stamps it definitively).
       model?: string;
+      parentAgentToolUseId?: string;
+      agentId?: string;
     }
   | {
       type: 'TRANSCRIPT_TOOL_USE';
@@ -263,6 +265,8 @@ export type ChatAction =
       toolUseId: string;
       toolName: string;
       toolInput: Record<string, unknown>;
+      parentAgentToolUseId?: string;
+      agentId?: string;
     }
   | {
       type: 'TRANSCRIPT_TOOL_RESULT';
@@ -272,6 +276,8 @@ export type ChatAction =
       result: string;
       isError: boolean;
       structuredPatch?: import('../../shared/types').StructuredPatchHunk[];
+      parentAgentToolUseId?: string;
+      agentId?: string;
     }
   | {
       type: 'TRANSCRIPT_TURN_COMPLETE';
