@@ -57,18 +57,25 @@ export function usePromptDetector() {
   const lastPermissionClearedRef = useRef<Map<string, number>>(new Map());
   const prevAwaitingRef = useRef<Map<string, boolean>>(new Map());
 
-  // Detect transitions OUT of awaiting-approval state
-  for (const [sid, session] of chatState) {
-    let hasAwaiting = false;
-    for (const [, tool] of session.toolCalls) {
-      if (tool.status === 'awaiting-approval') { hasAwaiting = true; break; }
+  // Perf: detect awaiting-approval transitions in an effect (off the render
+  // path) and iterate activeTurnToolIds (current-turn only, per chat-reducer
+  // rule #2) rather than the session-lifetime toolCalls Map. With many
+  // concurrent sessions accumulating hundreds of tool entries over time, the
+  // old render-body loop was O(sessions × toolCalls) on every dispatch.
+  useEffect(() => {
+    for (const [sid, session] of chatState) {
+      let hasAwaiting = false;
+      for (const toolId of session.activeTurnToolIds) {
+        const tool = session.toolCalls.get(toolId);
+        if (tool && tool.status === 'awaiting-approval') { hasAwaiting = true; break; }
+      }
+      const wasAwaiting = prevAwaitingRef.current.get(sid) ?? false;
+      if (wasAwaiting && !hasAwaiting) {
+        lastPermissionClearedRef.current.set(sid, Date.now());
+      }
+      prevAwaitingRef.current.set(sid, hasAwaiting);
     }
-    const wasAwaiting = prevAwaitingRef.current.get(sid) ?? false;
-    if (wasAwaiting && !hasAwaiting) {
-      lastPermissionClearedRef.current.set(sid, Date.now());
-    }
-    prevAwaitingRef.current.set(sid, hasAwaiting);
-  }
+  }, [chatState]);
 
   useEffect(() => {
     const unsub = onBufferReady((sid: string) => {

@@ -24,7 +24,15 @@ describe('chat state serialization', () => {
     } as any;
     session.toolCalls.set('tool-1', toolCall);
     session.activeTurnToolIds.add('tool-1');
-    session.assistantTurns.set('turn-1', { id: 'turn-1', segments: [], timestamp: 123 });
+    session.assistantTurns.set('turn-1', {
+      id: 'turn-1',
+      segments: [],
+      timestamp: 123,
+      stopReason: null,
+      model: null,
+      usage: null,
+      anthropicRequestId: null,
+    });
     session.timeline.push({ kind: 'assistant-turn', turnId: 'turn-1' });
     session.isThinking = true;
     session.attentionState = 'awaiting-input';

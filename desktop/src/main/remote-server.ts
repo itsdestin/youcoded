@@ -479,6 +479,9 @@ export class RemoteServer {
     // Delay PTY + hook replay to give the client time to process SESSION_INIT.
     // Without this delay, hook events arrive before the chat reducer has
     // initialized the session state, and all events are silently dropped.
+    // Note: the preceding `requestSnapshot()` await can take up to 2000ms
+    // (its internal timeout), so the worst-case total delay before PTY/hook
+    // replay starts is ~2500ms for a connect when the renderer is unresponsive.
     setTimeout(() => {
       if (ws.readyState !== WebSocket.OPEN) return;
 

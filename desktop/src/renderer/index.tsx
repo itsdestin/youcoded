@@ -1,3 +1,7 @@
+// Must run before any component import — sets window.__PLATFORM__ synchronously
+// so module-level isAndroid()/isRemoteMode() reads in imported files see the
+// right value. See platform-bootstrap.ts for why.
+import './platform-bootstrap';
 import React, { useState, useEffect, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
@@ -80,10 +84,8 @@ const isElectron = !!(window as any).claude;
 // Android WebView loads from file:// — always auto-connects, never needs a password screen
 const isAndroid = location.protocol === 'file:';
 
-// Set default platform for Electron path (browser/remote path sets it via remote-shim auth:ok)
-if (isElectron && !(window as any).__PLATFORM__) {
-  (window as any).__PLATFORM__ = 'electron';
-}
+// __PLATFORM__ is already set by platform-bootstrap.ts for electron/android;
+// browser/remote path leaves it undefined until remote-shim auth:ok fills it in.
 
 function Root() {
   const [connected, setConnected] = useState(isElectron);
@@ -138,9 +140,15 @@ function Root() {
   }
 
   // Android always auto-connects to local bridge — never show the password screen.
-  // shimReady guarantees window.claude is populated before App renders.
+  // Fix: wait for connection/auth to complete BEFORE mounting App. shimReady only
+  // guarantees window.claude exists, not that auth:ok has fired. IPC calls made
+  // during the pre-auth window (theme:list, skills:list, etc.) are dropped by
+  // LocalBridgeServer's unauthenticated-client guard (LocalBridgeServer.kt:116),
+  // then time out silently after 30s — causing install'd themes/skills to never
+  // appear in the UI. The first branch above renders App once `connected` flips;
+  // keep this path on a Loading state until then so we never ship IPC pre-auth.
   if (isAndroid) {
-    return <App />;
+    return <div className="flex items-center justify-center h-full bg-panel text-fg text-sm">Connecting...</div>;
   }
 
   return <LoginScreen onLogin={handleLogin} />;

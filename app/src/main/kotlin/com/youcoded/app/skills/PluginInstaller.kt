@@ -367,7 +367,11 @@ class PluginInstaller(
      */
     private suspend fun runGit(vararg args: String): Boolean = withContext(Dispatchers.IO) {
         try {
-            val gitPath = File(homeDir, "usr/bin/git").absolutePath
+            // Fix: Termux binaries live at <filesDir>/usr/bin/, NOT <filesDir>/home/usr/bin/.
+            // homeDir is filesDir/home (Bootstrap.homeDir); usrDir is filesDir/usr (Bootstrap.usrDir).
+            // Building the git path from homeDir instead of homeDir.parentFile resolved to
+            // a nonexistent path and every `git clone` failed with "unable to open file".
+            val gitPath = File(homeDir.parentFile ?: homeDir, "usr/bin/git").absolutePath
             val cmdList = mutableListOf("/system/bin/linker64", gitPath)
             cmdList.addAll(args)
 
@@ -409,11 +413,13 @@ class PluginInstaller(
             @Suppress("UNCHECKED_CAST")
             method.invoke(bootstrap) as Map<String, String>
         } catch (_: Exception) {
-            // Fallback: minimal env
+            // Fallback: minimal env. Same layout fix as runGit — usr/ lives at
+            // filesDir/usr, not homeDir/usr (homeDir is filesDir/home).
+            val usrRoot = (homeDir.parentFile ?: homeDir).absolutePath
             mapOf(
                 "HOME" to homeDir.absolutePath,
-                "PATH" to "${homeDir.absolutePath}/usr/bin:/system/bin",
-                "LD_LIBRARY_PATH" to "${homeDir.absolutePath}/usr/lib",
+                "PATH" to "$usrRoot/usr/bin:/system/bin",
+                "LD_LIBRARY_PATH" to "$usrRoot/usr/lib",
             )
         }
     }

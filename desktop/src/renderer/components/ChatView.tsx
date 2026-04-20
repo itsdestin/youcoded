@@ -88,6 +88,19 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
     return { hasAwaitingApproval: hasAwaiting, hasRunningTools: hasRunning, awaitingTools: awaiting };
   }, [state.toolCalls, state.activeTurnToolIds]);
 
+  // Find the most recent assistant turn's Anthropic request ID — surfaced on
+  // the AttentionBanner only for session-died / error so users can cite it
+  // when reporting an issue. Walk the timeline from the end for O(1) typical cost.
+  const lastTurnRequestId = useMemo(() => {
+    for (let i = state.timeline.length - 1; i >= 0; i--) {
+      const entry = state.timeline[i];
+      if (entry.kind === 'assistant-turn') {
+        return state.assistantTurns.get(entry.turnId)?.anthropicRequestId ?? null;
+      }
+    }
+    return null;
+  }, [state.timeline, state.assistantTurns]);
+
   // PTY-buffer classifier drives the attention banner. Replaces the old
   // 30s thinking-timeout watchdog + TERMINAL_ACTIVITY heartbeat — the hook
   // reads the xterm buffer directly and decides 'ok' vs. 'stuck'/'shell-idle'/etc.
@@ -468,7 +481,7 @@ export default function ChatView({ sessionId, visible, resumeInfo }: Props) {
             {state.isThinking && !hasAwaitingApproval && !hasRunningTools && (
               state.attentionState === 'ok'
                 ? <ThinkingIndicator />
-                : <AttentionBanner state={state.attentionState} />
+                : <AttentionBanner state={state.attentionState} anthropicRequestId={lastTurnRequestId} />
             )}
           </>
         )}

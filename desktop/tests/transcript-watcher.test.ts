@@ -236,6 +236,32 @@ describe('parseTranscriptLine', () => {
     const events = parseTranscriptLine(line, sessionId);
     expect(events).toEqual([]);
   });
+
+  it('emits stopReason on turn-complete for max_tokens stops', () => {
+    const line = JSON.stringify({
+      type: 'assistant',
+      sessionId: 's1',
+      uuid: 'u1',
+      timestamp: '2026-04-17T00:00:00.000Z',
+      requestId: 'req_abc',
+      message: {
+        model: 'claude-opus-4-7',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'truncated...' }],
+        stop_reason: 'max_tokens',
+        usage: { input_tokens: 10, output_tokens: 4096, cache_read_input_tokens: 5, cache_creation_input_tokens: 2 },
+      },
+    });
+    const events = parseTranscriptLine(line, 's1');
+    const turnComplete = events.find((e) => e.type === 'turn-complete');
+    expect(turnComplete).toBeDefined();
+    expect(turnComplete!.data).toEqual({
+      stopReason: 'max_tokens',
+      model: 'claude-opus-4-7',
+      anthropicRequestId: 'req_abc',
+      usage: { inputTokens: 10, outputTokens: 4096, cacheReadTokens: 5, cacheCreationTokens: 2 },
+    });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -266,7 +292,9 @@ describe('TranscriptWatcher', () => {
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-test-'));
-    watcher = new TranscriptWatcher(tmpDir);
+    // Short poll interval so the "falls back to polling" test still passes
+    // within ~1s. Production default is 2000ms.
+    watcher = new TranscriptWatcher(tmpDir, 500);
   });
 
   afterEach(() => {
@@ -475,5 +503,109 @@ describe('TranscriptWatcher', () => {
 
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[0].data.text).toBe('From polling');
+  });
+
+  // Regression: if a listener threw mid-batch, session.offset had already
+  // advanced past the un-emitted chunks, permanently stranding them. A later
+  // file growth couldn't recover them because readNewLines reads from the new
+  // (advanced) offset forward. Fix: emits must not abort the batch loop.
+  it('continues emitting remaining events when a listener throws on one', async () => {
+    const desktopSessionId = 'desktop-throw';
+    const claudeSessionId = 'claude-session-throw';
+    const cwd = '/home/user/project';
+
+    const slug = cwdToProjectSlug(cwd);
+    const projectDir = path.join(tmpDir, slug);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
+
+    const makeLine = (uuid: string, text: string) =>
+      JSON.stringify({
+        type: 'assistant',
+        uuid,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+          stop_reason: null,
+        },
+      });
+
+    fs.writeFileSync(
+      jsonlPath,
+      [
+        makeLine('uuid-a', 'msg A'),
+        makeLine('uuid-b', 'msg B'),
+        makeLine('uuid-c', 'msg C'),
+      ].join('\n') + '\n',
+    );
+
+    const received: string[] = [];
+    // Listener throws on B; with the fix, A and C still reach this listener.
+    watcher.on('transcript-event', (ev: TranscriptEvent) => {
+      if (ev.type !== 'assistant-text') return;
+      if (ev.data.text === 'msg B') throw new Error('boom');
+      received.push(ev.data.text);
+    });
+
+    watcher.startWatching(desktopSessionId, claudeSessionId, cwd);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(received).toContain('msg A');
+    expect(received).toContain('msg C');
+  });
+
+  it('records Agent tool_use in SubagentIndex for correlation', async () => {
+    const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'tw-agent-'));
+    const slug = 'C--tmp-project';
+    const projectDir = path.join(tmpRoot, slug);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const sessionId = 'sess-abc';
+    const parentJsonl = path.join(projectDir, `${sessionId}.jsonl`);
+    const subagentsDir = path.join(projectDir, sessionId, 'subagents');
+    fs.mkdirSync(subagentsDir, { recursive: true });
+
+    fs.writeFileSync(parentJsonl, JSON.stringify({
+      type: 'assistant',
+      uuid: 'uuid-1',
+      message: {
+        role: 'assistant',
+        content: [{
+          type: 'tool_use', id: 'toolu_P1', name: 'Agent',
+          input: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' },
+        }],
+        stop_reason: null,
+      },
+    }) + '\n');
+
+    fs.writeFileSync(
+      path.join(subagentsDir, 'agent-abc.meta.json'),
+      JSON.stringify({ description: 'Find bug', agentType: 'Explore' }),
+    );
+    fs.writeFileSync(
+      path.join(subagentsDir, 'agent-abc.jsonl'),
+      JSON.stringify({
+        type: 'assistant', uuid: 'uuid-s1', isSidechain: true,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'toolu_S1', name: 'Read', input: { file_path: '/a' } }],
+          stop_reason: null,
+        },
+      }) + '\n',
+    );
+
+    const tw = new TranscriptWatcher(tmpRoot);
+    tw.startWatching('desktop-sess-1', sessionId, 'C:/tmp/project');
+
+    const history = tw.getHistory('desktop-sess-1');
+    tw.stopWatching('desktop-sess-1');
+    fs.rmSync(tmpRoot, { recursive: true, force: true });
+
+    const parentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Agent');
+    const subagentToolUse = history.find(e => e.type === 'tool-use' && e.data.toolName === 'Read');
+    expect(parentToolUse).toBeDefined();
+    expect(parentToolUse!.data.parentAgentToolUseId).toBeUndefined();
+    expect(subagentToolUse).toBeDefined();
+    expect(subagentToolUse!.data.parentAgentToolUseId).toBe('toolu_P1');
+    expect(subagentToolUse!.data.agentId).toBe('abc');
   });
 });

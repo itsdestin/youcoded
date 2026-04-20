@@ -249,6 +249,17 @@ function AppInner() {
   // user saw "may have failed" even though compaction succeeded.
   const compactWatchdogs = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   useEffect(() => {
+    // Perf: this effect fires on every reducer dispatch. Steady state (no
+    // compaction in flight, no live watchdogs) short-circuits without walking
+    // the session map. When a compaction is live we still iterate — preserving
+    // the activity-awareness described above (timer resets on every dispatch).
+    if (compactWatchdogs.current.size === 0) {
+      let anyPending = false;
+      for (const session of chatStateMap.values()) {
+        if (session.compactionPending) { anyPending = true; break; }
+      }
+      if (!anyPending) return;
+    }
     for (const [sid, session] of chatStateMap) {
       const existing = compactWatchdogs.current.get(sid);
       if (session.compactionPending) {
@@ -494,6 +505,11 @@ function AppInner() {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            // Task 2.4: forward the per-message model from the transcript so the
+            // reducer can stamp turn.model on the first text of each turn.
+            model: event.data.model,
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-use':
@@ -504,6 +520,8 @@ function AppInner() {
             toolUseId: event.data.toolUseId,
             toolName: event.data.toolName,
             toolInput: event.data.toolInput || {},
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-result':
@@ -515,14 +533,23 @@ function AppInner() {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'turn-complete':
+          // Task 2.2: forward the full metadata payload. transcript-watcher emits these as
+          // optional fields on event.data (shared/types.ts); coalesce undefined → null so
+          // the action type (string | null, not optional) stays well-typed.
           batchTranscriptDispatch({
             type: 'TRANSCRIPT_TURN_COMPLETE',
             sessionId: event.sessionId,
             uuid: event.uuid,
             timestamp: event.timestamp,
+            stopReason: event.data.stopReason ?? null,
+            model: event.data.model ?? null,
+            anthropicRequestId: event.data.anthropicRequestId ?? null,
+            usage: event.data.usage ?? null,
           });
           break;
         case 'assistant-thinking':
@@ -576,24 +603,11 @@ function AppInner() {
       );
     });
 
-    // Sync permission mode by reading Claude Code's mode indicator from PTY output.
-    // Same approach as the mobile app — just check for mode text in the output.
-    const ptyModeHandler = window.claude.on.ptyOutput((sid: string, data: string) => {
-      const lower = data.toLowerCase();
-      let mode: PermissionMode | null = null;
-      if (lower.includes('bypass permissions on')) mode = 'bypass';
-      else if (lower.includes('accept edits on')) mode = 'auto-accept';
-      else if (lower.includes('plan mode on')) mode = 'plan';
-      else if (lower.includes('bypass permissions off')
-            || lower.includes('accept edits off')
-            || lower.includes('plan mode off')) mode = 'normal';
-      if (mode) {
-        setPermissionModes((prev) => {
-          if (prev.get(sid) === mode) return prev;
-          return new Map(prev).set(sid, mode!);
-        });
-      }
-    });
+    // Permission-mode detection (per-session) is wired up in a dedicated
+    // effect below, scoped to the current sessions list. Previously this used
+    // a global pty:output listener; that channel is no longer broadcast
+    // (every PTY chunk used to be double-sent to pay for a single listener —
+    // see ipc-handlers.ts pty-output comments).
 
     const statusHandler = window.claude.on.statusData((data) => {
       setStatusData((prev) => ({
@@ -717,7 +731,6 @@ function AppInner() {
       window.claude.off('session:destroyed', destroyedHandler);
       window.claude.off('hook:event', hookHandler);
       window.claude.off('session:renamed', renamedHandler);
-      window.claude.off('pty:output', ptyModeHandler);
       window.claude.off('status:data', statusHandler);
       if (transcriptHandler) window.claude.off('transcript:event', transcriptHandler);
       if (shrinkHandler) window.claude.off('transcript:shrink', shrinkHandler);
@@ -729,6 +742,46 @@ function AppInner() {
       if (chatHydrateHandler) window.claude.off('chat:hydrate', chatHydrateHandler);
     };
   }, [dispatch]);
+
+  // Desktop permission-mode detection, scoped per-session. Watches for Claude
+  // Code's in-terminal mode indicator strings ("bypass permissions on", etc.)
+  // and updates the HeaderBar badge. Previously a single global pty:output
+  // listener handled this, forcing every PTY chunk to be dual-broadcast.
+  // Subscribing per-session halves steady-state IPC traffic.
+  //
+  // Android doesn't forward raw PTY bytes — it emits 'session:permission-mode'
+  // instead (handled in the big effect above), so this effect is effectively
+  // desktop-only. On Android the ptyOutputForSession call is still safe but
+  // will never deliver data matching the mode strings.
+  useEffect(() => {
+    const claudeOn = (window.claude.on as any);
+    if (typeof claudeOn.ptyOutputForSession !== 'function') return;
+    const handles: Array<{ sid: string; remove: () => void }> = [];
+    for (const s of sessions) {
+      const remove = claudeOn.ptyOutputForSession(s.id, (data: string) => {
+        const lower = data.toLowerCase();
+        let mode: PermissionMode | null = null;
+        if (lower.includes('bypass permissions on')) mode = 'bypass';
+        else if (lower.includes('accept edits on')) mode = 'auto-accept';
+        else if (lower.includes('plan mode on')) mode = 'plan';
+        else if (lower.includes('bypass permissions off')
+              || lower.includes('accept edits off')
+              || lower.includes('plan mode off')) mode = 'normal';
+        if (mode) {
+          setPermissionModes((prev) => {
+            if (prev.get(s.id) === mode) return prev;
+            return new Map(prev).set(s.id, mode!);
+          });
+        }
+      });
+      handles.push({ sid: s.id, remove });
+    }
+    return () => {
+      for (const h of handles) {
+        try { h.remove(); } catch { /* unsubscribe API may no-op */ }
+      }
+    };
+  }, [sessions]);
 
   // Fetch session list on mount — catches sessions that existed before event handlers were registered
   // (e.g., remote browser reconnecting after the replay buffer events already fired)
@@ -1073,6 +1126,62 @@ function AppInner() {
     };
   }, [pendingModel, sessionId]);
 
+  // Passive drift reconciliation: silently align the session pill with what
+  // Claude actually used, whenever the transcript reveals they disagree.
+  //
+  // The verify-model-switch effect above only runs during a user-initiated
+  // Shift+Space / picker flip (pendingModel !== null). This effect catches the
+  // cases that flow doesn't see:
+  //   - user typed `/model sonnet` directly into the terminal view
+  //   - Claude Code auto-downshifted on rate-limit
+  //   - session resume picked up a different model than was selected
+  //
+  // Walks the timeline back to the most recent assistant turn with a known
+  // model (set by TRANSCRIPT_ASSISTANT_TEXT in Task 2.4 and reconfirmed by
+  // TRANSCRIPT_TURN_COMPLETE in Task 2.3), maps it to a ModelAlias, and if it
+  // disagrees with sessionModels[sessionId], silently updates both the pill
+  // state AND the persisted preference. No PTY writes — we're reflecting
+  // reality, not trying to change the backend model.
+  //
+  // Gated on !pendingModel so this doesn't race with the verify effect during
+  // a user-initiated switch (the in-flight turn still carries the old model
+  // and would cause this effect to undo the user's intent prematurely).
+  useEffect(() => {
+    if (!sessionId || pendingModel) return;
+    const session = chatStateMap.get(sessionId);
+    if (!session) return;
+
+    // Walk backward through the timeline for the most recent assistant-turn
+    // with a known model. turn.model is null until the first assistant-text
+    // arrives, so new/empty sessions exit here.
+    let latestModel: string | null = null;
+    for (let i = session.timeline.length - 1; i >= 0; i--) {
+      const entry = session.timeline[i];
+      if (entry.kind === 'assistant-turn') {
+        const turn = session.assistantTurns.get(entry.turnId);
+        if (turn?.model) {
+          latestModel = turn.model;
+          break;
+        }
+      }
+    }
+    if (!latestModel) return;
+
+    // Match the raw transcript model (e.g. 'claude-opus-4-7') → ModelAlias,
+    // mirroring the SessionInfo matcher at line 372.
+    const alias = MODELS.find((m) => latestModel!.includes(m.replace(/\[.*\]/, '')));
+    if (!alias) return;
+
+    const currentAlias = sessionModels.get(sessionId);
+    if (currentAlias && currentAlias !== alias) {
+      // Drift detected — reconcile silently. setPreference persists to disk
+      // (so next session boots with the correct default); setSessionModels
+      // updates the status-bar pill + Shift+Space cycle start point.
+      (window.claude as any).model?.setPreference(alias);
+      setSessionModels((prev) => new Map(prev).set(sessionId, alias));
+    }
+  }, [sessionId, chatStateMap, sessionModels, pendingModel]);
+
   // Snapshot factory for /cost and /usage. Pulls live stats from statusData
   // and freezes them as a point-in-time snapshot. Returns null if stats haven't
   // arrived yet (status line hook runs after each command, so a brand-new session
@@ -1209,6 +1318,14 @@ function AppInner() {
   }, [dispatch, currentModel]);
 
   const currentViewMode = sessionId ? (viewModes.get(sessionId) || 'chat') : 'chat';
+
+  // Mirror the active view mode onto <html data-view-mode="..."> so CSS can
+  // react to it. Needed on Android to hide the wallpaper layer over the native
+  // terminal — the React-side bg div sits on top of the native TerminalView
+  // and opaque wallpapers were blocking the terminal text from showing through.
+  useEffect(() => {
+    document.documentElement.dataset.viewMode = currentViewMode;
+  }, [currentViewMode]);
 
   const handleToggleView = useCallback(
     (mode: ViewMode) => {

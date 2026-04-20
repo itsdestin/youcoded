@@ -9,6 +9,9 @@ import BrailleSpinner from './BrailleSpinner';
 
 interface Props {
   state: Exclude<AttentionState, 'ok'>;
+  /** Anthropic API request ID for the last assistant turn, if any.
+   *  Rendered only when state is 'error' or 'session-died' for support correlation. */
+  anthropicRequestId?: string | null;
 }
 
 const COPY: Record<Props['state'], string> = {
@@ -24,7 +27,7 @@ const COPY: Record<Props['state'], string> = {
 // neutral bubble styling to stay consistent with ThinkingIndicator.
 const DESTRUCTIVE: Props['state'][] = ['error', 'session-died'];
 
-export default function AttentionBanner({ state }: Props) {
+export default function AttentionBanner({ state, anthropicRequestId }: Props) {
   const destructive = DESTRUCTIVE.includes(state);
   const bubbleBase = 'flex items-center gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5';
   const bubbleClasses = destructive
@@ -36,15 +39,27 @@ export default function AttentionBanner({ state }: Props) {
   // Show the spinner for every state except session-died — that one signals
   // the process is gone, so a spinning indicator would be misleading.
   const showSpinner = state !== 'session-died';
+  // Only surface the request ID on destructive states: it's strictly a support
+  // correlation aid, so we hide it during the benign awaiting-input / idle /
+  // stuck banners to avoid visual noise when nothing is actually wrong.
+  const showRequestId =
+    (state === 'session-died' || state === 'error') && !!anthropicRequestId;
 
   return (
     // in-view: opts the bubble into wallpaper-driven bubble glassmorphism
     // (theme-engine targets `.in-view .bg-inset`), matching ThinkingIndicator.
-    <div className="flex items-center gap-2 px-4 py-1.5 in-view">
+    // Column layout lets the Request ID stack beneath the bubble while staying
+    // inside the same banner container (consistent padding + glass treatment).
+    <div className="flex flex-col items-start gap-1 px-4 py-1.5 in-view">
       <div className={bubbleClasses}>
         {showSpinner && <BrailleSpinner size="base" />}
         <span className={textClasses}>{COPY[state]}</span>
       </div>
+      {showRequestId && (
+        <div className="text-[10.5px] text-fg-muted font-mono mt-1 select-text">
+          Request ID: {anthropicRequestId}
+        </div>
+      )}
     </div>
   );
 }

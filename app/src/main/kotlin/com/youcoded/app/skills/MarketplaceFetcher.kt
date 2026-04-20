@@ -12,7 +12,11 @@ class MarketplaceFetcher(
 ) {
 
     private val cacheDir = File(homeDir, ".claude/youcoded-marketplace-cache")
-    private val registryBase = "https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/main"
+    // Fix: the wecoded-marketplace repo's source of truth is `master`, not `main`.
+    // `main` has no index.json, so every fetch here was 404-ing silently — desktop
+    // uses `master` (desktop/src/main/skill-provider.ts REGISTRY_BASE) and we were
+    // the only platform diverged.
+    private val registryBase = "https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/master"
     private val statsTtl = 60 * 60 * 1000L       // 1 hour
     private val indexTtl = 24 * 60 * 60 * 1000L   // 24 hours
 

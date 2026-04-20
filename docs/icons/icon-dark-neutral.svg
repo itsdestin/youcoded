@@ -3,7 +3,7 @@
   <line x1="6" y1="6.5" x2="34" y2="6.5" stroke="rgba(160,160,160,0.25)" stroke-width="1" stroke-linecap="round"/>
   <line x1="6" y1="33.5" x2="34" y2="33.5" stroke="rgba(160,160,160,0.25)" stroke-width="1" stroke-linecap="round"/>
   <polygon points="5.2,17.2 7.4,17.2 10.2,20.5 7.4,23.8 5.2,23.8 8,20.5" fill="#e0e0e0"/>
-  <text x="12.8" y="20.5" dominant-baseline="central" text-anchor="start" font-family="'Cascadia Code','Consolas',monospace" font-weight="700" font-size="11" fill="#f0f0f0">D</text>
+  <text x="12.8" y="20.5" dominant-baseline="central" text-anchor="start" font-family="'Cascadia Code','Consolas',monospace" font-weight="700" font-size="11" fill="#f0f0f0">Y</text>
   <text x="20.3" y="20.5" dominant-baseline="central" text-anchor="start" font-family="'Cascadia Code','Consolas',monospace" font-weight="700" font-size="11" fill="#e0e0e0">C</text>
   <rect x="29.5" y="15" width="6" height="11" rx="0.5" fill="#e0e0e0" opacity="0.6"/>
 </svg>

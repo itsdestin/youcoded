@@ -208,6 +208,10 @@ describe('TRANSCRIPT_* reducer actions', () => {
       sessionId: SESSION,
       uuid: 'uuid-done',
       timestamp: 2000,
+      stopReason: null,
+      model: null,
+      anthropicRequestId: null,
+      usage: null,
     });
 
     const session = state.get(SESSION)!;
@@ -320,5 +324,301 @@ describe('TRANSCRIPT_* reducer actions', () => {
     // Should NOT add a second user message — the optimistic one is already there
     expect(session.timeline).toHaveLength(1);
     expect(session.isThinking).toBe(true);
+  });
+
+  // --- Test 10: Rapid-fire identical USER_PROMPTs — each gets its own bubble ---
+  // Regression: old content-based dedup scanned the last 10 timeline entries
+  // and silently suppressed any USER_PROMPT whose content matched a prior
+  // user message. Sending "yes" twice meant the second "yes" vanished.
+  // New behavior: USER_PROMPT always appends. Dedup is by pending/confirmed,
+  // not by content-match.
+  it('USER_PROMPT dispatched twice with same content creates TWO distinct timeline entries', () => {
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1000,
+    });
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1100,
+    });
+
+    const session = state.get(SESSION)!;
+    const userEntries = session.timeline.filter((e) => e.kind === 'user');
+    expect(userEntries).toHaveLength(2);
+  });
+
+  // --- Test 11: transcript confirms each pending entry individually ---
+  // With the new pattern, each TRANSCRIPT_USER_MESSAGE consumes the OLDEST
+  // matching pending entry. Two rapid sends + two transcript events = two
+  // confirmed bubbles, no duplicates.
+  it('TRANSCRIPT_USER_MESSAGE confirms pending entries one-by-one without adding duplicates', () => {
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1000,
+    });
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1100,
+    });
+
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_USER_MESSAGE',
+      sessionId: SESSION,
+      uuid: 'uuid-1',
+      text: 'yes',
+      timestamp: 1050,
+    });
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_USER_MESSAGE',
+      sessionId: SESSION,
+      uuid: 'uuid-2',
+      text: 'yes',
+      timestamp: 1150,
+    });
+
+    const session = state.get(SESSION)!;
+    const userEntries = session.timeline.filter((e) => e.kind === 'user');
+    expect(userEntries).toHaveLength(2);
+  });
+
+  // --- Test 12: transcript arrives without a pending match → append new ---
+  // Remote/replay path: TRANSCRIPT_USER_MESSAGE fires without a prior optimistic
+  // USER_PROMPT (e.g. viewer-only client, or user typed straight in terminal).
+  // Should add a new timeline entry, not silently drop it.
+  it('TRANSCRIPT_USER_MESSAGE appends a new entry when no matching pending entry exists', () => {
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_USER_MESSAGE',
+      sessionId: SESSION,
+      uuid: 'uuid-remote',
+      text: 'hello from remote',
+      timestamp: 1000,
+    });
+
+    const session = state.get(SESSION)!;
+    const userEntries = session.timeline.filter((e) => e.kind === 'user');
+    expect(userEntries).toHaveLength(1);
+    if (userEntries[0].kind === 'user') {
+      expect(userEntries[0].message.content).toBe('hello from remote');
+    }
+  });
+});
+
+describe('Subagent threading', () => {
+  let state: ChatState;
+
+  beforeEach(() => {
+    state = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: SESSION });
+  });
+
+  function emitParentAgentToolUse(): ChatState {
+    return chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE',
+      sessionId: SESSION,
+      uuid: 'uuid-parent',
+      toolUseId: 'toolu_parent',
+      toolName: 'Agent',
+      toolInput: { description: 'Find bug', subagent_type: 'Explore', prompt: 'go' },
+    });
+  }
+
+  it('subagent tool_use appends a subagent segment to the parent Agent tool', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE',
+      sessionId: SESSION,
+      uuid: 'uuid-s1',
+      toolUseId: 'toolu_child',
+      toolName: 'Read',
+      toolInput: { file_path: '/a' },
+      parentAgentToolUseId: 'toolu_parent',
+      agentId: 'abc',
+    });
+
+    const session = state.get(SESSION)!;
+    const parent = session.toolCalls.get('toolu_parent')!;
+    expect(parent.subagentSegments).toBeDefined();
+    expect(parent.subagentSegments!.length).toBe(1);
+    const seg = parent.subagentSegments![0];
+    expect(seg.type).toBe('tool');
+    if (seg.type === 'tool') {
+      expect(seg.toolUseId).toBe('toolu_child');
+      expect(seg.toolName).toBe('Read');
+      expect(seg.status).toBe('running');
+    }
+    expect(session.toolCalls.has('toolu_child')).toBe(false);
+    expect(session.activeTurnToolIds.has('toolu_child')).toBe(false);
+  });
+
+  it('subagent tool_result flips the matching segment to complete', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2',
+      toolUseId: 'toolu_child', result: 'file contents', isError: false,
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+
+    const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
+    const seg = parent.subagentSegments![0];
+    expect(seg.type).toBe('tool');
+    if (seg.type === 'tool') {
+      expect(seg.status).toBe('complete');
+      expect(seg.response).toBe('file contents');
+    }
+  });
+
+  it('subagent assistant text appends a text segment', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-s1',
+      text: "I'll check the Android side.",
+      timestamp: 1000,
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
+    expect(parent.subagentSegments!.length).toBe(1);
+    const seg = parent.subagentSegments![0];
+    expect(seg.type).toBe('text');
+    if (seg.type === 'text') expect(seg.content).toBe("I'll check the Android side.");
+  });
+
+  it('subagent event for unknown parent is a no-op', () => {
+    const before = state;
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
+      parentAgentToolUseId: 'toolu_nonexistent', agentId: 'abc',
+    });
+    expect(state).toBe(before);
+  });
+
+  it('subagent events do not touch activeTurnToolIds or toolGroups', () => {
+    state = emitParentAgentToolUse();
+    const beforeSession = state.get(SESSION)!;
+    const activeIdsBefore = new Set(beforeSession.activeTurnToolIds);
+    const groupsBefore = new Map(beforeSession.toolGroups);
+
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+
+    const afterSession = state.get(SESSION)!;
+    expect(afterSession.activeTurnToolIds).toEqual(activeIdsBefore);
+    expect(afterSession.toolGroups.size).toBe(groupsBefore.size);
+  });
+
+  it('duplicate subagent tool_use for same toolUseId updates in place (no duplicate segment)', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Read', toolInput: { file_path: '/updated' },
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
+    expect(parent.subagentSegments!.length).toBe(1);
+  });
+
+  it('subagent tool_result with isError:true flips segment to failed', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2',
+      toolUseId: 'toolu_child', result: 'ENOENT: no such file', isError: true,
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
+    const seg = parent.subagentSegments![0];
+    expect(seg.type).toBe('tool');
+    if (seg.type === 'tool') {
+      expect(seg.status).toBe('failed');
+      expect(seg.error).toBe('ENOENT: no such file');
+      expect(seg.response).toBeUndefined();
+    }
+  });
+
+  it('subagent tool_result carries structuredPatch onto the segment', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Edit',
+      toolInput: { file_path: '/a', old_string: 'x', new_string: 'y' },
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    const patch = [{ oldStart: 1, oldLines: 1, newStart: 1, newLines: 1, lines: [' x', '-y', '+z'] }];
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'uuid-s2',
+      toolUseId: 'toolu_child', result: 'edited', isError: false,
+      structuredPatch: patch,
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
+    const seg = parent.subagentSegments![0];
+    expect(seg.type).toBe('tool');
+    if (seg.type === 'tool') {
+      expect(seg.status).toBe('complete');
+      expect(seg.structuredPatch).toEqual(patch);
+    }
+  });
+
+  it('interleaved subagent text and tool segments preserve order', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-t1',
+      text: 'First thought', timestamp: 1000,
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-tool1',
+      toolUseId: 'toolu_mid', toolName: 'Read', toolInput: {},
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_ASSISTANT_TEXT', sessionId: SESSION, uuid: 'uuid-t2',
+      text: 'Second thought', timestamp: 1001,
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    const parent = state.get(SESSION)!.toolCalls.get('toolu_parent')!;
+    expect(parent.subagentSegments!.length).toBe(3);
+    expect(parent.subagentSegments![0].type).toBe('text');
+    expect(parent.subagentSegments![1].type).toBe('tool');
+    expect(parent.subagentSegments![2].type).toBe('text');
+  });
+
+  it('CLEAR_TIMELINE preserves subagentSegments on toolCalls entries', () => {
+    state = emitParentAgentToolUse();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE', sessionId: SESSION, uuid: 'uuid-s1',
+      toolUseId: 'toolu_child', toolName: 'Read', toolInput: {},
+      parentAgentToolUseId: 'toolu_parent', agentId: 'abc',
+    });
+    state = chatReducer(state, {
+      type: 'CLEAR_TIMELINE', sessionId: SESSION, markerId: 'm1', timestamp: 1000,
+    });
+    const session = state.get(SESSION)!;
+    const parent = session.toolCalls.get('toolu_parent')!;
+    expect(parent.subagentSegments!.length).toBe(1);
   });
 });

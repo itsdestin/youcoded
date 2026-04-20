@@ -249,4 +249,53 @@ class TranscriptSerializerTest {
         val result = TranscriptSerializer.assistantText("s", "u", ts, "t")
         assertEquals(ts, result.getLong("timestamp"))
     }
+
+    // ── subagent fields ──────────────────────────────────────────────────────
+
+    @Test
+    fun `assistantText serializes parentAgentToolUseId and agentId when present`() {
+        val result = TranscriptSerializer.assistantText(
+            sessionId = "s1", uuid = "u1", timestamp = 1000L,
+            text = "hi", model = null,
+            parentAgentToolUseId = "toolu_parent", agentId = "abc",
+        )
+        val data = result.getJSONObject("data")
+        assertEquals("toolu_parent", data.getString("parentAgentToolUseId"))
+        assertEquals("abc", data.getString("agentId"))
+    }
+
+    @Test
+    fun `toolUse serializes parentAgentToolUseId and agentId when present`() {
+        val result = TranscriptSerializer.toolUse(
+            sessionId = "s1", uuid = "u1", timestamp = 1000L,
+            toolUseId = "toolu_X", toolName = "Read", toolInput = JSONObject(),
+            parentAgentToolUseId = "toolu_parent", agentId = "abc",
+        )
+        val data = result.getJSONObject("data")
+        assertEquals("toolu_parent", data.getString("parentAgentToolUseId"))
+        assertEquals("abc", data.getString("agentId"))
+    }
+
+    @Test
+    fun `toolResult serializes parentAgentToolUseId and agentId when present`() {
+        val result = TranscriptSerializer.toolResult(
+            sessionId = "s1", uuid = "u1", timestamp = 1000L,
+            toolUseId = "toolu_X", result = "done", isError = false,
+            parentAgentToolUseId = "toolu_parent", agentId = "abc",
+        )
+        val data = result.getJSONObject("data")
+        assertEquals("toolu_parent", data.getString("parentAgentToolUseId"))
+        assertEquals("abc", data.getString("agentId"))
+    }
+
+    @Test
+    fun `subagent fields are omitted when null`() {
+        val result = TranscriptSerializer.toolUse(
+            sessionId = "s1", uuid = "u1", timestamp = 1000L,
+            toolUseId = "toolu_X", toolName = "Read", toolInput = JSONObject(),
+        )
+        val data = result.getJSONObject("data")
+        assertFalse(data.has("parentAgentToolUseId"))
+        assertFalse(data.has("agentId"))
+    }
 }

@@ -751,6 +751,19 @@ export default function SessionStrip({
           );
         })}
 
+        {/* Overflow count: sessions open in this window that the strip couldn't fit.
+            Purely an indicator — clicking the trigger (or this badge) opens the full list. */}
+        {sessions.length - visibleSessions.length > 0 && (
+          <button
+            onClick={handleMenuToggle}
+            className="inline-flex items-center justify-center min-w-[18px] h-[16px] px-1 ml-1 rounded-full bg-inset text-fg-2 text-[10px] font-semibold leading-none hover:bg-well transition-colors"
+            title={`${sessions.length - visibleSessions.length} more session${sessions.length - visibleSessions.length === 1 ? '' : 's'}`}
+            aria-label={`${sessions.length - visibleSessions.length} more sessions`}
+          >
+            +{sessions.length - visibleSessions.length}
+          </button>
+        )}
+
         {/* ── Dropdown trigger ───────────────────────────── */}
         <div ref={menuRef}>
           <button
