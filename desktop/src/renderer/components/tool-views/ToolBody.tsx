@@ -702,7 +702,13 @@ function AgentView({ tool }: { tool: ToolCallState }) {
           {showTimeline && <SubagentTimeline segments={segments} />}
         </div>
       )}
-      {tool.response && (
+      {/*
+        Fallback-only reply block: shown ONLY when the subagent JSONL
+        wasn't threaded (legacy cards, no subagents/ dir on disk). Normal
+        case, the final assistant-text segment appears inline at the tail
+        of the timeline and this block stays hidden to avoid duplication.
+      */}
+      {tool.response && segments.length === 0 && (
         <div className="pt-1 border-t border-edge/60">
           <div className="text-[10px] uppercase tracking-wider text-fg-muted mb-1">Agent reply</div>
           <div className="text-sm text-fg-dim">
