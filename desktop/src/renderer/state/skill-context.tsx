@@ -129,14 +129,11 @@ export function SkillProvider({ children }: { children: ReactNode }) {
     await refreshInstalled();
   }, [refreshInstalled]);
 
-  // Drawer shows only user favorites. Curated defaults seed favorites on first run
-  // (see initial-load effect); after that the user fully controls what's in the drawer.
-  // Favorites may hold PACKAGE ids (e.g. "youcoded-core-encyclopedia") post-decomposition,
-  // so also match skill.pluginName — a single favorited package surfaces all its skills.
-  const drawerSkills = useMemo(() => {
-    const favSet = new Set(favorites);
-    return installed.filter(s => favSet.has(s.id) || (s.pluginName && favSet.has(s.pluginName)));
-  }, [installed, favorites]);
+  // Drawer shows ALL installed skills. Sorting (favorites first) happens in
+  // CommandDrawer itself so callers can apply category/search filters first.
+  // The seed-favorites first-run logic still runs — it pre-populates the
+  // favorites array so the drawer's Favorites section is non-empty on day 1.
+  const drawerSkills = useMemo(() => installed, [installed]);
 
   // Stable references for pass-through IPC methods (no state dependencies)
   const listMarketplace = useCallback((filters?: SkillFilters) => window.claude.skills.listMarketplace(filters), []);
