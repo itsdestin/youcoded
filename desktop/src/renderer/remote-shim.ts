@@ -715,6 +715,10 @@ export function installShim(): void {
     appearance: {
       get: () => invoke('appearance:get'),
       set: (prefs: Record<string, any>) => invoke('appearance:set', prefs),
+      // Parity with preload.ts — theme favorites stored in appearance prefs.
+      favoriteTheme: (slug: string, favorited: boolean) =>
+        invoke('appearance:favorite-theme', { slug, favorited }),
+      getFavoriteThemes: () => invoke('appearance:get-favorite-themes', {}),
       // Cross-window appearance sync is Electron-only; single-window hosts
       // don't need these but renderer code calls them unconditionally.
       broadcast: (_prefs: Record<string, any>) => {},
