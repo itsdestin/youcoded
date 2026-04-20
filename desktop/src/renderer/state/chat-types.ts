@@ -82,7 +82,12 @@ export interface CopyPickerOption {
 }
 
 export type TimelineEntry =
-  | { kind: 'user'; message: ChatMessage }
+  // pending: true means the bubble was added optimistically by USER_PROMPT and
+  // is waiting for a matching TRANSCRIPT_USER_MESSAGE to confirm. When transcript
+  // catches up, it consumes the oldest matching pending entry (clears the flag)
+  // rather than dedup'ing via content-match against the last 10 entries (which
+  // silently dropped legitimate rapid-fire duplicates like "yes yes yes").
+  | { kind: 'user'; message: ChatMessage; pending?: boolean }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).

@@ -527,7 +527,20 @@ export class TranscriptWatcher extends EventEmitter {
 
       for (const event of events) {
         if (isRepeat && event.type === 'assistant-text') continue;
-        this.emit('transcript-event', event);
+        // Isolate each emit: a throwing listener must NOT abort the batch.
+        // session.offset has already advanced — if a throw skipped remaining
+        // chunks, they'd be permanently stranded (next readNewLines reads
+        // from the advanced offset forward). This is the root cause of the
+        // "rare missing Claude message" symptom we investigated.
+        try {
+          this.emit('transcript-event', event);
+        } catch (err) {
+          // Surface to the process's unhandled-exception path without
+          // breaking the loop. console.error preserves stack; the main
+          // process logs it alongside other diagnostics.
+          // eslint-disable-next-line no-console
+          console.error('[TranscriptWatcher] listener threw for', event.type, err);
+        }
       }
     }
   }

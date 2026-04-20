@@ -325,4 +325,88 @@ describe('TRANSCRIPT_* reducer actions', () => {
     expect(session.timeline).toHaveLength(1);
     expect(session.isThinking).toBe(true);
   });
+
+  // --- Test 10: Rapid-fire identical USER_PROMPTs — each gets its own bubble ---
+  // Regression: old content-based dedup scanned the last 10 timeline entries
+  // and silently suppressed any USER_PROMPT whose content matched a prior
+  // user message. Sending "yes" twice meant the second "yes" vanished.
+  // New behavior: USER_PROMPT always appends. Dedup is by pending/confirmed,
+  // not by content-match.
+  it('USER_PROMPT dispatched twice with same content creates TWO distinct timeline entries', () => {
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1000,
+    });
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1100,
+    });
+
+    const session = state.get(SESSION)!;
+    const userEntries = session.timeline.filter((e) => e.kind === 'user');
+    expect(userEntries).toHaveLength(2);
+  });
+
+  // --- Test 11: transcript confirms each pending entry individually ---
+  // With the new pattern, each TRANSCRIPT_USER_MESSAGE consumes the OLDEST
+  // matching pending entry. Two rapid sends + two transcript events = two
+  // confirmed bubbles, no duplicates.
+  it('TRANSCRIPT_USER_MESSAGE confirms pending entries one-by-one without adding duplicates', () => {
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1000,
+    });
+    state = dispatch(state, {
+      type: 'USER_PROMPT',
+      sessionId: SESSION,
+      content: 'yes',
+      timestamp: 1100,
+    });
+
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_USER_MESSAGE',
+      sessionId: SESSION,
+      uuid: 'uuid-1',
+      text: 'yes',
+      timestamp: 1050,
+    });
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_USER_MESSAGE',
+      sessionId: SESSION,
+      uuid: 'uuid-2',
+      text: 'yes',
+      timestamp: 1150,
+    });
+
+    const session = state.get(SESSION)!;
+    const userEntries = session.timeline.filter((e) => e.kind === 'user');
+    expect(userEntries).toHaveLength(2);
+  });
+
+  // --- Test 12: transcript arrives without a pending match → append new ---
+  // Remote/replay path: TRANSCRIPT_USER_MESSAGE fires without a prior optimistic
+  // USER_PROMPT (e.g. viewer-only client, or user typed straight in terminal).
+  // Should add a new timeline entry, not silently drop it.
+  it('TRANSCRIPT_USER_MESSAGE appends a new entry when no matching pending entry exists', () => {
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_USER_MESSAGE',
+      sessionId: SESSION,
+      uuid: 'uuid-remote',
+      text: 'hello from remote',
+      timestamp: 1000,
+    });
+
+    const session = state.get(SESSION)!;
+    const userEntries = session.timeline.filter((e) => e.kind === 'user');
+    expect(userEntries).toHaveLength(1);
+    if (userEntries[0].kind === 'user') {
+      expect(userEntries[0].message.content).toBe('hello from remote');
+    }
+  });
 });

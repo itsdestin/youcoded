@@ -502,4 +502,53 @@ describe('TranscriptWatcher', () => {
     expect(events.length).toBeGreaterThanOrEqual(1);
     expect(events[0].data.text).toBe('From polling');
   });
+
+  // Regression: if a listener threw mid-batch, session.offset had already
+  // advanced past the un-emitted chunks, permanently stranding them. A later
+  // file growth couldn't recover them because readNewLines reads from the new
+  // (advanced) offset forward. Fix: emits must not abort the batch loop.
+  it('continues emitting remaining events when a listener throws on one', async () => {
+    const desktopSessionId = 'desktop-throw';
+    const claudeSessionId = 'claude-session-throw';
+    const cwd = '/home/user/project';
+
+    const slug = cwdToProjectSlug(cwd);
+    const projectDir = path.join(tmpDir, slug);
+    fs.mkdirSync(projectDir, { recursive: true });
+    const jsonlPath = path.join(projectDir, `${claudeSessionId}.jsonl`);
+
+    const makeLine = (uuid: string, text: string) =>
+      JSON.stringify({
+        type: 'assistant',
+        uuid,
+        message: {
+          role: 'assistant',
+          content: [{ type: 'text', text }],
+          stop_reason: null,
+        },
+      });
+
+    fs.writeFileSync(
+      jsonlPath,
+      [
+        makeLine('uuid-a', 'msg A'),
+        makeLine('uuid-b', 'msg B'),
+        makeLine('uuid-c', 'msg C'),
+      ].join('\n') + '\n',
+    );
+
+    const received: string[] = [];
+    // Listener throws on B; with the fix, A and C still reach this listener.
+    watcher.on('transcript-event', (ev: TranscriptEvent) => {
+      if (ev.type !== 'assistant-text') return;
+      if (ev.data.text === 'msg B') throw new Error('boom');
+      received.push(ev.data.text);
+    });
+
+    watcher.startWatching(desktopSessionId, claudeSessionId, cwd);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+
+    expect(received).toContain('msg A');
+    expect(received).toContain('msg C');
+  });
 });

@@ -179,27 +179,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
 
-      // Deduplicate — if any of the last 10 timeline entries is a user message
-      // with the same content (InputBar optimistic + hook/transcript event
-      // arriving later, possibly with many intervening entries), skip
-      let isDuplicate = false;
-      for (let i = session.timeline.length - 1; i >= Math.max(0, session.timeline.length - 10); i--) {
-        const entry = session.timeline[i];
-        if (entry.kind === 'user' && 'message' in entry && entry.message.content === action.content) {
-          isDuplicate = true;
-          break;
-        }
-      }
-      if (isDuplicate) {
-        if (!session.isThinking) {
-          next.set(action.sessionId, {
-            ...session, isThinking: true, currentGroupId: null, currentTurnId: null,
-          });
-          return next;
-        }
-        return state;
-      }
-
+      // ALWAYS append a pending bubble — no content-based dedup. The prior
+      // last-10-entries content match silently dropped legitimate rapid-fire
+      // duplicates (e.g. "yes" twice within five turns). TRANSCRIPT_USER_MESSAGE
+      // confirms this entry by finding the oldest matching pending and
+      // clearing its flag.
       const message = {
         id: nextMessageId(),
         role: 'user' as const,
@@ -209,7 +193,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'user', message }],
+        timeline: [...session.timeline, { kind: 'user', message, pending: true }],
         isThinking: true,
         currentGroupId: null,
         currentTurnId: null,
@@ -315,26 +299,50 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
 
-      // Dedup against last 10 timeline entries (optimistic USER_PROMPT may
-      // have many intervening assistant-turn or tool entries before transcript arrives)
-      let isDuplicateT = false;
-      for (let i = session.timeline.length - 1; i >= Math.max(0, session.timeline.length - 10); i--) {
+      // Find the OLDEST pending entry with matching content and confirm it
+      // (clear the `pending` flag). This replaces the old last-10-entries
+      // content-match dedup, which suppressed legitimate rapid-fire repeats.
+      // Oldest-first so two identical optimistic bubbles get confirmed by two
+      // transcript events in order.
+      let confirmedIdx = -1;
+      for (let i = 0; i < session.timeline.length; i++) {
         const entry = session.timeline[i];
-        if (entry.kind === 'user' && 'message' in entry && entry.message.content === action.text) {
-          isDuplicateT = true;
+        if (
+          entry.kind === 'user' &&
+          entry.pending === true &&
+          entry.message.content === action.text
+        ) {
+          confirmedIdx = i;
           break;
         }
       }
-      if (isDuplicateT) {
-        if (!session.isThinking) {
-          next.set(action.sessionId, {
-            ...session, isThinking: true, currentGroupId: null, currentTurnId: null,
-          });
-          return next;
-        }
-        return state;
+
+      if (confirmedIdx >= 0) {
+        const entry = session.timeline[confirmedIdx];
+        if (entry.kind !== 'user') return state; // type-narrowing safety
+        const confirmed: TimelineEntry = {
+          kind: 'user',
+          message: entry.message,
+          pending: false,
+        };
+        const timeline = [
+          ...session.timeline.slice(0, confirmedIdx),
+          confirmed,
+          ...session.timeline.slice(confirmedIdx + 1),
+        ];
+        next.set(action.sessionId, {
+          ...session,
+          timeline,
+          isThinking: true,
+          currentGroupId: null,
+          currentTurnId: null,
+          attentionState: 'ok',
+        });
+        return next;
       }
 
+      // No pending match — remote/replay client, or user typed directly into
+      // the terminal. Append as a new confirmed entry.
       const message = {
         id: nextMessageId(),
         role: 'user' as const,
@@ -344,7 +352,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'user', message }],
+        timeline: [...session.timeline, { kind: 'user', message, pending: false }],
         isThinking: true,
         currentGroupId: null,
         currentTurnId: null,
