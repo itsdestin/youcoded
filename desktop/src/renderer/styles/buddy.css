@@ -33,6 +33,22 @@ html[data-mode="buddy-chat"] #root {
   background: transparent !important;
 }
 
+/* Theme engine appends <div id="theme-effects-overlay"> to <body> whenever
+   the active theme declares effects (vignette, scan-lines, noise). It is
+   position:fixed inset:0 — on an 80×80 mascot window Golden Sunbreak's
+   vignette 0.3 renders as a dark radial rectangle behind the mascot (what
+   user saw as "a perfect square, slightly transparent, edges clearly
+   visible"). Buddy windows should never show theme effects — they are
+   single-image surfaces, not the main canvas. Hide the overlay in both
+   buddy modes. (The #theme-bg + #theme-pattern siblings are only rendered
+   by App.tsx's React tree which buddy never mounts, so those don't need a
+   rule here — but leaving the existing body[data-mode=...] #theme-bg rule
+   in globals.css as a belt-and-suspenders guard.) */
+html[data-mode="buddy-mascot"] #theme-effects-overlay,
+html[data-mode="buddy-chat"] #theme-effects-overlay {
+  display: none !important;
+}
+
 body[data-mode="buddy-chat"] {
   font-size: 13px;
   overflow: hidden;
