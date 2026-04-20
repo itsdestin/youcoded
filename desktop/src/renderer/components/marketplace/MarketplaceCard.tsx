@@ -75,9 +75,19 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
   const peek = item.kind === "skill" ? componentSummary(item.entry.components) : null;
 
   return (
-    <button
-      type="button"
+    // Fix: changed from <button> to <div role="button"> so that the nested
+    // FavoriteStar <button> is valid HTML. Nested buttons are invalid and cause
+    // inconsistent browser behavior and screen-reader confusion.
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onOpen}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onOpen();
+        }
+      }}
       className="relative layer-surface text-left flex flex-col overflow-hidden transition-transform duration-200 hover:scale-[1.02] focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
       data-marketplace-card={id}
     >
@@ -127,6 +137,6 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
         {peek && <span className="text-fg-muted truncate">{peek}</span>}
       </div>
       </div>
-    </button>
+    </div>
   );
 }
