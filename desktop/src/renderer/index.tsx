@@ -140,9 +140,15 @@ function Root() {
   }
 
   // Android always auto-connects to local bridge — never show the password screen.
-  // shimReady guarantees window.claude is populated before App renders.
+  // Fix: wait for connection/auth to complete BEFORE mounting App. shimReady only
+  // guarantees window.claude exists, not that auth:ok has fired. IPC calls made
+  // during the pre-auth window (theme:list, skills:list, etc.) are dropped by
+  // LocalBridgeServer's unauthenticated-client guard (LocalBridgeServer.kt:116),
+  // then time out silently after 30s — causing install'd themes/skills to never
+  // appear in the UI. The first branch above renders App once `connected` flips;
+  // keep this path on a Loading state until then so we never ship IPC pre-auth.
   if (isAndroid) {
-    return <App />;
+    return <div className="flex items-center justify-center h-full bg-panel text-fg text-sm">Connecting...</div>;
   }
 
   return <LoginScreen onLogin={handleLogin} />;

@@ -2703,6 +2703,16 @@ class SessionService : Service() {
                 android.util.Log.w("SessionService", "Failed to record theme package install: ${e.message}")
             }
 
+            // Fix: FileObserver on the themes-dir root is non-recursive, so it
+            // doesn't see manifest.json created inside a new slug subdir. Without
+            // an explicit broadcast, React's appearance picker never learns about
+            // newly-installed themes until app restart. Broadcast the slug so
+            // theme-context's onReload(slug) fetches and merges it into userThemes.
+            bridgeServer.broadcast(JSONObject().apply {
+                put("type", "theme:reload")
+                put("payload", JSONObject().apply { put("slug", slug) })
+            })
+
             return JSONObject().put("status", "installed")
         } catch (e: Exception) {
             return JSONObject().put("status", "failed").put("error", e.message ?: "Unknown error")

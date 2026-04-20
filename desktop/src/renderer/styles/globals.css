@@ -336,6 +336,15 @@ html, body, #root {
   opacity: 0;
 }
 
+/* Android terminal mode: hide React wallpaper + pattern so the native
+   TerminalView (rendered below the transparent WebView in ChatScreen.kt)
+   shows through. On desktop, xterm draws on top of these layers, so they
+   stay visible in both modes. */
+html[data-platform="android"][data-view-mode="terminal"] #theme-bg,
+html[data-platform="android"][data-view-mode="terminal"] #theme-pattern {
+  display: none;
+}
+
 /* Glassmorphism — wallpaper-gated treatment for chrome + popup surfaces.
    Fix: gate ALL backdrop-filter behind [data-wallpaper] so solid themes
    don't create stacking contexts or pay GPU cost for invisible blur.

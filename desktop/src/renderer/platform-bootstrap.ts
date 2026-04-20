@@ -30,4 +30,11 @@ if (typeof window !== 'undefined' && !(window as any).__PLATFORM__) {
   }
 }
 
+// Mirror __PLATFORM__ onto <html data-platform="..."> so platform-conditional
+// CSS (e.g. hiding #theme-bg over the Android native terminal) can key off
+// it without a re-render. Written here so it lands before any style evaluates.
+if (typeof document !== 'undefined' && (window as any).__PLATFORM__) {
+  document.documentElement.dataset.platform = (window as any).__PLATFORM__;
+}
+
 export {};

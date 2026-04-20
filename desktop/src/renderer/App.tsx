@@ -1242,6 +1242,14 @@ function AppInner() {
 
   const currentViewMode = sessionId ? (viewModes.get(sessionId) || 'chat') : 'chat';
 
+  // Mirror the active view mode onto <html data-view-mode="..."> so CSS can
+  // react to it. Needed on Android to hide the wallpaper layer over the native
+  // terminal — the React-side bg div sits on top of the native TerminalView
+  // and opaque wallpapers were blocking the terminal text from showing through.
+  useEffect(() => {
+    document.documentElement.dataset.viewMode = currentViewMode;
+  }, [currentViewMode]);
+
   const handleToggleView = useCallback(
     (mode: ViewMode) => {
       if (!sessionId) return;

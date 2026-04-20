@@ -91,9 +91,11 @@ fun WebViewHost(
                             "Missing asset path".byteInputStream()
                         )
 
-                        // Resolve themes directory from app's internal storage
-                        val homeDir = context.filesDir
-                        val themesDir = File(homeDir, ".claude/wecoded-themes")
+                        // Fix: themes are installed under bootstrap.homeDir, which is
+                        // context.filesDir/home (Termux convention — see Bootstrap.kt:31).
+                        // Using context.filesDir directly looked in the wrong dir and
+                        // every theme asset 404'd, so wallpapers/icons never rendered.
+                        val themesDir = File(context.filesDir, "home/.claude/wecoded-themes")
                         val file = File(themesDir, "$slug/$assetPath")
 
                         // Security: verify canonical path is inside themes dir
