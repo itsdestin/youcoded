@@ -21,12 +21,23 @@ import com.youcoded.app.config.PackageTier
 
 class Bootstrap(internal val context: Context) {
 
+    companion object {
+        // Last Claude Code release shipping cli.js. See the comment on
+        // isFullySetup and installClaudeCode() for why this is pinned.
+        private const val PINNED_CLAUDE_CODE_VERSION = "2.1.112"
+    }
+
     val usrDir: File get() = File(context.filesDir, "usr")
     val homeDir: File get() = File(context.filesDir, "home")
     val isExtracted: Boolean get() = File(usrDir, "bin/bash").exists()
+    // Pinned to the last JS-based Claude Code release. 2.1.113+ repackaged the
+    // npm distribution as a native-binary launcher with no cli.js, which breaks
+    // both Bootstrap.selfTest() and PtyBridge's `node claude-wrapper.js cli.js`
+    // launch. Migrating to the native binary needs a full runtime rework (see
+    // docs/cc-dependencies.md → "CLI entry point layout").
     val isFullySetup: Boolean get() = File(usrDir, "bin/node").exists() &&
         File(usrDir, "lib/node_modules/npm").exists() &&
-        File(usrDir, "lib/node_modules/@anthropic-ai/claude-code").exists()
+        File(usrDir, "lib/node_modules/@anthropic-ai/claude-code/cli.js").exists()
     val isBootstrapped: Boolean get() = isExtracted && isFullySetup
 
     /** The package tier to install. Set before calling setup(). */
@@ -702,14 +713,20 @@ class Bootstrap(internal val context: Context) {
     }
 
     private fun installClaudeCode(onProgress: (Progress) -> Unit) {
-        if (File(usrDir, "lib/node_modules/@anthropic-ai/claude-code").exists()) return
+        // Gate on cli.js specifically, not just the directory. A prior install
+        // of 2.1.113+ leaves the directory populated but without cli.js, so a
+        // directory-only check would skip the reinstall we need.
+        if (File(usrDir, "lib/node_modules/@anthropic-ai/claude-code/cli.js").exists()) return
         onProgress(Progress.Installing("claude-code", 90))
         // npm is a JS script, not an ELF binary — run it via node + linker64.
-        // node <npm-cli.js> install -g @anthropic-ai/claude-code
+        // Version pinned: 2.1.113 moved Claude Code to a native-binary launcher
+        // (no cli.js). YouCoded's runtime (claude-wrapper.js monkey-patches,
+        // PtyBridge `node claude-wrapper.js cli.js`) is built around the JS CLI.
+        // Bump this pin only after migrating the runtime to the native binary.
         val nodePath = File(usrDir, "bin/node").absolutePath
         val npmCliPath = File(usrDir, "lib/node_modules/npm/bin/npm-cli.js").absolutePath
 
-        val cmdList = mutableListOf("/system/bin/linker64", nodePath, npmCliPath, "install", "-g", "@anthropic-ai/claude-code")
+        val cmdList = mutableListOf("/system/bin/linker64", nodePath, npmCliPath, "install", "-g", "@anthropic-ai/claude-code@$PINNED_CLAUDE_CODE_VERSION")
         val pb = ProcessBuilder(cmdList)
             .directory(homeDir)
             .redirectErrorStream(true)

@@ -69,6 +69,11 @@ Each entry has three fields:
 - **Depends on:** `claude` CLI accepting the flags YouCoded passes at launch (notably `--resume <session-id>` and any default flags in the launch command)
 - **Break symptom:** Session resume breaks; PTY spawns fail; new sessions launch in unexpected state.
 
+### npm package entry-point layout (Android)
+- **Files:** `app/src/main/.../runtime/Bootstrap.kt` (`isFullySetup`, `installClaudeCode`, `selfTest`), `app/src/main/.../runtime/PtyBridge.kt` (launch command)
+- **Depends on:** `npm install -g @anthropic-ai/claude-code` producing a JS entry at `lib/node_modules/@anthropic-ai/claude-code/cli.js`, launchable via `linker64 node claude-wrapper.js cli.js`. Claude Code is currently pinned to **2.1.112** — the last release with this layout. Bumping the pin requires migrating Android to the native-binary distribution (2.1.113+).
+- **Break symptom:** Bootstrap self-test fails with "Claude Code CLI entry point not found"; even bypassing self-test, PtyBridge launch fails because `cli.js` is absent. Observed in Claude Code 2.1.113 when the npm package was repackaged as a native-binary launcher with `bin/claude.exe` + `install.cjs` + per-platform sibling packages (`@anthropic-ai/claude-code-linux-arm64` etc.).
+
 ### Permission flow messages
 - **Files:** `desktop/src/renderer/state/hook-dispatcher.ts`, `desktop/src/renderer/hooks/usePromptDetector.ts`, `desktop/src/renderer/state/chat-reducer.ts`
 - **Depends on:** CC's approval-request shape in transcript or hook-relay, matching the IPC message YouCoded constructs for `PERMISSION_REQUEST`
