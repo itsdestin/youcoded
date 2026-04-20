@@ -142,15 +142,27 @@ export default function TerminalView({ sessionId, visible }: Props) {
     // Fit terminal to container and sync dimensions to PTY.
     // Skip when container is collapsed to 0x0 (hidden terminals) to avoid
     // setting a 1-column width on the PTY that causes text bunching.
+    //
+    // Dedup on unchanged dims: Windows ConPTY (used by node-pty on Win) reflows
+    // and re-emits visible buffer contents on every resize call. The
+    // ResizeObserver fires for any layout shift (font load, sibling resize,
+    // 1-pixel container jitter), and fit() can return the same cols/rows
+    // across ticks. Without dedup, each spurious resize re-emits Claude's
+    // Ink-rendered UI (banner + input bar) into xterm scrollback — so
+    // scrolling back looks like the same chunk repeated between every turn.
+    let lastCols = 0;
+    let lastRows = 0;
     const fitAndSync = () => {
       try {
         const el = containerRef.current;
         if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
         fitAddon.fit();
         const dims = fitAddon.proposeDimensions();
-        if (dims && dims.cols && dims.rows) {
-          window.claude.session.resize(sessionId, dims.cols, dims.rows);
-        }
+        if (!dims || !dims.cols || !dims.rows) return;
+        if (dims.cols === lastCols && dims.rows === lastRows) return;
+        lastCols = dims.cols;
+        lastRows = dims.rows;
+        window.claude.session.resize(sessionId, dims.cols, dims.rows);
       } catch {
         // Ignore fit errors during teardown
       }
