@@ -28,9 +28,95 @@ html[data-mode="buddy-mascot"] body,
 html[data-mode="buddy-chat"] body {
   background: transparent !important;
 }
-html[data-mode="buddy-mascot"] #root,
-html[data-mode="buddy-chat"] #root {
+html[data-mode="buddy-mascot"] #root {
   background: transparent !important;
+}
+
+/* Buddy chat bubble: layered CSS frosted-glass effect. The "glass" look
+   is assembled from five visual cues, NONE of which require native OS
+   blur APIs (which fail on frameless Electron windows + depend on user
+   Windows settings we can't guarantee):
+     1. Translucent panel tint — theme --panels-opacity, CLAMPED into a
+        narrow high-opacity band [0.88, 0.94]. Glass themes in the main
+        app dial --panels-opacity way down (e.g. 0.75) assuming
+        backdrop-filter will smear the content behind into a real blur —
+        but backdrop-filter can't reach the desktop through a transparent
+        Electron window, so low opacity in the buddy floater just
+        exposes raw unblurred desktop and wrecks readability. The clamp
+        keeps the bubble always ≥88% opaque (readable) while preserving
+        theme INTENT: glassier themes land at the 0.88 floor, flat themes
+        at the 0.94 ceiling. Narrow band = consistent look across themes.
+        The frosted grain overlay (::before, #5 below) + gradient
+        compensate for the extra translucency by making the surface
+        texture read as glass instead of just "slightly see-through."
+     2. Linear gradient overlay — subtle light-catch at the top edge,
+        subtle weight at the bottom; the tonal variation is what makes the
+        surface read as "glass" rather than "flat color"
+     3. Inset box-shadow top highlight — 1px of bright white at the upper
+        edge simulates light hitting the curve of a glass pane
+     4. Soft outer drop shadow — floats the bubble off the desktop
+     5. Frosted grain texture — inline SVG feTurbulence noise overlaid
+        via ::before with mix-blend-mode:overlay. This is the big "it
+        reads as frosted glass" tell — grain breaks up the otherwise
+        smooth surface and implies real-glass material, which is why
+        every production glassmorphism implementation includes it.
+   Combined, these signal "frosted glass" convincingly even without a real
+   desktop-blur backdrop. Same pattern used by Fluent / Material /
+   Apple HIG design systems for glass surfaces.
+   backdrop-filter stays for content INSIDE the bubble (e.g. bubbles
+   scrolling past the input area get subtly blurred under it when theme
+   has --panels-blur > 0). overflow:hidden clips the bubble feed + input
+   pill to the rounded corner curve during scroll.
+   isolation:isolate establishes a stacking context so the ::before
+   noise layer with z-index:-1 stays confined between the #root
+   background and the chat UI, without bleeding into the parent. */
+html[data-mode="buddy-chat"] #root {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(255, 255, 255, 0.08) 0%,
+      rgba(255, 255, 255, 0) 40%,
+      rgba(255, 255, 255, 0) 60%,
+      rgba(0, 0, 0, 0.04) 100%
+    ),
+    color-mix(
+      in srgb,
+      var(--panel) calc(clamp(0.88, var(--panels-opacity, 1), 0.94) * 100%),
+      transparent
+    ) !important;
+  backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  -webkit-backdrop-filter: blur(var(--panels-blur, 0px)) saturate(1.2);
+  border-radius: 18px;
+  border: 1px solid color-mix(in srgb, var(--edge) 60%, transparent);
+  box-shadow:
+    /* Top-edge light catch — 1px inset white simulates light on glass curve */
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    /* Barely-there inner rim glow, all around */
+    inset 0 0 0 1px rgba(255, 255, 255, 0.04),
+    /* Floating drop shadow */
+    0 10px 30px rgba(0, 0, 0, 0.22);
+  overflow: hidden;
+  /* Stacking context for the ::before grain overlay (see comment above) */
+  position: relative;
+  isolation: isolate;
+}
+
+/* Frosted grain overlay: tiled SVG fractalNoise converted to white-with-
+   alpha-from-luminance via feColorMatrix, overlaid with mix-blend-mode
+   so the grain picks up the panel tint underneath. z-index:-1 inside
+   #root's isolated stacking context keeps it ABOVE the panel tint and
+   BELOW the chat UI. 120×120 tile with stitchTiles avoids visible seams. */
+html[data-mode="buddy-chat"] #root::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  border-radius: inherit;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='120' height='120'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='0.85' numOctaves='2' stitchTiles='stitch' seed='3'/><feColorMatrix values='0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 1 0 0 0 0'/></filter><rect width='120' height='120' filter='url(%23n)' opacity='0.5'/></svg>");
+  background-size: 120px 120px;
+  mix-blend-mode: overlay;
+  opacity: 0.5;
 }
 
 /* Theme engine appends <div id="theme-effects-overlay"> to <body> whenever
@@ -60,6 +146,81 @@ body[data-mode="buddy-chat"] .assistant-bubble {
   padding: 9px 13px;
   font-size: 13px;
   line-height: 1.5;
+}
+
+/* Buddy chat input bar: flatten the InputBar's nested wrappers so ONLY
+   the form pill (bg-inset.rounded-xl — same as the main app's pill)
+   shows. The main-app InputBar has three layers (outer strip > padding
+   wrapper > form pill); the outer strip is a full-width footer panel
+   that reads as a distracting "external container" inside the tight
+   buddy bubble. We strip the outer strip's chrome/margin/padding AND
+   the padding wrapper inside it, leaving just the pill as a clean
+   single element.
+   !important because [data-input-style="minimal"] / [data-input-style="floating"]
+   / [data-chrome-style="floating"] theme variants already use !important
+   on .input-bar-container (margin, border-radius, padding, box-shadow).
+   We need to beat all of them. */
+body[data-mode="buddy-chat"] .input-bar-container {
+  background: transparent !important;
+  border: none !important;
+  box-shadow: none !important;
+  margin: 0 !important;
+  padding: 0 !important;
+  border-radius: 0 !important;
+  /* [data-input-style="floating"] theme variants set overflow:hidden on
+     .input-bar-container — harmless in the main app (the strip is full
+     width so nothing clips) but in buddy the strip is the same bounds as
+     the pill, so the pill's drop shadow gets chopped at the container
+     edge, reading as a "rectangular container cutting off the shadow."
+     Let shadows escape. */
+  overflow: visible !important;
+  /* theme-engine.ts injects `backdrop-filter: blur(...)` on
+     `[data-wallpaper] .input-bar-container` (theme-engine.ts:376) so the
+     main-app footer strip reads as glass over a wallpaper. In buddy the
+     container is a zero-radius invisible wrapper with width ≈ bubble
+     width — the injected blur paints a RECTANGULAR glass strip behind
+     the pill, which is the "rectangular corners around the text input
+     container" bug. Backdrop-filter stays on the form pill itself (via
+     its own rounded shape), so no glass is lost — just the rectangle. */
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+/* Strip the padding wrapper that sits between .input-bar-container and
+   the form pill. Tailwind `px-2 sm:px-3 pb-1 sm:pb-1.5` → 8px horizontal
+   + 4px bottom. In the tight 320px buddy bubble, that + BuddyChat's
+   own root padding stacks to ~18px of dead space around the pill,
+   which reads as a second container framing the pill. Drop it. */
+body[data-mode="buddy-chat"] .input-bar-container > div:last-child {
+  padding: 0 !important;
+}
+
+/* Form pill: drop shadow + subtle border for contrast against the
+   frosted-glass bubble background. The main-app pill relies on
+   bg-panel behind it for contrast; in the buddy there's no panel
+   footer, just glass, so the pill needs its own rim.
+   Border-radius bumped from Tailwind's `rounded-xl` (12px) to 18px so
+   the pill's corners match the bubble's curvature — at 12px inside an
+   18px bubble, the pill reads as visibly squarer than its container,
+   which is the "sharp/rectangular corners" the user observed. */
+body[data-mode="buddy-chat"] .input-bar-container form {
+  border-radius: 18px !important;
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.18),
+    0 0 0 1px color-mix(in srgb, var(--edge) 50%, transparent);
+}
+
+/* Buddy-chat floating chips (SessionPill, AttentionStrip, and anything
+   else using .layer-surface inside the buddy) get the same drop shadow +
+   rim-ring styling as the form pill, so all three floating elements
+   inside the bubble read as a coherent set. Inline style on SessionPill
+   uses `border:none` which strips .layer-surface's 1px solid edge —
+   box-shadow ring restores the ring without fighting the inline override.
+   !important because layer-surface already sets box-shadow. */
+body[data-mode="buddy-chat"] .layer-surface {
+  box-shadow:
+    0 2px 8px rgba(0, 0, 0, 0.18),
+    0 0 0 1px color-mix(in srgb, var(--edge) 50%, transparent) !important;
 }
 
 /* Strip tables / headings / blockquotes in buddy markdown */

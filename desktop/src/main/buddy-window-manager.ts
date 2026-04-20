@@ -98,8 +98,8 @@ export class BuddyWindowManager {
    * Choose the chat window's position relative to the current mascot.
    * Prefer right-of-mascot; fall back to left-of-mascot if the right side
    * would clip the workArea. Always clamps to visible workArea as a safety.
-   * Center chat vertically on the mascot so the pill lines up with the
-   * mascot's head instead of hovering 200px above it.
+   * Top-align chat with mascot so they read as a single unit — icon sits
+   * alongside the top of its conversation panel.
    */
   private computeChatAnchoredPosition(): Point {
     if (!this.mascot || this.mascot.isDestroyed()) {
@@ -109,9 +109,9 @@ export class BuddyWindowManager {
     const mb = this.mascot.getBounds();
     const display = screen.getDisplayMatching(mb) ?? screen.getPrimaryDisplay();
     const wa = display.workArea;
-    // Align chat's bottom with mascot's bottom so the chat rises above the
-    // mascot rather than floating next to its middle. 12 px gap.
-    const y = mb.y + mb.height - CHAT_SIZE.height;
+    // Top-align chat with the mascot (chat.y === mascot.y) so the buddy
+    // icon sits next to the chat's header, not its midpoint or bottom.
+    const y = mb.y;
     const rightX = mb.x + mb.width + 12;
     const rightFits = rightX + CHAT_SIZE.width <= wa.x + wa.width;
     const raw = rightFits
@@ -167,11 +167,22 @@ export class BuddyWindowManager {
     // anchored to the mascot when the user drags — whether chat is visible
     // or hidden. Hidden chat will pop back at the correct relative position
     // on next show. Destroyed chat is a no-op.
+    //
+    // Clamp the chat's follow-position to its own display's workArea too:
+    // the mascot may be clamped to an edge where the chat would otherwise
+    // get pushed off-screen (e.g. mascot pinned to the right edge with
+    // chat opened to the RIGHT of mascot = chat shifted past screen).
+    // Clamping ensures the chat always stays fully visible; it may lose
+    // its exact relative offset to the mascot momentarily, which is the
+    // right tradeoff vs. a half-offscreen window.
     const actualDx = newX - oldX;
     const actualDy = newY - oldY;
     if ((actualDx !== 0 || actualDy !== 0) && this.chat && !this.chat.isDestroyed()) {
       const cb = this.chat.getBounds();
-      this.chat.setPosition(cb.x + actualDx, cb.y + actualDy);
+      const chatRaw = { x: cb.x + actualDx, y: cb.y + actualDy };
+      const chatDisplay = screen.getDisplayMatching({ ...chatRaw, ...CHAT_SIZE }) ?? screen.getPrimaryDisplay();
+      const chatClamped = clampToWorkArea(chatRaw, CHAT_SIZE, chatDisplay.workArea);
+      this.chat.setPosition(Math.round(chatClamped.x), Math.round(chatClamped.y));
     }
   }
 
