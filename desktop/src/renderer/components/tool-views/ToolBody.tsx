@@ -4,6 +4,7 @@ import MarkdownContent from '../MarkdownContent';
 import { useChatState } from '../../state/chat-context';
 import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 import { SubagentTimeline } from './SubagentTimeline';
+import { ChevronIcon } from '../Icons';
 
 // Parsed views for expanded tool cards. One dispatcher + inline view functions;
 // splitting per-file only becomes worthwhile if a single view grows past ~80
@@ -650,12 +651,10 @@ function AgentView({ tool }: { tool: ToolCallState }) {
   const subagent = (tool.input.subagent_type as string) || 'general-purpose';
   const prompt = (tool.input.prompt as string) || '';
   const segments = tool.subagentSegments || [];
-  const [showPrompt, setShowPrompt] = useState(false);
 
-  // Auto-expand while the subagent is running; auto-collapse once the
-  // parent Agent tool has a response (i.e., subagent completed). The user
-  // can override either direction and their choice sticks for the rest of
-  // the session.
+  // Auto-expand the activity section while running; auto-collapse once the
+  // parent Agent tool has a response (subagent completed). User toggles
+  // stick for the rest of the session.
   const [showTimeline, setShowTimeline] = useState(() => !tool.response);
   const [userToggled, setUserToggled] = useState(false);
   const prevHadResponse = useRef(!!tool.response);
@@ -675,48 +674,71 @@ function AgentView({ tool }: { tool: ToolCallState }) {
         {desc && <span className="text-xs font-medium text-fg-2">{desc}</span>}
       </div>
       {prompt && (
-        <div>
-          <button
-            aria-expanded={showPrompt}
-            onClick={() => setShowPrompt(s => !s)}
-            className="text-[10px] uppercase tracking-wider text-fg-muted hover:text-fg-2"
-          >
-            {showPrompt ? 'Hide briefing' : 'Show briefing'}
-          </button>
-          {showPrompt && (
-            <pre className="mt-1 text-xs text-fg-dim bg-panel rounded-sm p-2 overflow-auto max-h-64 whitespace-pre-wrap font-mono">
-              {prompt}
-            </pre>
-          )}
-        </div>
+        <AgentSection title="Briefing" defaultOpen={false}>
+          <div className="text-sm text-fg-dim">
+            <MarkdownContent content={prompt} />
+          </div>
+        </AgentSection>
       )}
       {segments.length > 0 && (
-        <div>
-          <button
-            aria-expanded={showTimeline}
-            onClick={() => { setShowTimeline(s => !s); setUserToggled(true); }}
-            className="text-[10px] uppercase tracking-wider text-fg-muted hover:text-fg-2"
-          >
-            {showTimeline ? 'Hide agent activity' : `Show agent activity (${segments.length})`}
-          </button>
-          {showTimeline && <SubagentTimeline segments={segments} />}
-        </div>
+        <AgentSection
+          title={`Activity (${segments.length})`}
+          open={showTimeline}
+          onToggle={() => { setShowTimeline(s => !s); setUserToggled(true); }}
+        >
+          <SubagentTimeline segments={segments} />
+        </AgentSection>
       )}
-      {/*
-        Fallback-only reply block: shown ONLY when the subagent JSONL
-        wasn't threaded (legacy cards, no subagents/ dir on disk). Normal
-        case, the final assistant-text segment appears inline at the tail
-        of the timeline and this block stays hidden to avoid duplication.
-      */}
-      {tool.response && segments.length === 0 && (
-        <div className="pt-1 border-t border-edge/60">
-          <div className="text-[10px] uppercase tracking-wider text-fg-muted mb-1">Agent reply</div>
+      {tool.response && (
+        <AgentSection title="Response" defaultOpen={true}>
           <div className="text-sm text-fg-dim">
             <MarkdownContent content={tool.response} />
           </div>
-        </div>
+        </AgentSection>
       )}
       {tool.error && <ErrorBlock error={tool.error} />}
+    </div>
+  );
+}
+
+/**
+ * Expandable card styled to match the main ChatView ToolCard shell
+ * (`border border-edge rounded-lg`, same header padding, same ChevronIcon).
+ * Controlled or uncontrolled — `open`/`onToggle` takes precedence over
+ * `defaultOpen`. Used for the three AgentView sections: Briefing, Activity,
+ * Response.
+ */
+function AgentSection({
+  title, children, defaultOpen = false, open, onToggle,
+}: {
+  title: string;
+  children: React.ReactNode;
+  defaultOpen?: boolean;
+  open?: boolean;
+  onToggle?: () => void;
+}) {
+  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const isOpen = open ?? internalOpen;
+  const handleToggle = () => {
+    if (onToggle) onToggle();
+    else setInternalOpen(v => !v);
+  };
+  return (
+    <div className="border border-edge rounded-lg overflow-hidden">
+      <button
+        type="button"
+        aria-expanded={isOpen}
+        onClick={handleToggle}
+        className="w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors"
+      >
+        <span className="text-xs font-medium text-fg-2">{title}</span>
+        <ChevronIcon className="w-3.5 h-3.5 shrink-0 text-fg-muted ml-auto" expanded={isOpen} />
+      </button>
+      {isOpen && (
+        <div className="px-3 py-2 border-t border-edge">
+          {children}
+        </div>
+      )}
     </div>
   );
 }

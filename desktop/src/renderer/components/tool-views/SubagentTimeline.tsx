@@ -3,17 +3,19 @@ import type { SubagentSegment, ToolCallState } from '../../../shared/types';
 import MarkdownContent from '../MarkdownContent';
 import ToolBody from './ToolBody';
 import { friendlyToolDisplay } from '../ToolCard';
+import { CheckIcon, FailIcon, ChevronIcon } from '../Icons';
+import BrailleSpinner from '../BrailleSpinner';
 
 /**
  * Renders a subagent's inline timeline inside the parent AgentView card.
  *
  * Mirrors the main chat view's structure: consecutive tool calls bundle
- * into a tool group rendered as compact one-line rows with the same
- * natural-language titles the main ChatView uses (via `friendlyToolDisplay`
- * — so "Read" becomes "Reading config.ts", "Grep" becomes "Searching for
- * 'pattern'", etc.). Text segments between groups render as prose,
- * including the subagent's final message at the tail. Each tool row
- * click-expands to reveal its full ToolBody output on demand.
+ * into a tool group rendered as compact rows with the same natural-language
+ * titles the main ChatView uses (via `friendlyToolDisplay`) and mini
+ * versions of the same status / chevron icons (CheckIcon, FailIcon,
+ * BrailleSpinner, ChevronIcon at xs size). Text segments between groups
+ * render as prose. Each tool row click-expands to reveal its full
+ * ToolBody output on demand.
  *
  * The left vertical border frames the nested work visually so a dense
  * subagent (20+ tool calls) doesn't dominate the parent AgentView card.
@@ -74,7 +76,9 @@ function SubagentText({ content }: { content: string }) {
 }
 
 // ---------------------------------------------------------------------------
-// Tool group — one card containing compact rows, click-to-expand per row.
+// Tool group — one bordered card containing compact rows, click-to-expand
+// per row. Mimics the ToolCard shell (border + rounded-lg + hover header)
+// at a smaller scale suited to a nested timeline.
 // ---------------------------------------------------------------------------
 
 function SubagentToolGroup({ tools }: { tools: ToolSegment[] }) {
@@ -88,7 +92,7 @@ function SubagentToolGroup({ tools }: { tools: ToolSegment[] }) {
     });
   };
   return (
-    <div className="rounded-sm border border-edge-dim bg-inset/40 overflow-hidden">
+    <div className="rounded-lg border border-edge bg-inset overflow-hidden">
       {tools.map((t, i) => (
         <SubagentToolRow
           key={t.id}
@@ -111,56 +115,39 @@ function SubagentToolRow({
   separatorAbove: boolean;
 }) {
   const tool = segmentToToolState(segment);
-  // Reuse the same natural-language title derivation the main ChatView uses
-  // for its ToolCards, so subagent rows read like "Reading config.ts" instead
-  // of "READ /path/to/config.ts".
+  // Same natural-language title derivation the main ChatView uses for its
+  // ToolCards, so subagent rows read like "Reading config.ts" rather than
+  // "READ /path/to/config.ts".
   const { label, detail } = friendlyToolDisplay(tool);
-
-  const statusIndicator =
-    segment.status === 'running' ? <StatusDot color="amber" pulse /> :
-    segment.status === 'failed'  ? <StatusDot color="red" /> :
-                                   <StatusDot color="green" />;
 
   return (
     <div
-      className={separatorAbove ? 'border-t border-edge-dim/60' : ''}
+      className={separatorAbove ? 'border-t border-edge/60' : ''}
       style={{ contentVisibility: 'auto' }}
     >
       <button
         type="button"
         onClick={onToggle}
         aria-expanded={expanded}
-        className="w-full flex items-baseline gap-2 px-2 py-1 hover:bg-panel/40 text-left"
+        className="w-full flex items-center gap-1.5 px-3 py-1 text-left hover:bg-inset/50 transition-colors"
       >
-        <span className="translate-y-[2px]">{statusIndicator}</span>
-        <span className="text-xs text-fg-2 font-medium truncate">{label}</span>
+        <StatusIcon status={segment.status} />
+        <span className="text-fg-faint text-xs select-none">|</span>
+        <span className="text-xs font-medium text-fg-2">{label}</span>
         {detail && (
-          <span className="text-[11px] text-fg-muted truncate">{detail}</span>
+          <span className="text-xs text-fg-muted truncate flex-1 min-w-0">{detail}</span>
         )}
-        <span className="ml-auto text-[10px] text-fg-muted shrink-0">
-          {expanded ? '▾' : '▸'}
-        </span>
+        <ChevronIcon className="w-3 h-3 shrink-0 text-fg-muted ml-auto" expanded={expanded} />
       </button>
-      {expanded && (
-        <div className="px-2 pb-2 pt-1 border-t border-edge-dim/40">
-          <ToolBody tool={tool} />
-        </div>
-      )}
+      {expanded && <ToolBody tool={tool} />}
     </div>
   );
 }
 
-function StatusDot({ color, pulse }: { color: 'amber' | 'red' | 'green'; pulse?: boolean }) {
-  const fill =
-    color === 'amber' ? 'bg-amber-400' :
-    color === 'red'   ? 'bg-red-500' :
-                        'bg-green-500';
-  return (
-    <span
-      aria-hidden
-      className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${fill} ${pulse ? 'animate-pulse' : ''}`}
-    />
-  );
+function StatusIcon({ status }: { status: ToolSegment['status'] }) {
+  if (status === 'running') return <BrailleSpinner size="xs" />;
+  if (status === 'failed')  return <FailIcon  className="w-3 h-3 shrink-0 text-fg-dim" />;
+  return <CheckIcon className="w-3 h-3 shrink-0 text-fg-dim" />;
 }
 
 // ---------------------------------------------------------------------------

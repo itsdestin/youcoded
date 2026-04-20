@@ -61,21 +61,24 @@ describe('SubagentTimeline', () => {
     expect(container.textContent).toMatch(/First thought[\s\S]*Read[\s\S]*Second thought/);
   });
 
-  it('shows running indicator only when status is running', () => {
+  it('shows running-vs-complete status via distinct icons', () => {
     const runningSegments: SubagentSegment[] = [
       { type: 'tool', id: 't1', toolUseId: 'toolu_X', toolName: 'Bash',
         input: { command: 'ls' }, status: 'running' },
     ];
     const { rerender, container } = render(<SubagentTimeline segments={runningSegments} />);
-    // Scope queries to this render's container so stale DOM from other tests
-    // (jsdom persists across renders in the same describe block) doesn't interfere.
-    expect(container.querySelector('.animate-pulse')).toBeTruthy();
+    // Running state uses BrailleSpinner (unicode char, no status SVG).
+    // CheckIcon / FailIcon both render an outer <circle cx="12" cy="12"> —
+    // ChevronIcon (also present) has no circle, so we distinguish by that.
+    const statusSvgs = (c: HTMLElement) =>
+      Array.from(c.querySelectorAll('svg')).filter(s => s.querySelector('circle'));
+    expect(statusSvgs(container).length).toBe(0);
 
     const doneSegments: SubagentSegment[] = [
       { type: 'tool', id: 't1', toolUseId: 'toolu_X', toolName: 'Bash',
         input: { command: 'ls' }, status: 'complete', response: 'ok' },
     ];
     rerender(<SubagentTimeline segments={doneSegments} />);
-    expect(container.querySelector('.animate-pulse')).toBeNull();
+    expect(statusSvgs(container).length).toBe(1);
   });
 });
