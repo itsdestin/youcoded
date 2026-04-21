@@ -565,6 +565,7 @@ export const IPC = {
   SESSION_LIST: 'session:list',
   SESSION_SWITCH: 'session:switch',
   SKILLS_LIST: 'skills:list',
+  COMMANDS_LIST: 'commands:list',
   SKILLS_LIST_MARKETPLACE: 'skills:list-marketplace',
   SKILLS_GET_DETAIL: 'skills:get-detail',
   SKILLS_SEARCH: 'skills:search',

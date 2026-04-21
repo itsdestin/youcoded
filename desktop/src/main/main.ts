@@ -11,6 +11,7 @@ import { registerIpcHandlers } from './ipc-handlers';
 import { RemoteServer } from './remote-server';
 import { RemoteConfig } from './remote-config';
 import { LocalSkillProvider } from './skill-provider';
+import { CommandProvider } from './command-provider';
 import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionState, type AttentionSummary, type AttentionReport } from '../shared/types';
 import { VITE_DEV_PORT } from '../shared/ports';
 import { log, rotateLog } from './logger';
@@ -119,6 +120,21 @@ const hookRelay = new HookRelay(pipeName);
 const remoteConfig = new RemoteConfig();
 const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
+
+// commandProvider is constructed after skillProvider so it can read skills
+// for dedup. getProjectCwd returns the most recently active session's cwd,
+// or null if no sessions exist yet.
+const commandProvider = new CommandProvider(
+  () => skillProvider.getInstalled() as any,
+  () => {
+    const sessions = sessionManager.listSessions();
+    return sessions[0]?.cwd ?? null;
+  },
+);
+
+// When skills change (plugin install/uninstall), invalidate the command
+// cache so skill-name dedup re-evaluates.
+skillProvider.setCacheInvalidationListener(() => commandProvider.invalidateCache());
 // Pass a snapshot provider so RemoteServer can request the full chat state from
 // the renderer when new remote clients connect. The closure captures mainWindow
 // by reference — mainWindow is null here but will be set before any client
@@ -571,7 +587,7 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
 function createWindow(firstRunManager?: FirstRunManager) {
   mainWindow = createAppWindow({ maximize: true });
 
-  cleanupIpcHandlers = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, hookRelay, remoteConfig, remoteServer, windowRegistry);
+  cleanupIpcHandlers = registerIpcHandlers(ipcMain, sessionManager, mainWindow, skillProvider, commandProvider, hookRelay, remoteConfig, remoteServer, windowRegistry);
 
   if (firstRunManager) {
     registerFirstRunIpc(mainWindow, firstRunManager);
