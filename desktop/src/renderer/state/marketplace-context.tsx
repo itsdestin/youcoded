@@ -10,8 +10,9 @@
  */
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
-import type { SkillEntry, PackageInfo, FeaturedData } from '../../shared/types';
+import type { SkillEntry, PackageInfo, FeaturedData, InstalledPluginGroup } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
+import { groupInstalledByPlugin } from '../utils/plugin-grouping';
 
 // window.claude is typed for skills but not for theme.marketplace — cast via any
 const claude = () => (window as any).claude;
@@ -74,6 +75,8 @@ interface MarketplaceState {
   updateAvailable: Record<string, boolean>;
   // Installed content (merged from all sources)
   installedSkills: SkillEntry[];
+  /** Skills grouped by parent plugin; one entry per plugin. */
+  installedPlugins: InstalledPluginGroup[];
   favorites: string[];
   themeFavorites: string[];
   installingIds: Set<string>;
@@ -128,6 +131,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   const [error, setError] = useState<string | null>(null);
   // Guard against stale fetchAll responses when rapid install/uninstall triggers concurrent fetches
   const fetchGeneration = useRef(0);
+
+  // Plugin-grouped view of installed skills. Consumers that want one card per
+  // plugin (CommandDrawer browse, Library Skills tab) read this; consumers
+  // that need individual skills (search) continue to use installedSkills.
+  const installedPlugins = useMemo(
+    () => groupInstalledByPlugin(installedSkills, skillEntries),
+    [installedSkills, skillEntries],
+  );
 
   // Fetch all marketplace data in parallel on mount
   const fetchAll = useCallback(async () => {
@@ -382,6 +393,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     packages,
     updateAvailable,
     installedSkills,
+    installedPlugins,
     favorites,
     themeFavorites,
     installingIds,
@@ -399,7 +411,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     publishSkill,
   }), [
     skillEntries, themeEntries, featured, packages, updateAvailable, installedSkills,
-    favorites, themeFavorites, installingIds, installError, loading, error,
+    installedPlugins, favorites, themeFavorites, installingIds, installError, loading, error,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,
     setFavorite, favoriteTheme, fetchAll, publishSkill,
   ]);
