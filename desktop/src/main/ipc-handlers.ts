@@ -1387,22 +1387,6 @@ export function registerIpcHandlers(
   refreshUsageCache();
   const usageRefreshInterval = setInterval(refreshUsageCache, 5 * 60 * 1000);
 
-  // --- Announcement cache refresher ---
-  // Runs announcement-fetch.js on startup and every 6 hours to keep
-  // .announcement-cache.json fresh without relying on the toolkit's session-start.sh.
-  const rawAnnounceFetchPath = path.resolve(__dirname, '../../hook-scripts/announcement-fetch.js');
-  const unpackedAnnounceFetchPath = rawAnnounceFetchPath.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
-  const announceFetchScript = fs.existsSync(unpackedAnnounceFetchPath) ? unpackedAnnounceFetchPath : rawAnnounceFetchPath;
-
-  function refreshAnnouncementCache() {
-    try {
-      execFile('node', [announceFetchScript], { timeout: 15000 }, () => {});
-    } catch { /* node not found or script error — announcement just stays stale */ }
-  }
-
-  refreshAnnouncementCache();
-  const announceRefreshInterval = setInterval(refreshAnnouncementCache, 6 * 60 * 60 * 1000);
-
   // --- Topic file watcher (auto-title) ---
   // The auto-title hook writes topics to ~/.claude/topics/topic-{CLAUDE_CODE_SESSION_ID}.
   // But our desktop session IDs differ from Claude Code's internal IDs.
@@ -1756,7 +1740,6 @@ export function registerIpcHandlers(
     stopThemeWatcher();
     clearInterval(statusInterval);
     clearInterval(usageRefreshInterval);
-    clearInterval(announceRefreshInterval);
     transcriptWatcher.stopAll();
     for (const [id, watcher] of topicWatchers) {
       if (typeof (watcher as fs.FSWatcher).close === 'function') {

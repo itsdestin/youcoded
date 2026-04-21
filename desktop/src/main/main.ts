@@ -1060,8 +1060,6 @@ app.whenReady().then(async () => {
     log('ERROR', 'Main', 'Failed to reconcile MCP servers', { error: String(e) });
   }
 
-  // Decomposition v3 §9.1: replace hooks/announcement-fetch.js with a native
-  // service. First fetch fires immediately, 24h refresh loop thereafter.
   try {
     const { startAnnouncementService } = require('./announcement-service');
     startAnnouncementService();

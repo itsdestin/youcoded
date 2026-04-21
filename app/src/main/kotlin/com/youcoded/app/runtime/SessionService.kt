@@ -121,6 +121,7 @@ class SessionService : Service() {
     private var urlObserver: FileObserver? = null
     private var usageRefreshTimer: java.util.Timer? = null
     private var statusBroadcastTimer: java.util.Timer? = null
+    private var announcementService: AnnouncementService? = null
     // Phase 5d: FileObserver for theme hot-reload
     private var themeWatcher: FileObserver? = null
     var skillProvider: LocalSkillProvider? = null
@@ -182,6 +183,7 @@ class SessionService : Service() {
         titlesDir.mkdirs()
         startUrlObserver(bs)
         startUsageRefresh(bs)
+        announcementService = AnnouncementService(bs.homeDir).also { it.start() }
         startStatusBroadcast(bs)
         skillProvider = LocalSkillProvider(bs.homeDir, applicationContext)
         skillProvider?.ensureMigrated()
@@ -300,6 +302,17 @@ class SessionService : Service() {
                         val usageFile = File(claudeDir, ".usage-cache.json")
                         if (usageFile.exists()) {
                             try { payload.put("usage", JSONObject(usageFile.readText())) } catch (_: Exception) {}
+                        }
+
+                        // Announcement cache (mirror of desktop's
+                        // ipc-handlers.ts:1287). The renderer's StatusBar
+                        // gates on isExpired so stale entries don't render
+                        // even if they slipped through the fetch-time filter.
+                        val announcementFile = File(claudeDir, ".announcement-cache.json")
+                        if (announcementFile.exists()) {
+                            try {
+                                payload.put("announcement", JSONObject(announcementFile.readText()))
+                            } catch (_: Exception) {}
                         }
 
                         // Sync status
@@ -572,6 +585,8 @@ class SessionService : Service() {
         usageRefreshTimer = null
         statusBroadcastTimer?.cancel()
         statusBroadcastTimer = null
+        announcementService?.stop()
+        announcementService = null
         sessionRegistry.destroyAll()
         releaseWakeLock()
         super.onDestroy()
