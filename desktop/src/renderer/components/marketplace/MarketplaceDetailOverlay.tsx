@@ -10,6 +10,7 @@ import { useMarketplaceStats } from "../../state/marketplace-stats-context";
 import { useMarketplaceAuth } from "../../state/marketplace-auth-context";
 import { useTheme } from "../../state/theme-context";
 import type { SkillEntry, SkillComponents } from "../../../shared/types";
+import { isBundledPlugin, BUNDLED_REASON } from "../../../shared/bundled-plugins";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 import StarRating from "./StarRating";
 import RatingSubmitModal from "./RatingSubmitModal";
@@ -255,9 +256,24 @@ function SkillBody({
               Installing…
             </button>
           ) : installed ? (
-            <button type="button" onClick={onUninstall} className="px-4 py-2 rounded-md bg-inset text-fg border border-edge hover:border-edge-dim">
-              Uninstall
-            </button>
+            // Bundled plugins ship with YouCoded — disable the Uninstall
+            // button + show the reason on hover. The IPC handler also rejects
+            // bundled IDs, but disabling here gives users the right signal
+            // before they even click. Mirrors the guard in SkillDetail.tsx.
+            (() => {
+              const bundled = isBundledPlugin(entry.id);
+              return (
+                <button
+                  type="button"
+                  onClick={onUninstall}
+                  disabled={bundled}
+                  title={bundled ? BUNDLED_REASON : undefined}
+                  className="px-4 py-2 rounded-md bg-inset text-fg border border-edge hover:border-edge-dim disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:border-edge"
+                >
+                  Uninstall
+                </button>
+              );
+            })()
           ) : (
             <button
               type="button"

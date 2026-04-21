@@ -12,6 +12,7 @@ import { getConfig as getMarketplaceConfig } from './marketplace-config-store';
 import { reconcileHooks } from './hook-reconciler';
 import { reconcileMcp } from './mcp-reconciler';
 import { log } from './logger';
+import { BUNDLED_PLUGIN_IDS } from '../shared/bundled-plugins';
 import type {
   SkillEntry, SkillDetailView, SkillFilters, ChipConfig,
   MetadataOverride, SkillProvider,
@@ -842,5 +843,18 @@ export class LocalSkillProvider implements SkillProvider {
       }
     }
     return results;
+  }
+
+  /**
+   * Install any bundled plugins that are missing. Fire-and-forget on every
+   * app launch; silent retry next launch on failure. installMany() is
+   * idempotent — already-installed plugins no-op.
+   */
+  async ensureBundledPluginsInstalled(): Promise<void> {
+    try {
+      await this.installMany([...BUNDLED_PLUGIN_IDS]);
+    } catch (err) {
+      console.warn('[bundled-plugins] ensure failed:', err);
+    }
   }
 }

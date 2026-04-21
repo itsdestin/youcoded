@@ -1,6 +1,7 @@
 package com.youcoded.app.skills
 
 import android.content.Context
+import android.util.Log
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
@@ -397,6 +398,19 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
             results.put(entry)
         }
         return results
+    }
+
+    /**
+     * Install any bundled plugins that are missing. Runs fire-and-forget on
+     * every launch; silent retry next launch on failure. installMany is
+     * idempotent — already-installed plugins no-op.
+     */
+    suspend fun ensureBundledPluginsInstalled() {
+        try {
+            installMany(BundledPlugins.IDS)
+        } catch (e: Exception) {
+            Log.w("BundledPlugins", "ensure failed", e)
+        }
     }
 
     // Decomposition v3 §9.10: write activeStyle to

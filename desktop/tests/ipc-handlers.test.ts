@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 // Mock electron before importing ipc-handlers, which transitively imports
 // main.ts (for setPermissionOverrides). main.ts uses protocol.registerSchemesAsPrivileged
@@ -64,5 +64,74 @@ describe('IPC Handlers', () => {
     expect(registeredChannels).toContain('session:create');
     expect(registeredChannels).toContain('session:destroy');
     expect(registeredChannels).toContain('session:list');
+  });
+});
+
+describe('skills:uninstall bundled-plugin rejection', () => {
+  // Shared mock infrastructure for this suite — recreated before each test
+  // so handler registrations don't bleed across tests.
+  let mockIpcMain: { handle: ReturnType<typeof vi.fn>; on: ReturnType<typeof vi.fn> };
+  let mockSessionManager: any;
+  let mockWindow: any;
+
+  beforeEach(() => {
+    mockIpcMain = { handle: vi.fn(), on: vi.fn() };
+    mockSessionManager = {
+      createSession: vi.fn(() => ({ id: '1', name: 'test', cwd: '/tmp', status: 'active' })),
+      destroySession: vi.fn(() => true),
+      listSessions: vi.fn(() => []),
+      sendInput: vi.fn(),
+      resizeSession: vi.fn(),
+      broadcastReloadPlugins: vi.fn(),
+      on: vi.fn(),
+    };
+    mockWindow = { webContents: { send: vi.fn() }, isDestroyed: () => false };
+  });
+
+  it('rejects uninstall for bundled plugin IDs without calling skillProvider.uninstall', async () => {
+    const uninstall = vi.fn();
+    const mockSkillProvider = {
+      configStore: { getPackages: vi.fn(() => ({})) },
+      uninstall,
+      install: vi.fn(),
+      installMany: vi.fn(),
+      ensureBundledPluginsInstalled: vi.fn(),
+      ensureMigrated: vi.fn(),
+    };
+    registerIpcHandlers(
+      mockIpcMain as any,
+      mockSessionManager as any,
+      mockWindow as any,
+      mockSkillProvider as any,
+    );
+    const handler = (mockIpcMain.handle as any).mock.calls.find(
+      (c: any) => c[0] === 'skills:uninstall',
+    )[1];
+    const result = await handler({}, 'wecoded-themes-plugin');
+    expect(result).toEqual({ ok: false, error: 'bundled', type: 'plugin' });
+    expect(uninstall).not.toHaveBeenCalled();
+  });
+
+  it('falls through to skillProvider.uninstall for non-bundled IDs', async () => {
+    const uninstall = vi.fn().mockResolvedValue({ type: 'plugin' });
+    const mockSkillProvider = {
+      configStore: { getPackages: vi.fn(() => ({})) },
+      uninstall,
+      install: vi.fn(),
+      installMany: vi.fn(),
+      ensureBundledPluginsInstalled: vi.fn(),
+      ensureMigrated: vi.fn(),
+    };
+    registerIpcHandlers(
+      mockIpcMain as any,
+      mockSessionManager as any,
+      mockWindow as any,
+      mockSkillProvider as any,
+    );
+    const handler = (mockIpcMain.handle as any).mock.calls.find(
+      (c: any) => c[0] === 'skills:uninstall',
+    )[1];
+    await handler({}, 'some-other-plugin');
+    expect(uninstall).toHaveBeenCalledWith('some-other-plugin');
   });
 });
