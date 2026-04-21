@@ -1,5 +1,8 @@
 // Hardcoded list of Claude Code built-in slash commands.
 //
+// Last verified against Claude Code CLI v2.1.116 — 2026-04-21.
+// Update this stamp when re-verified; see docs/cc-dependencies.md.
+//
 // Why hardcoded: Claude Code ships as a compiled binary with no filesystem-
 // discoverable manifest for its built-in commands. The SDK init message
 // (`system/init.slash_commands`) omits most core meta commands (/help,
