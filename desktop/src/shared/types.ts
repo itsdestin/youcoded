@@ -243,6 +243,19 @@ export interface SkillDetailView extends SkillEntry {
   sourceRegistry?: string;
 }
 
+// Command drawer entry — represents a slash command that can appear
+// in the CommandDrawer's search results. Distinct from SkillEntry
+// because commands may be unclickable (e.g. CC built-ins without a
+// native UI in YouCoded).
+export type CommandEntry = {
+  name: string                   // '/compact', '/superpowers:brainstorm'
+  description: string
+  source: 'youcoded' | 'filesystem' | 'cc-builtin'
+  clickable: boolean
+  disabledReason?: string        // populated when clickable=false
+  aliases?: string[]             // e.g. /clear → ['/reset', '/new']
+}
+
 export interface SkillFilters {
   type?: 'prompt' | 'plugin';
   category?: SkillEntry['category'];
