@@ -50,6 +50,24 @@ describe('command-scanner', () => {
     expect(out).toEqual([]);
   });
 
+  it('handles CRLF line endings in frontmatter', () => {
+    fs.writeFileSync(path.join(tmp, 'crlf.md'),
+      '---\r\ndescription: Works on Windows\r\n---\r\n\r\nbody');
+    const out = scanCommandsFromDir(tmp);
+    expect(out).toEqual([
+      { name: '/crlf', description: 'Works on Windows', source: 'filesystem', clickable: true },
+    ]);
+  });
+
+  it('handles single-quoted description values', () => {
+    fs.writeFileSync(path.join(tmp, 'sq.md'),
+      "---\ndescription: 'Single-quoted desc'\n---\n");
+    const out = scanCommandsFromDir(tmp);
+    expect(out).toEqual([
+      { name: '/sq', description: 'Single-quoted desc', source: 'filesystem', clickable: true },
+    ]);
+  });
+
   it('scanPluginCommandsDir namespaces entries with plugin slug', () => {
     const pluginCmds = path.join(tmp, 'commands');
     fs.mkdirSync(pluginCmds);

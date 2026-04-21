@@ -51,10 +51,13 @@ export function scanPluginCommandsDir(pluginDir: string, pluginSlug: string): Co
 // full YAML parser — we only need this one field and it's always a simple
 // scalar in existing plugin command files. Returns '' if absent.
 function extractFrontmatterDescription(content: string): string {
-  if (!content.startsWith('---')) return '';
-  const end = content.indexOf('\n---', 3);
+  // Normalize CRLF → LF so Windows-authored files don't trip the fence
+  // detection or leave \r in captured values.
+  const normalized = content.replace(/\r\n/g, '\n');
+  if (!normalized.startsWith('---')) return '';
+  const end = normalized.indexOf('\n---', 3);
   if (end === -1) return '';
-  const block = content.slice(3, end);
+  const block = normalized.slice(3, end);
   const match = block.match(/^\s*description\s*:\s*(.+?)\s*$/m);
   if (!match) return '';
   let value = match[1].trim();
