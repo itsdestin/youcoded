@@ -18,6 +18,7 @@ import com.youcoded.app.bridge.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
@@ -596,6 +597,12 @@ class SessionService : Service() {
         announcementService = null
         sessionRegistry.destroyAll()
         releaseWakeLock()
+        // Cancel any pending coroutines on serviceScope (bridge dispatch,
+        // bundled-plugin install at startup, end-of-session sync pushes).
+        // SyncService and bridgeServer are stopped above, so pushes/messages
+        // that were already in-flight have nowhere to land — cancelling here
+        // matches the pattern SyncService.stop() uses for its own scope.
+        serviceScope.cancel()
         super.onDestroy()
     }
 
