@@ -93,6 +93,42 @@ export function BuddyChat() {
     prevSessionRef.current = viewedSession;
   }, [viewedSession]);
 
+  // When the session the buddy is viewing is destroyed (closed in the main
+  // window, or exited on its own), auto-switch to another active session.
+  // Without this, the pill shows "no session" and the feed stays frozen on
+  // the dead session's last state, because viewedSession still holds the
+  // destroyed id. Mirrors App.tsx's auto-switch behavior on main.
+  //
+  // If no other sessions exist, clear viewedSession so the Welcome/first-run
+  // screen renders — same behavior as opening the buddy with no sessions.
+  //
+  // We depend on viewedSession so the handler closes over the current value
+  // without needing a ref. setSession is idempotent per sid, so re-subscribing
+  // happens cleanly in the chosen branch.
+  useEffect(() => {
+    const handler = async (destroyedId: string) => {
+      if (destroyedId !== viewedSession) return;
+      const dir = await window.claude.detach.getDirectory();
+      let next: string | null = null;
+      for (const entry of dir?.windows ?? []) {
+        for (const s of (entry.sessions ?? [])) {
+          if (s.id !== destroyedId) { next = s.id; break; }
+        }
+        if (next) break;
+      }
+      if (next) {
+        await window.claude.buddy.setSession(next);
+        await window.claude.buddy.subscribe(next);
+        setViewedSession(next);
+      } else {
+        // No remaining sessions — drop to the welcome screen.
+        setViewedSession(null);
+      }
+    };
+    const raw = window.claude.on.sessionDestroyed(handler);
+    return () => window.claude.off('session:destroyed', raw);
+  }, [viewedSession]);
+
   // Close the chat window on Escape.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

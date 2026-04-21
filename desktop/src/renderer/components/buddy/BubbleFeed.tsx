@@ -110,6 +110,16 @@ export function BubbleFeed({ sessionId }: Props) {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            // Forward the per-message model so the reducer can stamp
+            // turn.model on the first text of each turn (mirror App.tsx).
+            model: event.data.model,
+            // Forward the subagent stamp so the reducer routes subagent
+            // events into the parent Agent tool's subagentSegments instead
+            // of appending them to the main timeline as separate bubbles.
+            // Without this the subagent's thinking, tools, and replies all
+            // appear inline as if the main Claude instance produced them.
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-use':
@@ -120,6 +130,10 @@ export function BubbleFeed({ sessionId }: Props) {
             toolUseId: event.data.toolUseId,
             toolName: event.data.toolName,
             toolInput: event.data.toolInput || {},
+            // Route subagent tool_use into the parent Agent card's
+            // subagentSegments — see assistant-text comment above.
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'tool-result':
@@ -131,6 +145,10 @@ export function BubbleFeed({ sessionId }: Props) {
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
             structuredPatch: event.data.structuredPatch,
+            // Route subagent tool_result into the parent Agent card's
+            // subagentSegments — see assistant-text comment above.
+            parentAgentToolUseId: event.data.parentAgentToolUseId,
+            agentId: event.data.agentId,
           });
           break;
         case 'turn-complete':

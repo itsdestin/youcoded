@@ -151,6 +151,29 @@ body[data-mode="buddy-chat"] .assistant-bubble {
   padding: 9px 13px;
   font-size: 13px;
   line-height: 1.5;
+  /* In the ~320px buddy window the bubble's max-width (80–85% of a ~280px
+     row) is ~220–240px. An unbreakable token (a long URL, a deep file path,
+     a hash) in that space pushes the bubble's border past its max-width
+     because neither `whitespace-pre-wrap` (user bubble) nor Markdown's
+     default anchor styling (assistant bubble) breaks mid-token. Result:
+     text spills past the rounded corner and clips against the window edge.
+     `overflow-wrap: anywhere` lets the browser break at any grapheme when
+     there's no natural break opportunity within the bubble — the same
+     behavior the main app gets from the wider chat column. Main's bubbles
+     keep their current behavior because this rule is scoped to buddy. */
+  overflow-wrap: anywhere;
+}
+
+/* Markdown-rendered links inside the assistant bubble don't get `break-all`
+   (see MarkdownContent.tsx `a` override — unlike LinkableText in the user
+   bubble, which does). In buddy's tight bubble width that leaves long URLs
+   un-broken and spilling out. Force mid-URL breaks for anchors specifically
+   so the bubble's overflow-wrap rule above isn't undone by a long <a> href
+   with no whitespace inside. Scoped to buddy only — main keeps the cleaner
+   "break only when needed" behavior. */
+body[data-mode="buddy-chat"] .assistant-bubble a,
+body[data-mode="buddy-chat"] .user-bubble a {
+  word-break: break-all;
 }
 
 /* Buddy chat input bar: flatten the InputBar's nested wrappers so ONLY
