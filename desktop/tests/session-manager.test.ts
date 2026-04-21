@@ -136,4 +136,39 @@ describe('SessionManager', () => {
     exitHandler();
     expect(exits).toHaveLength(0);
   });
+
+  // --- initialInput propagation (Task 10: dev:open-session-in) ---
+
+  it('carries initialInput through to SessionInfo when provided', () => {
+    const info = manager.createSession({
+      name: 'prefill-test',
+      cwd: tmpDir,
+      skipPermissions: false,
+      initialInput: 'hello from dev panel',
+    });
+    expect(info.initialInput).toBe('hello from dev panel');
+  });
+
+  it('leaves initialInput undefined when not provided', () => {
+    const info = manager.createSession({
+      name: 'no-prefill-test',
+      cwd: tmpDir,
+      skipPermissions: false,
+    });
+    // initialInput should be absent, not an empty string — keeps the object clean.
+    expect(info.initialInput).toBeUndefined();
+  });
+
+  it('emits session-created event with initialInput in the info object', () => {
+    const emitted: any[] = [];
+    manager.on('session-created', (info) => emitted.push(info));
+    manager.createSession({
+      name: 'emit-prefill-test',
+      cwd: tmpDir,
+      skipPermissions: false,
+      initialInput: 'prefill text',
+    });
+    expect(emitted).toHaveLength(1);
+    expect(emitted[0].initialInput).toBe('prefill text');
+  });
 });

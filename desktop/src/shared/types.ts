@@ -35,6 +35,10 @@ export interface SessionInfo {
   provider: SessionProvider;
   /** Model alias the session was started with (e.g. 'claude-sonnet-4-6') */
   model?: string;
+  /** Optional text to prefill into the input bar after this session is selected.
+   *  Consumed once by InputBar on first render after session switch; cleared via
+   *  a consumed-set ref so it never re-fires on re-renders. */
+  initialInput?: string;
 }
 
 export interface HookEvent {

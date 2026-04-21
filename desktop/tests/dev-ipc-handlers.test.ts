@@ -187,6 +187,49 @@ describe('submitIssue', () => {
 });
 
 import { installWorkspace, _resetInstallGuard } from '../src/main/dev-tools';
+// Type-level import for the dev:open-session-in contract (Task 10).
+import type { CreateSessionOpts } from '../src/main/session-manager';
+import type { SessionInfo } from '../src/shared/types';
+
+describe('CreateSessionOpts.initialInput (dev:open-session-in contract)', () => {
+  it('accepts initialInput as an optional string — compile-time type check', () => {
+    // This is a pure type test: if TypeScript compiles this file, the optional
+    // field exists on the interface and the contract is satisfied.
+    const opts: CreateSessionOpts = {
+      name: 'Development',
+      cwd: '/tmp',
+      skipPermissions: false,
+      initialInput: 'hello from dev panel',
+    };
+    expect(opts.initialInput).toBe('hello from dev panel');
+  });
+
+  it('allows initialInput to be omitted — field is truly optional', () => {
+    const opts: CreateSessionOpts = {
+      name: 'Development',
+      cwd: '/tmp',
+      skipPermissions: false,
+    };
+    expect(opts.initialInput).toBeUndefined();
+  });
+
+  it('SessionInfo accepts initialInput as an optional string', () => {
+    // Verify the SessionInfo shape carries the field so the session-created
+    // event (and the renderer) can pick it up.
+    const info: SessionInfo = {
+      id: 'abc',
+      name: 'dev',
+      cwd: '/tmp',
+      permissionMode: 'normal',
+      skipPermissions: false,
+      status: 'active',
+      createdAt: Date.now(),
+      provider: 'claude',
+      initialInput: 'some prefill',
+    };
+    expect(info.initialInput).toBe('some prefill');
+  });
+});
 
 describe('installWorkspace concurrency', () => {
   beforeEach(() => _resetInstallGuard());

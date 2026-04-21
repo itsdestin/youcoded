@@ -1797,6 +1797,29 @@ export function registerIpcHandlers(
     }
   });
 
+  ipcMain.handle(IPC.DEV_OPEN_SESSION_IN, async (_event, args: { cwd: string; initialInput?: string }) => {
+    // Create a new session in the requested directory, inheriting the user's
+    // preferred model and skip-permissions setting from their saved defaults.
+    let skipPermissions = false;
+    let model: string | undefined;
+    try {
+      const raw = fs.readFileSync(defaultsPrefPath, 'utf-8');
+      const parsed = JSON.parse(raw);
+      skipPermissions = parsed.skipPermissions === true;
+      model = typeof parsed.model === 'string' ? parsed.model : undefined;
+    } catch {
+      // Defaults file absent or unreadable — fall back to safe values above.
+    }
+    const info = sessionManager.createSession({
+      name: 'Development',
+      cwd: args.cwd ?? os.homedir(),
+      skipPermissions,
+      model,
+      initialInput: args.initialInput,
+    });
+    return info;
+  });
+
   // Return cleanup function for use during app shutdown
   return function cleanup() {
     stopThemeWatcher();
