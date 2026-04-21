@@ -31,6 +31,7 @@ import com.youcoded.app.marketplace.ApiResult
 import com.youcoded.app.marketplace.MarketplaceApiClient
 import com.youcoded.app.marketplace.MarketplaceAuthStore
 import com.youcoded.app.marketplace.MarketplaceUser
+import com.youcoded.app.skills.BundledPlugins
 import com.youcoded.app.skills.LocalSkillProvider
 import com.youcoded.app.skills.PluginInstaller
 
@@ -726,10 +727,17 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "skills:uninstall" -> {
-                // All uninstall routing consolidated in LocalSkillProvider
                 val id = msg.payload.optString("id")
-                val result = skillProvider?.uninstall(id)
-                    ?: JSONObject().put("ok", false).put("error", "Skill provider not initialized")
+                val result = if (BundledPlugins.isBundled(id)) {
+                    // Defense-in-depth: UI disables the button; reject here too.
+                    JSONObject()
+                        .put("ok", false)
+                        .put("error", "bundled")
+                        .put("type", "plugin")
+                } else {
+                    skillProvider?.uninstall(id)
+                        ?: JSONObject().put("ok", false).put("error", "Skill provider not initialized")
+                }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "skills:get-favorites" -> {
