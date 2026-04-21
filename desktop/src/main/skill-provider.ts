@@ -345,18 +345,36 @@ export class LocalSkillProvider implements SkillProvider {
   }
 
   async uninstall(id: string): Promise<{ type: 'plugin' | 'prompt' }> {
-    // Check if this is a marketplace-installed plugin
     const installed = this.configStore.getInstalledPlugins();
+
+    // Direct plugin-id match (e.g. marketplace card calling uninstall with
+    // the plugin id).
     if (installed[id]) {
       await uninstallPlugin(id);
       this.configStore.removePluginInstall(id);
       this.installedCache = null;
       return { type: 'plugin' };
-    } else {
-      this.configStore.deletePromptSkill(id);
-      this.installedCache = null;
-      return { type: 'prompt' };
     }
+
+    // Skill-granular ids like `destinclaude-encyclopedia:encyclopedia-compile`
+    // come from Library skill cards. Resolve them to the parent plugin id by
+    // looking up the skill in the installed cache (which carries pluginName)
+    // and then uninstall that plugin. This matches the user's expectation
+    // that "Uninstall" on a skill card removes the plugin shipping the skill.
+    const scanned = await this.getInstalled();
+    const skill = scanned.find(s => s.id === id);
+    const parentPluginId = skill?.pluginName;
+    if (parentPluginId && installed[parentPluginId]) {
+      await uninstallPlugin(parentPluginId);
+      this.configStore.removePluginInstall(parentPluginId);
+      this.installedCache = null;
+      return { type: 'plugin' };
+    }
+
+    // Fallback: treat as a user-authored prompt skill.
+    this.configStore.deletePromptSkill(id);
+    this.installedCache = null;
+    return { type: 'prompt' };
   }
 
   async setFavorite(id: string, favorited: boolean): Promise<void> {
