@@ -32,7 +32,11 @@ import {
 const PLUGINS_DIR = YOUCODED_PLUGINS_DIR;
 const CACHE_DIR = path.join(os.homedir(), '.claude', 'youcoded-marketplace-cache');
 const MARKETPLACE_REPO = 'https://github.com/anthropics/claude-plugins-official.git';
-const GIT_TIMEOUT = 120_000; // 2 minutes
+// 5 min — large skill repos (themes with bundled assets, plugins with vendored
+// binaries) can take well over 2 min on a slow connection. The previous 2 min
+// value would silently SIGTERM mid-clone and surface as a generic install
+// failure with no diagnostic context.
+const GIT_TIMEOUT = 5 * 60 * 1000;
 
 // Security: only allow safe characters in plugin IDs to prevent path traversal
 const SAFE_ID_RE = /^[a-zA-Z0-9_-]+$/;

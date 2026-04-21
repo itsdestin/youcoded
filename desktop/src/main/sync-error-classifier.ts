@@ -17,6 +17,50 @@ interface Pattern {
   fixAction: (instance: BackendInstance) => SyncWarning['fixAction'];
 }
 
+// Sentinel that rclone()/gitExec() prepend to stderr when Node killed the
+// child process due to its own `timeout:` option. The exec error in that case
+// has empty `e.stderr` (the child was SIGTERM'd before flushing), so without
+// a sentinel the classifier would fall through to UNKNOWN.
+export const TIMEOUT_SENTINEL = '[timeout-killed]';
+
+// Universal patterns checked first regardless of backend type — these match
+// transport-layer failures (timeouts, missing binaries, local disk full) that
+// any backend can hit. Order matters: more specific patterns must come first.
+const UNIVERSAL_PATTERNS: Pattern[] = [
+  {
+    code: 'TIMEOUT',
+    level: 'warn',
+    match: (s) => s.includes(TIMEOUT_SENTINEL),
+    title: (bt) => `${backendLabel(bt)} backup timed out`,
+    body: (bt) =>
+      `A ${backendLabel(bt)} upload didn't finish in time. This usually means a large file or slow connection. We'll retry on the next sync.`,
+    fixAction: (inst) => ({
+      label: 'Retry now',
+      kind: 'retry',
+      payload: { backendId: inst.id },
+    }),
+  },
+  {
+    // Local disk full — happens during PULL (writing remote data to local disk)
+    // or during git operations (clone/checkout into local repo). Drive pushes
+    // hit `storageQuotaExceeded` instead, which is the Drive-side variant.
+    code: 'LOCAL_DISK_FULL',
+    level: 'danger',
+    match: (s) =>
+      s.includes('no space left on device') ||
+      s.includes('There is not enough space on the disk') ||
+      s.includes('ENOSPC'),
+    title: () => 'Local disk is full',
+    body: () =>
+      "Sync can't continue because this device's disk is full. Free up space and we'll retry on the next sync.",
+    fixAction: (inst) => ({
+      label: 'Retry now',
+      kind: 'retry',
+      payload: { backendId: inst.id },
+    }),
+  },
+];
+
 // Rclone-first patterns. Order matters — first match wins.
 // Defensive: patterns are long substrings, not loose regex, to avoid misclassification.
 const RCLONE_PATTERNS: Pattern[] = [
@@ -80,6 +124,137 @@ const RCLONE_PATTERNS: Pattern[] = [
       payload: { backendId: inst.id },
     }),
   },
+  {
+    // Google API rate limiting. Surfaces as 403 with a specific reason string
+    // — distinct from QUOTA_EXCEEDED (storage full) and PERMISSION_DENIED (ACL).
+    // 429 is rare here (Google uses 403 with reason) but we match it defensively.
+    code: 'RATE_LIMITED',
+    level: 'warn',
+    match: (s) =>
+      s.includes('rateLimitExceeded') ||
+      s.includes('userRateLimitExceeded') ||
+      s.includes('Too Many Requests') ||
+      s.includes('429 Too Many'),
+    title: () => 'Google Drive is throttling',
+    body: () =>
+      "Google is asking us to slow down on Drive uploads. We'll back off and retry on the next sync.",
+    fixAction: (inst) => ({
+      label: 'Retry now',
+      kind: 'retry',
+      payload: { backendId: inst.id },
+    }),
+  },
+  {
+    // Permission errors. Distinct from auth (sign-in works) — the account is
+    // signed in but lacks rights to write at the destination path. Most common
+    // cause: a folder under Backup/personal/ is shared with restricted edit
+    // rights, or the destination was moved to a Shared Drive without granting
+    // the connected account "Content manager" access.
+    code: 'PERMISSION_DENIED',
+    level: 'danger',
+    match: (s) =>
+      s.includes('insufficientFilePermissions') ||
+      s.includes('does not have sufficient permissions') ||
+      s.includes('cannotModifyViewersCanCopyContent'),
+    title: () => "Google Drive denied write access",
+    body: () =>
+      "Drive accepted the sign-in but blocked the write. The destination folder may be read-only or owned by another account.",
+    fixAction: (inst) => ({
+      label: 'Open sync settings',
+      kind: 'open-sync-setup',
+      payload: { backendId: inst.id },
+    }),
+  },
+];
+
+// GitHub-specific patterns. Stderr comes from `git push`/`git pull` invoked
+// via gitExec(). Order matters — auth/missing-repo are most actionable, so
+// they're matched before the catch-all push-rejected case.
+const GITHUB_PATTERNS: Pattern[] = [
+  {
+    code: 'GITHUB_AUTH',
+    level: 'danger',
+    match: (s) =>
+      s.includes('Authentication failed') ||
+      s.includes('could not read Username') ||
+      s.includes('Permission denied (publickey)') ||
+      s.includes('fatal: Authentication failed') ||
+      s.includes('remote: Invalid username or password'),
+    title: () => "GitHub sign-in needed",
+    body: () =>
+      "GitHub rejected our credentials. Reconnect or refresh your token to resume backups.",
+    fixAction: (inst) => ({
+      label: 'Reconnect GitHub',
+      kind: 'open-sync-setup',
+      payload: { backendId: inst.id },
+    }),
+  },
+  {
+    code: 'GITHUB_REPO_NOT_FOUND',
+    level: 'danger',
+    match: (s) =>
+      s.includes('Repository not found') ||
+      s.includes('remote: Repository not found') ||
+      s.includes('could not read from remote repository'),
+    title: () => "GitHub backup repo is missing",
+    body: () =>
+      "The configured backup repo doesn't exist or isn't accessible. Check the URL or create the repo, then retry.",
+    fixAction: (inst) => ({
+      label: 'Open sync settings',
+      kind: 'open-sync-setup',
+      payload: { backendId: inst.id },
+    }),
+  },
+  {
+    code: 'GITHUB_LARGE_FILE',
+    level: 'danger',
+    match: (s) =>
+      s.includes("GH001: Large files detected") ||
+      s.includes("this exceeds GitHub's file size limit") ||
+      s.includes('larger than 100.00 MB'),
+    title: () => "GitHub blocked an oversized file",
+    body: () =>
+      "GitHub rejected the push because a file is over its 100 MB limit. The file needs Git LFS or to be excluded from sync.",
+    fixAction: (inst) => ({
+      label: 'Retry now',
+      kind: 'retry',
+      payload: { backendId: inst.id },
+    }),
+  },
+  {
+    code: 'GITHUB_PUSH_REJECTED',
+    level: 'warn',
+    match: (s) =>
+      s.includes('! [rejected]') ||
+      s.includes('non-fast-forward') ||
+      s.includes('Updates were rejected') ||
+      s.includes('fetch first'),
+    title: () => "GitHub push was rejected",
+    body: () =>
+      "Another device pushed to the backup repo first. Sync will reconcile on the next pull cycle.",
+    fixAction: (inst) => ({
+      label: 'Retry now',
+      kind: 'retry',
+      payload: { backendId: inst.id },
+    }),
+  },
+  {
+    code: 'GITHUB_NETWORK',
+    level: 'warn',
+    match: (s) =>
+      s.includes('Could not resolve host') ||
+      s.includes('Failed to connect to') ||
+      s.includes('Connection timed out') ||
+      s.includes('Operation timed out'),
+    title: () => "Can't reach GitHub",
+    body: () =>
+      "Couldn't connect to GitHub. We'll retry on the next sync.",
+    fixAction: (inst) => ({
+      label: 'Retry now',
+      kind: 'retry',
+      payload: { backendId: inst.id },
+    }),
+  },
 ];
 
 // Wrapper-layer detection: spawn ENOENT fires before any stderr is produced.
@@ -126,6 +301,20 @@ export function truncateStderr(stderr: string): string {
 }
 
 /**
+ * Build the stderr string surfaced to the classifier from a child_process
+ * exec rejection. When Node kills the child via its `timeout:` option the
+ * child has no chance to write stderr — the rejection just has `killed: true`
+ * and `signal: 'SIGTERM'`. We synthesize a sentinel string so the classifier
+ * can recognize the case instead of falling through to UNKNOWN.
+ */
+export function extractStderr(e: any, timeoutMs: number): string {
+  if (e?.killed && e?.signal) {
+    return `${TIMEOUT_SENTINEL} child killed by ${e.signal} after ${timeoutMs}ms\n${e.stderr || ''}`;
+  }
+  return e?.stderr || e?.message || '';
+}
+
+/**
  * Classify a push failure into a SyncWarning. Pure function — no I/O.
  * `stderr` may be empty; if it is, we fall through to UNKNOWN.
  */
@@ -134,9 +323,13 @@ export function classifyPushError(
   backendType: BackendType,
   instance: BackendInstance,
 ): SyncWarning {
-  // Patterns only wired up for rclone/Drive in this release; other backends
-  // skip straight to UNKNOWN with raw stderr shown in the panel.
-  const patterns = backendType === 'drive' ? [RCLONE_MISSING, ...RCLONE_PATTERNS] : [];
+  // Universal patterns first (timeouts and local disk full apply to any backend),
+  // then backend-specific. iCloud has no specific patterns yet.
+  const backendSpecific =
+    backendType === 'drive' ? [RCLONE_MISSING, ...RCLONE_PATTERNS] :
+    backendType === 'github' ? GITHUB_PATTERNS :
+    [];
+  const patterns = [...UNIVERSAL_PATTERNS, ...backendSpecific];
   const picked = patterns.find((p) => p.match(stderr)) || UNKNOWN;
 
   return {

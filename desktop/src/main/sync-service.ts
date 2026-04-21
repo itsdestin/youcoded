@@ -33,7 +33,7 @@ import {
   syncLegacyKeys,
   writeWarnings,
 } from './sync-state';
-import { classifyPushError, truncateStderr } from './sync-error-classifier';
+import { classifyPushError, extractStderr, truncateStderr } from './sync-error-classifier';
 
 const execFileAsync = promisify(execFile);
 
@@ -106,8 +106,12 @@ const INDEX_PRUNE_DAYS = 30;
 // upload. A full push in flight preempts the index-only push (it will upload
 // the index anyway), so the net cost is at most one extra small upload.
 const INDEX_PUSH_DEBOUNCE_MS = 30_000;
-const RCLONE_TIMEOUT = 60_000;
-const GIT_TIMEOUT = 60_000;
+// 10 min — generous because individual conversation slugs can grow to
+// hundreds of MB (one user has a 25 MB single .jsonl in a 156 MB slug).
+// The previous 60s value silently killed rclone mid-upload on big slugs,
+// producing empty stderr that fell through to UNKNOWN classification.
+const RCLONE_TIMEOUT = 10 * 60 * 1000;
+const GIT_TIMEOUT = 5 * 60 * 1000;
 const SESSION_PUSH_TIMEOUT = 15_000;
 
 // --- SyncService ---
@@ -267,14 +271,22 @@ export class SyncService extends EventEmitter {
    * Record a push-cycle failure for a backend: classify stderr and write a
    * SyncWarning (one per backend per cycle — de-duped by addOrReplaceWarning).
    * Also logs the classified code to backup.log for future diagnosis.
+   *
+   * `op` distinguishes push vs pull failures in the log; both share the same
+   * warning shape because the underlying problem (auth, network, missing
+   * config) is symmetric — fixing it unblocks both directions.
    */
-  private async recordBackendFailure(instance: BackendInstance, stderr: string): Promise<void> {
+  private async recordBackendFailure(
+    instance: BackendInstance,
+    stderr: string,
+    op: 'push' | 'pull' = 'push',
+  ): Promise<void> {
     const warning = classifyPushError(stderr, instance.type, instance);
     await addOrReplaceWarning(warning);
     this.logBackup(
       warning.level === 'danger' ? 'WARN' : 'INFO',
       `${instance.id} classified as ${warning.code}`,
-      'sync.push.classify',
+      `sync.${op}.classify`,
       { code: warning.code, stderr: truncateStderr(stderr) },
     );
   }
@@ -466,7 +478,7 @@ export class SyncService extends EventEmitter {
       const { stdout, stderr } = await execFileAsync('rclone', args, { timeout: RCLONE_TIMEOUT });
       return { code: 0, stdout, stderr };
     } catch (e: any) {
-      return { code: e.code || 1, stdout: e.stdout || '', stderr: e.stderr || e.message };
+      return { code: e.code || 1, stdout: e.stdout || '', stderr: extractStderr(e, RCLONE_TIMEOUT) };
     }
   }
 
@@ -476,7 +488,7 @@ export class SyncService extends EventEmitter {
       const { stdout, stderr } = await execFileAsync('git', args, { cwd, timeout: GIT_TIMEOUT });
       return { code: 0, stdout, stderr };
     } catch (e: any) {
-      return { code: e.code || 1, stdout: e.stdout || '', stderr: e.stderr || e.message };
+      return { code: e.code || 1, stdout: e.stdout || '', stderr: extractStderr(e, GIT_TIMEOUT) };
     }
   }
 
@@ -1161,14 +1173,28 @@ export class SyncService extends EventEmitter {
     const remoteBase = `${rcloneRemote}:${driveRoot}/Backup/personal`;
     const sysRemote = `${rcloneRemote}:${driveRoot}/Backup/system-backup`;
 
+    // Track first-fail stderr so we can record a SyncWarning at the end of the
+    // pull cycle. Symmetric with pushDrive's failure recording — same backend
+    // problems (CONFIG_MISSING, AUTH_EXPIRED, NETWORK) affect both directions,
+    // and the user needs to see them on first-run before any push has happened.
+    let firstFailStderr = '';
+    const noteFail = (label: string, r: ExecResult) => {
+      if (r.code !== 0) {
+        if (!firstFailStderr) firstFailStderr = r.stderr;
+        this.logBackup('WARN', `Pull ${label} failed`, 'sync.pull.drive', { stderr: truncateStderr(r.stderr || '') });
+      }
+    };
+
     // Memory files — list remote keys, then pull each
     const memResult = await this.rclone(['lsf', `${remoteBase}/memory/`, '--dirs-only']);
+    noteFail('memory/lsf', memResult);
     if (memResult.code === 0) {
       const memKeys = memResult.stdout.split('\n').map(k => k.replace(/\/$/, '').trim()).filter(Boolean);
       for (const key of memKeys) {
         const dest = path.join(this.claudeDir, 'projects', key, 'memory');
         fs.mkdirSync(dest, { recursive: true });
-        await this.rclone(['copy', `${remoteBase}/memory/${key}/`, dest + '/', '--update', '--skip-links', '--exclude', '.DS_Store']);
+        const r = await this.rclone(['copy', `${remoteBase}/memory/${key}/`, dest + '/', '--update', '--skip-links', '--exclude', '.DS_Store']);
+        noteFail(`memory/${key}`, r);
       }
     }
 
@@ -1176,7 +1202,7 @@ export class SyncService extends EventEmitter {
     // Once local config exists, it is authoritative — users configure backends
     // deliberately per-device, and silently overwriting their config could
     // disable sync, change backends, or break machine-specific setups.
-    const configPullPromise = this.fileExists(this.configPath)
+    const configPullPromise: Promise<ExecResult> = this.fileExists(this.configPath)
       ? Promise.resolve({ code: 0, stdout: '', stderr: 'skipped — local config exists' })
       : this.rclone(['copyto', `${sysRemote}/config.json`, this.configPath, '--update']);
 
@@ -1189,29 +1215,40 @@ export class SyncService extends EventEmitter {
       // System config — first-run only (see above)
       configPullPromise,
       // Encyclopedia
-      (async () => {
+      (async (): Promise<ExecResult> => {
         const encDir = path.join(this.claudeDir, 'encyclopedia');
         fs.mkdirSync(encDir, { recursive: true });
-        await this.rclone(['copy', `${remoteBase}/encyclopedia/`, encDir + '/', '--update', '--max-depth', '1', '--include', '*.md']);
+        return this.rclone(['copy', `${remoteBase}/encyclopedia/`, encDir + '/', '--update', '--max-depth', '1', '--include', '*.md']);
       })(),
       // Conversations — checksum + ignore-existing (don't overwrite local)
-      (async () => {
-        await this.rclone(['copy', `${remoteBase}/conversations/`, path.join(this.claudeDir, 'projects') + '/', '--checksum', '--include', '*.jsonl', '--ignore-existing']);
+      (async (): Promise<ExecResult> => {
+        return this.rclone(['copy', `${remoteBase}/conversations/`, path.join(this.claudeDir, 'projects') + '/', '--checksum', '--include', '*.jsonl', '--ignore-existing']);
       })(),
       // Conversation index to staging dir for post-pull merge
-      (async () => {
+      (async (): Promise<ExecResult> => {
         fs.mkdirSync(this.indexStagingDir, { recursive: true });
-        await this.rclone(['copy', `${sysRemote}/conversation-index.json`, this.indexStagingDir + '/', '--checksum']);
+        return this.rclone(['copy', `${sysRemote}/conversation-index.json`, this.indexStagingDir + '/', '--checksum']);
       })(),
     ]);
-    // Log any individual failures (rclone() already wraps errors, but the async
-    // IIFEs above can throw on fs.mkdirSync or other Node operations)
+    // Inspect both rclone non-zero exits AND IIFE rejections (fs.mkdirSync
+    // can throw e.g. EACCES). Both contribute to firstFailStderr.
     const pullLabels = ['CLAUDE.md', 'config.json', 'encyclopedia', 'conversations', 'conversation-index'];
     pullResults.forEach((r, i) => {
       if (r.status === 'rejected') {
-        this.logBackup('WARN', `Pull ${pullLabels[i]} failed: ${r.reason}`, 'sync.pull.drive');
+        const stderr = String(r.reason);
+        if (!firstFailStderr) firstFailStderr = stderr;
+        this.logBackup('WARN', `Pull ${pullLabels[i]} failed: ${stderr}`, 'sync.pull.drive');
+      } else {
+        noteFail(pullLabels[i], r.value);
       }
     });
+
+    // Surface the first failure as a SyncWarning so it appears in the UI.
+    // Don't call clearBackendFailures on success — pull alone doesn't prove push
+    // works (e.g. read access without write). Only push success clears warnings.
+    if (firstFailStderr) {
+      await this.recordBackendFailure(instance, firstFailStderr, 'pull');
+    }
   }
 
   // =========================================================================
@@ -1226,7 +1263,11 @@ export class SyncService extends EventEmitter {
 
     const pullResult = await this.gitExec(['pull', 'personal-sync', 'main'], repoDir);
     if (pullResult.code !== 0) {
-      this.logBackup('WARN', 'GitHub personal-sync pull failed', 'sync.pull.github');
+      // Surface as a SyncWarning (auth/network/repo-missing all need user action).
+      // Symmetric with pullDrive — see recordBackendFailure docstring for why we
+      // don't clear on success.
+      this.logBackup('WARN', 'GitHub personal-sync pull failed', 'sync.pull.github', { stderr: truncateStderr(pullResult.stderr || '') });
+      await this.recordBackendFailure(instance, pullResult.stderr || '', 'pull');
       return;
     }
 
