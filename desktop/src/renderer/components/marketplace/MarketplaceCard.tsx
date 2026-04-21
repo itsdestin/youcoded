@@ -1,5 +1,4 @@
-// Unified card for skill + theme discovery. Replaces per-type SkillCard/
-// ThemeCard in the new marketplace layout. Kept compact; the detail overlay
+// Unified card for skill + theme discovery. Kept compact; the detail overlay
 // carries the heavy content.
 
 import React from "react";

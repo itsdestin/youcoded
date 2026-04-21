@@ -2,7 +2,7 @@
 
 **Date:** 2026-04-06
 **Status:** Draft
-**Supersedes:** `plugin-install-and-registry-sync-prompt.md` (PTY injection approach — rejected)
+**Supersedes:** earlier PTY-injection prompt-based approach (rejected — see git history)
 
 ---
 

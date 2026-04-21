@@ -17,7 +17,7 @@ You are editing Android runtime code. Read `docs/android-runtime.md` in the youc
   - linker64-env.sh for Go binaries (gh, fzf, micro)
 - **`TMPDIR` = `$HOME/.cache/tmpdir`** (NOT `$HOME/tmp` — that path triggers Node.js's compiled-in rewriting)
 - **Use the LINKER variant of termux-exec**: `libtermux-exec-linker-ld-preload.so` copied over primary
-- **No glibc** — Bionic only. `execve-interceptor.c` is a research artifact, not deployed.
+- **No glibc** — Bionic only. (Earlier glibc-loader / execve-interceptor research is preserved in git history; no deployed native code.)
 
 ## Shared env across bridges
 

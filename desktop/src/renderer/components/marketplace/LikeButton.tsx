@@ -109,7 +109,7 @@ export default function LikeButton({ themeId, initialLiked = false, initialCount
   // benefit. Revisit when the backend exposes per-user liked state.
 
   const handleClick = useCallback(async (e: React.MouseEvent) => {
-    // Stop click from bubbling up to ThemeCard's onClick (which opens detail)
+    // Stop click from bubbling up to MarketplaceCard's onClick (which opens detail)
     e.stopPropagation();
 
     // Signed-out guard: show feedback but don't call the API
