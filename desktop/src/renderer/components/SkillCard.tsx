@@ -57,16 +57,19 @@ export default function SkillCard({
   const liveRating = liveStats?.rating ?? null;
   const liveReviewCount = liveStats?.review_count ?? 0;
 
-  // Chip row — renders for multi-skill plugin cards. stopPropagation on each
-  // chip so a chip click doesn't also fire the card's onClick.
+  // Chip row — renders for multi-skill plugin cards. Height-clipped to one
+  // row so cards stay uniform in the grid; chips beyond the visible line are
+  // simply hidden (users can open the plugin's detail overlay to see all of
+  // them). stopPropagation on each chip prevents chip clicks from firing the
+  // card's onClick.
   const chipRow = chipSkills && chipSkills.length > 0 && (
-    <div className="flex flex-wrap gap-1 mt-2">
+    <div className="flex flex-nowrap gap-1 mt-2 overflow-hidden shrink-0">
       {chipSkills.map(c => (
         <button
           key={c.id}
           type="button"
           onClick={(e) => { e.stopPropagation(); onChipClick?.(c.id); }}
-          className="text-[10px] px-1.5 py-0.5 rounded-sm bg-inset/60 text-fg-dim border border-edge/25 hover:bg-inset hover:text-fg transition-colors"
+          className="text-[10px] px-1.5 py-0.5 rounded-sm bg-inset/60 text-fg-dim border border-edge/25 hover:bg-inset hover:text-fg transition-colors shrink-0 truncate max-w-[80px]"
         >
           {c.displayName}
         </button>
@@ -144,16 +147,19 @@ export default function SkillCard({
     );
   }
 
-  // Drawer variant — Fix: root is now `<div role="button">` with `relative`
-  // so the FavoriteStar can sit inside the card without an outer wrapper
-  // distorting the drawer grid's flex sizing.
+  // Drawer variant — Fix: root is `<div role="button">` with `relative` so
+  // the FavoriteStar overlays inside the card. Fixed height (`h-28`) +
+  // `overflow-hidden` keep every tile the same shape/size in the grid
+  // regardless of description length or whether the plugin has a chip row;
+  // content that would exceed the height is clipped cleanly rather than
+  // pushing the row taller than its neighbors.
   return (
     <div
       role="button"
       tabIndex={0}
       onClick={() => onClick(skill)}
       onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onClick(skill); } }}
-      className="relative bg-panel border border-edge-dim rounded-lg p-3 text-left hover:bg-inset hover:border-edge transition-colors flex flex-col cursor-pointer"
+      className="relative bg-panel border border-edge-dim rounded-lg p-3 text-left hover:bg-inset hover:border-edge transition-colors flex flex-col cursor-pointer h-32 overflow-hidden"
     >
       {favorite && (
         <FavoriteStar corner size="sm" filled={favorite.filled} onToggle={favorite.onToggle} />
