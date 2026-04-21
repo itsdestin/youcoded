@@ -16,9 +16,13 @@ import MarketplaceCard from "./MarketplaceCard";
 import MarketplaceGrid from "./MarketplaceGrid";
 import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetailOverlay";
 import InstallingFooterStrip from "./InstallingFooterStrip";
-import IntegrationCard, { type IntegrationCardItem } from "./IntegrationCard";
-import type { SkillEntry } from "../../../shared/types";
+import type { SkillEntry, IntegrationEntry, IntegrationState } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
+
+// Integrations carry their catalog metadata plus live installed/connected state.
+// Previously lived in IntegrationCard.tsx; moved inline when the dedicated
+// component was retired in favor of rendering through MarketplaceCard.
+type IntegrationCardItem = IntegrationEntry & { state: IntegrationState };
 
 interface Props {
   onExit(): void;
@@ -43,7 +47,6 @@ export default function MarketplaceScreen({
   });
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   const [integrations, setIntegrations] = useState<IntegrationCardItem[]>([]);
-  const [integrationBusy, setIntegrationBusy] = useState<string | null>(null);
 
   // Fetch integrations on mount. Non-blocking — if the namespace is missing
   // (older app version) the catch keeps the rail empty without warning.
@@ -63,42 +66,37 @@ export default function MarketplaceScreen({
 
   const handleIntegration = async (item: IntegrationCardItem) => {
     if (item.status !== "available") return;
-    setIntegrationBusy(item.slug);
-    try {
-      if (item.state.installed) {
-        // Phase 3 scaffold — no real settings panel yet; uninstall as the
-        // safe placeholder so users can recover from a stuck state.
-        await (window as any).claude.integrations.uninstall(item.slug);
-      } else {
-        const result = await (window as any).claude.integrations.install(item.slug);
-        // setup.type === 'plugin' entries can carry a post-install slash
-        // command (e.g. /google-services-setup). Run it in a fresh Sonnet
-        // session so the user's active chat isn't hijacked by a multi-step
-        // OAuth walkthrough.
-        if (result?.postInstallCommand) {
-          const info = await (window as any).claude.session.create({
-            name: `Set up ${item.displayName}`,
-            cwd: "", // main falls back to home dir when blank
-            skipPermissions: false,
-            model: "claude-sonnet-4-6",
-          });
-          if (info?.id) {
-            // Pragmatic fixed delay — the CLI takes ~1–2s to reach the
-            // prompt. Claude Code buffers stdin until ready, so an early
-            // send is tolerated; a late send is the common case.
-            setTimeout(() => {
-              try {
-                (window as any).claude.session.sendInput(info.id, result.postInstallCommand + "\r");
-              } catch { /* user can type the command themselves */ }
-            }, 3000);
-            onExit(); // land on the new session
-          }
+    if (item.state.installed) {
+      // Phase 3 scaffold — no real settings panel yet; uninstall as the
+      // safe placeholder so users can recover from a stuck state.
+      await (window as any).claude.integrations.uninstall(item.slug);
+    } else {
+      const result = await (window as any).claude.integrations.install(item.slug);
+      // setup.type === 'plugin' entries can carry a post-install slash
+      // command (e.g. /google-services-setup). Run it in a fresh Sonnet
+      // session so the user's active chat isn't hijacked by a multi-step
+      // OAuth walkthrough.
+      if (result?.postInstallCommand) {
+        const info = await (window as any).claude.session.create({
+          name: `Set up ${item.displayName}`,
+          cwd: "", // main falls back to home dir when blank
+          skipPermissions: false,
+          model: "claude-sonnet-4-6",
+        });
+        if (info?.id) {
+          // Pragmatic fixed delay — the CLI takes ~1–2s to reach the
+          // prompt. Claude Code buffers stdin until ready, so an early
+          // send is tolerated; a late send is the common case.
+          setTimeout(() => {
+            try {
+              (window as any).claude.session.sendInput(info.id, result.postInstallCommand + "\r");
+            } catch { /* user can type the command themselves */ }
+          }, 3000);
+          onExit(); // land on the new session
         }
       }
-      await refreshIntegrations();
-    } finally {
-      setIntegrationBusy(null);
     }
+    await refreshIntegrations();
   };
 
   // Esc: close detail first, then exit screen. Matches App.tsx state-transition rules.
@@ -251,21 +249,57 @@ export default function MarketplaceScreen({
                 when the catalog hasn't loaded. */}
             {integrations.length > 0 && (
               <MarketplaceRail title="Connect your stuff" description="Bring your data in.">
-                {integrations.map((item) => (
+                {integrations.map((item) => {
+                  // Integration icons live in the marketplace repo at
+                  // integrations/icons/, referenced via raw.githubusercontent.com.
+                  // Previously IntegrationCard resolved this path internally; now
+                  // we pass a fully-resolved URL to MarketplaceCard's iconUrl prop.
+                  const MARKETPLACE_BRANCH = "master";
+                  const ICON_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${MARKETPLACE_BRANCH}/integrations`;
+                  const resolvedIcon = item.iconUrl ? `${ICON_BASE}/${item.iconUrl}` : undefined;
+
+                  // Shape a SkillEntry-compatible value so MarketplaceCard's
+                  // discriminated union is satisfied. Integrations go through
+                  // handleIntegration (via onOpen) for install/connect — the
+                  // corner affordance is suppressed. handleIntegration still
+                  // receives the raw `item` (with state/status/setup fields),
+                  // never this synthetic shape.
+                  // `category` is typed as a narrow union that doesn't include
+                  // 'integrations' — the double cast through `unknown` is the
+                  // documented escape hatch for this discriminated-union adapter.
+                  // MarketplaceCard only reads displayName/description/id from
+                  // this entry for display, so the fake category never reaches
+                  // any category-sensitive code path.
+                  const skillLike = {
+                    id: item.slug,
+                    displayName: item.displayName,
+                    description: item.tagline || '',
+                    category: 'integrations',
+                    prompt: `/${item.slug}`,
+                    source: 'marketplace',
+                    type: 'plugin',
+                    visibility: 'published',
+                  } as unknown as SkillEntry;
+
                   // Width caps at 360px on desktop but shrinks to 90vw on
                   // narrow screens (splitscreen / mobile) so a single card
                   // doesn't overflow the viewport. `!` needed because the
                   // rail's `[&>*]:w-[...]` child selector outranks a plain
                   // w- class by specificity — integration cards are wider
                   // than plugin/theme cards by design.
-                  <div key={item.slug} className="shrink-0 !w-[min(360px,90vw)]">
-                    <IntegrationCard
-                      item={item}
-                      busy={integrationBusy === item.slug}
-                      onPrimary={() => handleIntegration(item)}
-                    />
-                  </div>
-                ))}
+                  return (
+                    <div key={item.slug} className="shrink-0 !w-[min(360px,90vw)]">
+                      <MarketplaceCard
+                        item={{ kind: "skill", entry: skillLike }}
+                        installed={!!item.state.installed}
+                        iconUrl={resolvedIcon}
+                        accentColor={item.accentColor}
+                        suppressCorner
+                        onOpen={() => handleIntegration(item)}
+                      />
+                    </div>
+                  );
+                })}
               </MarketplaceRail>
             )}
 
