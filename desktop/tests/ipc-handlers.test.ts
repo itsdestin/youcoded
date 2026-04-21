@@ -6,7 +6,7 @@ import { describe, it, expect, vi } from 'vitest';
 vi.mock('electron', () => ({
   // whenReady must never resolve — otherwise main.ts runs its entire init chain
   // (createWindow, RemoteServer, SyncService, etc.) which hits unmocked APIs.
-  app: { isPackaged: false, getPath: vi.fn(() => '/tmp'), whenReady: vi.fn(() => new Promise(() => {})), on: vi.fn(), quit: vi.fn() },
+  app: { isPackaged: false, getPath: vi.fn(() => '/tmp'), whenReady: vi.fn(() => new Promise(() => {})), on: vi.fn(), quit: vi.fn(), setAppUserModelId: vi.fn() },
   ipcMain: { handle: vi.fn(), on: vi.fn() },
   BrowserWindow: vi.fn(() => ({ loadURL: vi.fn(), on: vi.fn(), webContents: { send: vi.fn() } })),
   Menu: { setApplicationMenu: vi.fn() },
