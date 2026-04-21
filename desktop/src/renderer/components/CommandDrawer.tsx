@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
 import type { SkillEntry } from '../../shared/types';
 import SkillCard from './SkillCard';
+import FavoriteStar from './marketplace/FavoriteStar';
 import { useSkills } from '../state/skill-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 
@@ -17,24 +18,24 @@ interface Props {
   onOpenLibrary?: () => void;
 }
 
-const categoryOrder = ['personal', 'work', 'development', 'admin', 'other'] as const;
-const categoryLabels: Record<string, string> = {
-  personal: 'PERSONAL',
-  work: 'WORK',
-  development: 'DEVELOPMENT',
-  admin: 'DESTINCLAUDE ADMIN',
-  other: 'OTHER SKILLS',
-};
+const categoryChips = ['personal', 'work', 'development', 'admin', 'other'] as const;
+type CategoryChip = typeof categoryChips[number];
 
 export default function CommandDrawer({ open, searchMode, externalFilter, onSelect, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary }: Props) {
-  const { drawerSkills } = useSkills();
+  const { drawerSkills, favorites, setFavorite } = useSkills();
   const [search, setSearch] = useState('');
+  const [categoryFilter, setCategoryFilter] = useState<CategoryChip | null>(null);
+  const [favoritesOnly, setFavoritesOnly] = useState(false);
   const searchRef = useRef<HTMLInputElement>(null);
   const scrollRef = useScrollFade<HTMLDivElement>();
+
+  // Derive favorite id set for O(1) lookups
+  const skillFavSet = useMemo(() => new Set(favorites), [favorites]);
 
   // Effective query: in search mode (slash-triggered), the InputBar drives
   // the filter via externalFilter; in browse mode, the drawer's own input does
   const effectiveQuery = searchMode ? (externalFilter ?? '') : search;
+  const isSearching = effectiveQuery.trim().length > 0;
 
   // Focus internal search on open — only in browse mode (compass button).
   // In search mode the InputBar keeps focus so the user sees the "/" prefix.
@@ -57,9 +58,9 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
     return () => window.removeEventListener('keydown', handler);
   }, [open, onClose]);
 
-  // Filter skills by effective query (external in search mode, internal otherwise)
-  const filtered = useMemo(() => {
-    if (!effectiveQuery.trim()) return drawerSkills;
+  // Search mode: flat list matching the query (preserves original behavior)
+  const searchFiltered = useMemo(() => {
+    if (!isSearching) return drawerSkills;
     const q = effectiveQuery.toLowerCase();
     return drawerSkills.filter(
       (s) =>
@@ -67,19 +68,52 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
         s.description.toLowerCase().includes(q) ||
         s.category.toLowerCase().includes(q),
     );
-  }, [drawerSkills, effectiveQuery]);
+  }, [drawerSkills, effectiveQuery, isSearching]);
 
-  // Group by category (only when not searching)
-  const grouped = useMemo(() => {
-    if (effectiveQuery.trim()) return null;
-    const groups = new Map<string, SkillEntry[]>();
-    for (const s of filtered) {
-      const list = groups.get(s.category) || [];
-      list.push(s);
-      groups.set(s.category, list);
-    }
-    return groups;
-  }, [filtered, effectiveQuery]);
+  // Browse mode: apply category chip filter, then split into favorites / others
+  const categoryFiltered = useMemo(() => {
+    if (isSearching) return drawerSkills;
+    if (!categoryFilter) return drawerSkills;
+    return drawerSkills.filter((s) => (s.category ?? 'other') === categoryFilter);
+  }, [drawerSkills, categoryFilter, isSearching]);
+
+  // Favorites section — skills whose id or pluginName is in the favorites set
+  const favsSorted = useMemo(() =>
+    categoryFiltered
+      .filter((s) => skillFavSet.has(s.id) || (s.pluginName != null && skillFavSet.has(s.pluginName)))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName)),
+    [categoryFiltered, skillFavSet],
+  );
+
+  // All-installed section — skills not in favorites
+  const othersSorted = useMemo(() =>
+    categoryFiltered
+      .filter((s) => !skillFavSet.has(s.id) && !(s.pluginName != null && skillFavSet.has(s.pluginName)))
+      .sort((a, b) => a.displayName.localeCompare(b.displayName)),
+    [categoryFiltered, skillFavSet],
+  );
+
+  // Helper: render a single drawer card with a FavoriteStar corner overlay.
+  // FavoriteStar is a <button>, so it cannot be placed inside SkillCard's
+  // drawer <button>. Instead, a relative-positioned wrapper div sits around
+  // SkillCard and the star is absolutely positioned over the card corner.
+  // FavoriteStar already calls e.stopPropagation(), so clicks on the star
+  // never bubble into the SkillCard click handler.
+  const renderDrawerCard = (skill: SkillEntry) => {
+    const isFav = skillFavSet.has(skill.id) || (skill.pluginName != null && skillFavSet.has(skill.pluginName));
+    const favId = skill.pluginName && skillFavSet.has(skill.pluginName) ? skill.pluginName : skill.id;
+    return (
+      <div key={skill.id} className="relative">
+        <SkillCard skill={skill} onClick={onSelect} />
+        <FavoriteStar
+          corner
+          size="sm"
+          filled={isFav}
+          onToggle={() => setFavorite(favId, !isFav)}
+        />
+      </div>
+    );
+  };
 
   return (
     <>
@@ -158,42 +192,73 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
         </div>
 
         {/* Scrollable content.
-             "Add Skills +" is always the last box in the drawer (even when the
-             user has favorites) so the marketplace is always one click away.
-             When a search has zero matches, it stands alone as the empty-state
-             affordance. */}
-        <div ref={scrollRef} className="scroll-fade px-4 pb-4" style={{ maxHeight: 'calc(45vh - 80px)' }}>
-          {grouped ? (
-            // Categorized view (browse mode)
+             "Add Skills +" is always the last box in the drawer so the marketplace
+             is always one click away. When a search has zero matches, it stands
+             alone as the empty-state affordance. */}
+        <div ref={scrollRef} className="scroll-fade pb-4" style={{ maxHeight: 'calc(45vh - 80px)' }}>
+          {isSearching ? (
+            // Search mode: flat filtered list, no chip row (preserves original behavior)
+            <div className="px-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {searchFiltered.map((skill) => renderDrawerCard(skill))}
+              <AddSkillsCard onClick={() => { onClose(); onOpenMarketplace(); }} />
+            </div>
+          ) : (
+            // Browse mode: sticky category chip row + two flat sections
             <>
-              {categoryOrder.map((cat) => {
-                const items = grouped.get(cat);
-                if (!items || items.length === 0) return null;
-                return (
-                  <div key={cat} className="mb-4">
-                    <h3 className="text-[10px] font-medium text-fg-muted tracking-wider mb-2">
-                      {categoryLabels[cat]}
-                    </h3>
-                    <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-                      {items.map((skill) => (
-                        <SkillCard key={skill.id} skill={skill} onClick={onSelect} />
-                      ))}
-                    </div>
+              {/* Sticky filter chip row — category filters + favorites-only toggle */}
+              <div className="sticky top-0 z-10 bg-panel px-2 py-1.5 border-b border-edge-dim flex flex-wrap gap-1.5">
+                {categoryChips.map((c) => (
+                  <button
+                    key={c}
+                    type="button"
+                    onClick={() => setCategoryFilter((prev) => prev === c ? null : c)}
+                    className={`text-xs px-2 py-0.5 rounded-full border transition-colors ${
+                      categoryFilter === c
+                        ? 'bg-accent text-on-accent border-accent'
+                        : 'bg-inset text-fg-2 border-edge-dim hover:border-edge'
+                    }`}
+                  >
+                    {c.charAt(0).toUpperCase() + c.slice(1)}
+                  </button>
+                ))}
+                <button
+                  type="button"
+                  onClick={() => setFavoritesOnly((v) => !v)}
+                  className={`text-xs px-2 py-0.5 rounded-full border ml-auto transition-colors ${
+                    favoritesOnly
+                      ? 'bg-accent/20 text-accent border-accent/50'
+                      : 'bg-inset text-fg-2 border-edge-dim hover:border-edge'
+                  }`}
+                >
+                  ★ Favorites only
+                </button>
+              </div>
+
+              {/* Favorites section */}
+              {favsSorted.length > 0 && (
+                <section className="px-2 pt-2">
+                  <h3 className="text-[10px] uppercase tracking-wide text-fg-dim mb-1 px-1">Favorites</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    {favsSorted.map((skill) => renderDrawerCard(skill))}
                   </div>
-                );
-              })}
-              <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                </section>
+              )}
+
+              {/* All installed (non-favorites) — hidden when favoritesOnly toggle is on */}
+              {!favoritesOnly && othersSorted.length > 0 && (
+                <section className="px-2 pt-3">
+                  <h3 className="text-[10px] uppercase tracking-wide text-fg-dim mb-1 px-1">All installed</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                    {othersSorted.map((skill) => renderDrawerCard(skill))}
+                  </div>
+                </section>
+              )}
+
+              {/* Add Skills + always trails at the end */}
+              <div className="px-2 pt-3 grid grid-cols-2 sm:grid-cols-3 gap-1.5">
                 <AddSkillsCard onClick={() => { onClose(); onOpenMarketplace(); }} />
               </div>
             </>
-          ) : (
-            // Flat search results — "Add Skills +" trails the matches
-            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
-              {filtered.map((skill) => (
-                <SkillCard key={skill.id} skill={skill} onClick={onSelect} />
-              ))}
-              <AddSkillsCard onClick={() => { onClose(); onOpenMarketplace(); }} />
-            </div>
           )}
         </div>
       </div>
