@@ -68,6 +68,11 @@ export class LocalSkillProvider implements SkillProvider {
   // youcoded-skills.json packages map and marketplace IPC can read it
   public configStore = new SkillConfigStore();
   private installedCache: SkillEntry[] | null = null;
+  private onCacheInvalidated?: () => void;
+
+  setCacheInvalidationListener(cb: () => void): void {
+    this.onCacheInvalidated = cb;
+  }
 
   constructor() {
     if (!fs.existsSync(CACHE_DIR)) fs.mkdirSync(CACHE_DIR, { recursive: true });
@@ -213,6 +218,7 @@ export class LocalSkillProvider implements SkillProvider {
         installedAt: new Date().toISOString(),
       });
       this.installedCache = null;
+      this.onCacheInvalidated?.();
       return { status: 'installed', type: 'prompt' };
     }
 
@@ -248,6 +254,7 @@ export class LocalSkillProvider implements SkillProvider {
         }],
       });
       this.installedCache = null;
+      this.onCacheInvalidated?.();
       // Also reconcile hooks — the newly-installed plugin may declare
       // required hooks that need to land in settings.json before the user's
       // next Claude session starts.
@@ -282,6 +289,7 @@ export class LocalSkillProvider implements SkillProvider {
       }
       this.configStore.updatePackageVersion(id, entry.version || '1.0.0');
       this.installedCache = null;
+      this.onCacheInvalidated?.();
       return { ok: true, newVersion: entry.version };
     }
 
@@ -303,6 +311,7 @@ export class LocalSkillProvider implements SkillProvider {
     if (result.status === 'installed' || result.status === 'already_installed') {
       this.configStore.updatePackageVersion(id, entry.version || '1.0.0');
       this.installedCache = null;
+      this.onCacheInvalidated?.();
 
       // Phase 3c: check if the new configSchema has required fields missing
       // from the existing user config. Don't block the update — just surface
@@ -338,10 +347,12 @@ export class LocalSkillProvider implements SkillProvider {
       await uninstallPlugin(id);
       this.configStore.removePluginInstall(id);
       this.installedCache = null;
+      this.onCacheInvalidated?.();
       return { type: 'plugin' };
     } else {
       this.configStore.deletePromptSkill(id);
       this.installedCache = null;
+      this.onCacheInvalidated?.();
       return { type: 'prompt' };
     }
   }
@@ -357,17 +368,20 @@ export class LocalSkillProvider implements SkillProvider {
   async setOverride(id: string, override: MetadataOverride): Promise<void> {
     this.configStore.setOverride(id, override);
     this.installedCache = null;
+    this.onCacheInvalidated?.();
   }
 
   async createPromptSkill(skill: Omit<SkillEntry, 'id'>): Promise<SkillEntry> {
     const entry = this.configStore.createPromptSkill(skill);
     this.installedCache = null;
+    this.onCacheInvalidated?.();
     return entry;
   }
 
   async deletePromptSkill(id: string): Promise<void> {
     this.configStore.deletePromptSkill(id);
     this.installedCache = null;
+    this.onCacheInvalidated?.();
   }
 
   // --- Sharing ---

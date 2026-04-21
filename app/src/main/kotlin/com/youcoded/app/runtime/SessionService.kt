@@ -128,6 +128,8 @@ class SessionService : Service() {
     private var themeWatcher: FileObserver? = null
     var skillProvider: LocalSkillProvider? = null
         private set
+    // Command drawer — provides slash commands list from plugins, skills, and project.
+    private var commandProvider: CommandProvider? = null
     var pluginInstaller: PluginInstaller? = null
         private set
     var bootstrap: Bootstrap? = null
@@ -195,6 +197,15 @@ class SessionService : Service() {
         serviceScope.launch(Dispatchers.IO) {
             skillProvider?.ensureBundledPluginsInstalled()
         }
+        // Command drawer — builds the merged commands list from CC built-ins, plugins, and skills.
+        commandProvider = CommandProvider(
+            homeDir = bs.homeDir,
+            skillProvider = skillProvider!!,
+            getProjectCwd = {
+                // Use the first registered session's cwd; null if no sessions yet.
+                sessionRegistry.sessions.value.values.firstOrNull()?.cwd?.absolutePath
+            },
+        )
         pluginInstaller = PluginInstaller(bs.homeDir, bs, skillProvider!!.configStore)
         // Wire up plugin installer and reload callback so LocalSkillProvider
         // handles all install/uninstall routing (consolidates SessionService logic)
@@ -726,6 +737,10 @@ class SessionService : Service() {
                 val result = skillProvider?.getInstalled() ?: org.json.JSONArray()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
+            "commands:list" -> {
+                val result = commandProvider?.getCommands() ?: org.json.JSONArray()
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
             "skills:list-marketplace" -> {
                 val result = skillProvider?.listMarketplace(msg.payload) ?: org.json.JSONArray()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
@@ -746,6 +761,8 @@ class SessionService : Service() {
                 val id = msg.payload.optString("id")
                 val result = skillProvider?.install(id)
                     ?: JSONObject().put("status", "failed").put("error", "Skill provider not initialized")
+                // Invalidate command cache so newly installed plugin commands appear immediately.
+                commandProvider?.invalidateCache()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "skills:uninstall" -> {
@@ -760,6 +777,8 @@ class SessionService : Service() {
                     skillProvider?.uninstall(id)
                         ?: JSONObject().put("ok", false).put("error", "Skill provider not initialized")
                 }
+                // Invalidate command cache so uninstalled plugin commands are removed immediately.
+                commandProvider?.invalidateCache()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             "skills:get-favorites" -> {

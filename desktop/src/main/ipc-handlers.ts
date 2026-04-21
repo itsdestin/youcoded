@@ -9,6 +9,7 @@ import { HookRelay } from './hook-relay';
 import { IPC, PERMISSION_OVERRIDES_DEFAULT, SESSION_FLAG_NAMES, type SessionFlagName } from '../shared/types';
 import { setPermissionOverrides } from './main';
 import { LocalSkillProvider } from './skill-provider';
+import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
 import { RemoteConfig } from './remote-config';
 import { RemoteServer } from './remote-server';
@@ -35,6 +36,7 @@ export function registerIpcHandlers(
   sessionManager: SessionManager,
   mainWindow: BrowserWindow,
   skillProvider: LocalSkillProvider,
+  commandProvider: CommandProvider,
   hookRelay?: HookRelay,
   remoteConfig?: RemoteConfig,
   remoteServer?: RemoteServer,
@@ -743,6 +745,10 @@ export function registerIpcHandlers(
   // --- Skills discovery & marketplace ---
   ipcMain.handle(IPC.SKILLS_LIST, async () => {
     return skillProvider.getInstalled();
+  });
+
+  ipcMain.handle(IPC.COMMANDS_LIST, async () => {
+    return commandProvider.getCommands();
   });
 
   ipcMain.handle(IPC.SKILLS_LIST_MARKETPLACE, async (_event, filters) => {

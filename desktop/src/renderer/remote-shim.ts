@@ -637,6 +637,9 @@ export function installShim(): void {
       // Phase 3b: update a plugin (re-installs at the same path)
       update: (id: string) => invoke('skills:update', { id }),
     },
+    commands: {
+      list: () => invoke('commands:list'),
+    },
     // Marketplace redesign Phase 3 — integrations namespace.
     integrations: {
       list: () => invoke('integrations:list'),

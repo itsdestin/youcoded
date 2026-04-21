@@ -84,6 +84,11 @@ Each entry has three fields:
 - **Depends on:** Transcript files written at `~/.claude/projects/<encoded-cwd-path>/*.jsonl` with CC's path-encoding scheme
 - **Break symptom:** Transcript watcher watches the wrong directory; chat UI silent for all sessions.
 
+### CC built-in command list
+- **Files:** `desktop/src/main/cc-builtin-commands.ts`, `app/src/main/kotlin/com/youcoded/app/runtime/CommandProvider.kt` (the `CC_BUILTIN_COMMANDS` companion block)
+- **Depends on:** Claude Code's set of built-in slash commands — names and behaviors baked into the compiled `claude` binary. These lists are hand-maintained; the SDK init message's `slash_commands` array omits core meta commands so automated discovery is not viable. Both files carry a version-anchor comment ("Last verified against Claude Code CLI vX.Y.Z — DATE") at the top.
+- **Break symptom:** New CC built-ins don't appear in the YouCoded CommandDrawer search. Removed CC built-ins still appear but remain unclickable with a "Run in Terminal View" note, so user impact is minor (they don't work when the user follows that hint in Terminal View). Renamed built-ins show with their old name.
+
 ### claude --version output format
 - **Files:** `youcoded-admin/skills/release/SKILL.md` (Phase 4 Step 3 and Step 2 baseline-line injection)
 - **Depends on:** `claude --version` output containing a parseable `\d+(\.\d+)+` substring

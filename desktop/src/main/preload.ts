@@ -24,6 +24,7 @@ const IPC = {
   STATUS_DATA: 'status:data',
   READ_TRANSCRIPT_META: 'transcript:read-meta',
   SKILLS_LIST: 'skills:list',
+  COMMANDS_LIST: 'commands:list',
   SKILLS_LIST_MARKETPLACE: 'skills:list-marketplace',
   SKILLS_GET_DETAIL: 'skills:get-detail',
   SKILLS_SEARCH: 'skills:search',
@@ -347,6 +348,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SKILLS_APPLY_OUTPUT_STYLE, styleId),
     // Phase 3b: update an already-installed plugin
     update: (id: string): Promise<any> => ipcRenderer.invoke(IPC.SKILLS_UPDATE, id),
+  },
+  commands: {
+    list: (): Promise<any[]> => ipcRenderer.invoke(IPC.COMMANDS_LIST),
   },
   // Phase 3: unified marketplace APIs (packages map, per-entry config)
   marketplace: {

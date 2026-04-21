@@ -42,7 +42,7 @@ import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
 
-import type { SkillEntry, PermissionMode, AttentionState } from '../shared/types';
+import type { SkillEntry, PermissionMode, AttentionState, CommandEntry } from '../shared/types';
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
 import type { SessionStatusColor } from './components/StatusDot';
@@ -1314,6 +1314,51 @@ function AppInner() {
     [statusData],
   );
 
+  const handleSelectCommand = useCallback(
+    (entry: CommandEntry) => {
+      // Defensive: disabled cards should never fire onClick in the UI, but if
+      // something does route a CC-builtin here, no-op rather than sending
+      // text that won't work in chat view.
+      if (!entry.clickable) return;
+      if (!sessionId) return;
+      setDrawerOpen(false);
+      setDrawerFilter(undefined);
+      inputBarRef.current?.clear();
+
+      if (entry.source === 'youcoded') {
+        const currentView = viewModes.get(sessionId) || 'chat';
+        const result = dispatchSlashCommand({
+          raw: entry.name,
+          sessionId,
+          view: currentView,
+          files: [],
+          dispatch,
+          timeline: [],
+          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => { setToast(msg); setTimeout(() => setToast(null), 3000); }, getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+        });
+        if (result.handled) {
+          if (result.alsoSendToPty) {
+            window.claude.session.sendInput(sessionId, result.alsoSendToPty);
+          }
+          return;
+        }
+        // Dispatcher declined (e.g. missing callback) — fall through to raw PTY send.
+      }
+
+      // Filesystem commands (and any unhandled YouCoded command) — send the
+      // slash command to the PTY so Claude Code executes it. Also record the
+      // optimistic user prompt so the chat timeline shows the action.
+      dispatch({
+        type: 'USER_PROMPT',
+        sessionId,
+        content: entry.name,
+        timestamp: Date.now(),
+      });
+      window.claude.session.sendInput(sessionId, `${entry.name}\r`);
+    },
+    [sessionId, dispatch, viewModes, getUsageSnapshot],
+  );
+
   const handleSelectSkill = useCallback(
     (skill: SkillEntry) => {
       if (skill.id === '_resume') {
@@ -1768,6 +1813,7 @@ function AppInner() {
                   searchMode={drawerSearchMode}
                   externalFilter={drawerFilter}
                   onSelect={handleSelectSkill}
+                  onSelectCommand={handleSelectCommand}
                   onClose={handleCloseDrawer}
                   onOpenManager={() => openMarketplace('installed')}
                   onOpenMarketplace={() => openMarketplace()}
