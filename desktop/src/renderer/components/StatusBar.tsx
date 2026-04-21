@@ -3,6 +3,7 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import type { PermissionMode } from '../../shared/types';
+import { isExpired } from '../../shared/announcement';
 import type { SyncWarning } from '../../main/sync-state';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { FastIcon } from './Icons';
@@ -33,7 +34,7 @@ interface StatusData {
     update_available: boolean;
     download_url: string | null;
   } | null;
-  announcement: { message: string } | null;
+  announcement: { message: string; expires?: string | null } | null;
   contextPercent: number | null;
   gitBranch: string | null;
   sessionStats: SessionStats | null;
@@ -840,8 +841,14 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
         </button>
       )}
 
-      {/* Platform announcement — ★ orange pill, truncates long copy */}
-      {show('announcement') && statusData.announcement?.message && (
+      {/* Platform announcement — ★ orange pill, truncates long copy.
+          Gate on isExpired so a stale cache entry (cleared remote but
+          not yet re-fetched, or a date that rolled past midnight since
+          last fetch) doesn't render. Defense-in-depth alongside the
+          fetch-time filter in announcement-service.ts. */}
+      {show('announcement') &&
+        statusData.announcement?.message &&
+        !isExpired(statusData.announcement.expires) && (
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border truncate max-w-[280px]"
           style={{
