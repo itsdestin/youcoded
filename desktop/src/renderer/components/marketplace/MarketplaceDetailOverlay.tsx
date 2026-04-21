@@ -259,7 +259,7 @@ function SkillBody({
             // Bundled plugins ship with YouCoded — disable the Uninstall
             // button + show the reason on hover. The IPC handler also rejects
             // bundled IDs, but disabling here gives users the right signal
-            // before they even click. Mirrors the guard in SkillDetail.tsx.
+            // before they even click.
             (() => {
               const bundled = isBundledPlugin(entry.id);
               return (
