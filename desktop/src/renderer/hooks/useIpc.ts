@@ -52,6 +52,10 @@ declare global {
         sessionRenamed: (cb: (sessionId: string, name: string) => void) => (...args: any[]) => void;
         uiAction: (cb: (action: any) => void) => () => void;
         transcriptEvent: (cb: (event: any) => void) => () => void;
+        // Remote-shim only: Electron clients don't have it (desktop EXPORTS via
+        // onChatExportSnapshot instead). Remote browsers receive chat:hydrate on
+        // connect so remote-shim subscribes this to dispatch HYDRATE_CHAT_STATE.
+        chatHydrate?: (cb: (payload: any) => void) => () => void;
       };
       dialog: {
         openFile: () => Promise<string[]>;

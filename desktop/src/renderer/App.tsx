@@ -818,7 +818,8 @@ function AppInner() {
     // Remote-only: host sends a full chat state snapshot immediately after the
     // remote client connects. Dispatches HYDRATE_CHAT_STATE so the reducer
     // pre-populates all session timelines without waiting for transcript replay.
-    const chatHydrateHandler = (window.claude.on as any).chatHydrate?.((payload: any) => {
+    // Typed-optional on the shared surface — present only on remote-shim.
+    const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
       dispatch({ type: 'HYDRATE_CHAT_STATE', sessions: payload });
     });
 

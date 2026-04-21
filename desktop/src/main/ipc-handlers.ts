@@ -1274,6 +1274,14 @@ export function registerIpcHandlers(
   const lastGitBranchByDesktopId: Record<string, string> = {};
   const lastSessionStatsByDesktopId: Record<string, any> = {};
 
+  // Per-session attention state, updated by the renderer via
+  // `remote:attention-changed` and read by buildStatusData() so remote
+  // browsers see matching StatusDot colors. Declared alongside the other
+  // last-known caches (above) so buildStatusData's lexical scope has all
+  // four in the TDZ-safe range. The listener that writes into this Map
+  // is registered further down where the handler block begins.
+  const lastAttentionBySession = new Map<string, string>();
+
   function buildStatusData() {
     const usage = readJsonFile(usageCachePath);
     const announcement = readJsonFile(announcementCachePath);
@@ -1404,11 +1412,9 @@ export function registerIpcHandlers(
   // Maps desktop session ID → Claude Code session ID
   const sessionIdMap = new Map<string, string>();
 
-  // Per-session attention state, updated by the renderer via
-  // `remote:attention-changed` and read by buildStatusData() so remote
-  // browsers see matching StatusDot colors.
-  const lastAttentionBySession = new Map<string, string>();
-
+  // `lastAttentionBySession` is declared alongside the other status-value
+  // caches above buildStatusData(); the listener that writes into it is
+  // registered here where the handler block begins.
   ipcMain.on('remote:attention-changed', (_e, payload: { sessionId: string; state: string }) => {
     if (!payload?.sessionId) return;
     lastAttentionBySession.set(payload.sessionId, payload.state);

@@ -904,6 +904,13 @@ export function installShim(): void {
     },
     // Buddy floater is desktop-Electron only (MVP). Browser/Android get
     // error-throwing stubs except onAttentionSummary which returns a no-op unsubscribe.
+    //
+    // Current callers are gated upstream by a `?mode=buddy-*` URL param that only
+    // Electron's BuddyWindowManager sets, so these throws never fire in practice.
+    // If you add a NEW buddy call site in chrome shared with remote browsers (e.g.
+    // a mounted control in the main chat view), guard it with optional chaining
+    // or a `window.claude?.window` presence check — throwing here keeps stray
+    // remote-code paths loud rather than silently succeeding.
     buddy: {
       show: () => { throw new Error('Buddy is desktop-only in this version'); },
       hide: () => { throw new Error('Buddy is desktop-only in this version'); },
