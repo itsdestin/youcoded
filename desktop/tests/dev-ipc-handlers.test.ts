@@ -57,3 +57,59 @@ describe('readLogTail', () => {
     expect(lines.at(-1)).toBe('line 499');
   });
 });
+
+import { execFile } from 'child_process';
+import { summarizeIssue } from '../src/main/dev-tools';
+
+describe('summarizeIssue', () => {
+  it('parses the JSON envelope returned by claude -p', async () => {
+    vi.mocked(execFile).mockImplementation(((_cmd: string, _args: string[], _opts: any, cb: any) => {
+      const json = JSON.stringify({
+        title: 'App crashes on startup',
+        summary: 'Clicking the icon does nothing.',
+        flagged_strings: ['/Users/alice/secret-project'],
+      });
+      cb(null, json, '');
+      return {} as any;
+    }) as any);
+    const out = await summarizeIssue({
+      kind: 'bug',
+      description: 'I clicked the icon and nothing happened.',
+      log: 'line A',
+    });
+    expect(out.title).toBe('App crashes on startup');
+    expect(out.summary).toContain('Clicking the icon');
+    expect(out.flagged_strings).toEqual(['/Users/alice/secret-project']);
+  });
+
+  it('returns a fallback envelope when claude -p errors', async () => {
+    vi.mocked(execFile).mockImplementation(((_c: string, _a: string[], _o: any, cb: any) => {
+      cb(new Error('not authenticated'), '', '');
+      return {} as any;
+    }) as any);
+    const out = await summarizeIssue({
+      kind: 'bug',
+      description: 'something',
+    });
+    expect(out.title).toBe('something'.slice(0, 80));
+    expect(out.summary).toBe('something');
+    expect(out.flagged_strings).toEqual([]);
+  });
+
+  it('omits the log block from the prompt when kind is feature', async () => {
+    let capturedArgs: string[] = [];
+    vi.mocked(execFile).mockImplementation(((_c: string, args: string[], _o: any, cb: any) => {
+      capturedArgs = args;
+      cb(null, JSON.stringify({ title: 't', summary: 's', flagged_strings: [] }), '');
+      return {} as any;
+    }) as any);
+    await summarizeIssue({
+      kind: 'feature',
+      description: 'I want X',
+      log: 'should not appear in prompt',
+    });
+    const promptArg = capturedArgs.find((a) => a.includes('I want X'));
+    expect(promptArg).toBeDefined();
+    expect(promptArg).not.toContain('should not appear in prompt');
+  });
+});

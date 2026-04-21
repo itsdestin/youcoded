@@ -176,3 +176,90 @@ export async function readLogTail(maxLines: number): Promise<string> {
   const tail = lines.slice(-maxLines).join('\n');
   return redactLog(tail, home);
 }
+
+// ---------------------------------------------------------------------------
+// T7: summarizeIssue (shells out to claude -p)
+// ---------------------------------------------------------------------------
+
+export interface SummarizeArgs {
+  kind: DevIssueKind;
+  description: string;
+  log?: string;
+}
+
+export interface SummaryResult {
+  title: string;
+  summary: string;
+  flagged_strings: string[];
+}
+
+/**
+ * Ask claude -p to produce a structured summary of the user's bug
+ * report or feature request. We pass the prompt as the final positional
+ * argument and instruct the CLI to emit JSON only. On any failure
+ * (CLI missing, not authenticated, JSON parse error) we degrade
+ * gracefully to a fallback envelope built from the user's description
+ * — submission still works.
+ */
+export async function summarizeIssue(args: SummarizeArgs): Promise<SummaryResult> {
+  const prompt = buildSummarizerPrompt(args);
+  try {
+    const stdout: string = await new Promise((resolve, reject) => {
+      execFile(
+        'claude',
+        ['-p', prompt],
+        { timeout: 30_000, maxBuffer: 1024 * 1024 },
+        (err, out) => (err ? reject(err) : resolve(String(out || ''))),
+      );
+    });
+    return parseSummary(stdout, args.description);
+  } catch {
+    return fallbackSummary(args.description);
+  }
+}
+
+function buildSummarizerPrompt(args: SummarizeArgs): string {
+  const intro =
+    args.kind === 'bug'
+      ? 'You are summarizing a bug report from a YouCoded user for a GitHub issue.'
+      : 'You are summarizing a feature request from a YouCoded user for a GitHub issue.';
+  const logBlock =
+    args.kind === 'bug' && args.log
+      ? `\n\nThe last lines of their app log are:\n\`\`\`\n${args.log}\n\`\`\``
+      : '';
+  return [
+    intro,
+    `\n\nThe user wrote:\n«${args.description}»`,
+    logBlock,
+    '\n\nProduce a JSON object with fields:',
+    '  - title: a one-line GitHub-issue title (≤80 chars)',
+    "  - summary: a one-paragraph summary that captures the user's intent",
+    '  - flagged_strings: an array of strings from the log that look sensitive (paths, IDs, possible secrets)',
+    '\n\nRespond with JSON only — no prose, no markdown fences.',
+  ].join('');
+}
+
+function parseSummary(stdout: string, fallbackText: string): SummaryResult {
+  // Be lenient: strip ``` fences if the model added them anyway.
+  const cleaned = stdout.replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+  try {
+    const parsed = JSON.parse(cleaned);
+    return {
+      title: String(parsed.title || fallbackText.slice(0, 80)),
+      summary: String(parsed.summary || fallbackText),
+      flagged_strings: Array.isArray(parsed.flagged_strings)
+        ? parsed.flagged_strings.map(String)
+        : [],
+    };
+  } catch {
+    return fallbackSummary(fallbackText);
+  }
+}
+
+function fallbackSummary(description: string): SummaryResult {
+  return {
+    title: description.slice(0, 80),
+    summary: description,
+    flagged_strings: [],
+  };
+}
