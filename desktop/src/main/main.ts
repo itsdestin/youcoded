@@ -119,6 +119,9 @@ const hookRelay = new HookRelay(pipeName);
 const remoteConfig = new RemoteConfig();
 const skillProvider = new LocalSkillProvider();
 skillProvider.ensureMigrated();
+// Fire-and-forget: install bundled plugins if missing. Silent retry on
+// every launch. See docs/superpowers/specs/2026-04-20-bundled-default-plugins-design.md.
+void skillProvider.ensureBundledPluginsInstalled();
 // Pass a snapshot provider so RemoteServer can request the full chat state from
 // the renderer when new remote clients connect. The closure captures mainWindow
 // by reference — mainWindow is null here but will be set before any client
