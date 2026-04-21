@@ -248,13 +248,13 @@ export interface SkillDetailView extends SkillEntry {
 // because commands may be unclickable (e.g. CC built-ins without a
 // native UI in YouCoded).
 export type CommandEntry = {
-  name: string                   // '/compact', '/superpowers:brainstorm'
-  description: string
-  source: 'youcoded' | 'filesystem' | 'cc-builtin'
-  clickable: boolean
-  disabledReason?: string        // populated when clickable=false
-  aliases?: string[]             // e.g. /clear → ['/reset', '/new']
-}
+  name: string;                   // '/compact', '/superpowers:brainstorm'
+  description: string;
+  source: 'youcoded' | 'filesystem' | 'cc-builtin';
+  clickable: boolean;
+  disabledReason?: string;        // populated when clickable=false
+  aliases?: string[];             // e.g. /clear → ['/reset', '/new']
+};
 
 export interface SkillFilters {
   type?: 'prompt' | 'plugin';
