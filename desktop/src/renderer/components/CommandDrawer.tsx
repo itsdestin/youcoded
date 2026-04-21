@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
-import type { SkillEntry } from '../../shared/types';
+import type { SkillEntry, CommandEntry } from '../../shared/types';
 import SkillCard from './SkillCard';
 import FavoriteStar from './marketplace/FavoriteStar';
 import { useSkills } from '../state/skill-context';
@@ -10,6 +10,7 @@ interface Props {
   searchMode: boolean;
   externalFilter?: string; // Filter driven by InputBar when slash-triggered
   onSelect: (skill: SkillEntry) => void;
+  onSelectCommand: (entry: CommandEntry) => void;
   onClose: () => void;
   onOpenManager: () => void;
   onOpenMarketplace: () => void;
@@ -21,8 +22,8 @@ interface Props {
 const categoryChips = ['personal', 'work', 'development', 'admin', 'other'] as const;
 type CategoryChip = typeof categoryChips[number];
 
-export default function CommandDrawer({ open, searchMode, externalFilter, onSelect, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary }: Props) {
-  const { drawerSkills, favorites, setFavorite } = useSkills();
+export default function CommandDrawer({ open, searchMode, externalFilter, onSelect, onSelectCommand, onClose, onOpenManager, onOpenMarketplace, onOpenLibrary }: Props) {
+  const { drawerSkills, drawerCommands, favorites, setFavorite } = useSkills();
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState<CategoryChip | null>(null);
   const [favoritesOnly, setFavoritesOnly] = useState(false);
@@ -70,6 +71,14 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
     );
   }, [drawerSkills, effectiveQuery, isSearching]);
 
+  const commandSearchFiltered = useMemo(() => {
+    if (!isSearching) return [] as CommandEntry[];
+    const q = effectiveQuery.toLowerCase();
+    return drawerCommands
+      .filter((c) => c.name.toLowerCase().includes(q) || c.description.toLowerCase().includes(q))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }, [drawerCommands, effectiveQuery, isSearching]);
+
   // Browse mode: apply category chip filter, then split into favorites / others
   const categoryFiltered = useMemo(() => {
     if (isSearching) return drawerSkills;
@@ -99,6 +108,29 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
   // SkillCard and the star is absolutely positioned over the card corner.
   // FavoriteStar already calls e.stopPropagation(), so clicks on the star
   // never bubble into the SkillCard click handler.
+  const renderCommandCard = (entry: CommandEntry) => {
+    const clickable = entry.clickable;
+    return (
+      <button
+        key={`cmd:${entry.name}`}
+        type="button"
+        onClick={clickable ? () => onSelectCommand(entry) : undefined}
+        disabled={!clickable}
+        title={!clickable ? entry.disabledReason : undefined}
+        className={`rounded-lg p-3 text-left border border-edge-dim flex flex-col ${
+          clickable
+            ? 'bg-panel/80 hover:bg-inset hover:border-edge transition-colors cursor-pointer'
+            : 'bg-panel/40 opacity-50 cursor-not-allowed'
+        }`}
+      >
+        <span className="font-mono text-sm text-fg">{entry.name}</span>
+        <span className="text-xs text-fg-muted mt-1 line-clamp-2">
+          {entry.description || (clickable ? '' : entry.disabledReason)}
+        </span>
+      </button>
+    );
+  };
+
   const renderDrawerCard = (skill: SkillEntry) => {
     const isFav = skillFavSet.has(skill.id) || (skill.pluginName != null && skillFavSet.has(skill.pluginName));
     const favId = skill.pluginName && skillFavSet.has(skill.pluginName) ? skill.pluginName : skill.id;
@@ -200,6 +232,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
             // Search mode: flat filtered list, no chip row (preserves original behavior)
             <div className="px-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
               {searchFiltered.map((skill) => renderDrawerCard(skill))}
+              {commandSearchFiltered.map((entry) => renderCommandCard(entry))}
               <AddSkillsCard onClick={() => { onClose(); onOpenMarketplace(); }} />
             </div>
           ) : (
