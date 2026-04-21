@@ -185,6 +185,12 @@ class SessionService : Service() {
         startStatusBroadcast(bs)
         skillProvider = LocalSkillProvider(bs.homeDir, applicationContext)
         skillProvider?.ensureMigrated()
+        // Fire-and-forget: install bundled plugins if missing. Silent retry on
+        // every launch. Dispatched on IO so service startup isn't blocked by
+        // marketplace HTTP.
+        serviceScope.launch(Dispatchers.IO) {
+            skillProvider?.ensureBundledPluginsInstalled()
+        }
         pluginInstaller = PluginInstaller(bs.homeDir, bs, skillProvider!!.configStore)
         // Wire up plugin installer and reload callback so LocalSkillProvider
         // handles all install/uninstall routing (consolidates SessionService logic)
