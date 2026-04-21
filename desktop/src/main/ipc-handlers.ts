@@ -16,6 +16,7 @@ import { TranscriptWatcher } from './transcript-watcher';
 import { listPastSessions, loadHistory } from './session-browser';
 import { readTranscriptMeta } from './transcript-utils';
 import { startThemeWatcher, listUserThemes, userThemeDir, userThemeManifest, THEMES_DIR } from './theme-watcher';
+import { isBundledPlugin } from '../shared/bundled-plugins';
 import { ThemeMarketplaceProvider } from './theme-marketplace-provider';
 import { generateThemePreview } from './theme-preview-generator';
 import { getSyncStatus, getSyncConfig, setSyncConfig, forceSync, getSyncLog, dismissWarning, addBackend, removeBackend, updateBackend, pushBackend, pullBackend, getSyncService, type SyncWarning } from './sync-state';
@@ -769,6 +770,12 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IPC.SKILLS_UNINSTALL, async (_event, id: string) => {
+    // Defense-in-depth: UI disables the uninstall button for bundled
+    // plugins; reject here too so a stale client or direct IPC call can't
+    // bypass it.
+    if (isBundledPlugin(id)) {
+      return { ok: false, error: 'bundled', type: 'plugin' };
+    }
     const result = await skillProvider.uninstall(id);
     // Reload plugins so Claude Code drops the uninstalled plugin — matches
     // Android behavior (SessionService.kt:490)
