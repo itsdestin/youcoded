@@ -21,12 +21,20 @@
 // import time, so the pre-auth window is safe.
 
 if (typeof window !== 'undefined' && !(window as any).__PLATFORM__) {
-  if (typeof location !== 'undefined' && location.protocol === 'file:') {
-    // Android WebView loads the bundled React UI from file://android_asset/web/
-    (window as any).__PLATFORM__ = 'android';
-  } else if ((window as any).claude) {
-    // Electron preload populates window.claude before the renderer JS runs
+  // Fix: check window.claude BEFORE location.protocol. Packaged Electron on
+  // Windows loads the renderer via win.loadFile() (main.ts), so
+  // location.protocol === 'file:' is true on desktop too — same as Android's
+  // WebView. Ordering the file-check first caused packaged desktop to be
+  // mis-tagged as 'android', which leaked the Android settings UI, tier
+  // picker, and html[data-platform="android"] CSS onto Windows in v1.1.x.
+  // The Electron preload populates window.claude synchronously before any
+  // renderer JS runs, so it's the reliable signal. Android WebView has no
+  // preload — window.claude is installed later by remote-shim.ts — so it
+  // correctly falls through to the file: branch here.
+  if ((window as any).claude) {
     (window as any).__PLATFORM__ = 'electron';
+  } else if (typeof location !== 'undefined' && location.protocol === 'file:') {
+    (window as any).__PLATFORM__ = 'android';
   }
 }
 
