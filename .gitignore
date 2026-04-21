@@ -9,8 +9,14 @@
 .cxx
 local.properties
 
-# DestinCode local settings
-.claude/
+# YouCoded local Claude Code settings (caches, topic markers, etc.).
+# Tracked rule files under .claude/rules/ are explicitly un-ignored so
+# they ship with the repo and auto-surface invariants to contributors.
+# Note: .claude/* (not .claude/) is required so git descends into the
+# directory and honors the negation patterns below.
+.claude/*
+!.claude/rules/
+!.claude/rules/**
 
 # Release signing
 *.jks
