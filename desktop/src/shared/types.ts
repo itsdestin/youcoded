@@ -895,3 +895,6 @@ export interface RestoreProgressEvent {
   currentFile?: string;
   phase: 'snapshotting' | 'fetching' | 'staging' | 'swapping' | 'done';
 }
+
+// Discriminator for development-flow IPC payloads.
+export type DevIssueKind = 'bug' | 'feature';
