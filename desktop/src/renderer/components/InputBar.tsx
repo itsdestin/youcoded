@@ -100,8 +100,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // (which would be a side-effect against shared state).
   const consumedPrefillIds = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!initialInput || consumedPrefillIds.current.has(sessionId)) return;
+    if (!initialInput?.trim() || consumedPrefillIds.current.has(sessionId)) return;
     consumedPrefillIds.current.add(sessionId);
+    // Bound the set to prevent unbounded growth over long app lifetimes.
+    // Oldest entries can't be re-triggered because their session IDs are
+    // no longer active in the session list.
+    if (consumedPrefillIds.current.size > 200) {
+      const oldest = consumedPrefillIds.current.values().next().value;
+      if (oldest !== undefined) consumedPrefillIds.current.delete(oldest);
+    }
     setText(initialInput);
     // Focus the textarea so the user can review / edit / submit immediately.
     requestAnimationFrame(() => {

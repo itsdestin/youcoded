@@ -2,7 +2,7 @@
 // Pure logic + IPC handler bodies for the Settings → Development feature.
 // See docs/superpowers/specs/2026-04-21-development-settings-design.md.
 
-import type { DevIssueKind } from '../shared/types';
+import type { DevIssueKind, SessionInfo } from '../shared/types';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
@@ -448,4 +448,59 @@ function runStreamed(
 
 function splitLines(s: string): string[] {
   return s.split(/\r?\n/).filter((l) => l.length > 0);
+}
+
+// --- dev:open-session-in logic ---
+// Extracted here (rather than inline in ipc-handlers.ts) so it can be unit-
+// tested without importing the full Electron IPC handler registration chain.
+//
+// Reads saved defaults (skipPermissions, model) from the defaults JSON file,
+// merges with safe fallbacks, then calls sessionManager.createSession.
+
+/** Minimal interface for the sessionManager dependency — avoids importing the
+ *  full SessionManager class (which transitively pulls in Electron). */
+export interface CreateSessionDeps {
+  defaultsPrefPath: string;
+  sessionManager: {
+    createSession(opts: {
+      name: string;
+      cwd: string;
+      skipPermissions: boolean;
+      model?: string;
+      initialInput?: string;
+    }): SessionInfo;
+  };
+  homedir: () => string;
+}
+
+/** Safe fallback values when the defaults file is absent or unreadable. */
+const DEV_SESSION_DEFAULTS = { skipPermissions: false, model: 'sonnet' };
+
+/**
+ * Creates a Development session in the given directory, inheriting
+ * skipPermissions and model from the user's saved defaults file.
+ * Exported for unit testing independent of IPC registration.
+ */
+export function openDevSessionIn(
+  args: { cwd: string; initialInput?: string },
+  deps: CreateSessionDeps,
+): SessionInfo {
+  let saved: Record<string, any> = {};
+  try {
+    // Apply DEV_SESSION_DEFAULTS spread so any future-added defaults fields
+    // always have a safe fallback, matching the pattern in 'defaults:get'.
+    saved = JSON.parse(fs.readFileSync(deps.defaultsPrefPath, 'utf-8'));
+  } catch {
+    // File absent or unreadable — fall back to DEV_SESSION_DEFAULTS below.
+  }
+  const merged = { ...DEV_SESSION_DEFAULTS, ...saved };
+  const skipPermissions = merged.skipPermissions === true;
+  const model = typeof merged.model === 'string' ? merged.model : undefined;
+  return deps.sessionManager.createSession({
+    name: 'Development',
+    cwd: args.cwd ?? deps.homedir(),
+    skipPermissions,
+    model,
+    initialInput: args.initialInput,
+  });
 }

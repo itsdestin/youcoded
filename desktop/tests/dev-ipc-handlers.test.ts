@@ -9,6 +9,8 @@ vi.mock('fs', () => ({
     unlink: vi.fn().mockResolvedValue(undefined),
   },
   existsSync: vi.fn(),
+  // Synchronous readFileSync used by openDevSessionIn in dev-tools.ts.
+  readFileSync: vi.fn(),
 }));
 // Mock os so home-dir redaction and tmpdir resolve predictably in tests.
 vi.mock('os', () => ({
@@ -228,6 +230,86 @@ describe('CreateSessionOpts.initialInput (dev:open-session-in contract)', () => 
       initialInput: 'some prefill',
     };
     expect(info.initialInput).toBe('some prefill');
+  });
+});
+
+import { openDevSessionIn } from '../src/main/dev-tools';
+
+describe('openDevSessionIn — runtime handler logic', () => {
+  const FAKE_INFO: SessionInfo = {
+    id: 'session-xyz',
+    name: 'Development',
+    cwd: '/workspace/myproject',
+    permissionMode: 'normal',
+    skipPermissions: false,
+    status: 'active',
+    createdAt: 0,
+    provider: 'claude',
+  };
+
+  function makeSessionManager(returnValue: SessionInfo = FAKE_INFO) {
+    return { createSession: vi.fn(() => returnValue) };
+  }
+
+  it('passes args.cwd through to createSession', async () => {
+    const fs = await import('fs');
+    // Simulate missing defaults file so the catch path fires.
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    const sm = makeSessionManager();
+    openDevSessionIn(
+      { cwd: '/workspace/myproject' },
+      { defaultsPrefPath: '/home/alice/.claude/youcoded-defaults.json', sessionManager: sm, homedir: () => '/home/alice' },
+    );
+    expect(sm.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/workspace/myproject' }),
+    );
+  });
+
+  it('passes args.initialInput through to createSession', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    const sm = makeSessionManager();
+    openDevSessionIn(
+      { cwd: '/workspace/myproject', initialInput: 'hello world' },
+      { defaultsPrefPath: '/home/alice/.claude/youcoded-defaults.json', sessionManager: sm, homedir: () => '/home/alice' },
+    );
+    expect(sm.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ initialInput: 'hello world' }),
+    );
+  });
+
+  it('falls back to skipPermissions:false and model "sonnet" when defaults file is absent', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.readFileSync).mockImplementation(() => {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    });
+    const sm = makeSessionManager();
+    openDevSessionIn(
+      { cwd: '/workspace/myproject' },
+      { defaultsPrefPath: '/home/alice/.claude/youcoded-defaults.json', sessionManager: sm, homedir: () => '/home/alice' },
+    );
+    expect(sm.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ skipPermissions: false, model: 'sonnet' }),
+    );
+  });
+
+  it('reads skipPermissions and model from the defaults file when present', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.readFileSync).mockReturnValue(
+      JSON.stringify({ skipPermissions: true, model: 'opus' }) as any,
+    );
+    const sm = makeSessionManager();
+    openDevSessionIn(
+      { cwd: '/some/dir' },
+      { defaultsPrefPath: '/home/alice/.claude/youcoded-defaults.json', sessionManager: sm, homedir: () => '/home/alice' },
+    );
+    expect(sm.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ skipPermissions: true, model: 'opus' }),
+    );
   });
 });
 

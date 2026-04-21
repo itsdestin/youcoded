@@ -27,10 +27,11 @@ import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGit
 import { getRestoreService } from './restore-service';
 import type { RestoreOptions, RestoreProgressEvent } from '../shared/types';
 import { log } from './logger';
-import { readLogTail, summarizeIssue, submitIssue, installWorkspace } from './dev-tools';
+import { readLogTail, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn } from './dev-tools';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
+
 
 export function registerIpcHandlers(
   ipcMain: IpcMain,
@@ -1798,26 +1799,8 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle(IPC.DEV_OPEN_SESSION_IN, async (_event, args: { cwd: string; initialInput?: string }) => {
-    // Create a new session in the requested directory, inheriting the user's
-    // preferred model and skip-permissions setting from their saved defaults.
-    let skipPermissions = false;
-    let model: string | undefined;
-    try {
-      const raw = fs.readFileSync(defaultsPrefPath, 'utf-8');
-      const parsed = JSON.parse(raw);
-      skipPermissions = parsed.skipPermissions === true;
-      model = typeof parsed.model === 'string' ? parsed.model : undefined;
-    } catch {
-      // Defaults file absent or unreadable — fall back to safe values above.
-    }
-    const info = sessionManager.createSession({
-      name: 'Development',
-      cwd: args.cwd ?? os.homedir(),
-      skipPermissions,
-      model,
-      initialInput: args.initialInput,
-    });
-    return info;
+    // Delegate to the exported helper so the logic is independently testable.
+    return openDevSessionIn(args, { defaultsPrefPath, sessionManager, homedir: os.homedir });
   });
 
   // Return cleanup function for use during app shutdown
