@@ -79,3 +79,40 @@ export function smartTruncateLog(text: string, keepLines: number): string {
   const omitted = lines.length - keepLines;
   return `… (${omitted} earlier lines omitted)\n${lines.slice(-keepLines).join('\n')}`;
 }
+
+const URL_CAP_BYTES = 7500; // leave headroom under GitHub's ~8KB practical cap
+const REPO_ISSUES_BASE = 'https://github.com/itsdestin/youcoded/issues/new';
+
+export interface BuildPrefillUrlArgs {
+  title: string;
+  body: string;
+  label: 'bug' | 'enhancement';
+}
+
+/**
+ * Construct the GitHub "new issue" URL with prefilled title/body/label.
+ * If the encoded URL would exceed our cap, hard-truncate the body and
+ * append a `[truncated]` marker so the user can paste a follow-up
+ * comment on the issue once they've created it in their browser.
+ */
+export function buildPrefillUrl(args: BuildPrefillUrlArgs): string {
+  const build = (body: string) => {
+    const params = new URLSearchParams({
+      title: args.title,
+      body,
+      labels: args.label,
+    });
+    return `${REPO_ISSUES_BASE}?${params.toString()}`;
+  };
+
+  let url = build(args.body);
+  if (url.length <= URL_CAP_BYTES) return url;
+
+  // Binary-style shrink: chop the tail until under the cap.
+  let body = args.body;
+  while (url.length > URL_CAP_BYTES && body.length > 100) {
+    body = body.slice(0, Math.floor(body.length * 0.8));
+    url = build(`${body}\n\n[truncated]`);
+  }
+  return url;
+}
