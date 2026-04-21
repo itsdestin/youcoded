@@ -3,6 +3,7 @@ import { useSkills } from '../state/skill-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useMarketplaceStats } from '../state/marketplace-stats-context';
 import type { SkillDetailView } from '../../shared/types';
+import { isBundledPlugin, BUNDLED_REASON } from '../../shared/bundled-plugins';
 import ConfigForm from './ConfigForm';
 import StarRating from './marketplace/StarRating';
 import RatingSubmitModal from './marketplace/RatingSubmitModal';
@@ -173,7 +174,8 @@ export default function SkillDetail({ skillId, onBack }: Props) {
           {isInstalled ? (
             <button
               onClick={handleUninstall}
-              disabled={installing}
+              disabled={installing || isBundledPlugin(skillId)}
+              title={isBundledPlugin(skillId) ? BUNDLED_REASON : undefined}
               className="px-4 py-1.5 text-sm font-medium rounded-lg border border-edge text-fg-muted hover:text-fg hover:border-edge-dim transition-colors disabled:opacity-50"
             >
               {installing ? 'Removing...' : 'Uninstall'}
