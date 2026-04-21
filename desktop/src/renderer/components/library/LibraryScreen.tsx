@@ -162,20 +162,23 @@ export default function LibraryScreen({
 
       <div className="px-4 flex flex-col gap-8 pb-12 pt-4">
 
-        {/* Skills tab — starred favorites first, then the rest. */}
+        {/* Skills tab — one card per plugin. Multi-skill plugins collapse to
+             a single tile; the "What's inside" detail overlay lists bundled
+             skills. Updates tab still uses installedSkills since update
+             detection is per-skill. */}
         {tab === 'skills' && (
           <>
             <Section title="Favorites" empty="No favorites yet — tap the star on any installed skill.">
-              {mp.installedSkills.filter(s => favSet.has(s.id)).length > 0 && (
+              {mp.installedPlugins.filter(p => favSet.has(p.id)).length > 0 && (
                 <MarketplaceGrid>
-                  {mp.installedSkills.filter(s => favSet.has(s.id)).map(renderSkillCard)}
+                  {mp.installedPlugins.filter(p => favSet.has(p.id)).map(renderSkillCard)}
                 </MarketplaceGrid>
               )}
             </Section>
             <Section title="Installed" empty="Install something from the marketplace to see it here.">
-              {mp.installedSkills.filter(s => !favSet.has(s.id)).length > 0 && (
+              {mp.installedPlugins.filter(p => !favSet.has(p.id)).length > 0 && (
                 <MarketplaceGrid>
-                  {mp.installedSkills.filter(s => !favSet.has(s.id)).map(renderSkillCard)}
+                  {mp.installedPlugins.filter(p => !favSet.has(p.id)).map(renderSkillCard)}
                 </MarketplaceGrid>
               )}
             </Section>
