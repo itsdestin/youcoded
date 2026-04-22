@@ -1850,8 +1850,7 @@ export class SyncService extends EventEmitter {
   /**
    * Run sync health checks and write .sync-warnings file.
    * Ports session-start.sh _bg_sync_health() — generates warnings for:
-   *   OFFLINE, PERSONAL:NOT_CONFIGURED, PERSONAL:STALE,
-   *   SKILLS:unrouted:name1,name2, PROJECTS:N
+   *   OFFLINE, PERSONAL:NOT_CONFIGURED, PERSONAL:STALE, PROJECTS:N
    * Called after pull completes and on app startup.
    */
   async runHealthCheck(): Promise<SyncWarning[]> {
@@ -1921,19 +1920,6 @@ export class SyncService extends EventEmitter {
       } catch {}
     }
 
-    // 2. Unrouted user skills
-    const unroutedSkills = this.findUnroutedSkills();
-    if (unroutedSkills.length > 0) {
-      warnings.push({
-        code: 'SKILLS_UNROUTED',
-        level: 'warn',
-        title: 'Unsynced skills',
-        body: `Some skills aren't being backed up: ${unroutedSkills.join(', ')}. Route them through the toolkit to include them.`,
-        dismissible: true,
-        createdEpoch: now,
-      });
-    }
-
     // 3. Unsynced projects
     const discoveredProjects = this.discoverProjects();
     if (discoveredProjects.length > 0) {
@@ -1954,6 +1940,9 @@ export class SyncService extends EventEmitter {
     // Merge with existing push-failure warnings (preserve them; only replace
     // the health-check-owned codes).
     const existing = await readWarnings();
+    // NOTE: 'SKILLS_UNROUTED' is retained here but no longer generated above.
+    // Keeps the filter clearing stale entries from old .sync-warnings.json files.
+    // Safe to remove from this set in a future release once all users have upgraded.
     const healthCodes = new Set(['OFFLINE', 'PERSONAL_NOT_CONFIGURED', 'PERSONAL_STALE', 'SKILLS_UNROUTED', 'PROJECTS_UNSYNCED']);
     const preserved = existing.filter((w) => !healthCodes.has(w.code));
     await writeWarnings([...preserved, ...warnings]);
@@ -1984,62 +1973,6 @@ export class SyncService extends EventEmitter {
     }
 
     return null;
-  }
-
-  /**
-   * Find user-created skills that are not routed in skill-routes.json.
-   * Skips toolkit-owned skills (symlinks into TOOLKIT_ROOT) and toolkit
-   * copies (matching skill name exists in toolkit layers).
-   */
-  private findUnroutedSkills(): string[] {
-    const skillsDir = path.join(this.claudeDir, 'skills');
-    if (!this.dirExists(skillsDir)) return [];
-
-    const routesFile = path.join(this.claudeDir, 'toolkit-state', 'skill-routes.json');
-    const routes = this.readJson(routesFile) || {};
-    const pluginsDir = path.join(this.claudeDir, 'plugins');
-
-    // Decomposition v3 §9.7: after decomposition there are no more core/life/
-    // productivity layers inside the monolith — every youcoded-core-owned skill
-    // lives in its own plugin directory (youcoded-core, youcoded-core-encyclopedia,
-    // youcoded-core-food, etc.). A skill under ~/.claude/skills/ is considered a
-    // toolkit copy if any youcoded-core-prefixed plugin ships the same skill.
-    const youcodedCorePluginDirs: string[] = (() => {
-      try {
-        return fs.readdirSync(pluginsDir, { withFileTypes: true })
-          .filter(d => d.isDirectory() && d.name.startsWith('youcoded'))
-          .map(d => path.join(pluginsDir, d.name));
-      } catch { return []; }
-    })();
-
-    const unrouted: string[] = [];
-
-    for (const skillName of fs.readdirSync(skillsDir)) {
-      const skillDir = path.join(skillsDir, skillName);
-      if (!this.dirExists(skillDir)) continue;
-
-      // Skip symlinks (toolkit-managed — legacy, pre-decomposition)
-      try { if (fs.lstatSync(skillDir).isSymbolicLink()) continue; } catch { continue; }
-
-      // Skip if any youcoded-core-prefixed plugin ships this skill under its
-      // skills/ directory — that means the user's local copy is a mirror of
-      // a toolkit-managed skill, not a user-authored one.
-      let isToolkitCopy = false;
-      for (const pluginDir of youcodedCorePluginDirs) {
-        if (this.dirExists(path.join(pluginDir, 'skills', skillName))) {
-          isToolkitCopy = true;
-          break;
-        }
-      }
-      if (isToolkitCopy) continue;
-
-      // Skip if already routed (any route means it's accounted for)
-      if (routes[skillName]?.route) continue;
-
-      unrouted.push(skillName);
-    }
-
-    return unrouted;
   }
 
   /**
