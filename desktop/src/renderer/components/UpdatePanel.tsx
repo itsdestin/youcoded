@@ -8,8 +8,6 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import MarkdownContent from './MarkdownContent';
-// Pure helper, lives in shared/ so the renderer doesn't pull anything from main.
-import { compareSemver } from '../../shared/semver';
 
 interface UpdateStatus {
   current: string;
@@ -88,8 +86,25 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   } else if (loading || !data) {
     body = <div className="text-fg-dim text-sm py-8 text-center">Loading…</div>;
   } else if (updateStatus.update_available) {
-    let shown = data.entries.filter(e => compareSemver(e.version, updateStatus.current) > 0);
-    if (shown.length === 0 && data.entries.length > 0) shown = [data.entries[0]];
+    // Filter by CHRONOLOGICAL position, not semver. CHANGELOG.md is authored
+    // top-newest-bottom-oldest, so source order is release order. Semver math breaks
+    // when a project resets its version numbers (e.g. YouCoded went 2.4.0 → 1.0.0);
+    // "older" entries can semver-compare as "newer." Position-based filter handles
+    // resets correctly.
+    const currentIdx = data.entries.findIndex(e => e.version === updateStatus.current);
+    let shown: ChangelogEntry[];
+    if (currentIdx === -1) {
+      // User's current version isn't in the changelog (never-released local build,
+      // stale file, etc.) — fall back to newest entry only.
+      shown = data.entries.length > 0 ? [data.entries[0]] : [];
+    } else if (currentIdx === 0) {
+      // User is already at the top of the file — no newer entries. Fall back to the
+      // newest so the popup isn't empty when `update_available` is true (e.g. the
+      // CHANGELOG lags a fresh release).
+      shown = [data.entries[0]];
+    } else {
+      shown = data.entries.slice(0, currentIdx);
+    }
     body = (
       <div className="space-y-6">
         {shown.map(e => (

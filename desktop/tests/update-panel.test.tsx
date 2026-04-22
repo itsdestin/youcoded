@@ -100,6 +100,31 @@ describe('UpdatePanel — update available', () => {
     render(<UpdatePanel open={true} onClose={() => {}} updateStatus={offStatus} />);
     await waitFor(() => expect(screen.getByText(/Thing B/)).toBeInTheDocument());
   });
+
+  it('handles version resets by using CHANGELOG position rather than semver math', async () => {
+    // YouCoded-style reset: 2.4.0 pre-reset is chronologically OLDER than current 1.1.2
+    // even though semver says 2.4.0 > 1.1.2. Filter must use position, not semver.
+    const resetChangelog = {
+      markdown: '# Changelog',
+      entries: [
+        { version: '1.1.2', date: '2026-04-21', body: 'current' },
+        { version: '1.1.1', date: '2026-04-20', body: 'pre-current 1.1.1' },
+        { version: '1.0.0', date: '2026-04-15', body: 'renumbered to 1.0.0' },
+        { version: '2.4.0', date: '2026-04-10', body: 'pre-reset 2.4.0 — MUST NOT APPEAR' },
+        { version: '2.3.0', date: '2026-04-05', body: 'pre-reset 2.3.0 — MUST NOT APPEAR' },
+      ],
+      fromCache: false,
+    };
+    (window as any).claude.update.changelog.mockResolvedValue(resetChangelog);
+    const status = { current: '1.1.1', latest: '1.1.2', update_available: true, download_url: 'http://x' };
+    render(<UpdatePanel open={true} onClose={() => {}} updateStatus={status} />);
+    // User is on 1.1.1 (index 1). Entries above it: [1.1.2]. Pre-reset entries MUST NOT be shown.
+    await waitFor(() => expect(screen.getByText(/current/)).toBeInTheDocument());
+    expect(screen.queryByText(/pre-reset 2\.4\.0/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pre-reset 2\.3\.0/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/pre-current 1\.1\.1/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/renumbered to 1\.0\.0/)).not.toBeInTheDocument();
+  });
 });
 
 describe('UpdatePanel — up to date', () => {
