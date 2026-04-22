@@ -399,6 +399,7 @@ class ManagedSession(
         "Choose a Theme for the Terminal",
         "Select Login Method",
         "Resume Session", // Stale session resume — lets user choose summary vs full resume
+        "Usage Limit Reached", // /rate-limit-options menu — Upgrade / Stop and wait
     )
 
     /** Detect permission mode from visible screen only (not raw buffer).
