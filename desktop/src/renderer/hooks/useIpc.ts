@@ -141,7 +141,8 @@ declare global {
       dev: {
         logTail: (maxLines?: number) => Promise<string>;
         summarizeIssue: (args: { kind: string; description: string; log?: string }) => Promise<{ title: string; summary: string; flagged_strings: string[] }>;
-        submitIssue: (args: { title: string; body: string; label: string }) => Promise<{ ok: boolean; url?: string; fallbackUrl?: string }>;
+        // WHY: body is now assembled in the main process; renderer passes raw fields (Fix 2).
+        submitIssue: (args: { kind: 'bug' | 'feature'; title: string; summary: string; description: string; log?: string; label: string }) => Promise<{ ok: boolean; url?: string; fallbackUrl?: string }>;
         installWorkspace: () => Promise<{ path: string; alreadyInstalled: boolean } | { error: string }>;
         onInstallProgress: (handler: (line: string) => void) => () => void;
         openSessionIn: (args: { cwd: string; initialInput?: string }) => Promise<{ id: string }>;

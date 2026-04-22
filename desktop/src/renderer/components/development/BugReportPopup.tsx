@@ -3,9 +3,11 @@
 // Screen 1 (describe): user picks bug/feature, writes description, clicks Continue.
 // Screen 2 (review): shows AI summary, editable log tail, Submit or Let Claude Try buttons.
 // Screen 3 (result): shows submission outcome or Claude session progress.
-// Reuses layer-scrim + layer-surface tokens — no hardcoded colors or z-indexes.
+// Uses <Scrim> / <OverlayPanel> primitives — no hardcoded colors, blur, or z-indexes
+// (PITFALLS overlay invariant).
 import { createPortal } from 'react-dom';
 import { useEffect, useState } from 'react';
+import { Scrim, OverlayPanel } from '../overlays/Overlay';
 
 interface Props {
   open: boolean;
@@ -68,10 +70,15 @@ export function BugReportPopup({ open, onClose }: Props) {
     if (!summary) return;
     setBusy(true);
     try {
-      const body = buildBody(kind, summary.summary, description, kind === 'bug' ? logTail : '');
+      // WHY: body is now assembled in the main process by buildIssueBody,
+      // which has access to app.getVersion() and os info. The renderer passes
+      // raw fields so the Environment line is accurate (Fix 2).
       const result = await window.claude.dev.submitIssue({
+        kind,
         title: summary.title,
-        body,
+        summary: summary.summary,
+        description,
+        log: kind === 'bug' ? logTail : undefined,
         label: kind === 'bug' ? 'bug' : 'enhancement',
       });
       if (result.ok) {
@@ -95,13 +102,14 @@ export function BugReportPopup({ open, onClose }: Props) {
     );
     try {
       const r = await window.claude.dev.installWorkspace();
-      if ((r as any).error) {
-        setResultMessage({ kind: 'claude', message: (r as any).error });
+      // WHY: discriminated-union narrowing instead of (r as any) casts (Fix 4).
+      if ('error' in r) {
+        setResultMessage({ kind: 'claude', message: r.error });
         return;
       }
       const prompt = kind === 'bug' ? PROMPT_BUG(description) : PROMPT_FEATURE(description);
-      await window.claude.dev.openSessionIn({ cwd: (r as any).path, initialInput: prompt });
-      setResultMessage({ kind: 'claude', message: `New session opened in ${(r as any).path}.` });
+      await window.claude.dev.openSessionIn({ cwd: r.path, initialInput: prompt });
+      setResultMessage({ kind: 'claude', message: `New session opened in ${r.path}.` });
     } catch (e: any) {
       setResultMessage({ kind: 'claude', message: String(e?.message || e) });
     } finally {
@@ -111,12 +119,9 @@ export function BugReportPopup({ open, onClose }: Props) {
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 layer-scrim" data-layer="2" />
-      <div
-        className="layer-surface relative p-4 w-[400px] max-w-[92vw] mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel layer={2} className="p-4 w-[400px] max-w-[92vw] mx-4">
         {screen === 'describe' && (
           <DescribeScreen
             kind={kind}
@@ -146,8 +151,8 @@ export function BugReportPopup({ open, onClose }: Props) {
             onDone={onClose}
           />
         )}
-      </div>
-    </div>,
+      </OverlayPanel>
+    </>,
     document.body,
   );
 }
@@ -255,8 +260,3 @@ function ResultScreen({ resultMessage, installLines, onDone }: any) {
   );
 }
 
-function buildBody(kind: Kind, summary: string, description: string, log: string): string {
-  const header = [summary.trim(), '', '---', '**User description:**', description.trim(), '', `**Environment:** YouCoded · ${navigator.userAgent}`].join('\n');
-  if (kind === 'feature') return header;
-  return [header, '', '**Logs (last N lines):**', '<details><summary>desktop.log</summary>', '', '```', log, '```', '', '</details>'].join('\n');
-}

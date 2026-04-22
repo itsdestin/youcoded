@@ -498,7 +498,7 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.DEV_LOG_TAIL, maxLines),
     summarizeIssue: (args: { kind: 'bug' | 'feature'; description: string; log?: string }) =>
       ipcRenderer.invoke(IPC.DEV_SUMMARIZE_ISSUE, args),
-    submitIssue: (args: { title: string; body: string; label: 'bug' | 'enhancement' }) =>
+    submitIssue: (args: { kind: 'bug' | 'feature'; title: string; summary: string; description: string; log?: string; label: 'bug' | 'enhancement' }) =>
       ipcRenderer.invoke(IPC.DEV_SUBMIT_ISSUE, args),
     installWorkspace: () =>
       ipcRenderer.invoke(IPC.DEV_INSTALL_WORKSPACE),

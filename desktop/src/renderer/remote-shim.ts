@@ -852,7 +852,7 @@ export function installShim(): void {
         invoke('dev:log-tail', maxLines),
       summarizeIssue: (args: { kind: 'bug' | 'feature'; description: string; log?: string }) =>
         invoke('dev:summarize-issue', args),
-      submitIssue: (args: { title: string; body: string; label: 'bug' | 'enhancement' }) =>
+      submitIssue: (args: { kind: 'bug' | 'feature'; title: string; summary: string; description: string; log?: string; label: 'bug' | 'enhancement' }) =>
         invoke('dev:submit-issue', args),
       installWorkspace: () =>
         invoke('dev:install-workspace'),

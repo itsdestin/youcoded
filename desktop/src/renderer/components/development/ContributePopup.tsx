@@ -2,9 +2,11 @@
 // Single-screen install flow for the "Contribute to YouCoded" option.
 // Clones the youcoded-dev workspace scaffold via dev:install-workspace IPC,
 // then offers an "Open in New Session" button that drops the user into it.
-// Reuses layer-scrim + layer-surface tokens — no hardcoded colors or z-indexes.
+// Uses <Scrim> / <OverlayPanel> primitives — no hardcoded colors, blur, or z-indexes
+// (PITFALLS overlay invariant).
 import { createPortal } from 'react-dom';
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { Scrim, OverlayPanel } from '../overlays/Overlay';
 
 interface Props {
   open: boolean;
@@ -16,6 +18,17 @@ export function ContributePopup({ open, onClose }: Props) {
   const [installLines, setInstallLines] = useState<string[]>([]);
   const [done, setDone] = useState<{ path: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  // WHY: Reset install state when the popup closes so the next open always
+  // starts fresh showing the "Install Workspace" button (Fix 3).
+  useEffect(() => {
+    if (!open) {
+      setInstalling(false);
+      setInstallLines([]);
+      setDone(null);
+      setError(null);
+    }
+  }, [open]);
 
   if (!open) return null;
 
@@ -29,10 +42,11 @@ export function ContributePopup({ open, onClose }: Props) {
     );
     try {
       const r = await window.claude.dev.installWorkspace();
-      if ((r as any).error) {
-        setError((r as any).error);
+      // WHY: discriminated-union narrowing instead of (r as any) casts (Fix 4).
+      if ('error' in r) {
+        setError(r.error);
       } else {
-        setDone({ path: (r as any).path });
+        setDone({ path: r.path });
       }
     } catch (e: any) {
       setError(String(e?.message || e));
@@ -49,12 +63,9 @@ export function ContributePopup({ open, onClose }: Props) {
   };
 
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 layer-scrim" data-layer="2" />
-      <div
-        className="layer-surface relative p-4 w-[400px] max-w-[92vw] mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel layer={2} className="p-4 w-[400px] max-w-[92vw] mx-4">
         {!installing && !done && !error && (
           <>
             <h3 className="text-sm font-medium text-fg mb-2">Contribute to YouCoded</h3>
@@ -96,8 +107,8 @@ export function ContributePopup({ open, onClose }: Props) {
             </div>
           </>
         )}
-      </div>
-    </div>,
+      </OverlayPanel>
+    </>,
     document.body,
   );
 }

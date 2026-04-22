@@ -1,8 +1,10 @@
 // desktop/src/renderer/components/development/DevelopmentPopup.tsx
 // L2 popup with three rows: Report, Contribute, Known Issues.
-// Reuses the existing layer-scrim + layer-surface tokens so the popup
-// picks up the active theme automatically — no hardcoded colors or z-indexes.
+// Uses <Scrim> / <OverlayPanel> primitives from Overlay.tsx so the popup
+// picks up theme tokens automatically — no hardcoded colors, blur, or z-indexes
+// (PITFALLS overlay invariant).
 import { createPortal } from 'react-dom';
+import { Scrim, OverlayPanel } from '../overlays/Overlay';
 
 interface Props {
   open: boolean;
@@ -14,19 +16,16 @@ interface Props {
 const KNOWN_ISSUES_URL = 'https://github.com/itsdestin/youcoded/issues';
 
 /**
- * L2 popup with three rows: Report, Contribute, Known Issues. Reuses
- * the existing layer-scrim + layer-surface tokens so the popup picks
- * up the active theme automatically.
+ * L2 popup with three rows: Report, Contribute, Known Issues. Uses
+ * <Scrim> / <OverlayPanel> primitives so the popup picks up the active
+ * theme automatically via CSS tokens.
  */
 export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }: Props) {
   if (!open) return null;
   return createPortal(
-    <div className="fixed inset-0 z-[60] flex items-center justify-center" onClick={onClose}>
-      <div className="absolute inset-0 layer-scrim" data-layer="2" />
-      <div
-        className="layer-surface relative p-4 w-[320px] mx-4"
-        onClick={(e) => e.stopPropagation()}
-      >
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel layer={2} className="p-4 w-[320px] mx-4">
         <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Development</h3>
         <div className="space-y-2">
           <Row
@@ -48,8 +47,8 @@ export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }:
             onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
           />
         </div>
-      </div>
-    </div>,
+      </OverlayPanel>
+    </>,
     document.body,
   );
 }

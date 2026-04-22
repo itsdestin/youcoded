@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as os from 'os';
 import { readLogTail } from '../src/main/dev-tools';
 
+// WHY: dev-tools.ts now imports app from electron to call app.getVersion() when
+// building the issue body in the main process. Mock it so tests don't need a
+// full Electron environment (Fix 2 — submitIssue restructure).
+vi.mock('electron', () => ({
+  app: { getVersion: vi.fn(() => '2.3.2') },
+}));
+
 vi.mock('fs', () => ({
   promises: {
     readFile: vi.fn(),
@@ -13,9 +20,13 @@ vi.mock('fs', () => ({
   readFileSync: vi.fn(),
 }));
 // Mock os so home-dir redaction and tmpdir resolve predictably in tests.
+// WHY: submitIssue now calls os.platform() and os.release() to build the
+// Environment line in the issue body — those must be included in the mock.
 vi.mock('os', () => ({
   homedir: vi.fn(() => '/home/alice'),
   tmpdir: vi.fn(() => '/tmp'),
+  platform: vi.fn(() => 'linux'),
+  release: vi.fn(() => '5.15.0'),
 }));
 vi.mock('child_process', () => ({
   execFile: vi.fn(),
@@ -147,6 +158,24 @@ describe('summarizeIssue', () => {
 
 import { submitIssue } from '../src/main/dev-tools';
 
+// Minimal SubmitArgs using the new raw-fields contract (body is now built in
+// the main process by buildIssueBody using app.getVersion() + os info).
+const SUBMIT_BUG: import('../src/main/dev-tools').SubmitArgs = {
+  kind: 'bug',
+  title: 't',
+  summary: 'summary text',
+  description: 'description text',
+  log: 'some log line',
+  label: 'bug',
+};
+const SUBMIT_FEATURE: import('../src/main/dev-tools').SubmitArgs = {
+  kind: 'feature',
+  title: 't',
+  summary: 'summary text',
+  description: 'description text',
+  label: 'enhancement',
+};
+
 describe('submitIssue', () => {
   it('returns the issue URL when gh is authed and create succeeds', async () => {
     vi.mocked(execFile).mockImplementation(((cmd: string, args: string[], _o: any, cb: any) => {
@@ -158,7 +187,7 @@ describe('submitIssue', () => {
       }
       return {} as any;
     }) as any);
-    const out = await submitIssue({ title: 't', body: 'b', label: 'bug' });
+    const out = await submitIssue(SUBMIT_BUG);
     expect(out.ok).toBe(true);
     expect((out as any).url).toBe('https://github.com/itsdestin/youcoded/issues/42');
   });
@@ -170,7 +199,7 @@ describe('submitIssue', () => {
       }
       return {} as any;
     }) as any);
-    const out = await submitIssue({ title: 't', body: 'b', label: 'bug' });
+    const out = await submitIssue(SUBMIT_BUG);
     expect(out.ok).toBe(false);
     expect((out as any).fallbackUrl).toContain('https://github.com/itsdestin/youcoded/issues/new');
     expect((out as any).fallbackUrl).toContain('labels=bug');
@@ -182,9 +211,31 @@ describe('submitIssue', () => {
       else cb(new Error('rate limited'), '', '');
       return {} as any;
     }) as any);
-    const out = await submitIssue({ title: 't', body: 'b', label: 'enhancement' });
+    const out = await submitIssue(SUBMIT_FEATURE);
     expect(out.ok).toBe(false);
     expect((out as any).fallbackUrl).toContain('labels=enhancement');
+  });
+
+  it('builds the issue body in main using buildIssueBody (not navigator.userAgent)', async () => {
+    // Verify the body written to the tmp file contains the canonical Environment
+    // line format produced by buildIssueBody, not a raw user-agent string.
+    let writtenBody = '';
+    const fs = await import('fs');
+    vi.mocked(fs.promises.writeFile).mockImplementation(async (_p: any, content: any) => {
+      writtenBody = String(content);
+    });
+    vi.mocked(execFile).mockImplementation(((cmd: string, args: string[], _o: any, cb: any) => {
+      if (args[0] === 'auth') cb(null, 'Logged in', '');
+      else cb(null, 'https://github.com/itsdestin/youcoded/issues/99\n', '');
+      return {} as any;
+    }) as any);
+    await submitIssue(SUBMIT_BUG);
+    // Body must contain the canonical "YouCoded vX.Y.Z · desktop · ..." format.
+    expect(writtenBody).toContain('**Environment:** YouCoded v');
+    expect(writtenBody).toContain('desktop');
+    // Must NOT contain the raw navigator.userAgent substring that the old renderer
+    // build-body helper would have included.
+    expect(writtenBody).not.toContain('navigator');
   });
 });
 

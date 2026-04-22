@@ -7,6 +7,10 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { execFile, spawn } from 'child_process';
+// WHY: app.getVersion() is only available in the main process. Used by
+// submitIssue to embed the accurate YouCoded version in the issue body
+// instead of relying on navigator.userAgent from the renderer (Fix 2).
+import { app } from 'electron';
 
 const GH_TOKEN_RE = /gh[opsu]_[A-Za-z0-9]{20,}/g;
 const ANTHROPIC_KEY_RE = /sk-ant-[A-Za-z0-9_-]{20,}/g;
@@ -277,8 +281,11 @@ function fallbackSummary(description: string): SummaryResult {
 // ---------------------------------------------------------------------------
 
 export interface SubmitArgs {
+  kind: 'bug' | 'feature';
   title: string;
-  body: string;
+  summary: string;
+  description: string;
+  log?: string;   // optional; bug-only
   label: 'bug' | 'enhancement';
 }
 
@@ -290,18 +297,34 @@ export type SubmitResult =
  * Submit a GitHub issue via the `gh` CLI when authenticated, otherwise
  * fall back to a prefilled browser URL. The fallback path lets the user
  * review and submit in their browser themselves.
+ *
+ * WHY: Body is assembled here (main process) using the canonical
+ * buildIssueBody helper so the Environment line contains the real
+ * app version and OS string rather than navigator.userAgent from the
+ * renderer (Fix 2 — code review feedback).
  */
 export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
+  // Build body in the main process where app.getVersion() and os info are available.
+  const body = buildIssueBody({
+    kind: args.kind,
+    summary: args.summary,
+    description: args.description,
+    log: args.log ?? '',
+    version: app.getVersion(),
+    platform: 'desktop',
+    os: `${os.platform()} ${os.release()}`,
+  });
+
   const ghAuthed = await isGhAuthenticated();
   if (!ghAuthed) {
-    return { ok: false, fallbackUrl: buildPrefillUrl(args) };
+    return { ok: false, fallbackUrl: buildPrefillUrl({ title: args.title, body, label: args.label }) };
   }
 
   const tmpFile = path.join(
     os.tmpdir(),
     `youcoded-issue-${Date.now()}-${process.pid}.md`,
   );
-  await fs.promises.writeFile(tmpFile, args.body, 'utf8');
+  await fs.promises.writeFile(tmpFile, body, 'utf8');
 
   try {
     const stdout: string = await new Promise((resolve, reject) => {
@@ -326,7 +349,7 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
     }
     return { ok: true, url };
   } catch {
-    return { ok: false, fallbackUrl: buildPrefillUrl(args) };
+    return { ok: false, fallbackUrl: buildPrefillUrl({ title: args.title, body, label: args.label }) };
   } finally {
     fs.promises.unlink(tmpFile).catch(() => undefined);
   }
