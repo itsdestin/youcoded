@@ -981,7 +981,7 @@ export function installShim(): void {
       // the pointer; throwing would spam the console on any platform where
       // the buddy mascot window somehow loaded remote-shim (shouldn't happen,
       // but the cost of being defensive is one line).
-      moveMascot: (_d: { dx: number; dy: number }) => { /* desktop-only */ },
+      moveMascot: (_t: { targetX: number; targetY: number }) => { /* desktop-only */ },
       onAttentionSummary: () => () => { /* no-op unsubscribe */ },
     },
     // Remote clients do not participate in buddy attention aggregation —

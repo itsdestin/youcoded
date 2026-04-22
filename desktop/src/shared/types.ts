@@ -478,8 +478,10 @@ export interface BuddyApi {
   unsubscribe(sessionId: string): Promise<void>;
   getViewedSession(): Promise<string | null>;
   // Fire-and-forget. Called by BuddyMascot during pointer drag; main
-  // moves the window by the supplied delta (clamped to visible workArea).
-  moveMascot(delta: { dx: number; dy: number }): void;
+  // places the mascot at the supplied target (clamped to visible workArea).
+  // Anchor-based, not delta-based, so per-move rounding on HiDPI displays
+  // cannot accumulate drift between the cursor and the mascot.
+  moveMascot(target: { targetX: number; targetY: number }): void;
   onAttentionSummary(cb: (summary: AttentionSummary) => void): () => void;
 }
 

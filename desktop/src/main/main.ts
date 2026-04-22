@@ -1202,8 +1202,8 @@ app.whenReady().then(async () => {
   // Windows Electron implements it via WM_NCHITTEST → HTCAPTION, which makes
   // the OS consume all pointer events for window dragging — the renderer
   // never gets pointerup, so click-to-toggle-chat never fires.
-  ipcMain.on(IPC.BUDDY_MOVE_MASCOT, (_evt, delta: { dx: number; dy: number }) => {
-    buddyManager.moveMascot(delta.dx, delta.dy);
+  ipcMain.on(IPC.BUDDY_MOVE_MASCOT, (_evt, target: { targetX: number; targetY: number }) => {
+    buddyManager.moveMascot(target.targetX, target.targetY);
   });
 
   // Desktop-capture action: screenshot the display the mascot sits on,

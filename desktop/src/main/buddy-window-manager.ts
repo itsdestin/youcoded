@@ -164,51 +164,59 @@ export class BuddyWindowManager {
   getCaptureWindow(): BrowserWindow | null { return this.capture; }
 
   /**
-   * Move the mascot window by a pointer-drag delta, clamped to the visible
-   * workArea of whichever display the window ends up on. Replaces CSS
-   * -webkit-app-region: drag, which on Windows consumes all pointer events
-   * via WM_NCHITTEST → HTCAPTION and breaks click detection.
+   * Place the mascot at an anchor-based target position from the renderer
+   * (cursor screenX/Y minus the grab offset captured on pointerdown). Clamps
+   * to the visible workArea. Replaces CSS -webkit-app-region: drag, which on
+   * Windows consumes all pointer events via WM_NCHITTEST → HTCAPTION and
+   * breaks click detection.
+   *
+   * Anchor-based (not delta-based): per-move rounding on HiDPI displays
+   * cannot accumulate drift between cursor and mascot, because every move
+   * recomputes the absolute target from the current cursor position. A
+   * previous delta-based implementation caused "slides under my cursor" on
+   * fractional-scale displays (125 / 150%): Math.round of each tiny dx
+   * systematically over- or under-shot, and the residual compounded.
    */
-  moveMascot(dx: number, dy: number): void {
+  moveMascot(targetX: number, targetY: number): void {
     if (!this.mascot || this.mascot.isDestroyed()) return;
     const [oldX, oldY] = this.mascot.getPosition();
-    const raw = { x: oldX + dx, y: oldY + dy };
+    const raw = { x: targetX, y: targetY };
     const display = screen.getDisplayMatching({ ...raw, ...MASCOT_SIZE }) ?? screen.getPrimaryDisplay();
     const clamped = clampToWorkArea(raw, MASCOT_SIZE, display.workArea);
     // setPosition requires integer args. Pointer screenX/Y on HiDPI displays
-    // can be fractional, so dx/dy (and therefore clamped.x/y) may be floats —
-    // passing a float throws "Error processing argument at index 1, conversion
-    // failure" from Electron's native bridge.
+    // can be fractional, so targetX/Y (and therefore clamped.x/y) may be
+    // floats — passing a float throws "Error processing argument at index 1,
+    // conversion failure" from Electron's native bridge.
     const newX = Math.round(clamped.x);
     const newY = Math.round(clamped.y);
     this.mascot.setPosition(newX, newY);
     // Move the chat by the SAME delta the mascot actually moved (not the
-    // requested delta, which may have been clamped). This keeps the chat
-    // anchored to the mascot when the user drags — whether chat is visible
-    // or hidden. Hidden chat will pop back at the correct relative position
-    // on next show. Destroyed chat is a no-op.
+    // requested delta, which may have been clamped). Clamp the follow-
+    // position to the chat's own display's workArea — the mascot may be
+    // pinned at an edge where the chat would otherwise overflow.
     //
-    // Clamp the chat's follow-position to its own display's workArea too:
-    // the mascot may be clamped to an edge where the chat would otherwise
-    // get pushed off-screen (e.g. mascot pinned to the right edge with
-    // chat opened to the RIGHT of mascot = chat shifted past screen).
-    // Clamping ensures the chat always stays fully visible; it may lose
-    // its exact relative offset to the mascot momentarily, which is the
-    // right tradeoff vs. a half-offscreen window.
+    // Skip the follow entirely when the chat is hidden: toggleChat() always
+    // re-anchors chat to the current mascot position via
+    // computeChatAnchoredPosition() on show, so there's nothing a hidden
+    // chat can do with a pending position. Every extra setPosition on a
+    // frameless Windows BrowserWindow hits DWM, and stacking three per
+    // pointermove (mascot + chat + capture icon) was a measurable source
+    // of "squishy" drag latency.
     const actualDx = newX - oldX;
     const actualDy = newY - oldY;
-    if ((actualDx !== 0 || actualDy !== 0) && this.chat && !this.chat.isDestroyed()) {
+    const chatVisible = !!(this.chat && !this.chat.isDestroyed() && this.chat.isVisible());
+    if ((actualDx !== 0 || actualDy !== 0) && this.chat && !this.chat.isDestroyed() && chatVisible) {
       const cb = this.chat.getBounds();
       const chatRaw = { x: cb.x + actualDx, y: cb.y + actualDy };
       const chatDisplay = screen.getDisplayMatching({ ...chatRaw, ...CHAT_SIZE }) ?? screen.getPrimaryDisplay();
       const chatClamped = clampToWorkArea(chatRaw, CHAT_SIZE, chatDisplay.workArea);
       this.chat.setPosition(Math.round(chatClamped.x), Math.round(chatClamped.y));
     }
-    // Capture icon always follows the mascot (pinned directly below).
-    // Recompute from scratch so it re-clamps against the mascot's new
-    // edge placement — if the mascot ends up at the bottom edge, the
-    // icon flips to above the mascot automatically.
-    if (this.capture && !this.capture.isDestroyed()) {
+    // Capture icon is only visible while the chat is visible (showCapture /
+    // hideCapture are chained off toggleChat), so gate on the same flag.
+    // Recompute from scratch on visible: if the mascot lands on a bottom
+    // edge the icon needs to flip above automatically.
+    if (this.capture && !this.capture.isDestroyed() && chatVisible) {
       const pos = this.computeCapturePosition();
       this.capture.setPosition(Math.round(pos.x), Math.round(pos.y));
     }
