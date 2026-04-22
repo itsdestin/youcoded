@@ -15,6 +15,7 @@ import path from "path";
 import os from "os";
 import type { IntegrationEntry, IntegrationIndex, IntegrationState, SkillEntry } from "../shared/types";
 import { installPlugin, uninstallPlugin } from "./plugin-installer";
+import { platformListDisplay } from "../shared/platform-display";
 
 const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${process.env.YOUCODED_MARKETPLACE_BRANCH || "master"}`;
 
@@ -111,10 +112,12 @@ export class IntegrationInstaller {
     }
 
     // Platform gate — honour entry.platforms if present.
+    // Error copy uses display names (macOS / Windows / Linux) since this
+    // message can surface in the UI if the renderer gate is bypassed.
     if (entry.platforms && entry.platforms.length > 0) {
       const cur = currentPlatform();
       if (cur === "unknown" || !entry.platforms.includes(cur as any)) {
-        return this.recordFailure(slug, `Not supported on this platform (needs ${entry.platforms.join("/")})`);
+        return this.recordFailure(slug, `Not supported on this platform — needs ${platformListDisplay(entry.platforms)}`);
       }
     }
 
@@ -125,7 +128,7 @@ export class IntegrationInstaller {
     // Non-plugin setup types — still stubs. Keep the manifest in sync with
     // the UI so the user sees a clear error rather than a success that silently
     // does nothing.
-    return this.recordFailure(slug, `setup.type "${entry.setup.type}" not yet implemented`);
+    return this.recordFailure(slug, `This integration's setup method isn't supported in this version.`);
   }
 
   private async installPluginBacked(entry: IntegrationEntry): Promise<IntegrationInstallResult> {
