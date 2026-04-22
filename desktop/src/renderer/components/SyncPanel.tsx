@@ -789,11 +789,6 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                       ? `Last synced ${timeAgo(status.lastSyncEpoch)}`
                       : 'Never synced'}
                 </div>
-                {status?.backupMeta?.platform && (
-                  <div className="text-[10px] text-fg-faint mt-0.5">
-                    from {status.backupMeta.platform} {'\u00B7'} toolkit {status.backupMeta.toolkit_version}
-                  </div>
-                )}
               </div>
               <button
                 onClick={handleForceSync}
