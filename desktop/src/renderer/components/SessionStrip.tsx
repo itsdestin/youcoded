@@ -810,7 +810,8 @@ export default function SessionStrip({
             </>
           )}
           {sessions.length > 0 && (
-            <div ref={sessionListRef} className="scroll-fade py-1" style={{ maxHeight: 'min(336px, 50vh)' }}>
+            <div ref={sessionListRef} className="scroll-fade" style={{ maxHeight: 'min(336px, 50vh)' }}>
+              <div className="py-1">
               {sessions.map((s, idx) => {
                 const color = sessionStatuses?.get(s.id) || 'gray';
                 const isBeingDragged = dragIdx === idx && isDragging.current;
@@ -875,6 +876,7 @@ export default function SessionStrip({
                   </div>
                 );
               })}
+              </div>
             </div>
           )}
 

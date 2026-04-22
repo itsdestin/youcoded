@@ -187,9 +187,10 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
         onClick={onClose}
       />
 
-      {/* Drawer */}
+      {/* Drawer — overflow-hidden clips the scroll-fade pseudos to the rounded-t-xl
+          corners so fades don't paint into the square corners above. */}
       <div
-        className={`fixed bottom-0 left-0 right-0 z-50 bg-panel border-t border-edge-dim rounded-t-xl transition-transform duration-300 ease-out ${
+        className={`fixed bottom-0 left-0 right-0 z-50 bg-panel border-t border-edge-dim rounded-t-xl overflow-hidden transition-transform duration-300 ease-out ${
           open ? 'translate-y-0' : 'translate-y-full'
         }`}
         style={{ maxHeight: '45vh' }}
@@ -255,7 +256,11 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
              "Add Skills +" is always the last box in the drawer so the marketplace
              is always one click away. When a search has zero matches, it stands
              alone as the empty-state affordance. */}
-        <div ref={scrollRef} className="scroll-fade pb-4" style={{ maxHeight: 'calc(45vh - 80px)' }}>
+        {/* Padding lives on an inner wrapper so the scroll-fade element itself has
+            no padding — sticky fade pseudos sit flush with the drawer's outer edges.
+            The drawer's own overflow:hidden + rounded-t-xl clips the top corners. */}
+        <div ref={scrollRef} className="scroll-fade" style={{ maxHeight: 'calc(45vh - 80px)' }}>
+          <div className="pb-4">
           {isSearching ? (
             // Search mode: flat filtered list of skills + commands, no chip row
             <div className="px-4 grid grid-cols-2 sm:grid-cols-3 gap-2">
@@ -321,6 +326,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
               </div>
             </>
           )}
+          </div>
         </div>
       </div>
     </>

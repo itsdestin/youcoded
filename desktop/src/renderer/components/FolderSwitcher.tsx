@@ -143,7 +143,8 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
         >
           {/* Saved folders list */}
           {folders.length > 0 && (
-            <div ref={listRef} className="scroll-fade max-h-48 py-1">
+            <div ref={listRef} className="scroll-fade max-h-48">
+              <div className="py-1">
               {folders.map((f) => {
                 const isSelected = f.path === value;
                 const isEditing = editingPath === f.path;
@@ -232,6 +233,7 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
                   </div>
                 );
               })}
+              </div>
             </div>
           )}
 

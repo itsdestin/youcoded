@@ -468,18 +468,43 @@ body[data-mode="buddy-chat"] #theme-bg {
    and overlays a panel-colored gradient at whichever edge still has hidden
    scroll room. The hook toggles data-fade-top / data-fade-bottom based on
    scrollTop; the pseudo-element overlays fade in/out via opacity.
-   Why pseudo-element overlays instead of mask-image: mask makes content
-   transparent (revealing the same panel color behind), which produces a barely
-   visible change. Painting a panel-colored gradient ON TOP of content gives a
-   visible "wash" — the bottom row is clearly covered, signalling more content.
-   position:sticky pins each overlay to the viewport edge of the scroll
-   container; the matching negative margin cancels the layout height so it
-   never displaces real content. */
+   History notes:
+   - We tried mask-image on the scroll container to match the background
+     automatically. Worked in some places (Settings, CommandDrawer) but failed
+     silently on descendants of .layer-surface OverlayPanels (ResumeBrowser,
+     StatusBar widget editor) — Chromium has clipping/repaint quirks when
+     mask-image sits under a stacking context with backdrop-filter + overflow.
+   - We tried reading the container's computed background so the fade color
+     matched translucent surfaces in wallpaper themes. Made the fade so weak
+     it was visually missing. Reverted.
+   The sticky panel-colored overlay is visible in every theme (opaque strip
+   against either opaque or translucent surrounds), and the slight color
+   mismatch on wallpaper themes is a better tradeoff than invisibility.
+   Padding-compensation: sticky pseudos default to sticking at the content-box
+   edge (inside padding). overflow clipping happens at the padding-box edge,
+   so content scrolls visibly through the padding band. --scroll-fade-pad-*
+   (set by the hook) extends the pseudo upward/downward through that band so
+   the fade starts flush with the container's outer scroll edge. */
 .scroll-fade {
+  overflow-x: hidden;
   overflow-y: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
   position: relative;
+  /* min-height: 0 is REQUIRED for .scroll-fade to function when used as a flex-1 child
+     in a flex column. Chromium's flex algorithm resolves `min-height: auto` to the
+     item's content min-size in some configurations (particularly when the parent has
+     only `max-height`, not `height`), even though CSS spec says overflow != visible
+     should make min-height: auto resolve to 0. Without this rule, a flex-1 scroll-fade
+     grows to fit all its content — clientHeight == scrollHeight, overflow-y never
+     engages, and the fade pseudo-elements never activate. Symptom: scroll-fade appears
+     broken (no fade) in popups whose OverlayPanel uses max-h-[Xvh] flex flex-col
+     directly (e.g. ResumeBrowser, StatusBar widget editor). For non-flex callsites
+     (explicit max-h, natural sizing) min-height: 0 is a no-op.
+     overflow-x: hidden clips the fade pseudos to the scroll-fade's own rounded corners
+     (for callsites that give the scroll-fade element itself a border-radius, like the
+     SyncPanel log box's rounded-lg). */
+  min-height: 0;
 }
 .scroll-fade::-webkit-scrollbar { display: none; }
 
@@ -490,7 +515,6 @@ body[data-mode="buddy-chat"] #theme-bg {
   position: sticky;
   left: 0;
   right: 0;
-  height: 36px;
   pointer-events: none;
   z-index: 2;
   opacity: 0;
@@ -498,11 +522,13 @@ body[data-mode="buddy-chat"] #theme-bg {
 }
 .scroll-fade::before {
   top: 0;
+  height: 36px;
   margin-bottom: -36px;
   background: linear-gradient(to bottom, var(--panel) 0%, transparent 100%);
 }
 .scroll-fade::after {
   bottom: 0;
+  height: 36px;
   margin-top: -36px;
   background: linear-gradient(to top, var(--panel) 0%, transparent 100%);
 }
@@ -581,6 +607,11 @@ body[data-mode="buddy-chat"] #theme-bg {
   border: 1px solid var(--edge);
   border-radius: var(--radius-xl);
   box-shadow: 0 8px 32px rgba(0, 0, 0, var(--shadow-strength, 0.15));
+  /* overflow: hidden clips descendants (including scroll-fade pseudo-elements) to the
+     rounded corners. Without it, fades at the top/bottom of scrollable content paint
+     past the rounded corners into square corners. box-shadow renders OUTSIDE the
+     border so overflow: hidden doesn't clip it. */
+  overflow: hidden;
 }
 [data-wallpaper] .layer-surface {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);

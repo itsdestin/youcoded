@@ -286,7 +286,8 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
           </button>
         </div>
 
-        <div ref={bodyRef} className="scroll-fade px-4 py-3 space-y-4">
+        <div ref={bodyRef} className="scroll-fade">
+          <div className="px-4 py-3 space-y-4">
             {/* Chip list — drag-to-reorder via pointer events (mirrors
                 SessionStrip dropdown). Grip icon appears on hover; drop
                 splices the row into the target position. */}
@@ -392,6 +393,7 @@ function ChipEditorPopup({ open, chips, setChips, installed, onClose }: ChipEdit
             {chips.length >= 10 && (
               <p className="text-[10px] text-fg-faint text-center">Maximum 10 chips reached</p>
             )}
+          </div>
         </div>
       </OverlayPanel>
 

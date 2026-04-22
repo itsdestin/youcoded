@@ -88,7 +88,10 @@ export default function AboutPopup({ open, onClose, platform, version, build }: 
           </button>
         </div>
 
-        <div ref={scrollRef} className="scroll-fade p-5 space-y-5">
+        {/* Padding lives on an inner wrapper so scroll-fade has no padding;
+            sticky fade pseudos then sit flush with the scroll-fade's outer edge. */}
+        <div ref={scrollRef} className="scroll-fade">
+          <div className="p-5 space-y-5">
           {/* Disclaimer — identical on both platforms */}
           <section className="space-y-1.5">
             <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Disclaimer</h4>
@@ -168,6 +171,7 @@ export default function AboutPopup({ open, onClose, platform, version, build }: 
               ))}
             </div>
           </section>
+          </div>
         </div>
       </OverlayPanel>
     </>,

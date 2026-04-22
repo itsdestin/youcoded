@@ -137,7 +137,9 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
         {!loaded ? (
           <div className="p-8 text-center text-sm text-fg-muted">Loading…</div>
         ) : (
-          <div ref={scrollRef} className="scroll-fade p-5 space-y-5">
+          // Padding on inner wrapper so scroll-fade is unpadded — sticky fades flush.
+          <div ref={scrollRef} className="scroll-fade">
+            <div className="p-5 space-y-5">
             {/* Permission default */}
             <section>
               <label className="block text-xs font-medium text-fg-muted tracking-wider uppercase mb-2">
@@ -251,6 +253,7 @@ export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Prop
                 Switches to terminal view and runs Claude Code's full <code>/config</code>
               </p>
             </section>
+            </div>
           </div>
         )}
       </OverlayPanel>

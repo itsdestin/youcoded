@@ -436,8 +436,16 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
             </button>
           </div>
 
-          {/* Widget list grouped by category — scrolls within the panel */}
-          <div ref={widgetListRef} className="scroll-fade flex-1 px-4 py-3 space-y-4">
+          {/* Widget list grouped by category — scrolls within the panel.
+              No flex-1: OverlayPanel only has max-h (indefinite height), which breaks
+              flex-grow in Chromium. Using default flex: 0 1 auto lets flex-shrink
+              clamp this div when content exceeds max-h so overflow-y: auto engages
+              and the scroll-fade hook sees a real scroll. */}
+          {/* Padding lives on an inner wrapper so the scroll-fade element itself has
+              no padding — sticky fade pseudos then sit flush with the scroll-fade's
+              outer edge. Rounded corners are clipped via overflow:hidden on .layer-surface. */}
+          <div ref={widgetListRef} className="scroll-fade">
+            <div className="px-4 py-3 space-y-4">
             {WIDGET_CATEGORIES.map((cat) => (
               <section key={cat.name}>
                 <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">
@@ -568,6 +576,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
                 </div>
               </section>
             ))}
+            </div>
           </div>
         </OverlayPanel>
       </div>

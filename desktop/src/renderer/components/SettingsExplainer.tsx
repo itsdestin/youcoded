@@ -67,8 +67,10 @@ export default function SettingsExplainer({ title, intro, sections, onBack, onCl
         </button>
       </div>
 
-      {/* Body — intro paragraph, then each section with its own heading. */}
-      <div ref={bodyRef} className="scroll-fade flex-1 px-4 py-4 space-y-5">
+      {/* Body — intro paragraph, then each section with its own heading.
+          Padding on inner wrapper so scroll-fade is unpadded (fade pseudos flush). */}
+      <div ref={bodyRef} className="scroll-fade flex-1">
+        <div className="px-4 py-4 space-y-5">
         <p className="text-xs text-fg-2 leading-relaxed">{intro}</p>
 
         {sections.map((section, i) => (
@@ -92,6 +94,7 @@ export default function SettingsExplainer({ title, intro, sections, onBack, onCl
             )}
           </section>
         ))}
+        </div>
       </div>
     </div>
   );

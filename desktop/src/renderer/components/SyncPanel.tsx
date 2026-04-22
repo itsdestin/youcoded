@@ -625,8 +625,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             </div>
           </div>
 
-          {/* Scrollable content */}
-          <div ref={mainScrollRef} className="scroll-fade flex-1 px-4 py-4 space-y-5">
+          {/* Scrollable content — padding on inner wrapper so sticky fades sit flush. */}
+          <div ref={mainScrollRef} className="scroll-fade flex-1">
+            <div className="px-4 py-4 space-y-5">
 
             {/* 1. Backend instances list */}
             <div>
@@ -939,6 +940,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                 <div className="text-fg-faint text-[11px]">Install the YouCoded toolkit to enable sync.</div>
               </div>
             )}
+            </div>
           </div>
         </div>
         )}
@@ -1109,7 +1111,8 @@ function EditBackendForm({
   return (
     <div className="flex flex-col h-full">
       <SubViewHeader title={`Edit ${backend.label}`} onBack={onBack} onClose={onClose} />
-      <div ref={actionsScrollRef} className="scroll-fade flex-1 px-4 py-4 space-y-4">
+      <div ref={actionsScrollRef} className="scroll-fade flex-1">
+        <div className="px-4 py-4 space-y-4">
         <div>
           <label className="block text-[10px] text-fg-muted mb-1">Name</label>
           <input
@@ -1142,6 +1145,7 @@ function EditBackendForm({
         >
           {saving ? 'Saving...' : 'Save'}
         </button>
+        </div>
       </div>
     </div>
   );

@@ -417,29 +417,39 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           </div>
 
           {/* Session list */}
-          <div ref={listRef} className="scroll-fade flex-1 py-2">
-            {loading ? (
-              <p className="text-sm text-fg-muted text-center py-8">Loading sessions...</p>
-            ) : filtered.length === 0 ? (
-              <p className="text-sm text-fg-muted text-center py-8">
-                {search.trim() ? 'No matching sessions' : 'No previous sessions found'}
-              </p>
-            ) : grouped ? (
-              // Grouped by project
-              [...grouped.entries()].map(([projectPath, items]) => (
-                <div key={projectPath} className="mb-2">
-                  <div className="px-4 py-1">
-                    <span className="text-[10px] uppercase tracking-wider text-fg-muted">
-                      {projectPath.replace(/\\/g, '/').split('/').pop() || projectPath}
-                    </span>
+          {/* No flex-1: OverlayPanel only has max-h (indefinite height), which breaks
+              flex-grow in Chromium. Using default flex: 0 1 auto lets flex-shrink
+              clamp this div when content exceeds max-h so overflow-y: auto engages
+              and the scroll-fade hook sees a real scroll. */}
+          {/* Padding lives on an inner wrapper so the scroll-fade element itself has
+              no padding. Sticky fade pseudos then sit flush with the scroll-fade's
+              outer edge, and the `overflow: hidden` on .layer-surface clips them to
+              the OverlayPanel's rounded corners. */}
+          <div ref={listRef} className="scroll-fade">
+            <div className="py-2">
+              {loading ? (
+                <p className="text-sm text-fg-muted text-center py-8">Loading sessions...</p>
+              ) : filtered.length === 0 ? (
+                <p className="text-sm text-fg-muted text-center py-8">
+                  {search.trim() ? 'No matching sessions' : 'No previous sessions found'}
+                </p>
+              ) : grouped ? (
+                // Grouped by project
+                [...grouped.entries()].map(([projectPath, items]) => (
+                  <div key={projectPath} className="mb-2">
+                    <div className="px-4 py-1">
+                      <span className="text-[10px] uppercase tracking-wider text-fg-muted">
+                        {projectPath.replace(/\\/g, '/').split('/').pop() || projectPath}
+                      </span>
+                    </div>
+                    {items.map((s) => renderSessionRow(s))}
                   </div>
-                  {items.map((s) => renderSessionRow(s))}
-                </div>
-              ))
-            ) : (
-              // Flat search results, priority-pinned
-              flatSorted.map((s) => renderSessionRow(s, true))
-            )}
+                ))
+              ) : (
+                // Flat search results, priority-pinned
+                flatSorted.map((s) => renderSessionRow(s, true))
+              )}
+            </div>
           </div>
         </OverlayPanel>
       </div>

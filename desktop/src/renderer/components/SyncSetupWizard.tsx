@@ -192,7 +192,8 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
     return (
       <div className="flex flex-col h-full">
         <WizardHeader title="Add a Backup Destination" onClose={onClose} />
-        <div ref={typeStepRef} className="scroll-fade flex-1 px-4 py-4 space-y-3">
+        <div ref={typeStepRef} className="scroll-fade flex-1">
+          <div className="px-4 py-4 space-y-3">
           {types.map(({ type, desc }) => {
             const existing = existingBackends.filter(b => b.type === type).length;
             // Only Drive supports multiple accounts — rclone gives each its own remote.
@@ -233,6 +234,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
               </button>
             );
           })}
+          </div>
         </div>
       </div>
     );
@@ -371,7 +373,8 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
           onBack={() => setStep(backendType === 'icloud' ? 'prereqs' : 'auth')}
           onClose={onClose}
         />
-        <div ref={configureStepRef} className="scroll-fade flex-1 px-4 py-4 space-y-4">
+        <div ref={configureStepRef} className="scroll-fade flex-1">
+          <div className="px-4 py-4 space-y-4">
           {/* Name */}
           <div>
             <label className="block text-[10px] text-fg-muted mb-1">Give this backup a name</label>
@@ -549,6 +552,7 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
               </span>
             ) : 'Start Backup'}
           </button>
+          </div>
         </div>
       </div>
     );
@@ -693,7 +697,8 @@ function PrereqCheckStep({
   return (
     <div className="flex flex-col h-full">
       <WizardHeader title="Checking Setup" onBack={onBack} onClose={onClose} />
-      <div ref={bodyRef} className="scroll-fade flex-1 px-4 py-4 space-y-4">
+      <div ref={bodyRef} className="scroll-fade flex-1">
+        <div className="px-4 py-4 space-y-4">
 
         {/* Checklist */}
         {backendType === 'drive' && (
@@ -761,6 +766,7 @@ function PrereqCheckStep({
             </div>
           </div>
         )}
+        </div>
       </div>
     </div>
   );

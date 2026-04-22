@@ -520,7 +520,8 @@ function SoundButton() {
                 <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
               </div>
 
-              <div ref={scrollRef} className="scroll-fade px-4 py-4 space-y-5">
+              <div ref={scrollRef} className="scroll-fade">
+                <div className="px-4 py-4 space-y-5">
                 {/* Master volume */}
                 <section>
                   <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Volume</h3>
@@ -574,6 +575,7 @@ function SoundButton() {
                   description="Plays when a background session has a new response"
                   dotColor="bg-blue-400"
                 />
+                </div>
               </div>
             </div>
           </div>
@@ -818,7 +820,8 @@ function RemoteButton({
               </div>
 
               {/* Scrollable content */}
-              <div ref={scrollRef} className="scroll-fade flex-1 px-4 py-4 space-y-6">
+              <div ref={scrollRef} className="scroll-fade flex-1">
+                <div className="px-4 py-4 space-y-6">
                 {loading ? (
                   <div className="flex items-center justify-center py-8 text-fg-muted text-sm">Loading...</div>
                 ) : (
@@ -1085,6 +1088,7 @@ function RemoteButton({
                     </section>
                   </>
                 )}
+                </div>
               </div>
             </div>
             )}
@@ -1349,7 +1353,8 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
                 <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
               </div>
 
-              <div ref={scrollRef} className="scroll-fade px-4 py-4 space-y-5">
+              <div ref={scrollRef} className="scroll-fade">
+                <div className="px-4 py-4 space-y-5">
                 {/* Default Model */}
                 <section>
                   <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Default Model</h3>
@@ -1436,6 +1441,7 @@ function DefaultsButton({ defaults, onDefaultsChange }: DefaultsButtonProps) {
                     </button>
                   </div>
                 </section>
+                </div>
               </div>
             </div>
           </div>
@@ -1519,7 +1525,8 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
               <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
             </div>
 
-            <div ref={scrollRef} className="scroll-fade p-3 space-y-2" style={{ maxHeight: 'calc(80vh - 52px)' }}>
+            <div ref={scrollRef} className="scroll-fade" style={{ maxHeight: 'calc(80vh - 52px)' }}>
+              <div className="p-3 space-y-2">
               {TIER_OPTIONS.map(t => {
                 const isActive = tier === t.id;
                 return (
@@ -1543,6 +1550,7 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
                   </button>
                 );
               })}
+              </div>
             </div>
           </div>
         </>,
@@ -1722,7 +1730,8 @@ function ConnectToDesktopButton() {
               <button onClick={() => setOpen(false)} className="text-fg-muted hover:text-fg-2 text-lg leading-none">✕</button>
             </div>
 
-            <div ref={scrollRef} className="scroll-fade px-4 py-4 space-y-4">
+            <div ref={scrollRef} className="scroll-fade">
+              <div className="px-4 py-4 space-y-4">
 
               {/* Tailscale warning */}
               {!tailscaleLoading && tailscaleStatus !== null && !tailscaleStatus.connected && (
@@ -1884,6 +1893,7 @@ function ConnectToDesktopButton() {
               <p className="text-[10px] text-fg-faint">
                 Connect to the YouCoded desktop app on your computer. Set up remote access in the desktop app's settings first.
               </p>
+              </div>
             </div>
           </div>
         </>,

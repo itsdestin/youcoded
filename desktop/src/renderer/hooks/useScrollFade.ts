@@ -3,17 +3,34 @@ import { useEffect, useRef, type RefObject } from 'react';
 // Attach to any scrollable element to hide the scrollbar and fade the
 // content at whichever edge has hidden scroll room. The hook sets two
 // data attributes — `data-fade-top` and `data-fade-bottom` — which the
-// `.scroll-fade` CSS class reads to drive a mask-image gradient.
+// `.scroll-fade` CSS class reads to drive the fade pseudo-element opacity.
 //
-// Why data attrs instead of inline style or class toggles: attribute
-// writes are cheap, don't cause React re-renders, and the CSS rule
-// stays the single source of truth for the fade size.
+// Why useEffect-without-deps instead of [] deps: some callers (e.g.
+// ResumeBrowser) conditionally render with `if (!open) return null`, so the
+// target element only mounts AFTER the enclosing component mounts. With
+// useEffect([]) the effect would run once at component mount — when the
+// conditional block has returned null and the target div doesn't exist yet —
+// capture a null ref, early-return, and never run again. Refs don't trigger
+// re-renders, so we can't depend on `ref.current`. Running on every render
+// (no deps) is cheap: the fast-path check `el !== attachedEl.current` makes
+// it a no-op after attachment.
 export function useScrollFade<T extends HTMLElement>(externalRef?: RefObject<T | null>) {
   const internalRef = useRef<T>(null);
   const ref = externalRef ?? internalRef;
+  const attachedEl = useRef<T | null>(null);
+  const cleanupRef = useRef<(() => void) | undefined>(undefined);
 
   useEffect(() => {
     const el = ref.current;
+    // Fast path: already attached to this element.
+    if (el === attachedEl.current) return;
+
+    // Element changed (mount, unmount, or swap) — detach from the old.
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = undefined;
+    }
+    attachedEl.current = el;
     if (!el) return;
 
     const update = () => {
@@ -33,11 +50,19 @@ export function useScrollFade<T extends HTMLElement>(externalRef?: RefObject<T |
     const mo = new MutationObserver(update);
     mo.observe(el, { childList: true, subtree: true, characterData: true });
 
-    return () => {
+    cleanupRef.current = () => {
       el.removeEventListener('scroll', update);
       ro.disconnect();
       mo.disconnect();
     };
+  }); // intentionally no deps — see comment above
+
+  // Component-unmount cleanup (run once, on unmount).
+  useEffect(() => () => {
+    if (cleanupRef.current) {
+      cleanupRef.current();
+      cleanupRef.current = undefined;
+    }
   }, []);
 
   return ref;
