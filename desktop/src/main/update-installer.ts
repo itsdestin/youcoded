@@ -200,9 +200,10 @@ export function createUpdateInstaller(options: UpdateInstallerOptions) {
       });
     }
     if (active) {
-      // Different URL while another download is running — reject fast.
-      // The IPC layer should cancel before issuing a new startDownload.
-      return Promise.reject(new UpdateInstallError('url-rejected', 'another download is already active'));
+      // Different URL while another download is running — reject fast with 'busy'.
+      // (Not 'url-rejected': this is an internal concurrency issue, not a URL-validation
+      // failure. The IPC layer should cancel before issuing a new startDownload.)
+      return Promise.reject(new UpdateInstallError('busy', 'another download is already active'));
     }
 
     // Validate URL and derive filename BEFORE opening any file or socket.
@@ -249,7 +250,12 @@ export function createUpdateInstaller(options: UpdateInstallerOptions) {
       followRequest(rawUrl, 0, (err, res) => {
         if (err || !res) {
           cleanupActive(job, true);
-          job.deferred.reject(new UpdateInstallError('network-failed', err?.message ?? 'no response'));
+          // Preserve UpdateInstallError codes (e.g. url-rejected from a redirect
+          // hop) rather than flattening everything to network-failed.
+          const wrapped = err instanceof UpdateInstallError
+            ? err
+            : new UpdateInstallError('network-failed', err?.message ?? 'no response');
+          job.deferred.reject(wrapped);
           return;
         }
         const contentLength = Number(res.headers?.['content-length'] ?? 0);
@@ -263,6 +269,10 @@ export function createUpdateInstaller(options: UpdateInstallerOptions) {
 
         res.on('end', () => {
           writeStream.end(() => {
+            // Guard: if cancelDownload fired while we were flushing, the .partial
+            // has already been deleted and the deferred already rejected.
+            // Don't double-reject or attempt rename of a missing file.
+            if (active?.jobId !== job.jobId) return;
             try {
               fs.renameSync(partialPath, filePath);
             } catch (renameErr) {

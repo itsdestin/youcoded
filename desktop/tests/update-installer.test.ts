@@ -201,7 +201,7 @@ describe('createUpdateInstaller download engine', () => {
     expect(jobId).toBeTruthy();
     installer.cancelDownload(jobId!);
 
-    await expect(downloadPromise).rejects.toThrow();
+    await expect(downloadPromise).rejects.toThrow(/network-failed/);
     expect(fs.existsSync(path.join(tmpDir, 'YouCoded.exe.partial'))).toBe(false);
     expect(fs.existsSync(path.join(tmpDir, 'YouCoded.exe'))).toBe(false);
   });

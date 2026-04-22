@@ -16,6 +16,7 @@ export type UpdateInstallErrorCode =
   | 'network-failed'        // download failed mid-stream
   | 'disk-full'             // ENOSPC during write
   | 'url-rejected'          // failed HTTPS / domain allowlist check
+  | 'busy'                  // another download is already active (different URL)
   | 'not-supported';        // Android stub's universal error
 
 export interface UpdateDownloadResult {
