@@ -8,10 +8,8 @@ import React, { useEffect, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import MarkdownContent from './MarkdownContent';
-// Pure helper, no Electron deps — safe to import into the renderer. If this
-// import path becomes a friction point later, move the semver helpers into a
-// shared module rather than duplicating the logic here.
-import { compareSemver } from '../../main/changelog-parser';
+// Pure helper, lives in shared/ so the renderer doesn't pull anything from main.
+import { compareSemver } from '../../shared/semver';
 
 interface UpdateStatus {
   current: string;
@@ -53,7 +51,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    (window as any).claude.update
+    window.claude.update
       .changelog({ forceRefresh: updateStatus.update_available })
       .then((res: ChangelogData) => setData(res))
       .catch(() => setData({ markdown: null, entries: [], fromCache: false, error: true }))
@@ -64,13 +62,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
 
   const handleUpdate = async () => {
     if (updateStatus.download_url) {
-      await (window as any).claude.shell.openExternal(updateStatus.download_url);
+      await window.claude.shell.openExternal(updateStatus.download_url);
     }
     onClose();
   };
 
   const handleOpenOnGithub = async () => {
-    await (window as any).claude.shell.openChangelog();
+    await window.claude.shell.openChangelog();
   };
 
   // Body selection:

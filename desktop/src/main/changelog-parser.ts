@@ -1,6 +1,11 @@
 // changelog-parser.ts — parses Keep-a-Changelog-style markdown into entries.
 // Anchored on `## [X.Y.Z]` headers to survive incidental format drift.
 
+// compareSemver lives in shared/ so the renderer can import it without pulling
+// in any main-process module. Re-exported here so existing callers keep working.
+import { compareSemver } from '../shared/semver';
+export { compareSemver };
+
 export interface ChangelogEntry {
   version: string;       // e.g. "1.1.2"
   date?: string;         // e.g. "2026-04-21" (optional, from the header line)
@@ -42,16 +47,3 @@ export function filterEntriesSinceVersion(entries: ChangelogEntry[], currentVers
   return entries.filter(e => compareSemver(e.version, currentVersion) > 0);
 }
 
-export function compareSemver(a: string, b: string): number {
-  const pa = a.split('.').map(n => parseInt(n, 10));
-  const pb = b.split('.').map(n => parseInt(n, 10));
-  // Guard with Number.isFinite: parseInt('abc', 10) is NaN, and NaN comparisons
-  // return arbitrary results (NaN !== 1 is true but NaN > 1 is false), so
-  // garbage input would otherwise produce nondeterministic ordering.
-  for (let i = 0; i < 3; i++) {
-    const da = Number.isFinite(pa[i]) ? pa[i] : 0;
-    const db = Number.isFinite(pb[i]) ? pb[i] : 0;
-    if (da !== db) return da > db ? 1 : -1;
-  }
-  return 0;
-}
