@@ -246,9 +246,10 @@ function DiffView({
     ? undefined
     : { maxHeight: `${DIFF_PREVIEW_LINES * DIFF_ROW_PX}px` };
 
-  // Pad the two line-number gutters to the widest number present so columns
-  // stay aligned. With structuredPatch, numbers can be large (line 2854) so
-  // we size to the actual maximum rather than the row count.
+  // Single line-number gutter matching Claude Code's native diff convention:
+  // deleted rows show the old-file number, context + added rows show the
+  // new-file number. Pad to the widest number so the column stays aligned —
+  // with structuredPatch, numbers can be large (e.g. line 2854).
   const gutterWidth = Math.max(2, String(maxLineNum).length);
   const gutterCh = `${gutterWidth}ch`;
 
@@ -260,8 +261,9 @@ function DiffView({
       >
         {rows.map((row, idx) => {
           const showSeparator = hunkBoundaries.has(idx);
-          const oldN = row.kind === 'add' ? '' : String(row.oldN);
-          const newN = row.kind === 'del' ? '' : String(row.newN);
+          // Single-number gutter: del → old-file number (the line being removed),
+          // add/ctx → new-file number (what the file will look like post-edit).
+          const lineNum = row.kind === 'del' ? String(row.oldN) : String(row.newN);
           const rowClass =
             row.kind === 'del'
               ? 'bg-red-600/10 border-l-[3px] border-red-500'
@@ -288,13 +290,7 @@ function DiffView({
                   className="text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0"
                   style={{ width: gutterCh }}
                 >
-                  {oldN}
-                </span>
-                <span
-                  className="text-right px-1.5 py-0.5 text-fg-muted select-none shrink-0"
-                  style={{ width: gutterCh }}
-                >
-                  {newN}
+                  {lineNum}
                 </span>
                 <span className={`w-4 select-none shrink-0 ${glyphClass}`}>{glyph}</span>
                 <span className={`py-0.5 pr-2 whitespace-pre-wrap break-all flex-1 ${textClass}`}>{row.text || ' '}</span>
