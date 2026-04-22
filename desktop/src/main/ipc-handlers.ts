@@ -1243,7 +1243,29 @@ export function registerIpcHandlers(
     if (Date.now() - lastReleaseCheck > RELEASE_CHECK_INTERVAL) {
       fetchLatestRelease().catch(() => {});
     }
-    return cachedUpdateStatus || { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null };
+    const status = cachedUpdateStatus || { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null };
+
+    // Dev-only: force update_available=true for manual UpdatePanel verification without waiting for a real release.
+    // Set YOUCODED_DEV_FAKE_UPDATE=1 to simulate a new release one patch ahead of the current version.
+    // Note: the download_url points at the real GitHub releases page, so clicking Update Now opens the browser
+    // to the actual latest release — not the fake +1 version. That's fine for UI verification; no real installer
+    // exists for the fake version. No-op unless the env var is exactly '1'.
+    if (process.env.YOUCODED_DEV_FAKE_UPDATE === '1') {
+      const currentVersion = app.getVersion();
+      const parts = currentVersion.split('.').map(n => parseInt(n, 10));
+      const maj = parts[0] || 0;
+      const min = parts[1] || 0;
+      const patch = parts[2] || 0;
+      return {
+        ...status,
+        current: currentVersion,
+        latest: `${maj}.${min}.${patch + 1}`,
+        update_available: true,
+        download_url: 'https://github.com/itsdestin/youcoded/releases/latest',
+      };
+    }
+
+    return status;
   }
 
   // Initial fetch on startup
