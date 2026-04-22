@@ -623,6 +623,18 @@ function AppInner() {
             agentId: event.data.agentId,
           });
           break;
+        case 'user-interrupt':
+          // ESC-passthrough: transcript-watcher detected a user-initiated
+          // interrupt (ESC sent to the PTY). Reducer records it so we can
+          // tag the next assistant turn as interrupted.
+          batchTranscriptDispatch({
+            type: 'TRANSCRIPT_INTERRUPT',
+            sessionId: event.sessionId,
+            uuid: event.uuid,
+            timestamp: event.timestamp,
+            kind: event.data.kind,
+          });
+          break;
         case 'assistant-text':
           batchTranscriptDispatch({
             type: 'TRANSCRIPT_ASSISTANT_TEXT',
