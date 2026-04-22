@@ -1250,7 +1250,9 @@ export function registerIpcHandlers(
     // Note: the download_url points at the real GitHub releases page, so clicking Update Now opens the browser
     // to the actual latest release — not the fake +1 version. That's fine for UI verification; no real installer
     // exists for the fake version. No-op unless the env var is exactly '1'.
-    if (process.env.YOUCODED_DEV_FAKE_UPDATE === '1') {
+    // `!app.isPackaged` gate: belt-and-suspenders so a stray env var in a user's
+    // shell can't flip the update pill on in a packaged build. Dev-only by design.
+    if (!app.isPackaged && process.env.YOUCODED_DEV_FAKE_UPDATE === '1') {
       const currentVersion = app.getVersion();
       const parts = currentVersion.split('.').map(n => parseInt(n, 10));
       const maj = parts[0] || 0;
