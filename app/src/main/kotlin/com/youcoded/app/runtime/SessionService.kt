@@ -50,6 +50,10 @@ class SessionService : Service() {
     // if there's only one authenticated connection (covers reconnect cases).
     private val sessionOwnership = ConcurrentHashMap<String, String>()
 
+    // Concurrency guard: prevent two concurrent dev:install-workspace ops from
+    // cloning/pulling the workspace simultaneously (e.g. double-tap the button).
+    @Volatile private var devInstallInFlight: Boolean = false
+
     /**
      * Security: use EncryptedSharedPreferences for paired device storage so
      * passwords are encrypted at rest. Falls back to regular SharedPreferences
@@ -2336,6 +2340,255 @@ class SessionService : Service() {
                 val result = marketplaceApiClient.postReport(ratingUserId, ratingPluginId, reason)
                 msg.id?.let {
                     bridgeServer.respond(ws, msg.type, it, result.toJson { _ -> JSONObject.NULL })
+                }
+            }
+
+            // ── Settings → Development IPC handlers ──────────────────────────────
+            // Android parity for the six dev:* types in desktop/src/main/ipc-handlers.ts.
+            // Logic is delegated to DevTools.kt which mirrors dev-tools.ts.
+
+            "dev:log-tail" -> {
+                val maxLines = (msg.payload as? Number)?.toInt() ?: 200
+                val homeDir = bootstrap?.homeDir ?: filesDir
+                val tail = withContext(Dispatchers.IO) {
+                    DevTools.readLogTail(homeDir.absolutePath, maxLines)
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, tail) }
+            }
+
+            "dev:summarize-issue" -> {
+                val kind = msg.payload.optString("kind", "bug")
+                val description = msg.payload.optString("description", "")
+                // Only include the log block for bug reports, not feature requests.
+                val log = if (kind == "bug") msg.payload.optString("log", "") else ""
+                val prompt = DevTools.buildSummarizerPrompt(kind, description, log)
+                val result = withContext(Dispatchers.IO) {
+                    val bs = bootstrap
+                    if (bs == null) {
+                        DevTools.parseSummary("", description, false)
+                    } else {
+                        val env = bs.buildRuntimeEnv()
+                        // claude is a Node.js program — runs via LD_PRELOAD (not linker64),
+                        // so we can pass it directly through runStreamed without the linker64 prefix.
+                        // Fix: pipe prompt via stdin (matches Phase 3 TS fix) so large prompts
+                        // don't hit ARG_MAX and special characters don't need shell-escaping.
+                        val (exit, out) = DevTools.runStreamed(
+                            env,
+                            listOf("claude", "-p"),
+                            bs.homeDir,
+                            stdinInput = prompt,
+                            onLine = { /* ignore intermediate lines — we only need final stdout */ },
+                        )
+                        DevTools.parseSummary(out, description, exit == 0)
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+
+            "dev:submit-issue" -> {
+                // Fix: read new SubmitArgs shape { kind, title, summary, description, log?, label }
+                // matching the Phase 5 TS fix. Old shape ({ title, body, label }) sent an empty body.
+                val kind = msg.payload.optString("kind", "bug")
+                val title = msg.payload.optString("title", "")
+                val summary = msg.payload.optString("summary", "")
+                val description = msg.payload.optString("description", "")
+                val log = msg.payload.optString("log", "")
+                val label = msg.payload.optString("label", "bug")
+                // Build body using canonical helper (mirrors buildIssueBody() in dev-tools.ts).
+                val pm = applicationContext.packageManager
+                val pkgInfo = pm.getPackageInfo(applicationContext.packageName, 0)
+                val versionName = pkgInfo.versionName ?: "unknown"
+                val osString = "Android ${android.os.Build.VERSION.RELEASE}"
+                val body = DevTools.buildIssueBody(kind, summary, description, log, versionName, osString)
+                val result = withContext(Dispatchers.IO) {
+                    val bs = bootstrap
+                    if (bs == null) {
+                        JSONObject().apply {
+                            put("ok", false)
+                            put("fallbackUrl", DevTools.buildPrefillUrl(title, body, label))
+                        }
+                    } else {
+                        val env = bs.buildRuntimeEnv()
+                        // gh is a Go binary — must be routed through linker64 directly
+                        // (bypasses LD_PRELOAD). This matches the github:auth handler above.
+                        val ghPath = File(bs.usrDir, "bin/gh").absolutePath
+                        val (authExit, _) = DevTools.runStreamed(
+                            env,
+                            listOf("/system/bin/linker64", ghPath, "auth", "status"),
+                            bs.homeDir,
+                            onLine = {},
+                        )
+                        if (authExit != 0) {
+                            JSONObject().apply {
+                                put("ok", false)
+                                put("fallbackUrl", DevTools.buildPrefillUrl(title, body, label))
+                            }
+                        } else {
+                            // Write body to a temp file so we avoid shell-escaping issues
+                            // with special characters in the issue body.
+                            val tmp = File.createTempFile("youcoded-issue-", ".md", cacheDir)
+                            try {
+                                tmp.writeText(body)
+                                val (exit, stdout) = DevTools.runStreamed(
+                                    env,
+                                    listOf(
+                                        "/system/bin/linker64", ghPath,
+                                        "issue", "create",
+                                        "--repo", "itsdestin/youcoded",
+                                        "--title", title,
+                                        "--body-file", tmp.absolutePath,
+                                        "--label", label,
+                                        "--label", "youcoded-app:reported",
+                                    ),
+                                    bs.homeDir,
+                                    onLine = {},
+                                )
+                                val url = Regex("https://github\\.com/[^\\s]+").find(stdout)?.value
+                                if (exit == 0 && url != null) {
+                                    JSONObject().apply { put("ok", true); put("url", url) }
+                                } else {
+                                    JSONObject().apply {
+                                        put("ok", false)
+                                        put("fallbackUrl", DevTools.buildPrefillUrl(title, body, label))
+                                    }
+                                }
+                            } finally {
+                                tmp.delete()
+                            }
+                        }
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+
+            "dev:install-workspace" -> {
+                // Concurrency guard: reject a second install if one is already running.
+                if (devInstallInFlight) {
+                    msg.id?.let {
+                        bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                            put("error", "Install already in progress")
+                        })
+                    }
+                    return@handleBridgeMessage
+                }
+                devInstallInFlight = true
+                val result = try {
+                    withContext(Dispatchers.IO) {
+                        val bs = bootstrap
+                        if (bs == null) {
+                            JSONObject().apply { put("error", "Bootstrap not initialised") }
+                        } else {
+                            val env = bs.buildRuntimeEnv()
+                            // Clone target: $HOME/youcoded-dev (parallel to user's project folders).
+                            val target = File(bs.homeDir, "youcoded-dev")
+                            // Fix: capture whether the workspace already existed BEFORE the
+                            // if/else so the response accurately reflects clone vs pull.
+                            val wasAlreadyInstalled = target.exists()
+                            val onLine: (String) -> Unit = { line ->
+                                // Stream progress lines to the React UI so the ContributePopup
+                                // can show a live log of the clone/pull. Mirrors the desktop
+                                // ipc-handlers.ts install-workspace progress push.
+                                bridgeServer.broadcast(JSONObject().apply {
+                                    put("type", "dev:install-progress")
+                                    put("payload", line)
+                                })
+                            }
+                            try {
+                                if (wasAlreadyInstalled) {
+                                    // Already present — check whether it's the right repo.
+                                    val (_, remote) = DevTools.runStreamed(
+                                        env,
+                                        listOf("git", "-C", target.absolutePath, "remote", "get-url", "origin"),
+                                        bs.homeDir,
+                                        onLine = {},
+                                    )
+                                    val cls = DevTools.classifyExistingWorkspace(remote.trim())
+                                    if (cls != "workspace") {
+                                        return@withContext JSONObject().apply {
+                                            put("error", "${target.absolutePath} already exists but isn't the YouCoded dev workspace. Move or rename it and try again.")
+                                        }
+                                    }
+                                    onLine("Found existing workspace, pulling latest…")
+                                    DevTools.runStreamed(
+                                        env,
+                                        listOf("git", "-C", target.absolutePath, "pull", "--ff-only"),
+                                        bs.homeDir,
+                                        onLine = onLine,
+                                    )
+                                } else {
+                                    onLine("Cloning workspace…")
+                                    DevTools.runStreamed(
+                                        env,
+                                        listOf("git", "clone", "--depth", "50",
+                                            "https://github.com/itsdestin/youcoded-dev",
+                                            target.absolutePath),
+                                        bs.homeDir,
+                                        onLine = onLine,
+                                    )
+                                }
+                                onLine("Cloning sub-repos (this may take a minute)…")
+                                DevTools.runStreamed(
+                                    env, listOf("bash", "setup.sh"), target, onLine = onLine,
+                                )
+                                // Register as a project folder via the same WorkingDirStore
+                                // that backs the folders:add IPC — this is the Android folder
+                                // picker's persistent store.
+                                val store = com.youcoded.app.config.WorkingDirStore(bs.homeDir)
+                                store.add(com.youcoded.app.config.WorkingDir(
+                                    label = "youcoded-dev",
+                                    path = target.absolutePath,
+                                ))
+                                JSONObject().apply {
+                                    put("path", target.absolutePath)
+                                    put("alreadyInstalled", wasAlreadyInstalled)
+                                }
+                            } catch (e: Exception) {
+                                JSONObject().apply { put("error", e.message ?: "Install failed") }
+                            }
+                        }
+                    }
+                } finally {
+                    devInstallInFlight = false
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+
+            "dev:install-progress" -> {
+                // Fire-and-forget push from server → clients; no handler needed on this side.
+                // Incoming messages of this type are server-originated broadcasts, not client
+                // requests — log and ignore if one arrives unexpectedly.
+                android.util.Log.d("SessionService", "dev:install-progress received (unexpected direction)")
+            }
+
+            "dev:open-session-in" -> {
+                val cwd = msg.payload.optString("cwd", "")
+                val initialInput = msg.payload.optString("initialInput", "").ifEmpty { null }
+                if (cwd.isEmpty()) {
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildErrorResponse("cwd is required")) }
+                } else {
+                    val session = withContext(Dispatchers.Main) {
+                        createSession(File(cwd), dangerousMode = false, apiKey = null)
+                    }
+                    val info = MessageRouter.buildSessionInfo(
+                        id = session.id,
+                        name = session.name.value,
+                        cwd = cwd,
+                        status = "active",
+                        permissionMode = "normal",
+                        skipPermissions = false,
+                        createdAt = session.createdAt,
+                    )
+                    val ownerClientId = ws.getAttachment<String>() ?: "unknown"
+                    sessionOwnership[session.id] = ownerClientId
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, info) }
+                    // Broadcast session:created so the React SessionStrip updates — includes
+                    // initialInput so InputBar.tsx can pre-fill the text box on the new session.
+                    bridgeServer.broadcast(JSONObject().apply {
+                        put("type", "session:created")
+                        put("payload", JSONObject(info.toString()).apply {
+                            if (initialInput != null) put("initialInput", initialInput)
+                        })
+                    })
                 }
             }
 

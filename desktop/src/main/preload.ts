@@ -205,6 +205,13 @@ const IPC = {
   BUDDY_ATTACH_FILE: 'buddy:attach-file',
   SESSION_ATTENTION_SUMMARY: 'session:attention-summary',
   ATTENTION_REPORT: 'attention:report',
+  // Settings → Development feature (bug report, contribute, known issues)
+  DEV_LOG_TAIL: 'dev:log-tail',
+  DEV_SUMMARIZE_ISSUE: 'dev:summarize-issue',
+  DEV_SUBMIT_ISSUE: 'dev:submit-issue',
+  DEV_INSTALL_WORKSPACE: 'dev:install-workspace',
+  DEV_INSTALL_PROGRESS: 'dev:install-progress',
+  DEV_OPEN_SESSION_IN: 'dev:open-session-in',
 } as const;
 
 contextBridge.exposeInMainWorld('claude', {
@@ -484,6 +491,24 @@ contextBridge.exposeInMainWorld('claude', {
     add: (folderPath: string, nickname?: string): Promise<any> => ipcRenderer.invoke(IPC.FOLDERS_ADD, folderPath, nickname),
     remove: (folderPath: string): Promise<boolean> => ipcRenderer.invoke(IPC.FOLDERS_REMOVE, folderPath),
     rename: (folderPath: string, nickname: string): Promise<boolean> => ipcRenderer.invoke(IPC.FOLDERS_RENAME, folderPath, nickname),
+  },
+  // Settings → Development feature (bug report, contribute, known issues)
+  dev: {
+    logTail: (maxLines: number) =>
+      ipcRenderer.invoke(IPC.DEV_LOG_TAIL, maxLines),
+    summarizeIssue: (args: { kind: 'bug' | 'feature'; description: string; log?: string }) =>
+      ipcRenderer.invoke(IPC.DEV_SUMMARIZE_ISSUE, args),
+    submitIssue: (args: { kind: 'bug' | 'feature'; title: string; summary: string; description: string; log?: string; label: 'bug' | 'enhancement' }) =>
+      ipcRenderer.invoke(IPC.DEV_SUBMIT_ISSUE, args),
+    installWorkspace: () =>
+      ipcRenderer.invoke(IPC.DEV_INSTALL_WORKSPACE),
+    onInstallProgress: (cb: (line: string) => void) => {
+      const listener = (_e: unknown, line: string) => cb(line);
+      ipcRenderer.on(IPC.DEV_INSTALL_PROGRESS, listener);
+      return () => ipcRenderer.removeListener(IPC.DEV_INSTALL_PROGRESS, listener);
+    },
+    openSessionIn: (args: { cwd: string; initialInput?: string }) =>
+      ipcRenderer.invoke(IPC.DEV_OPEN_SESSION_IN, args),
   },
   off: (channel: string, handler: (...args: any[]) => void) =>
     ipcRenderer.removeListener(channel, handler),

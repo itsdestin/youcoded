@@ -23,6 +23,9 @@ export interface CreateSessionOpts {
   model?: string;
   /** Which CLI backend to launch — defaults to 'claude' */
   provider?: SessionProvider;
+  /** Optional text to prefill into the input bar after the session is selected.
+   *  Forwarded into SessionInfo so the renderer can pick it up on session-created. */
+  initialInput?: string;
 }
 
 interface ManagedSession {
@@ -93,6 +96,9 @@ export class SessionManager extends EventEmitter {
       createdAt: Date.now(),
       provider,
       model: opts.model,
+      // Carry initialInput through so the renderer can prefill the input bar.
+      // Omit the key entirely when undefined to keep the object clean.
+      ...(opts.initialInput !== undefined ? { initialInput: opts.initialInput } : {}),
     };
 
     const session: ManagedSession = { info, worker };

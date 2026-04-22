@@ -93,3 +93,13 @@ Each entry has three fields:
 - **Files:** `youcoded-admin/skills/release/SKILL.md` (Phase 4 Step 3 and Step 2 baseline-line injection)
 - **Depends on:** `claude --version` output containing a parseable `\d+(\.\d+)+` substring
 - **Break symptom:** Release skill's CC version capture fails; baseline line not written; next release's `review-cc-changes` agent exits with the "no baseline" notice.
+
+### claude -p stdin mode (Settings → Development summarizer)
+- **Files:** `desktop/src/main/dev-tools.ts` (`summarizeIssue`), `app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt` (`dev:summarize-issue` case)
+- **Depends on:** `claude -p` accepting the prompt on stdin (no positional arg) and emitting a parseable JSON envelope on stdout. Reuses the user's Claude Code OAuth token automatically — no separate auth.
+- **Break symptom:** Bug-report summarizer degrades to fallback envelope (renderer shows raw description with "Summary unavailable" note). Submission still works, but maintainers see a less-useful issue body. Failure is silent — the user never sees an error.
+
+### gh CLI (Settings → Development bug-report submission)
+- **Files:** `desktop/src/main/dev-tools.ts` (`submitIssue`, `isGhAuthenticated`), `app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt` (`dev:submit-issue` case)
+- **Depends on:** `gh auth status` exiting non-zero when the user isn't logged in; `gh issue create --repo … --title … --body-file … --label …` writing the created-issue URL to stdout on success and exiting non-zero on failure; the `--label` flag rejecting unknown labels (which is why `bug`, `enhancement`, `youcoded-app:reported` must pre-exist on `itsdestin/youcoded`). Note: this is `gh` CLI, not Claude Code itself, but it shares the same pattern of "behavior we shell out to and parse" so it lives here.
+- **Break symptom:** Issue submission silently falls back to the URL-prefill path (browser opens with prefilled fields) on every call when the auth-check exit code or `issue create` stdout format changes. User can still submit manually in the browser; YouCoded just stops doing it for them.

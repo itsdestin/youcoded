@@ -1,4 +1,4 @@
-import { describe, test, expect } from 'vitest';
+import { describe, test, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 
@@ -87,5 +87,42 @@ describe('IPC channel consistency', () => {
         expect(preloadVal[1]).toBe(typesVal[1]);
       }
     }
+  });
+});
+
+// Regression net for the six dev:* IPC channels introduced by the
+// Settings → Development feature. All three platforms must carry identical
+// type strings. The Android assertion is intentionally expected to fail
+// until Phase 6 (SessionService.kt dev:* handlers) lands.
+describe('dev:* channel parity', () => {
+  const NEW_TYPES = [
+    'dev:log-tail',
+    'dev:summarize-issue',
+    'dev:submit-issue',
+    'dev:install-workspace',
+    'dev:install-progress',
+    'dev:open-session-in',
+  ];
+
+  it('all six dev:* types are declared in preload.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
+  });
+
+  it('all six dev:* types are referenced in remote-shim.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
+  });
+
+  // WHY: This assertion is intentionally failing until Phase 6 adds SessionService.kt
+  // handlers. It acts as the regression net — when Phase 6 lands, this turns green
+  // and confirms Android parity is complete.
+  it('all six dev:* types are handled by SessionService.kt (Android)', () => {
+    const ktPath = path.join(
+      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
+    );
+    const src = fs.readFileSync(ktPath, 'utf8');
+    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
 });

@@ -13,6 +13,9 @@ import { CLOSE_PROMPT_SUPPRESS_KEY } from './CloseSessionPrompt';
 import { ModelInfoTooltip } from './ModelPickerPopup';
 import { useScrollFade } from '../hooks/useScrollFade';
 import AboutPopup from './AboutPopup';
+import { DevelopmentPopup } from './development/DevelopmentPopup';
+import { BugReportPopup } from './development/BugReportPopup';
+import { ContributePopup } from './development/ContributePopup';
 
 // Plain-language explainer for the Remote Access popup. Shown when the user
 // taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
@@ -1892,6 +1895,9 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
   const [remoteConnected, setRemoteConnected] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
+  const [showDevMenu, setShowDevMenu] = useState(false);
+  const [showBugReport, setShowBugReport] = useState(false);
+  const [showContribute, setShowContribute] = useState(false);
 
   const claude = (window as any).claude;
 
@@ -1972,6 +1978,37 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
           <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Other</h3>
           <div className="space-y-2">
             <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
+
+            {/* Development — bug reports, contributions, known issues */}
+            <button
+              onClick={() => setShowDevMenu(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+            >
+              <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
+                <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3-3a1 1 0 000-1.4l-1.6-1.6a1 1 0 00-1.4 0l-3 3z" />
+                  <path d="M5 20l9-9" />
+                  <path d="M14.5 13.5L18 17" />
+                  <path d="M8.5 6.5L5 3" />
+                  <path d="M3 5l2.5 2.5" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-fg font-medium">Development</span>
+                <p className="text-[10px] text-fg-muted">Report a bug, contribute, or browse known issues</p>
+              </div>
+              <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <DevelopmentPopup
+              open={showDevMenu}
+              onClose={() => setShowDevMenu(false)}
+              onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+              onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
+            />
+            <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+            <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
             {/* Keyboard shortcuts intentionally omitted on Android — no physical keyboard. */}
 
@@ -2098,6 +2135,9 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
+  const [showDevMenu, setShowDevMenu] = useState(false);
+  const [showBugReport, setShowBugReport] = useState(false);
+  const [showContribute, setShowContribute] = useState(false);
 
   useEffect(() => {
     if (!open) return;
@@ -2263,6 +2303,37 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
           <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-3">Other</h3>
           <div className="space-y-2">
             <DefaultsButton defaults={defaults} onDefaultsChange={handleDefaultsChange} />
+
+            {/* Development — bug reports, contributions, known issues */}
+            <button
+              onClick={() => setShowDevMenu(true)}
+              className="w-full flex items-center gap-3 px-3 py-2.5 rounded-lg bg-inset/50 hover:bg-inset transition-colors text-left"
+            >
+              <div className="flex items-center justify-center shrink-0" style={{ width: 32, height: 20 }}>
+                <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14.7 6.3a1 1 0 000 1.4l1.6 1.6a1 1 0 001.4 0l3-3a1 1 0 000-1.4l-1.6-1.6a1 1 0 00-1.4 0l-3 3z" />
+                  <path d="M5 20l9-9" />
+                  <path d="M14.5 13.5L18 17" />
+                  <path d="M8.5 6.5L5 3" />
+                  <path d="M3 5l2.5 2.5" />
+                </svg>
+              </div>
+              <div className="flex-1 min-w-0">
+                <span className="text-xs text-fg font-medium">Development</span>
+                <p className="text-[10px] text-fg-muted">Report a bug, contribute, or browse known issues</p>
+              </div>
+              <svg className="w-3.5 h-3.5 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+              </svg>
+            </button>
+            <DevelopmentPopup
+              open={showDevMenu}
+              onClose={() => setShowDevMenu(false)}
+              onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+              onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
+            />
+            <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+            <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
             {/* Keyboard Shortcuts */}
             <button

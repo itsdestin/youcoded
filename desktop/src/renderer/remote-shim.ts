@@ -210,6 +210,12 @@ function handleMessage(data: string): void {
       // slug to match theme-context's onReload(slug) signature.
       dispatchEvent('theme:reload', payload?.slug);
       break;
+    case 'dev:install-progress':
+      // WHY: dev.onInstallProgress subscribers listen on this channel.
+      // The server emits one line at a time (string payload) while cloning
+      // the workspace. We forward the raw payload so the cb receives a string.
+      dispatchEvent('dev:install-progress', payload);
+      break;
   }
 }
 
@@ -836,6 +842,30 @@ export function installShim(): void {
       add: (folderPath: string, nickname?: string) => invoke('folders:add', { folderPath, nickname }),
       remove: (folderPath: string) => invoke('folders:remove', { folderPath }),
       rename: (folderPath: string, nickname: string) => invoke('folders:rename', { folderPath, nickname }),
+    },
+    // Settings → Development feature — mirrors preload.ts dev namespace.
+    // WHY: remote-browser users (and Android WebView) load remote-shim instead
+    // of preload.ts. Without this, DevelopmentPopup crashes when it calls
+    // window.claude.dev.logTail (parity invariant from PITFALLS.md).
+    dev: {
+      logTail: (maxLines: number) =>
+        invoke('dev:log-tail', maxLines),
+      summarizeIssue: (args: { kind: 'bug' | 'feature'; description: string; log?: string }) =>
+        invoke('dev:summarize-issue', args),
+      submitIssue: (args: { kind: 'bug' | 'feature'; title: string; summary: string; description: string; log?: string; label: 'bug' | 'enhancement' }) =>
+        invoke('dev:submit-issue', args),
+      installWorkspace: () =>
+        invoke('dev:install-workspace'),
+      onInstallProgress: (cb: (line: string) => void) => {
+        // WHY: Server pushes 'dev:install-progress' events via the existing
+        // WebSocket push dispatcher (handleMessage switch). Register a listener
+        // using addListener/removeListener — same pattern as sync.restore.onProgress.
+        const handler: Callback = (payload: any) => cb(String(payload));
+        addListener('dev:install-progress', handler);
+        return () => removeListener('dev:install-progress', handler);
+      },
+      openSessionIn: (args: { cwd: string; initialInput?: string }) =>
+        invoke('dev:open-session-in', args),
     },
     // First-run is desktop-only — return COMPLETE so the renderer never enters first-run mode
     firstRun: {
