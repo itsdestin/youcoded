@@ -468,11 +468,24 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
           } catch (e: any) {
             if (e.code === 'EXDEV') {
               // Cross-device rename (tmpfs download dir → ext4 app dir). Copy then unlink.
-              fs.copyFileSync(input.filePath, running);
-              fs.unlinkSync(input.filePath);
-            } else if (e.code === 'EACCES' || e.code === 'EPERM') {
-              // AppImage installed to a root-owned path — user needs sudo.
+              // Guard the copy for ENOSPC so the renderer shows the correct disk-full copy
+              // instead of a generic spawn-failed.
+              try {
+                fs.copyFileSync(input.filePath, running);
+                fs.unlinkSync(input.filePath);
+              } catch (copyErr: any) {
+                if (copyErr.code === 'ENOSPC') return { success: false, error: 'disk-full' };
+                if (copyErr.code === 'EACCES' || copyErr.code === 'EPERM' || copyErr.code === 'EROFS') {
+                  return { success: false, error: 'appimage-not-writable' };
+                }
+                return { success: false, error: 'spawn-failed' };
+              }
+            } else if (e.code === 'EACCES' || e.code === 'EPERM' || e.code === 'EROFS') {
+              // AppImage path is root-owned (EACCES/EPERM) or on a read-only FS (EROFS) —
+              // user needs sudo or a different location.
               return { success: false, error: 'appimage-not-writable' };
+            } else if (e.code === 'ENOSPC') {
+              return { success: false, error: 'disk-full' };
             } else {
               return { success: false, error: 'spawn-failed' };
             }
@@ -505,6 +518,9 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
     return new Promise(resolve => {
       let settled = false;
       let child: any;
+      // Hoisted so the `error` handler can clear the 2s quick-exit timer too —
+      // otherwise the timer survives and keeps Node's event loop alive until it fires.
+      let timer: NodeJS.Timeout | null = null;
 
       try {
         child = spawnFn(cmd, args, {
@@ -523,13 +539,14 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
       child.on?.('error', () => {
         if (settled) return;
         settled = true;
+        if (timer) clearTimeout(timer);
         resolve({ success: false, error: 'spawn-failed' });
       });
 
       if (requireQuickExitOk) {
         // macOS: wait up to QUICK_EXIT_WINDOW_MS for an early non-zero exit.
         // If the timer fires first the DMG mounted fine; resolve success.
-        const timer = setTimeout(() => {
+        timer = setTimeout(() => {
           if (settled) return;
           settled = true;
           try { child.unref?.(); } catch { /* ignore */ }
@@ -539,7 +556,7 @@ export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
         child.on?.('exit', (code: number | null) => {
           if (settled) return;
           settled = true;
-          clearTimeout(timer);
+          if (timer) clearTimeout(timer);
           if (code !== null && code !== 0) {
             resolve({ success: false, error: quickExitErrorCode });
           } else {
