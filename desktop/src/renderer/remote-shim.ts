@@ -750,6 +750,25 @@ export function installShim(): void {
     update: {
       changelog: async (opts: { forceRefresh: boolean }) =>
         invoke('update:changelog', opts),
+      // Mirrors main-side IPC channels for parity (see tests/update-install-ipc.test.ts):
+      //   'update:download'           — stub below (throws remote-unsupported)
+      //   'update:cancel'             — stub below (returns { success: false })
+      //   'update:launch'             — stub below (returns remote-unsupported)
+      //   'update:get-cached-download'— stub below (returns null)
+      //   'update:progress'           — never fires on remote (no-op subscribe)
+      download: async () => {
+        throw new Error('remote-unsupported');
+      },
+      cancel: async (_jobId: string) => ({ success: false }),
+      launch: async (_jobId: string, _filePath: string) => ({
+        success: false as const,
+        error: 'remote-unsupported' as const,
+      }),
+      getCachedDownload: async (_version: string) => null,
+      onProgress: (_handler: (ev: any) => void) => {
+        // No-op on remote browsers — they never emit progress.
+        return () => {};
+      },
     },
     remote: {
       getConfig: () => invoke('remote:get-config'),
