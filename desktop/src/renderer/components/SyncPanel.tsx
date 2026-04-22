@@ -683,18 +683,26 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         )}
                       </div>
 
-                      {/* Status dot — color derived from scoped warnings for this backend. */}
+                      {/* Status dot — same severity logic as the panel-wide row, scoped to this backend.
+                          Action-feedback "uploading/downloading" overlays the helper-derived color. */}
                       {(() => {
-                        const scoped = status.warnings.filter(w => w.backendId === b.id);
-                        const hasDanger = scoped.some(w => w.level === 'danger');
-                        const hasWarn = scoped.some(w => w.level === 'warn');
-                        const dotClass =
-                          hasDanger ? 'bg-red-500'
-                          : hasWarn ? 'bg-amber-500'
-                          : actionFeedback[b.id]?.includes('ing') ? 'bg-blue-400 animate-pulse'
-                          : b.syncEnabled && b.connected && b.lastPushEpoch && (Date.now() / 1000 - b.lastPushEpoch) < 86400 ? 'bg-green-500'
-                          : b.syncEnabled && b.connected ? 'bg-yellow-500'
-                          : 'bg-fg-muted/40';
+                        const scopedDisplay = deriveSyncState({
+                          hasBackends: true,
+                          // syncInProgress is global; per-backend "syncing" comes from per-backend action feedback below.
+                          syncInProgress: false,
+                          lastSyncEpoch: b.lastPushEpoch,
+                          warnings: status.warnings,
+                          scope: { backendId: b.id },
+                        });
+                        const inFlight = actionFeedback[b.id]?.includes('ing');
+                        const baseClass = dotColorForState(scopedDisplay);
+                        // When the backend isn't connected/sync-enabled at all, dim the dot regardless of warnings.
+                        const offline = !b.syncEnabled || !b.connected;
+                        const dotClass = inFlight
+                          ? 'bg-blue-400 animate-pulse'
+                          : offline && scopedDisplay.kind !== 'failing'
+                            ? 'bg-fg-muted/40'
+                            : baseClass;
                         return <div className={`w-2 h-2 rounded-full shrink-0 ${dotClass}`} />;
                       })()}
 
