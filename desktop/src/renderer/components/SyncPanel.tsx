@@ -211,14 +211,19 @@ export default function SyncSection({ autoOpen, onAutoOpenHandled }: SyncSection
     }
   }, [autoOpen, open, onAutoOpenHandled]);
 
-  // Derive summary for compact row
-  const syncCount = status?.backends.filter(b => b.syncEnabled).length ?? 0;
-  const storageCount = status?.backends.filter(b => !b.syncEnabled).length ?? 0;
-  const warningCount = status?.warnings.length ?? 0;
+  // Derive summary for compact row.
+  // Defensive: the outer `status?` only guards status being null/undefined —
+  // if a malformed payload has status without `backends`/`warnings`, the
+  // inner .filter/.length crashes to RootErrorBoundary. Use ?. on the inner
+  // fields too so a partial status degrades to zero counts instead of a
+  // render crash.
+  const syncCount = status?.backends?.filter(b => b.syncEnabled).length ?? 0;
+  const storageCount = status?.backends?.filter(b => !b.syncEnabled).length ?? 0;
+  const warningCount = status?.warnings?.length ?? 0;
   const lastSyncText = status?.lastSyncEpoch ? timeAgo(status.lastSyncEpoch) : 'Never';
 
   // Status dot: only considers sync-enabled backends
-  const syncBackends = status?.backends.filter(b => b.syncEnabled) ?? [];
+  const syncBackends = status?.backends?.filter(b => b.syncEnabled) ?? [];
   const dotColor = !status || syncBackends.length === 0
     ? 'bg-fg-muted/40'
     : status.syncInProgress
@@ -562,7 +567,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             <div>
               <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Your Backups</h3>
 
-              {status && status.backends.length > 0 ? (
+              {status?.backends && status.backends.length > 0 ? (
                 <div className="space-y-2">
                   {(() => {
                     // Fix: warnings are now SyncWarning objects, not strings — check by .code.
@@ -736,7 +741,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
             </div>
 
             {/* 3. Warnings — typed SyncWarning objects with title/body/fix-action/stderr */}
-            {status && status.warnings.length > 0 && (
+            {status?.warnings && status.warnings.length > 0 && (
               <div>
                 <h3 className="text-[10px] font-medium text-fg-muted tracking-wider uppercase mb-2">Warnings</h3>
                 <div className="space-y-2">

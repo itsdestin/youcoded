@@ -882,12 +882,16 @@ export default function SessionStrip({
               reports peer windows owning sessions. Selecting one tells main
               to focus that window and switch its active session. */}
           {(() => {
+            // Defensive: a partial windowDirectory payload (missing `sessions`
+            // on a peer window entry) must not crash SessionStrip — it lives
+            // in the main App tree above the Game ErrorBoundary, so a throw
+            // falls through to RootErrorBoundary and wipes chat state.
             const remoteGroups = (windowDirectory?.windows ?? [])
               .filter((w) => w.window.id !== myWindowId)
               .map((w) => ({
                 label: w.window.label,
                 windowId: w.window.id,
-                sessions: w.sessions,
+                sessions: w.sessions ?? [],
               }))
               .filter((g) => g.sessions.length > 0);
             if (remoteGroups.length === 0) return null;

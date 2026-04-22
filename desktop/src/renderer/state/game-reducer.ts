@@ -62,7 +62,14 @@ export function gameReducer(state: GameState, action: GameAction): GameState {
       return { ...state, slowConnect: false, slowConnectHint: null };
 
     case 'PRESENCE_UPDATE':
-      return { ...state, onlineUsers: action.online };
+      // Defensive: a malformed server frame (wrong schema, missing `users`) must
+      // not wipe onlineUsers to undefined — subsequent USER_JOINED/LEFT/STATUS
+      // reducers call .filter/.map on it and would crash the whole App tree
+      // (PRESENCE_UPDATE dispatch originates in usePartyLobby at AppInner scope,
+      // above the GamePanel ErrorBoundary, so the throw reaches RootErrorBoundary
+      // and resets chat state). Fall back to the existing list if the payload
+      // is missing, never to undefined.
+      return { ...state, onlineUsers: Array.isArray(action.online) ? action.online : state.onlineUsers };
 
     case 'USER_JOINED':
       return {
