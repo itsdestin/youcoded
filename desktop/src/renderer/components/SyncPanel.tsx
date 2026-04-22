@@ -202,7 +202,7 @@ const CATEGORY_LABELS: Record<string, string> = {
   specs: 'Specs',
 };
 
-// Hover descriptions — shown via title attribute on the badge spans
+// Hover descriptions — shown via title attribute on each inline category label
 const CATEGORY_DESCRIPTIONS: Record<string, string> = {
   memory: 'Your Claude memory files and preferences',
   conversations: 'Chat history and conversation logs',
@@ -872,7 +872,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                         {CATEGORY_LABELS[cat] || cat}
                       </span>
                     );
-                    return i === 0 ? [label] : [<span key={`sep-${cat}`}> {'·'} </span>, label];
+                    return i === 0 ? [label] : [<span key={`sep-${cat}`} aria-hidden="true"> {'·'} </span>, label];
                   })}
                 </span>
               </div>
