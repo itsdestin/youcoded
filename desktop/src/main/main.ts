@@ -25,6 +25,7 @@ import { registerMarketplaceApiHandlers } from './marketplace-api-handlers';
 import { requestChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
 import { excludeFromCapture, nativeCaptureExclusionAvailable } from './window-exclude-capture';
+import { cleanupStaleDownloads } from './update-installer';
 
 // macOS and Linux Electron apps may inherit a minimal PATH that's missing
 // common tool locations (Homebrew, nvm, Volta, pipx, cargo). macOS Finder/Dock
@@ -1066,6 +1067,15 @@ app.whenReady().then(async () => {
     }
   } catch (e) {
     log('ERROR', 'Main', 'Failed to clean up orphan symlinks', { error: String(e) });
+  }
+
+  // Sweep abandoned .partial files and downloads older than 24h from the
+  // in-app update cache. Runs at every startup so stale downloads (e.g. from
+  // a cancelled update on a prior session) don't accumulate on disk.
+  try {
+    cleanupStaleDownloads(path.join(app.getPath('userData'), 'update-cache'));
+  } catch (e) {
+    log('ERROR', 'Main', 'Failed to clean up stale update downloads', { error: String(e) });
   }
 
   // Decomposition v3 §9.3: reconcile plugin mcp-manifest.json into

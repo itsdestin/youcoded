@@ -28,6 +28,8 @@ import { getRestoreService } from './restore-service';
 import type { RestoreOptions, RestoreProgressEvent } from '../shared/types';
 import { log } from './logger';
 import { readLogTail, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn } from './dev-tools';
+import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
+import type { UpdateProgressEvent } from '../shared/update-install-types';
 import { getChangelog } from './changelog-service';
 
 // Max age for clipboard paste images (1 hour)
@@ -1275,6 +1277,95 @@ export function registerIpcHandlers(
 
     return status;
   }
+
+  // -------------------------------------------------------------------------
+  // In-app update installer — download + launch the platform installer.
+  // Spec: docs/superpowers/specs/2026-04-22-in-app-update-installer-design.md
+  // -------------------------------------------------------------------------
+  const updateCacheDir = path.join(app.getPath('userData'), 'update-cache');
+
+  const installer = createUpdateInstaller({
+    cacheDir: updateCacheDir,
+    onProgress: (ev: UpdateProgressEvent) => {
+      // Broadcast to every live renderer. Renderers filter by jobId (single-job
+      // invariant in the engine means only one is in flight, but filtering keeps
+      // UI state correct if a prior job's final tick arrives after the popup closed).
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('update:progress', ev);
+      }
+    },
+  });
+
+  const launchInstaller = makeLaunchInstaller({
+    shellOpenExternal: (url: string) => shell.openExternal(url),
+    appRelaunch: () => app.relaunch(),
+    fallbackDownloadUrl: () => cachedUpdateStatus?.download_url ?? '',
+    // production reads process.env.APPIMAGE (Linux only); tests pass an override.
+  });
+
+  // Dev-only fake-update flag: when set AND running from source (unpackaged),
+  // short-circuit the download/launch to use a bundled 1 MB dummy installer.
+  // Lets us exercise the popup flow end-to-end without a real release. Gated on
+  // !app.isPackaged so production builds can never enter this path even if the
+  // env var is somehow set.
+  const devFakeUpdate = !app.isPackaged && process.env.YOUCODED_DEV_FAKE_UPDATE === '1';
+
+  ipcMain.handle('update:download', async () => {
+    if (devFakeUpdate) {
+      // Copy the bundled dummy installer into the cache dir so the launch path
+      // exercises the same file-move logic it would hit in prod. Emits one
+      // synchronous 100% progress event so the renderer sees the full arc.
+      const ext = process.platform === 'win32' ? '.exe'
+               : process.platform === 'darwin' ? '.dmg'
+               : '.AppImage';
+      // app.getAppPath() resolves to the desktop/ root (where package.json lives),
+      // which is where dev-assets/ sits. More robust than __dirname across dev
+      // build variations (tsc watch vs esbuild output).
+      const srcPath = path.join(app.getAppPath(), 'dev-assets', `fake-installer${ext}`);
+      if (!fs.existsSync(updateCacheDir)) fs.mkdirSync(updateCacheDir, { recursive: true });
+      const dstPath = path.join(updateCacheDir, `YouCoded-fake-dev${ext}`);
+      fs.copyFileSync(srcPath, dstPath);
+      const bytesTotal = fs.statSync(dstPath).size;
+      const jobId = `dev-${Date.now()}`;
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('update:progress', { jobId, bytesReceived: bytesTotal, bytesTotal, percent: 100 });
+      }
+      return { jobId, filePath: dstPath, bytesTotal };
+    }
+    // Renderer never passes a URL — we resolve main-side from the trusted cache
+    // populated by the GitHub Releases check. Prevents renderer from spoofing
+    // the download target.
+    const status = getUpdateStatus();
+    const url = status?.download_url;
+    if (!url) throw new UpdateInstallError('url-rejected', 'no download URL available');
+    return await installer.startDownload(url);
+  });
+
+  ipcMain.handle('update:cancel', async (_event, payload: { jobId: string }) => {
+    installer.cancelDownload(payload.jobId);
+    return { success: true };
+  });
+
+  ipcMain.handle('update:launch', async (_event, payload: { jobId: string; filePath: string }) => {
+    if (devFakeUpdate) {
+      // Never actually launch anything in dev — just surface the cached file in
+      // the OS file manager so Destin can confirm it exists.
+      shell.showItemInFolder(payload.filePath);
+      // Return the fallback: 'browser' shape so the renderer flips out of launching
+      // state and calls onClose() — do NOT schedule app.quit() (that would kill the dev session).
+      return { success: true, quitPending: false, fallback: 'browser' as const };
+    }
+    const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
+    if (result.success && result.quitPending) {
+      // 500ms grace so the child installer process has detached cleanly before we exit.
+      setTimeout(() => app.quit(), 500);
+    }
+    return result;
+  });
+
+  ipcMain.handle('update:get-cached-download', async (_event, payload: { version: string }) => {
+    return findCachedDownload(updateCacheDir, payload.version, process.platform);
+  });
 
   // Initial fetch on startup
   fetchLatestRelease().catch(() => {});

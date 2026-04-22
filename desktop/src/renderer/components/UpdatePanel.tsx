@@ -4,10 +4,20 @@
 //   - false → "What's new" + full changelog, no button
 // Cache lives main-side (see changelog-service.ts).
 
-import React, { useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
+import type { UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import MarkdownContent from './MarkdownContent';
+
+// Error codes where a fresh download might succeed (transient or file-level).
+// The complement (dmg-corrupt, appimage-not-writable, unsupported-platform,
+// remote-unsupported, url-rejected, spawn-failed, busy) won't benefit from retry —
+// the user's best move is the browser fallback link.
+const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing']);
+function isRetriableErrorCode(code: string): boolean {
+  return RETRIABLE_ERROR_CODES.has(code);
+}
 
 interface UpdateStatus {
   current: string;
@@ -59,14 +69,127 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       .finally(() => setLoading(false));
   }, [open, updateStatus.update_available]);
 
-  if (!open) return null;
+  // ── Install state machine ────────────────────────────────────────────────
+  type InstallState =
+    | { kind: 'idle' }
+    | { kind: 'downloading'; jobId: string | null; percent: number }
+    | { kind: 'ready'; jobId: string; filePath: string }
+    | { kind: 'launching' }
+    | { kind: 'error'; code: string };
 
-  const handleUpdate = async () => {
+  const [installState, setInstallState] = useState<InstallState>({ kind: 'idle' });
+  // Ref rather than state because the progress handler fires asynchronously and
+  // we want the freshest jobId without re-subscribing.
+  const activeJobIdRef = useRef<string | null>(null);
+  // Aborted-close guard: if the user closes the popup mid-download and the
+  // download() promise still resolves afterwards (cancel didn't race in time),
+  // we must NOT setInstallState(ready) — that would leave stale "Launch Installer"
+  // state showing on next open.
+  const abortedRef = useRef(false);
+
+  // Subscribe to download progress. Main broadcasts progress to every window;
+  // we rely on the main-side single-job invariant (only one download in flight
+  // at a time) so any progress event during `downloading` state is ours.
+  // The jobId is captured lazily from the first progress event, since
+  // `window.claude.update.download()` doesn't return its jobId until it resolves.
+  // We preserve the raw `percent` (including the -1 sentinel for unknown
+  // Content-Length) so the button can render an indeterminate "Downloading…"
+  // label — don't clamp here.
+  useEffect(() => {
+    const unsub = window.claude.update.onProgress((ev) => {
+      setInstallState(prev => {
+        if (prev.kind !== 'downloading') return prev;
+        if (!activeJobIdRef.current) activeJobIdRef.current = ev.jobId;
+        return { kind: 'downloading', jobId: ev.jobId, percent: ev.percent };
+      });
+    });
+    return unsub;
+  }, []);
+
+  // When the popup opens and a completed download is already cached for this
+  // version, jump straight to ready state (skip the re-download).
+  // Guard: only overwrite state if we're still in `idle` — don't race against
+  // a user-initiated download that already started.
+  useEffect(() => {
+    if (!open) return;
+    if (!updateStatus.update_available) return;
+    let cancelled = false;
+    (async () => {
+      const cached = await window.claude.update.getCachedDownload(updateStatus.latest);
+      if (cancelled || !cached) return;
+      setInstallState(prev => prev.kind === 'idle'
+        ? { kind: 'ready', jobId: 'cached', filePath: cached.filePath }
+        : prev);
+    })();
+    return () => { cancelled = true; };
+  }, [open, updateStatus.update_available, updateStatus.latest]);
+
+  // When the popup opens/closes, manage the abortedRef + cancel any in-flight
+  // download. Main's cancelDownload is a no-op if the job isn't active, so we
+  // don't need to check installState — keeping this effect's deps to [open] only.
+  useEffect(() => {
+    if (open) {
+      // Fresh open — clear the abort flag so a new download can resolve.
+      abortedRef.current = false;
+      return;
+    }
+    // Close — signal abort, cancel any in-flight download, reset to idle.
+    abortedRef.current = true;
+    if (activeJobIdRef.current) {
+      window.claude.update.cancel(activeJobIdRef.current);
+      activeJobIdRef.current = null;
+    }
+    setInstallState({ kind: 'idle' });
+  }, [open]);
+
+  const runLaunch = useCallback(async (jobId: string, filePath: string) => {
+    setInstallState({ kind: 'launching' });
+    const result: UpdateLaunchResult = await window.claude.update.launch(jobId, filePath);
+    if (!result.success) {
+      setInstallState({ kind: 'error', code: result.error });
+      return;
+    }
+    if ('fallback' in result && result.fallback === 'browser') {
+      // .deb or missing-APPIMAGE — browser opened; close the popup.
+      onClose();
+      return;
+    }
+    // Happy path: main process will app.quit() in ~500ms. Leave the button in
+    // "launching" state — the app is about to disappear.
+  }, [onClose]);
+
+  const handleUpdate = useCallback(async () => {
+    // If we already have a ready job, skip straight to launch.
+    if (installState.kind === 'ready') {
+      await runLaunch(installState.jobId, installState.filePath);
+      return;
+    }
+    // Otherwise kick off a download. Preserve raw percent sentinel (-1 means
+    // Content-Length unknown) so the label shows the indeterminate branch.
+    try {
+      setInstallState({ kind: 'downloading', jobId: null, percent: -1 });
+      const result = await window.claude.update.download();
+      // Guard: if the popup closed during the download, don't leave stale
+      // "Launch Installer" state showing on next open.
+      if (abortedRef.current) return;
+      activeJobIdRef.current = result.jobId;
+      setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
+    } catch (e: any) {
+      if (abortedRef.current) return;
+      const code = typeof e?.message === 'string' ? (e.message.split(':')[0] || 'network-failed') : 'network-failed';
+      setInstallState({ kind: 'error', code });
+    }
+  }, [installState, runLaunch]);
+
+  const handleFallbackBrowser = useCallback(async () => {
     if (updateStatus.download_url) {
       await window.claude.shell.openExternal(updateStatus.download_url);
     }
     onClose();
-  };
+  }, [onClose, updateStatus.download_url]);
+  // ────────────────────────────────────────────────────────────────────────
+
+  if (!open) return null;
 
   const handleOpenOnGithub = async () => {
     await window.claude.shell.openChangelog();
@@ -140,13 +263,43 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         </header>
         <div className="flex-1 overflow-y-auto px-5 py-4">{body}</div>
         {updateStatus.update_available && (
-          <footer className="px-5 py-3 border-t border-edge-dim flex justify-end">
+          <footer className="px-5 py-3 border-t border-edge-dim flex flex-col items-end">
             <button
               onClick={handleUpdate}
-              className="px-4 py-2 rounded-sm bg-accent text-on-accent font-medium hover:opacity-90"
+              disabled={
+                installState.kind === 'downloading' ||
+                installState.kind === 'launching' ||
+                // Disable "retry" for errors where a fresh download won't help.
+                (installState.kind === 'error' && !isRetriableErrorCode(installState.code))
+              }
+              className="px-4 py-2 rounded-sm bg-accent text-on-accent font-medium hover:opacity-90 disabled:opacity-60"
             >
-              Update Now: v{updateStatus.current} → v{updateStatus.latest}
+              {installState.kind === 'idle' && `Update Now: v${updateStatus.current} → v${updateStatus.latest}`}
+              {installState.kind === 'downloading' && (
+                installState.percent >= 0 ? `Downloading ${installState.percent}%…` : 'Downloading…'
+              )}
+              {installState.kind === 'ready' && 'Launch Installer'}
+              {installState.kind === 'launching' && 'Launching…'}
+              {installState.kind === 'error' && (
+                // Retriable errors (network/disk/file-missing) can be fixed by
+                // a fresh download; the rest (dmg-corrupt, appimage-not-writable,
+                // unsupported-platform, remote-unsupported) can't — the user's
+                // best option is the browser fallback link below.
+                isRetriableErrorCode(installState.code)
+                  ? 'Download failed — Retry'
+                  : 'Launch failed'
+              )}
             </button>
+            {installState.kind === 'error' && (
+              <div className="text-xs text-fg-dim mt-2">
+                <button
+                  onClick={handleFallbackBrowser}
+                  className="underline hover:text-fg"
+                >
+                  Open in browser instead
+                </button>
+              </div>
+            )}
           </footer>
         )}
       </OverlayPanel>

@@ -2608,6 +2608,20 @@ class SessionService : Service() {
                 }
             }
 
+            // Desktop in-app update installer stubs (Android uses Play Store / direct APK sideload)
+            "update:download",
+            "update:cancel",
+            "update:launch",
+            "update:get-cached-download" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, UpdateInstallerStub.unsupported())
+                }
+            }
+            "update:progress" -> {
+                // Push-event channel — no-op on Android. Desktop pushes these; Android
+                // never subscribes because it never downloads desktop installers.
+            }
+
             else -> {
                 android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildErrorResponse("Unknown: ${msg.type}")) }

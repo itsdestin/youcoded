@@ -64,6 +64,11 @@ const IPC = {
   SKILLS_APPLY_OUTPUT_STYLE: 'skills:apply-output-style',
   OPEN_CHANGELOG: 'shell:open-changelog',
   UPDATE_CHANGELOG: 'update:changelog',
+  UPDATE_DOWNLOAD: 'update:download',
+  UPDATE_CANCEL: 'update:cancel',
+  UPDATE_LAUNCH: 'update:launch',
+  UPDATE_PROGRESS: 'update:progress',
+  UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
   OPEN_EXTERNAL: 'shell:open-external',
   TERMINAL_READY: 'session:terminal-ready',
   PERMISSION_RESPOND: 'permission:respond',
@@ -442,6 +447,15 @@ contextBridge.exposeInMainWorld('claude', {
   update: {
     changelog: (opts: { forceRefresh: boolean }): Promise<ChangelogIpcResult> =>
       ipcRenderer.invoke(IPC.UPDATE_CHANGELOG, opts),
+    download: () => ipcRenderer.invoke(IPC.UPDATE_DOWNLOAD),
+    cancel: (jobId: string) => ipcRenderer.invoke(IPC.UPDATE_CANCEL, { jobId }),
+    launch: (jobId: string, filePath: string) => ipcRenderer.invoke(IPC.UPDATE_LAUNCH, { jobId, filePath }),
+    getCachedDownload: (version: string) => ipcRenderer.invoke(IPC.UPDATE_GET_CACHED_DOWNLOAD, { version }),
+    onProgress: (handler: (ev: { jobId: string; bytesReceived: number; bytesTotal: number; percent: number }) => void) => {
+      const wrap = (_event: unknown, ev: any) => handler(ev);
+      ipcRenderer.on(IPC.UPDATE_PROGRESS, wrap);
+      return () => ipcRenderer.removeListener(IPC.UPDATE_PROGRESS, wrap);
+    },
   },
   remote: {
     getConfig: () => ipcRenderer.invoke(IPC.REMOTE_GET_CONFIG),

@@ -78,6 +78,12 @@ declare global {
           fromCache: boolean;
           error?: boolean;
         }>;
+        // In-app update installer (Task 7). Mirrors preload.ts + remote-shim.ts.
+        download: () => Promise<import('../../shared/update-install-types').UpdateDownloadResult>;
+        cancel: (jobId: string) => Promise<{ success: boolean }>;
+        launch: (jobId: string, filePath: string) => Promise<import('../../shared/update-install-types').UpdateLaunchResult>;
+        getCachedDownload: (version: string) => Promise<import('../../shared/update-install-types').UpdateCachedDownload | null>;
+        onProgress: (handler: (ev: import('../../shared/update-install-types').UpdateProgressEvent) => void) => () => void;
       };
       remote: {
         getConfig: () => Promise<any>;

@@ -618,6 +618,11 @@ export const IPC = {
   READ_TRANSCRIPT_META: 'transcript:read-meta',
   OPEN_CHANGELOG: 'shell:open-changelog',
   UPDATE_CHANGELOG: 'update:changelog',
+  UPDATE_DOWNLOAD: 'update:download',
+  UPDATE_CANCEL: 'update:cancel',
+  UPDATE_LAUNCH: 'update:launch',
+  UPDATE_PROGRESS: 'update:progress',
+  UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
   OPEN_EXTERNAL: 'shell:open-external',
   PERMISSION_RESPOND: 'permission:respond',
   // Remote settings

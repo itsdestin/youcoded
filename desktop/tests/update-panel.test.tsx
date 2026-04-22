@@ -58,7 +58,15 @@ const CHANGELOG_ERROR = { markdown: null, entries: [], fromCache: false, error: 
 
 beforeEach(() => {
   (window as any).claude = {
-    update: { changelog: vi.fn().mockResolvedValue(CHANGELOG_OK) },
+    update: {
+      changelog: vi.fn().mockResolvedValue(CHANGELOG_OK),
+      // New methods — no-op defaults so UpdatePanel's useEffects don't crash in tests.
+      onProgress: vi.fn().mockReturnValue(() => {}),
+      getCachedDownload: vi.fn().mockResolvedValue(null),
+      download: vi.fn().mockResolvedValue({ jobId: 'test-job', filePath: '/tmp/YouCoded-setup.exe', bytesTotal: 0 }),
+      cancel: vi.fn().mockResolvedValue({ success: true }),
+      launch: vi.fn().mockResolvedValue({ success: true, quitPending: true }),
+    },
     shell: {
       openExternal: vi.fn().mockResolvedValue(undefined),
       openChangelog: vi.fn().mockResolvedValue(undefined),
@@ -78,13 +86,15 @@ describe('UpdatePanel — update available', () => {
     await waitFor(() => expect((window as any).claude.update.changelog).toHaveBeenCalledWith({ forceRefresh: true }));
   });
 
-  it('Update Now button calls shell.openExternal and closes', async () => {
+  it('Update Now button kicks off download then shows Launch Installer', async () => {
+    // Behavior changed from Task 11: clicking no longer opens the browser directly —
+    // it starts the download flow. After download() resolves the button shows "Launch Installer".
     const onClose = vi.fn();
     render(<UpdatePanel open={true} onClose={onClose} updateStatus={UPDATE_STATUS_AVAILABLE} />);
     const btn = await screen.findByRole('button', { name: /update now/i });
     fireEvent.click(btn);
-    expect((window as any).claude.shell.openExternal).toHaveBeenCalledWith(UPDATE_STATUS_AVAILABLE.download_url);
-    await waitFor(() => expect(onClose).toHaveBeenCalled());
+    expect((window as any).claude.update.download).toHaveBeenCalled();
+    await waitFor(() => expect(screen.getByRole('button', { name: /launch installer/i })).toBeInTheDocument());
   });
 
   it('filters entries to those newer than current version', async () => {
