@@ -58,6 +58,11 @@ export default function AboutPopup({ open, onClose, platform, version, build }: 
   const libs = platform === 'desktop' ? DESKTOP_LIBS : ANDROID_LIBS;
   const versionLine = `YouCoded ${version}${build ? ` · ${build}` : ''}`;
 
+  // overflow-hidden on the OverlayPanel clips the inner header's bg-panel
+  // rectangle to the parent's rounded corners. .layer-surface only sets
+  // border-radius, not overflow:hidden, so a child with its own background
+  // paints sharp corners over the rounded surface — visible as boxy top
+  // corners on the About popup header before this fix.
   return createPortal(
     <>
       <Scrim layer={2} onClick={onClose} />
@@ -66,7 +71,7 @@ export default function AboutPopup({ open, onClose, platform, version, build }: 
         role="dialog"
         aria-modal={true}
         aria-labelledby="about-popup-title"
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-md w-[calc(100%-2rem)] max-h-[85vh] flex flex-col"
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 max-w-md w-[calc(100%-2rem)] max-h-[85vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {/* Header mirrors PreferencesPopup so all settings popups share the same chrome */}
@@ -86,7 +91,9 @@ export default function AboutPopup({ open, onClose, platform, version, build }: 
           </button>
         </div>
 
-        <div ref={scrollRef} className="scroll-fade p-5 space-y-5">
+        {/* flex-1 min-h-0 keeps the scroll body inside max-h-[85vh] — without
+            min-h-0 the flex item won't shrink below its content min-height. */}
+        <div ref={scrollRef} className="scroll-fade flex-1 min-h-0 p-5 space-y-5">
           {/* Disclaimer — identical on both platforms */}
           <section className="space-y-1.5">
             <h4 className="text-[10px] font-medium text-fg-muted uppercase tracking-wider">Disclaimer</h4>

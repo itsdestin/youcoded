@@ -1493,8 +1493,13 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
         </svg>
       </button>
 
-      {/* Popup overlay */}
-      {open && (
+      {/* Popup overlay — portaled to document.body so position:fixed centers
+          against the viewport, not the SettingsPanel drawer. The drawer (and
+          its glass ancestors) establishes a containing block for fixed children
+          via transform/backdrop-filter, which is why an inline-rendered popup
+          ends up centered inside the panel instead of the viewport. ThemeButton
+          above uses the same portal pattern for the same reason. */}
+      {open && createPortal(
         <>
           <Scrim layer={2} onClick={() => setOpen(false)} />
           <div
@@ -1540,7 +1545,8 @@ function TierSelector({ tier, onSetTier }: { tier: string; onSetTier: (t: string
               })}
             </div>
           </div>
-        </>
+        </>,
+        document.body,
       )}
     </section>
   );
