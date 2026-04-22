@@ -5,6 +5,7 @@ import { useTheme } from '../state/theme-context';
 import type { PermissionMode } from '../../shared/types';
 import { isExpired } from '../../shared/announcement';
 import type { SyncWarning } from '../../main/sync-state';
+import { deriveWarningSeverity } from '../state/sync-display-state';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { FastIcon } from './Icons';
 
@@ -578,8 +579,6 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
 
 export default function StatusBar({ statusData, onRunSync, onOpenSync, model, onCycleModel, permissionMode, onCyclePermission, fast, effort, onOpenModelPicker }: Props) {
   const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncStatus, syncWarnings } = statusData;
-  // SyncWarning[] comes pre-typed; render title + level directly.
-  const warnings = (syncWarnings ?? []).map((w) => ({ text: w.title, level: w.level }));
   const { activeTheme, cycleTheme } = useTheme();
   const { visible, toggle } = useWidgetVisibility();
   const [popupOpen, setPopupOpen] = useState(false);
@@ -816,19 +815,27 @@ export default function StatusBar({ statusData, onRunSync, onOpenSync, model, on
         </span>
       )}
 
-      {/* Sync warnings */}
-      {show('sync-warnings') && warnings.map((w, i) => {
+      {/* Sync status pill — at most one badge total.
+          Red "Sync Failing" for any danger-level warning,
+          orange "Sync Warning" for warn-only,
+          nothing when synced. Click opens the panel where the descriptive copy lives. */}
+      {show('sync-warnings') && (() => {
         const handler = onOpenSync || onRunSync;
+        const severity = deriveWarningSeverity(syncWarnings ?? []);
+        if (severity === null) return null;
+        const isFailing = severity === 'failing';
+        const label = isFailing ? 'Sync Failing' : 'Sync Warning';
+        const styleClass = isFailing ? warnStyles.danger : warnStyles.warn;
         return (
           <button
-            key={i}
             onClick={handler}
-            className={`px-1.5 py-0.5 rounded-sm border text-[9px] sm:text-[10px] ${warnStyles[w.level]} ${handler ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}
+            className={`px-1.5 py-0.5 rounded-sm border text-[9px] sm:text-[10px] ${styleClass} ${handler ? 'cursor-pointer hover:brightness-125 transition-all' : ''}`}
+            title={isFailing ? 'Sync is failing — click for details' : 'Sync warnings — click for details'}
           >
-            {w.text}
+            {label}
           </button>
         );
-      })}
+      })()}
 
       {/* Theme pill */}
       {show('theme') && (

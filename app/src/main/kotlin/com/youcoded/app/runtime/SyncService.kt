@@ -1148,8 +1148,7 @@ class SyncService(
 
     /**
      * Run sync health checks and write .sync-warnings file.
-     * Generates: OFFLINE, PERSONAL:NOT_CONFIGURED, PERSONAL:STALE,
-     *            SKILLS:unrouted:name1,name2
+     * Generates: OFFLINE, PERSONAL:NOT_CONFIGURED, PERSONAL:STALE
      * Note: PROJECTS:N is omitted on Android (discoverProjects not relevant on phones).
      */
     fun runHealthCheck(): List<String> {
@@ -1183,12 +1182,6 @@ class SyncService(
             }
         }
 
-        // 2. Unrouted user skills
-        val unroutedSkills = findUnroutedSkills()
-        if (unroutedSkills.isNotEmpty()) {
-            warnings.add("SKILLS:unrouted:${unroutedSkills.joinToString(",")}")
-        }
-
         // Write warnings file (or remove if empty)
         if (warnings.isNotEmpty()) {
             warningsFile.writeText(warnings.joinToString("\n") + "\n")
@@ -1197,41 +1190,6 @@ class SyncService(
         }
 
         return warnings
-    }
-
-    /** Find user-created skills that are not routed in skill-routes.json. */
-    private fun findUnroutedSkills(): List<String> {
-        val skillsDir = File(claudeDir, "skills")
-        if (!skillsDir.isDirectory) return emptyList()
-
-        val routesFile = File(claudeDir, "toolkit-state/skill-routes.json")
-        val routes = readJson(routesFile) ?: JSONObject()
-        val toolkitRoot = configGet("toolkit_root")
-        val toolkitLayers = listOf("core/skills", "productivity/skills", "life/skills")
-
-        val unrouted = mutableListOf<String>()
-
-        skillsDir.listFiles()?.forEach { skillDir ->
-            if (!skillDir.isDirectory) return@forEach
-            // Skip symlinks (toolkit-managed)
-            try { if (java.nio.file.Files.isSymbolicLink(skillDir.toPath())) return@forEach } catch (_: Exception) {}
-
-            // Skip toolkit copies
-            if (toolkitRoot.isNotEmpty()) {
-                val isToolkitCopy = toolkitLayers.any { layer ->
-                    File(toolkitRoot, "$layer/${skillDir.name}").isDirectory
-                }
-                if (isToolkitCopy) return@forEach
-            }
-
-            // Skip if already routed
-            val route = routes.optJSONObject(skillDir.name)
-            if (route?.optString("route")?.isNotEmpty() == true) return@forEach
-
-            unrouted.add(skillDir.name)
-        }
-
-        return unrouted
     }
 
     // =========================================================================
