@@ -64,7 +64,12 @@ export type TranscriptEventType =
   // Emitted when Claude Code writes a {type:"user", isCompactSummary:true}
   // entry — the canonical "compaction finished" signal. In-session /compact
   // appends to the SAME file (no shrink), so we can't use file-size heuristics.
-  | 'compact-summary';
+  | 'compact-summary'
+  // Emitted when Claude Code writes a user-interrupt marker ("[Request
+  // interrupted by user]" / "...for tool use"), produced when the user
+  // presses ESC during a turn. The reducer uses this to end the turn
+  // without rendering the marker as a user bubble.
+  | 'user-interrupt';
 
 export interface TranscriptEvent {
   type: TranscriptEventType;
@@ -104,6 +109,12 @@ export interface TranscriptEvent {
     parentAgentToolUseId?: string;
     /** Stable subagent ID — matches the filename agent-<agentId>.jsonl on disk. */
     agentId?: string;
+    /**
+     * Populated only on `user-interrupt` events. Distinguishes the two exact
+     * marker strings Claude Code writes: `[Request interrupted by user]`
+     * (plain) vs `[Request interrupted by user for tool use]` (tool-use).
+     */
+    kind?: 'plain' | 'tool-use';
   };
 }
 
