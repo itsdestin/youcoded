@@ -50,6 +50,10 @@ class SessionService : Service() {
     // if there's only one authenticated connection (covers reconnect cases).
     private val sessionOwnership = ConcurrentHashMap<String, String>()
 
+    // Concurrency guard: prevent two concurrent dev:install-workspace ops from
+    // cloning/pulling the workspace simultaneously (e.g. double-tap the button).
+    @Volatile private var devInstallInFlight: Boolean = false
+
     /**
      * Security: use EncryptedSharedPreferences for paired device storage so
      * passwords are encrypted at rest. Falls back to regular SharedPreferences
@@ -2366,11 +2370,15 @@ class SessionService : Service() {
                         val env = bs.buildRuntimeEnv()
                         // claude is a Node.js program — runs via LD_PRELOAD (not linker64),
                         // so we can pass it directly through runStreamed without the linker64 prefix.
+                        // Fix: pipe prompt via stdin (matches Phase 3 TS fix) so large prompts
+                        // don't hit ARG_MAX and special characters don't need shell-escaping.
                         val (exit, out) = DevTools.runStreamed(
                             env,
-                            listOf("claude", "-p", prompt),
+                            listOf("claude", "-p"),
                             bs.homeDir,
-                        ) { /* ignore intermediate lines — we only need final stdout */ }
+                            stdinInput = prompt,
+                            onLine = { /* ignore intermediate lines — we only need final stdout */ },
+                        )
                         DevTools.parseSummary(out, description, exit == 0)
                     }
                 }
@@ -2378,9 +2386,20 @@ class SessionService : Service() {
             }
 
             "dev:submit-issue" -> {
+                // Fix: read new SubmitArgs shape { kind, title, summary, description, log?, label }
+                // matching the Phase 5 TS fix. Old shape ({ title, body, label }) sent an empty body.
+                val kind = msg.payload.optString("kind", "bug")
                 val title = msg.payload.optString("title", "")
-                val body = msg.payload.optString("body", "")
+                val summary = msg.payload.optString("summary", "")
+                val description = msg.payload.optString("description", "")
+                val log = msg.payload.optString("log", "")
                 val label = msg.payload.optString("label", "bug")
+                // Build body using canonical helper (mirrors buildIssueBody() in dev-tools.ts).
+                val pm = applicationContext.packageManager
+                val pkgInfo = pm.getPackageInfo(applicationContext.packageName, 0)
+                val versionName = pkgInfo.versionName ?: "unknown"
+                val osString = "Android ${android.os.Build.VERSION.RELEASE}"
+                val body = DevTools.buildIssueBody(kind, summary, description, log, versionName, osString)
                 val result = withContext(Dispatchers.IO) {
                     val bs = bootstrap
                     if (bs == null) {
@@ -2397,7 +2416,8 @@ class SessionService : Service() {
                             env,
                             listOf("/system/bin/linker64", ghPath, "auth", "status"),
                             bs.homeDir,
-                        ) {}
+                            onLine = {},
+                        )
                         if (authExit != 0) {
                             JSONObject().apply {
                                 put("ok", false)
@@ -2421,7 +2441,8 @@ class SessionService : Service() {
                                         "--label", "youcoded-app:reported",
                                     ),
                                     bs.homeDir,
-                                ) {}
+                                    onLine = {},
+                                )
                                 val url = Regex("https://github\\.com/[^\\s]+").find(stdout)?.value
                                 if (exit == 0 && url != null) {
                                     JSONObject().apply { put("ok", true); put("url", url) }
@@ -2441,74 +2462,93 @@ class SessionService : Service() {
             }
 
             "dev:install-workspace" -> {
-                val result = withContext(Dispatchers.IO) {
-                    val bs = bootstrap
-                    if (bs == null) {
-                        JSONObject().apply { put("error", "Bootstrap not initialised") }
-                    } else {
-                        val env = bs.buildRuntimeEnv()
-                        val ghPath = File(bs.usrDir, "bin/gh").absolutePath
-                        // Clone target: $HOME/youcoded-dev (parallel to user's project folders).
-                        val target = File(bs.homeDir, "youcoded-dev")
-                        val onLine: (String) -> Unit = { line ->
-                            // Stream progress lines to the React UI so the ContributePopup
-                            // can show a live log of the clone/pull. Mirrors the desktop
-                            // ipc-handlers.ts install-workspace progress push.
-                            bridgeServer.broadcast(JSONObject().apply {
-                                put("type", "dev:install-progress")
-                                put("payload", line)
-                            })
-                        }
-                        try {
-                            if (target.exists()) {
-                                // Already present — check whether it's the right repo.
-                                val (_, remote) = DevTools.runStreamed(
-                                    env,
-                                    listOf("git", "-C", target.absolutePath, "remote", "get-url", "origin"),
-                                    bs.homeDir,
-                                ) {}
-                                val cls = DevTools.classifyExistingWorkspace(remote.trim())
-                                if (cls != "workspace") {
-                                    return@withContext JSONObject().apply {
-                                        put("error", "${target.absolutePath} already exists but isn't the YouCoded dev workspace. Move or rename it and try again.")
+                // Concurrency guard: reject a second install if one is already running.
+                if (devInstallInFlight) {
+                    msg.id?.let {
+                        bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                            put("error", "Install already in progress")
+                        })
+                    }
+                    return@handleBridgeMessage
+                }
+                devInstallInFlight = true
+                val result = try {
+                    withContext(Dispatchers.IO) {
+                        val bs = bootstrap
+                        if (bs == null) {
+                            JSONObject().apply { put("error", "Bootstrap not initialised") }
+                        } else {
+                            val env = bs.buildRuntimeEnv()
+                            // Clone target: $HOME/youcoded-dev (parallel to user's project folders).
+                            val target = File(bs.homeDir, "youcoded-dev")
+                            // Fix: capture whether the workspace already existed BEFORE the
+                            // if/else so the response accurately reflects clone vs pull.
+                            val wasAlreadyInstalled = target.exists()
+                            val onLine: (String) -> Unit = { line ->
+                                // Stream progress lines to the React UI so the ContributePopup
+                                // can show a live log of the clone/pull. Mirrors the desktop
+                                // ipc-handlers.ts install-workspace progress push.
+                                bridgeServer.broadcast(JSONObject().apply {
+                                    put("type", "dev:install-progress")
+                                    put("payload", line)
+                                })
+                            }
+                            try {
+                                if (wasAlreadyInstalled) {
+                                    // Already present — check whether it's the right repo.
+                                    val (_, remote) = DevTools.runStreamed(
+                                        env,
+                                        listOf("git", "-C", target.absolutePath, "remote", "get-url", "origin"),
+                                        bs.homeDir,
+                                        onLine = {},
+                                    )
+                                    val cls = DevTools.classifyExistingWorkspace(remote.trim())
+                                    if (cls != "workspace") {
+                                        return@withContext JSONObject().apply {
+                                            put("error", "${target.absolutePath} already exists but isn't the YouCoded dev workspace. Move or rename it and try again.")
+                                        }
                                     }
+                                    onLine("Found existing workspace, pulling latest…")
+                                    DevTools.runStreamed(
+                                        env,
+                                        listOf("git", "-C", target.absolutePath, "pull", "--ff-only"),
+                                        bs.homeDir,
+                                        onLine = onLine,
+                                    )
+                                } else {
+                                    onLine("Cloning workspace…")
+                                    DevTools.runStreamed(
+                                        env,
+                                        listOf("git", "clone", "--depth", "50",
+                                            "https://github.com/itsdestin/youcoded-dev",
+                                            target.absolutePath),
+                                        bs.homeDir,
+                                        onLine = onLine,
+                                    )
                                 }
-                                onLine("Found existing workspace, pulling latest…")
+                                onLine("Cloning sub-repos (this may take a minute)…")
                                 DevTools.runStreamed(
-                                    env,
-                                    listOf("git", "-C", target.absolutePath, "pull", "--ff-only"),
-                                    bs.homeDir,
-                                    onLine,
+                                    env, listOf("bash", "setup.sh"), target, onLine = onLine,
                                 )
-                            } else {
-                                onLine("Cloning workspace…")
-                                DevTools.runStreamed(
-                                    env,
-                                    listOf("git", "clone", "--depth", "50",
-                                        "https://github.com/itsdestin/youcoded-dev",
-                                        target.absolutePath),
-                                    bs.homeDir,
-                                    onLine,
-                                )
+                                // Register as a project folder via the same WorkingDirStore
+                                // that backs the folders:add IPC — this is the Android folder
+                                // picker's persistent store.
+                                val store = com.youcoded.app.config.WorkingDirStore(bs.homeDir)
+                                store.add(com.youcoded.app.config.WorkingDir(
+                                    label = "youcoded-dev",
+                                    path = target.absolutePath,
+                                ))
+                                JSONObject().apply {
+                                    put("path", target.absolutePath)
+                                    put("alreadyInstalled", wasAlreadyInstalled)
+                                }
+                            } catch (e: Exception) {
+                                JSONObject().apply { put("error", e.message ?: "Install failed") }
                             }
-                            onLine("Cloning sub-repos (this may take a minute)…")
-                            DevTools.runStreamed(env, listOf("bash", "setup.sh"), target, onLine)
-                            // Register as a project folder via the same WorkingDirStore
-                            // that backs the folders:add IPC — this is the Android folder
-                            // picker's persistent store.
-                            val store = com.youcoded.app.config.WorkingDirStore(bs.homeDir)
-                            store.add(com.youcoded.app.config.WorkingDir(
-                                label = "youcoded-dev",
-                                path = target.absolutePath,
-                            ))
-                            JSONObject().apply {
-                                put("path", target.absolutePath)
-                                put("alreadyInstalled", false)
-                            }
-                        } catch (e: Exception) {
-                            JSONObject().apply { put("error", e.message ?: "Install failed") }
                         }
                     }
+                } finally {
+                    devInstallInFlight = false
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }

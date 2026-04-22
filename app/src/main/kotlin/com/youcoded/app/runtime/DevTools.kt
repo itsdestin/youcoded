@@ -4,6 +4,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.TimeUnit
 
 /**
  * Kotlin equivalent of desktop/src/main/dev-tools.ts. Mirrors the
@@ -89,7 +90,9 @@ object DevTools {
         env: Map<String, String>,
         cmd: List<String>,
         cwd: File?,
+        stdinInput: String? = null,
         onLine: (String) -> Unit,
+        timeoutSeconds: Long = 300,
     ): Pair<Int, String> {
         val pb = ProcessBuilder(cmd).redirectErrorStream(true)
         // Wipe inherited env and replace with Bootstrap-built env so that
@@ -98,6 +101,13 @@ object DevTools {
         pb.environment().putAll(env)
         if (cwd != null) pb.directory(cwd)
         val proc = pb.start()
+
+        // Pipe stdin if provided (e.g. `claude -p` reads prompt from stdin
+        // rather than a positional arg to avoid shell escaping issues).
+        if (stdinInput != null) {
+            proc.outputStream.bufferedWriter().use { it.write(stdinInput) }
+        }
+
         val output = StringBuilder()
         proc.inputStream.bufferedReader().useLines { lines ->
             for (line in lines) {
@@ -105,8 +115,64 @@ object DevTools {
                 output.append(line).append('\n')
             }
         }
-        val exit = proc.waitFor()
+        // Use a bounded wait so runStreamed never hangs indefinitely on a
+        // stalled process (e.g. git clone that loses its connection).
+        val finished = proc.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+        val exit = if (finished) {
+            proc.exitValue()
+        } else {
+            proc.destroyForcibly()
+            -1  // Timeout sentinel — callers should treat non-zero as failure.
+        }
         return exit to output.toString()
+    }
+
+    // ── Issue body builder ────────────────────────────────────────────────
+
+    /**
+     * Build the GitHub issue body from the structured SubmitArgs payload.
+     * Mirrors buildIssueBody() in desktop/src/main/dev-tools.ts — keep in sync.
+     *
+     * @param kind         "bug" or "feature"
+     * @param summary      one-paragraph summary produced by the summariser
+     * @param description  raw user description
+     * @param log          redacted log tail (used only for bugs)
+     * @param versionName  app versionName from PackageInfo
+     * @param osString     e.g. "Android 14"
+     */
+    fun buildIssueBody(
+        kind: String,
+        summary: String,
+        description: String,
+        log: String,
+        versionName: String,
+        osString: String,
+    ): String {
+        val header = listOf(
+            summary.trim(),
+            "",
+            "---",
+            "**User description:**",
+            description.trim(),
+            "",
+            "**Environment:** YouCoded v$versionName · android · $osString",
+        ).joinToString("\n")
+
+        if (kind == "feature") return header
+
+        // Bug reports include a collapsible log block.
+        return listOf(
+            header,
+            "",
+            "**Logs:**",
+            "<details><summary>desktop.log</summary>",
+            "",
+            "```",
+            log,
+            "```",
+            "",
+            "</details>",
+        ).joinToString("\n")
     }
 
     // ── Summarizer helpers ────────────────────────────────────────────────
