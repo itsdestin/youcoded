@@ -314,3 +314,62 @@ export function createUpdateInstaller(options: UpdateInstallerOptions) {
 
   return { startDownload, cancelDownload, getActiveJobId };
 }
+
+// ─── Task 4: Stale-download cleanup + cache lookup ──────────────────────────
+
+const STALE_DOWNLOAD_AGE_MS = 24 * 3600 * 1000;
+
+/**
+ * Swept at app startup. Removes abandoned .partial files unconditionally and
+ * any non-partial download older than 24h (likely already installed).
+ * Safe to call when the directory doesn't exist — creates it.
+ */
+export function cleanupStaleDownloads(cacheDir: string): void {
+  if (!fs.existsSync(cacheDir)) {
+    fs.mkdirSync(cacheDir, { recursive: true });
+    return;
+  }
+  const now = Date.now();
+  for (const entry of fs.readdirSync(cacheDir)) {
+    const entryPath = path.join(cacheDir, entry);
+    try {
+      if (entry.endsWith('.partial')) {
+        fs.unlinkSync(entryPath);
+        continue;
+      }
+      const stat = fs.statSync(entryPath);
+      if (!stat.isFile()) continue;
+      if (now - stat.mtimeMs > STALE_DOWNLOAD_AGE_MS) fs.unlinkSync(entryPath);
+    } catch {
+      // Best-effort cleanup; don't block app startup on a stuck file.
+    }
+  }
+}
+
+/**
+ * Looks for an already-downloaded installer matching `expectedVersion` for the
+ * current platform. Used when the user reopens the update popup and a prior
+ * download completed — skips the re-download.
+ *
+ * Heuristic: the downloaded filename (set by electron-builder release naming)
+ * always contains the version string; we require both a platform-valid
+ * extension AND the version substring to match.
+ */
+export function findCachedDownload(
+  cacheDir: string,
+  expectedVersion: string,
+  platform: NodeJS.Platform,
+): import('../shared/update-install-types').UpdateCachedDownload | null {
+  if (!fs.existsSync(cacheDir)) return null;
+  const allowed = ALLOWED_EXTENSIONS_BY_PLATFORM[platform] ?? [];
+  for (const entry of fs.readdirSync(cacheDir)) {
+    if (entry.endsWith('.partial')) continue;
+    if (!allowed.some(ext => entry.endsWith(ext))) continue;
+    if (!entry.includes(expectedVersion)) continue;
+    const filePath = path.join(cacheDir, entry);
+    try {
+      if (fs.statSync(filePath).isFile()) return { filePath, version: expectedVersion };
+    } catch { /* ignore */ }
+  }
+  return null;
+}

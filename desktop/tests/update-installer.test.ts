@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { validateDownloadUrl, deriveDownloadFilename, createUpdateInstaller } from '../src/main/update-installer';
+import { validateDownloadUrl, deriveDownloadFilename, createUpdateInstaller, cleanupStaleDownloads, findCachedDownload } from '../src/main/update-installer';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -226,5 +226,85 @@ describe('createUpdateInstaller download engine', () => {
     });
     await expect(installer.startDownload('http://github.com/foo.exe')).rejects.toThrow(/url-rejected/);
     expect(fs.readdirSync(tmpDir).length).toBe(0);
+  });
+});
+
+describe('cleanupStaleDownloads', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cleanup-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('creates the cacheDir if missing', () => {
+    const dir = path.join(tmpDir, 'does-not-exist');
+    cleanupStaleDownloads(dir);
+    expect(fs.existsSync(dir)).toBe(true);
+  });
+
+  it('deletes .partial files unconditionally', () => {
+    fs.writeFileSync(path.join(tmpDir, 'YouCoded.exe.partial'), 'x');
+    cleanupStaleDownloads(tmpDir);
+    expect(fs.existsSync(path.join(tmpDir, 'YouCoded.exe.partial'))).toBe(false);
+  });
+
+  it('deletes non-.partial files older than 24h', () => {
+    const old = path.join(tmpDir, 'YouCoded.exe');
+    fs.writeFileSync(old, 'x');
+    const twentyFiveHoursAgo = Date.now() / 1000 - (25 * 3600);
+    fs.utimesSync(old, twentyFiveHoursAgo, twentyFiveHoursAgo);
+    cleanupStaleDownloads(tmpDir);
+    expect(fs.existsSync(old)).toBe(false);
+  });
+
+  it('keeps non-.partial files newer than 24h', () => {
+    const fresh = path.join(tmpDir, 'YouCoded.exe');
+    fs.writeFileSync(fresh, 'x');
+    cleanupStaleDownloads(tmpDir);
+    expect(fs.existsSync(fresh)).toBe(true);
+  });
+});
+
+describe('findCachedDownload', () => {
+  let tmpDir: string;
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-installer-cache-'));
+  });
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns null when no file matches the version', () => {
+    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+  });
+
+  it('returns null when cacheDir does not exist', () => {
+    expect(findCachedDownload(path.join(tmpDir, 'missing'), '1.2.3', 'win32')).toBeNull();
+  });
+
+  it('finds a matching .exe by version substring on Windows', () => {
+    const filePath = path.join(tmpDir, 'YouCoded-Setup-1.2.3.exe');
+    fs.writeFileSync(filePath, 'x');
+    const hit = findCachedDownload(tmpDir, '1.2.3', 'win32');
+    expect(hit).toEqual({ filePath, version: '1.2.3' });
+  });
+
+  it('finds a matching .dmg by version substring on macOS', () => {
+    const filePath = path.join(tmpDir, 'YouCoded-1.2.3-arm64.dmg');
+    fs.writeFileSync(filePath, 'x');
+    const hit = findCachedDownload(tmpDir, '1.2.3', 'darwin');
+    expect(hit).toEqual({ filePath, version: '1.2.3' });
+  });
+
+  it('ignores .partial files', () => {
+    fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.3.exe.partial'), 'x');
+    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+  });
+
+  it('ignores files for a different version', () => {
+    fs.writeFileSync(path.join(tmpDir, 'YouCoded-Setup-1.2.2.exe'), 'x');
+    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
   });
 });
