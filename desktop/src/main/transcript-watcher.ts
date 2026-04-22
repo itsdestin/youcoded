@@ -117,6 +117,33 @@ export function parseTranscriptLine(line: string, sessionId: string): Transcript
       const text = stripSystemTags(raw);
       // Skip empty messages (e.g. interrupted tool use placeholders)
       if (!text) return [];
+
+      // Claude Code writes these exact strings as user messages when the user
+      // presses ESC mid-turn. Emit a dedicated user-interrupt event (consumed
+      // by the reducer to end the in-flight turn) instead of a user-message,
+      // so the marker does not render as a user bubble. Exact-match only;
+      // embedded text is treated as a normal prompt (accepted edge).
+      if (text === '[Request interrupted by user]') {
+        events.push({
+          type: 'user-interrupt',
+          sessionId,
+          uuid,
+          timestamp,
+          data: { kind: 'plain' },
+        });
+        return events;
+      }
+      if (text === '[Request interrupted by user for tool use]') {
+        events.push({
+          type: 'user-interrupt',
+          sessionId,
+          uuid,
+          timestamp,
+          data: { kind: 'tool-use' },
+        });
+        return events;
+      }
+
       events.push({
         type: 'user-message',
         sessionId,
