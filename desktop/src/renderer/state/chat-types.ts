@@ -290,6 +290,17 @@ export type ChatAction =
       anthropicRequestId: string | null;
       usage: TurnUsage | null;
     }
+  // Dispatched when the transcript watcher detects Claude Code's
+  // user-interrupt markers ("[Request interrupted by user]" / "...for tool
+  // use"). Task 5 consumes this in the reducer to end the in-flight turn
+  // without rendering the marker as a user bubble.
+  | {
+      type: 'TRANSCRIPT_INTERRUPT';
+      sessionId: string;
+      uuid: string;
+      timestamp: number;
+      kind: 'plain' | 'tool-use';
+    }
   | {
       type: 'HISTORY_LOADED';
       sessionId: string;

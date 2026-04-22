@@ -135,13 +135,22 @@ function injectPlanSegment(
 /**
  * Shared cleanup for turn endings (both normal completion and timeout).
  * Marks orphaned running/awaiting tools as failed and clears turn tracking.
+ *
+ * `errorMessage` lets turn-ending paths attribute the failure accurately.
+ * Interrupt path (TRANSCRIPT_INTERRUPT) passes 'Turn interrupted' so the
+ * tool card distinguishes user-cancelled from normal turn completion; the
+ * default 'Turn ended' preserves behavior for TRANSCRIPT_TURN_COMPLETE
+ * and SESSION_PROCESS_EXITED.
  */
-function endTurn(session: SessionChatState): Partial<SessionChatState> {
+function endTurn(
+  session: SessionChatState,
+  errorMessage: string = 'Turn ended',
+): Partial<SessionChatState> {
   const toolCalls = new Map(session.toolCalls);
   for (const id of session.activeTurnToolIds) {
     const tool = toolCalls.get(id);
     if (tool && (tool.status === 'running' || tool.status === 'awaiting-approval')) {
-      toolCalls.set(id, { ...tool, status: 'failed', error: 'Turn ended' });
+      toolCalls.set(id, { ...tool, status: 'failed', error: errorMessage });
     }
   }
   return {
@@ -674,6 +683,36 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
 
       next.set(action.sessionId, { ...session, assistantTurns, ...endTurn(session) });
+      return next;
+    }
+
+    case 'TRANSCRIPT_INTERRUPT': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+
+      // User interrupted (ESC or equivalent): mirror TRANSCRIPT_TURN_COMPLETE
+      // but hardcode stopReason='interrupted' so the AssistantTurnBubble
+      // footer renders "Interrupted" under the affected turn. Then endTurn()
+      // clears turn-scoped state and flips in-flight tools in this turn to
+      // failed with error 'Turn interrupted' (vs. 'Turn ended' for normal
+      // completion) so the tool card distinguishes user-cancelled.
+      const interruptingTurnId = session.currentTurnId;
+      const assistantTurns = new Map(session.assistantTurns);
+      if (interruptingTurnId) {
+        const turn = assistantTurns.get(interruptingTurnId);
+        if (turn) {
+          assistantTurns.set(interruptingTurnId, {
+            ...turn,
+            stopReason: 'interrupted',
+          });
+        }
+      }
+
+      next.set(action.sessionId, {
+        ...session,
+        assistantTurns,
+        ...endTurn(session, 'Turn interrupted'),
+      });
       return next;
     }
 

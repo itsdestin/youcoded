@@ -123,7 +123,8 @@ The desktop app uses a layered keyboard system. The text input auto-focuses when
 | **Shift+Enter** | Text input focused | Insert newline |
 | **Enter** | Text input focused | Send message |
 | **/** | Text input focused | Open skill/command drawer |
-| **Escape** | Drawer/modal open | Close drawer or modal |
+| **Escape** | Drawer/modal open | Close the topmost drawer/modal |
+| **Escape** | Chat view focused, no overlay open | Interrupt the active Claude session (sends `\x1b` to the PTY) |
 | **Arrow Left/Right** | Permission prompt visible | Cycle between Yes/No/Always Allow buttons |
 
 **Implementation:** Global shortcuts use capture-phase `window` event listeners so they work even when xterm has focus. The idle unfocus timer and auto-focus listener coordinate through `document.activeElement` without direct coupling between components. See `InputBar.tsx` (idle unfocus + auto-focus), `SessionStrip.tsx` (Shift-hold nav), and `ChatView.tsx` (arrow scroll).

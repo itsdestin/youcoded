@@ -57,6 +57,11 @@ import { RemoteSnapshotExporter } from './components/RemoteSnapshotExporter';
 import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
 import { BuddyChatApp } from './components/buddy/BuddyChatApp';
 import { BuddyCaptureApp } from './components/buddy/BuddyCaptureApp';
+// ESC-passthrough: provider owns capture-phase ESC routing for overlays.
+// Mounted at app root so every overlay component is a descendant.
+import { EscCloseProvider } from './hooks/use-esc-close';
+// Pure guard for the chat-focused ESC -> PTY forwarding listener below.
+import { shouldForwardEscToPty } from './state/should-forward-esc-to-pty';
 
 type ViewMode = 'chat' | 'terminal';
 
@@ -621,6 +626,18 @@ function AppInner() {
             // and drop the former (it's already shown on the Agent card).
             parentAgentToolUseId: event.data.parentAgentToolUseId,
             agentId: event.data.agentId,
+          });
+          break;
+        case 'user-interrupt':
+          // ESC-passthrough: transcript-watcher detected a user-initiated
+          // interrupt (ESC sent to the PTY). Reducer records it so we can
+          // tag the next assistant turn as interrupted.
+          batchTranscriptDispatch({
+            type: 'TRANSCRIPT_INTERRUPT',
+            sessionId: event.sessionId,
+            uuid: event.uuid,
+            timestamp: event.timestamp,
+            kind: event.data.kind,
           });
           break;
         case 'assistant-text':
@@ -1522,6 +1539,42 @@ function AppInner() {
     return () => window.removeEventListener('keydown', handler, true);
   }, [handleToggleView, currentViewMode]);
 
+  // ESC-passthrough: forward ESC to the active session's PTY when chat is
+  // focused and no overlay consumed the event. Single \x1b byte — Claude Code
+  // treats it as an interrupt. See
+  // docs/superpowers/specs/2026-04-21-esc-chat-passthrough-design.md and
+  // docs/PITFALLS.md -> "PTY Writes". Reactive state is read via a ref so the
+  // listener isn't re-registered on every sessionId/viewMode change.
+  const escPassthroughStateRef = useRef<{
+    activeSessionId: string;
+    viewMode: 'chat' | 'terminal';
+  }>({ activeSessionId: '', viewMode: 'chat' });
+  escPassthroughStateRef.current = {
+    activeSessionId: sessionId ?? '',
+    viewMode: currentViewMode,
+  };
+
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const s = escPassthroughStateRef.current;
+      const forward = shouldForwardEscToPty({
+        defaultPrevented: e.defaultPrevented,
+        viewMode: s.viewMode,
+        hasActiveSession: !!s.activeSessionId,
+      });
+      if (!forward) return;
+      // One byte to the PTY — Claude Code treats it as an interrupt.
+      // Single-byte writes do NOT trigger Ink's 500ms paste-mode coalescing,
+      // so no chunking or pacing is needed. See docs/PITFALLS.md -> "PTY Writes".
+      window.claude.session.sendInput(s.activeSessionId, '\x1b');
+    };
+    // Bubble phase on purpose — EscCloseProvider owns capture phase, and we
+    // need to read e.defaultPrevented AFTER capture-phase overlay handlers run.
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, []);
+
   const currentSession = sessions.find((s) => s.id === sessionId);
   const canBypass = currentSession?.skipPermissions ?? false;
   const currentPermissionMode = sessionId ? (permissionModes.get(sessionId) || 'normal') : 'normal';
@@ -2165,6 +2218,10 @@ export default function App() {
     // Uses inline styles only — no theme tokens, no context — so it renders even
     // when ThemeProvider itself is the thing that crashed.
     <RootErrorBoundary>
+      {/* EscCloseProvider owns capture-phase ESC routing — must wrap all
+          overlay-bearing providers so every overlay is a descendant. Buddy
+          windows (early-returned above) don't need it. */}
+      <EscCloseProvider>
       <ThemeProvider>
         <ThemeBg />
         <ThemeEffects />
@@ -2194,6 +2251,7 @@ export default function App() {
           </WorkerHealthProvider>
         </MarketplaceAuthProvider>
       </ThemeProvider>
+      </EscCloseProvider>
     </RootErrorBoundary>
   );
 }

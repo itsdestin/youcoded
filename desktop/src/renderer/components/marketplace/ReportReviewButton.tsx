@@ -24,6 +24,7 @@ import React, {
   useCallback,
 } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { useEscClose } from '../../hooks/use-esc-close';
 import { useMarketplaceAuth } from '../../state/marketplace-auth-context';
 import { REPORT_REASON_MAX } from '../../state/marketplace-constants';
 
@@ -100,15 +101,12 @@ function ReportDialog({ reviewerLogin, onClose, onSubmit }: ReportDialogProps) {
     };
   }, []);
 
-  // Close on Escape — gated: don't close mid-submit (inFlight guard via dialogState)
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      // Fix: block Escape while submitting to prevent closing a mid-flight request
-      if (e.key === 'Escape' && dialogState.phase !== 'submitting') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose, dialogState.phase]);
+  // Close on Escape — gated: don't close mid-submit (inFlight guard preserves
+  // the previous behavior of blocking ESC while a report submission is in flight).
+  const handleEscapeClose = useCallback(() => {
+    if (dialogState.phase !== 'submitting') onClose();
+  }, [dialogState.phase, onClose]);
+  useEscClose(true, handleEscapeClose);
 
   const handleSubmit = useCallback(async () => {
     if (dialogState.phase === 'submitting') return;

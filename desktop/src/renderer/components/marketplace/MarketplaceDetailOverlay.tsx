@@ -3,7 +3,8 @@
 // content from the same shell; the "What's inside" section only shows for
 // skills with extracted `components` data.
 
-import React, { useEffect, useState } from "react";
+import React, { useState } from "react";
+import { useEscClose } from "../../hooks/use-esc-close";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { useMarketplace } from "../../state/marketplace-context";
 import { useMarketplaceStats } from "../../state/marketplace-stats-context";
@@ -39,16 +40,7 @@ export default function MarketplaceDetailOverlay({
   // Needed for Apply action and isActive check in ThemeBody
   const { theme: activeThemeSlug, setTheme } = useTheme();
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
+  useEscClose(true, onClose);
 
   // Lookup the target in the already-fetched context. No per-overlay fetch —
   // keeps the overlay snappy and avoids cache-invalidation questions.

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import type { SkillEntry } from '../../shared/types';
 import { useSkills } from '../state/skill-context';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { useEscClose } from '../hooks/use-esc-close';
 
 interface SkillEditorProps {
   skillId: string;
@@ -35,14 +36,7 @@ export default function SkillEditor({ skillId, onClose }: SkillEditorProps) {
     }
   }, [skill]);
 
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  useEscClose(true, onClose);
 
   if (!skill) {
     return (

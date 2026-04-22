@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTheme } from '../state/theme-context';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { useEscClose } from '../hooks/use-esc-close';
 import type { PublishState } from '../../shared/theme-marketplace-types';
 
 interface ThemeShareSheetProps {
@@ -54,14 +55,7 @@ export default function ThemeShareSheet({ themeSlug, onClose }: ThemeShareSheetP
     return () => { cancelled = true; };
   }, [themeSlug]);
 
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  useEscClose(true, onClose);
 
   const handlePublish = useCallback(async () => {
     setPublishing(true);

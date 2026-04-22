@@ -27,6 +27,7 @@ const STOP_REASON_COPY: Record<string, string> = {
   stop_sequence: 'Response stopped at a configured stop sequence.',
   refusal: 'Claude declined to respond.',
   pause_turn: 'Extended thinking paused mid-turn.',
+  interrupted: 'Interrupted.',
 };
 
 function StopReasonFooter({ reason }: { reason: string }) {

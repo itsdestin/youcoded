@@ -17,6 +17,7 @@ import MarketplaceGrid from "./MarketplaceGrid";
 import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetailOverlay";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
+import { useEscClose } from "../../hooks/use-esc-close";
 import type { SkillEntry, IntegrationEntry, IntegrationState } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 
@@ -141,16 +142,10 @@ export default function MarketplaceScreen({
   };
 
   // Esc: close detail first, then exit screen. Matches App.tsx state-transition rules.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape") return;
-      if (detail) return; // overlay handles its own Esc
-      e.stopPropagation();
-      onExit();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [detail, onExit]);
+  // When a detail overlay (plugin or integration) is open, its own useEscClose
+  // registration sits on top of the LIFO stack and captures ESC first; this
+  // registration only fires when no nested overlay is active.
+  useEscClose(!detail && !integrationDetail, onExit);
 
   const mode: "discovery" | "search" = isActive(filter) ? "search" : "discovery";
   const installedIds = useMemo(
@@ -461,13 +456,7 @@ function IntegrationDetailOverlay({
   statusBadge: { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' };
   iconUrl?: string;
 }) {
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') { e.stopPropagation(); onClose(); }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [onClose]);
+  useEscClose(true, onClose);
 
   const toneClass: Record<string, string> = {
     ok: 'bg-green-500/15 text-green-400 border-green-500/30',

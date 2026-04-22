@@ -1,7 +1,8 @@
-import React, { useEffect } from 'react';
+import React from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 
 // Shared About popup for Desktop and Android settings. Previously this was an
 // inline collapsible inside SettingsPanel on both platforms, which didn't match
@@ -44,14 +45,7 @@ export default function AboutPopup({ open, onClose, platform, version, build }: 
   const scrollRef = useScrollFade<HTMLDivElement>();
 
   // Escape-to-close, matching PreferencesPopup/ModelPickerPopup convention.
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose]);
+  useEscClose(open, onClose);
 
   if (!open) return null;
 
