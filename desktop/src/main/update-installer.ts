@@ -13,7 +13,8 @@ import fs from 'fs';
 import path from 'path';
 import https from 'https';
 import { randomUUID } from 'crypto';
-import type { UpdateInstallErrorCode, UpdateDownloadResult, UpdateProgressEvent } from '../shared/update-install-types';
+import { spawn as nodeSpawn, type SpawnOptions } from 'child_process';
+import type { UpdateInstallErrorCode, UpdateDownloadResult, UpdateProgressEvent, UpdateLaunchResult } from '../shared/update-install-types';
 
 // Domains we'll accept release-asset downloads from. GitHub Releases sometimes
 // redirects the download URL from github.com -> objects.githubusercontent.com;
@@ -388,4 +389,176 @@ export function findCachedDownload(
     } catch { /* ignore */ }
   }
   return null;
+}
+
+// ─── Task 5: Platform-specific launcher ─────────────────────────────────────
+
+// Quick-exit window: on macOS we spawn `open -W`, which stays alive until the
+// mounted DMG is ejected — for a healthy DMG that could be an hour. We only
+// listen for a FAST failure: if the child exits non-zero within this window
+// we treat it as a bad DMG; beyond it, we assume success and return quitPending.
+const QUICK_EXIT_WINDOW_MS = 2000;
+
+export interface LaunchInstallerDeps {
+  platform?: NodeJS.Platform;
+  // Injected for testability. Production wires in node child_process spawn + Electron shell/app.
+  spawn?: (cmd: string, args: string[], opts: SpawnOptions) => any;
+  shellOpenExternal: (url: string) => Promise<void>;
+  appRelaunch: () => void;
+  // Lazily read so the module doesn't care where the URL lives (main caches it).
+  fallbackDownloadUrl: () => string;
+  // Override for Linux AppImage detection — prod reads process.env.APPIMAGE.
+  envAppImage?: string;
+}
+
+export interface LaunchInstallerInput {
+  jobId: string;
+  filePath: string;
+}
+
+/**
+ * Factory that returns a `launch(input)` function bound to the injected deps.
+ * The returned function spawns the right installer binary per platform and returns
+ * an UpdateLaunchResult. It does NOT call app.quit() directly — callers schedule
+ * that after a short delay when quitPending is true.
+ */
+export function makeLaunchInstaller(deps: LaunchInstallerDeps) {
+  const platform = deps.platform ?? process.platform;
+  const spawnFn = deps.spawn ?? (nodeSpawn as any);
+
+  async function launch(input: LaunchInstallerInput): Promise<UpdateLaunchResult> {
+    // Guard: make sure the file wasn't cleaned up between download and launch.
+    if (!fs.existsSync(input.filePath)) {
+      return { success: false, error: 'file-missing' };
+    }
+
+    if (platform === 'win32') {
+      // Windows NSIS installer: detach immediately and let NSIS own its lifetime.
+      return spawnDetached(input.filePath, [], false);
+    }
+
+    if (platform === 'darwin') {
+      // macOS DMG: `open -W` mounts the DMG and opens the install window.
+      // It stays running until the user ejects — we only watch for fast failure.
+      return spawnDetached('open', ['-W', input.filePath], true, 'dmg-corrupt');
+    }
+
+    if (platform === 'linux') {
+      if (input.filePath.endsWith('.deb')) {
+        // .deb requires root / package manager — we can't launch it directly.
+        // Open the release page in the browser so the user can install manually.
+        await deps.shellOpenExternal(deps.fallbackDownloadUrl());
+        return { success: true, quitPending: false, fallback: 'browser' };
+      }
+
+      if (input.filePath.endsWith('.AppImage')) {
+        // AppImage self-replace: overwrite the currently-running AppImage, then relaunch.
+        // If APPIMAGE is not set (e.g. running from source), fall back to browser.
+        const running = deps.envAppImage ?? process.env.APPIMAGE;
+        if (!running || !fs.existsSync(running)) {
+          await deps.shellOpenExternal(deps.fallbackDownloadUrl());
+          return { success: true, quitPending: false, fallback: 'browser' };
+        }
+        try {
+          // Ensure the new AppImage is executable before replacing.
+          fs.chmodSync(input.filePath, 0o755);
+          try {
+            // Atomic rename — fastest path, works when src/dst are on the same filesystem.
+            fs.renameSync(input.filePath, running);
+          } catch (e: any) {
+            if (e.code === 'EXDEV') {
+              // Cross-device rename (tmpfs download dir → ext4 app dir). Copy then unlink.
+              fs.copyFileSync(input.filePath, running);
+              fs.unlinkSync(input.filePath);
+            } else if (e.code === 'EACCES' || e.code === 'EPERM') {
+              // AppImage installed to a root-owned path — user needs sudo.
+              return { success: false, error: 'appimage-not-writable' };
+            } else {
+              return { success: false, error: 'spawn-failed' };
+            }
+          }
+        } catch {
+          return { success: false, error: 'spawn-failed' };
+        }
+        // Trigger Electron's built-in relaunch so the new AppImage starts after quit.
+        deps.appRelaunch();
+        return { success: true, quitPending: true };
+      }
+    }
+
+    return { success: false, error: 'unsupported-platform' };
+  }
+
+  /**
+   * Spawns `cmd` with `args` detached. When `requireQuickExitOk` is true (macOS
+   * `open -W`), a 2-second window listens for an early non-zero exit that signals
+   * a broken DMG. On Windows the child is unref'd immediately after spawn.
+   *
+   * A `settled` flag prevents double-resolve from overlapping error/exit/timer events.
+   */
+  function spawnDetached(
+    cmd: string,
+    args: string[],
+    requireQuickExitOk: boolean,
+    quickExitErrorCode: 'dmg-corrupt' | 'spawn-failed' = 'spawn-failed',
+  ): Promise<UpdateLaunchResult> {
+    return new Promise(resolve => {
+      let settled = false;
+      let child: any;
+
+      try {
+        child = spawnFn(cmd, args, {
+          detached: true,
+          stdio: 'ignore',
+          // Show NSIS's own window on Windows (windowsHide:true would suppress it).
+          ...(platform === 'win32' ? { windowsHide: false } : {}),
+        });
+      } catch {
+        // spawn() itself threw synchronously (e.g. ENOENT before the child started).
+        resolve({ success: false, error: 'spawn-failed' });
+        return;
+      }
+
+      // Async spawn error (e.g. ENOENT surfaced via the error event on Windows/Linux).
+      child.on?.('error', () => {
+        if (settled) return;
+        settled = true;
+        resolve({ success: false, error: 'spawn-failed' });
+      });
+
+      if (requireQuickExitOk) {
+        // macOS: wait up to QUICK_EXIT_WINDOW_MS for an early non-zero exit.
+        // If the timer fires first the DMG mounted fine; resolve success.
+        const timer = setTimeout(() => {
+          if (settled) return;
+          settled = true;
+          try { child.unref?.(); } catch { /* ignore */ }
+          resolve({ success: true, quitPending: true });
+        }, QUICK_EXIT_WINDOW_MS);
+
+        child.on?.('exit', (code: number | null) => {
+          if (settled) return;
+          settled = true;
+          clearTimeout(timer);
+          if (code !== null && code !== 0) {
+            resolve({ success: false, error: quickExitErrorCode });
+          } else {
+            // Exited 0 within the window (unusual but valid — DMG was already mounted).
+            resolve({ success: true, quitPending: true });
+          }
+        });
+      } else {
+        // Windows / detach-immediately path: unref the child in the next tick so
+        // Node doesn't wait for it to exit, then resolve success.
+        setImmediate(() => {
+          if (settled) return;
+          settled = true;
+          try { child.unref?.(); } catch { /* ignore */ }
+          resolve({ success: true, quitPending: true });
+        });
+      }
+    });
+  }
+
+  return launch;
 }

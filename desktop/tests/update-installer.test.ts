@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { validateDownloadUrl, deriveDownloadFilename, createUpdateInstaller, cleanupStaleDownloads, findCachedDownload } from '../src/main/update-installer';
+import { validateDownloadUrl, deriveDownloadFilename, createUpdateInstaller, cleanupStaleDownloads, findCachedDownload, makeLaunchInstaller } from '../src/main/update-installer';
+import type { UpdateLaunchResult } from '../src/shared/update-install-types';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -323,5 +324,159 @@ describe('findCachedDownload', () => {
     fs.writeFileSync(filePath, 'x');
     const hit = findCachedDownload(tmpDir, '1.2.3', 'linux');
     expect(hit).toEqual({ filePath, version: '1.2.3' });
+  });
+});
+
+describe('launchInstaller', () => {
+  let tmpDir: string;
+  beforeEach(() => { tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'update-launch-test-')); });
+  afterEach(() => { fs.rmSync(tmpDir, { recursive: true, force: true }); });
+
+  function fakeChild(overrides: Partial<{ exitCode: number | null; exitDelay: number; errorOnSpawn: boolean }> = {}) {
+    const emitter: any = new EventEmitter();
+    emitter.unref = () => {};
+    if (overrides.errorOnSpawn) {
+      setImmediate(() => emitter.emit('error', new Error('ENOENT')));
+    } else if (overrides.exitCode !== undefined) {
+      setTimeout(() => emitter.emit('exit', overrides.exitCode), overrides.exitDelay ?? 10);
+    }
+    return emitter;
+  }
+
+  it('Windows: spawns the .exe detached and returns quitPending=true', async () => {
+    const filePath = path.join(tmpDir, 'YouCoded.exe');
+    fs.writeFileSync(filePath, 'x');
+    const spawnCalls: any[] = [];
+    const launch = makeLaunchInstaller({
+      platform: 'win32',
+      spawn: (cmd: string, args: string[], opts: any) => {
+        spawnCalls.push({ cmd, args, opts });
+        return fakeChild({ exitCode: 0, exitDelay: 5000 }); // NSIS won't exit quickly
+      },
+      shellOpenExternal: async () => {},
+      appRelaunch: () => {},
+      fallbackDownloadUrl: () => 'https://github.com/...', // not used on happy path
+    });
+    const r = await launch({ jobId: 'j', filePath });
+    expect(r).toEqual({ success: true, quitPending: true });
+    expect(spawnCalls).toHaveLength(1);
+    expect(spawnCalls[0].cmd).toBe(filePath);
+    expect(spawnCalls[0].opts.detached).toBe(true);
+    expect(spawnCalls[0].opts.stdio).toBe('ignore');
+  });
+
+  it('macOS: spawns `open -W <dmg>` and waits up to 2s for a quick failure', async () => {
+    const filePath = path.join(tmpDir, 'YouCoded.dmg');
+    fs.writeFileSync(filePath, 'x');
+    const spawnCalls: any[] = [];
+    const launch = makeLaunchInstaller({
+      platform: 'darwin',
+      spawn: (cmd: string, args: string[], opts: any) => {
+        spawnCalls.push({ cmd, args, opts });
+        return fakeChild({ exitCode: 0, exitDelay: 10_000 }); // healthy — stays mounted
+      },
+      shellOpenExternal: async () => {},
+      appRelaunch: () => {},
+      fallbackDownloadUrl: () => 'https://github.com/...',
+    });
+    const r = await launch({ jobId: 'j', filePath });
+    expect(r).toEqual({ success: true, quitPending: true });
+    expect(spawnCalls[0].cmd).toBe('open');
+    expect(spawnCalls[0].args).toEqual(['-W', filePath]);
+  }, 10_000);
+
+  it('macOS: if `open -W` exits non-zero within 2s, returns dmg-corrupt error', async () => {
+    const filePath = path.join(tmpDir, 'YouCoded.dmg');
+    fs.writeFileSync(filePath, 'x');
+    const launch = makeLaunchInstaller({
+      platform: 'darwin',
+      spawn: () => fakeChild({ exitCode: 1, exitDelay: 10 }),
+      shellOpenExternal: async () => {},
+      appRelaunch: () => {},
+      fallbackDownloadUrl: () => '',
+    });
+    const r = await launch({ jobId: 'j', filePath });
+    expect(r).toEqual({ success: false, error: 'dmg-corrupt' });
+  });
+
+  it('returns file-missing if the downloaded file is gone', async () => {
+    const launch = makeLaunchInstaller({
+      platform: 'win32',
+      spawn: () => fakeChild(),
+      shellOpenExternal: async () => {},
+      appRelaunch: () => {},
+      fallbackDownloadUrl: () => '',
+    });
+    const r = await launch({ jobId: 'j', filePath: path.join(tmpDir, 'missing.exe') });
+    expect(r).toEqual({ success: false, error: 'file-missing' });
+  });
+
+  it('returns spawn-failed on spawn error', async () => {
+    const filePath = path.join(tmpDir, 'YouCoded.exe');
+    fs.writeFileSync(filePath, 'x');
+    const launch = makeLaunchInstaller({
+      platform: 'win32',
+      spawn: () => fakeChild({ errorOnSpawn: true }),
+      shellOpenExternal: async () => {},
+      appRelaunch: () => {},
+      fallbackDownloadUrl: () => '',
+    });
+    const r = await launch({ jobId: 'j', filePath });
+    expect(r).toEqual({ success: false, error: 'spawn-failed' });
+  });
+
+  it('Linux AppImage: replaces APPIMAGE and calls app.relaunch, returns quitPending=true', async () => {
+    const running = path.join(tmpDir, 'YouCoded-1.2.2.AppImage');
+    const downloaded = path.join(tmpDir, 'YouCoded-1.2.3.AppImage');
+    fs.writeFileSync(running, 'old');
+    fs.writeFileSync(downloaded, 'new');
+    let relaunched = false;
+    const launch = makeLaunchInstaller({
+      platform: 'linux',
+      spawn: () => fakeChild({ exitCode: 0, exitDelay: 5000 }),
+      shellOpenExternal: async () => {},
+      appRelaunch: () => { relaunched = true; },
+      fallbackDownloadUrl: () => '',
+      envAppImage: running,
+    });
+    const r = await launch({ jobId: 'j', filePath: downloaded });
+    expect(r).toEqual({ success: true, quitPending: true });
+    expect(fs.readFileSync(running, 'utf8')).toBe('new');
+    expect(fs.existsSync(downloaded)).toBe(false);
+    expect(relaunched).toBe(true);
+  });
+
+  it('Linux AppImage without APPIMAGE env: falls back to browser, app keeps running', async () => {
+    const filePath = path.join(tmpDir, 'YouCoded.AppImage');
+    fs.writeFileSync(filePath, 'x');
+    const opened: string[] = [];
+    const launch = makeLaunchInstaller({
+      platform: 'linux',
+      spawn: () => fakeChild(),
+      shellOpenExternal: async (url: string) => { opened.push(url); },
+      appRelaunch: () => {},
+      fallbackDownloadUrl: () => 'https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.AppImage',
+      envAppImage: undefined,
+    });
+    const r = await launch({ jobId: 'j', filePath });
+    expect(r).toEqual({ success: true, quitPending: false, fallback: 'browser' });
+    expect(opened).toEqual(['https://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.AppImage']);
+  });
+
+  it('Linux .deb: shells out to browser, app keeps running', async () => {
+    const filePath = path.join(tmpDir, 'youcoded.deb');
+    fs.writeFileSync(filePath, 'x');
+    const opened: string[] = [];
+    const launch = makeLaunchInstaller({
+      platform: 'linux',
+      spawn: () => fakeChild(),
+      shellOpenExternal: async (url: string) => { opened.push(url); },
+      appRelaunch: () => {},
+      fallbackDownloadUrl: () => 'https://github.com/...deb',
+      envAppImage: '/does/not/matter.AppImage',
+    });
+    const r = await launch({ jobId: 'j', filePath });
+    expect(r).toEqual({ success: true, quitPending: false, fallback: 'browser' });
+    expect(opened).toEqual(['https://github.com/...deb']);
   });
 });
