@@ -1303,7 +1303,35 @@ export function registerIpcHandlers(
     // production reads process.env.APPIMAGE (Linux only); tests pass an override.
   });
 
+  // Dev-only fake-update flag: when set AND running from source (unpackaged),
+  // short-circuit the download/launch to use a bundled 1 MB dummy installer.
+  // Lets us exercise the popup flow end-to-end without a real release. Gated on
+  // !app.isPackaged so production builds can never enter this path even if the
+  // env var is somehow set.
+  const devFakeUpdate = !app.isPackaged && process.env.YOUCODED_DEV_FAKE_UPDATE === '1';
+
   ipcMain.handle('update:download', async () => {
+    if (devFakeUpdate) {
+      // Copy the bundled dummy installer into the cache dir so the launch path
+      // exercises the same file-move logic it would hit in prod. Emits one
+      // synchronous 100% progress event so the renderer sees the full arc.
+      const ext = process.platform === 'win32' ? '.exe'
+               : process.platform === 'darwin' ? '.dmg'
+               : '.AppImage';
+      // app.getAppPath() resolves to the desktop/ root (where package.json lives),
+      // which is where dev-assets/ sits. More robust than __dirname across dev
+      // build variations (tsc watch vs esbuild output).
+      const srcPath = path.join(app.getAppPath(), 'dev-assets', `fake-installer${ext}`);
+      if (!fs.existsSync(updateCacheDir)) fs.mkdirSync(updateCacheDir, { recursive: true });
+      const dstPath = path.join(updateCacheDir, `YouCoded-fake-dev${ext}`);
+      fs.copyFileSync(srcPath, dstPath);
+      const bytesTotal = fs.statSync(dstPath).size;
+      const jobId = `dev-${Date.now()}`;
+      for (const win of BrowserWindow.getAllWindows()) {
+        if (!win.isDestroyed()) win.webContents.send('update:progress', { jobId, bytesReceived: bytesTotal, bytesTotal, percent: 100 });
+      }
+      return { jobId, filePath: dstPath, bytesTotal };
+    }
     // Renderer never passes a URL — we resolve main-side from the trusted cache
     // populated by the GitHub Releases check. Prevents renderer from spoofing
     // the download target.
@@ -1319,6 +1347,14 @@ export function registerIpcHandlers(
   });
 
   ipcMain.handle('update:launch', async (_event, payload: { jobId: string; filePath: string }) => {
+    if (devFakeUpdate) {
+      // Never actually launch anything in dev — just surface the cached file in
+      // the OS file manager so Destin can confirm it exists.
+      shell.showItemInFolder(payload.filePath);
+      // Return the fallback: 'browser' shape so the renderer flips out of launching
+      // state and calls onClose() — do NOT schedule app.quit() (that would kill the dev session).
+      return { success: true, quitPending: false, fallback: 'browser' as const };
+    }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
     if (result.success && result.quitPending) {
       // 500ms grace so the child installer process has detached cleanly before we exit.
