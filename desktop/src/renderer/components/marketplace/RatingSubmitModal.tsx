@@ -24,6 +24,7 @@ import React, {
   useCallback,
 } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { useEscClose } from '../../hooks/use-esc-close';
 import { useMarketplaceAuth } from '../../state/marketplace-auth-context';
 import { useMarketplaceStats } from '../../state/marketplace-stats-context';
 
@@ -108,15 +109,7 @@ export default function RatingSubmitModal({
     return () => { cancelledRef.current = true; };
   }, []);
 
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose]);
+  useEscClose(open, onClose);
 
   // Reset form state whenever the modal opens for a new session.
   // inFlight and installing are also reset here so that a close+reopen while a
