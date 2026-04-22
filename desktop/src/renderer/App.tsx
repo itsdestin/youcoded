@@ -57,6 +57,9 @@ import { RemoteSnapshotExporter } from './components/RemoteSnapshotExporter';
 import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
 import { BuddyChatApp } from './components/buddy/BuddyChatApp';
 import { BuddyCaptureApp } from './components/buddy/BuddyCaptureApp';
+// ESC-passthrough: provider owns capture-phase ESC routing for overlays.
+// Mounted at app root so every overlay component is a descendant.
+import { EscCloseProvider } from './hooks/use-esc-close';
 
 type ViewMode = 'chat' | 'terminal';
 
@@ -2177,6 +2180,10 @@ export default function App() {
     // Uses inline styles only — no theme tokens, no context — so it renders even
     // when ThemeProvider itself is the thing that crashed.
     <RootErrorBoundary>
+      {/* EscCloseProvider owns capture-phase ESC routing — must wrap all
+          overlay-bearing providers so every overlay is a descendant. Buddy
+          windows (early-returned above) don't need it. */}
+      <EscCloseProvider>
       <ThemeProvider>
         <ThemeBg />
         <ThemeEffects />
@@ -2206,6 +2213,7 @@ export default function App() {
           </WorkerHealthProvider>
         </MarketplaceAuthProvider>
       </ThemeProvider>
+      </EscCloseProvider>
     </RootErrorBoundary>
   );
 }
