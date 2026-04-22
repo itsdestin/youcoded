@@ -18,6 +18,8 @@ import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetail
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { useEscClose } from "../../hooks/use-esc-close";
+import { useCurrentPlatform } from "../../state/platform";
+import { platformDisplayName, platformListDisplay } from "../../../shared/platform-display";
 import type { SkillEntry, IntegrationEntry, IntegrationState } from "../../../shared/types";
 import type { ThemeRegistryEntryWithStatus } from "../../../shared/theme-marketplace-types";
 
@@ -53,6 +55,7 @@ export default function MarketplaceScreen({
   onExit, onOpenLibrary, onOpenShareSheet, onOpenThemeShare, initialTypeChip, initialDetailId, onDetailConsumed,
 }: Props) {
   const mp = useMarketplace();
+  const currentPlatform = useCurrentPlatform();
   const [filter, setFilter] = useState<FilterState>(() => {
     const f = emptyFilter();
     if (initialTypeChip) f.type = initialTypeChip;
@@ -97,6 +100,12 @@ export default function MarketplaceScreen({
   // it, integrations would fall back to MarketplaceCard's generic "Installed"
   // badge and lose the connected/needs-auth/error/deprecated nuance.
   const integrationStatusBadge = (item: IntegrationCardItem): { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' | 'locked' } => {
+    // Platform lock overrides everything — if the user can't install, the
+    // connected/needs-auth state is moot. When platform is still resolving
+    // (null) treat as "not blocked" to avoid a transient grey badge flash.
+    if (currentPlatform && item.platforms && item.platforms.length > 0 && !item.platforms.includes(currentPlatform as any)) {
+      return { text: `${platformDisplayName(item.platforms[0])} Only`, tone: 'locked' };
+    }
     if (item.status === 'planned') return { text: 'Coming soon', tone: 'neutral' };
     if (item.status === 'deprecated') return { text: 'Deprecated', tone: 'neutral' };
     const s = item.state;
