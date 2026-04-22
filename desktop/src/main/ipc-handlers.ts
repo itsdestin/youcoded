@@ -1259,7 +1259,6 @@ export function registerIpcHandlers(
       const min = parts[1] || 0;
       const patch = parts[2] || 0;
       return {
-        ...status,
         current: currentVersion,
         latest: `${maj}.${min}.${patch + 1}`,
         update_available: true,

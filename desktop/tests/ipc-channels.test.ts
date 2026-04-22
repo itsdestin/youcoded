@@ -126,3 +126,31 @@ describe('dev:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
 });
+
+// Regression net for the update:changelog IPC channel introduced by the
+// UpdatePanel popup feature. All three platforms must carry identical
+// type strings — drift would silently break changelog fetch on one side.
+describe('update:changelog channel parity', () => {
+  const NEW_TYPES = [
+    'update:changelog',
+  ];
+
+  it('update:changelog type is declared in preload.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
+  });
+
+  it('update:changelog type is referenced in remote-shim.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    for (const t of NEW_TYPES) expect(src).toContain(`'${t}'`);
+  });
+
+  it('update:changelog type is handled by SessionService.kt (Android)', () => {
+    const ktPath = path.join(
+      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
+    );
+    const src = fs.readFileSync(ktPath, 'utf8');
+    for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
+  });
+});

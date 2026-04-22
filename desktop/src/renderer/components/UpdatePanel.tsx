@@ -18,6 +18,9 @@ interface UpdateStatus {
   download_url: string | null;
 }
 
+// Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
+// main/changelog-service.ts). Four-way mirror — when you edit one, edit all four.
+// Not covered by the IPC-parity test; drift is silent until runtime shape mismatch.
 interface ChangelogEntry { version: string; date?: string; body: string; }
 
 interface ChangelogData {
