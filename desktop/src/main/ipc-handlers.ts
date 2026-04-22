@@ -891,6 +891,16 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.INTEGRATIONS_CONFIGURE, async (_e, slug: string, settings: Record<string, unknown>) => {
     return integrationInstaller.configure(slug, settings);
   });
+  ipcMain.handle(IPC.INTEGRATIONS_CONNECT, async (_e, slug: string) => {
+    return integrationInstaller.connect(slug);
+  });
+
+  // Reports process.platform so the renderer can gate UI (e.g. hide Install
+  // buttons on macOS-only integrations when running on Windows). Returns the
+  // raw Node code — the renderer uses platform-display.ts to humanize.
+  ipcMain.handle(IPC.PLATFORM_GET, () => {
+    return process.platform;
+  });
 
   // Phase 4 — user-initiated cache bust. Next fetchIndex/getFeatured refetches.
   ipcMain.handle(IPC.MARKETPLACE_INVALIDATE_CACHE, async () => {

@@ -654,6 +654,18 @@ export function installShim(): void {
       status: (slug: string) => invoke('integrations:status', { slug }),
       configure: (slug: string, settings: Record<string, any>) =>
         invoke('integrations:configure', { slug, settings }),
+      connect: (slug: string) => invoke('integrations:connect', { slug }),
+    },
+    // Platform detection for renderer-level UI gating. Desktop returns the
+    // raw string; Android wraps in {platform}. Normalize both here so callers
+    // see a consistent union type.
+    getPlatform: async (): Promise<'darwin' | 'win32' | 'linux' | 'android'> => {
+      const result = await invoke('platform:get');
+      if (typeof result === 'string') return result as any;
+      if (result && typeof result === 'object' && 'platform' in result) {
+        return (result as any).platform;
+      }
+      return 'linux'; // degenerate fallback; shouldn't hit in practice
     },
     // Phase 3: unified marketplace (packages map + per-entry config)
     marketplace: {

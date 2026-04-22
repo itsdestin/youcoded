@@ -57,6 +57,8 @@ const IPC = {
   INTEGRATIONS_UNINSTALL: 'integrations:uninstall',
   INTEGRATIONS_STATUS: 'integrations:status',
   INTEGRATIONS_CONFIGURE: 'integrations:configure',
+  INTEGRATIONS_CONNECT: 'integrations:connect',
+  PLATFORM_GET: 'platform:get',
   // Phase 4 — skip 24h cache after /feature curation.
   MARKETPLACE_INVALIDATE_CACHE: 'marketplace:invalidate-cache',
   SKILLS_GET_INTEGRATION_INFO: 'skills:get-integration-info',
@@ -395,7 +397,12 @@ contextBridge.exposeInMainWorld('claude', {
     status: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_STATUS, slug),
     configure: (slug: string, settings: Record<string, any>): Promise<any> =>
       ipcRenderer.invoke(IPC.INTEGRATIONS_CONFIGURE, slug, settings),
+    connect: (slug: string): Promise<any> => ipcRenderer.invoke(IPC.INTEGRATIONS_CONNECT, slug),
   },
+  // Returns the raw process.platform code so the renderer can gate UI (e.g.
+  // hide Install buttons on macOS-only integrations when running on Windows).
+  getPlatform: (): Promise<'darwin' | 'win32' | 'linux' | 'android'> =>
+    ipcRenderer.invoke(IPC.PLATFORM_GET),
   // Marketplace sign-in (device-code OAuth flow) — token stays in main process.
   // start/poll wrap API calls and return ApiResult so the renderer can inspect
   // HTTP status codes across the contextBridge (structuredClone drops Error fields).

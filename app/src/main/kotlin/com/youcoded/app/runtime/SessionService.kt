@@ -891,6 +891,7 @@ class SessionService : Service() {
             "integrations:status",
             "integrations:install",
             "integrations:uninstall",
+            "integrations:connect",
             "integrations:configure" -> {
                 val result = JSONObject().apply {
                     put("slug", msg.payload?.optString("slug") ?: "")
@@ -899,6 +900,14 @@ class SessionService : Service() {
                     put("error", "not-implemented: integrations available on Android in a follow-up")
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
+            }
+            // Renderer-side platform detection. Android is explicitly "android"
+            // — distinct from "linux" so integrations declaring
+            // `platforms: ['linux']` don't accidentally enable here. Desktop
+            // returns the raw process.platform string ('darwin'/'win32'/'linux').
+            "platform:get" -> {
+                val payload = JSONObject().apply { put("platform", "android") }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
             }
             // Decomposition v3 §9.9: integration badges for the detail view
             "skills:get-integration-info" -> {
