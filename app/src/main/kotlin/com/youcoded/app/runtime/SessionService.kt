@@ -2596,6 +2596,9 @@ class SessionService : Service() {
                 // Desktop-only feature. Android never renders the version pill, so this
                 // handler should be unreachable — but IPC-parity invariant (docs/PITFALLS.md
                 // "Cross-Platform") requires the type string to exist in all three files.
+                // If Android ever does render the pill, error:true routes the React UI to
+                // the "Open on GitHub" fallback (in UpdatePanel.tsx) rather than a blank
+                // panel. Prefer fail-loud over fail-silent for an unreachable-today path.
                 msg.id?.let {
                     bridgeServer.respond(ws, msg.type, it, JSONObject()
                         .put("markdown", JSONObject.NULL)

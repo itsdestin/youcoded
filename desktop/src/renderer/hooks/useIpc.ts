@@ -68,6 +68,9 @@ declare global {
         openChangelog: () => Promise<void>;
         openExternal: (url: string) => Promise<void>;
       };
+      // Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
+      // main/changelog-service.ts). When you edit one, edit all three — this copy
+      // isn't covered by the ipc-channels.test.ts parity test and will drift silently.
       update: {
         changelog: (opts: { forceRefresh: boolean }) => Promise<{
           markdown: string | null;
