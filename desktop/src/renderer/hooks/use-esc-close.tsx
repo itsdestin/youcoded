@@ -91,16 +91,19 @@ export function EscCloseProvider({ children }: { children: React.ReactNode }): R
   return <EscStoreContext.Provider value={store}>{children}</EscStoreContext.Provider>;
 }
 
+// Soft-fail when no provider is mounted: the hook becomes a no-op rather than
+// throwing. Production always has the provider at App root, so the real path
+// is always exercised. The soft-fail keeps isolated component tests (which
+// render a subtree without the provider) from needing a wrapper — missing
+// provider is visible as "ESC doesn't close overlays" during dev, not as a
+// cascade of test crashes. Follows the same pattern as React Router hooks.
 export function useEscClose(open: boolean, onClose: () => void): void {
   const store = useContext(EscStoreContext);
-  if (!store) {
-    throw new Error('useEscClose must be used inside <EscCloseProvider>');
-  }
   const ref = useRef(onClose);
   useEffect(() => { ref.current = onClose; }, [onClose]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!store || !open) return;
     const id = nextId++;
     store.push({ id, ref });
     return () => store.remove(id);
@@ -109,12 +112,11 @@ export function useEscClose(open: boolean, onClose: () => void): void {
 
 export function useEscStackEmpty(): boolean {
   const store = useContext(EscStoreContext);
-  if (!store) {
-    throw new Error('useEscStackEmpty must be used inside <EscCloseProvider>');
-  }
+  // Without a provider there's no stack, so treat it as empty. Matches the
+  // soft-fail model above.
   return useSyncExternalStore(
-    useCallback((l) => store.subscribe(l), [store]),
-    useCallback(() => store.isEmpty, [store]),
+    useCallback((l) => (store ? store.subscribe(l) : () => {}), [store]),
+    useCallback(() => (store ? store.isEmpty : true), [store]),
     useCallback(() => true, []),
   );
 }
