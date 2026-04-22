@@ -191,6 +191,41 @@ export class IntegrationInstaller {
     return { slug, installed: false, connected: false };
   }
 
+  // Re-run the post-install setup command for an already-installed integration.
+  // Used by the "Connect" button on the detail overlay when state is
+  // installed-but-not-connected (e.g. OAuth expired or user skipped the
+  // initial setup flow). Does NOT re-install the plugin — just returns the
+  // command so the renderer can spawn it in a fresh Sonnet session, same
+  // path that install() uses.
+  async connect(slug: string): Promise<IntegrationInstallResult> {
+    const manifest = this.readManifest();
+    const current = manifest[slug];
+    if (!current?.installed) {
+      return { slug, installed: false, connected: false, error: `${slug} is not installed` };
+    }
+
+    const catalog = await this.listCatalog();
+    const entry = (catalog.integrations || []).find((e) => e.slug === slug);
+    if (!entry) {
+      return { ...current, error: `Integration not found: ${slug}` };
+    }
+
+    const cmd = entry.setup.postInstallCommand;
+    if (!cmd) {
+      return { ...current, error: `${slug} has no connect flow` };
+    }
+
+    // Clear any prior error so the UI flips out of the "Error" badge when
+    // the user kicks off a retry. State stays installed=true/connected=false
+    // until the post-install command actually succeeds (which is outside the
+    // installer's visibility — the user's Claude session runs it).
+    const next: IntegrationState = { ...current, error: undefined };
+    manifest[slug] = next;
+    this.writeManifest(manifest);
+
+    return { ...next, postInstallCommand: cmd };
+  }
+
   async configure(slug: string, _settings: Record<string, unknown>): Promise<IntegrationState> {
     const manifest = this.readManifest();
     const current = manifest[slug] ?? { slug, installed: false, connected: false };
