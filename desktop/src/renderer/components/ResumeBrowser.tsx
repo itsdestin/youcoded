@@ -1,7 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { MODELS, type ModelAlias } from './StatusBar';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 
 const MODEL_LABELS: Record<string, string> = {
@@ -114,18 +115,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     }
   }, [open]);
 
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') {
-        if (expandedId) { setExpandedId(null); }
-        else { onClose(); }
-      }
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose, expandedId]);
+  // Close on Escape — collapse the expanded row first, then close the browser.
+  // Extracted into a callback so useEscClose sees the layered close behavior.
+  const handleEscClose = useCallback(() => {
+    if (expandedId) setExpandedId(null);
+    else onClose();
+  }, [expandedId, onClose]);
+  useEscClose(open, handleEscClose);
 
   const filtered = useMemo(() => {
     // Hide complete sessions by default; Show Complete toggle reveals them.

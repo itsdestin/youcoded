@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 
 interface SavedFolder {
   path: string;
@@ -54,6 +55,14 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true }: P
       document.removeEventListener('touchstart', handler);
     };
   }, [open]);
+
+  // Close panel on Escape — routed through the central useEscClose LIFO stack
+  // so chat-passthrough preventDefault works consistently with other overlays.
+  const handleEscClose = useCallback(() => {
+    setOpen(false);
+    setEditingPath(null);
+  }, []);
+  useEscClose(open, handleEscClose);
 
   // Focus nickname input when editing starts
   useEffect(() => {

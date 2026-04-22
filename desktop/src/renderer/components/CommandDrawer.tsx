@@ -4,6 +4,7 @@ import SkillCard from './SkillCard';
 import { useSkills } from '../state/skill-context';
 import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 
 interface Props {
   open: boolean;
@@ -65,15 +66,7 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
     }
   }, [open, searchMode]);
 
-  // Close on Escape
-  useEffect(() => {
-    if (!open) return;
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [open, onClose]);
+  useEscClose(open, onClose);
 
   // Search mode: flat list matching the query (preserves original behavior).
   const searchFiltered = useMemo(() => {

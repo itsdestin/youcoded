@@ -2,6 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { useSkills } from '../state/skill-context';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { useEscClose } from '../hooks/use-esc-close';
 
 interface ShareSheetProps {
   skillId: string;
@@ -37,14 +38,7 @@ export default function ShareSheet({ skillId, onClose }: ShareSheetProps) {
       });
   }, [skillId, getShareLink]);
 
-  // Close on Escape
-  useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onClose();
-    };
-    window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
-  }, [onClose]);
+  useEscClose(true, onClose);
 
   const handleCopy = async () => {
     if (!shareLink) return;

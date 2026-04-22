@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { useEscClose } from '../hooks/use-esc-close';
 
 // Flag order must match ResumeBrowser's pill order so the UI is consistent.
 type FlagName = 'priority' | 'helpful' | 'complete';
@@ -45,17 +46,20 @@ export default function CloseSessionPrompt({ open, sessionName, onCancel, onConf
     }
   }, [open]);
 
+  // ESC is routed through the central useEscClose stack so overlay LIFO and
+  // chat-passthrough preventDefault work uniformly. Enter still needs its own
+  // window listener because it submits rather than closes.
+  useEscClose(open, onCancel);
   useEffect(() => {
     if (!open) return;
     const handler = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') onCancel();
-      else if (e.key === 'Enter') {
+      if (e.key === 'Enter') {
         onConfirm(FLAG_ORDER.filter((f) => sel[f]));
       }
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [open, sel, onCancel, onConfirm]);
+  }, [open, sel, onConfirm]);
 
   if (!open) return null;
 
