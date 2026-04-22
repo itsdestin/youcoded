@@ -152,11 +152,23 @@ export function BubbleFeed({ sessionId }: Props) {
           });
           break;
         case 'turn-complete':
+          // Forward per-turn metadata so the buddy reducer stamps stopReason,
+          // model, anthropicRequestId, and usage on AssistantTurn — matches
+          // App.tsx's main-window dispatch. Without this, buddy turns would
+          // have these fields permanently null even though transcript-watcher
+          // emits them, breaking the per-turn metadata strip / StopReasonFooter
+          // / AttentionBanner request-id readout if the buddy ever surfaces
+          // those UIs. Coalesce undefined → null because the action type
+          // requires (string | null), not optional.
           batchDispatch({
             type: 'TRANSCRIPT_TURN_COMPLETE',
             sessionId: event.sessionId,
             uuid: event.uuid,
             timestamp: event.timestamp,
+            stopReason: event.data.stopReason ?? null,
+            model: event.data.model ?? null,
+            anthropicRequestId: event.data.anthropicRequestId ?? null,
+            usage: event.data.usage ?? null,
           });
           break;
         case 'assistant-thinking':

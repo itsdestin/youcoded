@@ -9,7 +9,7 @@ import java.io.File
 // see docs/cc-dependencies.md entry "CC built-in command list" and
 // docs/superpowers/specs/2026-04-21-command-drawer-search-commands-design.md.
 //
-// Last verified against Claude Code CLI v2.1.116 — 2026-04-21.
+// Last verified against Claude Code CLI v2.1.117 — 2026-04-21.
 class CommandProvider(
   private val homeDir: File,
   private val skillProvider: LocalSkillProvider,

@@ -366,8 +366,8 @@ export class LocalSkillProvider implements SkillProvider {
       return { type: 'plugin' };
     }
 
-    // Skill-granular ids like `destinclaude-encyclopedia:encyclopedia-compile`
-    // come from Library skill cards. Resolve them to the parent plugin id by
+    // Skill-granular ids like `superpowers:brainstorming` come from Library
+    // skill cards. Resolve them to the parent plugin id by
     // looking up the skill in the installed cache (which carries pluginName)
     // and then uninstall that plugin. This matches the user's expectation
     // that "Uninstall" on a skill card removes the plugin shipping the skill.
