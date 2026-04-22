@@ -115,38 +115,46 @@ export default function MarketplaceScreen({
     return { text: 'Not installed', tone: 'neutral' };
   };
 
-  const handleIntegration = async (item: IntegrationCardItem) => {
-    if (item.status !== "available") return;
-    if (item.state.installed) {
-      // Phase 3 scaffold — no real settings panel yet; uninstall as the
-      // safe placeholder so users can recover from a stuck state.
-      await (window as any).claude.integrations.uninstall(item.slug);
-    } else {
-      const result = await (window as any).claude.integrations.install(item.slug);
-      // setup.type === 'plugin' entries can carry a post-install slash
-      // command (e.g. /google-services-setup). Run it in a fresh Sonnet
-      // session so the user's active chat isn't hijacked by a multi-step
-      // OAuth walkthrough.
-      if (result?.postInstallCommand) {
-        const info = await (window as any).claude.session.create({
-          name: `Set up ${item.displayName}`,
-          cwd: "", // main falls back to home dir when blank
-          skipPermissions: false,
-          model: "claude-sonnet-4-6",
-        });
-        if (info?.id) {
-          // Pragmatic fixed delay — the CLI takes ~1–2s to reach the
-          // prompt. Claude Code buffers stdin until ready, so an early
-          // send is tolerated; a late send is the common case.
-          setTimeout(() => {
-            try {
-              (window as any).claude.session.sendInput(info.id, result.postInstallCommand + "\r");
-            } catch { /* user can type the command themselves */ }
-          }, 3000);
-          onExit(); // land on the new session
-        }
-      }
+  // Spawn a new Sonnet session and pipe the post-install setup command into
+  // it. Shared by both install and connect flows. The fixed 3s delay matches
+  // the legacy implementation — Claude Code buffers stdin, so the value isn't
+  // load-bearing, just pragmatic.
+  const runPostInstallCommand = async (displayName: string, command: string) => {
+    const info = await (window as any).claude.session.create({
+      name: `Set up ${displayName}`,
+      cwd: "",
+      skipPermissions: false,
+      model: "claude-sonnet-4-6",
+    });
+    if (info?.id) {
+      setTimeout(() => {
+        try {
+          (window as any).claude.session.sendInput(info.id, command + "\r");
+        } catch { /* user can type the command themselves */ }
+      }, 3000);
+      onExit();
     }
+  };
+
+  const installIntegration = async (item: IntegrationCardItem) => {
+    if (item.status !== "available") return;
+    const result = await (window as any).claude.integrations.install(item.slug);
+    if (result?.postInstallCommand) {
+      await runPostInstallCommand(item.displayName, result.postInstallCommand);
+    }
+    await refreshIntegrations();
+  };
+
+  const connectIntegration = async (item: IntegrationCardItem) => {
+    const result = await (window as any).claude.integrations.connect(item.slug);
+    if (result?.postInstallCommand) {
+      await runPostInstallCommand(item.displayName, result.postInstallCommand);
+    }
+    await refreshIntegrations();
+  };
+
+  const uninstallIntegration = async (item: IntegrationCardItem) => {
+    await (window as any).claude.integrations.uninstall(item.slug);
     await refreshIntegrations();
   };
 
@@ -432,18 +440,35 @@ export default function MarketplaceScreen({
         />
       )}
 
-      {integrationDetail && (
-        <IntegrationDetailOverlay
-          item={integrationDetail}
-          onClose={() => setIntegrationDetail(null)}
-          onPrimary={async () => {
-            await handleIntegration(integrationDetail);
-            setIntegrationDetail(null);
-          }}
-          statusBadge={integrationStatusBadge(integrationDetail)}
-          iconUrl={integrationDetail.iconUrl ? `${INTEGRATION_ICON_BASE}/${integrationDetail.iconUrl}` : undefined}
-        />
-      )}
+      {integrationDetail && (() => {
+        // Platform-block detection is shared with the card; compute it inline
+        // so the detail header's disabled button and its tooltip agree with
+        // the card's "macOS Only" pill.
+        const blocked = !!(currentPlatform && integrationDetail.platforms && integrationDetail.platforms.length > 0 && !integrationDetail.platforms.includes(currentPlatform as any));
+        const blockedName = blocked && integrationDetail.platforms ? platformDisplayName(integrationDetail.platforms[0]) : null;
+        return (
+          <IntegrationDetailOverlay
+            item={integrationDetail}
+            onClose={() => setIntegrationDetail(null)}
+            onInstall={async () => {
+              await installIntegration(integrationDetail);
+              setIntegrationDetail(null);
+            }}
+            onConnect={async () => {
+              await connectIntegration(integrationDetail);
+              setIntegrationDetail(null);
+            }}
+            onUninstall={async () => {
+              await uninstallIntegration(integrationDetail);
+              setIntegrationDetail(null);
+            }}
+            statusBadge={integrationStatusBadge(integrationDetail)}
+            iconUrl={integrationDetail.iconUrl ? `${INTEGRATION_ICON_BASE}/${integrationDetail.iconUrl}` : undefined}
+            platformBlocked={blocked}
+            platformBlockedName={blockedName}
+          />
+        );
+      })()}
 
       {/* Docked footer — outside the scroll container so it stays fixed at the
           bottom of the viewport regardless of scroll position. */}
@@ -452,18 +477,23 @@ export default function MarketplaceScreen({
   );
 }
 
-// Lightweight detail overlay for integrations. Mirrors MarketplaceDetailOverlay's
-// layer-2 pattern (scrim + panel) but stays self-contained because integrations
-// aren't in mp.skillEntries and their Install button routes through
-// handleIntegration, not the generic installSkill flow.
+// Detail overlay for integrations. Mirrors MarketplaceDetailOverlay's section
+// structure (header → metadata chips → About → Setup) but stays a separate
+// component because integration actions (Install / Connect / Settings /
+// Uninstall) diverge from plugin actions (Install / Favorite / Share / Review).
 function IntegrationDetailOverlay({
-  item, onClose, onPrimary, statusBadge, iconUrl,
+  item, onClose, onInstall, onConnect, onUninstall,
+  statusBadge, iconUrl, platformBlocked, platformBlockedName,
 }: {
   item: IntegrationCardItem;
   onClose(): void;
-  onPrimary(): void | Promise<void>;
+  onInstall(): void | Promise<void>;
+  onConnect(): void | Promise<void>;
+  onUninstall(): void | Promise<void>;
   statusBadge: { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' | 'locked' };
   iconUrl?: string;
+  platformBlocked: boolean;
+  platformBlockedName: string | null;  // e.g. "macOS" when blocked, else null
 }) {
   useEscClose(true, onClose);
 
@@ -475,16 +505,34 @@ function IntegrationDetailOverlay({
     locked: 'bg-slate-500/10 text-fg-dim border-slate-500/30',
   };
 
-  const planned = item.status === 'planned';
-  const deprecated = item.status === 'deprecated';
-  const actionLabel = planned
-    ? 'Coming soon'
-    : deprecated
-      ? 'Deprecated'
-      : item.state.installed
-        ? 'Open settings'
-        : 'Install';
-  const actionDisabled = planned || deprecated || item.status !== 'available';
+  // Derive the action-button state. Precedence: platform-blocked > planned >
+  // deprecated > install-error > install-state. The spec table in
+  // docs/superpowers/specs/2026-04-22-marketplace-integration-polish-design.md §6
+  // is the source of truth.
+  type ActionState =
+    | { kind: 'blocked'; label: string; tooltip: string }
+    | { kind: 'planned' }
+    | { kind: 'deprecated' }
+    | { kind: 'install-error' }
+    | { kind: 'not-installed' }
+    | { kind: 'needs-auth' }
+    | { kind: 'connected' };
+
+  const actionState: ActionState = (() => {
+    if (platformBlocked && platformBlockedName) {
+      return {
+        kind: 'blocked',
+        label: `${platformBlockedName} Only`,
+        tooltip: `Only available on ${platformBlockedName}`,
+      };
+    }
+    if (item.status === 'planned') return { kind: 'planned' };
+    if (item.status === 'deprecated') return { kind: 'deprecated' };
+    if (!item.state.installed && item.state.error) return { kind: 'install-error' };
+    if (!item.state.installed) return { kind: 'not-installed' };
+    if (item.state.installed && !item.state.connected) return { kind: 'needs-auth' };
+    return { kind: 'connected' };
+  })();
 
   return (
     <>
@@ -507,44 +555,197 @@ function IntegrationDetailOverlay({
         </header>
         <div className="flex-1 overflow-y-auto p-6">
           <article className="flex flex-col gap-4 max-w-3xl mx-auto">
-            <header className="flex items-start gap-4">
-              {/* Custom integration icon, falls back to the displayName letter. */}
-              <div
-                className="w-16 h-16 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-2xl font-semibold"
-                style={iconUrl ? undefined : { background: item.accentColor || 'var(--accent)' }}
-              >
-                {iconUrl ? (
-                  <img src={iconUrl} alt="" className="w-full h-full object-contain" />
-                ) : (
-                  item.displayName.slice(0, 1)
-                )}
-              </div>
-              <div className="flex-1 min-w-0">
-                <h1 className="text-2xl font-semibold text-fg">{item.displayName}</h1>
-                {item.tagline && <p className="mt-1 text-fg-2">{item.tagline}</p>}
-                <div className="mt-3 flex items-center gap-2">
-                  <span className={`text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5 border ${toneClass[statusBadge.tone]}`}>
-                    {statusBadge.text}
-                  </span>
-                  {item.state.error && (
-                    <span className="text-xs text-red-400 truncate" title={item.state.error}>{item.state.error}</span>
+            <header className="flex items-start justify-between gap-4">
+              <div className="flex items-start gap-4 min-w-0 flex-1">
+                {/* Custom integration icon, falls back to the displayName letter. */}
+                <div
+                  className="w-16 h-16 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-2xl font-semibold"
+                  style={iconUrl ? undefined : { background: item.accentColor || 'var(--accent)' }}
+                >
+                  {iconUrl ? (
+                    <img src={iconUrl} alt="" className="w-full h-full object-contain" />
+                  ) : (
+                    item.displayName.slice(0, 1)
                   )}
                 </div>
+                <div className="flex-1 min-w-0">
+                  <h1 className="text-2xl font-semibold text-fg">{item.displayName}</h1>
+                  {item.tagline && <p className="mt-1 text-fg-2">{item.tagline}</p>}
+                  <div className="mt-3 flex items-center gap-2 flex-wrap">
+                    <span className={`text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5 border ${toneClass[statusBadge.tone]}`}>
+                      {statusBadge.text}
+                    </span>
+                    {item.state.error && (
+                      <span className="text-xs text-red-400 truncate max-w-[40ch]" title={item.state.error}>{item.state.error}</span>
+                    )}
+                  </div>
+                </div>
+              </div>
+              <div className="shrink-0 flex items-center gap-2">
+                <IntegrationActions
+                  state={actionState}
+                  onInstall={onInstall}
+                  onConnect={onConnect}
+                  onUninstall={onUninstall}
+                />
               </div>
             </header>
-            <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => { void onPrimary(); }}
-                disabled={actionDisabled}
-                className="px-4 py-2 rounded-md bg-accent text-on-accent hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
-              >
-                {actionLabel}
-              </button>
-            </div>
+
+            <IntegrationMetadataChips entry={item} />
+
+            {item.longDescription ? (
+              <section>
+                <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">About</h2>
+                <div className="prose prose-sm max-w-none text-fg-2 whitespace-pre-wrap">
+                  {item.longDescription}
+                </div>
+              </section>
+            ) : null}
+
+            <IntegrationSetupDetails entry={item} />
           </article>
         </div>
       </OverlayPanel>
     </>
+  );
+}
+
+// Renders the contextual action buttons in the detail header. One branch per
+// ActionState case keeps the overlay JSX clean.
+function IntegrationActions({
+  state, onInstall, onConnect, onUninstall,
+}: {
+  state:
+    | { kind: 'blocked'; label: string; tooltip: string }
+    | { kind: 'planned' }
+    | { kind: 'deprecated' }
+    | { kind: 'install-error' }
+    | { kind: 'not-installed' }
+    | { kind: 'needs-auth' }
+    | { kind: 'connected' };
+  onInstall(): void | Promise<void>;
+  onConnect(): void | Promise<void>;
+  onUninstall(): void | Promise<void>;
+}) {
+  // Shared styles — mirrors MarketplaceDetailOverlay's primary + uninstall classes.
+  const primaryCls = 'px-4 py-2 rounded-md bg-accent text-on-accent hover:opacity-90';
+  const uninstallCls = 'px-4 py-2 rounded-md bg-inset text-fg border border-edge hover:border-edge-dim';
+  const disabledCls = 'px-4 py-2 rounded-md bg-inset text-fg-dim border border-edge-dim cursor-not-allowed opacity-60';
+
+  if (state.kind === 'blocked') {
+    return (
+      <button type="button" disabled title={state.tooltip} className={disabledCls}>
+        {state.label}
+      </button>
+    );
+  }
+  if (state.kind === 'planned') {
+    return <button type="button" disabled className={disabledCls}>Coming soon</button>;
+  }
+  if (state.kind === 'deprecated') {
+    return <button type="button" disabled className={disabledCls}>Deprecated</button>;
+  }
+  if (state.kind === 'install-error') {
+    return (
+      <button type="button" onClick={() => { void onInstall(); }} className={primaryCls}>
+        Retry Install
+      </button>
+    );
+  }
+  if (state.kind === 'not-installed') {
+    return (
+      <button type="button" onClick={() => { void onInstall(); }} className={primaryCls}>
+        Install
+      </button>
+    );
+  }
+  if (state.kind === 'needs-auth') {
+    return (
+      <>
+        <button type="button" onClick={() => { void onConnect(); }} className={primaryCls}>
+          Connect
+        </button>
+        <button type="button" disabled title="Coming soon" className={disabledCls}>
+          Settings (Coming soon…)
+        </button>
+        <button type="button" onClick={() => { void onUninstall(); }} className={uninstallCls}>
+          Uninstall
+        </button>
+      </>
+    );
+  }
+  // connected
+  return (
+    <>
+      <button type="button" disabled title="Coming soon" className={disabledCls}>
+        Settings (Coming soon…)
+      </button>
+      <button type="button" onClick={() => { void onUninstall(); }} className={uninstallCls}>
+        Uninstall
+      </button>
+    </>
+  );
+}
+
+// Mirror of MarketplaceDetailOverlay's MetadataChips — pulls the tags +
+// lifeArea from the IntegrationEntry. Intentionally duplicated (not imported)
+// because the plugin MetadataChips takes a SkillEntry shape.
+function IntegrationMetadataChips({ entry }: { entry: IntegrationCardItem }) {
+  const tags = entry.tags || [];
+  const lifeAreas = entry.lifeArea || [];
+  if (!tags.length && !lifeAreas.length) return null;
+
+  return (
+    <div className="flex flex-wrap gap-1.5 items-center">
+      {tags.map((t) => (
+        <span key={`tag-${t}`} className="text-xs px-2 py-0.5 rounded-full bg-inset text-fg-2 border border-edge-dim">
+          #{t}
+        </span>
+      ))}
+      {lifeAreas.map((a) => (
+        <span key={`area-${a}`} className="text-xs px-2 py-0.5 rounded-full bg-accent/10 text-fg border border-accent/30 capitalize">
+          {a}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// Small bulleted block describing setup — derived from setup.type /
+// requiresOAuth / postInstallCommand / platforms. No new registry fields.
+function IntegrationSetupDetails({ entry }: { entry: IntegrationCardItem }) {
+  const bullets: string[] = [];
+  if (entry.setup.type === 'api-key' && entry.setup.keyName) {
+    bullets.push(`Requires a \`${entry.setup.keyName}\` API key`);
+  }
+  if (entry.setup.requiresOAuth) {
+    const provider = entry.setup.oauthProvider ? entry.setup.oauthProvider : 'OAuth';
+    bullets.push(`Signs in via ${provider}`);
+  }
+  if (entry.platforms && entry.platforms.length > 0) {
+    bullets.push(`Available on ${platformListDisplay(entry.platforms)}`);
+  }
+  if (entry.setup.postInstallCommand) {
+    bullets.push(`After install, runs \`${entry.setup.postInstallCommand}\``);
+  }
+
+  if (bullets.length === 0) return null;
+
+  return (
+    <section>
+      <h2 className="text-sm uppercase tracking-wide text-fg-dim mb-2">Setup</h2>
+      <ul className="list-disc pl-5 text-sm text-fg-2 space-y-1">
+        {bullets.map((b) => (
+          <li key={b}>
+            {/* Render inline-code segments inside backticks as <code>. */}
+            {b.split(/(`[^`]+`)/g).map((chunk, i) =>
+              chunk.startsWith('`') && chunk.endsWith('`')
+                ? <code key={i} className="px-1 py-0.5 rounded bg-inset text-fg-2 text-xs">{chunk.slice(1, -1)}</code>
+                : <span key={i}>{chunk}</span>
+            )}
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
