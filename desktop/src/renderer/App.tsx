@@ -26,6 +26,7 @@ import { usePromptDetector } from './hooks/usePromptDetector';
 import { usePartyLobby } from './hooks/usePartyLobby';
 import { usePartyGame } from './hooks/usePartyGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
+import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './hooks/useExpandAllToggle';
 import { AppIcon, WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
 import TerminalToolbar, { TerminalScrollButtons } from './components/TerminalToolbar';
@@ -1573,6 +1574,31 @@ function AppInner() {
     // need to read e.defaultPrevented AFTER capture-phase overlay handlers run.
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
+  }, []);
+
+  // Ctrl+O toggles expand-all / collapse-all across every collapsible tool
+  // card, tool group, and agent section in the chat view. The hook module
+  // persists the current mode so child ToolCards that mount AFTER the
+  // shortcut fires (e.g. inside a tool group that just opened) read the mode
+  // via getInitialExpanded() and come up in the right state. Terminal view
+  // ignores the shortcut so the keystroke passes to the PTY.
+  const viewModeRef = useRef(currentViewMode);
+  viewModeRef.current = currentViewMode;
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.shiftKey || e.altKey) return;
+      if (e.key !== 'o' && e.key !== 'O') return;
+      if (viewModeRef.current !== 'chat') return;
+      e.preventDefault();
+      if (isInExpandAllMode()) {
+        broadcastCollapseAll();
+      } else {
+        broadcastExpandAll();
+      }
+    };
+    window.addEventListener('keydown', handler, true);
+    return () => window.removeEventListener('keydown', handler, true);
   }, []);
 
   const currentSession = sessions.find((s) => s.id === sessionId);

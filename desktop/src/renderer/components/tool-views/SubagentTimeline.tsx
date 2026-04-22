@@ -5,6 +5,7 @@ import ToolBody from './ToolBody';
 import { friendlyToolDisplay } from '../ToolCard';
 import { CheckIcon, FailIcon, ChevronIcon } from '../Icons';
 import BrailleSpinner from '../BrailleSpinner';
+import { useExpandAllToggle, getInitialExpanded } from '../../hooks/useExpandAllToggle';
 
 /**
  * Renders a subagent's inline timeline inside the parent AgentView card.
@@ -82,7 +83,9 @@ function SubagentText({ content }: { content: string }) {
 // ---------------------------------------------------------------------------
 
 function SubagentToolGroup({ tools }: { tools: ToolSegment[] }) {
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
+  const [expanded, setExpanded] = useState<Set<string>>(() =>
+    getInitialExpanded() ? new Set(tools.map(t => t.id)) : new Set()
+  );
   const toggle = (id: string) => {
     setExpanded(prev => {
       const next = new Set(prev);
@@ -91,6 +94,11 @@ function SubagentToolGroup({ tools }: { tools: ToolSegment[] }) {
       return next;
     });
   };
+  // Ctrl+O: expand opens every row in this group; collapse empties the set.
+  useExpandAllToggle(
+    () => setExpanded(new Set(tools.map(t => t.id))),
+    () => setExpanded(new Set()),
+  );
   return (
     <div className="rounded-lg border border-edge bg-inset overflow-hidden">
       {tools.map((t, i) => (

@@ -108,6 +108,7 @@ function timeAgo(timestamp: number): string {
 
 const SHORTCUTS: { keys: string; description: string }[] = [
   { keys: 'Ctrl + `', description: 'Toggle between chat and terminal view' },
+  { keys: 'Ctrl + O', description: 'Expand / collapse all tool cards' },
   { keys: 'Shift (hold)', description: 'Open session switcher' },
   { keys: 'Shift + Arrow Up/Down', description: 'Navigate between sessions' },
   { keys: 'Shift (release)', description: 'Switch to highlighted session' },

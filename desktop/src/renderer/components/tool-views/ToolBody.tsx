@@ -5,6 +5,7 @@ import { useChatState } from '../../state/chat-context';
 import { buildTasksById, TASK_LIFECYCLE, TaskState, TaskStatus } from '../../state/task-state';
 import { SubagentTimeline } from './SubagentTimeline';
 import { ChevronIcon } from '../Icons';
+import { useExpandAllToggle, getInitialExpanded, isExpandModeActive } from '../../hooks/useExpandAllToggle';
 
 // Parsed views for expanded tool cards. One dispatcher + inline view functions;
 // splitting per-file only becomes worthwhile if a single view grows past ~80
@@ -38,7 +39,8 @@ function stripCarriageReturns(s: string): string {
 }
 
 function CollapsibleBlock({ children, maxLines = 20, className = '' }: { children: string; maxLines?: number; className?: string }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => getInitialExpanded());
+  useExpandAllToggle(() => setOpen(true), () => setOpen(false));
   const lines = children.split('\n');
   const overflow = lines.length > maxLines;
   const shown = open || !overflow ? children : lines.slice(0, maxLines).join('\n');
@@ -240,7 +242,8 @@ function DiffView({
   }, [oldStr, newStr, structuredPatch]);
 
   const total = rows.length;
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => getInitialExpanded());
+  useExpandAllToggle(() => setOpen(true), () => setOpen(false));
   const overflow = total > DIFF_PREVIEW_LINES;
   const containerStyle = open || !overflow
     ? undefined
@@ -578,7 +581,8 @@ function ReadView({ tool }: { tool: ToolCallState }) {
   const offset = tool.input.offset as number | undefined;
   const limit = tool.input.limit as number | undefined;
   const rows = tool.response ? parseCatN(tool.response) : [];
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(() => getInitialExpanded());
+  useExpandAllToggle(() => setOpen(true), () => setOpen(false));
   const overflow = rows.length > READ_PREVIEW_LINES;
 
   let rangeLabel = '';
@@ -651,8 +655,10 @@ function AgentView({ tool }: { tool: ToolCallState }) {
   // Auto-expand the activity section while running; auto-collapse once the
   // parent Agent tool has a response (subagent completed). User toggles
   // stick for the rest of the session.
-  const [showTimeline, setShowTimeline] = useState(() => !tool.response);
-  const [userToggled, setUserToggled] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(() => getInitialExpanded(!tool.response));
+  // Start userToggled=true when the shortcut is already in effect so the
+  // auto-collapse-on-response effect below doesn't fight the user's intent.
+  const [userToggled, setUserToggled] = useState(() => isExpandModeActive());
   const prevHadResponse = useRef(!!tool.response);
   useEffect(() => {
     if (userToggled) return;
@@ -660,6 +666,12 @@ function AgentView({ tool }: { tool: ToolCallState }) {
     if (!prevHadResponse.current && hasResponse) setShowTimeline(false);
     prevHadResponse.current = hasResponse;
   }, [tool.response, userToggled]);
+  // Ctrl+O: mark userToggled so the auto-collapse-on-response effect doesn't
+  // fight the shortcut back closed as soon as the subagent completes.
+  useExpandAllToggle(
+    () => { setShowTimeline(true); setUserToggled(true); },
+    () => { setShowTimeline(false); setUserToggled(true); },
+  );
 
   const tone = SUBAGENT_TONE[subagent] || 'neutral';
 
@@ -713,7 +725,11 @@ function AgentSection({
   open?: boolean;
   onToggle?: () => void;
 }) {
-  const [internalOpen, setInternalOpen] = useState(defaultOpen);
+  const [internalOpen, setInternalOpen] = useState(() => getInitialExpanded(defaultOpen));
+  // Uncontrolled AgentSections (Briefing, Response) respond to Ctrl+O; the
+  // controlled Activity section reflects whatever AgentView's showTimeline
+  // says — isOpen prefers the `open` prop, so this is a harmless no-op there.
+  useExpandAllToggle(() => setInternalOpen(true), () => setInternalOpen(false));
   const isOpen = open ?? internalOpen;
   const handleToggle = () => {
     if (onToggle) onToggle();

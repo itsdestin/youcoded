@@ -5,6 +5,7 @@ import { CheckIcon, FailIcon, QuestionIcon, ChevronIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { isAndroid } from '../platform';
 import ToolBody from './tool-views/ToolBody';
+import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 
 // --- Helpers for friendly display ---
 
@@ -578,7 +579,10 @@ interface Props {
 }
 
 export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }: Props) {
-  const [expanded, setExpanded] = useState(false);
+  // Seed from the module-level mode so a card that mounts AFTER Ctrl+O fired
+  // (e.g. when its parent tool group just opened) starts in the right state.
+  const [expanded, setExpanded] = useState(() => getInitialExpanded());
+  useExpandAllToggle(() => setExpanded(true), () => setExpanded(false));
   const dispatch = useChatDispatch();
   const display = friendlyToolDisplay(tool);
 

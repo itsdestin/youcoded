@@ -7,6 +7,7 @@ import { CheckIcon, FailIcon, ChevronIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { formatBubbleTime } from '../utils/format-time';
 import { useTheme } from '../state/theme-context';
+import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 
 interface Props {
   turn: AssistantTurn;
@@ -69,7 +70,8 @@ function TurnMetadataStrip({ turn }: { turn: AssistantTurn }) {
 
 /** Renders a collapsed summary for 3+ tools in a group. */
 function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[]; sessionId: string }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(() => getInitialExpanded());
+  useExpandAllToggle(() => setExpanded(true), () => setExpanded(false));
 
   const runningCount = tools.filter((t) => t.status === 'running').length;
   const completedCount = tools.filter((t) => t.status === 'complete').length;
@@ -245,7 +247,8 @@ function PlanBubbleContent({
   planFilePath?: string;
   allowedPrompts?: unknown;
 }) {
-  const [showPrompts, setShowPrompts] = useState(false);
+  const [showPrompts, setShowPrompts] = useState(() => getInitialExpanded());
+  useExpandAllToggle(() => setShowPrompts(true), () => setShowPrompts(false));
   const prompts = Array.isArray(allowedPrompts) ? allowedPrompts : [];
   const fileName = planFilePath
     ? planFilePath.replace(/\\/g, '/').split('/').pop()
