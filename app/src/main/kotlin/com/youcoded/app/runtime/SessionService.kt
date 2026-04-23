@@ -664,7 +664,11 @@ class SessionService : Service() {
                     id = session.id, name = session.name.value,
                     cwd = cwd, status = "active",
                     permissionMode = "normal", skipPermissions = dangerous,
-                    createdAt = session.createdAt
+                    createdAt = session.createdAt,
+                    // Pass the resolved model (payload > model-preference.json > "sonnet")
+                    // so React's status-bar switcher shows the right alias immediately,
+                    // not after the first assistant-text event reconciles it.
+                    model = model,
                 )
                 // Security: record which client ID owns this session
                 val ownerClientId = ws.getAttachment<String>() ?: "unknown"

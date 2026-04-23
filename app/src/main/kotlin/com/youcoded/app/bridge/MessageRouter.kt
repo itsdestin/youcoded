@@ -40,6 +40,7 @@ object MessageRouter {
         permissionMode: String,
         skipPermissions: Boolean,
         createdAt: Long = 0L,
+        model: String? = null,
     ): JSONObject {
         return JSONObject().apply {
             put("id", id)
@@ -49,6 +50,11 @@ object MessageRouter {
             put("permissionMode", permissionMode)
             put("skipPermissions", skipPermissions)
             put("createdAt", createdAt)
+            // Parity with desktop SessionInfo.model — lets the React status-bar model
+            // switcher show the correct alias immediately on session:created, instead
+            // of falling back to 'sonnet' until the first assistant-text transcript
+            // event reconciles it (App.tsx line 520 reads info.model).
+            if (model != null) put("model", model)
         }
     }
 
