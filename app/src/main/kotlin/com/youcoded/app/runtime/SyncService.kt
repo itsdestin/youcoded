@@ -415,7 +415,9 @@ class SyncService(
             // rclone prints the OAuth link to stderr. Port defaults to 53682
             // but rclone picks another if taken — match any port.
             val urlRegex = Regex("""http://127\.0\.0\.1:\d+/auth\?state=\S+""")
-            @Volatile var urlFired = false
+            // Single-threaded flag — only the stderrThread below reads and writes it.
+            // (@Volatile is field-only in Kotlin and rejected by the compiler on locals.)
+            var urlFired = false
             val stderrBuf = StringBuilder()
 
             // Stream stderr line-by-line — we must fire the intent before the
