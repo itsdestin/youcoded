@@ -2,6 +2,114 @@
 
 All notable changes to YouCoded are documented in this file.
 
+## [1.2.0] — 2026-04-22
+
+**Claude Code CLI baseline:** v2.1.117
+
+In-app update flow (changelog popup + download/launch installer), ESC stack +
+chat-to-PTY interrupt, sync UX polish, marketplace integration polish, buddy
+mascot drag rewrite, and assorted stability fixes.
+
+### Added
+- **In-app update installer** — Clicking "Update Now" in the version pill now
+  downloads the platform-correct release asset (`.exe` / `.dmg` /
+  `.AppImage`), shows throttled progress with cancel, then launches the
+  installer. Mac DMG asset matching honors `process.arch`. Includes
+  URL validation, safe filename derivation, stale-download sweep,
+  cached-download lookup, platform-specific launch branches, and
+  `YOUCODED_DEV_FAKE_UPDATE` env flag (gated on `!app.isPackaged`) with
+  bundled dummy installers for manual verification. Five new IPC channels
+  added in cross-platform parity (preload, remote-shim, ipc-handlers,
+  Android stub: `UpdateInstallerStub.kt`).
+- **In-app changelog popup** — Version pill click opens the new
+  `UpdatePanel` showing the changelog filtered to versions newer than the
+  installed build (uses CHANGELOG position, not semver, so version resets
+  don't break the filter). Full-changelog mode also available.
+  New `changelog-service` (fetch + cache + capped redirects + atomic write
+  + graceful fallback) and shared `compareSemver` helper. Wired across
+  preload, ipc-handlers, remote-shim, and Android stub via new
+  `update:changelog` IPC.
+- **ESC overlay stack + chat-to-PTY interrupt** — New `useEscClose` stack
+  hook centralizes overlay dismissal so ESC pops the topmost overlay
+  (LIFO). When no overlay is open and chat view has focus, ESC forwards a
+  single byte to the active Claude session as an interrupt. New
+  `TRANSCRIPT_INTERRUPT` reducer event detects `[Request interrupted by
+  user]` markers in the transcript watcher and ends the in-flight turn
+  with `stopReason: 'interrupted'` (renders an "Interrupted" footer on
+  the affected turn bubble). 13 overlays migrated to `useEscClose`.
+- **Ctrl+O expand/collapse all tool cards** — Toggles every tool card in
+  the active chat between expanded and collapsed states.
+- **Settings → Development popup polish** — New icons, centered layout, and
+  follow-on integrations from the v1.1.2 dev panel: `platform:get` and
+  `integrations:connect` IPCs (cross-platform parity) let the panel
+  re-run an integration's `postInstallCommand` for already-installed
+  entries. New `useCurrentPlatform` renderer hook (cached, single IPC
+  per session) and `platform-display` shared helper (e.g. `darwin` →
+  `macOS`) used in user-facing copy.
+- **`platform:get` IPC** — Returns the current OS so renderer code can
+  branch on it without scraping userAgent. Implemented in desktop main +
+  Android `SessionService` for parity.
+- **Marketplace `connect` action for installed integrations** — Re-runs an
+  integration's `postInstallCommand` so users can refresh credentials or
+  reconfigure without uninstall/reinstall. Integration entries now carry
+  an optional `tags` field.
+- **`locked` badge tone + "macOS Only" badge on platform-blocked cards** —
+  Marketplace cards for platform-restricted integrations now show a
+  distinct visual state with a clear platform note.
+
+### Changed
+- **Sync UX unified through `deriveSyncState` helper** — All sync UI surfaces
+  (compact rows, per-backend dots, status-bar pill, syncpanel tiles) now
+  derive their visual state from a single helper with exhaustive switch
+  checks. Status-bar pill is now severity-aware (single pill instead of
+  per-warning fan-out). Vestigial `SKILLS_UNROUTED` warning code removed.
+  Sync setup wizard's per-backend dots include a loading gate so they
+  don't flash an incorrect color before health-check completes.
+- **Buddy mascot drag rewrite** — Anchor-based drag with rAF coalescing
+  eliminates cursor drift and lag on long drag gestures. Replaces the
+  prior pointer-delta model that accumulated rounding error.
+- **Marketplace integration detail overlay rewritten** — Now shares parity
+  with plugin detail overlay; `MarketplaceCard` consolidates rendering
+  for both integrations and plugins (props: `iconUrl`, `accentColor`,
+  `statusBadge`, `suppressCorner`).
+- **Diff viewer line-number gutter collapsed** — Two-column gutter
+  collapsed into a single line-number column for cleaner reading on
+  narrow widths.
+- **Site landing page polish** — Smoother intro (preload backdrops,
+  fonts-ready gate, faster timing, nav clicks fast-forward), tagline
+  updated to "Make Claude Yours", description meta refreshed. Install
+  modal redesigned to show platform-specific install instructions
+  *before* the download starts.
+
+### Fixed
+- **Filter-path crashes that wiped chat state** — Hardened renderer code
+  paths that filter chat entries so a thrown predicate no longer aborts
+  reducer state and silently empties the chat.
+- **`/rate-limit-options` menu surfaces in chat view** — Was previously
+  only routable from terminal view.
+- **Theme picker flicker after install/uninstall** — Reload `userThemes`
+  immediately after install/uninstall instead of waiting for the next
+  poll.
+- **About popup rounded corners + Package Tier popup centering** — Both
+  popups now match the standard overlay surface treatment.
+- **About popup header background** — Dropped opaque background so the
+  header matches peer popups.
+- **Post-install integration setup hint** — Replaces the fragile
+  auto-type-into-PTY behavior with a setup-hint banner that shows the
+  command for the user to run themselves.
+- **CI `partykit-deploy` health check** — Treats the "No onRequest
+  handler" 500 response as healthy (PartyKit returns this when the
+  deployed worker has no HTTP handler — only WebSocket — which is
+  correct for the lobby room).
+- **Scroll-fade quirks** — Flush fades on conditional-mount, hook
+  conditional-mount, rounded-corner clipping. Plus a `useScrollFade`
+  hook lifecycle fix.
+
+### Removed
+- **`SyncService.kt` legacy hook scaffolding** — Drops 43 lines of dead
+  code for the pre-app sync flow. Sync is now owned entirely by the
+  desktop app's `sync-service.ts`.
+
 ## [1.1.2] — 2026-04-21
 
 **Claude Code CLI baseline:** v2.1.117
