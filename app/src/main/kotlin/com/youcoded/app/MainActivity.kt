@@ -15,6 +15,12 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.compose.foundation.background
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.text.font.FontWeight
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import com.youcoded.app.bridge.LocalBridgeServer
 import com.youcoded.app.config.TierStore
 import com.youcoded.app.runtime.Bootstrap
 import com.youcoded.app.runtime.ServiceBinder
@@ -221,6 +227,20 @@ class MainActivity : ComponentActivity() {
                                     Box(modifier = Modifier.fillMaxSize()) {
                                         ChatScreen(svc)
 
+                                        // Bridge bind-failure overlay. Without this, a port collision
+                                        // (e.g. dev APK launched while the released app is running and
+                                        // already owns 9901) would silently leave the WebView stuck on
+                                        // "Connecting..." forever — the React side just times out its
+                                        // retries with no UI signal. We surface the actual error here
+                                        // along with the action the user needs to take.
+                                        val bridgeState by svc.bridgeServer.state.collectAsStateWithLifecycle()
+                                        (bridgeState as? LocalBridgeServer.State.BindFailed)?.let { failed ->
+                                            BridgeBindFailedOverlay(
+                                                port = svc.bridgeServer.port,
+                                                detail = failed.message,
+                                            )
+                                        }
+
                                         // Folder picker dialog
                                         if (_showFolderPicker.value) {
                                             FolderPickerDialog(
@@ -334,5 +354,55 @@ class MainActivity : ComponentActivity() {
         }
         // Clear the intent data so re-creation doesn't re-import
         intent?.data = null
+    }
+}
+
+/**
+ * Full-screen actionable error shown when LocalBridgeServer fails to bind.
+ * The most common cause is two YouCoded apps installed on the same device
+ * (released `com.youcoded.app` + dev `com.youcoded.app.dev`) both trying to
+ * bind the same localhost port. We tell the user exactly how to recover.
+ */
+@Composable
+private fun BridgeBindFailedOverlay(port: Int, detail: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xCC000000)),
+        contentAlignment = Alignment.Center,
+    ) {
+        Column(
+            modifier = Modifier
+                .padding(horizontal = 24.dp)
+                .background(MaterialTheme.colorScheme.surface, RoundedCornerShape(12.dp))
+                .padding(24.dp),
+            horizontalAlignment = Alignment.Start,
+        ) {
+            Text(
+                "Couldn't start the local bridge",
+                style = MaterialTheme.typography.titleLarge,
+                fontWeight = FontWeight.SemiBold,
+                color = MaterialTheme.colorScheme.error,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                "Port $port is already in use on this device. This usually " +
+                    "means another YouCoded app (release or dev variant) is " +
+                    "running in the background.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(8.dp))
+            Text(
+                "Open Android Settings → Apps, find the other YouCoded app, " +
+                    "tap Force stop, then re-launch this app.",
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                detail,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
     }
 }

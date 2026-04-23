@@ -1,10 +1,15 @@
 package com.youcoded.app.bridge
 
 import android.util.Log
+import com.youcoded.app.BuildConfig
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import org.java_websocket.WebSocket
 import org.java_websocket.handshake.ClientHandshake
 import org.java_websocket.server.WebSocketServer
 import org.json.JSONObject
+import java.net.BindException
 import java.net.InetSocketAddress
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
@@ -19,13 +24,30 @@ import java.util.concurrent.atomic.AtomicInteger
  * server start and injected into the WebView by WebViewHost.
  */
 class LocalBridgeServer(
-    private val port: Int = 9901
+    val port: Int = BuildConfig.BRIDGE_PORT
 ) {
     companion object {
         private const val TAG = "LocalBridgeServer"
         // Security: max time (ms) a client can stay connected without authenticating
         private const val AUTH_TIMEOUT_MS = 5000L
     }
+
+    /**
+     * Lifecycle of the underlying socket bind. Exposed as a [StateFlow] so the
+     * Activity can render an actionable error overlay if the port is taken
+     * (e.g. dev APK collides with the released app). Without this, java-websocket
+     * surfaces bind failures only via [WebSocketServer.onError] on a background
+     * thread — the WebView keeps trying to connect and the React UI hangs on
+     * "Connecting..." forever.
+     */
+    sealed class State {
+        object Starting : State()
+        object Listening : State()
+        data class BindFailed(val message: String) : State()
+    }
+
+    private val _state = MutableStateFlow<State>(State.Starting)
+    val state: StateFlow<State> = _state.asStateFlow()
 
     private var server: WebSocketServer? = null
     private val clients = ConcurrentHashMap<String, WebSocket>()
@@ -122,11 +144,21 @@ class LocalBridgeServer(
             }
 
             override fun onError(conn: WebSocket?, ex: Exception) {
-                Log.e(TAG, "WebSocket error: ${ex.message}", ex)
+                // conn==null means a server-level error; BindException specifically
+                // means the port is taken (most common: another YouCoded variant
+                // already running). Surface it via [state] so the UI can react.
+                if (conn == null && ex is BindException) {
+                    val msg = ex.message ?: "Port $port unavailable"
+                    Log.e(TAG, "Bind failed on 127.0.0.1:$port: $msg", ex)
+                    _state.value = State.BindFailed(msg)
+                } else {
+                    Log.e(TAG, "WebSocket error: ${ex.message}", ex)
+                }
             }
 
             override fun onStart() {
                 Log.i(TAG, "LocalBridgeServer listening on 127.0.0.1:$port")
+                _state.value = State.Listening
             }
         }
 

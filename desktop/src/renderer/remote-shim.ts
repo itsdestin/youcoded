@@ -58,9 +58,14 @@ export function onConnectionStateChange(cb: (state: RemoteConnectionState) => vo
 function getWsUrl(): string {
   // If a remote host override is set, use it (connectToHost sets this)
   if (targetUrl) return targetUrl;
-  // Android WebView loads from file:// — connect to local bridge server
+  // Android WebView loads from file:// — connect to local bridge server.
+  // Port comes from the `bridgePort` query param injected by WebViewHost.kt
+  // so dev (9951) and release (9901) APKs can run side-by-side without
+  // colliding on the same localhost socket. Default 9901 keeps the legacy
+  // wiring working if a host forgets to inject the param.
   if (location.protocol === 'file:') {
-    return 'ws://localhost:9901';
+    const port = new URLSearchParams(location.search).get('bridgePort') || '9901';
+    return `ws://localhost:${port}`;
   }
   const proto = location.protocol === 'https:' ? 'wss:' : 'ws:';
   return `${proto}//${location.host}/ws`;
