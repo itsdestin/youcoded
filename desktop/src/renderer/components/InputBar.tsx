@@ -9,6 +9,7 @@ import FlowingKeywordsText from './FlowingKeywords';
 import { dispatchSlashCommand, type ViewMode } from '../state/slash-command-dispatcher';
 import type { UsageSnapshot } from '../state/chat-types';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { isAndroid } from '../platform';
 
 export interface InputBarHandle {
   clear: () => void;
@@ -160,11 +161,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   }, [disabled]);
 
   // Unfocus textarea after idle so global shortcuts (e.g. Shift to open
-  // session switcher, Shift+Space to cycle model) work without conflicting
+  // session switcher, Shift+Space to cycle model) work without conflicting.
+  // Skip on Android: blurring the textarea dismisses the soft keyboard, so
+  // the user would have to re-tap the field after every brief pause. Those
+  // global shortcuts are desktop-only (Shift-hold, Shift+Space, Shift+Tab)
+  // and have no Android equivalent, so keeping focus here costs nothing.
   const idleBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const el = inputRef.current;
-    if (!el) return;
+    if (!el || isAndroid()) return;
     const resetTimer = () => {
       if (idleBlurTimer.current) clearTimeout(idleBlurTimer.current);
       idleBlurTimer.current = setTimeout(() => {
