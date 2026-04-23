@@ -2137,14 +2137,21 @@ class SessionService : Service() {
                     .put("configured", configured).put("remoteName", remoteName ?: org.json.JSONObject.NULL)) }
             }
             "sync:setup:auth-gdrive" -> {
-                // Run rclone config create — BROWSER env var routes OAuth to Android browser
+                // Stream rclone's stderr and open the OAuth URL via Intent —
+                // rclone can't auto-open xdg-open on Android (Go's raw execve
+                // bypasses termux-exec's LD_PRELOAD shim; see PITFALLS.md →
+                // Android Runtime). PlatformBridge.openUrl uses
+                // Intent.ACTION_VIEW, the SELinux-safe path.
                 val sync = syncService
+                val pb = platformBridge
                 if (sync == null) {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                         .put("success", false).put("remoteName", "gdrive").put("error", "SyncService not initialized")) }
                 } else {
                     try {
-                        val result = sync.execCommand(listOf("rclone", "config", "create", "gdrive", "drive"), timeoutSeconds = 120)
+                        val result = sync.authGdriveWithBrowserIntent { url ->
+                            pb?.openUrl(url)
+                        }
                         if (result.code == 0) {
                             msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                                 .put("success", true).put("remoteName", "gdrive")) }

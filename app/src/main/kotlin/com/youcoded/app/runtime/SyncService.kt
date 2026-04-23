@@ -382,6 +382,91 @@ class SyncService(
         return execCommand(listOf("rclone") + args)
     }
 
+    /**
+     * Run `rclone config create gdrive drive` for the Google Drive OAuth flow,
+     * streaming stderr so we can extract the auth URL as soon as rclone prints
+     * it and hand it to Android's system browser via Intent.
+     *
+     * Why a custom exec path (and not plain execCommand): rclone is a Go binary;
+     * Go's exec bypasses termux-exec's LD_PRELOAD shim, so rclone cannot
+     * fork/exec the `~/.claude-mobile/xdg-open` script (SELinux denies execve
+     * on scripts in the app's home dir via the raw syscall path that Go uses).
+     * rclone's auto-browser-open always fails on Android; we intercept the
+     * "please go to the following link: <URL>" line rclone prints as its
+     * fallback and open the URL ourselves via PlatformBridge.openUrl, which
+     * uses Intent.ACTION_VIEW (the SELinux-safe path). Once the user signs in,
+     * rclone receives the OAuth callback on its localhost listener and writes
+     * the config as normal.
+     *
+     * @param onAuthUrl called on a background thread the first time the URL
+     *                  regex matches. Open the URL via Intent here.
+     */
+    internal fun authGdriveWithBrowserIntent(
+        timeoutSeconds: Long = 180,
+        onAuthUrl: (String) -> Unit
+    ): ExecResult {
+        return try {
+            val env = bootstrap.buildRuntimeEnv()
+            val pb = ProcessBuilder("rclone", "config", "create", "gdrive", "drive")
+            pb.environment().putAll(env)
+            pb.redirectErrorStream(false)
+            val process = pb.start()
+
+            // rclone prints the OAuth link to stderr. Port defaults to 53682
+            // but rclone picks another if taken — match any port.
+            val urlRegex = Regex("""http://127\.0\.0\.1:\d+/auth\?state=\S+""")
+            @Volatile var urlFired = false
+            val stderrBuf = StringBuilder()
+
+            // Stream stderr line-by-line — we must fire the intent before the
+            // process exits (rclone blocks on the OAuth callback indefinitely
+            // until the user completes sign-in).
+            val stderrThread = Thread {
+                try {
+                    process.errorStream.bufferedReader().useLines { lines ->
+                        for (line in lines) {
+                            synchronized(stderrBuf) { stderrBuf.appendLine(line) }
+                            if (!urlFired) {
+                                urlRegex.find(line)?.let { match ->
+                                    urlFired = true
+                                    try { onAuthUrl(match.value) } catch (_: Exception) { /* callback must not abort the reader */ }
+                                }
+                            }
+                        }
+                    }
+                } catch (_: Exception) { /* stream closed on process exit */ }
+            }
+            stderrThread.isDaemon = true
+            stderrThread.start()
+
+            // Drain stdout in parallel so rclone's write buffer doesn't stall.
+            val stdoutBuf = StringBuilder()
+            val stdoutThread = Thread {
+                try {
+                    process.inputStream.bufferedReader().useLines { lines ->
+                        for (line in lines) synchronized(stdoutBuf) { stdoutBuf.appendLine(line) }
+                    }
+                } catch (_: Exception) { /* stream closed on process exit */ }
+            }
+            stdoutThread.isDaemon = true
+            stdoutThread.start()
+
+            val completed = process.waitFor(timeoutSeconds, TimeUnit.SECONDS)
+            if (!completed) {
+                process.destroyForcibly()
+                stderrThread.join(500)
+                stdoutThread.join(500)
+                ExecResult(1, stdoutBuf.toString(), "Google sign-in timed out after ${timeoutSeconds}s")
+            } else {
+                stderrThread.join(500)
+                stdoutThread.join(500)
+                ExecResult(process.exitValue(), stdoutBuf.toString(), stderrBuf.toString())
+            }
+        } catch (e: Exception) {
+            ExecResult(1, "", e.message ?: "exec failed")
+        }
+    }
+
     /** Execute git with args in a working directory. */
     private fun gitExec(args: List<String>, cwd: File): ExecResult {
         return execCommand(listOf("git") + args, cwd = cwd)
