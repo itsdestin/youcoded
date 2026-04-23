@@ -23,6 +23,7 @@ import { GameProvider, useGameState, useGameDispatch } from './state/game-contex
 import { hookEventToAction } from './state/hook-dispatcher';
 import type { SyncWarning } from '../main/sync-state';
 import { usePromptDetector } from './hooks/usePromptDetector';
+import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePartyLobby } from './hooks/usePartyLobby';
 import { usePartyGame } from './hooks/usePartyGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
@@ -285,6 +286,9 @@ function AppInner() {
   }, [settingsOpen]);
 
   usePromptDetector();
+  // Drives --vvp-offset from window.visualViewport so the input bar stays glued
+  // to the top of the soft keyboard on Android / mobile browsers.
+  useVisualViewport();
   useRemoteAttentionSync();
   const dispatch = useChatDispatch();
   const chatStateMap = useChatStateMap();
