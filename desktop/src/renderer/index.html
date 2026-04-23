@@ -2,7 +2,12 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+  <!-- interactive-widget=overlays-content tells the UA: when the soft keyboard
+       appears, do NOT resize the page. Overlay it and report geometry via
+       window.visualViewport. The useVisualViewport hook reads that and drives
+       --vvp-offset so the input bar rises with the keyboard in a single,
+       smooth, OS-synchronized animation. -->
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=overlays-content" />
   <title>YouCoded</title>
 </head>
 <body>

@@ -207,9 +207,13 @@
 }
 
 /* Use dynamic viewport height on mobile — prevents content from scrolling behind browser chrome.
-   --vvp-offset is set by useVisualViewport hook when the mobile keyboard is open. */
+   --vvp-offset is set by useVisualViewport hook when the mobile keyboard is open.
+   We do NOT shrink the root container by --vvp-offset anymore; instead individual
+   bottom-anchored elements below compensate via transform / padding. Shrinking here
+   caused a full layout cascade on every visualViewport sample, which read as jitter
+   during the OS keyboard animation. See docs/PITFALLS.md → Keyboard Animation. */
 html, body, #root {
-  height: calc(100dvh - var(--vvp-offset, 0px));
+  height: 100dvh;
   overflow: hidden;
 }
 
@@ -388,14 +392,16 @@ body[data-mode="buddy-chat"] #theme-bg {
    input bar, but scrolls behind frosted glass in both directions */
 .chat-scroll {
   padding-top: 3rem;
-  padding-bottom: var(--bottom-chrome-height, 5rem);
+  /* --vvp-offset is the soft-keyboard height; added so the last message
+     clears BOTH the floating input bar AND the on-screen keyboard. */
+  padding-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--vvp-offset, 0px));
 }
 
 /* Inset the scrollbar track so it stops below the header and above the
    bottom chrome, matching the visible content area. */
 .chat-scroll::-webkit-scrollbar-track {
   margin-top: 2.5rem;
-  margin-bottom: var(--bottom-chrome-height, 5rem);
+  margin-bottom: calc(var(--bottom-chrome-height, 5rem) + var(--vvp-offset, 0px));
 }
 
 /* Bottom chrome (input + status bars) — mirrors header pattern.
@@ -407,12 +413,20 @@ body[data-mode="buddy-chat"] #theme-bg {
   left: 0;
   right: 0;
   z-index: 20;
+  /* Lift the input + status bars above the soft keyboard. Using transform
+     (GPU composite) instead of shifting `bottom` avoids triggering a layout
+     pass on every visualViewport sample — the OS keyboard animation stays
+     smooth even when vvp samples fire at 10-30fps on Android WebView. */
+  transform: translateY(calc(-1 * var(--vvp-offset, 0px)));
+  will-change: transform;
 }
 
 /* Jump-to-bottom button — chrome floats over the content area,
    so push the button up above it */
 .jump-to-bottom {
-  bottom: calc(var(--bottom-chrome-height, 5rem) + 0.75rem);
+  /* Includes --vvp-offset so the button stays above the soft keyboard
+     when it's open (same treatment as .bottom-float). */
+  bottom: calc(var(--bottom-chrome-height, 5rem) + 0.75rem + var(--vvp-offset, 0px));
 }
 
 /* Lightweight containment — skip layout/style for off-screen chat messages.
