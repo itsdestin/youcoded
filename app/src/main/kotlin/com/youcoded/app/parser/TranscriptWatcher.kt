@@ -77,7 +77,6 @@ class TranscriptWatcher(
         var job: Job? = null,
         var fileObserver: FileObserver? = null,
         val mutex: Mutex = Mutex(),
-        var accumulatedStreamingText: String = "",
         // Subagent threading: shared index for parent-Agent correlation. All
         // recordParentAgentToolUse() + bindSubagent() calls go through this.
         val subagentIndex: SubagentIndex = SubagentIndex(),
@@ -219,7 +218,10 @@ class TranscriptWatcher(
         when (type) {
             "user" -> parseUserLine(obj, sessionId, uuid, timestamp, state)
             "assistant" -> parseAssistantLine(obj, sessionId, uuid, timestamp, state)
-            "progress" -> parseProgressLine(obj, sessionId, state)
+            // "progress" — skipped to match desktop (transcript-watcher.ts:42).
+            // Desktop only emits events for user/assistant lines; mirroring that
+            // keeps the per-platform event stream byte-identical so tool-call
+            // grouping in the shared React reducer behaves the same.
             // "file-history-snapshot" — skip
         }
     }
@@ -231,8 +233,6 @@ class TranscriptWatcher(
         timestamp: Long,
         state: WatcherState,
     ) {
-        state.accumulatedStreamingText = ""
-
         // Compact-summary entry — canonical "compaction finished" signal.
         // Written after /compact (appended to same JSONL) or resume-from-summary
         // (first entry of new JSONL). isVisibleInTranscriptOnly=true: suppress
@@ -381,25 +381,6 @@ class TranscriptWatcher(
                 usage = usage,
                 anthropicRequestId = anthropicRequestId,
             ))
-        }
-    }
-
-    private fun parseProgressLine(obj: JSONObject, sessionId: String, state: WatcherState) {
-        val content = obj.optJSONArray("content") ?: return
-        val text = buildString {
-            for (i in 0 until content.length()) {
-                val block = content.optJSONObject(i) ?: continue
-                if (block.optString("type") == "text") {
-                    append(block.optString("text", ""))
-                }
-            }
-        }
-        if (text.isNotEmpty()) {
-            state.accumulatedStreamingText += text
-            val cleaned = stripSystemTags(state.accumulatedStreamingText)
-            if (cleaned.isNotBlank()) {
-                _events.tryEmit(TranscriptEvent.StreamingText(sessionId, cleaned))
-            }
         }
     }
 

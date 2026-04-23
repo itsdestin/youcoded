@@ -86,14 +86,6 @@ sealed class TranscriptEvent {
         val anthropicRequestId: String? = null,
     ) : TranscriptEvent()
 
-    /** Streaming assistant text from progress events */
-    data class StreamingText(
-        override val sessionId: String,
-        val text: String,
-        override val uuid: String = "",
-        override val timestamp: Long = 0L,
-    ) : TranscriptEvent()
-
     /** Canonical compaction-complete signal: emitted when Claude Code writes
      *  a {type:"user", isCompactSummary:true} entry. Covers both in-session
      *  /compact (appends to same JSONL, so shrink cannot fire) and

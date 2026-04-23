@@ -12,8 +12,6 @@ import org.junit.Test
  *
  * The outer `{ type: "transcript:event", payload: ... }` wrapper is added
  * by ManagedSession's broadcast call, not by the serializer.
- *
- * Exception: streamingText is a custom event and stays flat (no data wrapper).
  */
 class TranscriptSerializerTest {
 
@@ -234,31 +232,10 @@ class TranscriptSerializerTest {
         assertEquals("claude-opus-4-7", data.getString("model"))
     }
 
-    // ── streamingText ────────────────────────────────────────────────────────
-
-    @Test
-    fun `streamingText has correct type`() {
-        val result = TranscriptSerializer.streamingText("s", "partial text")
-        assertEquals("streaming-text", result.getString("type"))
-    }
-
-    @Test
-    fun `streamingText contains sessionId and text at top level`() {
-        val result = TranscriptSerializer.streamingText("sess-stream", "partial response...")
-        assertEquals("sess-stream", result.getString("sessionId"))
-        assertEquals("partial response...", result.getString("text"))
-    }
-
-    @Test
-    fun `streamingText has no data wrapper`() {
-        val result = TranscriptSerializer.streamingText("s", "t")
-        assertFalse("streamingText should not have 'data' key", result.has("data"))
-    }
-
     // ── top-level structure ──────────────────────────────────────────────────
 
     @Test
-    fun `non-streaming methods return JSONObject with type sessionId uuid timestamp data`() {
+    fun `all methods return JSONObject with type sessionId uuid timestamp data`() {
         val input = JSONObject()
         val cases = listOf(
             TranscriptSerializer.userMessage("s", "u", 0L, "t"),
