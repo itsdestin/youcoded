@@ -813,7 +813,12 @@ body[data-mode="buddy-chat"] #theme-bg {
      that the header bar retained. */
   border: 1px solid var(--edge);
   padding: 2px 12px;
-  margin: 4px auto 0;
+  /* Bottom margin mirrors the gap between the input-bar and status-bar outer
+     containers (input-bar margin-bottom 6px + this element's margin-top 4px
+     = 10px) so the status bar sits off the window edge with symmetric
+     breathing room in floating chrome. Applies to every theme that opts into
+     chrome-style: "floating" — no per-theme override required. */
+  margin: 4px auto 10px;
   /* Clip child widgets (model pill, mode chips, rate-limit pills, etc.) to the
      rounded edge so their own backgrounds/borders never poke past the curve.
      Safe here: the floating status-bar has no outer box-shadow to lose. */
