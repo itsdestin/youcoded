@@ -348,9 +348,14 @@ class SessionService : Service() {
                             try { payload.put("syncWarnings", warnFile.readText().trim()) } catch (_: Exception) {}
                         }
 
-                        // Per-session context % and session stats
+                        // Per-session context %, session stats, and git branch.
+                        // Mirrors desktop's ipc-handlers.ts:buildStatusData per-session
+                        // loop — the git branch file is written by statusline.sh at
+                        // `~/.claude/.gitbranch-$claudeId`. Without this map, the
+                        // git-branch status bar widget receives no data and hides.
                         val contextMap = JSONObject()
                         val sessionStatsMap = JSONObject()
+                        val gitBranchMap = JSONObject()
                         for ((mobileId, session) in sessionRegistry.sessions.value) {
                             val claudeId = session.ptyBridge?.getEventBridge()
                                 ?.getClaudeSessionId(mobileId) ?: continue
@@ -362,9 +367,17 @@ class SessionService : Service() {
                             if (statsFile.exists()) {
                                 try { sessionStatsMap.put(mobileId, JSONObject(statsFile.readText())) } catch (_: Exception) {}
                             }
+                            val branchFile = File(claudeDir, ".gitbranch-$claudeId")
+                            if (branchFile.exists()) {
+                                try {
+                                    val branch = branchFile.readText().trim()
+                                    if (branch.isNotEmpty()) gitBranchMap.put(mobileId, branch)
+                                } catch (_: Exception) {}
+                            }
                         }
                         payload.put("contextMap", contextMap)
                         payload.put("sessionStatsMap", sessionStatsMap)
+                        payload.put("gitBranchMap", gitBranchMap)
 
                         bridgeServer.broadcast(JSONObject().apply {
                             put("type", "status:data")
