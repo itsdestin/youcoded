@@ -1,0 +1,6 @@
+{"type":"user","uuid":"u-02-1","promptId":"p-2","message":{"role":"user","content":"Read a, b, c."}}
+{"type":"assistant","uuid":"u-02-2","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"Reading three files."},{"type":"tool_use","id":"toolu_a","name":"Read","input":{"file_path":"/a"}},{"type":"tool_use","id":"toolu_b","name":"Read","input":{"file_path":"/b"}},{"type":"tool_use","id":"toolu_c","name":"Read","input":{"file_path":"/c"}}],"stop_reason":"tool_use"}}
+{"type":"user","uuid":"u-02-3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_a","content":"contents A","is_error":false}]}}
+{"type":"user","uuid":"u-02-4","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_b","content":"contents B","is_error":false}]}}
+{"type":"user","uuid":"u-02-5","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_c","content":"contents C","is_error":false}]}}
+{"type":"assistant","uuid":"u-02-6","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"All three read."}],"stop_reason":"end_turn"}}

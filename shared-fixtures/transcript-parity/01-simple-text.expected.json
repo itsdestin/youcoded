@@ -1,0 +1,29 @@
+[
+  {
+    "type": "user-message",
+    "sessionId": "fixture-session",
+    "uuid": "u-01-1",
+    "data": { "text": "Say hi." }
+  },
+  {
+    "type": "assistant-text",
+    "sessionId": "fixture-session",
+    "uuid": "u-01-2",
+    "data": { "text": "Hi!", "model": "claude-opus-4-7" }
+  },
+  {
+    "type": "turn-complete",
+    "sessionId": "fixture-session",
+    "uuid": "u-01-2",
+    "data": {
+      "stopReason": "end_turn",
+      "model": "claude-opus-4-7",
+      "usage": {
+        "inputTokens": 10,
+        "outputTokens": 2,
+        "cacheReadTokens": 0,
+        "cacheCreationTokens": 0
+      }
+    }
+  }
+]

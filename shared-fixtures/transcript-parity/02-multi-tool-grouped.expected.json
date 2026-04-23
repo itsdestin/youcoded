@@ -1,0 +1,62 @@
+[
+  {
+    "type": "user-message",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-1",
+    "data": { "text": "Read a, b, c." }
+  },
+  {
+    "type": "assistant-text",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-2",
+    "data": { "text": "Reading three files.", "model": "claude-opus-4-7" }
+  },
+  {
+    "type": "tool-use",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-2",
+    "data": { "toolUseId": "toolu_a", "toolName": "Read", "toolInput": { "file_path": "/a" } }
+  },
+  {
+    "type": "tool-use",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-2",
+    "data": { "toolUseId": "toolu_b", "toolName": "Read", "toolInput": { "file_path": "/b" } }
+  },
+  {
+    "type": "tool-use",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-2",
+    "data": { "toolUseId": "toolu_c", "toolName": "Read", "toolInput": { "file_path": "/c" } }
+  },
+  {
+    "type": "tool-result",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-3",
+    "data": { "toolUseId": "toolu_a", "toolResult": "contents A", "isError": false }
+  },
+  {
+    "type": "tool-result",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-4",
+    "data": { "toolUseId": "toolu_b", "toolResult": "contents B", "isError": false }
+  },
+  {
+    "type": "tool-result",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-5",
+    "data": { "toolUseId": "toolu_c", "toolResult": "contents C", "isError": false }
+  },
+  {
+    "type": "assistant-text",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-6",
+    "data": { "text": "All three read.", "model": "claude-opus-4-7" }
+  },
+  {
+    "type": "turn-complete",
+    "sessionId": "fixture-session",
+    "uuid": "u-02-6",
+    "data": { "stopReason": "end_turn", "model": "claude-opus-4-7" }
+  }
+]

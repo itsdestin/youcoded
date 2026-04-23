@@ -1,0 +1,6 @@
+{"type":"user","uuid":"u-03-1","promptId":"p-3","message":{"role":"user","content":"Read foo then write bar."}}
+{"type":"assistant","uuid":"u-03-2","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"tool_use","id":"toolu_r","name":"Read","input":{"file_path":"/foo"}}],"stop_reason":"tool_use"}}
+{"type":"user","uuid":"u-03-3","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_r","content":"foo contents","is_error":false}]}}
+{"type":"assistant","uuid":"u-03-4","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"Now writing bar."},{"type":"tool_use","id":"toolu_w","name":"Write","input":{"file_path":"/bar","content":"hi"}}],"stop_reason":"tool_use"}}
+{"type":"user","uuid":"u-03-5","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_w","content":"File created","is_error":false}]}}
+{"type":"assistant","uuid":"u-03-6","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"Done."}],"stop_reason":"end_turn"}}

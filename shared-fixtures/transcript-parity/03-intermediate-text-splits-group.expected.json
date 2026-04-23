@@ -1,0 +1,50 @@
+[
+  {
+    "type": "user-message",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-1",
+    "data": { "text": "Read foo then write bar." }
+  },
+  {
+    "type": "tool-use",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-2",
+    "data": { "toolUseId": "toolu_r", "toolName": "Read", "toolInput": { "file_path": "/foo" } }
+  },
+  {
+    "type": "tool-result",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-3",
+    "data": { "toolUseId": "toolu_r", "toolResult": "foo contents", "isError": false }
+  },
+  {
+    "type": "assistant-text",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-4",
+    "data": { "text": "Now writing bar.", "model": "claude-opus-4-7" }
+  },
+  {
+    "type": "tool-use",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-4",
+    "data": { "toolUseId": "toolu_w", "toolName": "Write", "toolInput": { "file_path": "/bar", "content": "hi" } }
+  },
+  {
+    "type": "tool-result",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-5",
+    "data": { "toolUseId": "toolu_w", "toolResult": "File created", "isError": false }
+  },
+  {
+    "type": "assistant-text",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-6",
+    "data": { "text": "Done.", "model": "claude-opus-4-7" }
+  },
+  {
+    "type": "turn-complete",
+    "sessionId": "fixture-session",
+    "uuid": "u-03-6",
+    "data": { "stopReason": "end_turn", "model": "claude-opus-4-7" }
+  }
+]

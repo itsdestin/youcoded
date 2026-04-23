@@ -96,9 +96,20 @@ Phase 1 alone fixes the user-visible bugs. Phases 2 and 3 are the long-term drif
 
 ---
 
-## Phase 2 — Shared Data + Parity Scaffolding
+## Phase 2 — Parity Scaffolding
 
-### Chunk 2.1 — Lift hardcoded lists to shared JSON
+### Chunk 2.1 — Lift hardcoded lists to shared JSON [SKIPPED]
+
+Skipped after Phase 1 review. The three target lists (`BUNDLED_PLUGIN_IDS` 2
+entries; `SETUP_PROMPT_TITLES` 5-6 entries with intentional Android/desktop
+delta on parsed Ink-menu titles; `CC_BUILTIN_COMMANDS` 19 entries with a
+function call that doesn't serialize cleanly) are too small and too well-
+guarded by `PARITY REQUIRED` comments to justify a JSON + asset-loader +
+build-script-copy abstraction. Drift will be caught by Chunk 2.2's parity
+tests for the lists that matter (transcript event shape). Revisit only if
+a list grows past ~10 entries or starts changing frequently.
+
+### Chunk 2.1-original — Lift hardcoded lists to shared JSON
 
 **Why:** Three lists are currently hand-synced across platforms — `BUNDLED_PLUGIN_IDS` (PITFALLS already calls this out), the setup-prompt titles whitelist (just duplicated in Phase 1), and the CC built-in commands list. Each is an independent drift surface.
 

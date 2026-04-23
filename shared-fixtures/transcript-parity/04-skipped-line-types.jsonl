@@ -1,0 +1,5 @@
+{"type":"progress","content":[{"type":"text","text":"streaming partial..."}]}
+{"type":"file-history-snapshot","uuid":"u-04-1","files":["/x"]}
+{"type":"user","uuid":"u-04-2","isMeta":true,"message":{"role":"user","content":"system context — should be skipped"}}
+{"type":"user","uuid":"u-04-3","message":{"role":"user","content":"tool wrapper without promptId — should be skipped"}}
+{"type":"user","uuid":"u-04-4","promptId":"p-4","message":{"role":"user","content":"real prompt"}}

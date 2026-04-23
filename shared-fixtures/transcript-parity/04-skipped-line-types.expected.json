@@ -1,0 +1,8 @@
+[
+  {
+    "type": "user-message",
+    "sessionId": "fixture-session",
+    "uuid": "u-04-4",
+    "data": { "text": "real prompt" }
+  }
+]

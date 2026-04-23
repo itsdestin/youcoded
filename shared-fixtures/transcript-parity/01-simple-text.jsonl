@@ -1,0 +1,2 @@
+{"type":"user","uuid":"u-01-1","promptId":"p-1","message":{"role":"user","content":"Say hi."}}
+{"type":"assistant","uuid":"u-01-2","message":{"role":"assistant","model":"claude-opus-4-7","content":[{"type":"text","text":"Hi!"}],"stop_reason":"end_turn","usage":{"input_tokens":10,"output_tokens":2}}}
