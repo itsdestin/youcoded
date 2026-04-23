@@ -29,7 +29,7 @@ import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
 import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './hooks/useExpandAllToggle';
 import { AppIcon, WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
-import TerminalToolbar, { TerminalScrollButtons } from './components/TerminalToolbar';
+import { TerminalScrollButtons } from './components/TerminalToolbar';
 import TrustGate, { useTrustGateActive } from './components/TrustGate';
 import SettingsPanel from './components/SettingsPanel';
 import ResumeBrowser from './components/ResumeBrowser';
@@ -1935,9 +1935,9 @@ function AppInner() {
                inert disables focus/keyboard/paste when hidden so keystrokes
                reach xterm instead of the buried textarea. */}
               <div ref={bottomBarRef} className={`chrome-wrapper chrome-wrapper--bottom bg-canvas${currentViewMode === 'chat' ? ' bottom-float' : ''}`} {...(currentViewMode !== 'chat' && getPlatform() === 'electron' ? { inert: true, style: { position: 'absolute', width: 0, height: 0, overflow: 'hidden' } as React.CSSProperties } : {})}>
-                {isTerminalTouch && sessionId && (
-                  <TerminalToolbar sessionId={sessionId} />
-                )}
+                {/* TerminalToolbar (Esc/Tab/Ctrl/arrows) now renders inside
+                    ChatInputBar when minimal={isTerminalTouch}, slotted in
+                    the QuickChips position so both modes share one container. */}
                 <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => { setToast(msg); setTimeout(() => setToast(null), 3000); }} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} initialInput={currentSession?.initialInput} />
                 <StatusBar
                   statusData={{

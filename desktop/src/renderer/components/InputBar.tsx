@@ -1,6 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useImperativeHandle, forwardRef } from 'react';
 import { useChatDispatch } from '../state/chat-context';
 import QuickChips, { QuickChip } from './QuickChips';
+import TerminalToolbar from './TerminalToolbar';
 import { AttachIcon, CompassIcon } from './Icons';
 import BrailleBurst from './BrailleBurst';
 import FlowingKeywordsText from './FlowingKeywords';
@@ -406,6 +407,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
+      {/* Terminal view (minimal) renders the Esc/Tab/Ctrl/arrow helper row in
+          the same slot QuickChips occupies in chat view, so both modes share
+          the same "pill row above input bar" visual inside one container. */}
+      {minimal && <TerminalToolbar sessionId={sessionId} />}
       {!minimal && !compact && <QuickChips onChipTap={handleChip} />}
 
       {attachments.length > 0 && (
