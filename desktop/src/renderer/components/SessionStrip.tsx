@@ -802,7 +802,8 @@ export default function SessionStrip({
             };
           })()}
         >
-          {sessions.length > 0 && (
+          {/* Android only ever has one window, so the "in this window" scoping label is meaningless there */}
+          {sessions.length > 0 && !isAndroid() && (
             <>
               <div className="px-3 pt-1.5 text-[10px] uppercase tracking-wider text-fg-muted">
                 Sessions in this window
