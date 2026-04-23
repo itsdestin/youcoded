@@ -15,7 +15,11 @@ import java.io.File
 fun WebViewHost(
     modifier: Modifier = Modifier,
     devUrl: String? = null,
-    bridgeAuthToken: String? = null
+    bridgeAuthToken: String? = null,
+    // Per-build bridge port. Release uses 9901; debug uses 9951 so the dev APK
+    // can run side-by-side with the released app without colliding on the same
+    // localhost socket. React reads this from `location.search` in remote-shim.ts.
+    bridgePort: Int = BuildConfig.BRIDGE_PORT
 ) {
     var webView by remember { mutableStateOf<WebView?>(null) }
 
@@ -150,9 +154,20 @@ fun WebViewHost(
                 }
 
                 // Security: pass bridge auth token as query param so it's available
-                // before any JS runs — avoids race with remote-shim.ts connect()
+                // before any JS runs — avoids race with remote-shim.ts connect().
+                // bridgePort piggybacks on the same query-string handoff so the
+                // React shim can target the right port for this build variant.
                 val baseUrl = devUrl ?: "file:///android_asset/web/index.html"
-                val url = if (bridgeAuthToken != null) "$baseUrl?bridgeToken=$bridgeAuthToken" else baseUrl
+                val url = buildString {
+                    append(baseUrl)
+                    val params = mutableListOf<String>()
+                    if (bridgeAuthToken != null) params += "bridgeToken=$bridgeAuthToken"
+                    params += "bridgePort=$bridgePort"
+                    if (params.isNotEmpty()) {
+                        append('?')
+                        append(params.joinToString("&"))
+                    }
+                }
                 loadUrl(url)
 
                 webView = this

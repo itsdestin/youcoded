@@ -57,6 +57,11 @@ android {
             applicationIdSuffix = ".dev"
             versionNameSuffix = "-dev"
             resValue("string", "app_name", "YouCoded Dev")
+            // Dev APK uses a different LocalBridgeServer port so it can run
+            // side-by-side with the released app (which binds 9901). Both apps
+            // would otherwise collide on 127.0.0.1:9901 and the dev app's
+            // WebView would hang forever on "Connecting...".
+            buildConfigField("int", "BRIDGE_PORT", "9951")
         }
         release {
             isMinifyEnabled = true
@@ -67,6 +72,7 @@ android {
             )
             signingConfig = signingConfigs.getByName("release")
             resValue("string", "app_name", "YouCoded")
+            buildConfigField("int", "BRIDGE_PORT", "9901")
         }
     }
 
