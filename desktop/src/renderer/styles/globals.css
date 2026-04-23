@@ -802,7 +802,10 @@ body[data-mode="buddy-chat"] #theme-bg {
   align-self: center;
   width: fit-content;
   max-width: 95%;
-  border-radius: var(--radius-full);
+  /* Match the input-bar-container rounding in floating mode (--radius-lg)
+     so the top status pill and the bottom input pill share the same corner
+     curve instead of the status bar reading as a more aggressive full pill. */
+  border-radius: var(--radius-lg);
   /* No background override — let the base .status-bar / [data-wallpaper] .status-bar
      rules cascade through so wallpaper themes keep translucency + injected
      backdrop-filter. Previously `background: var(--panel)` here made the
@@ -811,6 +814,10 @@ body[data-mode="buddy-chat"] #theme-bg {
   border: 1px solid var(--edge);
   padding: 2px 12px;
   margin: 4px auto 0;
+  /* Clip child widgets (model pill, mode chips, rate-limit pills, etc.) to the
+     rounded edge so their own backgrounds/borders never poke past the curve.
+     Safe here: the floating status-bar has no outer box-shadow to lose. */
+  overflow: hidden;
 }
 
 [data-chrome-style="floating"] .input-bar-container {
@@ -820,6 +827,13 @@ body[data-mode="buddy-chat"] #theme-bg {
   border-top: 1px solid var(--edge);
   /* Perf: blur radius kept small — large blur is expensive on Android WebView. */
   box-shadow: 0 -2px 6px rgba(0, 0, 0, 0.15);
+  /* Clip children (quick chips, attachments, textarea) to the rounded edge.
+     Without this, when chrome-style=floating is active but input-style is NOT
+     floating (e.g., default / terminal / minimal), the [data-input-style=
+     "floating"] rule that supplies overflow:hidden never fires, and children
+     spill past the rounded corners. Outer box-shadow renders outside the
+     element, so this clip does not affect the shadow above. */
+  overflow: hidden;
 }
 
 @keyframes breathe {
