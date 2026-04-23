@@ -1208,7 +1208,17 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
             val targetPath = if (realBin.exists()) realBin.absolutePath else continue
             val wrapper = File(execWrappersDir, name)
             wrapper.writeText("#!/system/bin/sh\nexec /system/bin/linker64 \"$targetPath\" \"\$@\"\n")
-            wrapper.setExecutable(true)
+            // Mode 0755 (r-x for all), not the default 0700 that File.setExecutable(true)
+            // produces under Android's 0077 umask. Why 0755: these wrappers are exec'd
+            // by subprocesses spawned from Go binaries like `gh` (which bypass the
+            // termux-exec LD_PRELOAD and also don't inherit the bash shell functions).
+            // With 0700, `gh auth setup-git` fails with EACCES on fork/exec of this
+            // wrapper even though the subprocess runs as the same app uid — the shell
+            // shebang interpretation path is stricter than direct linker64 calls.
+            // The file is inside the app sandbox, so wider perms don't expose it to
+            // other apps (Android sandboxes /data/data/<pkg>/ by uid anyway).
+            wrapper.setReadable(true, false)
+            wrapper.setExecutable(true, false)
         }
 
         // Create vendor symlinks for Claude Code's built-in tools.
@@ -1403,6 +1413,42 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
         // bash-level wrappers; all C/Rust programs are handled by termux-exec.
         sb.appendLine()
         sb.appendLine("# Go binary wrappers — raw syscall exec bypass")
+
+        // Helper: after `gh auth login/logout/refresh/token`, gh rewrites
+        // ~/.config/gh/hosts.yml but git on its own has no way to authenticate
+        // over HTTPS — on Android we can't use `gh auth setup-git` (Go's exec
+        // chain breaks on SELinux). Instead we mirror the OAuth token into
+        // ~/.netrc, which libcurl reads natively with no subprocess needed.
+        // Bootstrap.syncGhTokenToNetrc() handles this at session-start; this
+        // shell-level hook handles the "user logs in mid-session" case so
+        // `git push` Just Works immediately afterward with no manual step.
+        sb.appendLine("""_youcoded_sync_gh_netrc() {
+  local _hosts="${'$'}HOME/.config/gh/hosts.yml"
+  local _netrc="${'$'}HOME/.netrc"
+  if [ ! -f "${'$'}_hosts" ]; then
+    # gh auth logout removes hosts.yml entirely; strip github.com from .netrc too
+    if [ -f "${'$'}_netrc" ] && grep -q '^machine github.com ' "${'$'}_netrc"; then
+      grep -v '^machine github.com ' "${'$'}_netrc" > "${'$'}_netrc.tmp" && mv "${'$'}_netrc.tmp" "${'$'}_netrc"
+      chmod 600 "${'$'}_netrc"
+    fi
+    return 0
+  fi
+  local _token
+  _token=${'$'}(awk '/^[[:space:]]*oauth_token:/ {print ${'$'}2; exit}' "${'$'}_hosts" 2>/dev/null)
+  [ -z "${'$'}_token" ] && return 0
+  local _entry="machine github.com login x-access-token password ${'$'}_token"
+  if [ -f "${'$'}_netrc" ]; then
+    if grep -q '^machine github.com ' "${'$'}_netrc"; then
+      awk -v e="${'$'}_entry" '/^machine github.com / {print e; next} {print}' "${'$'}_netrc" > "${'$'}_netrc.tmp" && mv "${'$'}_netrc.tmp" "${'$'}_netrc"
+    else
+      printf '%s\n' "${'$'}_entry" >> "${'$'}_netrc"
+    fi
+  else
+    printf '%s\n' "${'$'}_entry" > "${'$'}_netrc"
+  fi
+  chmod 600 "${'$'}_netrc"
+}""")
+
         val ghBin = File(binDir, "gh")
         if (ghBin.exists()) {
             val ghPath = ghBin.absolutePath
@@ -1456,6 +1502,16 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
       ;;
   esac
   /system/bin/linker64 "$ghPath" "${'$'}{__FT[@]}"
+  local _rc=${'$'}?
+  # Post-hook: after any `gh auth` subcommand, re-sync the OAuth token into
+  # ~/.netrc so git HTTPS auth works without `gh auth setup-git` (which is
+  # broken on Android — see _youcoded_sync_gh_netrc comment above).
+  if [ "${'$'}{__FT[0]:-}" = "auth" ]; then
+    case "${'$'}{__FT[1]:-}" in
+      login|logout|refresh|token|switch) _youcoded_sync_gh_netrc 2>/dev/null ;;
+    esac
+  fi
+  return ${'$'}_rc
 }""")
             functionNames.add("gh")
         }
@@ -1509,6 +1565,9 @@ When you see an `[Auto-Title]` reminder, **immediately** use Bash to write a 3-5
             sb.appendLine()
             sb.appendLine("# Export functions for subshells")
             sb.appendLine("export -f __fix_tmp 2>/dev/null")
+            // Helper called by gh() post-hook — must be exported so it's
+            // available when gh is invoked from a subshell.
+            sb.appendLine("export -f _youcoded_sync_gh_netrc 2>/dev/null")
             for (n in functionNames) {
                 sb.appendLine("export -f $n 2>/dev/null")
             }
