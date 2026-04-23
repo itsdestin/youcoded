@@ -534,32 +534,17 @@ class ManagedSession(
             }
         }
 
-        // --- Browser auth / paste code prompt ---
-        if (("paste code" in lower || "paste the code" in lower || "browser" in lower) &&
-            ("sign" in lower || "code" in lower || "authorize" in lower)) {
-            if ("paste_code" !in activePrompts && "paste_code" !in completedPromptIds) {
-                activePrompts.add("paste_code")
-                broadcastPrompt("paste_code", "Complete Sign-In in Your Browser", listOf(
-                    PromptButton("Browser opened — waiting for code...", ""),
-                ))
-            }
-        } else if ("paste_code" in activePrompts) {
-            val count = absentPollCounts.getOrDefault("paste_code", 0) + 1
-            absentPollCounts["paste_code"] = count
-            if (count >= DISMISS_THRESHOLD) {
-                activePrompts.remove("paste_code")
-                broadcastPromptDismiss("paste_code")
-                absentPollCounts.remove("paste_code")
-            }
-        }
+        // OAuth "paste code" flow used to be handled here with a free-text
+        // substring AND ("paste code"/"browser" + "sign"/"code"/"authorize")
+        // that fired on any normal Claude output mentioning those words.
+        // Removed for desktop parity: desktop's usePromptDetector has no
+        // equivalent — it relies on the terminal view to show the OAuth URL
+        // and code-paste prompt natively. If Claude Code ever surfaces OAuth
+        // as a structured Ink Select menu, the parsed-menu path above
+        // (gated on SETUP_PROMPT_TITLES) will handle it without false positives.
 
         // --- "Press Enter to continue" ---
         if ("press enter to continue" in lower) {
-            if ("paste_code" in activePrompts) {
-                activePrompts.remove("paste_code")
-                completedPromptIds.add("paste_code")
-                broadcastPromptComplete("paste_code", "Signed in")
-            }
             val continueKey = when {
                 "login successful" in lower -> "continue_login"
                 "security" in lower -> "continue_security"
