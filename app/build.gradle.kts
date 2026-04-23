@@ -31,9 +31,33 @@ android {
             keyAlias = keystoreProperties.getProperty("keyAlias", "youcoded")
             keyPassword = keystoreProperties.getProperty("keyPassword", "")
         }
+
+        // Stable debug signing: if app/debug.keystore is committed, use it so
+        // dev APKs share one signature across CI runs (dev→dev upgrades preserve
+        // data). If absent, AGP falls back to the per-machine ~/.android/debug.keystore
+        // and each CI run produces a fresh key — dev builds would then require
+        // uninstall-before-install, but release builds are unaffected.
+        getByName("debug") {
+            val stableDebugKeystore = file("debug.keystore")
+            if (stableDebugKeystore.exists()) {
+                storeFile = stableDebugKeystore
+                storePassword = "android"
+                keyAlias = "androiddebugkey"
+                keyPassword = "android"
+            }
+        }
     }
 
     buildTypes {
+        // Dev build: installs as a SEPARATE app ("YouCoded Dev") alongside the
+        // released app on the same device. applicationIdSuffix changes the final
+        // package ID; namespace (Kotlin/Java package) stays the same so class
+        // references like `.MainActivity` still resolve.
+        debug {
+            applicationIdSuffix = ".dev"
+            versionNameSuffix = "-dev"
+            resValue("string", "app_name", "YouCoded Dev")
+        }
         release {
             isMinifyEnabled = true
             isShrinkResources = true
@@ -42,6 +66,7 @@ android {
                 "proguard-rules.pro"
             )
             signingConfig = signingConfigs.getByName("release")
+            resValue("string", "app_name", "YouCoded")
         }
     }
 

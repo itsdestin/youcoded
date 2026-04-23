@@ -22,6 +22,9 @@ local.properties
 *.jks
 *.keystore
 keystore.properties
+# Exception: debug keystore is publicly known (password "android") and is
+# intentionally committed so every dev build shares one signing key.
+!app/debug.keystore
 
 # Drafts and temp files
 icon-drafts/
