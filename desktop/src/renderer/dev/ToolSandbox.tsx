@@ -35,13 +35,42 @@ function renderBlock(block: FixtureBlock, index: number): React.ReactNode {
   return <ToolCard key={block.tool.toolUseId} tool={block.tool} />;
 }
 
+// Derive the group heading for a fixture: multi-block fixtures go under
+// "Grouped turns"; single-tool fixtures group by their tool's name, with
+// all mcp__*__* tools folded under "MCP" so ecosystem tools share one header.
+function groupKey(name: string, blocks: FixtureBlock[]): string {
+  if (name.startsWith('group-')) return 'Grouped turns';
+  const firstTool = blocks.find((b) => b.kind === 'tool');
+  if (!firstTool || firstTool.kind !== 'tool') return 'Other';
+  const t = firstTool.tool.toolName;
+  if (t.startsWith('mcp__')) return 'MCP';
+  return t;
+}
+
+// Keep "Grouped turns" at the bottom of the page; the single-tool groups
+// sort alphabetically above it so "Agent", "Bash", "Edit"... read in order.
+function compareGroups(a: string, b: string): number {
+  if (a === 'Grouped turns') return 1;
+  if (b === 'Grouped turns') return -1;
+  return a.localeCompare(b);
+}
+
 export function ToolSandbox() {
-  const entries = Object.entries(fixtures)
-    .map(([path, raw]) => {
-      const name = path.split('/').pop()!.replace(/\.jsonl$/, '');
-      return { name, result: loadFixture(name, raw) };
-    })
-    .sort((a, b) => a.name.localeCompare(b.name));
+  const entries = Object.entries(fixtures).map(([path, raw]) => {
+    const name = path.split('/').pop()!.replace(/\.jsonl$/, '');
+    return { name, result: loadFixture(name, raw) };
+  });
+
+  // Bucket each fixture by its derived group, sort fixtures alphabetically
+  // within each group.
+  const groups = new Map<string, typeof entries>();
+  for (const entry of entries) {
+    const key = groupKey(entry.name, entry.result.blocks);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(entry);
+  }
+  for (const list of groups.values()) list.sort((a, b) => a.name.localeCompare(b.name));
+  const sortedGroups = Array.from(groups.entries()).sort((a, b) => compareGroups(a[0], b[0]));
 
   return (
     <ChatProvider>
@@ -56,38 +85,54 @@ export function ToolSandbox() {
           tool_use/tool_result pair. Edit ToolBody.tsx and save to see changes
           via HMR.
         </p>
-        {entries.map(({ name, result }) => {
-          // Multi-block fixtures (or any fixture with text) get a bubble frame
-          // so the grouping reads as "one assistant turn". Single-tool fixtures
-          // render bare — matches the original sandbox look.
-          const hasText = result.blocks.some((b) => b.kind === 'text');
-          const wrap = result.blocks.length > 1 || hasText;
-          return (
-            <section key={name} style={{ marginBottom: 32 }}>
-              <h2 style={{ fontSize: 14, opacity: 0.6, marginBottom: 8 }}>{name}</h2>
-              {result.error ? (
-                <div style={{ color: 'tomato', fontFamily: 'monospace' }}>
-                  {result.error}
+        {sortedGroups.map(([groupName, fixturesInGroup]) => (
+          <section key={groupName} style={{ marginBottom: 40 }}>
+            <h2
+              style={{
+                fontSize: 18,
+                marginBottom: 12,
+                paddingBottom: 6,
+                borderBottom: '1px solid var(--edge-dim, #333)',
+              }}
+            >
+              {groupName}
+            </h2>
+            {fixturesInGroup.map(({ name, result }) => {
+              // Multi-block fixtures (or any fixture with text) get a bubble frame
+              // so the grouping reads as "one assistant turn". Single-tool fixtures
+              // render bare — matches the original sandbox look.
+              const hasText = result.blocks.some((b) => b.kind === 'text');
+              const wrap = result.blocks.length > 1 || hasText;
+              return (
+                <div key={name} style={{ marginBottom: 24 }}>
+                  <h3 style={{ fontSize: 13, opacity: 0.6, marginBottom: 8, fontWeight: 400 }}>
+                    {name}
+                  </h3>
+                  {result.error ? (
+                    <div style={{ color: 'tomato', fontFamily: 'monospace' }}>
+                      {result.error}
+                    </div>
+                  ) : wrap ? (
+                    // Light outline + padding so the grouping reads visually.
+                    // Intentionally minimal; the point is "this is all one turn", not theming.
+                    <div
+                      style={{
+                        border: '1px solid var(--edge-dim, #333)',
+                        borderRadius: 8,
+                        padding: 16,
+                        margin: '8px 0',
+                      }}
+                    >
+                      {result.blocks.map(renderBlock)}
+                    </div>
+                  ) : (
+                    result.blocks.map(renderBlock)
+                  )}
                 </div>
-              ) : wrap ? (
-                // Light outline + padding so the grouping reads visually.
-                // Intentionally minimal; the point is "this is all one turn", not theming.
-                <div
-                  style={{
-                    border: '1px solid var(--edge-dim, #333)',
-                    borderRadius: 8,
-                    padding: 16,
-                    margin: '8px 0',
-                  }}
-                >
-                  {result.blocks.map(renderBlock)}
-                </div>
-              ) : (
-                result.blocks.map(renderBlock)
-              )}
-            </section>
-          );
-        })}
+              );
+            })}
+          </section>
+        ))}
       </div>
       </div>
     </ChatProvider>
