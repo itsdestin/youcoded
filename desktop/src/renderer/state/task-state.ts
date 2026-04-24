@@ -31,6 +31,22 @@ export interface TaskState {
   events: TaskEvent[];
 }
 
+/**
+ * Parse Claude Code's TaskCreate response string to extract task id + subject.
+ * Example input: "Task #1 created successfully: Sync youcoded master"
+ *
+ * The numeric id is NOT in the tool input — only in this response string. If
+ * this format ever changes in Claude Code, the Open Tasks chip degrades
+ * gracefully: tasks appear only once TaskUpdate/TaskList mention them. See
+ * youcoded/docs/cc-dependencies.md for the coupling.
+ */
+export function parseTaskCreateResult(text: string): { id: string; subject: string } | null {
+  if (typeof text !== 'string') return null;
+  const match = text.match(/^Task #(\d+) created successfully: (.+)$/);
+  if (!match) return null;
+  return { id: match[1], subject: match[2] };
+}
+
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskStop']);
 
 export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<string, TaskState> {
