@@ -260,6 +260,31 @@ public final class TerminalEmulator {
 
     private static final String LOG_TAG = "TerminalEmulator";
 
+    /**
+     * YOUCODED PATCH (see VENDORED.md):
+     * Raw-byte listener for routing PTY bytes to secondary consumers
+     * (e.g. an xterm.js renderer over WebSocket) before the emulator
+     * parses them. Listeners fire on the terminal thread; they must
+     * copy bytes before any async work — the buffer is reused across reads.
+     */
+    public interface RawByteListener {
+        void onBytesReceived(byte[] buffer, int length);
+    }
+
+    // YOUCODED PATCH: CopyOnWriteArrayList keeps iteration safe when listeners are added/removed concurrently.
+    private final java.util.List<RawByteListener> rawByteListeners =
+        new java.util.concurrent.CopyOnWriteArrayList<>();
+
+    // YOUCODED PATCH: Register a raw-byte listener.
+    public void addRawByteListener(RawByteListener listener) {
+        rawByteListeners.add(listener);
+    }
+
+    // YOUCODED PATCH: Unregister a raw-byte listener.
+    public void removeRawByteListener(RawByteListener listener) {
+        rawByteListeners.remove(listener);
+    }
+
     private boolean isDecsetInternalBitSet(int bit) {
         return (mCurrentDecSetFlags & bit) != 0;
     }
@@ -480,6 +505,11 @@ public final class TerminalEmulator {
      * @param length the number of bytes in the array to process
      */
     public void append(byte[] buffer, int length) {
+        // YOUCODED PATCH: notify raw-byte listeners before emulator parse.
+        // CopyOnWriteArrayList iteration is safe under concurrent add/remove.
+        for (RawByteListener listener : rawByteListeners) {
+            listener.onBytesReceived(buffer, length);
+        }
         for (int i = 0; i < length; i++)
             processByte(buffer[i]);
     }
