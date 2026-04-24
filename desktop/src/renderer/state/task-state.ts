@@ -47,6 +47,26 @@ export function parseTaskCreateResult(text: string): { id: string; subject: stri
   return { id: match[1], subject: match[2] };
 }
 
+/**
+ * Parse Claude Code's TaskList response block into a per-task snapshot.
+ * Example row: "#1 [completed] Task 1: Create worktree and branch"
+ * The "Task N: " prefix is optional.
+ *
+ * Malformed lines are skipped silently — a format change degrades to "some
+ * tasks missing from the snapshot" rather than a render crash.
+ */
+export function parseTaskListResult(text: string): Array<{ id: string; status: TaskStatus; subject: string }> {
+  if (typeof text !== 'string' || text.length === 0) return [];
+  const rows: Array<{ id: string; status: TaskStatus; subject: string }> = [];
+  const lineRegex = /^#(\d+) \[(pending|in_progress|completed)\] (?:Task \d+: )?(.+)$/;
+  for (const line of text.split(/\r?\n/)) {
+    const match = line.match(lineRegex);
+    if (!match) continue;
+    rows.push({ id: match[1], status: match[2] as TaskStatus, subject: match[3] });
+  }
+  return rows;
+}
+
 const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskStop']);
 
 export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<string, TaskState> {
