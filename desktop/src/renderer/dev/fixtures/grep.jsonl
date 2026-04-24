@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Grep","name":"Grep","input":{"pattern":"TODO","path":"src/","output_mode":"files_with_matches"}}
+{"tool_use_id":"toolu_01Grep","type":"tool_result","content":"src/renderer/App.tsx\nsrc/main/ipc-handlers.ts\nsrc/main/sync-service.ts","is_error":false}

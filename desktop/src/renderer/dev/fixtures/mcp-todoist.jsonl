@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Todo","name":"mcp__todoist__tasks-list","input":{"project_id":"123456","filter":"today"}}
+{"tool_use_id":"toolu_01Todo","type":"tool_result","content":"[{\"id\":\"901\",\"content\":\"Review PR #42\",\"priority\":3},{\"id\":\"902\",\"content\":\"Draft release notes\",\"priority\":2}]","is_error":false}

@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Sk1ll","name":"Skill","input":{"skill":"superpowers:brainstorming"}}
+{"tool_use_id":"toolu_01Sk1ll","type":"tool_result","content":"Launching skill: superpowers:brainstorming","is_error":false}

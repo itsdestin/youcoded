@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Win","name":"mcp__windows-control__Click","input":{"x":420,"y":180,"button":"left"}}
+{"tool_use_id":"toolu_01Win","type":"tool_result","content":"{\"success\":true,\"clicked_at\":{\"x\":420,\"y\":180}}","is_error":false}
