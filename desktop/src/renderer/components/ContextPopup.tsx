@@ -2,8 +2,9 @@ import React from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 
-// Hint text keyed to the same color bands the chip uses (contextColor in StatusBar.tsx).
-// > 60% green, 20–60% amber, < 20% red. Non-dev copy — reviewed with spec.
+// Hint copy keyed to spec bands: > 60 plenty, 20–60 getting tight, < 20 very low.
+// Thresholds are intentionally coarser than contextColor() — the copy describes
+// user intent (when to act), not the indicator color.
 function hintFor(pct: number): string {
   if (pct > 60) return 'Plenty of room — no action needed.';
   if (pct >= 20) return 'Getting tight — consider compacting soon.';
