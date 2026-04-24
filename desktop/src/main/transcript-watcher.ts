@@ -14,12 +14,19 @@ import { SubagentWatcher } from './subagent-watcher';
  * Converts a filesystem path to Claude Code's project directory slug.
  * e.g. `C:\Users\alice` → `C--Users-alice`
  *      `/home/user/project` → `-home-user-project`
+ *      `C:\Users\alice\PAF 540 Final` → `C--Users-alice-PAF-540-Final`
+ *
+ * Must mirror Claude Code's own encoding exactly — otherwise the watcher points
+ * at a non-existent directory and chat view stays empty. CC replaces spaces
+ * with dashes too; we do the same so cwds like "PAF 540 Final Data Project"
+ * resolve to the right ~/.claude/projects/<slug>/ folder.
  */
 export function cwdToProjectSlug(cwd: string): string {
   return cwd
     .replace(/\\/g, '/')   // backslash → forward slash
     .replace(/:/g, '-')    // colon → dash
-    .replace(/\//g, '-');   // slash → dash
+    .replace(/\//g, '-')   // slash → dash
+    .replace(/ /g, '-');   // space → dash (CC does this too)
 }
 
 // ---------------------------------------------------------------------------

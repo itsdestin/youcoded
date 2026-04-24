@@ -204,7 +204,7 @@ class SyncService(
     /**
      * Generate the current device's project slug.
      * Must match TranscriptWatcher.cwdToProjectSlug() and desktop's getCurrentSlug().
-     * Replace /, \, : with - to match Claude Code's slug algorithm.
+     * Replace /, \, :, and space with - to match Claude Code's slug algorithm.
      */
     fun getCurrentSlug(): String {
         // Use canonical path to resolve symlinks (e.g., /data/user/0 → /data/data)
@@ -213,8 +213,9 @@ class SyncService(
         } catch (_: Exception) {
             bootstrap.homeDir.absolutePath
         }
-        // Replace path separators with dashes — same regex as desktop: /[/\\:]/g, '-'
-        return homePath.replace('/', '-').replace('\\', '-').replace(':', '-')
+        // Replace path separators + spaces with dashes — must match desktop exactly.
+        // Space handling is required: CC encodes spaces as dashes too.
+        return homePath.replace('/', '-').replace('\\', '-').replace(':', '-').replace(' ', '-')
     }
 
     // =========================================================================

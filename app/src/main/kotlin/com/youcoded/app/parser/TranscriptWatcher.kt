@@ -53,13 +53,17 @@ class TranscriptWatcher(
 
         /**
          * Convert a working directory path to Claude Code's project slug.
-         * Mirrors desktop's cwdToProjectSlug(): replace \, :, / with -. Leading dash is preserved.
+         * Mirrors desktop's cwdToProjectSlug(): replace \, :, /, and space with -.
+         * Leading dash is preserved. Space handling is required — CC encodes spaces
+         * as dashes too, and without it the watcher reads from a non-existent
+         * directory for any cwd containing spaces (e.g. "PAF 540 Final Data Project").
          */
         fun cwdToProjectSlug(cwdPath: String): String {
             return cwdPath
                 .replace('\\', '-')
                 .replace(':', '-')
                 .replace('/', '-')
+                .replace(' ', '-')
         }
     }
 
