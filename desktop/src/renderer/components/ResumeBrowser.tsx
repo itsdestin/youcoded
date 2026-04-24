@@ -4,6 +4,14 @@ import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
+import {
+  applyFilters,
+  sortSessions,
+  groupSessions,
+  getAvailableProjects,
+  type FilterState,
+  type FlagName,
+} from './resume-browser-filters';
 
 const MODEL_LABELS: Record<string, string> = {
   sonnet: 'Sonnet',
@@ -30,11 +38,10 @@ function formatSize(bytes: number): string {
   return `${(kb / 1024).toFixed(1)}MB`;
 }
 
-// Keep in sync with SESSION_FLAG_NAMES in shared/types.ts. The renderer imports
-// from shared/types would be ideal, but that module is CommonJS — we use a
-// literal list here to avoid the compile coupling and keep the flag order
-// stable in the UI (Priority first, Helpful, then Complete).
-type FlagName = 'priority' | 'helpful' | 'complete';
+// FlagName is imported from resume-browser-filters.ts (single source of truth).
+// Kept in sync with SESSION_FLAG_NAMES in shared/types.ts; that module is
+// CommonJS so we don't import it directly. FLAG_ORDER fixes the pill / badge
+// ordering in the UI (Priority first, Helpful, then Complete).
 const FLAG_ORDER: FlagName[] = ['priority', 'helpful', 'complete'];
 const FLAG_LABEL: Record<FlagName, string> = {
   priority: 'Priority',
@@ -96,6 +103,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // mid-interaction when Show Complete is off. Reset on every open.
   const [stickyComplete, setStickyComplete] = useState<Set<string>>(new Set());
 
+  // New filter state — all reset on each open (no localStorage). Default values
+  // (empty Sets, sortDir='desc') produce identical behaviour to the prior
+  // hard-coded filter pipeline.
+  const [selectedProjects, setSelectedProjects] = useState<Set<string>>(new Set());
+  const [selectedTags, setSelectedTags] = useState<Set<FlagName>>(new Set());
+  const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc');
+
   // Fetch sessions when opened
   useEffect(() => {
     if (open) {
@@ -105,6 +119,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setResumeDangerous(defaultSkipPermissions || false);
       // Reset the sticky-visible set each open — previously kept rows drop out.
       setStickyComplete(new Set());
+      // Reset filter pills each open — current spec: no persistence.
+      setSelectedProjects(new Set());
+      setSelectedTags(new Set());
+      setSortDir('desc');
       setLoading(true);
       (window as any).claude.session.browse()
         .then((list: PastSession[]) => setSessions(list))
@@ -124,54 +142,30 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   useEscClose(open, handleEscClose);
 
   const filtered = useMemo(() => {
-    // Hide complete sessions by default; Show Complete toggle reveals them.
-    // Priority does NOT override hiding — a complete+priority session stays hidden.
-    // Exception: sessions just flagged Complete during this open stay visible
-    // (stickyComplete) so the row doesn't disappear mid-interaction.
-    const base = showComplete
-      ? sessions
-      : sessions.filter((s) => !s.flags?.complete || stickyComplete.has(s.sessionId));
-    if (!search.trim()) return base;
-    const q = search.toLowerCase();
-    return base.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        s.projectPath.toLowerCase().includes(q),
-    );
-  }, [sessions, search, showComplete, stickyComplete]);
+    // Filter pipeline lives in resume-browser-filters.ts so it can be unit tested.
+    // Order: Show Complete + sticky → project → tag → search.
+    const state: FilterState = {
+      search,
+      showComplete,
+      stickyComplete,
+      selectedProjects,
+      selectedTags,
+    };
+    return applyFilters(sessions, state);
+  }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTags]);
 
-  // Group by project path AND sort priority sessions to the top of each group.
-  // Secondary sort is lastModified desc (preserves the existing default).
+  // Group by project path; within-group sort priority-pinned + lastModified by sortDir.
+  // Between-group order also follows sortDir (newest-first when desc, oldest-first when asc).
   const grouped = useMemo(() => {
     if (search.trim()) return null;
-    const groups = new Map<string, PastSession[]>();
-    for (const s of filtered) {
-      const list = groups.get(s.projectPath) || [];
-      list.push(s);
-      groups.set(s.projectPath, list);
-    }
-    for (const [k, arr] of groups) {
-      arr.sort((a, b) => {
-        const ap = a.flags?.priority ? 0 : 1;
-        const bp = b.flags?.priority ? 0 : 1;
-        if (ap !== bp) return ap - bp;
-        return b.lastModified - a.lastModified;
-      });
-      groups.set(k, arr);
-    }
-    return groups;
-  }, [filtered, search]);
+    return groupSessions(filtered, sortDir);
+  }, [filtered, search, sortDir]);
 
-  // Flat list (search mode) — still pin priority to the top.
+  // Flat list (search mode) — priority-pinned, lastModified by sortDir.
   const flatSorted = useMemo(() => {
     if (!search.trim()) return filtered;
-    return [...filtered].sort((a, b) => {
-      const ap = a.flags?.priority ? 0 : 1;
-      const bp = b.flags?.priority ? 0 : 1;
-      if (ap !== bp) return ap - bp;
-      return b.lastModified - a.lastModified;
-    });
-  }, [filtered, search]);
+    return sortSessions(filtered, sortDir);
+  }, [filtered, search, sortDir]);
 
   // Optimistically flip a flag in local state, then persist via IPC. On failure
   // we revert. A meta-changed push from other tabs/devices also refreshes the
