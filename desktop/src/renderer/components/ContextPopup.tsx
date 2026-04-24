@@ -147,15 +147,17 @@ export default function ContextPopup({
             <div className="px-4 pb-4 pt-2 space-y-3 border-t border-edge">
               {customizing ? (
                 <div className="space-y-2">
-                  <label className="block text-xs font-medium text-fg-muted tracking-wider uppercase">
+                  <label htmlFor="compact-instructions" className="block text-xs font-medium text-fg-muted tracking-wider uppercase">
                     Keep these priorities (optional)
                   </label>
                   <textarea
+                    id="compact-instructions"
                     value={instructions}
                     onChange={(e) => setInstructions(e.target.value)}
                     placeholder="e.g. keep code decisions and architecture; drop debugging output"
                     rows={3}
                     className="w-full px-2 py-1.5 text-xs bg-inset border border-edge rounded-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+                    autoFocus
                   />
                   <div className="flex gap-2">
                     <button
