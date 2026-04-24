@@ -227,6 +227,80 @@ export default function HeaderBar({
     return () => ro.disconnect();
   }, []);
 
+  // Cluster width reservation. A plain `flex-1` split would cap the session
+  // strip at ~1/3 of the header even when the side clusters only fill
+  // ~160-200px of content. Instead we measure each cluster's natural content
+  // width (sum of shrink-0 children — safe because the containers are
+  // flex-stretched but their children report intrinsic widths), reserve
+  // max(leftNat, rightNat) * CLUSTER_HEADROOM on BOTH sides, and let the
+  // center flex-1 wrapper absorb the rest. Symmetric reservations keep the
+  // strip window-center-aligned; the headroom multiplier is a visual buffer
+  // so clusters don't feel like they're kissing the strip.
+  //
+  // Measuring *children* (not the container's clientWidth) avoids a feedback
+  // loop: our applied width would otherwise feed back into the next
+  // measurement. The children are all `shrink-0`, so offsetWidth always
+  // reports their intrinsic width.
+  const leftClusterRef = useRef<HTMLDivElement>(null);
+  const rightClusterRef = useRef<HTMLDivElement>(null);
+  const [reservedWidth, setReservedWidth] = useState<number | null>(null);
+
+  useLayoutEffect(() => {
+    const header = headerRef.current;
+    const left = leftClusterRef.current;
+    const right = rightClusterRef.current;
+    if (!header || !left || !right) return;
+
+    const CLUSTER_HEADROOM = 1.2;   // visual buffer between clusters and strip
+    const MIN_STRIP_WIDTH = 180;    // don't starve the strip at narrow widths
+
+    const measureNatural = (el: HTMLElement): number => {
+      const children = Array.from(el.children) as HTMLElement[];
+      const visible = children.filter(c => c.offsetWidth > 0);
+      if (visible.length === 0) return 0;
+      const totalW = visible.reduce((sum, c) => sum + c.offsetWidth, 0);
+      const gap = parseFloat(window.getComputedStyle(el).columnGap || '0') || 0;
+      return totalW + gap * (visible.length - 1);
+    };
+
+    const compute = () => {
+      const headerW = header.clientWidth;
+      if (headerW === 0) return; // not laid out yet
+      const natLeft = measureNatural(left);
+      const natRight = measureNatural(right);
+      const maxNat = Math.max(natLeft, natRight);
+      const ideal = maxNat * CLUSTER_HEADROOM;
+      // Squeeze the headroom toward 1.0 if the strip would drop below viable
+      // width. Never below maxNat itself — the reservation must always cover
+      // actual content so the strip can't overpaint the gear (this preserves
+      // the "no min-w-0 on left cluster" invariant in a stricter form).
+      const cap = Math.max(maxNat, (headerW - MIN_STRIP_WIDTH) / 2);
+      const reserved = Math.min(ideal, cap);
+      const next = Math.ceil(reserved);
+      // 2px dedup dampens sub-pixel jitter during the chat/terminal toggle's
+      // label animation; without it RO fires many times across 300ms.
+      setReservedWidth(prev =>
+        prev != null && Math.abs(prev - next) < 2 ? prev : next,
+      );
+    };
+
+    compute();
+    const ro = new ResizeObserver(compute);
+    ro.observe(header);
+    ro.observe(left);
+    ro.observe(right);
+    return () => ro.disconnect();
+  }, []);
+
+  // Inline style applied to both clusters. When `reservedWidth` is null
+  // (pre-measurement or not-yet-laid-out), we fall back to `flex-1` via
+  // className. The width transition smooths the shift that happens when the
+  // chat/terminal toggle's active label changes width (Chat=3rem, Term=4.5rem).
+  const clusterStyle: React.CSSProperties | undefined = reservedWidth != null
+    ? { flex: '0 0 auto', width: `${reservedWidth}px`, transition: 'width 200ms ease' }
+    : undefined;
+  const clusterFlexClass = reservedWidth == null ? 'flex-1 ' : '';
+
   const measureEndpoints = useCallback(() => {
     const container = containerRef.current;
     const chatBtn = chatBtnRef.current;
@@ -379,8 +453,14 @@ export default function HeaderBar({
       <MacTrafficLights headerRef={headerRef} />
       {/* Left — settings gear + REMOTE badge + (Win/Linux) chat/terminal toggle.
           NOTE: no min-w-0 — left children are all shrink-0; letting this collapse
-          would allow SessionStrip to overpaint the gear. Keep symmetric with right. */}
-      <div className="flex-1 flex items-center gap-1 sm:gap-2">
+          would allow SessionStrip to overpaint the gear. When reservedWidth is
+          set (measured), width is pinned to `max(left, right) * 1.2` so both
+          sides reserve equal space; when unset we fall back to flex-1. */}
+      <div
+        ref={leftClusterRef}
+        className={`${clusterFlexClass}flex items-center gap-1 sm:gap-2`}
+        style={clusterStyle}
+      >
         <button
           onClick={onToggleSettings}
           className={`relative ${isAndroid() ? 'p-2' : 'p-1'} rounded-sm hover:bg-inset transition-colors shrink-0 ${settingsOpen ? 'text-fg' : 'text-fg-muted'}`}
@@ -430,8 +510,13 @@ export default function HeaderBar({
       />
       </div>
 
-      {/* Right — view toggles */}
-      <div className="flex-1 flex items-center justify-end gap-1 sm:gap-2">
+      {/* Right — view toggles. Symmetric reservation with the left cluster
+          (see clusterStyle above) keeps the session strip window-centered. */}
+      <div
+        ref={rightClusterRef}
+        className={`${clusterFlexClass}flex items-center justify-end gap-1 sm:gap-2`}
+        style={clusterStyle}
+      >
         {!toggleOnLeft && toggleElement}
         <div className="bg-inset rounded-md p-0.5 hidden sm:block">
           <button
