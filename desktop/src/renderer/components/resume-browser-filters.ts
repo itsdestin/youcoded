@@ -118,7 +118,9 @@ export function getAvailableProjects<T extends PastSessionLike>(
     label: lastSegment(path),
     count,
   }));
-  result.sort((a, b) => a.label.localeCompare(b.label));
+  // Case-insensitive so 'YouCoded' and 'apps' interleave alphabetically rather
+  // than capitalized-first. Affects the Projects dropdown rendering order.
+  result.sort((a, b) => a.label.localeCompare(b.label, undefined, { sensitivity: 'base' }));
   return result;
 }
 

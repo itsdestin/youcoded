@@ -198,4 +198,14 @@ describe('getAvailableProjects', () => {
     const out = getAvailableProjects([session({ projectPath: 'singletoken' })]);
     expect(out).toEqual([{ path: 'singletoken', label: 'singletoken', count: 1 }]);
   });
+
+  it('sorts case-insensitively so capitalized labels interleave with lowercase ones', () => {
+    const list = [
+      session({ projectPath: '/x/ZebraProject' }),
+      session({ projectPath: '/x/apps' }),
+      session({ projectPath: '/x/Banana' }),
+    ];
+    const out = getAvailableProjects(list);
+    expect(out.map((p) => p.label)).toEqual(['apps', 'Banana', 'ZebraProject']);
+  });
 });
