@@ -89,7 +89,8 @@ export default function ContextPopup({
         layer={2}
         role="dialog"
         aria-modal={true}
-        aria-labelledby="context-popup-title"
+        aria-labelledby={showInfo ? undefined : 'context-popup-title'}
+        aria-label={showInfo ? 'About Context' : undefined}
         className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[320px]"
         onClick={(e) => e.stopPropagation()}
       >

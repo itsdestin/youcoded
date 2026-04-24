@@ -112,11 +112,8 @@ describe('ContextPopup — info view', () => {
   it('closes the whole popup when the explainer Close is clicked', () => {
     const { onClose } = renderPopup();
     fireEvent.click(screen.getByLabelText('What is this?'));
-    // Explainer renders its own Close button with aria-label="Close"
-    const closes = screen.getAllByLabelText('Close');
-    // There may be two — one from explainer, one from the main view header
-    // (but main view should be hidden). Pick any — the explainer's.
-    fireEvent.click(closes[0]);
+    // Explainer renders its own Close button; main-view header is not mounted when showInfo is true.
+    fireEvent.click(screen.getByLabelText('Close'));
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
