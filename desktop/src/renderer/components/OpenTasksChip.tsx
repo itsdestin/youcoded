@@ -19,7 +19,10 @@ export default function OpenTasksChip({ running, pending, onOpen }: Props) {
   const total = running + pending;
   if (total === 0) return null;
 
-  const tooltip = `${running} in progress, ${pending} pending — click to view`;
+  const parts: string[] = [];
+  if (running > 0) parts.push(`${running} in progress`);
+  if (pending > 0) parts.push(`${pending} pending`);
+  const tooltip = `${parts.join(', ')} — click to view tasks`;
 
   return (
     <button

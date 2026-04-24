@@ -37,4 +37,11 @@ describe('OpenTasksChip', () => {
     fireEvent.click(screen.getByRole('button'));
     expect(onOpen).toHaveBeenCalledTimes(1);
   });
+
+  it('aria-label omits zero count', () => {
+    render(<OpenTasksChip running={0} pending={3} onOpen={() => {}} />);
+    const btn = screen.getByRole('button');
+    expect(btn.getAttribute('aria-label')).not.toContain('0 in progress');
+    expect(btn.getAttribute('aria-label')).toContain('3 pending');
+  });
 });
