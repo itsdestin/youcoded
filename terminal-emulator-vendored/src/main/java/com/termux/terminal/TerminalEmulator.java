@@ -277,6 +277,7 @@ public final class TerminalEmulator {
 
     // YOUCODED PATCH: Register a raw-byte listener.
     public void addRawByteListener(RawByteListener listener) {
+        if (listener == null) throw new IllegalArgumentException("listener must not be null");
         rawByteListeners.add(listener);
     }
 
@@ -507,8 +508,15 @@ public final class TerminalEmulator {
     public void append(byte[] buffer, int length) {
         // YOUCODED PATCH: notify raw-byte listeners before emulator parse.
         // CopyOnWriteArrayList iteration is safe under concurrent add/remove.
+        // Per-listener try/catch: a misbehaving listener must not abort the
+        // emulator parse (mirrors the readNewLines per-emit isolation invariant
+        // in transcript-watcher.ts).
         for (RawByteListener listener : rawByteListeners) {
-            listener.onBytesReceived(buffer, length);
+            try {
+                listener.onBytesReceived(buffer, length);
+            } catch (Exception e) {
+                android.util.Log.w(LOG_TAG, "RawByteListener threw; ignoring", e);
+            }
         }
         for (int i = 0; i < length; i++)
             processByte(buffer[i]);
