@@ -23,6 +23,22 @@ const fixtures = import.meta.glob('./fixtures/*.jsonl', {
   eager: true,
 }) as Record<string, string>;
 
+// Skills float to the end of the turn in real chat (see AssistantTurnBubble
+// extraction in Task 3); mirror that here so the sandbox shows the real
+// layout outcome when we prototype the compact Skill variant.
+function orderedBlocks(blocks: FixtureBlock[]): FixtureBlock[] {
+  const skillBlocks: FixtureBlock[] = [];
+  const otherBlocks: FixtureBlock[] = [];
+  for (const b of blocks) {
+    if (b.kind === 'tool' && b.tool.toolName === 'Skill') {
+      skillBlocks.push(b);
+    } else {
+      otherBlocks.push(b);
+    }
+  }
+  return [...otherBlocks, ...skillBlocks];
+}
+
 // Renders a single block — text as prose, tool as a real <ToolCard>.
 function renderBlock(block: FixtureBlock, index: number): React.ReactNode {
   if (block.kind === 'text') {
@@ -123,10 +139,10 @@ export function ToolSandbox() {
                         margin: '8px 0',
                       }}
                     >
-                      {result.blocks.map(renderBlock)}
+                      {orderedBlocks(result.blocks).map(renderBlock)}
                     </div>
                   ) : (
-                    result.blocks.map(renderBlock)
+                    orderedBlocks(result.blocks).map(renderBlock)
                   )}
                 </div>
               );

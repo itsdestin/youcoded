@@ -1,0 +1,7 @@
+{"type":"text","text":"Let me invoke the brainstorming skill, but first pull a bit of context."}
+{"type":"tool_use","id":"toolu_01SKL1","name":"Skill","input":{"skill":"superpowers:brainstorming"}}
+{"tool_use_id":"toolu_01SKL1","type":"tool_result","content":"Launching skill: superpowers:brainstorming","is_error":false}
+{"type":"tool_use","id":"toolu_01B","name":"Bash","input":{"command":"git status","description":"Repo status"}}
+{"tool_use_id":"toolu_01B","type":"tool_result","content":"On branch skill-compact-card\nnothing to commit, working tree clean","is_error":false}
+{"type":"tool_use","id":"toolu_01R","name":"Read","input":{"file_path":"/workspace/README.md","limit":5}}
+{"tool_use_id":"toolu_01R","type":"tool_result","content":"     1→# YouCoded\n     2→\n     3→Hyper-personalized AI assistant.\n","is_error":false}
