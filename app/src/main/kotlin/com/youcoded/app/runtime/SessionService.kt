@@ -18,6 +18,7 @@ import com.youcoded.app.bridge.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.SupervisorJob
@@ -49,6 +50,11 @@ class SessionService : Service() {
     // pattern. On Android there's typically one client, so we also allow input
     // if there's only one authenticated connection (covers reconnect cases).
     private val sessionOwnership = ConcurrentHashMap<String, String>()
+
+    // Tracks the per-session coroutine job that collects rawByteFlow and
+    // broadcasts pty:raw-bytes push events. Cancelled when the session is destroyed
+    // or (implicitly) when serviceScope.cancel() fires in onDestroy().
+    private val rawByteJobs = mutableMapOf<String, Job>()
 
     // Concurrency guard: prevent two concurrent dev:install-workspace ops from
     // cloning/pulling the workspace simultaneously (e.g. double-tap the button).
@@ -673,6 +679,12 @@ class SessionService : Service() {
                 // Security: record which client ID owns this session
                 val ownerClientId = ws.getAttachment<String>() ?: "unknown"
                 sessionOwnership[session.id] = ownerClientId
+                // Start broadcasting raw PTY bytes for this session. The coroutine
+                // lives on serviceScope so it's cancelled automatically on onDestroy();
+                // it's also cancelled explicitly in session:destroy below.
+                session.ptyBridge?.let { ptyBridge ->
+                    rawByteJobs[session.id] = launchRawByteBroadcast(session.id, ptyBridge)
+                }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, info) }
                 bridgeServer.broadcast(JSONObject().apply {
                     put("type", "session:created")
@@ -682,6 +694,8 @@ class SessionService : Service() {
             "session:destroy" -> {
                 val sessionId = msg.payload.optString("sessionId", "")
                 sessionOwnership.remove(sessionId) // Clean up ownership tracking
+                // Cancel the raw-byte broadcast coroutine for this session.
+                rawByteJobs.remove(sessionId)?.cancel()
                 withContext(Dispatchers.Main) {
                     destroySession(sessionId)
                 }
@@ -3287,6 +3301,52 @@ class SessionService : Service() {
             tmp.renameTo(indexFile) || run { indexFile.writeText(root.toString(2)); true }
             true
         } catch (_: Throwable) { false }
+    }
+
+    /**
+     * Broadcast raw PTY bytes over the WebSocket as pty:raw-bytes push events.
+     * Batches to coalesce bursts: flush every 16ms (~1 frame at 60fps) OR
+     * when the pending buffer hits 8KB, whichever comes first. Base64 encodes
+     * the payload so JSON can carry arbitrary bytes (ANSI control chars with
+     * high bits are common). Broadcast recipient: all authenticated clients.
+     *
+     * WHY: The React-side terminal renderer (xterm.js) needs a raw byte feed
+     * rather than a cooked-text snapshot so it can replay ANSI sequences and
+     * render the terminal state faithfully on remote/WebView clients.
+     */
+    private fun launchRawByteBroadcast(sessionId: String, ptyBridge: PtyBridge): Job {
+        return serviceScope.launch {
+            val pending = java.io.ByteArrayOutputStream()
+            var lastFlushNs = System.nanoTime()
+            val flushIntervalNs = 16_000_000L  // 16 ms — ~1 frame at 60fps
+            val maxBufferBytes = 8192           // 8 KB cap prevents unbounded latency on slow connections
+
+            ptyBridge.rawByteFlow.collect { bytes ->
+                pending.write(bytes)
+                val now = System.nanoTime()
+                if (pending.size() >= maxBufferBytes || now - lastFlushNs >= flushIntervalNs) {
+                    try {
+                        val payload = JSONObject().apply {
+                            put("sessionId", sessionId)
+                            put("data", android.util.Base64.encodeToString(
+                                pending.toByteArray(), android.util.Base64.NO_WRAP))
+                        }
+                        bridgeServer.broadcast(
+                            JSONObject().apply {
+                                put("type", "pty:raw-bytes")
+                                put("payload", payload)
+                            }
+                        )
+                    } catch (e: Exception) {
+                        // Broadcast failure (e.g. WebSocket gone mid-send) is best-effort;
+                        // log and continue — the flow source (PtyBridge) is unaffected.
+                        android.util.Log.w("SessionService", "pty:raw-bytes broadcast failed for $sessionId: ${e.message}")
+                    }
+                    pending.reset()
+                    lastFlushNs = now
+                }
+            }
+        }
     }
 
     companion object {
