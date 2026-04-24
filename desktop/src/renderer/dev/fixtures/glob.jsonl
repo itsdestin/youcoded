@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Glob","name":"Glob","input":{"pattern":"**/*.tsx","path":"src/renderer"}}
+{"tool_use_id":"toolu_01Glob","type":"tool_result","content":"src/renderer/App.tsx\nsrc/renderer/components/ToolCard.tsx\nsrc/renderer/components/ChatView.tsx\nsrc/renderer/components/HeaderBar.tsx\nsrc/renderer/components/InputBar.tsx","is_error":false}
