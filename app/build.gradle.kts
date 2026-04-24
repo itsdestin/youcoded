@@ -140,4 +140,9 @@ dependencies {
     testImplementation("org.json:json:20231013")
     // Coroutines test support for runTest in SubagentWatcherTest
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.8.1")
+    // kotlin.test assertions (assertTrue/assertEquals/etc.) for JVM unit tests
+    testImplementation(kotlin("test"))
+    // MockWebServer for AnalyticsServiceTest — version matches the OkHttp
+    // already on the main classpath (4.12.0).
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
 }
