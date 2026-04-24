@@ -38,6 +38,33 @@ function formatSize(bytes: number): string {
   return `${(kb / 1024).toFixed(1)}MB`;
 }
 
+// Shared trigger-button shape for the filter row beneath the search bar.
+// Inactive pills look like the search input frame; active pills tint with
+// the accent so it's obvious a filter is narrowing the list.
+function FilterPill({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: (e: React.MouseEvent) => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2.5 py-1 rounded-full text-[11px] flex items-center gap-1.5 transition-colors ${
+        active
+          ? 'bg-accent/10 border border-accent/40 text-fg'
+          : 'bg-inset border border-edge-dim text-fg-muted hover:text-fg'
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
 // FlagName is imported from resume-browser-filters.ts (single source of truth).
 // Kept in sync with SESSION_FLAG_NAMES in shared/types.ts; that module is
 // CommonJS so we don't import it directly. FLAG_ORDER fixes the pill / badge
@@ -403,6 +430,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 placeholder="Search sessions..."
                 className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
               />
+            </div>
+            <div className="flex items-center gap-1.5 mt-2">
+              {/* Sort toggle — flips lastModified direction. Priority-pin still wins. */}
+              <FilterPill active={sortDir !== 'desc'} onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}>
+                {sortDir === 'desc' ? 'Most recent ↓' : 'Oldest first ↑'}
+              </FilterPill>
             </div>
           </div>
 
