@@ -2,6 +2,7 @@ package com.youcoded.app.runtime
 
 import android.content.Context
 import com.youcoded.app.parser.EventBridge
+import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import kotlinx.coroutines.CoroutineScope
@@ -36,6 +37,18 @@ class PtyBridge(
     /** Timestamp of last PTY output — used by activity indicator */
     private val _lastPtyOutputTime = MutableStateFlow(0L)
     val lastPtyOutputTime: StateFlow<Long> = _lastPtyOutputTime
+
+    /**
+     * Raw bytes from the PTY, emitted before the Termux emulator parses
+     * them. Fed by a RawByteListener attached to the emulator. Consumers
+     * (SessionService broadcast) must not block — tryEmit drops on overflow
+     * to keep the terminal thread free.
+     */
+    private val _rawByteFlow = MutableSharedFlow<ByteArray>(
+        replay = 0,
+        extraBufferCapacity = 64,
+    )
+    val rawByteFlow: SharedFlow<ByteArray> = _rawByteFlow
 
     private val _rawBuffer = StringBuffer()  // Thread-safe; capped to prevent OOM
     val rawBuffer: String get() = _rawBuffer.toString()
@@ -159,6 +172,15 @@ class PtyBridge(
         // resize to actual dimensions when attached, but this ensures the setup
         // screens (theme, auth, trust) render their full content before that.
         session?.initializeEmulator(80, 60)
+
+        // Route raw PTY bytes to rawByteFlow. The listener fires on the
+        // terminal thread, so copy bytes before emitting — Termux reuses
+        // the buffer across reads.
+        val emulator = session?.emulator
+        emulator?.addRawByteListener(TerminalEmulator.RawByteListener { buffer, length ->
+            val copy = buffer.copyOfRange(0, length)
+            _rawByteFlow.tryEmit(copy)
+        })
     }
 
     fun writeInput(text: String) {
