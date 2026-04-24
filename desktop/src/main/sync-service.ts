@@ -328,15 +328,20 @@ export class SyncService extends EventEmitter {
 
   /**
    * Generate the current device's project slug.
-   * On Windows, os.homedir() returns native path (C:\Users\desti).
+   * On Windows, os.homedir() returns native path (C:\Users\alice).
    * On Unix, uses fs.realpathSync to resolve symlinks.
-   * Replace /, \, : with - to match Claude Code's slug algorithm.
+   * Replace /, \, :, and SPACE with - to match Claude Code's slug algorithm.
+   * MUST match cwdToProjectSlug() in transcript-watcher.ts and the two Android
+   * encoders (TranscriptWatcher.cwdToProjectSlug, SyncService.getCurrentSlug).
+   * Omitting the space replace here means Windows users with spaces in the
+   * home-dir path (e.g. "First Last") write to a different slug than the
+   * watcher reads from, silently splitting sync from transcript.
    */
   getCurrentSlug(): string {
     let homePath: string;
     if (process.platform === 'win32') {
-      // os.homedir() already returns native Windows path (C:\Users\desti)
-      // No cygpath needed — bash uses cygpath because $HOME is /c/Users/desti
+      // os.homedir() already returns native Windows path (C:\Users\alice)
+      // No cygpath needed — bash uses cygpath because $HOME is /c/Users/alice
       homePath = os.homedir();
     } else {
       try {
@@ -345,8 +350,8 @@ export class SyncService extends EventEmitter {
         homePath = os.homedir();
       }
     }
-    // Replace path separators and drive letter colon with dashes
-    return homePath.replace(/[/\\:]/g, '-');
+    // Replace path separators, drive-letter colon, AND spaces with dashes
+    return homePath.replace(/[/\\: ]/g, '-');
   }
 
   // =========================================================================
