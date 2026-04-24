@@ -31,6 +31,10 @@ import { readLogTail, summarizeIssue, submitIssue, installWorkspace, openDevSess
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
 import type { UpdateProgressEvent } from '../shared/update-install-types';
 import { getChangelog } from './changelog-service';
+// Analytics opt-out — Phase 6. The two exported functions read/write
+// ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
+// short-circuits when optIn is false.
+import { getOptIn as getAnalyticsOptIn, setOptIn as setAnalyticsOptIn } from './analytics-service';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -676,6 +680,16 @@ export function registerIpcHandlers(
     } catch {
       return null;
     }
+  });
+
+  // --- Anonymous analytics opt-out (Phase 6) ---------------------------------
+  // Getters and setters for the boolean gate analytics-service reads on launch.
+  // The About → Privacy section's toggle drives these; renderer handles the
+  // optimistic flip with revert-on-failure, so we don't need to return a bool
+  // from the setter.
+  ipcMain.handle('analytics:get-opt-in', () => getAnalyticsOptIn());
+  ipcMain.handle('analytics:set-opt-in', (_event, enabled: boolean) => {
+    setAnalyticsOptIn(Boolean(enabled));
   });
 
   // --- Folder switcher persistence ---
