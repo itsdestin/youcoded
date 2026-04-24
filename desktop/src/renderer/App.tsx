@@ -59,6 +59,32 @@ import { RemoteSnapshotExporter } from './components/RemoteSnapshotExporter';
 import { BuddyMascotApp } from './components/buddy/BuddyMascotApp';
 import { BuddyChatApp } from './components/buddy/BuddyChatApp';
 import { BuddyCaptureApp } from './components/buddy/BuddyCaptureApp';
+
+// Dev-only ToolCard fixture sandbox wrapper. The React.lazy + dynamic
+// import() live inside a `import.meta.env.DEV` ternary so Vite statically
+// replaces the prod branch with `null` and tree-shakes the entire sandbox
+// module (plus its fixture glob) out of production bundles. A bare
+// module-scope `React.lazy(() => import(...))` would keep the chunk
+// reachable — Vite emits a chunk for every reachable dynamic import
+// regardless of whether the call site is dead code at the CALL SITE.
+// By making the lazy itself conditional on DEV, the whole dependency edge
+// disappears in prod.
+// Named-export unwrap: ToolSandbox is a named export, not default.
+// @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
+const ToolSandboxRoute: React.ComponentType = import.meta.env.DEV
+  ? (() => {
+      const Lazy = React.lazy(() =>
+        import('./dev/ToolSandbox').then((m) => ({ default: m.ToolSandbox }))
+      );
+      return function ToolSandboxRouteDev() {
+        return (
+          <React.Suspense fallback={null}>
+            <Lazy />
+          </React.Suspense>
+        );
+      };
+    })()
+  : () => null;
 // ESC-passthrough: provider owns capture-phase ESC routing for overlays.
 // Mounted at app root so every overlay component is a descendant.
 import { EscCloseProvider } from './hooks/use-esc-close';
@@ -2236,6 +2262,16 @@ export default function App() {
       window.claude.buddy?.show?.();
     }
   }, []);
+
+  // Dev-only ToolCard sandbox route. Gated on import.meta.env.DEV so the
+  // entire branch (including the dynamic import() below) is statically
+  // dead code in production builds and tree-shaken out by Vite. Follows
+  // the same ?mode= query-param convention as buddy windows above.
+  // Named-export unwrap: ToolSandbox is a named export, not default.
+  // @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
+  if (import.meta.env.DEV && buddyMode === 'tool-sandbox') {
+    return <ToolSandboxRoute />;
+  }
 
   // Buddy windows render as isolated placeholders without main-app providers
   if (buddyMode === 'buddy-mascot') return <BuddyMascotApp />;
