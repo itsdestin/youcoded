@@ -45,6 +45,8 @@ function FilterPill({
   active,
   onClick,
   children,
+  hasPopup,
+  expanded,
 }: {
   active: boolean;
   // Receives the MouseEvent so dropdown-owning callers can stopPropagation()
@@ -52,6 +54,10 @@ function FilterPill({
   // outside-click handler from immediately re-closing the dropdown.
   onClick: (e: React.MouseEvent) => void;
   children: React.ReactNode;
+  // Optional: when the pill opens a dropdown, callers pass these so screen
+  // readers announce both "active filter" (aria-pressed) AND dropdown state.
+  hasPopup?: boolean;
+  expanded?: boolean;
 }) {
   return (
     <button
@@ -60,6 +66,8 @@ function FilterPill({
       // aria-pressed conveys the toggle state to assistive tech. Mirrors the
       // Show Complete toggle's pattern further down in this file.
       aria-pressed={active}
+      aria-haspopup={hasPopup ? 'listbox' : undefined}
+      aria-expanded={hasPopup ? !!expanded : undefined}
       className={`px-2.5 py-1 rounded-full text-[11px] flex items-center gap-1.5 transition-colors ${
         active
           ? 'bg-accent/10 border border-accent/40 text-fg'
@@ -237,6 +245,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     if (selectedList.length <= 3) return selectedList.map((p) => p.label).join(', ');
     return `Projects (${selectedList.length})`;
   }, [selectedProjects, availableProjects]);
+
+  // Trigger label for the Tags pill: 0 → "Tags"; 1 → flag label; 2 → "A + B".
+  // Architected so future custom-tags work is a list extension.
+  const tagsLabel = useMemo(() => {
+    if (selectedTags.size === 0) return 'Tags';
+    const labels: string[] = [];
+    if (selectedTags.has('priority')) labels.push('Priority');
+    if (selectedTags.has('helpful')) labels.push('Helpful');
+    return labels.join(' + ');
+  }, [selectedTags]);
 
   // Optimistically flip a flag in local state, then persist via IPC. On failure
   // we revert. A meta-changed push from other tabs/devices also refreshes the
@@ -480,6 +498,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               <div className="relative">
                 <FilterPill
                   active={selectedProjects.size > 0}
+                  hasPopup
+                  expanded={openPill === 'projects'}
                   onClick={(e) => {
                     e.stopPropagation();
                     setOpenPill((p) => (p === 'projects' ? null : 'projects'));
@@ -528,6 +548,51 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                         );
                       })}
                     </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Tags: multi-select dropdown over the per-session flag set. Priority + Helpful only;
+                  Complete stays owned by the Show Complete toggle in the header. */}
+              <div className="relative">
+                <FilterPill
+                  active={selectedTags.size > 0}
+                  hasPopup
+                  expanded={openPill === 'tags'}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setOpenPill((p) => (p === 'tags' ? null : 'tags'));
+                  }}
+                >
+                  <span>{tagsLabel}</span>
+                  <span className="text-fg-faint text-[9px]">▾</span>
+                </FilterPill>
+                {openPill === 'tags' && (
+                  <div
+                    className="layer-surface absolute top-full left-0 mt-1 w-44 overflow-hidden"
+                    style={{ zIndex: 50, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
+                  >
+                    {(['priority', 'helpful'] as const).map((tag) => {
+                      const checked = selectedTags.has(tag);
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => {
+                            setSelectedTags((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(tag)) next.delete(tag);
+                              else next.add(tag);
+                              return next;
+                            });
+                          }}
+                          className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
+                        >
+                          <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
+                          <span className="flex-1 capitalize">{tag}</span>
+                        </button>
+                      );
+                    })}
                   </div>
                 )}
               </div>
