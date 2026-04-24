@@ -156,4 +156,44 @@ describe('ContextPopup — actions', () => {
     expect(screen.getByRole('button', { name: /^Compact conversation$/i })).toBeDisabled();
     expect(screen.getByLabelText(/Customize compact instructions/i)).toBeDisabled();
   });
+
+  it('opens the inline editor when the chevron is clicked', () => {
+    renderPopup();
+    fireEvent.click(screen.getByLabelText(/Customize compact instructions/i));
+    expect(screen.getByPlaceholderText(/keep code decisions/i)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /Compact with instructions/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Back$/i })).toBeInTheDocument();
+    // The default compact button should no longer be visible in editor mode
+    expect(screen.queryByRole('button', { name: /^Compact conversation$/i })).toBeNull();
+  });
+
+  it('returns to the default actions view when Back is clicked in editor mode', () => {
+    renderPopup();
+    fireEvent.click(screen.getByLabelText(/Customize compact instructions/i));
+    fireEvent.click(screen.getByRole('button', { name: /^Back$/i }));
+    expect(screen.getByRole('button', { name: /^Compact conversation$/i })).toBeInTheDocument();
+    expect(screen.queryByPlaceholderText(/keep code decisions/i)).toBeNull();
+  });
+
+  it('disables submit while the textarea is empty or whitespace-only', () => {
+    renderPopup();
+    fireEvent.click(screen.getByLabelText(/Customize compact instructions/i));
+    const submit = screen.getByRole('button', { name: /Compact with instructions/i });
+    expect(submit).toBeDisabled();
+    const textarea = screen.getByPlaceholderText(/keep code decisions/i);
+    fireEvent.change(textarea, { target: { value: '   ' } });
+    expect(submit).toBeDisabled();
+    fireEvent.change(textarea, { target: { value: 'keep code' } });
+    expect(submit).toBeEnabled();
+  });
+
+  it('dispatches /compact <trimmed instructions> and closes on submit', () => {
+    const { onDispatch, onClose } = renderPopup();
+    fireEvent.click(screen.getByLabelText(/Customize compact instructions/i));
+    const textarea = screen.getByPlaceholderText(/keep code decisions/i);
+    fireEvent.change(textarea, { target: { value: '   keep architecture decisions  ' } });
+    fireEvent.click(screen.getByRole('button', { name: /Compact with instructions/i }));
+    expect(onDispatch).toHaveBeenCalledWith('/compact keep architecture decisions');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
 });

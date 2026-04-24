@@ -143,51 +143,91 @@ export default function ContextPopup({
               </div>
             </div>
 
-            {/* Actions — primary compact (focused editor lands in Task 6), then Clear secondary. */}
+            {/* Actions: default view shows split Compact + Clear; customizing shows the editor. */}
             <div className="px-4 pb-4 pt-2 space-y-3 border-t border-edge">
-              {/* Split-button: main = /compact, chevron = open inline editor (Task 6). */}
-              <div>
-                <div className="flex w-full rounded-sm overflow-hidden border border-accent">
-                  <button
-                    onClick={() => {
-                      onDispatch('/compact');
-                      onClose();
-                    }}
-                    disabled={!sessionId}
-                    className="flex-1 py-2 px-3 text-sm font-medium bg-accent text-on-accent hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
-                  >
-                    Compact conversation
-                  </button>
-                  <button
-                    onClick={() => setCustomizing(true)}
-                    disabled={!sessionId}
-                    aria-label="Customize compact instructions"
-                    className="px-2 bg-accent text-on-accent border-l border-on-accent/30 hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
-                  >
-                    {/* Chevron down */}
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
-                    </svg>
-                  </button>
+              {customizing ? (
+                <div className="space-y-2">
+                  <label className="block text-xs font-medium text-fg-muted tracking-wider uppercase">
+                    Keep these priorities (optional)
+                  </label>
+                  <textarea
+                    value={instructions}
+                    onChange={(e) => setInstructions(e.target.value)}
+                    placeholder="e.g. keep code decisions and architecture; drop debugging output"
+                    rows={3}
+                    className="w-full px-2 py-1.5 text-xs bg-inset border border-edge rounded-sm text-fg focus:outline-none focus:ring-1 focus:ring-accent resize-none"
+                  />
+                  <div className="flex gap-2">
+                    <button
+                      onClick={() => {
+                        // Back resets draft so it doesn't leak if the user cancels then reopens.
+                        setCustomizing(false);
+                        setInstructions('');
+                      }}
+                      className="flex-1 py-2 px-3 text-sm rounded-sm border border-edge bg-panel text-fg-2 hover:bg-inset transition-colors"
+                    >
+                      Back
+                    </button>
+                    <button
+                      onClick={() => {
+                        const trimmed = instructions.trim();
+                        if (!trimmed || !sessionId) return;
+                        onDispatch(`/compact ${trimmed}`);
+                        onClose();
+                      }}
+                      disabled={!sessionId || instructions.trim().length === 0}
+                      className="flex-1 py-2 px-3 text-sm font-medium rounded-sm bg-accent text-on-accent hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Compact with instructions
+                    </button>
+                  </div>
                 </div>
-              </div>
+              ) : (
+                <>
+                  {/* Split-button: main = /compact, chevron = open inline editor. */}
+                  <div>
+                    <div className="flex w-full rounded-sm overflow-hidden border border-accent">
+                      <button
+                        onClick={() => {
+                          onDispatch('/compact');
+                          onClose();
+                        }}
+                        disabled={!sessionId}
+                        className="flex-1 py-2 px-3 text-sm font-medium bg-accent text-on-accent hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Compact conversation
+                      </button>
+                      <button
+                        onClick={() => setCustomizing(true)}
+                        disabled={!sessionId}
+                        aria-label="Customize compact instructions"
+                        className="px-2 bg-accent text-on-accent border-l border-on-accent/30 hover:opacity-90 transition-opacity disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center"
+                      >
+                        <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M6 9l6 6 6-6" />
+                        </svg>
+                      </button>
+                    </div>
+                  </div>
 
-              {/* Clear secondary — existing block from Task 4. */}
-              <div>
-                <button
-                  onClick={() => {
-                    onDispatch('/clear');
-                    onClose();
-                  }}
-                  disabled={!sessionId}
-                  className="w-full py-2 px-3 text-sm rounded-sm border border-edge bg-panel text-fg-2 hover:bg-inset transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Clear and start over
-                </button>
-                <p className="text-[11px] text-fg-muted mt-1 leading-snug">
-                  Erases the visible timeline and resets Claude's memory for this session. No summary is kept.
-                </p>
-              </div>
+                  {/* Clear secondary action. */}
+                  <div>
+                    <button
+                      onClick={() => {
+                        onDispatch('/clear');
+                        onClose();
+                      }}
+                      disabled={!sessionId}
+                      className="w-full py-2 px-3 text-sm rounded-sm border border-edge bg-panel text-fg-2 hover:bg-inset transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                    >
+                      Clear and start over
+                    </button>
+                    <p className="text-[11px] text-fg-muted mt-1 leading-snug">
+                      Erases the visible timeline and resets Claude's memory for this session. No summary is kept.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </>
         )}
