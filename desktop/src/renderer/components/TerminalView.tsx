@@ -32,6 +32,10 @@ export default function TerminalView({ sessionId, visible }: Props) {
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
+  // Re-attach helper exposed across effects so the theme effect can recover
+  // WebGL using the same construction + onContextLoss handler shape as the
+  // mount effect (with the shared retry-cap counter).
+  const attachWebglRef = useRef<(() => void) | null>(null);
   const visibleRef = useRef(visible);
   visibleRef.current = visible;
   const { activeTheme, reducedEffects } = useTheme();
@@ -58,19 +62,17 @@ export default function TerminalView({ sessionId, visible }: Props) {
   useEffect(() => {
     if (!terminalRef.current) return;
     requestAnimationFrame(() => {
-      if (!terminalRef.current) return;
+      const terminal = terminalRef.current;
+      if (!terminal) return;
       // Always use opaque xterm background — transparency is handled by the
       // container overlay, not by xterm itself. WebGL requires opaque backgrounds.
-      terminalRef.current.options.theme = getXtermTheme(false);
+      terminal.options.theme = getXtermTheme(false);
 
-      // Ensure WebGL is attached (may have been disposed by a previous version)
+      // Ensure WebGL is attached (may have been disposed by a previous version
+      // or by a prior context loss). Delegates to attachWebgl from the mount
+      // effect so we share the same onContextLoss recovery + retry cap.
       if (!webglRef.current) {
-        try {
-          const webgl = new WebglAddon();
-          webgl.onContextLoss(() => webgl.dispose());
-          terminalRef.current.loadAddon(webgl);
-          webglRef.current = webgl;
-        } catch {}
+        attachWebglRef.current?.();
       }
     });
   }, [activeTheme]);
@@ -99,14 +101,55 @@ export default function TerminalView({ sessionId, visible }: Props) {
 
     // WebGL renderer — always load for performance. Wallpaper visibility is
     // handled by the container's opacity, not by xterm transparency.
-    try {
-      const webgl = new WebglAddon();
-      webgl.onContextLoss(() => webgl.dispose());
-      terminal.loadAddon(webgl);
-      webglRef.current = webgl;
-    } catch {
-      // Falls back to DOM renderer if WebGL unavailable
-    }
+    //
+    // WebGL context loss happens when the GPU resets, the browser reclaims
+    // GPU memory, or a driver crashes. Without a recovery handler, xterm
+    // keeps showing the disposed atlas's stale glyphs even though the
+    // underlying buffer is intact (text selection still reveals real text).
+    // A window resize forces xterm to repaint every cell — that's why
+    // resizing "fixes" it. Here we proactively dispose, re-attach a fresh
+    // WebglAddon, and refresh visible rows so the grid recovers immediately.
+    // Cap retries at 3 in a row so a persistently broken GPU context can't
+    // loop forever — after that, fall back to the DOM renderer permanently.
+    // The retry counter resets if 30+ minutes pass between losses, so a
+    // long-running session that occasionally drifts (sleep/wake, monitor
+    // hot-plug spread across hours) doesn't burn through its 3 strikes.
+    const RETRY_RESET_MS = 30 * 60 * 1000;
+    let webglContextLossRetries = 0;
+    let lastContextLossAt = 0;
+    const attachWebgl = () => {
+      const term = terminalRef.current ?? terminal;
+      if (!term) return;
+      try {
+        const webgl = new WebglAddon();
+        webgl.onContextLoss(() => {
+          webgl.dispose();
+          webglRef.current = null;
+          const now = Date.now();
+          if (now - lastContextLossAt > RETRY_RESET_MS) {
+            webglContextLossRetries = 0;
+          }
+          lastContextLossAt = now;
+          if (webglContextLossRetries >= 3) {
+            // Give up — DOM renderer takes over for the rest of this session.
+            term.refresh(0, term.rows - 1);
+            return;
+          }
+          webglContextLossRetries += 1;
+          attachWebgl();
+          // Repaint visible cells from the buffer so corrupted glyphs from
+          // the disposed atlas are replaced immediately (don't wait for the
+          // next resize/scroll).
+          term.refresh(0, term.rows - 1);
+        });
+        term.loadAddon(webgl);
+        webglRef.current = webgl;
+      } catch {
+        // Falls back to DOM renderer if WebGL unavailable
+      }
+    };
+    attachWebgl();
+    attachWebglRef.current = attachWebgl;
 
     // Ctrl+C copies the selection (if any) instead of sending SIGINT;
     // Ctrl+C with no selection falls through to xterm's default so users
@@ -227,6 +270,10 @@ export default function TerminalView({ sessionId, visible }: Props) {
       window.removeEventListener('resize', fitAndSync);
       resizeObserver.disconnect();
       unregisterTerminal(sessionId);
+      // Clear the cross-effect helper so the theme effect can't call into
+      // the disposed terminal between unmount and remount.
+      attachWebglRef.current = null;
+      webglRef.current = null;
       terminal.dispose();
     };
   }, [sessionId]);
