@@ -1,15 +1,13 @@
 import { ToolCallState } from '../../shared/types';
 
 // Derived per-session task state built from Task* tool calls in chat state.
-// Pure function — no reducer changes needed. Scan is O(N) across toolCalls;
-// callers should memoize on the toolCalls Map reference (preserved across
-// text streaming per chat-reducer invariants).
+// Scans toolCalls in insertion order. Pure function — memoize on the Map ref
+// (preserved across streams per chat-reducer invariants).
 //
-// KNOWN LIMITATION: TaskCreate returns its taskId in the response string, not
-// the input. Parsing it out of freeform text is fragile, so for now we only
-// index tasks that ever appear in a TaskUpdate (which always carries taskId
-// in input). A TaskCreate with no subsequent TaskUpdate is still rendered by
-// TaskCreateView on its own — it just doesn't get linked into tasksById.
+// TaskCreate returns its numeric id ONLY in the response string (see
+// parseTaskCreateResult). TaskList response is the authoritative per-session
+// snapshot (see parseTaskListResult). Both are CC-coupled; see
+// youcoded/docs/cc-dependencies.md.
 
 export type TaskStatus = 'pending' | 'in_progress' | 'completed' | 'deleted';
 
@@ -25,10 +23,15 @@ export interface TaskState {
   id: string;
   subject?: string;
   description?: string;
+  activeForm?: string;           // Present-continuous label shown while in_progress
   priority?: string;
   status?: TaskStatus;
+  /** Insertion index in toolCalls where this task first appeared — sort key. */
+  createdAt?: number;
   /** Events in chronological order (insertion order of toolCalls Map). */
   events: TaskEvent[];
+  /** User-flagged-inactive in the UI. View-model only; not derived from tool calls. */
+  markedInactive?: boolean;
 }
 
 /**
@@ -69,18 +72,46 @@ export function parseTaskListResult(text: string): Array<{ id: string; status: T
   return rows;
 }
 
-const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskStop']);
+const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskStop', 'TaskList']);
 
 export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<string, TaskState> {
   const tasks = new Map<string, TaskState>();
 
+  // Scan in insertion order. `idx` gives us stable createdAt values.
+  let idx = 0;
   for (const tool of toolCalls.values()) {
+    const i = idx++;
     if (!TASK_TOOLS.has(tool.toolName)) continue;
     const input = tool.input || {};
-    const taskId = input.taskId as string | undefined;
-    if (!taskId) continue; // TaskCreate without pre-assigned id — skip (see note above)
 
-    const existing = tasks.get(taskId) || { id: taskId, events: [] };
+    // --- TaskList: authoritative snapshot, overwrites current tasks ---
+    if (tool.toolName === 'TaskList' && typeof tool.response === 'string') {
+      for (const row of parseTaskListResult(tool.response)) {
+        const existing = tasks.get(row.id) || { id: row.id, events: [], createdAt: i };
+        tasks.set(row.id, {
+          ...existing,
+          subject: row.subject ?? existing.subject,
+          status: row.status,
+          events: [...existing.events, {
+            toolUseId: tool.toolUseId,
+            toolName: tool.toolName,
+            status: row.status,
+            patch: { taskId: row.id, subject: row.subject, status: row.status },
+          }],
+        });
+      }
+      continue;
+    }
+
+    // --- TaskCreate: derive id from the response string if the input lacks it ---
+    let taskId = input.taskId as string | undefined;
+    if (!taskId && tool.toolName === 'TaskCreate' && typeof tool.response === 'string') {
+      const parsed = parseTaskCreateResult(tool.response);
+      if (parsed) taskId = parsed.id;
+    }
+    if (!taskId) continue;
+
+    const existing = tasks.get(taskId) || { id: taskId, events: [], createdAt: i };
     const status = input.status as TaskStatus | undefined;
 
     const event: TaskEvent = {
@@ -96,6 +127,7 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<strin
       // subject overrides earlier ones (matches TaskUpdate's patch semantics).
       subject: (input.subject as string | undefined) ?? existing.subject,
       description: (input.description as string | undefined) ?? existing.description,
+      activeForm: (input.activeForm as string | undefined) ?? existing.activeForm,
       priority: (input.priority as string | undefined) ?? existing.priority,
       status: status ?? existing.status,
       events: [...existing.events, event],

@@ -1,5 +1,14 @@
 import { describe, it, expect } from 'vitest';
-import { parseTaskCreateResult, parseTaskListResult } from './task-state';
+import { parseTaskCreateResult, parseTaskListResult, buildTasksById } from './task-state';
+import type { ToolCallState } from '../../shared/types';
+
+function makeCall(overrides: Partial<ToolCallState> & { toolUseId: string; toolName: string }): ToolCallState {
+  return {
+    status: 'complete',
+    input: {},
+    ...overrides,
+  } as ToolCallState;
+}
 
 describe('parseTaskCreateResult', () => {
   it('parses the canonical "Task #N created successfully: <subject>" form', () => {
@@ -86,5 +95,92 @@ describe('parseTaskListResult', () => {
   it('skips a non-matching single line without throwing', () => {
     expect(() => parseTaskListResult('not a task line at all')).not.toThrow();
     expect(parseTaskListResult('not a task line at all')).toEqual([]);
+  });
+});
+
+describe('buildTasksById (extended)', () => {
+  it('indexes a TaskCreate-only task via the response string', () => {
+    const toolCalls = new Map<string, ToolCallState>();
+    toolCalls.set('t1', makeCall({
+      toolUseId: 't1',
+      toolName: 'TaskCreate',
+      input: { subject: 'Do the thing', description: 'Detail', activeForm: 'Doing the thing' },
+      response: 'Task #5 created successfully: Do the thing',
+    }));
+
+    const tasks = buildTasksById(toolCalls);
+    const task = tasks.get('5');
+    expect(task).toBeDefined();
+    expect(task!.id).toBe('5');
+    expect(task!.subject).toBe('Do the thing');
+    expect(task!.description).toBe('Detail');
+    expect(task!.activeForm).toBe('Doing the thing');
+    expect(task!.createdAt).toBe(0);
+    expect(task!.status).toBeUndefined();
+  });
+
+  it('lets a TaskList snapshot overwrite a stale TaskUpdate status', () => {
+    const toolCalls = new Map<string, ToolCallState>();
+    toolCalls.set('t1', makeCall({
+      toolUseId: 't1',
+      toolName: 'TaskCreate',
+      input: { subject: 'S', description: 'D' },
+      response: 'Task #1 created successfully: S',
+    }));
+    toolCalls.set('t2', makeCall({
+      toolUseId: 't2',
+      toolName: 'TaskUpdate',
+      input: { taskId: '1', status: 'in_progress' },
+    }));
+    toolCalls.set('t3', makeCall({
+      toolUseId: 't3',
+      toolName: 'TaskList',
+      input: {},
+      response: '#1 [completed] Task 1: S',
+    }));
+
+    const task = buildTasksById(toolCalls).get('1');
+    expect(task!.status).toBe('completed');
+  });
+
+  it('preserves existing TaskUpdate-only indexing (backward compatibility)', () => {
+    const toolCalls = new Map<string, ToolCallState>();
+    toolCalls.set('t1', makeCall({
+      toolUseId: 't1',
+      toolName: 'TaskUpdate',
+      input: { taskId: '9', status: 'pending' },
+    }));
+    const task = buildTasksById(toolCalls).get('9');
+    expect(task).toBeDefined();
+    expect(task!.status).toBe('pending');
+  });
+
+  it('sets createdAt from the first toolCalls index the task appears at', () => {
+    const toolCalls = new Map<string, ToolCallState>();
+    toolCalls.set('a', makeCall({
+      toolUseId: 'a', toolName: 'Bash', input: { command: 'ls' },
+    }));
+    toolCalls.set('b', makeCall({
+      toolUseId: 'b', toolName: 'TaskCreate',
+      input: { subject: 'X' }, response: 'Task #3 created successfully: X',
+    }));
+    toolCalls.set('c', makeCall({
+      toolUseId: 'c', toolName: 'TaskUpdate',
+      input: { taskId: '3', status: 'in_progress' },
+    }));
+
+    const task = buildTasksById(toolCalls).get('3');
+    expect(task!.createdAt).toBe(1);
+  });
+
+  it('tolerates unknown input keys without throwing', () => {
+    const toolCalls = new Map<string, ToolCallState>();
+    toolCalls.set('t1', makeCall({
+      toolUseId: 't1', toolName: 'TaskCreate',
+      input: { subject: 'S', owner: 'agent-x', metadata: { foo: 1 } },
+      response: 'Task #1 created successfully: S',
+    }));
+    expect(() => buildTasksById(toolCalls)).not.toThrow();
+    expect(buildTasksById(toolCalls).get('1')).toBeDefined();
   });
 });
