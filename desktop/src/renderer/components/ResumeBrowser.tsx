@@ -47,6 +47,9 @@ function FilterPill({
   children,
 }: {
   active: boolean;
+  // Receives the MouseEvent so dropdown-owning callers can stopPropagation()
+  // — the Projects + Tags pills (Tasks 4 + 5) rely on this to keep their
+  // outside-click handler from immediately re-closing the dropdown.
   onClick: (e: React.MouseEvent) => void;
   children: React.ReactNode;
 }) {
@@ -54,6 +57,9 @@ function FilterPill({
     <button
       type="button"
       onClick={onClick}
+      // aria-pressed conveys the toggle state to assistive tech. Mirrors the
+      // Show Complete toggle's pattern further down in this file.
+      aria-pressed={active}
       className={`px-2.5 py-1 rounded-full text-[11px] flex items-center gap-1.5 transition-colors ${
         active
           ? 'bg-accent/10 border border-accent/40 text-fg'
