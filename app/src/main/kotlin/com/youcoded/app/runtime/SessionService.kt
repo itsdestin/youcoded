@@ -746,6 +746,18 @@ class SessionService : Service() {
                     }
                 }
             }
+            "terminal:get-screen-text" -> {
+                // Returns the current visible screen buffer as plain text.
+                // Used by the React-side attention classifier so it can run on
+                // standalone Android with the same classifyBuffer function as
+                // desktop. Unknown sessionId returns {text: ""} — callers
+                // (classifier) already tolerate empty buffers during startup.
+                val sessionId = msg.payload.optString("sessionId", "")
+                val session = sessionRegistry.sessions.value[sessionId]
+                val text = session?.ptyBridge?.readScreenText() ?: ""
+                val response = JSONObject().apply { put("text", text) }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, response) }
+            }
             "permission:respond" -> {
                 val requestId = msg.payload.optString("requestId", "")
                 val decision = msg.payload.optJSONObject("decision") ?: JSONObject()
