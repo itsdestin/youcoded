@@ -13,7 +13,9 @@ import android.os.Binder
 import android.os.FileObserver
 import android.os.IBinder
 import android.os.PowerManager
+import com.youcoded.app.BuildConfig
 import com.youcoded.app.MainActivity
+import com.youcoded.app.analytics.AnalyticsService
 import com.youcoded.app.bridge.*
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -175,6 +177,26 @@ class SessionService : Service() {
                 }
             }
         }
+
+        // Privacy analytics: fire install + daily-heartbeat ping to the marketplace
+        // Worker. Fire-and-forget: no await, no logging. Respects opt-out internally
+        // (AnalyticsService.runOnLaunch returns early if state.optIn is false).
+        // Runs on a raw thread so service startup is never blocked by network I/O.
+        // Mirror of desktop/src/main/main.ts's analytics wire-in.
+        Thread {
+            try {
+                AnalyticsService(
+                    apiBase = "https://wecoded-marketplace-api.destinj101.workers.dev",
+                    // $HOME is set by Bootstrap to the Termux home dir, but onCreate
+                    // runs BEFORE initBootstrap, so fall back to filesDir.parent
+                    // (Android internal files root) or filesDir itself.
+                    homeDir = File(System.getenv("HOME") ?: filesDir.parent ?: filesDir.absolutePath),
+                    appVersion = BuildConfig.VERSION_NAME,
+                ).runOnLaunch()
+            } catch (_: Exception) {
+                // Swallow — analytics must never impact app startup.
+            }
+        }.start()
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
