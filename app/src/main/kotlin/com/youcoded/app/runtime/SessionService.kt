@@ -54,7 +54,10 @@ class SessionService : Service() {
     // Tracks the per-session coroutine job that collects rawByteFlow and
     // broadcasts pty:raw-bytes push events. Cancelled when the session is destroyed
     // or (implicitly) when serviceScope.cancel() fires in onDestroy().
-    private val rawByteJobs = mutableMapOf<String, Job>()
+    // Fix: ConcurrentHashMap instead of mutableMapOf — handleBridgeMessage runs on
+    // Dispatchers.IO so concurrent create/destroy could race on a plain HashMap.
+    // Matches the sessionOwnership field above, which uses ConcurrentHashMap for the same reason.
+    private val rawByteJobs = ConcurrentHashMap<String, Job>()
 
     // Concurrency guard: prevent two concurrent dev:install-workspace ops from
     // cloning/pulling the workspace simultaneously (e.g. double-tap the button).
@@ -3321,6 +3324,13 @@ class SessionService : Service() {
             val flushIntervalNs = 16_000_000L  // 16 ms — ~1 frame at 60fps
             val maxBufferBytes = 8192           // 8 KB cap prevents unbounded latency on slow connections
 
+            // Note: flush is data-driven — a partial buffer is only flushed when
+            // the next byte arrives or when we hit 8KB. If the PTY goes silent
+            // mid-batch, the tail bytes stay pending until the next emission.
+            // Tier 1 has no render consumer so this is acceptable; Tier 2
+            // xterm.js will need to tolerate up to one-batch lag on shell-idle
+            // or handle it with a timer-driven flush (withTimeoutOrNull around
+            // collect) if frame-accurate rendering matters.
             ptyBridge.rawByteFlow.collect { bytes ->
                 pending.write(bytes)
                 val now = System.nanoTime()
