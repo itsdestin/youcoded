@@ -173,11 +173,40 @@ function splitIntoBubbles(turn: AssistantTurn): VisualBubble[] {
   return bubbles;
 }
 
+// Walks the turn's tool-group segments and returns every Skill ToolCallState
+// in invocation order. Used by the bubble render to pull Skills OUT of their
+// groups (where ToolGroupInline now filters them) and render them as a
+// trailing row of standalone cards on the last bubble of the turn.
+function collectTurnSkills(
+  turn: AssistantTurn,
+  toolGroups: Map<string, ToolGroupState>,
+  toolCalls: Map<string, ToolCallState>,
+): ToolCallState[] {
+  const skills: ToolCallState[] = [];
+  for (const seg of turn.segments) {
+    if (seg.type !== 'tool-group') continue;
+    const group = toolGroups.get(seg.groupId);
+    if (!group) continue;
+    for (const id of group.toolIds) {
+      const t = toolCalls.get(id);
+      if (t && t.toolName === 'Skill') skills.push(t);
+    }
+  }
+  return skills;
+}
+
 export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolCalls, sessionId, showTimestamps }: Props) {
   // Read opt-in metadata preference here so the strip below only renders when
   // the user has explicitly turned it on in PreferencesPopup (default false).
   const { showTurnMetadata } = useTheme();
   const bubbles = splitIntoBubbles(turn);
+  // Skills are reordered to the end of the turn's last bubble (view-layer only).
+  // ToolGroupInline filters Skills out of their groups; this list backs the
+  // trailing standalone-card row below.
+  const turnSkills = React.useMemo(
+    () => collectTurnSkills(turn, toolGroups, toolCalls),
+    [turn, toolGroups, toolCalls],
+  );
 
   return (
     <>
@@ -209,6 +238,17 @@ export default React.memo(function AssistantTurnBubble({ turn, toolGroups, toolC
                       toolCalls={toolCalls}
                       sessionId={sessionId}
                     />
+                  ))}
+                </div>
+              )}
+              {/* Trailing-Skills row: Skills are reordered to the end of the turn's
+                  last bubble so they read as a status footer rather than co-mingled
+                  with substantive tool output. ToolGroupInline filters Skills out
+                  upstream so this is the only place they render. */}
+              {isLastBubble && turnSkills.length > 0 && (
+                <div className="mt-1 space-y-0.5">
+                  {turnSkills.map((skill) => (
+                    <ToolCard key={skill.toolUseId} tool={skill} sessionId={sessionId} />
                   ))}
                 </div>
               )}
@@ -300,7 +340,11 @@ function ToolGroupInline({
 
   const tools = group.toolIds
     .map((id) => toolCalls.get(id))
-    .filter((t): t is ToolCallState => t !== undefined);
+    // Skip undefined AND skip Skill tools — Skills render as a trailing
+    // standalone row outside any group via AssistantTurnBubble (see
+    // collectTurnSkills + the trailing-skills div on the last bubble).
+    // View-layer reorder; reducer state untouched.
+    .filter((t): t is ToolCallState => t !== undefined && t.toolName !== 'Skill');
 
   if (tools.length === 0) return null;
 
