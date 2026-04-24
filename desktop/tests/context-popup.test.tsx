@@ -117,3 +117,24 @@ describe('ContextPopup — info view', () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 });
+
+describe('ContextPopup — actions', () => {
+  it('renders the "Clear and start over" button with explanatory note', () => {
+    renderPopup();
+    expect(screen.getByRole('button', { name: /Clear and start over/i })).toBeInTheDocument();
+    expect(screen.getByText(/Erases the visible timeline/i)).toBeInTheDocument();
+  });
+
+  it('dispatches /clear and closes the popup when Clear is clicked', () => {
+    const { onDispatch, onClose } = renderPopup();
+    fireEvent.click(screen.getByRole('button', { name: /Clear and start over/i }));
+    expect(onDispatch).toHaveBeenCalledWith('/clear');
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('disables Clear when sessionId is null', () => {
+    renderPopup({ sessionId: null });
+    const btn = screen.getByRole('button', { name: /Clear and start over/i });
+    expect(btn).toBeDisabled();
+  });
+});

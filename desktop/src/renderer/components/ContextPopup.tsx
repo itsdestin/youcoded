@@ -137,6 +137,25 @@ export default function ContextPopup({
                 )}
               </div>
             </div>
+
+            {/* Actions — primary compact lands in Task 5; Clear is the secondary. */}
+            <div className="px-4 pb-4 pt-2 space-y-3 border-t border-edge">
+              <div>
+                <button
+                  onClick={() => {
+                    onDispatch('/clear');
+                    onClose();
+                  }}
+                  disabled={!sessionId}
+                  className="w-full py-2 px-3 text-sm rounded-sm border border-edge bg-panel text-fg-2 hover:bg-inset transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Clear and start over
+                </button>
+                <p className="text-[11px] text-fg-muted mt-1 leading-snug">
+                  Erases the visible timeline and resets Claude&rsquo;s memory for this session. No summary is kept.
+                </p>
+              </div>
+            </div>
           </>
         )}
       </OverlayPanel>
