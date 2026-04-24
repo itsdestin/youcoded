@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Web","name":"WebFetch","input":{"url":"https://example.com/docs","prompt":"Extract the API reference"}}
+{"tool_use_id":"toolu_01Web","type":"tool_result","content":"# API Reference\n\nThe example API exposes two endpoints: /users and /projects. Each returns JSON...","is_error":false}

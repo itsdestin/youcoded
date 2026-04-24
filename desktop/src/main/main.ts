@@ -492,7 +492,14 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // Append mode query param for buddy windows so React can branch on the mode
   const modeQuery = opts?.buddy ? `?mode=buddy-${opts.buddy}` : '';
   if (!app.isPackaged) {
-    win.loadURL(`${DEV_SERVER_URL}${modeQuery}`);
+    // YOUCODED_DEV_URL lets dev launchers (e.g. scripts/run-sandbox.sh in the
+    // youcoded-dev workspace) boot the MAIN window straight into a specific
+    // path like ?mode=tool-sandbox — avoids the DevTools location.href dance.
+    // Only applies to the main window: buddy windows keep their own
+    // ?mode=buddy-* routing so the override can't hijack them. Prod (file://)
+    // is untouched because this whole branch runs under `!app.isPackaged`.
+    const devUrlOverride = !opts?.buddy ? process.env.YOUCODED_DEV_URL : undefined;
+    win.loadURL(devUrlOverride || `${DEV_SERVER_URL}${modeQuery}`);
   } else {
     win.loadFile(path.join(__dirname, '../renderer/index.html'), {
       // loadFile expects search string WITHOUT the leading '?'

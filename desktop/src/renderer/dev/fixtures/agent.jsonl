@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Agent","name":"Agent","input":{"description":"Low-info tool call audit","subagent_type":"Explore","prompt":"Survey the ToolCard renderer and recent transcripts..."}}
+{"tool_use_id":"toolu_01Agent","type":"tool_result","content":"Agent returned a 600-word report. See previous message for findings.","is_error":false}

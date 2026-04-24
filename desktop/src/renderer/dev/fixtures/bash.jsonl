@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Bash","name":"Bash","input":{"command":"ls -la docs/","description":"List docs directory"}}
+{"tool_use_id":"toolu_01Bash","type":"tool_result","content":"total 48\ndrwxr-xr-x  8 user  staff   256 Apr 24 10:00 .\ndrwxr-xr-x 40 user  staff  1280 Apr 24 10:00 ..\n-rw-r--r--  1 user  staff  1024 Apr 24 10:00 README.md","is_error":false}

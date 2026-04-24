@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01SkFail","name":"Skill","input":{"skill":"superpowers:nonexistent-skill"}}
+{"tool_use_id":"toolu_01SkFail","type":"tool_result","content":"Error: skill 'superpowers:nonexistent-skill' not found. (Synthetic fixture — real Claude Code currently never produces this shape, but the sandbox exercises what the UI does if it ever does.)","is_error":true}

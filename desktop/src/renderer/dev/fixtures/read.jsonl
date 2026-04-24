@@ -1,0 +1,2 @@
+{"type":"tool_use","id":"toolu_01Read","name":"Read","input":{"file_path":"/workspace/src/example.ts"}}
+{"tool_use_id":"toolu_01Read","type":"tool_result","content":"     1→export function greet(name: string) {\n     2→  return `Hello, ${name}!`;\n     3→}\n","is_error":false}
