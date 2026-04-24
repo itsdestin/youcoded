@@ -58,11 +58,13 @@ export function parseTaskCreateResult(text: string): { id: string; subject: stri
 export function parseTaskListResult(text: string): Array<{ id: string; status: TaskStatus; subject: string }> {
   if (typeof text !== 'string' || text.length === 0) return [];
   const rows: Array<{ id: string; status: TaskStatus; subject: string }> = [];
+  // 'deleted' is intentionally omitted — CC's TaskList never emits that status
+  // in sampled transcripts. TaskStatus includes 'deleted' for TaskUpdate paths.
   const lineRegex = /^#(\d+) \[(pending|in_progress|completed)\] (?:Task \d+: )?(.+)$/;
   for (const line of text.split(/\r?\n/)) {
     const match = line.match(lineRegex);
     if (!match) continue;
-    rows.push({ id: match[1], status: match[2] as TaskStatus, subject: match[3] });
+    rows.push({ id: match[1], status: match[2] as TaskStatus, subject: match[3].trim() });
   }
   return rows;
 }

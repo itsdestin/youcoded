@@ -78,7 +78,13 @@ describe('parseTaskListResult', () => {
     expect(parseTaskListResult('')).toEqual([]);
   });
 
-  it('does not throw on non-string-like garbage', () => {
-    expect(() => parseTaskListResult('')).not.toThrow();
+  it('does not throw on whitespace-only input', () => {
+    expect(() => parseTaskListResult('\n\n\n')).not.toThrow();
+    expect(parseTaskListResult('\n\n\n')).toEqual([]);
+  });
+
+  it('skips a non-matching single line without throwing', () => {
+    expect(() => parseTaskListResult('not a task line at all')).not.toThrow();
+    expect(parseTaskListResult('not a task line at all')).toEqual([]);
   });
 });
