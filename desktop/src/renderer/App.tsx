@@ -152,6 +152,13 @@ function AppInner() {
   const [modelPickerOpen, setModelPickerOpen] = useState(false);
   // Open Tasks popup — opened by the OpenTasksChip in the StatusBar
   const [openTasksPopupOpen, setOpenTasksPopupOpen] = useState(false);
+  // SINGLE useSessionTasks instance for the whole page. The chip (in StatusBar)
+  // and the popup both read from this one derivation so their inactiveMap state
+  // stays in sync — two independent useSessionTasks calls would each keep their
+  // own localStorage-backed state, and the `storage` event doesn't fire within
+  // the same page (only across tabs). Fallback '' when there's no session gives
+  // an empty task list via useChatState's singleton EMPTY_SESSION_STATE.
+  const openTasks = useSessionTasks(sessionId ?? '');
   // Fast + effort state — surfaced via status bar chips. Persisted to ~/.claude/youcoded-model-modes.json.
   const [fastMode, setFastMode] = useState(false);
   const [effortLevel, setEffortLevel] = useState<string>('auto');
@@ -1974,7 +1981,7 @@ function AppInner() {
                   fast={fastMode}
                   effort={effortLevel}
                   onOpenModelPicker={() => setModelPickerOpen(true)}
-                  sessionId={sessionId ?? undefined}
+                  openTasksCounts={sessionId ? { running: openTasks.counts.running, pending: openTasks.counts.pending } : undefined}
                   onOpenOpenTasks={() => setOpenTasksPopupOpen(true)}
                 />
               </div>
@@ -2147,12 +2154,15 @@ function AppInner() {
           window.claude.session.sendInput(sessionId, `/model ${m}\r`);
         }}
       />
-      {/* Open Tasks popup — rendered at App root so it escapes any inner stacking context. */}
+      {/* Open Tasks popup — rendered at App root so it escapes any inner stacking context.
+          Reads from the single `openTasks` useSessionTasks instance declared in AppInner. */}
       {sessionId && (
-        <OpenTasksPopupMount
-          sessionId={sessionId}
+        <OpenTasksPopup
           open={openTasksPopupOpen}
+          tasks={openTasks.tasks}
           onClose={() => setOpenTasksPopupOpen(false)}
+          onMarkInactive={openTasks.markInactive}
+          onUnhide={openTasks.unhide}
         />
       )}
       {/* Full-screen glass marketplace + library destinations. MarketplaceProvider
@@ -2217,22 +2227,6 @@ const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?
     return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} initialInput={initialInput} />;
   },
 );
-
-// Wrapper that owns the useSessionTasks hook call for the Open Tasks popup.
-// Lives outside AppInner so the hook only mounts when a sessionId is present
-// (guarded by the {sessionId && ...} block at the AppInner render site).
-function OpenTasksPopupMount({ sessionId, open, onClose }: { sessionId: string; open: boolean; onClose: () => void }) {
-  const { tasks, markInactive, unhide } = useSessionTasks(sessionId);
-  return (
-    <OpenTasksPopup
-      open={open}
-      tasks={tasks}
-      onClose={onClose}
-      onMarkInactive={markInactive}
-      onUnhide={unhide}
-    />
-  );
-}
 
 function ThemeBg() {
   const { bgStyle, patternStyle } = useTheme();

@@ -155,7 +155,7 @@ describe('buildTasksById (extended)', () => {
     expect(task!.status).toBe('pending');
   });
 
-  it('sets createdAt from the first toolCalls index the task appears at', () => {
+  it('sets orderIndex from the first toolCalls index the task appears at', () => {
     const toolCalls = new Map<string, ToolCallState>();
     toolCalls.set('a', makeCall({
       toolUseId: 'a', toolName: 'Bash', input: { command: 'ls' },

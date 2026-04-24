@@ -119,7 +119,12 @@ export function useSessionTasks(sessionId: string) {
     });
   }, [sessionId]);
 
-  // Sync localStorage changes made in other tabs / windows (rare but correct).
+  // Cross-TAB storage sync only. The browser's storage event fires when ANOTHER
+  // browsing context (different tab or window) writes to localStorage — NOT when
+  // the current page writes. Two useSessionTasks instances in the same page are
+  // NOT auto-synced by this listener. To avoid that, mount only ONE instance per
+  // page and thread the derived state down (see App.tsx — single useSessionTasks
+  // call at AppInner root, reused by StatusBar chip + OpenTasksPopup).
   useEffect(() => {
     const onStorage = (e: StorageEvent) => {
       if (e.key === INACTIVE_STORAGE_KEY) setInactiveMap(readInactive());
