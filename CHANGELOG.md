@@ -2,6 +2,30 @@
 
 All notable changes to YouCoded are documented in this file.
 
+## [1.2.1] — 2026-04-23
+
+**Claude Code CLI baseline:** v2.1.119
+
+### Added
+- **Separate "YouCoded Dev" Android build** — debug APK now installs side-by-side with the release app (different `applicationIdSuffix`, label, and bridge port 9951). Both variants can coexist on the same device.
+- **Soft-keyboard animation on Android** — chat input bar now smoothly tracks the Android soft keyboard via `visualViewport` + GPU translate, with the viewport meta tag configured so Android WebView fires the resize events reliably.
+- **Bridge bind-failure overlay** — if both YouCoded variants are running, the one that loses the port race now shows a clear "another variant is running" screen instead of silently failing.
+
+### Changed
+- **Android git/gh authenticate like desktop** — OAuth token from `gh auth login` is now mirrored into `~/.netrc` (mode 0600) so `git push` over HTTPS works without `gh auth setup-git` (which can't run under Android's exec model).
+- **Google Drive OAuth opens via Intent** — `rclone config create gdrive drive` now streams stderr, captures the auth URL, and opens it via `Intent.ACTION_VIEW` instead of relying on rclone's built-in browser-open (which rclone's Go runtime can't execute on Android).
+- **Terminal toolbar restyled** — ESC/Tab/Ctrl/arrow keys are now quick chips inside the input bar, consistent with the mobile-first layout.
+- **Floating status bar** — corners align with content, children clip correctly to edges, and there's breathing room below.
+
+### Fixed
+- **Android Resume Browser** slug decoding + missing `size` field — projects with hyphens in their directory name (e.g. `youcoded-dev`) now resolve correctly via greedy filesystem walk instead of collapsing to the wrong path.
+- **Project slug encoding** now matches Claude Code for folders with spaces on Windows (e.g. `PAF 540 Final Data Project`) across both transcript-watcher and sync-service, on desktop and Android.
+- **Chat input focus retention on Android** — the soft keyboard no longer dismisses when you release focus to global shortcuts (there are no global shortcuts on touch devices anyway).
+- **`session:created` payload carries `model` on Android** — status-bar pill shows the correct model alias at session launch instead of defaulting until the first transcript event.
+- **`status:data` broadcast carries `gitBranchMap` on Android** — git-branch widget now renders on Android matching desktop behavior.
+- **Hide desktop-only settings on Android** — buddy floater toggle and "Sessions in this window" label no longer appear.
+- **CI unblock** — removed invalid `@Volatile` on a local variable in `SyncService.authGdriveWithBrowserIntent`.
+
 ## [1.2.0] — 2026-04-22
 
 **Claude Code CLI baseline:** v2.1.117
