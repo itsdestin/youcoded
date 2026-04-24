@@ -77,7 +77,7 @@ describe('OpenTasksPopup', () => {
         onUnhide={noop}
       />
     );
-    const btn = screen.getByRole('button', { name: /mark inactive/i });
+    const btn = screen.getByRole('button', { name: /mark task #5 inactive/i });
     fireEvent.click(btn);
     expect(onMarkInactive).toHaveBeenCalledWith('5');
   });
@@ -128,5 +128,29 @@ describe('OpenTasksPopup', () => {
     expect(scrim).toBeTruthy();
     fireEvent.click(scrim!);
     expect(onClose).toHaveBeenCalled();
+  });
+
+  it('completed section stays collapsed when >5 entries', () => {
+    const many = Array.from({ length: 6 }, (_, i) => task({
+      id: String(i + 1),
+      subject: `Done ${i + 1}`,
+      status: 'completed',
+      orderIndex: i,
+    }));
+    render(
+      <OpenTasksPopup
+        open={true}
+        tasks={many}
+        onClose={noop}
+        onMarkInactive={noop}
+        onUnhide={noop}
+      />
+    );
+    // With 6 completed entries, the section header should say "6" but the rows
+    // should not be rendered until the toggle is clicked.
+    const toggle = screen.getByRole('button', { name: /completed/i });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('Done 1')).toBeNull();
+    expect(screen.queryByText('Done 6')).toBeNull();
   });
 });

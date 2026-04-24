@@ -72,12 +72,10 @@ function Row({ t, group, onMarkInactive, onUnhide }: {
           Unhide
         </button>
       ) : (
-        // WHY: no aria-label here — text content "Mark Inactive" is the
-        // accessible name, matching the test's getByRole({name:/mark inactive/i}).
-        // Per-row context is provided by the surrounding row structure.
         <button
-          className="text-[10px] text-fg-muted hover:text-fg bg-inset hover:bg-well px-2 py-0.5 rounded border border-edge-dim opacity-40 group-hover:opacity-100 focus:opacity-100 transition-opacity"
+          className="text-[10px] text-fg-muted hover:text-fg bg-inset hover:bg-well px-2 py-0.5 rounded border border-edge-dim opacity-40 group-hover:opacity-100 focus-visible:opacity-100 transition-opacity"
           onClick={() => onMarkInactive(t.id)}
+          aria-label={`Mark task #${t.id} inactive`}
         >
           Mark Inactive
         </button>
@@ -96,10 +94,13 @@ function SectionHeader({ label, count }: { label: string; count: number }) {
 }
 
 export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, onUnhide }: Props) {
-  const [completedOpen, setCompletedOpen] = useState(false);
-  // WHY: inactive section starts expanded so Unhide buttons are immediately
-  // reachable — the section is collapsible but open by default for discoverability.
-  const [inactiveOpen, setInactiveOpen] = useState(true);
+  // Compute initial open states from the first render's tasks, then let the user
+  // fully control. Avoids fighting user intent when the completed count crosses 5
+  // mid-popup.
+  const initialCompleted = tasks.filter(t => !t.markedInactive && (t.status === 'completed' || t.status === 'deleted'));
+  const initialInactive = tasks.filter(t => t.markedInactive);
+  const [completedOpen, setCompletedOpen] = useState(() => initialCompleted.length > 0 && initialCompleted.length <= 5);
+  const [inactiveOpen, setInactiveOpen] = useState(() => initialInactive.length > 0 && initialInactive.length <= 5);
 
   if (!open) return null;
 
@@ -108,10 +109,6 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
   const completed = tasks.filter(t => groupOf(t) === 'completed');
   const inactive = tasks.filter(t => groupOf(t) === 'inactive');
   const openCount = running.length + pending.length;
-
-  // Completed section: expanded by default only when ≤5 entries.
-  const completedStartOpen = completed.length > 0 && completed.length <= 5;
-  const effectiveCompletedOpen = completedOpen || completedStartOpen;
 
   return (
     <>
@@ -162,13 +159,14 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
         {completed.length > 0 && (
           <>
             <button
+              aria-expanded={completedOpen}
               className="w-full text-left text-[10px] uppercase tracking-wider text-fg-muted px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg"
               onClick={() => setCompletedOpen(v => !v)}
             >
               <span>Completed</span>
-              <span>{completed.length} {effectiveCompletedOpen ? '▾' : '▸'}</span>
+              <span>{completed.length} {completedOpen ? '▾' : '▸'}</span>
             </button>
-            {effectiveCompletedOpen && completed.map(t => (
+            {completedOpen && completed.map(t => (
               <Row key={t.id} t={t} group="completed" onMarkInactive={onMarkInactive} onUnhide={onUnhide} />
             ))}
           </>
@@ -178,6 +176,7 @@ export default function OpenTasksPopup({ open, tasks, onClose, onMarkInactive, o
         {inactive.length > 0 && (
           <>
             <button
+              aria-expanded={inactiveOpen}
               className="w-full text-left text-[10px] uppercase tracking-wider text-fg-muted px-2 pt-2 pb-1 flex justify-between items-baseline hover:text-fg border-t border-edge-dim mt-1"
               onClick={() => setInactiveOpen(v => !v)}
             >
