@@ -115,7 +115,7 @@ describe('buildTasksById (extended)', () => {
     expect(task!.subject).toBe('Do the thing');
     expect(task!.description).toBe('Detail');
     expect(task!.activeForm).toBe('Doing the thing');
-    expect(task!.createdAt).toBe(0);
+    expect(task!.orderIndex).toBe(0);
     expect(task!.status).toBeUndefined();
   });
 
@@ -170,7 +170,7 @@ describe('buildTasksById (extended)', () => {
     }));
 
     const task = buildTasksById(toolCalls).get('3');
-    expect(task!.createdAt).toBe(1);
+    expect(task!.orderIndex).toBe(1);
   });
 
   it('tolerates unknown input keys without throwing', () => {
@@ -180,7 +180,7 @@ describe('buildTasksById (extended)', () => {
       input: { subject: 'S', owner: 'agent-x', metadata: { foo: 1 } },
       response: 'Task #1 created successfully: S',
     }));
-    expect(() => buildTasksById(toolCalls)).not.toThrow();
-    expect(buildTasksById(toolCalls).get('1')).toBeDefined();
+    const result = buildTasksById(toolCalls);
+    expect(result.get('1')).toBeDefined();
   });
 });

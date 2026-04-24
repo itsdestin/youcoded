@@ -16,6 +16,11 @@ export interface TaskEvent {
   toolUseId: string;
   toolName: string;
   status?: TaskStatus;
+  /**
+   * The tool input (for TaskCreate/TaskUpdate) or a synthesized row subset
+   * (for TaskList). Shape varies by toolName. Consumers that need a uniform
+   * view should branch on toolName.
+   */
   patch?: Record<string, unknown>;
 }
 
@@ -26,8 +31,8 @@ export interface TaskState {
   activeForm?: string;           // Present-continuous label shown while in_progress
   priority?: string;
   status?: TaskStatus;
-  /** Insertion index in toolCalls where this task first appeared — sort key. */
-  createdAt?: number;
+  /** Insertion index in toolCalls where this task first appeared — stable sort key. Always set by buildTasksById. */
+  orderIndex: number;
   /** Events in chronological order (insertion order of toolCalls Map). */
   events: TaskEvent[];
   /** User-flagged-inactive in the UI. View-model only; not derived from tool calls. */
@@ -77,7 +82,7 @@ const TASK_TOOLS = new Set(['TaskCreate', 'TaskUpdate', 'TaskGet', 'TaskStop', '
 export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<string, TaskState> {
   const tasks = new Map<string, TaskState>();
 
-  // Scan in insertion order. `idx` gives us stable createdAt values.
+  // Scan in insertion order. `idx` gives us stable orderIndex values.
   let idx = 0;
   for (const tool of toolCalls.values()) {
     const i = idx++;
@@ -87,7 +92,7 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<strin
     // --- TaskList: authoritative snapshot, overwrites current tasks ---
     if (tool.toolName === 'TaskList' && typeof tool.response === 'string') {
       for (const row of parseTaskListResult(tool.response)) {
-        const existing = tasks.get(row.id) || { id: row.id, events: [], createdAt: i };
+        const existing = tasks.get(row.id) || { id: row.id, events: [], orderIndex: i };
         tasks.set(row.id, {
           ...existing,
           subject: row.subject ?? existing.subject,
@@ -111,7 +116,7 @@ export function buildTasksById(toolCalls: Map<string, ToolCallState>): Map<strin
     }
     if (!taskId) continue;
 
-    const existing = tasks.get(taskId) || { id: taskId, events: [], createdAt: i };
+    const existing = tasks.get(taskId) || { id: taskId, events: [], orderIndex: i };
     const status = input.status as TaskStatus | undefined;
 
     const event: TaskEvent = {
