@@ -26,6 +26,7 @@ import { requestChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
 import { excludeFromCapture, nativeCaptureExclusionAvailable } from './window-exclude-capture';
 import { cleanupStaleDownloads } from './update-installer';
+import { runAnalyticsOnLaunch } from './analytics-service';
 
 // macOS and Linux Electron apps may inherit a minimal PATH that's missing
 // common tool locations (Homebrew, nvm, Volta, pipx, cargo). macOS Finder/Dock
@@ -992,6 +993,10 @@ function registerDetachIpc() {
 
 app.whenReady().then(async () => {
   await rotateLog();
+
+  // Fire-and-forget: never await. Respects the opt-out in About → Privacy
+  // internally and fails silently on any network issue.
+  void runAnalyticsOnLaunch();
 
   // --- First-run detection (wrapped in try/catch — never breaks the app) ---
   let firstRunManager: FirstRunManager | undefined;
