@@ -1,0 +1,10 @@
+{
+  "description": "Spinner counter advanced since last tick (3→8s) → thinking-active",
+  "bufferTail": [
+    "Running analysis",
+    "✽ Analyzing… (8s · esc to interrupt)",
+    ""
+  ],
+  "previousSpinnerSeconds": 3,
+  "secondsSincePreviousSpinner": 5
+}

@@ -1,0 +1,10 @@
+{
+  "description": "Spinner with multi-byte glyph ⏺ (U+23FA, 3-byte UTF-8) — still matches SPINNER_RE → thinking-active",
+  "bufferTail": [
+    "Processing request",
+    "⏺ Working… (8s · esc to interrupt)",
+    ""
+  ],
+  "previousSpinnerSeconds": null,
+  "secondsSincePreviousSpinner": 1
+}

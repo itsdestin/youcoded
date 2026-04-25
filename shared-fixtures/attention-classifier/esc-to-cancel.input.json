@@ -1,0 +1,10 @@
+{
+  "description": "\"esc to cancel\" marker present with no spinner → unknown + escToCancel:true (stuck escalation is time-based in the hook)",
+  "bufferTail": [
+    "  Running bash command...",
+    "  $ find . -name \"*.ts\" -type f",
+    "  (esc to cancel)"
+  ],
+  "previousSpinnerSeconds": null,
+  "secondsSincePreviousSpinner": 0
+}

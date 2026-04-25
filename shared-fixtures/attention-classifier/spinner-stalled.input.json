@@ -1,0 +1,10 @@
+{
+  "description": "Spinner counter unchanged (5s→5s) with ≥10s elapsed → thinking-stalled",
+  "bufferTail": [
+    "Running analysis",
+    "✢ Computing… (5s · esc to interrupt)",
+    ""
+  ],
+  "previousSpinnerSeconds": 5,
+  "secondsSincePreviousSpinner": 12
+}
