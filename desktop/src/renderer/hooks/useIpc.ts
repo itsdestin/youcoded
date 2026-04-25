@@ -68,6 +68,12 @@ declare global {
         openChangelog: () => Promise<void>;
         openExternal: (url: string) => Promise<void>;
       };
+      // Task 9: preload bridge for reading the xterm screen buffer from the main
+      // process (used by useAttentionClassifier and the Android terminal-data parity
+      // refactor). Shape mirrors the handler in preload.ts (commit 0a7594a).
+      terminal: {
+        getScreenText: (sessionId: string) => Promise<string>;
+      };
       // Mirrors ChangelogIpcResult in preload.ts (which mirrors ChangelogResult in
       // main/changelog-service.ts). When you edit one, edit all three — this copy
       // isn't covered by the ipc-channels.test.ts parity test and will drift silently.
