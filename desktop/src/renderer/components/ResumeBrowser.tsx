@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { MODELS, type ModelAlias } from './StatusBar';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useScrollFade } from '../hooks/useScrollFade';
@@ -50,6 +51,7 @@ function FilterPill({
   children,
   hasPopup,
   expanded,
+  buttonRef,
 }: {
   active: boolean;
   // Receives the MouseEvent so dropdown-owning callers can stopPropagation()
@@ -63,9 +65,13 @@ function FilterPill({
   // entirely when hasPopup is falsy (Sort pill).
   hasPopup?: boolean;
   expanded?: boolean;
+  // Optional: dropdown-owning callers pass a ref so they can measure the
+  // trigger's bounding rect for portal positioning. Sort doesn't need it.
+  buttonRef?: React.Ref<HTMLButtonElement>;
 }) {
   return (
     <button
+      ref={buttonRef}
       type="button"
       onClick={onClick}
       // aria-pressed conveys the toggle state to assistive tech. Mirrors the
@@ -82,6 +88,50 @@ function FilterPill({
       {children}
     </button>
   );
+}
+
+// Measure a trigger button's bounding rect and return fixed-position coords for
+// a portaled dropdown anchored just below the trigger. Re-measures on resize /
+// scroll. Clamps the left coordinate so a wide dropdown near the right edge of
+// the viewport shifts left rather than overflowing off-screen. Used by the
+// Projects + Tags pills which portal their dropdown to escape the
+// OverlayPanel's overflow:hidden clipping.
+function useDropdownPosition(
+  isOpen: boolean,
+  triggerRef: React.RefObject<HTMLButtonElement | null>,
+  dropdownWidthPx: number,
+): { top: number; left: number } | null {
+  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+
+  useLayoutEffect(() => {
+    if (!isOpen) {
+      setPosition(null);
+      return;
+    }
+    const measure = () => {
+      const el = triggerRef.current;
+      if (!el) return;
+      const rect = el.getBoundingClientRect();
+      // Clamp so the dropdown's right edge stays at least 8px inside the
+      // viewport. If the trigger sits too far right, the dropdown shifts left.
+      const maxLeft = Math.max(8, window.innerWidth - dropdownWidthPx - 8);
+      setPosition({
+        top: rect.bottom + 4,
+        left: Math.min(rect.left, maxLeft),
+      });
+    };
+    measure();
+    window.addEventListener('resize', measure);
+    // Capture-phase scroll listener catches scroll on any ancestor, not just
+    // window — needed if a scrollable parent moves the trigger.
+    window.addEventListener('scroll', measure, true);
+    return () => {
+      window.removeEventListener('resize', measure);
+      window.removeEventListener('scroll', measure, true);
+    };
+  }, [isOpen, triggerRef, dropdownWidthPx]);
+
+  return position;
 }
 
 // FlagName is imported from resume-browser-filters.ts (single source of truth).
@@ -135,6 +185,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const listRef = useScrollFade<HTMLDivElement>();
   // Wraps the filter pill row so outside-click can close the active dropdown.
   const filterRowRef = useRef<HTMLDivElement>(null);
+  // Trigger refs for portal positioning + dropdown refs so the outside-click
+  // handler can recognize clicks inside the portaled dropdown body (which is
+  // no longer a child of filterRowRef).
+  const projectsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const tagsTriggerRef = useRef<HTMLButtonElement | null>(null);
+  const projectsDropdownRef = useRef<HTMLDivElement | null>(null);
+  const tagsDropdownRef = useRef<HTMLDivElement | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
@@ -199,12 +256,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   }, [openPill, expandedId, onClose]);
   useEscClose(open, handleEscClose);
 
-  // Close the active filter dropdown on outside click. Mirrors FolderSwitcher's
-  // pattern at desktop/src/renderer/components/FolderSwitcher.tsx.
+  // Close the active filter dropdown on outside click. Recognizes clicks
+  // inside the trigger row AND the portaled dropdowns (which live in
+  // document.body, outside filterRowRef).
   useEffect(() => {
     if (!openPill) return;
     const handler = (e: Event) => {
-      if (filterRowRef.current?.contains(e.target as Node)) return;
+      const target = e.target as Node;
+      if (filterRowRef.current?.contains(target)) return;
+      if (projectsDropdownRef.current?.contains(target)) return;
+      if (tagsDropdownRef.current?.contains(target)) return;
       setOpenPill(null);
     };
     document.addEventListener('mousedown', handler);
@@ -266,6 +327,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       .map((tag) => FLAG_LABEL[tag])
       .join(' + ');
   }, [selectedTags]);
+
+  // Portal-anchored dropdown positions. Dropdown widths match the className
+  // (Projects: w-64 = 256px, Tags: w-44 = 176px). Keep these in sync if the
+  // className width changes.
+  const projectsDropdownPos = useDropdownPosition(openPill === 'projects', projectsTriggerRef, 256);
+  const tagsDropdownPos = useDropdownPosition(openPill === 'tags', tagsTriggerRef, 176);
 
   // Optimistically flip a flag in local state, then persist via IPC. On failure
   // we revert. A meta-changed push from other tabs/devices also refreshes the
@@ -505,108 +572,125 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               />
             </div>
             <div ref={filterRowRef} className="flex items-center gap-1.5 mt-2 relative">
-              {/* Projects: multi-select dropdown over distinct projectPaths in the loaded sessions. */}
-              <div className="relative">
-                <FilterPill
-                  active={selectedProjects.size > 0}
-                  hasPopup
-                  expanded={openPill === 'projects'}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpenPill((p) => (p === 'projects' ? null : 'projects'));
+              {/* Projects: multi-select dropdown over distinct projectPaths in the loaded sessions.
+                  Dropdown is portaled to document.body so it escapes the OverlayPanel's
+                  overflow:hidden clipping (lets it overlap the panel edge). */}
+              <FilterPill
+                buttonRef={projectsTriggerRef}
+                active={selectedProjects.size > 0}
+                hasPopup
+                expanded={openPill === 'projects'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenPill((p) => (p === 'projects' ? null : 'projects'));
+                }}
+              >
+                <span>{projectsLabel}</span>
+                <span className="text-fg-faint text-[9px]">▾</span>
+              </FilterPill>
+              {openPill === 'projects' && projectsDropdownPos && createPortal(
+                <div
+                  ref={projectsDropdownRef}
+                  className="layer-surface w-64 max-w-[calc(100vw-1rem)] overflow-hidden"
+                  style={{
+                    position: 'fixed',
+                    top: projectsDropdownPos.top,
+                    left: projectsDropdownPos.left,
+                    zIndex: 60,
+                    animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both',
                   }}
                 >
-                  <span>{projectsLabel}</span>
-                  <span className="text-fg-faint text-[9px]">▾</span>
-                </FilterPill>
-                {openPill === 'projects' && (
-                  <div
-                    className="layer-surface absolute top-full left-0 mt-1 w-64 overflow-hidden"
-                    style={{ zIndex: 50, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
+                  {/* "Clear" — text-only affordance that empties selectedProjects (which the data
+                      model treats as "filter inactive"). No checkbox visual so it doesn't read as
+                      a master "select every project" toggle. Muted small-caps style separates it
+                      from the checkbox rows below. Always visible; clicks no-op when already cleared. */}
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProjects(new Set())}
+                    className="w-full text-left px-2.5 py-1.5 text-[11px] uppercase tracking-wider text-fg-muted hover:text-fg hover:bg-inset transition-colors"
                   >
-                    {/* "Show all" — text-only clear affordance. No checkbox visual so users don't
-                        misread this as a master "select every project" toggle (it isn't — empty
-                        selectedProjects is "filter inactive"). Muted style separates it from the
-                        checkbox rows below. Always visible; clicks no-op when already cleared. */}
-                    <button
-                      type="button"
-                      onClick={() => setSelectedProjects(new Set())}
-                      className="w-full text-left px-2.5 py-1.5 text-[11px] uppercase tracking-wider text-fg-muted hover:text-fg hover:bg-inset transition-colors"
-                    >
-                      Show all
-                    </button>
-                    <div className="max-h-56 overflow-y-auto border-t border-edge-dim">
-                      {availableProjects.map((p) => {
-                        const checked = selectedProjects.has(p.path);
-                        return (
-                          <button
-                            key={p.path}
-                            type="button"
-                            onClick={() => {
-                              setSelectedProjects((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(p.path)) next.delete(p.path);
-                                else next.add(p.path);
-                                return next;
-                              });
-                            }}
-                            className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
-                          >
-                            <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
-                            <span className="flex-1 truncate" title={p.path}>{p.label}</span>
-                            <span className="text-[10px] text-fg-faint shrink-0">{p.count}</span>
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Tags: multi-select dropdown over the per-session flag set. Priority + Helpful only;
-                  Complete stays owned by the Show Complete toggle in the header. */}
-              <div className="relative">
-                <FilterPill
-                  active={selectedTags.size > 0}
-                  hasPopup
-                  expanded={openPill === 'tags'}
-                  onClick={(e) => {
-                    e.stopPropagation();
-                    setOpenPill((p) => (p === 'tags' ? null : 'tags'));
-                  }}
-                >
-                  <span>{tagsLabel}</span>
-                  <span className="text-fg-faint text-[9px]">▾</span>
-                </FilterPill>
-                {openPill === 'tags' && (
-                  <div
-                    className="layer-surface absolute top-full left-0 mt-1 w-44 overflow-hidden"
-                    style={{ zIndex: 50, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
-                  >
-                    {TAG_FILTER_OPTIONS.map((tag) => {
-                      const checked = selectedTags.has(tag);
+                    Clear
+                  </button>
+                  <div className="max-h-56 overflow-y-auto border-t border-edge-dim">
+                    {availableProjects.map((p) => {
+                      const checked = selectedProjects.has(p.path);
                       return (
                         <button
-                          key={tag}
+                          key={p.path}
                           type="button"
                           onClick={() => {
-                            setSelectedTags((prev) => {
+                            setSelectedProjects((prev) => {
                               const next = new Set(prev);
-                              if (next.has(tag)) next.delete(tag);
-                              else next.add(tag);
+                              if (next.has(p.path)) next.delete(p.path);
+                              else next.add(p.path);
                               return next;
                             });
                           }}
                           className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
                         >
                           <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
-                          <span className="flex-1">{FLAG_LABEL[tag]}</span>
+                          <span className="flex-1 truncate" title={p.path}>{p.label}</span>
+                          <span className="text-[10px] text-fg-faint shrink-0">{p.count}</span>
                         </button>
                       );
                     })}
                   </div>
-                )}
-              </div>
+                </div>,
+                document.body,
+              )}
+
+              {/* Tags: multi-select dropdown over the per-session flag set. Priority + Helpful only;
+                  Complete stays owned by the Show Complete toggle in the header. Dropdown is
+                  portaled to escape the OverlayPanel's overflow:hidden clipping. */}
+              <FilterPill
+                buttonRef={tagsTriggerRef}
+                active={selectedTags.size > 0}
+                hasPopup
+                expanded={openPill === 'tags'}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setOpenPill((p) => (p === 'tags' ? null : 'tags'));
+                }}
+              >
+                <span>{tagsLabel}</span>
+                <span className="text-fg-faint text-[9px]">▾</span>
+              </FilterPill>
+              {openPill === 'tags' && tagsDropdownPos && createPortal(
+                <div
+                  ref={tagsDropdownRef}
+                  className="layer-surface w-44 max-w-[calc(100vw-1rem)] overflow-hidden"
+                  style={{
+                    position: 'fixed',
+                    top: tagsDropdownPos.top,
+                    left: tagsDropdownPos.left,
+                    zIndex: 60,
+                    animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both',
+                  }}
+                >
+                  {TAG_FILTER_OPTIONS.map((tag) => {
+                    const checked = selectedTags.has(tag);
+                    return (
+                      <button
+                        key={tag}
+                        type="button"
+                        onClick={() => {
+                          setSelectedTags((prev) => {
+                            const next = new Set(prev);
+                            if (next.has(tag)) next.delete(tag);
+                            else next.add(tag);
+                            return next;
+                          });
+                        }}
+                        className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
+                      >
+                        <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
+                        <span className="flex-1">{FLAG_LABEL[tag]}</span>
+                      </button>
+                    );
+                  })}
+                </div>,
+                document.body,
+              )}
 
               {/* Sort toggle — flips lastModified direction. Priority-pin still wins. */}
               <FilterPill active={sortDir !== 'desc'} onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}>
