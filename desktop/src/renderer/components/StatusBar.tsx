@@ -9,6 +9,7 @@ import { deriveWarningSeverity } from '../state/sync-display-state';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { FastIcon } from './Icons';
 import UpdatePanel from './UpdatePanel';
+import ContextPopup from './ContextPopup';
 import OpenTasksChip from './OpenTasksChip';
 
 // --- Session stats shape (written by statusline.sh to .session-stats-{id}.json) ---
@@ -132,6 +133,9 @@ interface Props {
   fast?: boolean;
   effort?: string;
   onOpenModelPicker?: () => void;
+  // Context popup: session and a dispatcher wrapper threaded from App.tsx.
+  sessionId?: string | null;
+  onDispatch?: (input: string) => void;
   /** Open-tasks counts for the chip — derived at App root from a single
    *  useSessionTasks instance so the chip and popup share inactiveMap state. */
   openTasksCounts?: { running: number; pending: number };
@@ -609,6 +613,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
 export default function StatusBar({
   statusData, onRunSync, onOpenSync, model, onCycleModel,
   permissionMode, onCyclePermission, fast, effort, onOpenModelPicker,
+  sessionId, onDispatch,
   openTasksCounts, onOpenOpenTasks,
 }: Props) {
   const { usage, updateStatus, contextPercent, gitBranch, sessionStats, syncStatus, syncWarnings } = statusData;
@@ -617,6 +622,7 @@ export default function StatusBar({
   const [popupOpen, setPopupOpen] = useState(false);
   // Version pill now opens the in-app UpdatePanel (changelog + update action) instead of firing external URLs.
   const [updatePanelOpen, setUpdatePanelOpen] = useState(false);
+  const [contextPopupOpen, setContextPopupOpen] = useState(false);
 
   const show = (id: WidgetId) => visible.has(id);
   const ss = sessionStats; // shorthand
@@ -711,15 +717,18 @@ export default function StatusBar({
         </button>
       )}
 
-      {/* Context remaining */}
+      {/* Context remaining — clickable opens ContextPopup (compact/clear actions + explainer). */}
       {show('context') && contextPercent != null && (
-        <span className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim">
+        <button
+          onClick={() => setContextPopupOpen(true)}
+          aria-haspopup="dialog"
+          aria-label={`Context: ${contextPercent}% remaining. Click to manage context.`}
+          className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:border-edge hover:bg-inset transition-colors"
+        >
           <span>Context:</span>
-          <span className={contextColor(contextPercent)}>
-            {contextPercent}%
-          </span>
+          <span className={contextColor(contextPercent)}>{contextPercent}%</span>
           <span>Remaining</span>
-        </span>
+        </button>
       )}
 
       {/* Session cost — estimated USD cost for this session */}
@@ -965,6 +974,16 @@ export default function StatusBar({
           updateStatus={updateStatus}
         />
       )}
+
+      {/* Context popup — portal-rendered; position in tree is cosmetic. */}
+      <ContextPopup
+        open={contextPopupOpen}
+        onClose={() => setContextPopupOpen(false)}
+        sessionId={sessionId ?? null}
+        contextPercent={contextPercent}
+        contextTokens={sessionStats?.contextTokens ?? null}
+        onDispatch={onDispatch ?? (() => {})}
+      />
     </div>
   );
 }
