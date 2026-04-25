@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
@@ -74,8 +74,16 @@ export default function ContextPopup({
   // Must be called unconditionally (React hooks rules) — soft-fails without a provider.
   useEscClose(open, onClose);
 
+  // Reset transient view state when the popup closes so reopening always lands on the main view.
+  useEffect(() => {
+    if (!open) {
+      setShowInfo(false);
+      setCustomizing(false);
+      setInstructions('');
+    }
+  }, [open]);
+
   // Track whether the user has opened the (i) explainer view.
-  // Reset to false is implicit: the popup unmounts when closed, so state resets naturally.
   const [showInfo, setShowInfo] = useState(false);
 
   // customizing / instructions — not consumed until Task 6 where the chevron opens
@@ -96,7 +104,7 @@ export default function ContextPopup({
         aria-modal={true}
         aria-labelledby={showInfo ? undefined : 'context-popup-title'}
         aria-label={showInfo ? 'About Context' : undefined}
-        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[320px]"
+        className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-[320px] max-h-[85vh] flex flex-col overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
         {showInfo ? (
