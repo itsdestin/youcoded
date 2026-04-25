@@ -103,3 +103,13 @@ Each entry has three fields:
 - **Files:** `desktop/src/main/dev-tools.ts` (`submitIssue`, `isGhAuthenticated`), `app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt` (`dev:submit-issue` case)
 - **Depends on:** `gh auth status` exiting non-zero when the user isn't logged in; `gh issue create --repo … --title … --body-file … --label …` writing the created-issue URL to stdout on success and exiting non-zero on failure; the `--label` flag rejecting unknown labels (which is why `bug`, `enhancement`, `youcoded-app:reported` must pre-exist on `itsdestin/youcoded`). Note: this is `gh` CLI, not Claude Code itself, but it shares the same pattern of "behavior we shell out to and parse" so it lives here.
 - **Break symptom:** Issue submission silently falls back to the URL-prefill path (browser opens with prefilled fields) on every call when the auth-check exit code or `issue create` stdout format changes. User can still submit manually in the browser; YouCoded just stops doing it for them.
+
+### Android attention classifier
+
+- **What:** `useAttentionClassifier` (renderer) runs on standalone Android by reading screen text via `window.claude.terminal.getScreenText`, which routes to `PtyBridge.readScreenText()` on the Android side. Classifier regex patterns in `classifyBuffer` match Claude Code CLI spinner glyphs (✻✽✢✳✶*⏺◉) and the "esc to cancel" / "esc to interrupt" markers.
+- **CC-coupled files:**
+  - `desktop/src/renderer/state/attention-classifier.ts` (patterns)
+  - `desktop/src/renderer/hooks/useAttentionClassifier.ts` (tick logic)
+  - `desktop/tests/attention-classifier-parity.test.ts` + `shared-fixtures/attention-classifier/` (regression coverage)
+- **Why coupled:** Patterns must match Claude Code's CLI output. Visual changes to the Ink UI (spinner glyph, prompt copy, error banner color) can break classification silently.
+- **Review trigger:** Any Claude Code CHANGELOG entry mentioning TUI / Ink / prompt / spinner / progress updates.
