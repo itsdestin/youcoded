@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { ToolCallState } from '../../shared/types';
 import { useChatDispatch } from '../state/chat-context';
-import { CheckIcon, FailIcon, QuestionIcon, ChevronIcon } from './Icons';
+import { CheckIcon, FailIcon, QuestionIcon, ChevronIcon, BrainIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { isAndroid } from '../platform';
 import ToolBody from './tool-views/ToolBody';
@@ -611,7 +611,15 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         <QuestionIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
       )}
       {tool.status === 'complete' && (
-        <CheckIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+        // Skills get the brain glyph on success — visually distinct from
+        // the generic check used by every other tool, since "skill ran"
+        // carries different meaning ("Claude consulted external knowledge")
+        // than "command finished." Failed skills still use the FailIcon.
+        isCompactSkill ? (
+          <BrainIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+        ) : (
+          <CheckIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+        )
       )}
       {tool.status === 'failed' && (
         <FailIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />

@@ -113,6 +113,29 @@ export function QuestionIcon({ className = 'w-4 h-4' }: IconProps) {
   );
 }
 
+/** Brain — side-profile with brainstem descending from bottom right.
+ * Shown in place of the check icon on a successfully invoked Skill tool
+ * card so skills read distinctly in the chat timeline. Same opacity and
+ * stroke weight as the status icons (Check/Fail/Question) so it sits in
+ * the same visual slot. */
+export function BrainIcon({ className = 'w-4 h-4' }: IconProps) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" opacity="0.6">
+      {/* Brain — side profile, lobed contour. Frontal lobe on the left,
+          occipital on the right, narrowing to the stem at bottom-right. */}
+      <path
+        d="M6 11 Q 5 8, 8 7 Q 8 4, 11 5 Q 12 4, 13 5 Q 16 4, 17 7 Q 20 8, 19 11 Q 20 14, 17 15 Q 16 16, 14 16 L 13 16 Q 10 17, 8 15 Q 6 14, 6 11 Z"
+        strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      />
+      {/* Brainstem — short tube descending from the brain's bottom-right */}
+      <path
+        d="M14 16 L 15 19 Q 15 21, 17 21"
+        strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
 /** Chevron — used for expand/collapse toggles */
 export function ChevronIcon({ className = 'w-3.5 h-3.5', expanded = false }: IconProps & { expanded?: boolean }) {
   return (
