@@ -474,6 +474,16 @@ function ThemeBody({
   const themeStats = stats.themes[entry.slug];
   const likes = themeStats?.likes ?? 0;
   const installed = !!entry.installed;
+
+  // Confirmation wrapper — locally-built themes are permanent deletes (no marketplace copy to reinstall from)
+  const handleUninstall = () => {
+    const confirmCopy = entry.isLocal
+      ? `Permanently delete "${entry.name}"? This theme was built locally — there's no marketplace copy, so the files will be removed forever and can't be recovered.`
+      : `Uninstall "${entry.name}"? You can reinstall it later from the marketplace.`;
+    if (!window.confirm(confirmCopy)) return;
+    onUninstall();
+  };
+
   return (
     <article className="flex flex-col gap-4 max-w-3xl mx-auto">
       <header className="flex items-start justify-between gap-4">
@@ -524,7 +534,7 @@ function ThemeBody({
               <button type="button" disabled className="px-4 py-2 rounded-md bg-inset text-fg-dim border border-edge cursor-default">
                 Active
               </button>
-              <button type="button" onClick={onUninstall} className="px-3 py-2 rounded-md text-fg-dim hover:text-fg text-sm">
+              <button type="button" onClick={handleUninstall} className="px-3 py-2 rounded-md text-fg-dim hover:text-fg text-sm">
                 Uninstall
               </button>
             </>
@@ -533,7 +543,7 @@ function ThemeBody({
               <button type="button" onClick={onApply} className="px-4 py-2 rounded-md bg-accent text-on-accent hover:opacity-90">
                 Apply theme
               </button>
-              <button type="button" onClick={onUninstall} className="px-3 py-2 rounded-md text-fg-dim hover:text-fg text-sm">
+              <button type="button" onClick={handleUninstall} className="px-3 py-2 rounded-md text-fg-dim hover:text-fg text-sm">
                 Uninstall
               </button>
             </>
