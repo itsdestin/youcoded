@@ -76,4 +76,10 @@ export interface ThemeMarketplaceFilters {
 /** Result returned to the renderer with installation status annotated */
 export type ThemeRegistryEntryWithStatus = ThemeRegistryEntry & {
   installed: boolean;
+  /** True for entries synthesized from a locally-built user theme that has no
+   * marketplace registry entry. Drives the "Local" badge + tooltip in
+   * MarketplaceCard, and the permanent-deletion confirmation copy. Distinct
+   * from `installed: true` which means "manifest.json exists on disk" — a
+   * marketplace theme can be installed but not local. */
+  isLocal?: boolean;
 };
