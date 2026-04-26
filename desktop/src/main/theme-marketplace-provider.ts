@@ -64,6 +64,24 @@ function ghApiWithBody(ghBin: string, args: string[], body: string, timeoutMs = 
 // Slug must be kebab-case: lowercase letters, digits, hyphens only
 const SAFE_SLUG_RE = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/** True when the theme's preview.png exists and was last modified at or
+ * after the manifest.json was last modified. Used by publishTheme() to
+ * avoid regenerating a preview that the /theme-builder skill (or a
+ * previous publisher run) just produced. The mtime comparison is `>=`
+ * not `>` because manifest and preview can be written close enough in
+ * time to land on the same millisecond — strict greater-than would
+ * needlessly regenerate in that case. */
+export function isPreviewFresh(themeDir: string): boolean {
+  const previewPath = path.join(themeDir, 'preview.png');
+  const manifestPath = path.join(themeDir, 'manifest.json');
+  try {
+    if (!fs.existsSync(previewPath) || !fs.existsSync(manifestPath)) return false;
+    return fs.statSync(previewPath).mtimeMs >= fs.statSync(manifestPath).mtimeMs;
+  } catch {
+    return false;
+  }
+}
+
 export class ThemeMarketplaceProvider {
   private cachedIndex: ThemeRegistryIndex | null = null;
   private cacheTimestamp = 0;
@@ -405,11 +423,19 @@ export class ThemeMarketplaceProvider {
       }
     }
 
-    // 4. Generate preview image
-    try {
-      await generateThemePreview(themeDir, manifest);
-    } catch (err: any) {
-      console.warn('[ThemeMarketplace] Preview generation failed (continuing without):', err.message);
+    // 4. Use the local preview.png if it's already fresh (theme-builder generates
+    //    it via wecoded-themes/scripts/generate-previews.js at finalize). Falling
+    //    back to BrowserWindow capture only when the local file is missing or
+    //    stale keeps the canonical Playwright-rendered preview as the source
+    //    of truth instead of letting the publisher's variant overwrite it.
+    if (!isPreviewFresh(themeDir)) {
+      try {
+        await generateThemePreview(themeDir, manifest);
+      } catch (err: any) {
+        console.warn('[ThemeMarketplace] Preview generation failed (continuing without):', err.message);
+      }
+    } else {
+      console.log('[ThemeMarketplace] Using existing fresh preview.png from theme-builder');
     }
 
     // 5. Collect all theme files (manifest + assets + preview)
