@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback, useLayoutEffect } from 'react';
+import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { MODELS, type ModelAlias } from './StatusBar';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
@@ -90,48 +90,52 @@ function FilterPill({
   );
 }
 
-// Measure a trigger button's bounding rect and return fixed-position coords for
-// a portaled dropdown anchored just below the trigger. Re-measures on resize /
-// scroll. Clamps the left coordinate so a wide dropdown near the right edge of
-// the viewport shifts left rather than overflowing off-screen. Used by the
-// Projects + Tags pills which portal their dropdown to escape the
-// OverlayPanel's overflow:hidden clipping.
-function useDropdownPosition(
-  isOpen: boolean,
+// Compute fixed-position coords for a portaled dropdown anchored just below a
+// trigger button. Clamps the left coordinate so a wide dropdown near the right
+// edge of the viewport shifts left rather than overflowing off-screen. Pure;
+// callers invoke it synchronously inside the click handler so the dropdown can
+// render in the same React commit as `openPill` flipping (no two-render lag).
+function measureDropdown(
   triggerRef: React.RefObject<HTMLButtonElement | null>,
   dropdownWidthPx: number,
 ): { top: number; left: number } | null {
-  const [position, setPosition] = useState<{ top: number; left: number } | null>(null);
+  const el = triggerRef.current;
+  if (!el) return null;
+  const rect = el.getBoundingClientRect();
+  // Clamp so the dropdown's right edge stays at least 8px inside the viewport.
+  // If the trigger sits too far right, the dropdown shifts left.
+  const maxLeft = Math.max(8, window.innerWidth - dropdownWidthPx - 8);
+  return {
+    top: rect.bottom + 4,
+    left: Math.min(rect.left, maxLeft),
+  };
+}
 
-  useLayoutEffect(() => {
-    if (!isOpen) {
-      setPosition(null);
-      return;
-    }
-    const measure = () => {
-      const el = triggerRef.current;
-      if (!el) return;
-      const rect = el.getBoundingClientRect();
-      // Clamp so the dropdown's right edge stays at least 8px inside the
-      // viewport. If the trigger sits too far right, the dropdown shifts left.
-      const maxLeft = Math.max(8, window.innerWidth - dropdownWidthPx - 8);
-      setPosition({
-        top: rect.bottom + 4,
-        left: Math.min(rect.left, maxLeft),
-      });
+// While a dropdown is open, re-measure the trigger on window resize / scroll
+// so the dropdown stays anchored as the viewport changes. The initial position
+// is captured synchronously in the pill's click handler — this hook only
+// handles updates after open, not the open itself.
+function useDropdownReposition(
+  isOpen: boolean,
+  triggerRef: React.RefObject<HTMLButtonElement | null>,
+  dropdownWidthPx: number,
+  setPosition: React.Dispatch<React.SetStateAction<{ top: number; left: number } | null>>,
+): void {
+  useEffect(() => {
+    if (!isOpen) return;
+    const remeasure = () => {
+      const next = measureDropdown(triggerRef, dropdownWidthPx);
+      if (next) setPosition(next);
     };
-    measure();
-    window.addEventListener('resize', measure);
+    window.addEventListener('resize', remeasure);
     // Capture-phase scroll listener catches scroll on any ancestor, not just
     // window — needed if a scrollable parent moves the trigger.
-    window.addEventListener('scroll', measure, true);
+    window.addEventListener('scroll', remeasure, true);
     return () => {
-      window.removeEventListener('resize', measure);
-      window.removeEventListener('scroll', measure, true);
+      window.removeEventListener('resize', remeasure);
+      window.removeEventListener('scroll', remeasure, true);
     };
-  }, [isOpen, triggerRef, dropdownWidthPx]);
-
-  return position;
+  }, [isOpen, triggerRef, dropdownWidthPx, setPosition]);
 }
 
 // FlagName is imported from resume-browser-filters.ts (single source of truth).
@@ -331,8 +335,26 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Portal-anchored dropdown positions. Dropdown widths match the className
   // (Projects: w-64 = 256px, Tags: w-44 = 176px). Keep these in sync if the
   // className width changes.
-  const projectsDropdownPos = useDropdownPosition(openPill === 'projects', projectsTriggerRef, 256);
-  const tagsDropdownPos = useDropdownPosition(openPill === 'tags', tagsTriggerRef, 176);
+  // The position is captured synchronously inside each pill's onClick handler
+  // (not via useLayoutEffect) so the dropdown can render in the same React
+  // commit as `openPill` flipping — eliminates the two-render lag the prior
+  // implementation had between pill click and dropdown appearing.
+  const [projectsDropdownPos, setProjectsDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  const [tagsDropdownPos, setTagsDropdownPos] = useState<{ top: number; left: number } | null>(null);
+  // Reposition while open (resize / scroll updates only — not the initial
+  // measurement, which is sync in the click handler).
+  useDropdownReposition(openPill === 'projects', projectsTriggerRef, 256, setProjectsDropdownPos);
+  useDropdownReposition(openPill === 'tags', tagsTriggerRef, 176, setTagsDropdownPos);
+
+  // Clear stale position state when the dropdown closes via outside-click or
+  // ESC (the click handlers do this themselves, but those external paths
+  // don't). Saves a tiny amount of memory and prevents a stale position from
+  // briefly flashing if the same pill reopens before useDropdownReposition
+  // has a chance to update.
+  useEffect(() => {
+    if (openPill !== 'projects' && projectsDropdownPos !== null) setProjectsDropdownPos(null);
+    if (openPill !== 'tags' && tagsDropdownPos !== null) setTagsDropdownPos(null);
+  }, [openPill, projectsDropdownPos, tagsDropdownPos]);
 
   // Optimistically flip a flag in local state, then persist via IPC. On failure
   // we revert. A meta-changed push from other tabs/devices also refreshes the
@@ -582,7 +604,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 expanded={openPill === 'projects'}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setOpenPill((p) => (p === 'projects' ? null : 'projects'));
+                  // Measure synchronously so the dropdown renders with its final
+                  // position in the same commit as openPill flipping. Avoids the
+                  // two-render lag the prior useLayoutEffect approach had.
+                  if (openPill === 'projects') {
+                    setOpenPill(null);
+                    setProjectsDropdownPos(null);
+                  } else {
+                    setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256));
+                    setOpenPill('projects');
+                  }
                 }}
               >
                 <span>{projectsLabel}</span>
@@ -597,7 +628,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     top: projectsDropdownPos.top,
                     left: projectsDropdownPos.left,
                     zIndex: 60,
-                    animation: 'dropdown-in 60ms ease-out both',
                   }}
                 >
                   {/* "Clear" — text-only affordance that empties selectedProjects (which the data
@@ -649,7 +679,14 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 expanded={openPill === 'tags'}
                 onClick={(e) => {
                   e.stopPropagation();
-                  setOpenPill((p) => (p === 'tags' ? null : 'tags'));
+                  // Measure synchronously — see Projects onClick comment.
+                  if (openPill === 'tags') {
+                    setOpenPill(null);
+                    setTagsDropdownPos(null);
+                  } else {
+                    setTagsDropdownPos(measureDropdown(tagsTriggerRef, 176));
+                    setOpenPill('tags');
+                  }
                 }}
               >
                 <span>{tagsLabel}</span>
@@ -664,7 +701,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     top: tagsDropdownPos.top,
                     left: tagsDropdownPos.left,
                     zIndex: 60,
-                    animation: 'dropdown-in 60ms ease-out both',
                   }}
                 >
                   {TAG_FILTER_OPTIONS.map((tag) => {
