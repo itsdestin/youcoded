@@ -287,8 +287,8 @@ contextBridge.exposeInMainWorld('claude', {
     },
     // Shape parity with remote-shim — desktop never fires this push event
     // (Electron PTY emits pty:output strings instead). The stub keeps the
-    // window.claude.on shape symmetric so React components don't need to
-    // platform-branch on the API's existence.
+    // window.claude.on shape symmetric so an optional-chained call from a
+    // future hook returns a benign no-op unsubscriber rather than crashing.
     ptyRawBytesForSession: (_sessionId: string, _cb: (data: string) => void) => {
       return () => {};
     },
