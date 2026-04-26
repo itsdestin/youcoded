@@ -176,6 +176,17 @@ declare global {
         onInstallProgress: (handler: (line: string) => void) => () => void;
         openSessionIn: (args: { cwd: string; initialInput?: string }) => Promise<{ id: string }>;
       };
+      // GPU / performance preference — multiGpuDetected: false means the
+      // Performance section in Settings hides itself (no hardware to toggle).
+      performance: {
+        get: () => Promise<import('../../shared/types').PerformanceConfigSnapshot>;
+        set: (preferPowerSaving: boolean) => Promise<{ ok: true }>;
+      };
+      // WHY: named 'app' (not 'performance') so future restart-required settings
+      // can reuse the same generic restart channel.
+      app: {
+        restart: () => Promise<void>;
+      };
     };
   }
 }

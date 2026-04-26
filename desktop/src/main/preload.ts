@@ -2,7 +2,7 @@ import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
-import type { AttentionSummary, AttentionReport } from '../shared/types';
+import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot } from '../shared/types';
 
 // Mirrored type — must match ChangelogResult in src/main/changelog-service.ts.
 interface ChangelogIpcResult {
@@ -232,6 +232,11 @@ const IPC = {
   // analytics-service consults on launch (Phase 6).
   ANALYTICS_GET_OPT_IN: 'analytics:get-opt-in',
   ANALYTICS_SET_OPT_IN: 'analytics:set-opt-in',
+  // Performance / GPU settings. APP_RESTART is intentionally generic — not
+  // 'performance:restart' — so future restart-required settings can reuse it.
+  PERFORMANCE_GET_CONFIG: 'performance:get-config',
+  PERFORMANCE_SET_CONFIG: 'performance:set-config',
+  APP_RESTART: 'app:restart',
 } as const;
 
 contextBridge.exposeInMainWorld('claude', {
@@ -795,5 +800,18 @@ contextBridge.exposeInMainWorld('claude', {
   terminal: {
     getScreenText: (sessionId: string): Promise<string> =>
       ipcRenderer.invoke('terminal:get-screen-text', sessionId),
+  },
+  // GPU / performance preference — read and write the preferPowerSaving flag.
+  // multiGpuDetected: false in the response means the UI section stays hidden.
+  performance: {
+    get: (): Promise<PerformanceConfigSnapshot> =>
+      ipcRenderer.invoke(IPC.PERFORMANCE_GET_CONFIG),
+    set: (preferPowerSaving: boolean): Promise<{ ok: true }> =>
+      ipcRenderer.invoke(IPC.PERFORMANCE_SET_CONFIG, { preferPowerSaving }),
+  },
+  // WHY: named 'app:restart' (not 'performance:restart') so any future
+  // restart-required setting can reuse this single generic channel.
+  app: {
+    restart: (): Promise<void> => ipcRenderer.invoke(IPC.APP_RESTART),
   },
 });
