@@ -42,7 +42,15 @@ export default function PerformanceSection() {
 
       <button
         type="button"
-        onClick={() => setPreferPowerSaving(!saved)}
+        role="switch"
+        aria-checked={saved}
+        onClick={() => {
+          // Hook owns optimistic rollback + re-throw on persistence failure.
+          // We swallow here intentionally — without an error toast surface yet,
+          // the visual state has already corrected itself via the hook's revert,
+          // and an unhandled rejection in the console is just noise.
+          setPreferPowerSaving(!saved).catch(() => { /* see WHY above */ });
+        }}
         className="w-full text-left flex items-start gap-3 p-3 rounded-lg hover:bg-inset transition-colors"
       >
         <span className={`mt-0.5 inline-block w-4 h-4 rounded border ${
