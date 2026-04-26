@@ -48,8 +48,8 @@ describe('ToolCard — Skill compact variant', () => {
       </ChatProvider>
     );
     expect(screen.queryByTestId('tool-card-body')).toBeNull();
-    // But the header label IS visible:
-    expect(screen.getByText(/Running \/superpowers:brainstorming/)).toBeInTheDocument();
+    // Header label uses the new "Invoked skill: <bare-name>" format (namespace stripped).
+    expect(screen.getByText(/Invoked skill: brainstorming/)).toBeInTheDocument();
   });
 
   it('renders non-Skill tool with the chevron present', () => {

@@ -82,7 +82,8 @@ describe('AssistantTurnBubble — Skill extraction', () => {
 
     const html = container.innerHTML;
     const bashIdx = html.indexOf('git status');
-    const skillIdx = html.indexOf('superpowers:brainstorming');
+    // Skill label is "Invoked skill: <bare-name>" — namespace is stripped.
+    const skillIdx = html.indexOf('Invoked skill: brainstorming');
     expect(bashIdx).toBeGreaterThanOrEqual(0);
     expect(skillIdx).toBeGreaterThanOrEqual(0);
     expect(skillIdx).toBeGreaterThan(bashIdx);
@@ -98,7 +99,7 @@ describe('AssistantTurnBubble — Skill extraction', () => {
     ]);
 
     const { container } = renderTurn({ turn, toolGroups, toolCalls });
-    expect(container.innerHTML).toContain('superpowers:brainstorming');
+    expect(container.innerHTML).toContain('Invoked skill: brainstorming');
   });
 
   it('stacks multiple Skills in invocation order at the end', () => {
@@ -115,8 +116,9 @@ describe('AssistantTurnBubble — Skill extraction', () => {
 
     const { container } = renderTurn({ turn, toolGroups, toolCalls });
     const html = container.innerHTML;
-    const oneIdx = html.indexOf('superpowers:one');
-    const twoIdx = html.indexOf('superpowers:two');
+    // Full label phrasing makes the bare suffix unambiguous in the HTML.
+    const oneIdx = html.indexOf('Invoked skill: one');
+    const twoIdx = html.indexOf('Invoked skill: two');
     // 'ls -la /tmp' is distinctive — won't false-match on 'TooLs' etc.
     const bashIdx = html.indexOf('ls -la /tmp');
     expect(bashIdx).toBeGreaterThanOrEqual(0);

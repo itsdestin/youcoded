@@ -145,8 +145,13 @@ export function friendlyToolDisplay(tool: ToolCallState): { label: string; detai
     case 'Skill': {
       const skill = input.skill as string | undefined;
       const args = input.args as string | undefined;
+      // Strip the plugin namespace ("superpowers:brainstorming" -> "brainstorming")
+      // so the label reads as English, not as a technical id. Past tense matches
+      // the post-launch state — by the time the card renders, the skill has
+      // already been invoked.
+      const bareName = skill?.includes(':') ? skill.split(':').slice(-1)[0] : skill;
       return {
-        label: skill ? `Running /${skill}` : 'Running Skill',
+        label: bareName ? `Invoked skill: ${bareName}` : 'Invoked skill',
         detail: args ? `↳ ${args}` : '',
       };
     }

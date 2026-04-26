@@ -9,7 +9,9 @@
 import React from 'react';
 import { ChatProvider } from '../state/chat-context';
 import ToolCard from '../components/ToolCard';
+import { CollapsedToolGroup } from '../components/AssistantTurnBubble';
 import { loadFixture, type FixtureBlock } from './fixture-loader';
+import type { ToolCallState } from '../../shared/types';
 
 // Vite's import.meta.glob eagerly reads every fixture as a raw string at build
 // time. We silence tsc because our tsconfig uses `module: "commonjs"` which
@@ -39,16 +41,44 @@ function orderedBlocks(blocks: FixtureBlock[]): FixtureBlock[] {
   return [...otherBlocks, ...skillBlocks];
 }
 
-// Renders a single block — text as prose, tool as a real <ToolCard>.
-function renderBlock(block: FixtureBlock, index: number): React.ReactNode {
-  if (block.kind === 'text') {
-    return (
-      <p key={`text-${index}`} style={{ margin: '8px 0', lineHeight: 1.5, opacity: 0.9 }}>
-        {block.text}
-      </p>
-    );
+// Walks the (already Skill-reordered) blocks and groups consecutive non-Skill
+// tool runs into a real <CollapsedToolGroup> — matches what production does
+// when 2+ tools land in the same reducer-level group. Skills always render
+// as standalone <ToolCard> instances (mirrors the AssistantTurnBubble
+// extraction in Task 3 — Skills opt out of groups and trail at the end).
+function renderBlocks(blocks: FixtureBlock[]): React.ReactNode[] {
+  const out: React.ReactNode[] = [];
+  let toolBuffer: ToolCallState[] = [];
+
+  function flushToolBuffer(key: string) {
+    if (toolBuffer.length === 0) return;
+    if (toolBuffer.length === 1) {
+      const t = toolBuffer[0];
+      out.push(<ToolCard key={t.toolUseId} tool={t} />);
+    } else {
+      out.push(<CollapsedToolGroup key={key} tools={toolBuffer} sessionId="sandbox" />);
+    }
+    toolBuffer = [];
   }
-  return <ToolCard key={block.tool.toolUseId} tool={block.tool} />;
+
+  blocks.forEach((block, i) => {
+    if (block.kind === 'text') {
+      flushToolBuffer(`group-${i}`);
+      out.push(
+        <p key={`text-${i}`} style={{ margin: '8px 0', lineHeight: 1.5, opacity: 0.9 }}>
+          {block.text}
+        </p>
+      );
+    } else if (block.tool.toolName === 'Skill') {
+      flushToolBuffer(`group-${i}`);
+      out.push(<ToolCard key={block.tool.toolUseId} tool={block.tool} />);
+    } else {
+      toolBuffer.push(block.tool);
+    }
+  });
+  flushToolBuffer('group-final');
+
+  return out;
 }
 
 // Derive the group heading for a fixture: multi-block fixtures go under
@@ -139,10 +169,10 @@ export function ToolSandbox() {
                         margin: '8px 0',
                       }}
                     >
-                      {orderedBlocks(result.blocks).map(renderBlock)}
+                      {renderBlocks(orderedBlocks(result.blocks))}
                     </div>
                   ) : (
-                    orderedBlocks(result.blocks).map(renderBlock)
+                    renderBlocks(orderedBlocks(result.blocks))
                   )}
                 </div>
               );

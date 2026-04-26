@@ -68,8 +68,10 @@ function TurnMetadataStrip({ turn }: { turn: AssistantTurn }) {
   );
 }
 
-/** Renders a collapsed summary for 3+ tools in a group. */
-function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[]; sessionId: string }) {
+/** Renders a collapsed summary for 2+ tools in a group. Exported so the dev
+ * sandbox at /tool-sandbox can render fixtures with the same grouping
+ * treatment real chat uses (single visual unit + shared bg-inset on cards). */
+export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[]; sessionId: string }) {
   const [expanded, setExpanded] = useState(() => getInitialExpanded());
   useExpandAllToggle(() => setExpanded(true), () => setExpanded(false));
 
