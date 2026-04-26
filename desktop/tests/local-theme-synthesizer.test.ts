@@ -38,13 +38,18 @@ describe('synthesizeLocalThemeEntries', () => {
     expect(local!.features).toContain('glassmorphism');
   });
 
-  it('does not duplicate when a local manifest matches a marketplace slug', () => {
+  it('does not duplicate when a local manifest matches a marketplace slug, and the marketplace entry wins', () => {
     const result = synthesizeLocalThemeEntries(
       [marketplaceEntry],
       [{ slug: 'golden-sunbreak', manifest: { slug: 'golden-sunbreak', name: 'X', author: 'Y', dark: true, tokens: {} }, hasPreview: false }],
     );
     expect(result).toHaveLength(1);
     expect(result[0].isLocal).toBeUndefined();
+    // Lock in "marketplace wins" as a contract — this prevents a future merge-order
+    // swap from silently flipping which entry survives a slug collision.
+    expect(result[0].slug).toBe('golden-sunbreak');
+    expect(result[0].source).toBe('youcoded-core');
+    expect(result[0].name).toBe('Golden Sunbreak');
   });
 
   it('falls back to wallpaper path when preview.png is missing', () => {

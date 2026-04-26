@@ -1,4 +1,4 @@
-import type { ThemeRegistryEntryWithStatus } from '../shared/theme-marketplace-types';
+import type { ThemeRegistryEntry, ThemeRegistryEntryWithStatus } from '../shared/theme-marketplace-types';
 
 /** What we read for each local user theme on disk. The caller (provider)
  * supplies these — this module is pure so it stays unit-testable. */
@@ -27,15 +27,24 @@ function detectFeatures(manifest: Record<string, any>): string[] {
   return features;
 }
 
-function pickPreviewTokens(manifest: Record<string, any>): Record<string, string> | undefined {
+function pickPreviewTokens(
+  manifest: Record<string, any>,
+): ThemeRegistryEntry['previewTokens'] | undefined {
   const tokens = manifest.tokens ?? {};
   const picked: Record<string, string> = {};
   for (const key of PREVIEW_TOKEN_KEYS) {
     if (typeof tokens[key] === 'string') picked[key] = tokens[key];
   }
-  return Object.keys(picked).length === PREVIEW_TOKEN_KEYS.length
-    ? (picked as any)
-    : undefined;
+  if (Object.keys(picked).length !== PREVIEW_TOKEN_KEYS.length) return undefined;
+  return {
+    canvas: picked.canvas,
+    panel: picked.panel,
+    accent: picked.accent,
+    'on-accent': picked['on-accent'],
+    fg: picked.fg,
+    'fg-muted': picked['fg-muted'],
+    edge: picked.edge,
+  };
 }
 
 function pickPreviewUrl(rec: LocalThemeRecord): string | undefined {
