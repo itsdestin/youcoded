@@ -82,6 +82,8 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
       ? mp.themeFavorites.includes(item.entry.slug)
       : mp.favorites.includes(item.entry.id);
   const isInstalled = !!installed;
+  // Derived: true only when this card represents a locally-built theme (not in marketplace).
+  const isLocalTheme = item.kind === 'theme' && !!item.entry.isLocal;
   const [iconFailed, setIconFailed] = useState(false);
 
   const toggleFavorite = () => {
@@ -178,6 +180,33 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
           <div className="min-w-0">
             <h3 className="font-medium text-fg truncate">{title}</h3>
             {author && <p className="text-xs text-fg-dim truncate">{author}</p>}
+            {isLocalTheme && (
+              <div className="mt-1 inline-flex items-center gap-1 group relative">
+                <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
+                  Local
+                </span>
+                <button
+                  type="button"
+                  onClick={(e) => e.stopPropagation()}
+                  onKeyDown={(e) => e.stopPropagation()}
+                  className="text-fg-muted hover:text-fg-2 leading-none focus:outline-none focus-visible:ring-1 focus-visible:ring-accent rounded-full"
+                  aria-label="What does Local mean?"
+                >
+                  <svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+                    <circle cx="8" cy="8" r="7" fill="none" stroke="currentColor" strokeWidth="1.5" />
+                    <text x="8" y="11" textAnchor="middle" fontSize="9" fontWeight="600" fill="currentColor">i</text>
+                  </svg>
+                </button>
+                {/* Tooltip — only shown on hover/focus of the (i). The group-hover on the
+                     parent inline-flex handles both badge hover and the icon button. */}
+                <div
+                  role="tooltip"
+                  className="pointer-events-none absolute top-full left-0 mt-1 w-64 z-20 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity layer-surface p-3 text-xs text-fg-2 leading-relaxed"
+                >
+                  Local only. Built by you with Claude — not in the marketplace, so it can't be shared or re-downloaded. Deleting it removes the files permanently. You can publish it later from the theme detail view.
+                </div>
+              </div>
+            )}
           </div>
         </div>
         {/* Status badge — z-10 keeps it above the corner star overlay so
