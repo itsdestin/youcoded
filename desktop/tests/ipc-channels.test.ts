@@ -160,18 +160,25 @@ describe('terminal:get-screen-text channel parity', () => {
   });
 });
 
-// Regression net for pty:raw-bytes, introduced by the android-terminal-data-parity
-// plan (Task 8). This is an Android-broadcast-only push event: SessionService.kt
-// emits it; there is no desktop sender or consumer yet (Tier 2 xterm.js would be
-// the consumer, not shipping in this plan). The desktop surfaces (preload, shim,
-// ipc-handlers) intentionally do NOT declare this type — adding stubs would be
-// dead code until Tier 2 lands.
-//
-// WHY only one assertion: this acts as a tombstone so the string is pinned and
-// never silently renamed. When Tier 2 lands and desktop surfaces need it, add the
-// three remaining assertions here and they will immediately catch drift.
-describe('pty:raw-bytes channel parity (Android-broadcast-only)', () => {
+// Regression net for pty:raw-bytes. Tier 1 introduced the Android broadcaster;
+// Tier 2 (xterm-in-WebView) added the desktop-side consumer surfaces. Three
+// surfaces must carry identical type strings — drift would silently break the
+// xterm-on-Android renderer. ipc-handlers.ts is intentionally NOT in this list:
+// pty:raw-bytes is a push event from Android via WebSocket, not a request-
+// response handler, and there is no desktop sender (Electron PTY emits
+// pty:output strings instead).
+describe('pty:raw-bytes channel parity', () => {
   const CHANNEL = 'pty:raw-bytes';
+
+  it('pty:raw-bytes is declared in preload.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    expect(src).toContain(`'${CHANNEL}'`);
+  });
+
+  it('pty:raw-bytes is referenced in remote-shim.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    expect(src).toContain(`'${CHANNEL}'`);
+  });
 
   it('pty:raw-bytes is broadcast by SessionService.kt (Android)', () => {
     const ktPath = path.join(

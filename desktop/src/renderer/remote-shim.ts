@@ -150,6 +150,12 @@ function handleMessage(data: string): void {
       dispatchEvent('pty:output', payload.sessionId, payload.data);              // global (App.tsx mode detection)
       dispatchEvent(`pty:output:${payload.sessionId}`, payload.data);            // per-session (TerminalView)
       break;
+    case 'pty:raw-bytes':
+      // Per-session dispatch only — no global consumer (xterm is per-session).
+      // Payload data is base64-encoded raw PTY bytes from Android's
+      // RawByteListener (Tier 1). usePtyRawBytes decodes to Uint8Array.
+      dispatchEvent(`pty:raw-bytes:${payload.sessionId}`, payload.data);
+      break;
     case 'hook:event':
       dispatchEvent('hook:event', payload);
       break;
@@ -602,6 +608,11 @@ export function installShim(): void {
       ptyOutput: (cb: Callback) => addListener('pty:output', cb),
       ptyOutputForSession: (sessionId: string, cb: (data: string) => void) => {
         const channel = `pty:output:${sessionId}`;
+        const handler = addListener(channel, cb);
+        return () => removeListener(channel, handler);
+      },
+      ptyRawBytesForSession: (sessionId: string, cb: (data: string) => void) => {
+        const channel = `pty:raw-bytes:${sessionId}`;
         const handler = addListener(channel, cb);
         return () => removeListener(channel, handler);
       },

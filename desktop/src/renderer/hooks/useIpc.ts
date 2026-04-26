@@ -56,6 +56,9 @@ declare global {
         // onChatExportSnapshot instead). Remote browsers receive chat:hydrate on
         // connect so remote-shim subscribes this to dispatch HYDRATE_CHAT_STATE.
         chatHydrate?: (cb: (payload: any) => void) => () => void;
+        // Optional — desktop stub returns no-op unsubscribe; Android remote-shim
+        // dispatches base64-encoded raw PTY bytes for xterm.js consumption (Tier 2).
+        ptyRawBytesForSession?: (sessionId: string, cb: (data: string) => void) => () => void;
       };
       dialog: {
         openFile: () => Promise<string[]>;

@@ -23,6 +23,7 @@ const IPC = {
   SESSION_CREATED: 'session:created',
   SESSION_DESTROYED: 'session:destroyed',
   PTY_OUTPUT: 'pty:output',
+  PTY_RAW_BYTES: 'pty:raw-bytes',
   HOOK_EVENT: 'hook:event',
   SESSION_RENAMED: 'session:renamed',
   DIALOG_OPEN_FILE: 'dialog:open-file',
@@ -283,6 +284,13 @@ contextBridge.exposeInMainWorld('claude', {
       const handler = (_event: IpcRendererEvent, data: string) => cb(data);
       ipcRenderer.on(channel, handler);
       return () => ipcRenderer.removeListener(channel, handler);
+    },
+    // Shape parity with remote-shim — desktop never fires this push event
+    // (Electron PTY emits pty:output strings instead). The stub keeps the
+    // window.claude.on shape symmetric so React components don't need to
+    // platform-branch on the API's existence.
+    ptyRawBytesForSession: (_sessionId: string, _cb: (data: string) => void) => {
+      return () => {};
     },
     hookEvent: (cb: (event: any) => void) => {
       const handler = (_e: IpcRendererEvent, event: any) => cb(event);
