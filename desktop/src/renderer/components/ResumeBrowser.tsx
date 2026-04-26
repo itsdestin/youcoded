@@ -79,7 +79,7 @@ function FilterPill({
       aria-pressed={active}
       aria-haspopup={hasPopup ? 'listbox' : undefined}
       aria-expanded={hasPopup ? !!expanded : undefined}
-      className={`px-2.5 py-1 rounded-full text-[11px] flex items-center gap-1.5 transition-colors ${
+      className={`px-2.5 py-1 rounded-full text-[11px] flex items-center gap-1.5 transition-colors duration-75 ${
         active
           ? 'bg-accent/10 border border-accent/40 text-fg'
           : 'bg-inset border border-edge-dim text-fg-muted hover:text-fg'
@@ -597,7 +597,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     top: projectsDropdownPos.top,
                     left: projectsDropdownPos.left,
                     zIndex: 60,
-                    animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both',
+                    animation: 'dropdown-in 60ms ease-out both',
                   }}
                 >
                   {/* "Clear" — text-only affordance that empties selectedProjects (which the data
@@ -664,7 +664,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     top: tagsDropdownPos.top,
                     left: tagsDropdownPos.left,
                     zIndex: 60,
-                    animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both',
+                    animation: 'dropdown-in 60ms ease-out both',
                   }}
                 >
                   {TAG_FILTER_OPTIONS.map((tag) => {
