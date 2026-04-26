@@ -9,7 +9,6 @@
 import React from 'react';
 import { ChatProvider } from '../state/chat-context';
 import ToolCard from '../components/ToolCard';
-import { CollapsedToolGroup } from '../components/AssistantTurnBubble';
 import { loadFixture, type FixtureBlock } from './fixture-loader';
 import type { ToolCallState } from '../../shared/types';
 
@@ -41,11 +40,13 @@ function orderedBlocks(blocks: FixtureBlock[]): FixtureBlock[] {
   return [...otherBlocks, ...skillBlocks];
 }
 
-// Walks the (already Skill-reordered) blocks and groups consecutive non-Skill
-// tool runs into a real <CollapsedToolGroup> — matches what production does
-// when 2+ tools land in the same reducer-level group. Skills always render
-// as standalone <ToolCard> instances (mirrors the AssistantTurnBubble
-// extraction in Task 3 — Skills opt out of groups and trail at the end).
+// Walks the (already Skill-reordered) blocks. Consecutive non-Skill tools
+// get wrapped in a shared bordered container with inGroup={true} on each
+// card so they read visually as one tool group (mirrors the production
+// CollapsedToolGroup styling without importing it — the import path
+// caused a runtime crash, so we reproduce the visual outcome locally).
+// Skill tools always render standalone — they extract from groups in
+// production (Task 3) and we mirror that here.
 function renderBlocks(blocks: FixtureBlock[]): React.ReactNode[] {
   const out: React.ReactNode[] = [];
   let toolBuffer: ToolCallState[] = [];
@@ -56,7 +57,15 @@ function renderBlocks(blocks: FixtureBlock[]): React.ReactNode[] {
       const t = toolBuffer[0];
       out.push(<ToolCard key={t.toolUseId} tool={t} />);
     } else {
-      out.push(<CollapsedToolGroup key={key} tools={toolBuffer} sessionId="sandbox" />);
+      out.push(
+        <div key={key} className="border border-edge rounded-lg overflow-hidden my-1">
+          <div className="px-2 py-1.5 space-y-0.5">
+            {toolBuffer.map((t) => (
+              <ToolCard key={t.toolUseId} tool={t} inGroup />
+            ))}
+          </div>
+        </div>
+      );
     }
     toolBuffer = [];
   }
