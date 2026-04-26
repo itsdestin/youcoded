@@ -108,3 +108,13 @@ Each entry has three fields:
 - **Files:** `desktop/src/renderer/state/task-state.ts` (`parseTaskCreateResult`, `parseTaskListResult`)
 - **Depends on:** Two CC-emitted result strings parsed by the Open Tasks chip data layer. (1) `TaskCreate` response: `"Task #<N> created successfully: <subject>"` — the numeric id is only in this string, not in the tool input. (2) `TaskList` response: newline-separated rows matching `^#<N> \[(pending|in_progress|completed)\] (?:Task \d+: )?<subject>$` — authoritative per-session snapshot.
 - **Break symptom:** Open Tasks chip and popup lose visibility into newly-created tasks (they still appear after a subsequent `TaskUpdate` that carries `taskId` directly). If TaskList format changes, the `buildTasksById` authoritative-snapshot path silently stops reconciling status — chip counts drift from what `TaskList` reports until the user triggers an explicit TaskUpdate. Parsers return `null`/`[]` on mismatch, so no render crash — just silent data gaps.
+
+### Android attention classifier
+
+- **What:** `useAttentionClassifier` (renderer) runs on standalone Android by reading screen text via `window.claude.terminal.getScreenText`, which routes to `PtyBridge.readScreenText()` on the Android side. Classifier regex patterns in `classifyBuffer` match Claude Code CLI spinner glyphs (✻✽✢✳✶*⏺◉) and the "esc to cancel" / "esc to interrupt" markers.
+- **CC-coupled files:**
+  - `desktop/src/renderer/state/attention-classifier.ts` (patterns)
+  - `desktop/src/renderer/hooks/useAttentionClassifier.ts` (tick logic)
+  - `desktop/tests/attention-classifier-parity.test.ts` + `shared-fixtures/attention-classifier/` (regression coverage)
+- **Why coupled:** Patterns must match Claude Code's CLI output. Visual changes to the Ink UI (spinner glyph, prompt copy, error banner color) can break classification silently.
+- **Review trigger:** Any Claude Code CHANGELOG entry mentioning TUI / Ink / prompt / spinner / progress updates.

@@ -782,4 +782,18 @@ contextBridge.exposeInMainWorld('claude', {
   attention: {
     report: (payload: AttentionReport) => ipcRenderer.send(IPC.ATTENTION_REPORT, payload),
   },
+  // Exposes the live xterm buffer for a session. Used by useAttentionClassifier
+  // (~1s cadence) so it can read terminal state on both Electron and Android
+  // via the same window.claude.terminal.getScreenText API.
+  // The call chain on desktop is intentionally circuitous:
+  //   renderer → preload contextBridge → ipcMain.handle →
+  //   event.sender.executeJavaScript → window.__terminalRegistry.getScreenText
+  // This round-trip is necessary because contextBridge freezes the exposed
+  // object, so the renderer cannot write back to it. The registry is wired
+  // up in bootstrap/terminal-bridge.ts. Round-trip cost is not perf-sensitive
+  // at ~1s cadence.
+  terminal: {
+    getScreenText: (sessionId: string): Promise<string> =>
+      ipcRenderer.invoke('terminal:get-screen-text', sessionId),
+  },
 });

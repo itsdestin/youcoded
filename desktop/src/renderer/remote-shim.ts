@@ -1037,5 +1037,18 @@ export function installShim(): void {
     attention: {
       report: () => { /* no-op: buddy attention summary is desktop-only */ },
     },
+    // WHY: useAttentionClassifier calls window.claude.terminal.getScreenText
+    // every 1s on Electron to read the xterm PTY buffer for attention state
+    // classification. On Android the PTY buffer lives in Kotlin (TerminalView /
+    // ScreenBufferTracker), so we route through the existing WebSocket invoke
+    // helper to the terminal:get-screen-text handler added in SessionService.kt
+    // (Task 7). Response shape is {text: string}; normalize to Promise<string>
+    // with a '' fallback for safety.
+    terminal: {
+      getScreenText: async (sessionId: string): Promise<string> => {
+        const response = await invoke('terminal:get-screen-text', { sessionId });
+        return response?.text ?? '';
+      },
+    },
   };
 }

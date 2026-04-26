@@ -319,6 +319,20 @@ export function registerIpcHandlers(
     process.nextTick(() => sendForSession(info.id, IPC.SESSION_CREATED, info));
   });
 
+  // window.claude.terminal.getScreenText — reads the visible xterm buffer
+  // for the given session. The actual read happens in the renderer (xterm
+  // lives there), so main calls back via executeJavaScript. ~1s cadence
+  // under the classifier; round-trip overhead is negligible.
+  ipcMain.handle('terminal:get-screen-text', async (event, sessionId: string) => {
+    try {
+      return await event.sender.executeJavaScript(
+        `window.__terminalRegistry?.getScreenText(${JSON.stringify(sessionId)}) ?? ''`
+      );
+    } catch {
+      return '';
+    }
+  });
+
   // Session CRUD
   ipcMain.handle(IPC.SESSION_CREATE, async (event, opts) => {
     const info = sessionManager.createSession(opts);

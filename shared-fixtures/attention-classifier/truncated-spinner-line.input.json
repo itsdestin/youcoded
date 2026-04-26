@@ -1,0 +1,8 @@
+{
+  "description": "Spinner line truncated before closing paren — SPINNER_RE does not match → unknown",
+  "bufferTail": [
+    "✻ Thinking… (5s · esc to interru"
+  ],
+  "previousSpinnerSeconds": null,
+  "secondsSincePreviousSpinner": 0
+}

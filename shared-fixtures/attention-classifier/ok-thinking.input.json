@@ -1,0 +1,10 @@
+{
+  "description": "Spinner visible, first tick (previousSpinnerSeconds null) → thinking-active",
+  "bufferTail": [
+    "Claude is working...",
+    "✻ Thinking… (5s · esc to interrupt)",
+    ""
+  ],
+  "previousSpinnerSeconds": null,
+  "secondsSincePreviousSpinner": 1
+}

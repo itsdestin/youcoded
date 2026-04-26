@@ -127,6 +127,62 @@ describe('dev:* channel parity', () => {
   });
 });
 
+// Regression net for terminal:get-screen-text, introduced by the
+// android-terminal-data-parity plan (Task 7/9/10). All four surfaces
+// (preload.ts, remote-shim.ts, ipc-handlers.ts, SessionService.kt) must
+// carry identical type strings — drift would silently break the PTY
+// buffer classifier on one platform.
+describe('terminal:get-screen-text channel parity', () => {
+  const CHANNEL = 'terminal:get-screen-text';
+
+  it('terminal:get-screen-text is declared in preload.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    expect(src).toContain(`'${CHANNEL}'`);
+  });
+
+  it('terminal:get-screen-text is referenced in remote-shim.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-shim.ts'), 'utf8');
+    expect(src).toContain(`'${CHANNEL}'`);
+  });
+
+  it('terminal:get-screen-text is referenced in ipc-handlers.ts', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'ipc-handlers.ts'), 'utf8');
+    expect(src).toContain(`'${CHANNEL}'`);
+  });
+
+  it('terminal:get-screen-text is handled by SessionService.kt (Android)', () => {
+    const ktPath = path.join(
+      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
+    );
+    const src = fs.readFileSync(ktPath, 'utf8');
+    expect(src).toContain(`"${CHANNEL}"`);
+  });
+});
+
+// Regression net for pty:raw-bytes, introduced by the android-terminal-data-parity
+// plan (Task 8). This is an Android-broadcast-only push event: SessionService.kt
+// emits it; there is no desktop sender or consumer yet (Tier 2 xterm.js would be
+// the consumer, not shipping in this plan). The desktop surfaces (preload, shim,
+// ipc-handlers) intentionally do NOT declare this type — adding stubs would be
+// dead code until Tier 2 lands.
+//
+// WHY only one assertion: this acts as a tombstone so the string is pinned and
+// never silently renamed. When Tier 2 lands and desktop surfaces need it, add the
+// three remaining assertions here and they will immediately catch drift.
+describe('pty:raw-bytes channel parity (Android-broadcast-only)', () => {
+  const CHANNEL = 'pty:raw-bytes';
+
+  it('pty:raw-bytes is broadcast by SessionService.kt (Android)', () => {
+    const ktPath = path.join(
+      __dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+      'com', 'youcoded', 'app', 'runtime', 'SessionService.kt',
+    );
+    const src = fs.readFileSync(ktPath, 'utf8');
+    expect(src).toContain(`"${CHANNEL}"`);
+  });
+});
+
 // Regression net for the update:changelog IPC channel introduced by the
 // UpdatePanel popup feature. All three platforms must carry identical
 // type strings — drift would silently break changelog fetch on one side.

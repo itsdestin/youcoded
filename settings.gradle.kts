@@ -14,3 +14,4 @@ dependencyResolutionManagement {
 }
 rootProject.name = "destin-code"
 include(":app")
+include(":terminal-emulator-vendored")

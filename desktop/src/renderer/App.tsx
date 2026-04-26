@@ -1,3 +1,7 @@
+// Registers window.__terminalRegistry so main-process executeJavaScript
+// can call getScreenText for the attention classifier's ~1s buffer reads.
+// Must run before any TerminalView mounts (which call registerTerminal).
+import './bootstrap/terminal-bridge';
 import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import TerminalView from './components/TerminalView';
 import ChatView from './components/ChatView';

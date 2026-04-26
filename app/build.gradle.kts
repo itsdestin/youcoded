@@ -108,8 +108,17 @@ dependencies {
     // application is distributed under GPLv3 (see app/LICENSE). The desktop Electron app
     // has no such dependency and remains MIT-licensed. Swapping in a permissively-licensed
     // terminal library is the only way to relicense the Android app.
-    implementation("com.github.termux.termux-app:terminal-emulator:v0.118.1")
-    implementation("com.github.termux.termux-app:terminal-view:v0.118.1")
+    // Vendored terminal-emulator module with RawByteListener patch. Don't
+    // add back the Maven dep — that pulls unpatched classes and creates
+    // duplicate-class errors.
+    implementation(project(":terminal-emulator-vendored"))
+
+    // terminal-view stays on Maven — we don't patch the View layer.
+    // Exclude terminal-emulator from its transitive deps so Gradle uses
+    // our vendored version exclusively.
+    implementation("com.github.termux.termux-app:terminal-view:v0.118.1") {
+        exclude(group = "com.github.termux.termux-app", module = "terminal-emulator")
+    }
 
     // Apache Commons Compress for extracting .deb packages (ar + tar + xz + zstd)
     implementation("org.apache.commons:commons-compress:1.27.1")
