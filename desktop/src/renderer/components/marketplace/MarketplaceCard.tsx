@@ -43,6 +43,9 @@ interface Props {
     name: string;
     onClick: () => void;
   };
+  /** When true, render as a horizontal list row optimized for narrow viewports.
+   *  Used by MarketplaceGrid below 640px. Rails always pass false (omit). */
+  compact?: boolean;
 }
 
 // Tone-class map copied from the retired IntegrationCard.tsx so integrations
@@ -71,7 +74,7 @@ function componentSummary(c: SkillComponents | null | undefined): string | null 
   return parts.join(" · ") || null;
 }
 
-export default function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge }: Props) {
+export default function MarketplaceCard({ item, onOpen, installed, updateAvailable, iconUrl, accentColor, suppressCorner, statusBadge, pluginBadge, compact }: Props) {
   const stats = useMarketplaceStats();
   const mp = useMarketplace();
   const kind = item.kind;
@@ -114,6 +117,114 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
   const peek = item.kind === "skill" ? componentSummary(item.entry.components) : null;
 
   const showIcon = !!iconUrl && !iconFailed;
+
+  // Compact list-row layout for narrow viewports. Outer click and keyboard
+  // affordance match the wide layout so detail overlays open the same way.
+  if (compact) {
+    // Resolve a 52x52 thumbnail. Order: explicit iconUrl, then theme preview
+    // (reuses themePreviewUrl declared above), then first-letter fallback on
+    // accent-tinted background.
+    const fallbackLetter = title.slice(0, 1).toUpperCase();
+
+    // Status pill: "Local" for local themes wins over generic Installed/Update,
+    // since local themes are always "installed" but the more interesting fact
+    // is that they're not in the marketplace.
+    const compactStatus: { text: string; tone: 'ok' | 'warn' | 'err' | 'neutral' | 'locked' } | null = statusBadge
+      ? statusBadge
+      : isLocalTheme
+        ? { text: 'Local', tone: 'neutral' }
+        : isInstalling
+          ? { text: 'Installing…', tone: 'neutral' }
+          : updateAvailable
+            ? { text: 'Update', tone: 'warn' }
+            : isInstalled
+              ? { text: 'Installed', tone: 'neutral' }
+              : null;
+
+    return (
+      <div
+        role="button"
+        tabIndex={0}
+        onClick={onOpen}
+        onKeyDown={(e) => {
+          if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            onOpen();
+          }
+        }}
+        className="layer-surface flex flex-row items-center gap-3 p-3 text-left transition-colors hover:bg-inset focus:outline-none focus-visible:ring-2 focus-visible:ring-accent"
+        data-marketplace-card={id}
+        data-marketplace-card-compact="true"
+        style={accentColor ? { borderColor: accentColor } : undefined}
+      >
+        {/* 52x52 thumbnail. Themes use a tiny preview crop; integrations use
+            their iconUrl; otherwise a first-letter chip on accent. */}
+        <div
+          className="w-[52px] h-[52px] rounded-md shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-lg font-semibold"
+          style={!showIcon && !themePreviewUrl ? { background: accentColor || 'var(--accent)' } : undefined}
+        >
+          {showIcon ? (
+            <img src={iconUrl!} alt="" className="w-full h-full object-contain" onError={() => setIconFailed(true)} />
+          ) : themePreviewUrl ? (
+            <img src={themePreviewUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
+          ) : (
+            <span aria-hidden>{fallbackLetter}</span>
+          )}
+        </div>
+
+        {/* Center column. min-w-0 is load-bearing — without it the truncate
+            below stops working because the flex item can grow past parent. */}
+        <div className="flex-1 min-w-0">
+          <h3 className="font-medium text-fg truncate">{title}</h3>
+          {author && <p className="text-xs text-fg-dim truncate">{author}</p>}
+          {blurb && <p className="text-sm text-fg-2 line-clamp-1">{blurb}</p>}
+          {(rating != null && ratingCount > 0) || installs > 0 || likes > 0 ? (
+            <div className="mt-1 flex items-center gap-3 text-xs text-fg-dim">
+              {rating != null && ratingCount > 0 && (
+                <StarRating value={rating} count={ratingCount} size="sm" />
+              )}
+              {installs > 0 && <span>{installs.toLocaleString()} installs</span>}
+              {likes > 0 && <span>{likes.toLocaleString()} likes</span>}
+            </div>
+          ) : null}
+        </div>
+
+        {/* Right column: status pill + inline install button. The install
+            button gives mobile users a one-tap install affordance without
+            having to open the detail overlay first (spec §4: "inline install
+            button, small download icon, 32×32 tap target"). e.stopPropagation
+            prevents the card's own onOpen from firing at the same time.
+            Themes route install through the detail overlay, so no inline
+            install button for them. The button is sized for a 42px tap target
+            via p-3 — well above WCAG 2.2's 24px minimum and close to iOS
+            HIG's 44pt recommendation. */}
+        <div className="shrink-0 flex flex-col items-end gap-1.5">
+          {compactStatus && (
+            <span
+              className={`text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full ${STATUS_TONE_CLASS[compactStatus.tone]}`}
+            >
+              {compactStatus.text}
+            </span>
+          )}
+          {!suppressCorner && kind === 'skill' && !isInstalled && !isInstalling && (
+            <button
+              type="button"
+              onClick={(e) => { e.stopPropagation(); install(); }}
+              aria-label="Install"
+              title="Install"
+              className="p-3 rounded-md text-fg-dim hover:text-fg hover:bg-inset transition-colors"
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="7 10 12 15 17 10" />
+                <line x1="12" y1="15" x2="12" y2="3" />
+              </svg>
+            </button>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
