@@ -341,6 +341,44 @@ class SyncService(
     // Shell-out Wrappers (via Bootstrap.buildRuntimeEnv + linker64)
     // =========================================================================
 
+    /**
+     * Resolve a bare command name ("rclone", "git", "gh") into an executable
+     * path suitable for ProcessBuilder.
+     *
+     * Why this exists: Java's execvp() resolves the command against the
+     * JVM-inherited PATH (system dirs only on Android — /system/bin, /apex/…,
+     * etc.) and completely ignores the PATH we stuff into pb.environment().
+     * That env only affects the child's runtime environment, not command
+     * lookup. Without this helper, every Termux-prefix binary ENOENTs with
+     * "Cannot run program 'rclone': error=2, No such file or directory"
+     * before the subprocess even starts — and because execCommand swallows
+     * the IOException and returns code=1, callers silently degrade to "sync
+     * seems not configured" instead of surfacing a real error.
+     *
+     * Resolution order:
+     *   1. Already-absolute path                   → use as-is
+     *   2. Termux prefix (bootstrap.usrDir/bin/X)  → prefix with
+     *      /system/bin/linker64 for SELinux W^X bypass, matching the
+     *      existing pattern in Bootstrap.runProcess, PluginInstaller, and
+     *      SessionService's direct ProcessBuilder sites
+     *   3. /system/bin/X                           → use that absolute path
+     *   4. Unresolvable                            → return unchanged so the
+     *      exec surfaces the original ENOENT in the returned stderr
+     */
+    private fun resolveBinary(command: List<String>): List<String> {
+        val name = command.firstOrNull() ?: return command
+        if (name.startsWith("/")) return command
+        val termuxBin = File(bootstrap.usrDir, "bin/$name")
+        if (termuxBin.canExecute()) {
+            return listOf("/system/bin/linker64", termuxBin.absolutePath) + command.drop(1)
+        }
+        val systemBin = File("/system/bin/$name")
+        if (systemBin.canExecute()) {
+            return listOf(systemBin.absolutePath) + command.drop(1)
+        }
+        return command
+    }
+
     /** Execute a command with the termux runtime environment.
      *  Internal so SessionService (same package) can call it for sync setup wizard IPC. */
     internal fun execCommand(
@@ -351,7 +389,11 @@ class SyncService(
     ): ExecResult {
         return try {
             val env = bootstrap.buildRuntimeEnv()
-            val pb = ProcessBuilder(command)
+            // Resolve bare binary name → abs path + linker64 wrapper.
+            // See resolveBinary() comment: without this, "rclone"/"git"/"gh"
+            // all ENOENT because Java's execvp doesn't consult our env PATH.
+            val resolved = resolveBinary(command)
+            val pb = ProcessBuilder(resolved)
             pb.environment().putAll(env)
             if (cwd != null) pb.directory(cwd)
             pb.redirectErrorStream(false)
@@ -374,13 +416,24 @@ class SyncService(
                 ExecResult(process.exitValue(), stdout, stderr)
             }
         } catch (e: Exception) {
+            // Log so ENOENT-class regressions are visible in logcat; execCommand
+            // historically swallowed these silently, which hid the "rclone not in
+            // JVM PATH" bug for months (sync UI just showed "no backends").
+            android.util.Log.w(TAG, "execCommand failed for ${command.firstOrNull()}: ${e.message}")
             ExecResult(1, "", e.message ?: "exec failed")
         }
     }
 
-    /** Execute rclone with args. */
-    private fun rclone(args: List<String>): ExecResult {
-        return execCommand(listOf("rclone") + args)
+    /** Execute rclone with args.
+     *
+     *  5-minute ceiling matches DriveRestoreAdapter.fetchInto's explicit
+     *  300s — bulk copy/sync of a single category can take minutes over
+     *  cellular, and the 60s default would trip before a real hang. Quick
+     *  rclone calls (listremotes, config show) are invoked through
+     *  execCommand() directly with their own timeout, so this only applies
+     *  to data-transfer calls that go through the helper. */
+    private fun rclone(args: List<String>, timeoutSeconds: Long = 300L): ExecResult {
+        return execCommand(listOf("rclone") + args, timeoutSeconds = timeoutSeconds)
     }
 
     /**
@@ -408,7 +461,11 @@ class SyncService(
     ): ExecResult {
         return try {
             val env = bootstrap.buildRuntimeEnv()
-            val pb = ProcessBuilder("rclone", "config", "create", "gdrive", "drive")
+            // Same exec-resolve story as execCommand — without resolveBinary,
+            // ProcessBuilder("rclone", …) ENOENTs because Java's execvp uses
+            // the JVM PATH, not pb.environment().
+            val resolved = resolveBinary(listOf("rclone", "config", "create", "gdrive", "drive"))
+            val pb = ProcessBuilder(resolved)
             pb.environment().putAll(env)
             pb.redirectErrorStream(false)
             val process = pb.start()
@@ -466,13 +523,17 @@ class SyncService(
                 ExecResult(process.exitValue(), stdoutBuf.toString(), stderrBuf.toString())
             }
         } catch (e: Exception) {
+            android.util.Log.w(TAG, "authGdriveWithBrowserIntent failed: ${e.message}")
             ExecResult(1, "", e.message ?: "exec failed")
         }
     }
 
-    /** Execute git with args in a working directory. */
-    private fun gitExec(args: List<String>, cwd: File): ExecResult {
-        return execCommand(listOf("git") + args, cwd = cwd)
+    /** Execute git with args in a working directory.
+     *
+     *  300s ceiling matches rclone — large initial clones / pushes can run
+     *  long over cellular and the 60s default would trip during real work. */
+    private fun gitExec(args: List<String>, cwd: File, timeoutSeconds: Long = 300L): ExecResult {
+        return execCommand(listOf("git") + args, cwd = cwd, timeoutSeconds = timeoutSeconds)
     }
 
     // =========================================================================
