@@ -35,13 +35,17 @@ object SessionBrowser {
     /**
      * List all past sessions from ~/.claude/projects/ grouped by project.
      * Excludes currently active session IDs and sessions < 500 bytes.
-     * Mirrors the desktop's listPastSessions().
+     * Mirrors the desktop's listPastSessions() — no per-call limit (the UI
+     * does its own client-side filtering / search / grouping). A previous
+     * hardcoded 30-session cap here silently truncated restore results to
+     * the 30 most-recent conversations across ALL projects, so a user who
+     * just pulled hundreds of JSONLs from Drive saw "about 30" in the
+     * Resume Browser regardless of how many actually synced.
      */
     fun listPastSessions(
         projectsDir: File,
         topicsDir: File,
         activeIds: Set<String> = emptySet(),
-        limit: Int = 30,
     ): List<PastSession> {
         if (!projectsDir.exists()) return emptyList()
 
@@ -77,7 +81,20 @@ object SessionBrowser {
             }
         }
 
-        return sessions.sortedByDescending { it.lastModified }.take(limit)
+        // Dedup on sessionId (parity with desktop session-browser.ts:181).
+        // The sync aggregator symlinks/copies project-specific JSONLs into
+        // the home-slug project dir, so the same sessionId can appear under
+        // two slugs. Prefer the entry with the longest slug — that's the
+        // real project dir, so Resume opens with the correct cwd instead
+        // of defaulting to $HOME.
+        val deduped = HashMap<String, PastSession>()
+        for (s in sessions) {
+            val existing = deduped[s.sessionId]
+            if (existing == null || s.projectSlug.length > existing.projectSlug.length) {
+                deduped[s.sessionId] = s
+            }
+        }
+        return deduped.values.sortedByDescending { it.lastModified }
     }
 
     data class HistoryResult(

@@ -77,7 +77,12 @@ function send(msg: any): void {
   }
 }
 
-function invoke(type: string, payload?: any): Promise<any> {
+// Default 30s is fine for anything interactive, but long-running sync/restore
+// operations (rclone copy of 100s of files over cellular, git push of a large
+// repo, etc.) can legitimately take minutes. Callers pass a larger timeoutMs
+// for those — see `sync.force` and `sync.restore.execute` below.
+function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Promise<any> {
+  const timeoutMs = opts?.timeoutMs ?? 30_000;
   return new Promise((resolve, reject) => {
     const id = `msg-${++messageId}`;
     const timeout = setTimeout(() => {
@@ -85,7 +90,7 @@ function invoke(type: string, payload?: any): Promise<any> {
         pending.delete(id);
         reject(new Error(`Request ${type} timed out`));
       }
-    }, 30_000);
+    }, timeoutMs);
     pending.set(id, { resolve, reject, timeout });
     send({ type, id, payload });
   });
@@ -855,7 +860,8 @@ export function installShim(): void {
       getStatus: () => invoke('sync:get-status'),
       getConfig: () => invoke('sync:get-config'),
       setConfig: (updates: any) => invoke('sync:set-config', { updates }),
-      force: () => invoke('sync:force'),
+      // Full sync can transfer megabytes across slow cellular — 10 min ceiling.
+      force: () => invoke('sync:force', undefined, { timeoutMs: 10 * 60_000 }),
       getLog: (lines?: number) => invoke('sync:get-log', { lines }),
       dismissWarning: (warning: string) => invoke('sync:dismiss-warning', { warning }),
       // V2: Per-instance backend management
@@ -870,8 +876,11 @@ export function installShim(): void {
         checkPrereqs: (backend: string) => invoke('sync:setup:check-prereqs', { backend }),
         installRclone: () => invoke('sync:setup:install-rclone'),
         checkGdrive: () => invoke('sync:setup:check-gdrive'),
-        authGdrive: () => invoke('sync:setup:auth-gdrive'),
-        authGithub: () => invoke('sync:setup:auth-github'),
+        // OAuth waits on the user completing sign-in in a browser tab; Android
+        // side has a 180s rclone wait, gh device flow can poll longer — give a
+        // 4 min ceiling so the shim doesn't cut the kotlin timeout short.
+        authGdrive: () => invoke('sync:setup:auth-gdrive', undefined, { timeoutMs: 4 * 60_000 }),
+        authGithub: () => invoke('sync:setup:auth-github', undefined, { timeoutMs: 4 * 60_000 }),
         createRepo: (repoName: string) => invoke('sync:setup:create-repo', { repoName }),
       },
       // Restore from backup — directional, user-initiated pull. Mirrors the
@@ -880,8 +889,13 @@ export function installShim(): void {
       restore: {
         listVersions: (backendId: string) =>
           invoke('sync:restore:list-versions', { backendId }),
-        preview: (opts: any) => invoke('sync:restore:preview', { opts }),
-        execute: (opts: any) => invoke('sync:restore:execute', { opts }),
+        // Preview walks the whole remote via `rclone lsjson --recursive`; for a
+        // large backup over cellular that can take a couple minutes. 3 min.
+        preview: (opts: any) => invoke('sync:restore:preview', { opts }, { timeoutMs: 3 * 60_000 }),
+        // Execute actually transfers files — can run 10+ min on slow links.
+        // 15 min ceiling; the kotlin side emits progress events during the
+        // transfer, so the UI stays alive even on multi-minute restores.
+        execute: (opts: any) => invoke('sync:restore:execute', { opts }, { timeoutMs: 15 * 60_000 }),
         listSnapshots: () => invoke('sync:restore:list-snapshots'),
         undo: (snapshotId: string) => invoke('sync:restore:undo', { snapshotId }),
         deleteSnapshot: (snapshotId: string) =>

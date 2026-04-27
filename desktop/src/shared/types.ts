@@ -958,7 +958,8 @@ export interface RestoreProgressEvent {
   filesDone: number;
   filesTotal: number;
   currentFile?: string;
-  phase: 'snapshotting' | 'fetching' | 'staging' | 'swapping' | 'done';
+  // 'error' = restore failed; UI surfaces the exception message in the wizard.
+  phase: 'snapshotting' | 'fetching' | 'staging' | 'swapping' | 'done' | 'error';
 }
 
 // Discriminator for development-flow IPC payloads.

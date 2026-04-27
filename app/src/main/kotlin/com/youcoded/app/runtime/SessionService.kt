@@ -410,6 +410,21 @@ class SessionService : Service() {
                         payload.put("sessionStatsMap", sessionStatsMap)
                         payload.put("gitBranchMap", gitBranchMap)
 
+                        // Background bulk-conversations pull state — non-null
+                        // while a recent restore is still fetching older
+                        // history. Renders as a chip in StatusBar so the user
+                        // knows why conversations are still appearing after
+                        // the restore wizard's "Done" screen closed.
+                        val bgState = syncService?.backgroundPullState
+                        if (bgState != null) {
+                            payload.put("backgroundPull", JSONObject().apply {
+                                put("type", bgState.type)
+                                put("startedAt", bgState.startedAt)
+                            })
+                        } else {
+                            payload.put("backgroundPull", JSONObject.NULL)
+                        }
+
                         bridgeServer.broadcast(JSONObject().apply {
                             put("type", "status:data")
                             put("payload", payload)
@@ -1929,6 +1944,15 @@ class SessionService : Service() {
                             svc.browseCategoryUrl(backendId, cat, versionRef)
                         } catch (_: Exception) { null }
                     }
+                    // Fire Intent.ACTION_VIEW here — desktop's handler calls
+                    // shell.openExternal as a side effect, but React on Android
+                    // runs under file:// so its window.open fallback is a no-op.
+                    // Without this, tapping the folder icon silently does
+                    // nothing on mobile. Still return the URL so the IPC
+                    // response shape stays identical to desktop.
+                    if (url != null) {
+                        platformBridge?.openUrl(url)
+                    }
                     msg.id?.let {
                         bridgeServer.respond(ws, msg.type, it,
                             JSONObject().put("url", url ?: JSONObject.NULL))
@@ -1957,7 +1981,11 @@ class SessionService : Service() {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
                 } else {
                     try {
-                        val opts = RestoreOptions.fromJson(msg.payload)
+                        // React shim wraps as { opts: {...} } for preview/execute;
+                        // other sync:restore:* handlers pass backendId at the top
+                        // level. Mirror desktop's `payload.opts || payload` fallback.
+                        val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
+                        val opts = RestoreOptions.fromJson(optsJson)
                         val preview = svc.previewRestore(opts)
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, preview.toJson()) }
                     } catch (e: Exception) {
@@ -1971,7 +1999,9 @@ class SessionService : Service() {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
                 } else {
                     try {
-                        val opts = RestoreOptions.fromJson(msg.payload)
+                        // Same { opts } unwrap as sync:restore:preview above.
+                        val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
+                        val opts = RestoreOptions.fromJson(optsJson)
                         // Progress events are broadcast (no id) — matches desktop's
                         // sync:restore:progress push-event shape. Wizard UI subscribes
                         // to them across every connected client.

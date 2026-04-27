@@ -245,30 +245,107 @@ export class RestoreService {
   ): Promise<RestoreResult> {
     const startedAt = Date.now();
 
-    // Emit a single 'fetching' phase for each category up-front so the UI
-    // renders per-category rows. Merge doesn't stage per-category, so we don't
-    // get file-level progress — just the two top-level phases (fetching, done).
+    // Merge has no per-file stats from rclone — it's one opaque pull followed
+    // by one opaque push. We emit discrete phase checkpoints (0 → 65 → 100)
+    // and rely on the React-side smoother (RestoreProgress.tsx) to creep
+    // between them so the bar never looks frozen during the silent pull.
+    //
+    // Two visible phases only:
+    //   fetching (0 → 65): the pull (download from backup)
+    //   swapping (65 → 100): the push (upload local-only files back)
+    // We skip 'staging' for merge — pull() does its post-ops internally but
+    // there's no moment to point at, so surfacing it would lie.
+    const emitAll = (filesDone: number, filesTotal: number, phase: RestoreProgressEvent['phase']) => {
+      for (const category of opts.categories) {
+        onProgress({ category, filesDone, filesTotal, phase });
+      }
+    };
+
+    // Pre-pull counts so the summary can report an accurate "N files pulled"
+    // delta. Push direction isn't counted — push() doesn't expose per-category
+    // file tallies and we don't want to fake a number.
+    const preCount = new Map<RestoreCategory, number>();
     for (const category of opts.categories) {
-      onProgress({ category, filesDone: 0, filesTotal: 0, phase: 'fetching' });
+      preCount.set(category, this.countCategoryFiles(category));
     }
 
-    // Phase 1: pull remote → local (add + overwrite-newer, no deletions).
-    await this.syncService.pull({ backendId: opts.backendId });
+    emitAll(0, 100, 'fetching');
 
-    // Phase 2: push local → remote (uploads anything local-only). `force: true`
-    // so the push isn't skipped for being recent — the user just asked for a sync.
-    await this.syncService.push({ backendId: opts.backendId, force: true });
-
-    for (const category of opts.categories) {
-      onProgress({ category, filesDone: 1, filesTotal: 1, phase: 'done' });
+    try {
+      await this.syncService.pull({ backendId: opts.backendId });
+    } catch (e) {
+      emitAll(0, 0, 'error');
+      throw new Error(`Pull failed: ${(e as Error)?.message ?? e}`);
     }
+
+    emitAll(65, 100, 'swapping');
+
+    try {
+      const pushResult = await this.syncService.push({ backendId: opts.backendId, force: true });
+      if (!pushResult.success) {
+        emitAll(0, 0, 'error');
+        throw new Error(`Push failed: ${pushResult.errors} backend error(s)`);
+      }
+    } catch (e) {
+      emitAll(0, 0, 'error');
+      if (e instanceof Error && e.message.startsWith('Push failed:')) throw e;
+      throw new Error(`Push failed: ${(e as Error)?.message ?? e}`);
+    }
+
+    // Recount post-pull — delta from preCount captures how many files pull added locally.
+    let filesWritten = 0;
+    for (const category of opts.categories) {
+      const post = this.countCategoryFiles(category);
+      filesWritten += Math.max(0, post - (preCount.get(category) ?? 0));
+    }
+
+    emitAll(100, 100, 'done');
 
     return {
       categoriesRestored: opts.categories,
-      filesWritten: 0, // merge doesn't track per-file writes; sync-service logs it
+      filesWritten,
       durationMs: Date.now() - startedAt,
       requiresRestart: opts.categories.includes('skills') || opts.categories.includes('memory'),
     };
+  }
+
+  /**
+   * Count the files that make up a category's live state. Used by merge mode
+   * for the summary's pre/post-pull delta. Memory + conversations share
+   * projects/ so they need extension filters — walking the whole tree for
+   * either would double-count.
+   */
+  private countCategoryFiles(category: RestoreCategory): number {
+    const live = this.liveDirFor(category);
+    if (!fs.existsSync(live)) return 0;
+    let count = 0;
+    const walk = (dir: string) => {
+      let entries: fs.Dirent[];
+      try {
+        entries = fs.readdirSync(dir, { withFileTypes: true });
+      } catch {
+        return;
+      }
+      for (const e of entries) {
+        const full = path.join(dir, e.name);
+        if (e.isDirectory()) {
+          walk(full);
+        } else if (e.isFile()) {
+          if (category === 'conversations') {
+            if (full.endsWith('.jsonl')) count++;
+          } else if (category === 'memory') {
+            // Unix-style check works on Windows too — path.join produces
+            // backslashes but the relative inclusion is what matters.
+            const rel = path.relative(live, full).replace(/\\/g, '/');
+            if (rel.includes('/memory/') && rel.endsWith('.md')) count++;
+          } else {
+            count++;
+          }
+        }
+      }
+    };
+    walk(live);
+    return count;
   }
 
   private async executeWipe(
