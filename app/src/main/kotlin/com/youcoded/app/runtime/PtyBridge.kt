@@ -212,10 +212,23 @@ class PtyBridge(
         // sending `\r`, eliminating the 600 ms timing assumption entirely. Not
         // urgent on Android because Linux PTY scheduling is more predictable
         // than ConPTY, but desirable for parity with desktop's design.
+        //
+        // Special case — payloads containing ESC bytes (0x1b) MUST take the
+        // split path even when short. ManagedSession.detectPrompts and
+        // InkSelectParser.toPromptButtons build menu-navigation payloads of
+        // the form `<UPs><DOWNs>\r` (sign-in, theme, trust-folder, bypass).
+        // These are 13–25 bytes — well under SAFE_ATOMIC_LEN — but writing
+        // arrows + Enter atomically causes Ink's Select component to either
+        // miss the navigation or commit Enter on the wrong row. The 600 ms
+        // gap was the original mechanism (pre-cc007084) that made multi-arrow
+        // nav work; the atomic fast-path silently broke all four pre-session
+        // menus. Splitting only escape-containing payloads preserves the
+        // chat-message fast path while fixing menu navigation.
         val SAFE_ATOMIC_LEN = 56
+        val hasEscape = text.any { it.code == 0x1b }
         when {
             !text.endsWith("\r") -> session?.write(text)
-            text.length <= SAFE_ATOMIC_LEN -> session?.write(text)
+            !hasEscape && text.length <= SAFE_ATOMIC_LEN -> session?.write(text)
             else -> {
                 val preamble = text.dropLast(1)
                 session?.write(preamble)
