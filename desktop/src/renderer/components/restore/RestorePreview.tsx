@@ -1,5 +1,6 @@
 import React from 'react';
 import type { RestoreCategory, RestorePreview as RestorePreviewData } from '../../../shared/types';
+import { Scrim, OverlayPanel } from '../overlays/Overlay';
 
 // Pure presentational component — renders the preview/diff summary the
 // main-process returned from restore:preview.
@@ -8,8 +9,11 @@ import type { RestoreCategory, RestorePreview as RestorePreviewData } from '../.
 //   merge → Download (remote→local) / Update (overwrite-newer) / Upload (local→remote)
 //   wipe  → Add / Overwrite / Delete  (the exact ops the mirror will perform)
 //
-// Each row has a folder icon that resolves the category's remote browse URL
-// via the main process and opens it (Drive folder, GitHub tree, file:// for iCloud).
+// Each category name is a dotted-underline button. Tapping opens a confirmation
+// modal that asks before opening the category folder on the remote backend
+// (Drive, GitHub tree). Per-row size was removed so the table fits phone
+// viewports without horizontal overflow — the totals row at the bottom still
+// shows aggregate size.
 
 type Props = {
   preview: RestorePreviewData;
@@ -25,32 +29,20 @@ function formatBytes(n: number): string {
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`;
 }
 
-// SVG folder icon — small, theme-tokened. Clicking opens the browse URL via IPC.
-function FolderLink({ onClick, title }: { onClick: () => void; title: string }) {
-  return (
-    <button
-      type="button"
-      title={title}
-      onClick={onClick}
-      className="w-5 h-5 rounded-sm flex items-center justify-center text-fg-muted hover:text-fg-2 hover:bg-inset transition-colors"
-    >
-      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-        <path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z" />
-      </svg>
-    </button>
-  );
-}
-
 export function RestorePreview({ preview, categories, backendId, versionRef }: Props) {
   const rows = preview.perCategory.filter((p) => categories.includes(p.category));
   const isMerge = preview.mode === 'merge';
+
+  // Category whose browse-folder confirmation modal is open. null = no modal.
+  const [confirmCategory, setConfirmCategory] = React.useState<RestoreCategory | null>(null);
 
   const openCategoryFolder = async (c: RestoreCategory) => {
     try {
       // @ts-ignore contextBridge
       const res = await window.claude.sync.restore.browseCategory(backendId, c, versionRef);
-      // Desktop main opens via shell.openExternal inside the handler; browser
-      // gets the URL back and opens it here (new tab).
+      // Desktop main opens via shell.openExternal inside the handler; Android
+      // handler fires Intent.ACTION_VIEW. The browser path falls through to
+      // window.open below. file: (Android WebView) never reaches window.open.
       if (res?.url && typeof window !== 'undefined' && window.location.protocol.startsWith('http')) {
         window.open(res.url, '_blank', 'noopener');
       }
@@ -68,34 +60,67 @@ export function RestorePreview({ preview, categories, backendId, versionRef }: P
             ? 'Merge will sync files both directions. Nothing gets deleted on either side.'
             : 'Wipe & restore will replace local files with the backup. Review each category.'}
         </div>
+        <div className="text-[11px] text-fg-faint mt-1">
+          Tap a category name to open that folder on the backup.
+        </div>
       </div>
 
       <div className="rounded-md border border-edge-dim overflow-hidden">
-        <table className="w-full text-[11px]">
+        <table className="w-full text-[11px] table-fixed">
           <thead className="bg-inset/60">
-            <tr className="text-fg-dim">
+            <tr className="text-fg-dim align-bottom">
               <th className="text-left px-3 py-2 font-medium">Category</th>
+              {/* Count columns are per-file — "files" subtext below each header
+                  avoids a phone reader mis-parsing "skills / 124" as "124 skills". */}
               {isMerge ? (
                 <>
-                  <th className="text-right px-2 py-2 font-medium" title="Files on backup missing locally">Download</th>
-                  <th className="text-right px-2 py-2 font-medium" title="Files newer on backup">Update</th>
-                  <th className="text-right px-2 py-2 font-medium" title="Files only local — will be uploaded">Upload</th>
+                  <th className="text-right px-2 py-2 font-medium" title="Files on backup missing locally">
+                    <div>Download</div>
+                    <div className="text-[9px] text-fg-faint font-normal">files</div>
+                  </th>
+                  <th className="text-right px-2 py-2 font-medium" title="Files newer on backup">
+                    <div>Update</div>
+                    <div className="text-[9px] text-fg-faint font-normal">files</div>
+                  </th>
+                  <th className="text-right px-2 py-2 font-medium" title="Files only local — will be uploaded">
+                    <div>Upload</div>
+                    <div className="text-[9px] text-fg-faint font-normal">files</div>
+                  </th>
                 </>
               ) : (
                 <>
-                  <th className="text-right px-2 py-2 font-medium">Add</th>
-                  <th className="text-right px-2 py-2 font-medium">Overwrite</th>
-                  <th className="text-right px-2 py-2 font-medium text-red-400">Delete</th>
+                  <th className="text-right px-2 py-2 font-medium">
+                    <div>Add</div>
+                    <div className="text-[9px] text-fg-faint font-normal">files</div>
+                  </th>
+                  <th className="text-right px-2 py-2 font-medium">
+                    <div>Overwrite</div>
+                    <div className="text-[9px] text-fg-faint font-normal">files</div>
+                  </th>
+                  <th className="text-right px-2 py-2 font-medium text-red-400">
+                    <div>Delete</div>
+                    <div className="text-[9px] text-fg-faint font-normal">files</div>
+                  </th>
                 </>
               )}
-              <th className="text-right px-3 py-2 font-medium">Size</th>
-              <th className="w-8 px-1 py-2" />
             </tr>
           </thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.category} className="border-t border-edge-dim">
-                <td className="px-3 py-2 text-fg capitalize">{r.category}</td>
+                {/* Category name is a text button with a dotted underline —
+                    the previous folder-icon-in-a-6th-column approach was
+                    clipped on narrow phones AND hard to recognize as tappable. */}
+                <td className="px-3 py-2 text-fg capitalize">
+                  <button
+                    type="button"
+                    onClick={() => setConfirmCategory(r.category)}
+                    className="text-left border-b border-dotted border-fg-faint hover:border-fg-dim hover:text-fg-2 transition-colors cursor-pointer bg-transparent p-0 font-inherit"
+                    title={`Open the ${r.category} folder in Google Drive`}
+                  >
+                    {r.category}
+                  </button>
+                </td>
                 <td className="px-2 py-2 text-right text-fg-dim">{r.toAdd}</td>
                 <td className="px-2 py-2 text-right text-fg-dim">{r.toOverwrite}</td>
                 {isMerge ? (
@@ -105,18 +130,11 @@ export function RestorePreview({ preview, categories, backendId, versionRef }: P
                     {r.toDelete}
                   </td>
                 )}
-                <td className="px-3 py-2 text-right text-fg-dim">{formatBytes(r.bytes)}</td>
-                <td className="px-1 py-2">
-                  <FolderLink
-                    onClick={() => openCategoryFolder(r.category)}
-                    title={`Browse ${r.category} on backup`}
-                  />
-                </td>
               </tr>
             ))}
             {rows.length === 0 && (
               <tr>
-                <td colSpan={6} className="px-3 py-4 text-center text-fg-muted">
+                <td colSpan={4} className="px-3 py-4 text-center text-fg-muted">
                   No categories selected.
                 </td>
               </tr>
@@ -145,6 +163,46 @@ export function RestorePreview({ preview, categories, backendId, versionRef }: P
             </div>
           ))}
         </div>
+      )}
+
+      {confirmCategory && (
+        <>
+          <Scrim layer={2} onClick={() => setConfirmCategory(null)} />
+          <OverlayPanel
+            layer={2}
+            role="dialog"
+            aria-modal
+            aria-labelledby="browse-category-title"
+            className="fixed left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-sm rounded-xl p-5"
+          >
+            <h2 id="browse-category-title" className="text-sm font-semibold text-fg mb-2">
+              Open in Google Drive?
+            </h2>
+            <p className="text-[12px] text-fg-muted mb-4">
+              This will open the <span className="capitalize font-medium text-fg-2">{confirmCategory}</span> folder on the backup so you can see exactly what's there. The backup itself won't change.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setConfirmCategory(null)}
+                className="px-3 py-1.5 rounded-md text-[12px] text-fg-dim hover:text-fg bg-inset hover:bg-inset/80 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  const c = confirmCategory;
+                  setConfirmCategory(null);
+                  void openCategoryFolder(c);
+                }}
+                className="px-3 py-1.5 rounded-md text-[12px] font-medium bg-accent text-on-accent hover:brightness-110 transition-colors"
+              >
+                Open in Drive
+              </button>
+            </div>
+          </OverlayPanel>
+        </>
       )}
     </div>
   );

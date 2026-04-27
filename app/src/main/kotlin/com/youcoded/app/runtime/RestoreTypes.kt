@@ -191,7 +191,7 @@ data class RestoreProgressEvent(
     val filesDone: Int,
     val filesTotal: Int,
     val currentFile: String? = null,
-    /** 'snapshotting' | 'fetching' | 'staging' | 'swapping' | 'done' */
+    /** 'snapshotting' | 'fetching' | 'staging' | 'swapping' | 'done' | 'error' */
     val phase: String,
 ) {
     fun toJson(): JSONObject = JSONObject().apply {

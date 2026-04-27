@@ -196,32 +196,92 @@ class RestoreService(
     ): RestoreResult = withContext(Dispatchers.IO) {
         val startedAt = System.currentTimeMillis()
 
-        // Emit a single 'fetching' phase for each category up-front so the UI
-        // renders per-category rows. Merge doesn't stage per-category, so we
-        // don't get file-level progress — just the two top-level phases.
-        for (category in opts.categories) {
-            onProgress(RestoreProgressEvent(category, 0, 0, null, "fetching"))
+        // Merge has no per-file stats from rclone — it's one opaque 5-15 min pull
+        // followed by one opaque push. We emit discrete phase checkpoints (0 → 65
+        // → 100) and rely on the React-side smoother (RestoreProgress.tsx) to
+        // creep between them so the bar never looks frozen during the silent pull.
+        //
+        // Two visible phases only:
+        //   fetching (0 → 65): the pull (download from backup)
+        //   swapping (65 → 100): the push (upload local-only files back)
+        // We skip 'staging' for merge — pull() does its post-ops internally
+        // (slug rewrite, index merge, topic regen) but there's no moment we can
+        // point at and say "staging is happening", so surfacing it would lie.
+        val emitAll: (Int, Int, String) -> Unit = { filesDone, filesTotal, phase ->
+            for (category in opts.categories) {
+                onProgress(RestoreProgressEvent(category, filesDone, filesTotal, null, phase))
+            }
         }
 
-        // Phase 1: pull remote → local (add + overwrite-newer, no deletions).
-        syncService.pull(backendId = opts.backendId)
+        // Pre-pull counts so the summary can report an accurate "N files pulled"
+        // delta. Push direction isn't counted — PushResult doesn't expose
+        // per-category file tallies and we don't want to fake a number.
+        val preCount = opts.categories.associateWith { countCategoryFiles(it) }
 
-        // Phase 2: push local → remote (uploads anything local-only). force=true
-        // so the push isn't skipped for being recent — the user just asked for it.
-        syncService.push(force = true, backendId = opts.backendId)
+        emitAll(0, 100, "fetching")
 
-        for (category in opts.categories) {
-            onProgress(RestoreProgressEvent(category, 1, 1, null, "done"))
+        try {
+            // Phase 1: pull remote → local (add + overwrite-newer, no deletions).
+            syncService.pull(backendId = opts.backendId)
+        } catch (e: Exception) {
+            emitAll(0, 0, "error")
+            throw RuntimeException("Pull failed: ${e.message ?: e}", e)
         }
+
+        emitAll(65, 100, "swapping")
+
+        try {
+            // Phase 2: push local → remote (uploads anything local-only).
+            // force=true so the push isn't skipped for being recent — the user
+            // just asked for a sync. PushResult.success=false means at least
+            // one backend returned errors; bubble that up so the wizard's
+            // error screen shows it.
+            val pushResult = syncService.push(force = true, backendId = opts.backendId)
+            if (!pushResult.success) {
+                emitAll(0, 0, "error")
+                throw RuntimeException("Push failed: ${pushResult.errors} backend error(s)")
+            }
+        } catch (e: Exception) {
+            emitAll(0, 0, "error")
+            // Don't wrap a RuntimeException we already threw — rethrow as-is.
+            if (e is RuntimeException && e.message?.startsWith("Push failed:") == true) throw e
+            throw RuntimeException("Push failed: ${e.message ?: e}", e)
+        }
+
+        // Recount post-pull for the summary. The delta from preCount captures
+        // how many files the pull actually added locally.
+        val postCount = opts.categories.associateWith { countCategoryFiles(it) }
+        val filesWritten = opts.categories.sumOf { cat ->
+            maxOf(0, (postCount[cat] ?: 0) - (preCount[cat] ?: 0))
+        }
+
+        emitAll(100, 100, "done")
 
         RestoreResult(
             snapshotId = null,
             categoriesRestored = opts.categories,
-            filesWritten = 0, // merge doesn't track per-file writes; sync logs it
+            filesWritten = filesWritten,
             durationMs = System.currentTimeMillis() - startedAt,
             requiresRestart = opts.categories.contains(RestoreCategory.SKILLS) ||
                               opts.categories.contains(RestoreCategory.MEMORY),
         )
+    }
+
+    /**
+     * Count the files that make up a category's live state. Used by merge mode
+     * to compute a pre/post-pull delta for the summary's "files written" count.
+     * Memory + conversations share the projects/ tree so they need extension
+     * filters — walking the whole tree for either would double-count.
+     */
+    private fun countCategoryFiles(category: RestoreCategory): Int {
+        val live = liveDirFor(category)
+        if (!live.exists()) return 0
+        val (files, _) = walkRestoreFiles(live)
+        return when (category) {
+            RestoreCategory.CONVERSATIONS -> files.count { it.endsWith(".jsonl") }
+            RestoreCategory.MEMORY -> files.count { it.contains("/memory/") && it.endsWith(".md") }
+            else -> files.size
+        }
     }
 
     private suspend fun executeWipe(
