@@ -255,16 +255,16 @@ export default function MarketplaceScreen({
 
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
-      {/* Top bar — stays visible on scroll; holds the Exit hint. */}
-      <div className="flex items-center justify-between p-3">
+      {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
+      <div className="flex items-center justify-between gap-2 p-3">
         {/* Auth chip sits flush-left before the title so the GitHub sign-in
             entry point is the first thing users see when entering the
             marketplace — fixes the "no obvious way to sign in" gap. */}
-        <div className="flex items-center gap-2 pl-2">
+        <div className="flex items-center gap-2 pl-2 min-w-0">
           <MarketplaceAuthChip />
-          <h1 className="text-xl font-semibold text-fg">Marketplace</h1>
+          <h1 className="text-xl font-semibold text-fg truncate">Marketplace</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {onOpenLibrary && (
             <button
               type="button"
@@ -272,7 +272,9 @@ export default function MarketplaceScreen({
               className="text-fg-2 hover:text-fg text-sm px-3 py-1 rounded-md border border-edge-dim hover:border-edge"
               aria-label="Open Your Library"
             >
-              Your Library
+              {/* Full label at sm+, abbreviated below — keeps the row to one line on a 360-wide phone. */}
+              <span className="hidden sm:inline">Your Library</span>
+              <span className="sm:hidden">Lib</span>
             </button>
           )}
           <button
@@ -281,7 +283,9 @@ export default function MarketplaceScreen({
             className="text-fg-dim hover:text-fg text-sm px-2 py-1"
             aria-label="Exit marketplace"
           >
-            Esc · Back to chat
+            {/* Esc hint on desktop where there's an Esc key; back arrow on touch. */}
+            <span className="hidden sm:inline">Esc · Back to chat</span>
+            <span className="sm:hidden" aria-hidden>←</span>
           </button>
         </div>
       </div>
