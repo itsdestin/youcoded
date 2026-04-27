@@ -35,6 +35,8 @@ import { getChangelog } from './changelog-service';
 // ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
 // short-circuits when optIn is false.
 import { getOptIn as getAnalyticsOptIn, setOptIn as setAnalyticsOptIn } from './analytics-service';
+import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
+import type { PerformanceConfigSnapshot } from '../shared/types';
 
 // Max age for clipboard paste images (1 hour)
 const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
@@ -234,6 +236,37 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.ZOOM_GET, () => {
     if (!mainWindow || mainWindow.isDestroyed()) return 100;
     return zoomLevelToPercent(mainWindow.webContents.getZoomLevel());
+  });
+
+  // --- Performance / GPU pref ---
+  // The Settings → Performance section reads/writes ~/.claude/youcoded-performance.json
+  // through these handlers. The Chromium force-{high,low}-power-gpu switch is
+  // applied at module load in main.ts (cannot be changed at runtime), so set-config
+  // only persists the value — the renderer is responsible for prompting a restart.
+  ipcMain.handle(IPC.PERFORMANCE_GET_CONFIG, (): PerformanceConfigSnapshot => {
+    const cfg = loadConfigSync();
+    const gpu = getCachedGpu();
+    return {
+      preferPowerSaving: cfg.preferPowerSaving,
+      appliedAtLaunch: getAppliedAtLaunch(),
+      multiGpuDetected: gpu.multiGpuDetected,
+      gpuList: gpu.gpuList,
+    };
+  });
+
+  ipcMain.handle(IPC.PERFORMANCE_SET_CONFIG, (_event, payload: { preferPowerSaving: boolean }) => {
+    // Validate the payload — IPC inputs are untrusted (a remote browser
+    // client could send anything). We coerce to a strict boolean.
+    const next = payload?.preferPowerSaving === true;
+    writeConfig({ preferPowerSaving: next });
+    return { ok: true as const };
+  });
+
+  ipcMain.handle(IPC.APP_RESTART, () => {
+    // Generic restart channel — reused by any future setting that needs a
+    // restart to apply. relaunch() schedules the restart for after exit().
+    app.relaunch();
+    app.exit(0);
   });
 
   // --- Theme marketplace ---

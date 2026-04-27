@@ -2705,6 +2705,34 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, null) }
             }
 
+            "performance:get-config" -> {
+                // Android has no userland GPU choice. Always return defaults so
+                // the renderer's Performance section stays hidden (it gates on
+                // multiGpuDetected). Keeps IPC parity green without surfacing
+                // a setting that has no effect on Android.
+                val payload = JSONObject().apply {
+                    put("preferPowerSaving", false)
+                    put("appliedAtLaunch", false)
+                    put("multiGpuDetected", false)
+                    put("gpuList", org.json.JSONArray())
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
+            }
+            "performance:set-config" -> {
+                // No-op write. We accept the payload silently so the renderer
+                // doesn't see an error if it ever fires this on Android.
+                val payload = JSONObject().apply { put("ok", true) }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
+            }
+            "app:restart" -> {
+                // Android session lifecycle differs — a restart equivalent
+                // would be killing and respawning SessionService. Out of scope
+                // for the GPU-toggle feature. Acknowledge so the parity test
+                // stays green; the Performance section is hidden on Android
+                // so this branch is unreachable in normal use anyway.
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }
+            }
+
             "update:changelog" -> {
                 // Desktop-only feature. Android never renders the version pill, so this
                 // handler should be unreachable — but IPC-parity invariant (docs/PITFALLS.md

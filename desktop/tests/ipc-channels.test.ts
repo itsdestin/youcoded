@@ -246,3 +246,35 @@ describe('analytics:* channel parity', () => {
     for (const t of NEW_TYPES) expect(src).toContain(`"${t}"`);
   });
 });
+
+describe('performance:* and app:restart parity', () => {
+  const channels = ['performance:get-config', 'performance:set-config', 'app:restart'];
+
+  it('all three types are declared in preload.ts', () => {
+    const preload = fs.readFileSync(
+      path.join(__dirname, '../src/main/preload.ts'), 'utf8'
+    );
+    for (const ch of channels) {
+      expect(preload, `${ch} missing from preload.ts`).toContain(`'${ch}'`);
+    }
+  });
+
+  it('all three types are referenced in remote-shim.ts', () => {
+    const shim = fs.readFileSync(
+      path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8'
+    );
+    for (const ch of channels) {
+      expect(shim, `${ch} missing from remote-shim.ts`).toContain(`'${ch}'`);
+    }
+  });
+
+  it('all three types are handled by SessionService.kt (Android)', () => {
+    const kt = fs.readFileSync(
+      path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt'),
+      'utf8'
+    );
+    for (const ch of channels) {
+      expect(kt, `${ch} missing from SessionService.kt`).toContain(`"${ch}"`);
+    }
+  });
+});

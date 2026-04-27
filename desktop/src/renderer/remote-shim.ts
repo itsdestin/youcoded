@@ -1050,5 +1050,17 @@ export function installShim(): void {
         return response?.text ?? '';
       },
     },
+    // GPU / performance preference — mirrors preload.ts performance namespace.
+    // multiGpuDetected: false in the response means the UI section stays hidden.
+    performance: {
+      get: () => invoke('performance:get-config'),
+      set: (preferPowerSaving: boolean) =>
+        invoke('performance:set-config', { preferPowerSaving }),
+    },
+    // WHY: named 'app:restart' (not 'performance:restart') so any future
+    // restart-required setting can reuse this single generic channel.
+    app: {
+      restart: () => invoke('app:restart'),
+    },
   };
 }

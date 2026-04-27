@@ -800,7 +800,21 @@ export const IPC = {
   DEV_INSTALL_WORKSPACE: 'dev:install-workspace',
   DEV_INSTALL_PROGRESS: 'dev:install-progress',
   DEV_OPEN_SESSION_IN: 'dev:open-session-in',
+  // Performance / GPU settings — not app:restart because future restart-required
+  // settings (e.g. renderer process changes) can reuse the same generic channel.
+  PERFORMANCE_GET_CONFIG: 'performance:get-config',
+  PERFORMANCE_SET_CONFIG: 'performance:set-config',
+  APP_RESTART: 'app:restart',
 } as const;
+
+// Performance / GPU configuration snapshot — returned by performance:get-config.
+// multiGpuDetected: false means the Performance section in Settings is hidden.
+export interface PerformanceConfigSnapshot {
+  preferPowerSaving: boolean;
+  appliedAtLaunch: boolean;
+  multiGpuDetected: boolean;
+  gpuList: string[];
+}
 
 // --- Window registry / detach types ---
 

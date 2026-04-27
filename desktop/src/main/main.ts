@@ -27,6 +27,7 @@ import { BuddyWindowManager } from './buddy-window-manager';
 import { excludeFromCapture, nativeCaptureExclusionAvailable } from './window-exclude-capture';
 import { cleanupStaleDownloads } from './update-installer';
 import { runAnalyticsOnLaunch } from './analytics-service';
+import { loadConfigSync, setAppliedAtLaunch, setCachedGpu } from './performance-config';
 
 // macOS and Linux Electron apps may inherit a minimal PATH that's missing
 // common tool locations (Homebrew, nvm, Volta, pipx, cargo). macOS Finder/Dock
@@ -991,12 +992,58 @@ function registerDetachIpc() {
   });
 }
 
+// Apply GPU preference. Reads ~/.claude/youcoded-performance.json synchronously.
+// Default (file missing OR preferPowerSaving=false) → request the discrete GPU.
+// preferPowerSaving=true → request the integrated GPU.
+// These are hints to Chromium; the OS may still override (Windows Settings →
+// Graphics, NVIDIA Control Panel). The "Restart to apply" notice in
+// SettingsPanel uses appliedAtLaunch — set here — to know whether the running
+// process matches the on-disk config.
+{
+  const perf = loadConfigSync();
+  if (perf.preferPowerSaving) {
+    app.commandLine.appendSwitch('force-low-power-gpu');
+  } else {
+    app.commandLine.appendSwitch('force-high-performance-gpu');
+  }
+  setAppliedAtLaunch(perf.preferPowerSaving);
+}
+
 app.whenReady().then(async () => {
   await rotateLog();
 
   // Fire-and-forget: never await. Respects the opt-out in About → Privacy
   // internally and fails silently on any network issue.
   void runAnalyticsOnLaunch();
+
+  // Cache the GPU device list once. Used by the Performance section in
+  // SettingsPanel to decide whether to render (hidden on single-GPU systems)
+  // and to surface a "Detected GPUs: ..." line under the toggle. Async
+  // because getGPUInfo can take 1-2s on first call; the IPC handler returns
+  // multiGpuDetected:false until this resolves.
+  app.getGPUInfo('complete').then((info: unknown) => {
+    const list: string[] = [];
+    // Electron's GPUInfo shape uses `gpuDevice` (singular array). Names live
+    // in auxAttributes.glRenderer for the active device, but device-level
+    // names are not always populated — fall back to a vendor/device-id hint.
+    if (info && typeof info === 'object') {
+      const gpuDevice = (info as { gpuDevice?: Array<Record<string, unknown>> }).gpuDevice;
+      const aux = (info as { auxAttributes?: Record<string, unknown> }).auxAttributes;
+      if (Array.isArray(gpuDevice)) {
+        for (const d of gpuDevice) {
+          const renderer = typeof aux?.glRenderer === 'string' && d.active === true
+            ? (aux.glRenderer as string)
+            : null;
+          const fallback = `GPU vendor=${d.vendorId ?? '?'} device=${d.deviceId ?? '?'}`;
+          list.push(renderer ?? fallback);
+        }
+      }
+    }
+    setCachedGpu(list);
+  }).catch((err: unknown) => {
+    log('WARN', 'Main', 'getGPUInfo failed — GPU list unavailable', { error: String(err) });
+    setCachedGpu([]);
+  });
 
   // --- First-run detection (wrapped in try/catch — never breaks the app) ---
   let firstRunManager: FirstRunManager | undefined;
