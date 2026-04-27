@@ -44,6 +44,9 @@ interface StatusData {
   sessionStats: SessionStats | null;
   syncStatus: string | null;
   syncWarnings: SyncWarning[] | null;
+  // Non-null while a recent restore is still pulling older conversations in
+  // the background. Drives the 'restore-progress' chip.
+  backgroundPull?: { type: 'conversations'; startedAt: number } | null;
 }
 
 const MODELS = ['haiku', 'sonnet', 'opus[1m]'] as const;
@@ -156,7 +159,8 @@ type WidgetId =
   | 'session-cost' | 'tokens-in' | 'tokens-out' | 'cache-stats' | 'code-changes' | 'session-time'
   | 'cache-hit-rate' | 'active-ratio' | 'output-speed'
   | 'announcement'
-  | 'open-tasks';
+  | 'open-tasks'
+  | 'restore-progress';
 
 // Widget categories and definitions with info tooltips
 // defaultVisible: true = shown for new installs, false = opt-in only
@@ -306,6 +310,13 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         defaultVisible: true,
         description: 'Alerts when sync isn\'t working (no internet, stale data, unsynced skills).',
         bestFor: 'YouCoded toolkit users. Keeps you aware of sync issues that could cause data loss.',
+      },
+      {
+        id: 'restore-progress',
+        label: 'Restore Progress',
+        defaultVisible: true,
+        description: 'Shows when YouCoded is still pulling older conversations from your backup in the background after a restore. Auto-hides when complete.',
+        bestFor: 'Anyone who has just restored from a backup — explains why older conversations are still appearing minutes after the restore wizard closed.',
       },
       {
         id: 'theme',
@@ -869,6 +880,30 @@ export default function StatusBar({
           </svg>
           <span>{gitBranch}</span>
         </span>
+      )}
+
+      {/* Background restore-pull chip — green pulse, no count. Visible only
+          while pull-recent-50 + bg-bulk strategy is mid-flight (started by
+          SyncService.scheduleBackgroundConversationsPull). Auto-hides when
+          backgroundPull becomes null. Click opens the same SyncPanel the
+          sync-warnings chip uses. */}
+      {show('restore-progress') && statusData.backgroundPull && (
+        <button
+          onClick={onOpenSync || onRunSync}
+          className="px-1.5 py-0.5 rounded-sm border text-[9px] sm:text-[10px] flex items-center gap-1.5 cursor-pointer hover:brightness-125 transition-all"
+          style={{
+            backgroundColor: 'rgba(34,197,94,0.12)',
+            borderColor: 'rgba(34,197,94,0.35)',
+            color: '#22C55E',
+          }}
+          title="Older conversations from your backup are still syncing in the background"
+        >
+          <span
+            className="w-1.5 h-1.5 rounded-full animate-pulse"
+            style={{ backgroundColor: '#22C55E' }}
+          />
+          Syncing older conversations…
+        </button>
       )}
 
       {/* Sync status pill — at most one badge total.

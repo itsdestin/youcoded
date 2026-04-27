@@ -113,6 +113,12 @@ const INDEX_PUSH_DEBOUNCE_MS = 30_000;
 const RCLONE_TIMEOUT = 10 * 60 * 1000;
 const GIT_TIMEOUT = 5 * 60 * 1000;
 const SESSION_PUSH_TIMEOUT = 15_000;
+// Recent-conversations strategy: foreground pull only fetches the N most-
+// recently-active sessions (sorted by lastActive in conversation-index.json).
+// The remainder is scheduled as a background pull. Without this, a fresh
+// restore takes 14+ minutes for users with large histories — see the
+// 2026-04-24 restore UX investigation in git log.
+const RECENT_PULL_LIMIT = 50;
 
 // --- SyncService ---
 
@@ -139,6 +145,15 @@ export class SyncService extends EventEmitter {
    * this true before any filesystem work, false after the final swap.
    */
   public restoreInProgress = false;
+
+  /**
+   * Non-null while a background bulk-conversations pull is running. Read by
+   * buildStatusData() so the StatusBar can render a chip. Also serves as a
+   * single-flight guard — scheduleBackgroundConversationsPull skips if non-null
+   * so a re-restore mid-pull doesn't race two background fetches.
+   */
+  private backgroundPullState: { type: string; startedAt: number } | null = null;
+  public getBackgroundPullState() { return this.backgroundPullState; }
 
   constructor() {
     super();
@@ -1211,9 +1226,19 @@ export class SyncService extends EventEmitter {
       ? Promise.resolve({ code: 0, stdout: '', stderr: 'skipped — local config exists' })
       : this.rclone(['copyto', `${sysRemote}/config.json`, this.configPath, '--update']);
 
-    // Parallel pulls for non-dependent resources.
-    // Each wrapped in its own catch so a single rclone failure (network timeout,
-    // DNS error) doesn't abort the entire pull via unhandled rejection.
+    // Pull conversation-index.json FIRST (was last). The recent-50 strategy
+    // reads it to decide which conversations to fetch in the foreground; if it
+    // fails we fall back to the legacy bulk pull. See 2026-04-24 restore UX
+    // investigation in git log for why this matters (was 14+ min foreground
+    // for large accounts).
+    fs.mkdirSync(this.indexStagingDir, { recursive: true });
+    const indexResult = await this.rclone(['copy', `${sysRemote}/conversation-index.json`, this.indexStagingDir + '/', '--checksum']);
+    noteFail('conversation-index', indexResult);
+
+    // Parallel pulls for the small + non-dependent categories. Each wrapped
+    // in its own catch so a single rclone failure (network timeout, DNS error)
+    // doesn't abort the whole pull via unhandled rejection.
+    const projectsDir = path.join(this.claudeDir, 'projects');
     const pullResults = await Promise.allSettled([
       // CLAUDE.md
       this.rclone(['copyto', `${remoteBase}/CLAUDE.md`, path.join(this.claudeDir, 'CLAUDE.md'), '--update']),
@@ -1225,19 +1250,8 @@ export class SyncService extends EventEmitter {
         fs.mkdirSync(encDir, { recursive: true });
         return this.rclone(['copy', `${remoteBase}/encyclopedia/`, encDir + '/', '--update', '--max-depth', '1', '--include', '*.md']);
       })(),
-      // Conversations — checksum + ignore-existing (don't overwrite local)
-      (async (): Promise<ExecResult> => {
-        return this.rclone(['copy', `${remoteBase}/conversations/`, path.join(this.claudeDir, 'projects') + '/', '--checksum', '--include', '*.jsonl', '--ignore-existing']);
-      })(),
-      // Conversation index to staging dir for post-pull merge
-      (async (): Promise<ExecResult> => {
-        fs.mkdirSync(this.indexStagingDir, { recursive: true });
-        return this.rclone(['copy', `${sysRemote}/conversation-index.json`, this.indexStagingDir + '/', '--checksum']);
-      })(),
     ]);
-    // Inspect both rclone non-zero exits AND IIFE rejections (fs.mkdirSync
-    // can throw e.g. EACCES). Both contribute to firstFailStderr.
-    const pullLabels = ['CLAUDE.md', 'config.json', 'encyclopedia', 'conversations', 'conversation-index'];
+    const pullLabels = ['CLAUDE.md', 'config.json', 'encyclopedia'];
     pullResults.forEach((r, i) => {
       if (r.status === 'rejected') {
         const stderr = String(r.reason);
@@ -1248,12 +1262,144 @@ export class SyncService extends EventEmitter {
       }
     });
 
+    // Conversations — recent-50 in foreground, rest in background.
+    // Why split: a fresh restore was taking 14+ minutes because rclone has to
+    // enumerate the entire conversations/ tree. Recent-50 fetches the most
+    // recently-active sessions synchronously (~30s) and lets the user start
+    // working while history syncs in the background.
+    const stagedIndex = path.join(this.indexStagingDir, 'conversation-index.json');
+    let recentCount = -1;
+    if (this.fileExists(stagedIndex) && fs.statSync(stagedIndex).size > 0) {
+      try {
+        recentCount = await this.pullDriveConversationsRecent(remoteBase, stagedIndex, projectsDir, RECENT_PULL_LIMIT);
+      } catch (e) {
+        this.logBackup('WARN', `Recent conversations pull threw: ${e}`, 'sync.pull.drive');
+        if (!firstFailStderr) firstFailStderr = String(e);
+        recentCount = -1;
+      }
+    }
+
+    if (recentCount < 0) {
+      // Fallback: index missing/unreadable. Run the legacy bulk pull synchronously
+      // so the user actually gets their conversations on first-run / index-corrupted
+      // scenarios. No background schedule (the foreground already covered everything).
+      this.logBackup('INFO', 'No conversation index — falling back to legacy bulk pull', 'sync.pull.drive');
+      const r = await this.rclone(['copy', `${remoteBase}/conversations/`, projectsDir + '/', '--checksum', '--include', '*.jsonl', '--ignore-existing']);
+      noteFail('conversations', r);
+    } else {
+      // Recent-50 done; schedule the bulk pull as fire-and-forget so the user
+      // can use the app immediately. Single-flight guarded internally.
+      this.scheduleBackgroundConversationsPull(remoteBase, projectsDir);
+    }
+
     // Surface the first failure as a SyncWarning so it appears in the UI.
     // Don't call clearBackendFailures on success — pull alone doesn't prove push
     // works (e.g. read access without write). Only push success clears warnings.
     if (firstFailStderr) {
       await this.recordBackendFailure(instance, firstFailStderr, 'pull');
     }
+  }
+
+  /**
+   * Foreground: pull only the [limit] most-recently-active conversations
+   * named in the staged conversation-index.json using rclone's --files-from.
+   * One rclone process, --transfers 8 in parallel internally → ~30s for 50
+   * files vs. 14 min for a full bulk copy. Returns the count of file lines
+   * actually pulled, or 0 if the index has no eligible entries.
+   *
+   * --ignore-existing means already-local files are skipped, so this is
+   * cheap to re-run on every startup pull.
+   */
+  private async pullDriveConversationsRecent(
+    remoteBase: string,
+    stagedIndex: string,
+    projectsDir: string,
+    limit: number,
+  ): Promise<number> {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(fs.readFileSync(stagedIndex, 'utf8'));
+    } catch (e) {
+      this.logBackup('WARN', `Failed to parse staged index: ${e}`, 'sync.pull.drive');
+      return 0;
+    }
+    const sessions = parsed?.sessions;
+    if (!sessions || typeof sessions !== 'object') return 0;
+
+    type Entry = { sessionId: string; slug: string; lastActive: string };
+    const entries: Entry[] = [];
+    for (const [sessionId, raw] of Object.entries(sessions)) {
+      const obj = raw as any;
+      const slug = String(obj?.slug ?? '').trim();
+      if (!slug) continue;
+      entries.push({ sessionId, slug, lastActive: String(obj?.lastActive ?? '') });
+    }
+    if (entries.length === 0) return 0;
+    // ISO-8601 lastActive strings sort lexicographically as chronologically.
+    const recent = entries.sort((a, b) => b.lastActive.localeCompare(a.lastActive)).slice(0, limit);
+
+    // Write a files-from list. Paths relative to the rclone source root.
+    const listFile = path.join(this.claudeDir, 'toolkit-state', '.recent-pull-files-from.txt');
+    try {
+      fs.mkdirSync(path.dirname(listFile), { recursive: true });
+      fs.writeFileSync(listFile, recent.map(e => `${e.slug}/${e.sessionId}.jsonl`).join('\n') + '\n');
+
+      const r = await this.rclone([
+        'copy',
+        `${remoteBase}/conversations/`,
+        projectsDir + '/',
+        '--files-from', listFile,
+        '--checksum',
+        '--ignore-existing',
+        '--transfers', '8',
+      ]);
+      if (r.code !== 0) {
+        this.logBackup('WARN', `Recent conversations pull failed: ${truncateStderr(r.stderr || '')}`, 'sync.pull.drive');
+      }
+      return recent.length;
+    } finally {
+      try { fs.unlinkSync(listFile); } catch { /* best-effort */ }
+    }
+  }
+
+  /**
+   * Background: fire-and-forget bulk pull of every remaining conversation.
+   * Reuses the original `--include *.jsonl --ignore-existing` semantics so
+   * the recent-50 just pulled are skipped.
+   *
+   * Single-flight guarded — if a prior background pull is still running we
+   * return immediately. Otherwise the chip would either flicker out when
+   * the first finishes or never appear when a re-restore begins.
+   */
+  private scheduleBackgroundConversationsPull(remoteBase: string, projectsDir: string): void {
+    if (this.backgroundPullState !== null) {
+      this.logBackup('INFO', 'Skipping bg conversations pull — one already running', 'sync.pull.drive');
+      return;
+    }
+    this.backgroundPullState = { type: 'conversations', startedAt: Date.now() };
+    // Fire-and-forget; the .catch keeps an unhandled-rejection from killing the process.
+    (async () => {
+      try {
+        const r = await this.rclone([
+          'copy',
+          `${remoteBase}/conversations/`,
+          projectsDir + '/',
+          '--checksum',
+          '--include', '*.jsonl',
+          '--ignore-existing',
+          '--transfers', '8',
+        ]);
+        if (r.code !== 0) {
+          this.logBackup('WARN', `Background conversations pull failed: ${truncateStderr(r.stderr || '')}`, 'sync.pull.drive');
+        } else {
+          this.logBackup('INFO', 'Background conversations pull complete', 'sync.pull.drive');
+        }
+      } catch (e) {
+        this.logBackup('WARN', `Background conversations pull threw: ${e}`, 'sync.pull.drive');
+      } finally {
+        this.backgroundPullState = null;
+      }
+    })().catch(() => { /* swallowed — already logged inside */ });
   }
 
   // =========================================================================

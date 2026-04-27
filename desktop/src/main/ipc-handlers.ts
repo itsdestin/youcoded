@@ -1559,7 +1559,12 @@ export function registerIpcHandlers(
       if (state) attentionMap[desktopId] = state;
     }
 
-    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap };
+    // Background bulk-conversations pull — non-null while a recent-restore
+    // is still fetching older history in the background. UI shows a chip
+    // explaining why conversations are still appearing after restore "Done".
+    const backgroundPull = getSyncService()?.getBackgroundPullState() ?? null;
+
+    return { usage, announcement, updateStatus, syncStatus, syncWarnings, lastSyncEpoch, syncInProgress, backupMeta, contextMap, gitBranchMap, sessionStatsMap, attentionMap, backgroundPull };
   }
 
   // Push status data every 10s — store handle so it can be cleared on shutdown

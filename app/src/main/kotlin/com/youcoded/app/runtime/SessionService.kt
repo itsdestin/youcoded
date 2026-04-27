@@ -410,6 +410,21 @@ class SessionService : Service() {
                         payload.put("sessionStatsMap", sessionStatsMap)
                         payload.put("gitBranchMap", gitBranchMap)
 
+                        // Background bulk-conversations pull state — non-null
+                        // while a recent restore is still fetching older
+                        // history. Renders as a chip in StatusBar so the user
+                        // knows why conversations are still appearing after
+                        // the restore wizard's "Done" screen closed.
+                        val bgState = syncService?.backgroundPullState
+                        if (bgState != null) {
+                            payload.put("backgroundPull", JSONObject().apply {
+                                put("type", bgState.type)
+                                put("startedAt", bgState.startedAt)
+                            })
+                        } else {
+                            payload.put("backgroundPull", JSONObject.NULL)
+                        }
+
                         bridgeServer.broadcast(JSONObject().apply {
                             put("type", "status:data")
                             put("payload", payload)
@@ -1929,13 +1944,14 @@ class SessionService : Service() {
                             svc.browseCategoryUrl(backendId, cat, versionRef)
                         } catch (_: Exception) { null }
                     }
-                    // Side effect: fire the system browser intent so the
-                    // user lands on the Drive folder. The wizard already
-                    // confirmed intent in a modal — desktop opens via
-                    // shell.openExternal in its own handler; we mirror
-                    // that here so the chip click feels equivalent.
+                    // Fire Intent.ACTION_VIEW here — desktop's handler calls
+                    // shell.openExternal as a side effect, but React on Android
+                    // runs under file:// so its window.open fallback is a no-op.
+                    // Without this, tapping the folder icon silently does
+                    // nothing on mobile. Still return the URL so the IPC
+                    // response shape stays identical to desktop.
                     if (url != null) {
-                        try { platformBridge?.openUrl(url) } catch (_: Exception) {}
+                        platformBridge?.openUrl(url)
                     }
                     msg.id?.let {
                         bridgeServer.respond(ws, msg.type, it,
@@ -1965,12 +1981,9 @@ class SessionService : Service() {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
                 } else {
                     try {
-                        // React shim wraps the body in {opts: {...}} for
-                        // restore.preview/execute (see remote-shim.ts) but
-                        // older callers pass the body flat. Accept both so
-                        // the Android handler matches desktop's permissive
-                        // shape — fixed in this branch after preview was
-                        // failing with "No backend with id ''".
+                        // React shim wraps as { opts: {...} } for preview/execute;
+                        // other sync:restore:* handlers pass backendId at the top
+                        // level. Mirror desktop's `payload.opts || payload` fallback.
                         val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
                         val opts = RestoreOptions.fromJson(optsJson)
                         val preview = svc.previewRestore(opts)
@@ -1986,7 +1999,7 @@ class SessionService : Service() {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
                 } else {
                     try {
-                        // Same {opts: {...}} envelope unwrap as preview above.
+                        // Same { opts } unwrap as sync:restore:preview above.
                         val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
                         val opts = RestoreOptions.fromJson(optsJson)
                         // Progress events are broadcast (no id) — matches desktop's
