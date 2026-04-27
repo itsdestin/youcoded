@@ -1,23 +1,26 @@
-// Sticky chip bar — type, vibe, meta, search. Chips are multi-select;
-// active chips switch the screen from discovery mode (hero + rails) to
-// search mode (filtered grid only).
+// Sticky chip bar — type, vibe, meta, search.
+//
+// At ≥ 640px: chips render inline (current behavior).
+// At < 640px: only the search input + a "Filters" button render in the sticky
+//   bar; tapping the button opens a bottom-anchored FilterSheet that hosts the
+//   same chip groups stacked vertically. State shape and toggle logic are
+//   unchanged — the sheet is just a different layout container.
+//
+// Active count for the Filters button: (type ? 1 : 0) + vibes.size + meta.size.
+// The query is excluded since it's already visible in the search input.
 
-import React from "react";
+import React, { useState } from "react";
+import { Scrim, OverlayPanel } from "../overlays/Overlay";
+import { useEscClose } from "../../hooks/use-esc-close";
+import { useNarrowViewport } from "../../hooks/use-narrow-viewport";
 
-// "skill" kept as the internal id — maps to plugin-shaped entries in the
-// index. UI labels it "Plugins" because that's what users actually install.
 export type TypeChip = "skill" | "theme";
 export type MetaChip = "new" | "popular" | "picks";
 
-// Kept in sync with wecoded-marketplace/scripts/schema.js ALLOWED_LIFE_AREAS.
-// If this list drifts, chips will still render but won't filter — the intersection
-// is server-truth via the `lifeArea` entry field.
 const VIBES = ["school", "work", "creative", "health", "personal", "finance", "home"] as const;
 export type VibeChip = typeof VIBES[number];
 
 export interface FilterState {
-  // Single-select: a user is either browsing plugins OR themes, not both.
-  // null = show everything (discovery default).
   type: TypeChip | null;
   vibes: Set<VibeChip>;
   meta: Set<MetaChip>;
@@ -32,13 +35,19 @@ export function isActive(f: FilterState): boolean {
   return f.type !== null || f.vibes.size > 0 || f.meta.size > 0 || f.query.trim().length > 0;
 }
 
+function activeFilterCount(f: FilterState): number {
+  return (f.type !== null ? 1 : 0) + f.vibes.size + f.meta.size;
+}
+
 interface Props {
   value: FilterState;
   onChange(next: FilterState): void;
 }
 
 export default function MarketplaceFilterBar({ value, onChange }: Props) {
-  // Multi-select for vibes and meta; type is single-select (radio-like).
+  const compact = useNarrowViewport();
+  const [sheetOpen, setSheetOpen] = useState(false);
+
   const toggleMulti = (key: "vibes" | "meta", v: any) => {
     const next = { ...value, vibes: new Set(value.vibes), meta: new Set(value.meta) };
     const set = next[key] as Set<any>;
@@ -49,6 +58,49 @@ export default function MarketplaceFilterBar({ value, onChange }: Props) {
     onChange({ ...value, type: value.type === t ? null : t });
   };
 
+  if (compact) {
+    const count = activeFilterCount(value);
+    return (
+      <>
+        <div className="layer-surface sticky top-0 z-20 flex items-center gap-2 p-2">
+          <input
+            type="search"
+            placeholder="Search…"
+            value={value.query}
+            onChange={(e) => onChange({ ...value, query: e.target.value })}
+            className="flex-1 min-w-0 bg-inset border border-edge rounded-md px-3 py-1.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
+          />
+          <button
+            type="button"
+            onClick={() => setSheetOpen(true)}
+            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-edge-dim hover:border-edge text-fg-2 hover:text-fg"
+            aria-label={count > 0 ? `Filters (${count} active)` : 'Filters'}
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="4" y1="6" x2="20" y2="6" />
+              <line x1="6" y1="12" x2="18" y2="12" />
+              <line x1="9" y1="18" x2="15" y2="18" />
+            </svg>
+            <span>Filters</span>
+            {count > 0 && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent text-on-accent leading-none">{count}</span>
+            )}
+          </button>
+        </div>
+        {sheetOpen && (
+          <FilterSheet
+            value={value}
+            onChange={onChange}
+            onClose={() => setSheetOpen(false)}
+            toggleMulti={toggleMulti}
+            setType={setType}
+          />
+        )}
+      </>
+    );
+  }
+
+  // Wide layout — unchanged from before the mobile redesign.
   return (
     <div className="layer-surface sticky top-0 z-20 flex flex-wrap items-center gap-2 p-3">
       <ChipGroup label="Type">
@@ -69,10 +121,6 @@ export default function MarketplaceFilterBar({ value, onChange }: Props) {
         <Chip active={value.meta.has("popular")} onClick={() => toggleMulti("meta", "popular")}>Popular</Chip>
         <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Destin's picks</Chip>
       </ChipGroup>
-      {/* Search wrapper: full-width when the chip bar wraps onto its own
-          line on narrow screens (mobile / splitscreen), fixed 12rem on
-          sm+. Without w-full on narrow, the search input stays its 12rem
-          width and floats awkwardly on a near-empty row. */}
       <div className="w-full sm:w-auto sm:ml-auto">
         <input
           type="search"
@@ -82,6 +130,91 @@ export default function MarketplaceFilterBar({ value, onChange }: Props) {
           className="bg-inset border border-edge rounded-md px-3 py-1.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent w-full sm:w-48"
         />
       </div>
+    </div>
+  );
+}
+
+// Bottom-anchored sheet hosting the same chip groups stacked vertically. Built
+// on the existing Scrim + OverlayPanel primitives so theme tokens (scrim color,
+// blur, shadow, z-index) drive the look. Chip toggles update FilterState live —
+// "Apply" is just a close affordance.
+function FilterSheet({
+  value, onChange, onClose, toggleMulti, setType,
+}: {
+  value: FilterState;
+  onChange(next: FilterState): void;
+  onClose(): void;
+  toggleMulti(key: 'vibes' | 'meta', v: any): void;
+  setType(t: TypeChip): void;
+}) {
+  // FilterSheet pushes onto the EscClose LIFO stack — closes top-down ahead of
+  // MarketplaceScreen's own ESC handler without a gate change in the screen.
+  useEscClose(true, onClose);
+
+  const clearAll = () => {
+    // Preserve the search query (it's still visible in the sticky bar) but
+    // reset all chip selections.
+    onChange({ ...emptyFilter(), query: value.query });
+  };
+
+  return (
+    <>
+      <Scrim layer={2} onClick={onClose} />
+      <OverlayPanel
+        layer={2}
+        role="dialog"
+        aria-modal
+        aria-labelledby="marketplace-filter-sheet-title"
+        className="fixed inset-x-2 max-h-[80vh] overflow-y-auto rounded-2xl flex flex-col"
+        style={{ bottom: 'max(0.5rem, env(safe-area-inset-bottom))' }}
+      >
+        <header className="sticky top-0 z-10 flex items-center justify-between px-4 py-3 border-b border-edge-dim bg-panel">
+          <h2 id="marketplace-filter-sheet-title" className="text-base font-semibold text-fg">Filters</h2>
+          <button
+            type="button"
+            onClick={clearAll}
+            className="text-sm text-fg-2 hover:text-fg"
+          >
+            Clear all
+          </button>
+        </header>
+        <div className="flex-1 flex flex-col gap-4 p-4">
+          <SheetGroup label="Type">
+            <Chip active={value.type === "skill"} onClick={() => setType("skill")}>Plugins</Chip>
+            <Chip active={value.type === "theme"} onClick={() => setType("theme")}>Themes</Chip>
+          </SheetGroup>
+          <SheetGroup label="Vibe">
+            {VIBES.map((v) => (
+              <Chip key={v} active={value.vibes.has(v)} onClick={() => toggleMulti("vibes", v)}>
+                {v[0].toUpperCase() + v.slice(1)}
+              </Chip>
+            ))}
+          </SheetGroup>
+          <SheetGroup label="Meta">
+            <Chip active={value.meta.has("new")} onClick={() => toggleMulti("meta", "new")}>New</Chip>
+            <Chip active={value.meta.has("popular")} onClick={() => toggleMulti("meta", "popular")}>Popular</Chip>
+            <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Destin's picks</Chip>
+          </SheetGroup>
+        </div>
+        <footer className="sticky bottom-0 z-10 px-4 py-3 border-t border-edge-dim bg-panel">
+          <button
+            type="button"
+            onClick={onClose}
+            className="w-full px-4 py-2 rounded-md bg-accent text-on-accent font-medium hover:opacity-90"
+          >
+            Apply
+          </button>
+        </footer>
+      </OverlayPanel>
+    </>
+  );
+}
+
+function SheetGroup({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <h3 className="text-xs uppercase tracking-wide text-fg-dim">{label}</h3>
+      <div className="flex flex-wrap gap-2">{children}</div>
     </div>
   );
 }
