@@ -32,15 +32,15 @@ export default function MarketplaceHero({ slots, lookup, onOpen }: Props) {
     <section
       role="region"
       aria-label="Featured"
-      className="layer-surface relative overflow-hidden min-h-[180px] p-6 flex flex-col justify-end gap-2"
+      className="layer-surface relative overflow-hidden min-h-[110px] sm:min-h-[180px] p-4 sm:p-6 flex flex-col justify-end gap-2"
       style={slot.accentColor ? { borderColor: slot.accentColor } : undefined}
     >
       <div className="relative z-10">
         <p className="text-xs uppercase tracking-wide text-fg-dim">Featured</p>
-        <h2 className="text-2xl font-semibold text-fg">
+        <h2 className="text-base sm:text-2xl font-semibold text-fg">
           {entry?.displayName || slot.id}
         </h2>
-        <p className="text-sm text-fg-2 max-w-xl mt-1">{slot.blurb}</p>
+        <p className="text-sm text-fg-2 max-w-xl mt-1 line-clamp-1 sm:line-clamp-none">{slot.blurb}</p>
         <button
           type="button"
           onClick={() => onOpen(slot.id)}
