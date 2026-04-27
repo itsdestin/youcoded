@@ -1,11 +1,11 @@
 {
-  "description": "Shell prompt in buffer with no spinner → unknown (shell-idle escalation is time-based in the hook, not classifyBuffer)",
+  "description": "Shell prompt in buffer with no spinner → unknown (the hook's no-spinner-20s escalation handles sustained absence; classifyBuffer itself stays neutral)",
   "bufferTail": [
     "user@hostname:~/project$ npm run build",
     "> youcoded@1.0.0 build",
     "> vite build",
     "user@hostname:~/project$"
   ],
-  "previousSpinnerSeconds": null,
-  "secondsSincePreviousSpinner": 0
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 0
 }

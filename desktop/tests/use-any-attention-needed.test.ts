@@ -26,7 +26,7 @@ describe('useAnyAttentionNeeded', () => {
     act(() => {
       emit({
         anyNeedsAttention: true,
-        perSession: { 's1': { attentionState: 'awaiting-input', awaitingApproval: false } },
+        perSession: { 's1': { attentionState: 'stuck', awaitingApproval: false } },
       } satisfies AttentionSummary);
     });
     expect(result.current).toBe(true);

@@ -1,0 +1,9 @@
+{
+  "description": "Claude assistant turn rendered in CC's chat output, prefixed with '● ' (CC's assistant-turn marker). The user asked Claude to literally output '✻ Pondering…' and Claude complied. The ^ anchor in SPINNER_RE excludes this because the line starts with '●', not a spinner glyph.",
+  "bufferTail": [
+    "● ✻ Pondering…",
+    ""
+  ],
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 0
+}

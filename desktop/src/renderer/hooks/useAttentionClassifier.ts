@@ -18,15 +18,10 @@ const STABILITY_TICKS = 5;
 // while the classifier is active (isThinking + no tool running/awaiting),
 // escalate to 'stuck'. The gate conditions already rule out "busy with a
 // tool" and "waiting on user", so sustained spinner-absence really does mean
-// the CLI is silent in a way we should surface.
+// the CLI is silent in a way we should surface. Acts as the safety net for
+// genuine stalls where the spinner has been removed entirely from the buffer
+// (e.g. CC crashed mid-render or output scrolled the spinner off-screen).
 const NO_SPINNER_STUCK_MS = 20_000;
-
-// If "esc to cancel" is continuously present in the buffer for this long
-// (with no tool active in chat view — already enforced by the hook gate),
-// escalate to 'stuck'. Claude Code shows this marker on certain waiting
-// prompts; extended persistence means the CLI is blocked on something the
-// chat view isn't tracking.
-const ESC_TO_CANCEL_STUCK_MS = 25_000;
 
 interface HookArgs {
   /** isThinking from reducer — gates the whole classifier. */
@@ -88,15 +83,15 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
       return;
     }
 
-    // Per-run spinner tracking for active vs. stalled detection.
-    let previousSpinnerSeconds: number | null = null;
-    let previousSpinnerAt: number = Date.now();
-    // When we last saw any spinner (any seconds value) in the buffer. Seeded
-    // to run-start so the 20s no-spinner timer begins counting immediately.
+    // Per-run spinner tracking — glyph rotation drives active vs. stalled.
+    let previousSpinnerGlyph: string | null = null;
+    // When the glyph last CHANGED. While the glyph stays the same we measure
+    // age against this timestamp; after ≥10s without rotation the classifier
+    // returns thinking-stalled (mapped to 'stuck').
+    let previousSpinnerGlyphAt: number = Date.now();
+    // When we last saw any spinner glyph in the buffer. Seeded to run-start
+    // so the 20s no-spinner-stuck timer begins counting immediately.
     let lastSpinnerSeenAt: number = Date.now();
-    // When "esc to cancel" first appeared in a continuous run. Reset to null
-    // whenever the marker disappears from the tail.
-    let escToCancelSince: number | null = null;
     // Debounce: count how many consecutive ticks have mapped to the same
     // non-ok state. Only dispatch once it sticks — transitions back to 'ok'
     // fire immediately so the banner clears fast when Claude resumes.
@@ -124,26 +119,18 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
 
       const ctx: ClassifierContext = {
         bufferTail: tail,
-        previousSpinnerSeconds,
-        secondsSincePreviousSpinner: (Date.now() - previousSpinnerAt) / 1000,
+        previousSpinnerGlyph,
+        secondsSincePreviousGlyph: (Date.now() - previousSpinnerGlyphAt) / 1000,
       };
       const result = classifyBuffer(ctx);
 
-      // Track spinner progression for the next tick.
-      if (result.spinnerSeconds !== null) {
+      // Track spinner glyph for the next tick.
+      if (result.spinnerGlyph !== null) {
         lastSpinnerSeenAt = Date.now();
-        if (result.spinnerSeconds !== previousSpinnerSeconds) {
-          previousSpinnerSeconds = result.spinnerSeconds;
-          previousSpinnerAt = Date.now();
+        if (result.spinnerGlyph !== previousSpinnerGlyph) {
+          previousSpinnerGlyph = result.spinnerGlyph;
+          previousSpinnerGlyphAt = Date.now();
         }
-      }
-
-      // Track "esc to cancel" persistence — reset on disappearance so only
-      // continuous presence counts toward the stuck threshold.
-      if (result.escToCancel) {
-        if (escToCancelSince === null) escToCancelSince = Date.now();
-      } else {
-        escToCancelSince = null;
       }
 
       let mapped = bufferClassToAttention(result.class);
@@ -155,16 +142,6 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
         mapped === 'ok' &&
         result.class === 'unknown' &&
         Date.now() - lastSpinnerSeenAt >= NO_SPINNER_STUCK_MS
-      ) {
-        mapped = 'stuck';
-      }
-
-      // Escalate persistent "esc to cancel" to 'stuck' — it means Claude Code
-      // is waiting on something the chat view doesn't know about.
-      if (
-        mapped === 'ok' &&
-        escToCancelSince !== null &&
-        Date.now() - escToCancelSince >= ESC_TO_CANCEL_STUCK_MS
       ) {
         mapped = 'stuck';
       }

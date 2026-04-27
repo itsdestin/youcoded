@@ -227,6 +227,7 @@ function attentionColorFromSummary(sessionId: string, summary: AttentionSummary 
   switch (status) {
     case 'green': return '#4CAF50';  // thinking or running tool
     case 'red':   return '#DD4444';  // awaiting approval
+    case 'amber': return '#F5A623';  // attention banner showing (stuck/session-died)
     case 'blue':  return '#60A5FA';  // has unseen activity
     case 'gray':
     default:      return '#666666';  // idle / no report yet

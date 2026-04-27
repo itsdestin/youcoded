@@ -1,6 +1,6 @@
 {
   "description": "Empty buffer (zero lines) → unknown",
   "bufferTail": [],
-  "previousSpinnerSeconds": null,
-  "secondsSincePreviousSpinner": 0
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 0
 }

@@ -31,6 +31,7 @@ import { useVisualViewport } from './hooks/useVisualViewport';
 import { usePartyLobby } from './hooks/usePartyLobby';
 import { usePartyGame } from './hooks/usePartyGame';
 import { useRemoteAttentionSync } from './hooks/useRemoteAttentionSync';
+import { useSubmitConfirmation } from './hooks/useSubmitConfirmation';
 import { broadcastExpandAll, broadcastCollapseAll, isInExpandAllMode } from './hooks/useExpandAllToggle';
 import { AppIcon, WelcomeAppIcon, ThemeMascot } from './components/Icons';
 import CommandDrawer from './components/CommandDrawer';
@@ -327,6 +328,9 @@ function AppInner() {
   }, [settingsOpen]);
 
   usePromptDetector();
+  // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
+  // busy — see useSubmitConfirmation for the full mechanism.
+  useSubmitConfirmation();
   // Drives --vvp-offset from window.visualViewport so the input bar stays glued
   // to the top of the soft keyboard on Android / mobile browsers.
   useVisualViewport();
@@ -440,13 +444,22 @@ function AppInner() {
           if (hasAwaiting) break;
         }
 
+        // Priority: red (awaiting-approval) → amber (attention banner showing —
+        // stuck or session-died) → green (working) → blue (unseen activity) →
+        // gray (idle). Amber is between red and green: the session needs the
+        // user's eyes but it's not as urgent as a permission prompt, and it's
+        // not "all good, just working" either. Overrides green so a stuck
+        // session doesn't appear identical to a healthy thinking session.
+        const needsAttention = chatState.attentionState !== 'ok';
         const status: SessionStatusColor = hasAwaiting
           ? 'red'
-          : (chatState.isThinking || hasRunning)
-            ? 'green'
-            : (chatState.timeline.length > 0 && !viewedSessions.has(s.id) && s.id !== sessionId)
-              ? 'blue'
-              : 'gray';
+          : needsAttention
+            ? 'amber'
+            : (chatState.isThinking || hasRunning)
+              ? 'green'
+              : (chatState.timeline.length > 0 && !viewedSessions.has(s.id) && s.id !== sessionId)
+                ? 'blue'
+                : 'gray';
         newStatuses.set(s.id, status);
       }
 

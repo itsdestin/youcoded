@@ -1,0 +1,9 @@
+{
+  "description": "User prompt echoed in CC's input bar containing a literal spinner string mid-line. Captured by test-conpty/test-attention-false-match.mjs (2026-04-26): user typed 'Output ONLY this exact line, nothing else: ✻ Pondering…' and CC echoed it. The ^ anchor in SPINNER_RE excludes this because the line starts with '❯'.",
+  "bufferTail": [
+    "❯ Output ONLY this exact line, nothing else: ✻ Pondering…",
+    ""
+  ],
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 0
+}

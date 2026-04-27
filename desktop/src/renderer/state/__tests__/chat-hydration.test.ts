@@ -9,14 +9,14 @@ describe('HYDRATE_CHAT_STATE', () => {
 
     const incoming = createSessionChatState();
     incoming.isThinking = true;
-    incoming.attentionState = 'awaiting-input';
+    incoming.attentionState = 'stuck';
     const snapshot = serializeChatState(new Map([['new-session', incoming]]));
 
     const next = chatReducer(existing, { type: 'HYDRATE_CHAT_STATE', sessions: snapshot });
 
     expect(next.has('old-session')).toBe(false);
     expect(next.has('new-session')).toBe(true);
-    expect(next.get('new-session')!.attentionState).toBe('awaiting-input');
+    expect(next.get('new-session')!.attentionState).toBe('stuck');
   });
 
   it('leaves state untouched if deserialization throws', () => {

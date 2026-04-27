@@ -1,6 +1,6 @@
 # Claude Code Dependencies
 
-This doc tracks every place YouCoded couples to Claude Code's behavior. The `review-cc-changes` release agent reads it to map CC CHANGELOG entries to code that might break. Humans read it when adding CC-adjacent code.
+This doc tracks every place YouCoded couples to Claude Code's behavior — every silent point of failure when CC changes. It's both a navigational hub for humans and the input to the `review-cc-changes` release agent that maps CC CHANGELOG entries to code that might break.
 
 ## When to update
 
@@ -11,6 +11,40 @@ Each entry has three fields:
 - **Files:** one or more code paths
 - **Depends on:** plain-English description of the CC aspect this code relies on
 - **Break symptom:** observable user-facing failure if CC changes this
+
+## Verification tooling
+
+Drift detection beats discovering breakage from a user bug report. Several tools exist; use them on every CC version bump and as part of `/audit`.
+
+**Methodology guide:** `desktop/test-conpty/README.md` documents how to write new probes against the live `claude` binary — pre-trusting cwds, detecting "ready" / "submitted" / "stuck" from stdout, ANSI-stripping conventions, cost control, and the pitfalls that consumed the most time the first time around. Read it before adding a new probe. Reusable for any future PTY/Ink/Claude-input/output question, not just chat-submit.
+
+| Tool | What it captures | When to run |
+|------|------------------|-------------|
+| `desktop/test-conpty/cc-snapshot.mjs` | CC version, paste-classification length threshold (bisected), input-bar echo behavior. Writes JSON to `test-conpty/snapshots/cc-<version>.json` for diffing across releases. | Each CC version bump. Compare new snapshot to prior. |
+| `desktop/test-conpty/test-multiline-submit.mjs` | End-to-end submit scenarios against the real `claude` binary — paste threshold, multi-line submit, bug-state recovery. | When changing the worker write protocol (`pty-worker.js`, `PtyBridge.kt`, `useSubmitConfirmation.ts`). |
+| `desktop/test-conpty/harness.mjs` | Bracketed-paste viability on Windows ConPTY. Empirical disproof of the marker-based-submit path. | Only re-run if someone proposes resurrecting bracketed paste. |
+| `desktop/test-conpty/test-attention-states.mjs` | End-to-end attention classifier behavior against real CC — drives idle/quick/long thinking scenarios and verifies no false-stuck dispatches. Captures observed glyph + gerund sets per scenario. | When changing `attention-classifier.ts` SPINNER_RE, the staleness threshold, or the hook driver. |
+| `desktop/test-conpty/test-spinner-fullcapture.mjs` | Captures the full raw byte stream from welcome through response and grep-probes for "esc to interrupt" / "esc to cancel" / `(Ns ·` patterns. Confirms whether CC's spinner format has changed. | Each CC version bump. |
+| `desktop/test-conpty/test-attention-false-match.mjs` | Production-accurate false-match probe (uses `@xterm/headless` for buffer rendering) — drives Claude prompts that nudge spinner-shape text into the response, verifies SPINNER_RE doesn't false-match. | When changing the SPINNER_RE shape or the `^` anchor. |
+| `shared-fixtures/attention-classifier/*.json` | Pinned classifier inputs + expected outputs. Drives `attention-classifier-parity.test.ts`. | Whenever the spinner regex or classifier behavior changes. Add a fixture in the same commit. |
+| `shared-fixtures/transcript-parity/` | Pinned transcript JSONL inputs + expected event streams for the parser. Drives `desktop/tests/transcript-parity.test.ts` and gates the Android Node-CLI parity. | Whenever transcript-watcher logic changes. |
+| `shared-fixtures/raw-byte-listener/` | Raw-byte payload contract for the Android terminal-emulator vendor patch. Drives `raw-byte-listener-contract.test.ts`. | Whenever the terminal-emulator vendor patch or `pty:raw-bytes` payload changes. |
+| `desktop/tests/ipc-channels.test.ts` | Cross-platform IPC parity matrix — every `window.claude.*` API present in `preload.ts` must be present in `remote-shim.ts` and reachable via a Kotlin `SessionService.kt` handler. | Auto-runs in `npm test`; fails CI if parity drifts. |
+| `/audit` slash command | Drift between docs and code. Outputs `docs/AUDIT.md` + carries open items into `docs/knowledge-debt.md`. | Before any release; periodically. |
+
+The most rigorous CC-version drift catch is: re-run `cc-snapshot.mjs` against the new CC, diff the resulting JSON against the prior snapshot, and treat any field change as a release-blocker until the affected coupling entry below is reviewed.
+
+## Current verified baseline
+
+| Field | Value |
+|-------|-------|
+| Claude Code CLI version | **2.1.119** (April 2026) |
+| Paste-classification length threshold | **64 bytes** — atomic write ≥64 bytes ending in `\r` is paste-classified, `\r` becomes literal newline |
+| Spinner glyph set | `✻ ✽ ✢ ✳ ✶ * ⏺ ◉ ·` (empirical; not from a documented contract) |
+| Input-bar echo delay | ~6.75 s on cold start (Ink batches renders; warm session is faster) |
+| Anthropic model ID convention | dotted-hyphen, e.g. `claude-opus-4-7` |
+
+Update this table when you re-run snapshots after a CC version bump. Anything that doesn't match the current snapshot needs an audit before the release ships.
 
 ## Touchpoints
 
@@ -26,8 +60,19 @@ Each entry has three fields:
 
 ### PTY spinner regex (attention-classifier)
 - **Files:** `desktop/src/renderer/state/attention-classifier.ts` (`SPINNER_RE`)
-- **Depends on:** CC thinking-spinner glyphs `[✻✽✢✳✶*⏺◉]` and suffix `(Ns · esc to interrupt)` (case-insensitive)
-- **Break symptom:** `attentionState` misclassifies — AttentionBanner shows false positives or negatives; ThinkingIndicator visibility wrong.
+- **Depends on:** CC thinking-spinner leading-glyph set `[✻✽✢✳✶*⏺◉·]` (each is one frame of CC's animation) followed by ` <Gerund>…` (any word + U+2026 ellipsis), anchored to the start of the line (`^`). The glyph set is empirical — discovered by inspecting real CC output, not from any documented contract. CC can introduce a new spinner frame in any release. The previous regex also required `(Ns · esc to interrupt)` after the gerund, but the 2026-04-26 audit confirmed CC v2.1.119 has dropped that suffix entirely; if a future version brings it back, the new regex still matches because the `…` ellipsis is the anchor. The `^` anchor is load-bearing: without it, Claude's response text containing markdown bullets (`* Loading…`) or literal spinner glyphs (`❯ ... ✻ Pondering…`, `● ✻ Pondering…`) triggers false matches. CC also has a hook-execution variant `<glyph> <Gerund>… (running stop hook · 3s · ↓ 1 tokens)` — the regex stops at `…`, so this still matches.
+- **Active vs. stalled detection:** Glyph rotation across ticks. Same glyph for ≥10s ⇒ `thinking-stalled`. Verified in `test-conpty/test-attention-states.mjs` and `test-conpty/test-spinner-fullcapture.mjs`. The empirical glyph set captured in 2026-04-26 probes is `{✻ ✽ ✢ ✳ ✶ *}`; `⏺ ◉ ·` come from older traces and remain in the regex pending re-confirmation.
+- **Break symptom:** Frame-by-frame intermittent misclassification — `attentionState` flips between `thinking-active` and `'ok'` 1/Nth of the time during a real assistant turn (where N is the spinner frame count). User sees the AttentionBanner flicker; on a well-timed pause CC stays "thinking" but the UI says it's done. Worse: if the regex matches *nothing* during real thinking (e.g. seconds-counter requirement under v2.1.119), the no-spinner-20s escalation in the hook flashes the wrong banner during every long turn. Re-run `node test-conpty/test-spinner-fullcapture.mjs` and `test-conpty/test-attention-states.mjs` on each CC bump to verify.
+
+### PTY worker write protocol — Ink paste threshold
+- **Files:** `desktop/src/main/pty-worker.js` (case `'input'`), `app/src/main/.../runtime/PtyBridge.kt` (`writeInput`), `desktop/src/renderer/hooks/useSubmitConfirmation.ts`
+- **Depends on:** Two private Ink/CC behaviors that determine whether `body + \r` writes submit a chat message vs. leave a literal newline in the input bar: (1) the **paste-classification length threshold** — atomic writes longer than ~N chars are treated as paste, with trailing `\r` becoming literal newline; the worker's 64-byte chunking + 600 ms Enter-split is designed to keep each individual read below the threshold. Empirically verified: 6-byte atomic `ATEST\r` submits, 101-byte atomic `D + 100×z + \r` does not (CC v2.1.119, April 2026). (2) The **input-bar echo contract** — CC re-renders typed input back through stdout, which the planned echo-driven worker depends on. Both are private Ink internals with no documented contract.
+- **Break symptom:** Length-threshold drift makes the chunking workaround stop sufficing — chat sends silently fail to submit (text appears in CC's input bar with literal newline, never reaches Claude) at frequencies that vary with message length and load. `useSubmitConfirmation` retry catches most but adds 5 s recovery latency. Echo-contract drift would break echo-driven send entirely if introduced.
+
+### PTY input-bar echo (input-mirroring)
+- **Files:** `desktop/src/main/pty-worker.js` (any future `onData`-watching submit logic)
+- **Depends on:** CC echoing typed stdin bytes back into the rendered input bar via stdout, so a programmatic writer can observe consumption before sending the trailing `\r`. This is universal TUI behavior but is technically a CC-internal contract.
+- **Break symptom:** If CC stopped echoing input (e.g. switched to a "silent input" mode mid-turn), an echo-driven worker would hang waiting for an echo that never comes; chat sends would never complete. No echo-driven worker is shipped yet — this entry is preventive for the planned change.
 
 ### Other PTY attention patterns
 - **Files:** `desktop/src/renderer/state/attention-classifier.ts` (regexes for awaiting-input, shell-idle, error, stuck)
@@ -111,7 +156,7 @@ Each entry has three fields:
 
 ### Android attention classifier
 
-- **What:** `useAttentionClassifier` (renderer) runs on standalone Android by reading screen text via `window.claude.terminal.getScreenText`, which routes to `PtyBridge.readScreenText()` on the Android side. Classifier regex patterns in `classifyBuffer` match Claude Code CLI spinner glyphs (✻✽✢✳✶*⏺◉) and the "esc to cancel" / "esc to interrupt" markers.
+- **What:** `useAttentionClassifier` (renderer) runs on standalone Android by reading screen text via `window.claude.terminal.getScreenText`, which routes to `PtyBridge.readScreenText()` on the Android side. Classifier regex in `classifyBuffer` matches Claude Code CLI spinner glyphs (✻✽✢✳✶*⏺◉·) followed by `<Gerund>…`. The seconds-counter / "esc to interrupt" / "esc to cancel" markers were removed in the 2026-04-26 audit because CC v2.1.119 no longer emits any of them.
 - **CC-coupled files:**
   - `desktop/src/renderer/state/attention-classifier.ts` (patterns)
   - `desktop/src/renderer/hooks/useAttentionClassifier.ts` (tick logic)

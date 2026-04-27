@@ -1,0 +1,9 @@
+{
+  "description": "Regression: U+00B7 MIDDLE DOT is also used as a plain separator in CC's status text (e.g. 'Sonnet 4.6 · Claude Max'). The regex requires a gerund word + ellipsis after the glyph, so plain separator usage must NOT classify as a spinner.",
+  "bufferTail": [
+    "Sonnet 4.6 · Claude Max · destinmoss.work@gmail.com's Organization",
+    ""
+  ],
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 0
+}

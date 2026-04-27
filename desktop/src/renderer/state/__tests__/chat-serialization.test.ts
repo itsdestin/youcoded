@@ -35,7 +35,7 @@ describe('chat state serialization', () => {
     });
     session.timeline.push({ kind: 'assistant-turn', turnId: 'turn-1' });
     session.isThinking = true;
-    session.attentionState = 'awaiting-input';
+    session.attentionState = 'stuck';
     session.compactionPending = { startedAt: 456, beforeContextTokens: 1000 };
     const state: ChatState = new Map([['session-a', session]]);
 
@@ -49,7 +49,7 @@ describe('chat state serialization', () => {
     expect(restored.assistantTurns.get('turn-1')?.timestamp).toBe(123);
     expect(restored.timeline).toEqual([{ kind: 'assistant-turn', turnId: 'turn-1' }]);
     expect(restored.isThinking).toBe(true);
-    expect(restored.attentionState).toBe('awaiting-input');
+    expect(restored.attentionState).toBe('stuck');
     expect(restored.compactionPending).toEqual({ startedAt: 456, beforeContextTokens: 1000 });
   });
 });

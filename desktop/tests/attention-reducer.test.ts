@@ -130,7 +130,7 @@ describe('Attention state reducer actions', () => {
     state = dispatch(state, {
       type: 'ATTENTION_STATE_CHANGED',
       sessionId: SESSION,
-      state: 'shell-idle',
+      state: 'stuck',
     });
     state = dispatch(state, {
       type: 'TRANSCRIPT_TURN_COMPLETE',

@@ -1,0 +1,9 @@
+{
+  "description": "CC v2.1.119 hook-execution spinner variant — the gerund + ellipsis is followed by parenthesized info '(running stop hook · 3s · ↓ 1 tokens)'. Captured by test-conpty/test-attention-false-match.mjs in 2026-04-26 probe. The regex stops at the ellipsis, so both plain and hook-execution variants match identically.",
+  "bufferTail": [
+    "✶ Channelling… (running stop hook · 3s · ↓ 1 tokens)",
+    ""
+  ],
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 0
+}

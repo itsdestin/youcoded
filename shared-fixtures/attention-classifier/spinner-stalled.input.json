@@ -1,10 +1,10 @@
 {
-  "description": "Spinner counter unchanged (5s→5s) with ≥10s elapsed → thinking-stalled",
+  "description": "Spinner glyph unchanged (✢ → ✢) with ≥30s elapsed since the last rotation → thinking-stalled. Threshold raised from 10s to 30s on 2026-04-26 after empirical capture showed CC v2.1.119 holds the same glyph for 10–20s during normal silent thinking; 30s avoids false-firing on slow renders while still catching genuine stalls.",
   "bufferTail": [
     "Running analysis",
-    "✢ Computing… (5s · esc to interrupt)",
+    "✢ Computing…",
     ""
   ],
-  "previousSpinnerSeconds": 5,
-  "secondsSincePreviousSpinner": 12
+  "previousSpinnerGlyph": "✢",
+  "secondsSincePreviousGlyph": 31
 }

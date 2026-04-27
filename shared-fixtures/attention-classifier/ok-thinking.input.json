@@ -1,10 +1,10 @@
 {
-  "description": "Spinner visible, first tick (previousSpinnerSeconds null) → thinking-active",
+  "description": "Spinner visible (glyph + gerund + …), first tick (previousSpinnerGlyph null) → thinking-active. Empirical baseline from CC v2.1.119; the seconds-counter / 'esc to interrupt' suffix has been dropped by upstream and is no longer required by the regex.",
   "bufferTail": [
     "Claude is working...",
-    "✻ Thinking… (5s · esc to interrupt)",
+    "✻ Thinking…",
     ""
   ],
-  "previousSpinnerSeconds": null,
-  "secondsSincePreviousSpinner": 1
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 1
 }

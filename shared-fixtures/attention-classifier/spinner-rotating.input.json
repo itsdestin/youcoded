@@ -1,0 +1,10 @@
+{
+  "description": "Spinner glyph rotated since the previous tick (✻ → ⏺) → thinking-active. This is the new positive-staleness signal: as long as glyphs keep changing, CC is alive.",
+  "bufferTail": [
+    "Running analysis",
+    "⏺ Cogitating…",
+    ""
+  ],
+  "previousSpinnerGlyph": "✻",
+  "secondsSincePreviousGlyph": 1
+}

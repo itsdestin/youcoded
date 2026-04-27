@@ -440,19 +440,29 @@ export interface IntegrationState {
 // the AttentionBanner (everything else). A classifier reads the PTY buffer
 // and maps its conclusions onto these states; process-exit events also
 // transition to 'session-died' directly. See docs/chat-reducer.md.
+//
+// Narrowed 2026-04-26: 'awaiting-input' / 'shell-idle' / 'error' were
+// removed because nothing in the codebase ever dispatched them — the
+// classifier was simplified to spinner-only signals back in the April
+// rewrite, but the type and the AttentionBanner copy table still carried
+// the dead branches. Reducer tests that used them have been switched to
+// 'stuck' (the only buffer-driven non-ok state). If we ever need finer
+// distinctions, reintroduce them along with the dispatching code path.
 export type AttentionState =
   | 'ok'              // Default — indicator renders if isThinking
-  | 'awaiting-input'  // PTY shows a non-hook prompt (CLI-level confirm, etc.)
-  | 'shell-idle'      // PTY shows bash/shell prompt; session not actively running
-  | 'error'           // PTY tail matches error pattern
-  | 'stuck'           // Spinner frame stale ≥ 10s OR unknown silence > 60s
+  | 'stuck'           // Spinner glyph stale ≥ 10s OR no spinner ≥ 20s while thinking
   | 'session-died';   // Process exited mid-turn
 
 // Red | green | blue | gray — mirrors SessionStatusColor in renderer.
 // Duplicated as a string literal type here (not imported) so main-process
 // code in Node can consume this interface without dragging renderer
 // imports across the main/renderer boundary.
-export type SessionStatusDotColor = 'green' | 'red' | 'blue' | 'gray';
+// Mirrored in renderer as SessionStatusColor (StatusDot.tsx). Duplicated as a
+// string literal here (not imported) so main-process Node code can consume
+// this interface without crossing the main/renderer boundary. Keep the two
+// unions in sync — adding a color in one place without the other will make
+// the AttentionSummary IPC payload reject valid renderer values.
+export type SessionStatusDotColor = 'green' | 'red' | 'amber' | 'blue' | 'gray';
 
 export interface AttentionSummary {
   anyNeedsAttention: boolean;

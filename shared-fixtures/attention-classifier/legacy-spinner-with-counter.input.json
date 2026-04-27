@@ -1,0 +1,9 @@
+{
+  "description": "Legacy spinner format with seconds-counter and 'esc to interrupt' suffix (pre-CC-v2.1.119). The new regex no longer requires the suffix but is still a superset of the old format, so this must continue to classify as thinking-active.",
+  "bufferTail": [
+    "✻ Pondering… (7s · esc to interrupt)",
+    ""
+  ],
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 1
+}

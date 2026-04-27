@@ -51,6 +51,10 @@ interface Props {
 const DOT_BG: Record<SessionStatusColor, string> = {
   green: 'bg-green-400',
   red: 'bg-red-400',
+  // Amber harmonizes with the buddy AttentionStrip's #f5a623 ("needs
+  // attention" convention). bg-amber-400 (#fbbf24) reads as the same status
+  // across surfaces.
+  amber: 'bg-amber-400',
   blue: 'bg-blue-400',
   gray: 'bg-gray-500',
 };
@@ -58,6 +62,7 @@ const DOT_BG: Record<SessionStatusColor, string> = {
 const GLOW_SHADOW: Record<SessionStatusColor, string> = {
   green: '0 0 6px rgba(76,175,80,0.35)',
   red: '0 0 6px rgba(221,68,68,0.35)',
+  amber: '0 0 6px rgba(245,166,35,0.35)',
   blue: '0 0 6px rgba(96,165,250,0.35)',
   gray: 'none',
 };
@@ -65,6 +70,7 @@ const GLOW_SHADOW: Record<SessionStatusColor, string> = {
 const INDICATOR_COLOR: Record<SessionStatusColor, string> = {
   green: '#4CAF50',
   red: '#DD4444',
+  amber: '#F5A623',
   blue: '#60A5FA',
   gray: '#666666',
 };

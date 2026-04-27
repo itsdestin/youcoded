@@ -1,5 +1,4 @@
 {
   "class": "thinking-stalled",
-  "spinnerSeconds": 5,
-  "escToCancel": false
+  "spinnerGlyph": "✢"
 }

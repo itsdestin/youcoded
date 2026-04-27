@@ -24,8 +24,7 @@ export function AttentionStrip({ sessionId, summary }: Props) {
 
   const color =
     state.awaitingApproval ? '#f5a623'
-    : state.attentionState === 'error' || state.attentionState === 'stuck' ? '#ef4444'
-    : state.attentionState === 'awaiting-input' ? '#f5a623'
+    : state.attentionState === 'stuck' ? '#ef4444'
     : state.attentionState === 'session-died' ? '#6b7280'
     : '#60a5fa';
 

@@ -1,0 +1,11 @@
+{
+  "description": "Claude markdown bullet response with single-word + U+2026 ellipsis. Captured by test-conpty/test-attention-false-match.mjs (2026-04-26): without the ^ anchor in SPINNER_RE, this matched the classifier and would have left the ThinkingIndicator showing if isThinking was stuck true. The 2-space indent is what xterm renders for a markdown bullet inside Claude's response.",
+  "bufferTail": [
+    "  * Loading…",
+    "  * Building…",
+    "  * Saving…",
+    ""
+  ],
+  "previousSpinnerGlyph": null,
+  "secondsSincePreviousGlyph": 0
+}

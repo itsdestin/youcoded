@@ -1,0 +1,10 @@
+{
+  "description": "Spinner with U+00B7 MIDDLE DOT leading glyph. Documented in the glyph set since the April 2026 audit; current empirical probes (2026-04-26) have NOT directly observed `·` as a leading glyph in CC v2.1.119, but the regex retains it from older captures. If a future audit confirms the dot is no longer used, this fixture is the natural place to flip the contract.",
+  "bufferTail": [
+    "Running analysis",
+    "· Envisioning…",
+    ""
+  ],
+  "previousSpinnerGlyph": "✻",
+  "secondsSincePreviousGlyph": 3
+}

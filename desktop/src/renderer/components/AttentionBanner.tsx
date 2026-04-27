@@ -15,9 +15,6 @@ interface Props {
 }
 
 const COPY: Record<Props['state'], string> = {
-  'awaiting-input': 'Response needed in Terminal view.',
-  'shell-idle': 'Session is idle — open Terminal view.',
-  'error': 'Error in Terminal view — check it.',
   'stuck': 'Still waiting on Claude — check Terminal view if this persists.',
   'session-died': 'Session ended unexpectedly.',
 };
@@ -25,7 +22,7 @@ const COPY: Record<Props['state'], string> = {
 // Destructive states pick up the L3 destructive ring tokens so they read as
 // "something went wrong" rather than just a nudge. Other states reuse the
 // neutral bubble styling to stay consistent with ThinkingIndicator.
-const DESTRUCTIVE: Props['state'][] = ['error', 'session-died'];
+const DESTRUCTIVE: Props['state'][] = ['session-died'];
 
 export default function AttentionBanner({ state, anthropicRequestId }: Props) {
   const destructive = DESTRUCTIVE.includes(state);
@@ -39,11 +36,10 @@ export default function AttentionBanner({ state, anthropicRequestId }: Props) {
   // Show the spinner for every state except session-died — that one signals
   // the process is gone, so a spinning indicator would be misleading.
   const showSpinner = state !== 'session-died';
-  // Only surface the request ID on destructive states: it's strictly a support
-  // correlation aid, so we hide it during the benign awaiting-input / idle /
-  // stuck banners to avoid visual noise when nothing is actually wrong.
-  const showRequestId =
-    (state === 'session-died' || state === 'error') && !!anthropicRequestId;
+  // Only surface the request ID on session-died: it's strictly a support
+  // correlation aid, so we hide it during the benign 'stuck' banner where
+  // Claude is likely still working.
+  const showRequestId = state === 'session-died' && !!anthropicRequestId;
 
   return (
     // in-view: opts the bubble into wallpaper-driven bubble glassmorphism
