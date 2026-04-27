@@ -16,7 +16,7 @@ import AboutPopup from './AboutPopup';
 import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { BugReportPopup } from './development/BugReportPopup';
 import { ContributePopup } from './development/ContributePopup';
-import PerformanceSection from './PerformanceSection';
+import PerformanceButton from './PerformanceButton';
 
 // Plain-language explainer for the Remote Access popup. Shown when the user
 // taps the (i) icon in the popup header — see RemoteButton's `showInfo` state.
@@ -1982,7 +1982,7 @@ function AndroidSettings({ open, onClose, onSendInput, onOpenThemeMarketplace, o
 
         {/* No <BuddyToggle /> on Android — the floater relies on an Electron always-on-top window that Android doesn't support yet */}
 
-        <PerformanceSection />
+        <PerformanceButton />
 
         <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 
@@ -2293,7 +2293,7 @@ function DesktopSettings({ open, onClose, onSendInput, hasActiveSession, onOpenT
 
         <SoundButton />
 
-        <PerformanceSection />
+        <PerformanceButton />
 
         <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 
