@@ -274,9 +274,11 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
           className="w-full h-36 object-cover border-b border-edge-dim"
         />
       )}
-      <div className="p-4 flex flex-col gap-2 flex-1">
+      {/* p-3/gap-1.5 at narrow shrinks the rail tile so 2-3 fit on a phone screen
+          without losing the visual-card feel. Wide stays at p-4/gap-2. */}
+      <div className="p-3 sm:p-4 flex flex-col gap-1.5 sm:gap-2 flex-1">
       <div className="flex items-start justify-between gap-2">
-        <div className="flex items-start gap-3 min-w-0">
+        <div className="flex items-start gap-2 sm:gap-3 min-w-0">
           {/* Integration icon — renders alongside the title, not the corner,
               so it never collides with the install/favorite affordance. */}
           {showIcon && (
@@ -290,8 +292,11 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
             </div>
           )}
           <div className="min-w-0">
-            <h3 className="font-medium text-fg truncate">{title}</h3>
-            {author && <p className="text-xs text-fg-dim truncate">{author}</p>}
+            <h3 className="font-medium text-fg truncate text-sm sm:text-base">{title}</h3>
+            {/* Author on its own line at sm+; at narrow we hide it here and
+                render it inline with the bottom stats row to save vertical
+                space — see the bottom row below. */}
+            {author && <p className="hidden sm:block text-xs text-fg-dim truncate">{author}</p>}
             {isLocalTheme && (
               <div className="mt-1 inline-flex items-center gap-1 group relative">
                 <span className="text-[10px] uppercase tracking-wide px-2 py-0.5 rounded-full bg-accent/15 text-accent border border-accent/30">
@@ -347,7 +352,7 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
           </span>
         )}
       </div>
-      {blurb && <p className="text-sm text-fg-2 line-clamp-2">{blurb}</p>}
+      {blurb && <p className="text-xs sm:text-sm text-fg-2 line-clamp-1 sm:line-clamp-2">{blurb}</p>}
       {/* Plugin-name badge — jumps to the parent plugin's detail page.
           Only rendered for skills that belong to a marketplace plugin;
           stopPropagation prevents the card's own onClick from firing. */}
@@ -361,13 +366,19 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
           {pluginBadge.name}
         </button>
       )}
-      <div className="mt-auto flex items-center gap-3 text-xs text-fg-dim pt-1">
+      <div className="mt-auto flex items-center gap-2 sm:gap-3 text-xs text-fg-dim pt-1 min-w-0">
+        {/* Author appears here at narrow only — keeps the byline visible without
+            spending a whole row on it. Hidden at sm+ since it has its own line
+            under the title up top. */}
+        {author && <span className="sm:hidden text-fg-dim truncate">{author}</span>}
         {rating != null && ratingCount > 0 && (
           <StarRating value={rating} count={ratingCount} size="sm" />
         )}
-        {installs > 0 && <span>{installs.toLocaleString()} installs</span>}
-        {likes > 0 && <span>{likes.toLocaleString()} likes</span>}
-        {peek && <span className="text-fg-muted truncate">{peek}</span>}
+        {installs > 0 && <span className="shrink-0">{installs.toLocaleString()} installs</span>}
+        {likes > 0 && <span className="shrink-0">{likes.toLocaleString()} likes</span>}
+        {/* Component peek (e.g. "2 skills · 3 commands") is wide-only —
+            saves a row at narrow where space is tight. */}
+        {peek && <span className="hidden sm:inline text-fg-muted truncate">{peek}</span>}
       </div>
       </div>
     </div>

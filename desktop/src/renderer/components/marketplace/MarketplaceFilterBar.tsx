@@ -62,30 +62,44 @@ export default function MarketplaceFilterBar({ value, onChange }: Props) {
     const count = activeFilterCount(value);
     return (
       <>
-        <div className="layer-surface sticky top-0 z-20 flex items-center gap-2 p-2">
-          <input
-            type="search"
-            placeholder="Search…"
-            value={value.query}
-            onChange={(e) => onChange({ ...value, query: e.target.value })}
-            className="flex-1 min-w-0 bg-inset border border-edge rounded-md px-3 py-1.5 text-sm text-fg placeholder:text-fg-muted focus:outline-none focus:ring-2 focus:ring-accent"
-          />
-          <button
-            type="button"
-            onClick={() => setSheetOpen(true)}
-            className="shrink-0 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm border border-edge-dim hover:border-edge text-fg-2 hover:text-fg"
-            aria-label={count > 0 ? `Filters (${count} active)` : 'Filters'}
-          >
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-              <line x1="4" y1="6" x2="20" y2="6" />
-              <line x1="6" y1="12" x2="18" y2="12" />
-              <line x1="9" y1="18" x2="15" y2="18" />
-            </svg>
-            <span>Filters</span>
-            {count > 0 && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-accent text-on-accent leading-none">{count}</span>
-            )}
-          </button>
+        {/* Single rounded pill: leading magnifier icon, borderless input, trailing
+            filter button — same in-row pattern as InputBar's send button. The
+            outer wrapper carries the border + focus ring; the input itself is
+            transparent so focus styling reads as one element. */}
+        <div className="layer-surface sticky top-0 z-20 p-2">
+          <div className="flex items-center bg-inset border border-edge rounded-md focus-within:ring-2 focus-within:ring-accent">
+            <span className="pl-2.5 pr-1 text-fg-muted shrink-0" aria-hidden>
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="11" cy="11" r="7" />
+                <line x1="21" y1="21" x2="16.65" y2="16.65" />
+              </svg>
+            </span>
+            <input
+              type="search"
+              placeholder="Search…"
+              value={value.query}
+              onChange={(e) => onChange({ ...value, query: e.target.value })}
+              className="flex-1 min-w-0 bg-transparent border-0 outline-none px-2 py-1.5 text-sm text-fg placeholder:text-fg-muted"
+            />
+            <button
+              type="button"
+              onClick={() => setSheetOpen(true)}
+              className="shrink-0 relative p-2 mr-1 rounded-md text-fg-2 hover:text-fg hover:bg-edge-dim"
+              aria-label={count > 0 ? `Filters (${count} active)` : 'Filters'}
+              title={count > 0 ? `Filters (${count} active)` : 'Filters'}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                <line x1="4" y1="6" x2="20" y2="6" />
+                <line x1="6" y1="12" x2="18" y2="12" />
+                <line x1="9" y1="18" x2="15" y2="18" />
+              </svg>
+              {count > 0 && (
+                <span className="absolute -top-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-accent text-on-accent text-[10px] font-medium leading-[16px] text-center">
+                  {count}
+                </span>
+              )}
+            </button>
+          </div>
         </div>
         {sheetOpen && (
           <FilterSheet

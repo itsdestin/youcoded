@@ -277,15 +277,28 @@ export default function MarketplaceScreen({
               <span className="sm:hidden">Lib</span>
             </button>
           )}
+          {/* Wide: text "Esc · Back to chat" hint, no border (Esc key does the work). */}
           <button
             type="button"
             onClick={onExit}
-            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1"
             aria-label="Exit marketplace"
           >
-            {/* Esc hint on desktop where there's an Esc key; back arrow on touch. */}
-            <span className="hidden sm:inline">Esc · Back to chat</span>
-            <span className="sm:hidden" aria-hidden>←</span>
+            Esc · Back to chat
+          </button>
+          {/* Narrow: bordered close-X button — touch users have no Esc key, so we
+              give them an obvious close affordance with a button-shaped container
+              matching the Library button next to it. */}
+          <button
+            type="button"
+            onClick={onExit}
+            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            aria-label="Exit marketplace"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
           </button>
         </div>
       </div>
