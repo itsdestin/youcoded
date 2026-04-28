@@ -4,9 +4,45 @@
  * only returned on high-confidence substring match.
  *
  * Used by: sync-service.ts (on any push returning errors > 0).
+ *
+ * Also hosts the pure remote-name decision helper used by pushGithub's
+ * self-heal block (kept here, not in sync-service.ts, so it has a unit-test
+ * seam that doesn't require constructing a SyncService).
  */
 
 import type { SyncWarning, BackendType, BackendInstance } from './sync-state';
+
+/**
+ * Decide which `git remote …` command to run to make `personal-sync` the
+ * canonical remote name in a repoDir. Pure — no I/O.
+ *
+ * Inputs:
+ *   - `remoteListStdout`: raw stdout from `git remote` (may be empty, may
+ *     contain CRLF on Windows, may contain extra whitespace)
+ *   - `syncRepo`: configured remote URL (used only when adding a fresh remote)
+ *
+ * Returns:
+ *   - `null` if `personal-sync` already exists (no action needed)
+ *   - `['remote', 'rename', 'origin', 'personal-sync']` if only `origin` exists
+ *     (clone-success path, or pre-fix broken installs)
+ *   - `['remote', 'add', 'personal-sync', syncRepo]` if neither exists
+ *     (rare — empty remotes list, or some unrelated third remote name)
+ *
+ * Existence checks are exact-match against the trimmed remote name list, so
+ * a remote called `personal-syncro` would not be mistaken for `personal-sync`.
+ */
+export function decidePersonalSyncRemoteAction(
+  remoteListStdout: string,
+  syncRepo: string,
+): string[] | null {
+  const remotes = (remoteListStdout || '')
+    .split('\n')
+    .map(r => r.trim())
+    .filter(Boolean);
+  if (remotes.includes('personal-sync')) return null;
+  if (remotes.includes('origin')) return ['remote', 'rename', 'origin', 'personal-sync'];
+  return ['remote', 'add', 'personal-sync', syncRepo];
+}
 
 interface Pattern {
   code: string;
@@ -192,10 +228,15 @@ const GITHUB_PATTERNS: Pattern[] = [
   {
     code: 'GITHUB_REPO_NOT_FOUND',
     level: 'danger',
+    // The two `Repository not found` patterns are real GitHub 404s. We
+    // intentionally do NOT match `Could not read from remote repository.` —
+    // that line appears as a secondary message in transport failures (SSH
+    // connection timeouts, etc.) which should fall through to GITHUB_NETWORK
+    // or UNKNOWN. The auth case is caught earlier by GITHUB_AUTH on its own
+    // markers.
     match: (s) =>
       s.includes('Repository not found') ||
-      s.includes('remote: Repository not found') ||
-      s.includes('could not read from remote repository'),
+      s.includes('remote: Repository not found'),
     title: () => "GitHub backup repo is missing",
     body: () =>
       "The configured backup repo doesn't exist or isn't accessible. Check the URL or create the repo, then retry.",

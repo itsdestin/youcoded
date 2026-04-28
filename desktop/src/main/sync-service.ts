@@ -33,7 +33,7 @@ import {
   syncLegacyKeys,
   writeWarnings,
 } from './sync-state';
-import { classifyPushError, extractStderr, truncateStderr } from './sync-error-classifier';
+import { classifyPushError, decidePersonalSyncRemoteAction, extractStderr, truncateStderr } from './sync-error-classifier';
 
 const execFileAsync = promisify(execFile);
 
@@ -801,8 +801,28 @@ export class SyncService extends EventEmitter {
       }
     }
 
-    // Ensure remote URL is current
-    await this.gitExec(['remote', 'set-url', 'personal-sync', syncRepo], repoDir);
+    // Self-heal the remote name. `git clone` (success path) creates `origin`,
+    // but the rest of this service unconditionally references `personal-sync`.
+    // Without this block, every push/pull fails with "fatal: 'personal-sync'
+    // does not appear to be a git repository" until the user manually renames
+    // the remote. Idempotent — fixes both new installs and existing affected
+    // users on next sync run. See itsdestin/youcoded#74.
+    const remotesResult = await this.gitExec(['remote'], repoDir);
+    if (remotesResult.code === 0) {
+      const action = decidePersonalSyncRemoteAction(remotesResult.stdout || '', syncRepo);
+      if (action) {
+        const r = await this.gitExec(action, repoDir);
+        if (r.code !== 0) {
+          this.logBackup('WARN', `Failed to ${action[1]} personal-sync remote`, 'sync.push.github', { stderr: truncateStderr(r.stderr || '') });
+        }
+      }
+    }
+
+    // Ensure remote URL is current (handles syncRepo config changes)
+    const setUrlResult = await this.gitExec(['remote', 'set-url', 'personal-sync', syncRepo], repoDir);
+    if (setUrlResult.code !== 0) {
+      this.logBackup('WARN', 'Failed to update personal-sync remote URL', 'sync.push.github', { stderr: truncateStderr(setUrlResult.stderr || '') });
+    }
 
     // Copy all data categories into repo structure
     const projectsDir = path.join(this.claudeDir, 'projects');
@@ -1840,7 +1860,12 @@ export class SyncService extends EventEmitter {
       case 'github': {
         const repoDir = path.join(this.claudeDir, 'toolkit-state', `personal-sync-repo-${instance.id}`);
         if (!this.dirExists(path.join(repoDir, '.git'))) return;
-        await this.gitExec(['pull', 'personal-sync', 'main'], repoDir);
+        // Log non-zero exits so silent remote misconfig (e.g. #74) surfaces
+        // in backup.log even though we don't promote it to a SyncWarning here.
+        const pullR = await this.gitExec(['pull', 'personal-sync', 'main'], repoDir);
+        if (pullR.code !== 0) {
+          this.logBackup('WARN', 'Index-only pull from personal-sync failed', 'sync.pull.github', { stderr: truncateStderr(pullR.stderr || '') });
+        }
         const src = path.join(repoDir, 'system-backup', 'conversation-index.json');
         if (this.fileExists(src)) fs.copyFileSync(src, path.join(stagedDir, 'conversation-index.json'));
         break;
@@ -1877,7 +1902,13 @@ export class SyncService extends EventEmitter {
             fs.copyFileSync(this.conversationIndexPath, path.join(repoDir, 'system-backup', 'conversation-index.json'));
             await this.gitExec(['add', 'system-backup/conversation-index.json'], repoDir);
             await this.gitExec(['commit', '-m', 'sync: conversation-index (tags)'], repoDir);
-            await this.gitExec(['push', 'personal-sync', 'main'], repoDir);
+            // Log non-zero exits so silent remote misconfig (#74) surfaces in
+            // backup.log. Not promoted to SyncWarning — the 15-min pushGithub
+            // owns that surface and would record the same failure there.
+            const idxPushR = await this.gitExec(['push', 'personal-sync', 'main'], repoDir);
+            if (idxPushR.code !== 0) {
+              this.logBackup('WARN', 'Index-only push to personal-sync failed', 'sync.push.index.github', { stderr: truncateStderr(idxPushR.stderr || '') });
+            }
             break;
           }
           case 'icloud': {
@@ -2238,7 +2269,12 @@ export class SyncService extends EventEmitter {
             const diff = await this.gitExec(['diff', '--cached', '--quiet'], repoDir);
             if (diff.code !== 0) {
               await this.gitExec(['commit', '-m', 'auto: session-end sync', '--no-gpg-sign'], repoDir);
-              await this.gitExec(['push', 'personal-sync', 'main'], repoDir);
+              // Log non-zero exits so silent remote misconfig (#74) surfaces
+              // in backup.log without spamming the SyncWarning surface.
+              const sessPushR = await this.gitExec(['push', 'personal-sync', 'main'], repoDir);
+              if (sessPushR.code !== 0) {
+                this.logBackup('WARN', 'Session-end push to personal-sync failed', 'sync.push.session.github', { stderr: truncateStderr(sessPushR.stderr || '') });
+              }
             }
             break;
           }

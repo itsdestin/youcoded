@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   classifyPushError,
+  decidePersonalSyncRemoteAction,
   extractStderr,
   truncateStderr,
   TIMEOUT_SENTINEL,
@@ -175,6 +176,25 @@ describe('classifyPushError', () => {
     expect(w.level).toBe('warn');
   });
 
+  it('SSH connection timeout falls to GITHUB_NETWORK, not GITHUB_REPO_NOT_FOUND', () => {
+    // Real git stderr for an SSH transport timeout includes "Could not read
+    // from remote repository." as a secondary line. REPO_NOT_FOUND must NOT
+    // catch this — it's a transport issue, not a missing repo. Regression
+    // guard for the deleted match line in GITHUB_REPO_NOT_FOUND.
+    const stderr = 'ssh: connect to host github.com port 22: Connection timed out\nfatal: Could not read from remote repository.';
+    const w = classifyPushError(stderr, 'github', ghInstance);
+    expect(w.code).toBe('GITHUB_NETWORK');
+  });
+
+  it('"Could not read from remote repository" alone does NOT match REPO_NOT_FOUND', () => {
+    // A bare "Could not read from remote repository" with no other markers is
+    // ambiguous — most likely a transport blip. It should fall through to
+    // UNKNOWN rather than misleadingly tell the user the repo is missing.
+    const stderr = 'fatal: Could not read from remote repository.';
+    const w = classifyPushError(stderr, 'github', ghInstance);
+    expect(w.code).toBe('UNKNOWN');
+  });
+
   it('GitHub patterns do not leak into drive classification', () => {
     const stderr = 'fatal: Authentication failed for https://github.com/user/repo';
     const w = classifyPushError(stderr, 'drive', driveInstance);
@@ -217,5 +237,59 @@ describe('truncateStderr', () => {
     const out = truncateStderr('a'.repeat(501));
     expect(out.length).toBeLessThan(520);
     expect(out.endsWith('(truncated)')).toBe(true);
+  });
+});
+
+describe('decidePersonalSyncRemoteAction', () => {
+  const REPO = 'https://github.com/user/youcoded-personal-sync.git';
+
+  it('returns null when personal-sync already exists (fresh-init case)', () => {
+    expect(decidePersonalSyncRemoteAction('personal-sync\n', REPO)).toBeNull();
+  });
+
+  it('returns null when both personal-sync and another remote exist', () => {
+    expect(decidePersonalSyncRemoteAction('origin\npersonal-sync\n', REPO)).toBeNull();
+  });
+
+  it('renames origin when only origin exists (the #74 bug state)', () => {
+    expect(decidePersonalSyncRemoteAction('origin\n', REPO)).toEqual([
+      'remote', 'rename', 'origin', 'personal-sync',
+    ]);
+  });
+
+  it('adds personal-sync when no remotes exist (empty stdout)', () => {
+    expect(decidePersonalSyncRemoteAction('', REPO)).toEqual([
+      'remote', 'add', 'personal-sync', REPO,
+    ]);
+  });
+
+  it('adds personal-sync when only an unrelated remote exists', () => {
+    // User manually renamed `origin` to something custom — we add a fresh
+    // personal-sync alongside rather than disturbing their setup.
+    expect(decidePersonalSyncRemoteAction('upstream\n', REPO)).toEqual([
+      'remote', 'add', 'personal-sync', REPO,
+    ]);
+  });
+
+  it('handles Windows CRLF line endings from `git remote`', () => {
+    // On Windows git emits `\r\n`-separated remote lists. The trim step
+    // strips the trailing `\r`; without it `Array.includes` would fail.
+    expect(decidePersonalSyncRemoteAction('origin\r\n', REPO)).toEqual([
+      'remote', 'rename', 'origin', 'personal-sync',
+    ]);
+    expect(decidePersonalSyncRemoteAction('personal-sync\r\n', REPO)).toBeNull();
+  });
+
+  it('handles whitespace and empty lines gracefully', () => {
+    expect(decidePersonalSyncRemoteAction('  origin  \n\n', REPO)).toEqual([
+      'remote', 'rename', 'origin', 'personal-sync',
+    ]);
+  });
+
+  it('does NOT confuse `personal-syncro` (substring) with `personal-sync` (exact)', () => {
+    // Defensive: Array.includes is exact equality, not substring. Pin it.
+    expect(decidePersonalSyncRemoteAction('personal-syncro\n', REPO)).toEqual([
+      'remote', 'add', 'personal-sync', REPO,
+    ]);
   });
 });
