@@ -1201,6 +1201,13 @@ export function registerIpcHandlers(
     }
   });
 
+  // No-op: Electron has no hardware back button. Registered for shape
+  // parity with SessionService.kt's handleBridgeMessage() so the
+  // 'system:notify-stack-state' string exists in ipc-handlers.ts too.
+  ipcMain.on(IPC.SYSTEM_NOTIFY_STACK_STATE, () => {
+    // intentionally empty
+  });
+
   // Forward session exit events — exitCode is piped through to the renderer
   // so the reducer can distinguish clean shutdowns from 'session-died' cases.
   sessionManager.on('session-exit', (sessionId: string, exitCode: number) => {
