@@ -5,7 +5,7 @@
 import React, { useState } from 'react';
 import { describe, it, expect, vi } from 'vitest';
 import { render, fireEvent, act } from '@testing-library/react';
-import { EscCloseProvider, useEscClose, useEscStackEmpty } from './use-esc-close';
+import { EscCloseProvider, useEscClose, useEscStackEmpty, useDismissTop } from './use-esc-close';
 
 function pressEsc() {
   act(() => {
@@ -136,5 +136,56 @@ describe('useEscClose', () => {
     const ev = new KeyboardEvent('keydown', { key: 'Escape', bubbles: true, cancelable: true });
     act(() => { window.dispatchEvent(ev); });
     expect(ev.defaultPrevented).toBe(false);
+  });
+
+  it('useDismissTop pops the top of the stack and invokes its onClose', () => {
+    const onClose = vi.fn();
+    let dismiss: () => void = () => {};
+    function Capturer() {
+      dismiss = useDismissTop();
+      return null;
+    }
+    render(
+      <EscCloseProvider>
+        <Capturer />
+        <Overlay onClose={onClose} />
+      </EscCloseProvider>,
+    );
+    act(() => { dismiss(); });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('useDismissTop is LIFO: closes the most-recently-opened overlay first', () => {
+    const onCloseA = vi.fn();
+    const onCloseB = vi.fn();
+    let dismiss: () => void = () => {};
+    function Capturer() {
+      dismiss = useDismissTop();
+      return null;
+    }
+    render(
+      <EscCloseProvider>
+        <Capturer />
+        <Overlay onClose={onCloseA} />
+        <Overlay onClose={onCloseB} />
+      </EscCloseProvider>,
+    );
+    act(() => { dismiss(); });
+    expect(onCloseB).toHaveBeenCalledTimes(1);
+    expect(onCloseA).not.toHaveBeenCalled();
+  });
+
+  it('useDismissTop is a no-op when the stack is empty', () => {
+    let dismiss: () => void = () => {};
+    function Capturer() {
+      dismiss = useDismissTop();
+      return null;
+    }
+    render(
+      <EscCloseProvider>
+        <Capturer />
+      </EscCloseProvider>,
+    );
+    expect(() => act(() => { dismiss(); })).not.toThrow();
   });
 });
