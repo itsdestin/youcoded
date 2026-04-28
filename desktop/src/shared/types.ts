@@ -815,6 +815,9 @@ export const IPC = {
   PERFORMANCE_GET_CONFIG: 'performance:get-config',
   PERFORMANCE_SET_CONFIG: 'performance:set-config',
   APP_RESTART: 'app:restart',
+  // System namespace — hardware back button bridge (Android only)
+  SYSTEM_NOTIFY_STACK_STATE: 'system:notify-stack-state',
+  SYSTEM_BACK: 'system:back',
 } as const;
 
 // Performance / GPU configuration snapshot — returned by performance:get-config.
