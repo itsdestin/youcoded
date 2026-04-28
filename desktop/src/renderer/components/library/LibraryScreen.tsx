@@ -4,6 +4,7 @@
 
 import React, { useMemo, useState, useEffect } from "react";
 import { useMarketplace } from "../../state/marketplace-context";
+import { useEscClose } from "../../hooks/use-esc-close";
 import MarketplaceCard from "../marketplace/MarketplaceCard";
 import MarketplaceGrid from "../marketplace/MarketplaceGrid";
 import MarketplaceDetailOverlay, {
@@ -31,15 +32,10 @@ export default function LibraryScreen({
   // Tab state — defaults to 'skills' if no initialTab provided.
   const [tab, setTab] = useState<'skills' | 'themes' | 'updates'>(initialTab ?? 'skills');
 
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key !== "Escape" || detail) return;
-      e.stopPropagation();
-      onExit();
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [detail, onExit]);
+  // Register with the dismissal stack — ESC (desktop) and hardware back
+  // (Android) both call onExit. LIFO with any nested overlay so the overlay
+  // closes first (detail popup), then the screen.
+  useEscClose(true, onExit);
 
   const favSet = useMemo(() => new Set(mp.favorites), [mp.favorites]);
   const themeFavSet = useMemo(() => new Set(mp.themeFavorites), [mp.themeFavorites]);
