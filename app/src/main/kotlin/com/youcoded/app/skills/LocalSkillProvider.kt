@@ -87,6 +87,31 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
         return result
     }
 
+    // Integrations list for the "Connect your stuff" rail. Returns the catalog
+    // entries with a default state attached, since the install/connect manifest
+    // (~/.claude/integrations.json on desktop) is not yet maintained on Android.
+    // Renderer-side platform check filters macOS-only / linux-only entries via
+    // the existing IntegrationCardItem.platforms field — Android entries that
+    // don't match this device get a "macOS Only"-style locked badge.
+    fun listIntegrations(): JSONArray {
+        val entries = fetcher.fetchIntegrations()
+        val result = JSONArray()
+        for (i in 0 until entries.length()) {
+            val entry = entries.getJSONObject(i)
+            val slug = entry.optString("slug")
+            // Attach IntegrationState — install/connect actions are still stubbed
+            // on Android (returns a not-implemented error), so state is constant.
+            val state = JSONObject().apply {
+                put("slug", slug)
+                put("installed", false)
+                put("connected", false)
+            }
+            entry.put("state", state)
+            result.put(entry)
+        }
+        return result
+    }
+
     fun listMarketplace(filters: JSONObject?): JSONArray {
         val entries = fetcher.fetchIndex()
         val stats = fetcher.fetchStats()
