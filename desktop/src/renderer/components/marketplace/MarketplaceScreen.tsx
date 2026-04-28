@@ -160,11 +160,11 @@ export default function MarketplaceScreen({
     setSetupHint((prev) => (prev?.slug === item.slug ? null : prev));
   };
 
-  // Esc: close detail first, then exit screen. Matches App.tsx state-transition rules.
-  // When a detail overlay (plugin or integration) is open, its own useEscClose
-  // registration sits on top of the LIFO stack and captures ESC first; this
-  // registration only fires when no nested overlay is active.
-  useEscClose(!detail && !integrationDetail, onExit);
+  // Register with the dismissal stack. ESC (desktop) and hardware back
+  // (Android) both call onExit — same path as the on-screen close button.
+  // LIFO with MarketplaceDetailOverlay: when an overlay is open over the
+  // grid, its useEscClose entry sits above this one and gets dismissed first.
+  useEscClose(true, onExit);
 
   const mode: "discovery" | "search" = isActive(filter) ? "search" : "discovery";
   const installedIds = useMemo(
