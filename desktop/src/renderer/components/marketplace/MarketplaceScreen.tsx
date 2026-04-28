@@ -576,29 +576,45 @@ function IntegrationDetailOverlay({
   return (
     <>
       <Scrim layer={2} onClick={onClose} />
+      {/* Inset shrinks at narrow so the popup fills the phone screen — see
+          MarketplaceDetailOverlay for the same treatment. */}
       <OverlayPanel
         layer={2}
-        className="fixed inset-8 md:inset-16 flex flex-col overflow-hidden"
+        className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
         style={item.accentColor ? { borderColor: item.accentColor } : undefined}
       >
-        <header className="flex items-center justify-between p-4 border-b border-edge-dim">
+        <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
           <h2 className="text-lg font-semibold text-fg">Integration</h2>
+          {/* Wide: Esc-text. Narrow: bordered close-X. */}
           <button
             type="button"
             onClick={onClose}
-            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1"
             aria-label="Close"
           >
             Esc · Close
           </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            aria-label="Close"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </header>
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
           <article className="flex flex-col gap-4 max-w-3xl mx-auto">
-            <header className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-4 min-w-0 flex-1">
+            {/* Header stacks at narrow so the icon+title+tagline get full row
+                width and the action button cluster drops below. */}
+            <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
+              <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
                 {/* Custom integration icon, falls back to the displayName letter. */}
                 <div
-                  className="w-16 h-16 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-2xl font-semibold"
+                  className="w-12 h-12 sm:w-16 sm:h-16 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-xl sm:text-2xl font-semibold"
                   style={iconUrl ? undefined : { background: item.accentColor || 'var(--accent)' }}
                 >
                   {iconUrl ? (
@@ -608,8 +624,8 @@ function IntegrationDetailOverlay({
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h1 className="text-2xl font-semibold text-fg">{item.displayName}</h1>
-                  {item.tagline && <p className="mt-1 text-fg-2">{item.tagline}</p>}
+                  <h1 className="text-xl sm:text-2xl font-semibold text-fg">{item.displayName}</h1>
+                  {item.tagline && <p className="mt-1 text-sm sm:text-base text-fg-2">{item.tagline}</p>}
                   <div className="mt-3 flex items-center gap-2 flex-wrap">
                     <span className={`text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5 border ${toneClass[statusBadge.tone]}`}>
                       {statusBadge.text}
@@ -620,7 +636,7 @@ function IntegrationDetailOverlay({
                   </div>
                 </div>
               </div>
-              <div className="shrink-0 flex items-center gap-2">
+              <div className="shrink-0 flex items-center gap-2 flex-wrap">
                 <IntegrationActions
                   state={actionState}
                   onInstall={onInstall}

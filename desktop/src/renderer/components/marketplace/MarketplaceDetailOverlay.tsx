@@ -98,22 +98,36 @@ export default function MarketplaceDetailOverlay({
   return (
     <>
       <Scrim layer={2} onClick={onClose} />
+      {/* Inset shrinks to 8px on narrow so the popup fills the phone screen
+          (the desktop 32–64px insets crushed the body into a ~290px column). */}
       <OverlayPanel
         layer={2}
-        className="fixed inset-8 md:inset-16 flex flex-col overflow-hidden"
+        className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
       >
-        <header className="flex items-center justify-between p-4 border-b border-edge-dim">
+        <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
           <h2 className="text-lg font-semibold text-fg">Details</h2>
+          {/* Wide: Esc-text hint. Narrow: bordered close-X matching the marketplace top bar. */}
           <button
             type="button"
             onClick={onClose}
-            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1"
             aria-label="Close"
           >
             Esc · Close
           </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            aria-label="Close"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </header>
-        <div className="flex-1 overflow-y-auto p-6">{content}</div>
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">{content}</div>
       </OverlayPanel>
     </>
   );
@@ -210,13 +224,15 @@ function SkillBody({
 
   return (
     <article className="flex flex-col gap-4 max-w-3xl mx-auto">
-      <header className="flex items-start justify-between gap-4">
+      {/* Header stacks at narrow so the title/tagline get the full row width
+          and the icon cluster drops below — at sm+ they sit side-by-side. */}
+      <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold text-fg">{entry.displayName}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold text-fg">{entry.displayName}</h1>
           {entry.author && <p className="text-sm text-fg-dim">{entry.author}</p>}
-          {entry.tagline && <p className="mt-2 text-base text-fg-2">{entry.tagline}</p>}
+          {entry.tagline && <p className="mt-2 text-sm sm:text-base text-fg-2">{entry.tagline}</p>}
         </div>
-        <div className="shrink-0 flex items-center gap-2">
+        <div className="shrink-0 flex items-center gap-2 flex-wrap">
           {/* Favorite: only meaningful for installed skills (it drives the
               command drawer starred list). Gated + tooltipped when not. */}
           <IconButton
@@ -486,13 +502,14 @@ function ThemeBody({
 
   return (
     <article className="flex flex-col gap-4 max-w-3xl mx-auto">
-      <header className="flex items-start justify-between gap-4">
+      {/* Header stacks at narrow — see SkillBody for the rationale. */}
+      <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
         <div className="min-w-0">
-          <h1 className="text-2xl font-semibold text-fg">{entry.name}</h1>
+          <h1 className="text-xl sm:text-2xl font-semibold text-fg">{entry.name}</h1>
           {entry.author && <p className="text-sm text-fg-dim">{entry.author}</p>}
-          {entry.description && <p className="mt-2 text-fg-2">{entry.description}</p>}
+          {entry.description && <p className="mt-2 text-sm sm:text-base text-fg-2">{entry.description}</p>}
         </div>
-        <div className="shrink-0 flex items-center gap-2">
+        <div className="shrink-0 flex items-center gap-2 flex-wrap">
           {/* Theme "favorite" = public like on the Worker. No local-only state. */}
           <LikeButton themeId={entry.slug} initialCount={likes} />
           {/* Local favorite (drives Appearance panel). Distinct from LikeButton
