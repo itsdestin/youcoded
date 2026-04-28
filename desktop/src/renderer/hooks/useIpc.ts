@@ -190,6 +190,14 @@ declare global {
       app: {
         restart: () => Promise<void>;
       };
+      // Platform integration for hardware back button (Android). On desktop,
+      // both methods are no-op stubs (preload.ts). On Android, notifyStackState
+      // enables/disables OnBackPressedCallback and onBack subscribes to
+      // system:back push events from MainActivity.
+      system?: {
+        notifyStackState: (empty: boolean) => void;
+        onBack: (cb: () => void) => () => void;
+      };
     };
   }
 }
