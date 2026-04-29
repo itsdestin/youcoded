@@ -43,12 +43,16 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
           // overflow-x-auto coerces overflow-y to scroll/auto per CSS spec —
           // the rail's clip box becomes the cards' bounding box, so any
           // vertical shadow extending past the card top/bottom gets sliced,
-          // producing hard horizontal cutoff lines. Fix: pt-3/pb-6 gives
-          // the .layer-surface shadow (`0 8px 32px`) most of its visible
-          // extent without leaving the previous pt-6/pb-10's excessive
-          // dead space between rails. The shadow tail past pb-6 is at
-          // <25% of peak intensity so the cut reads as a soft fade, not
-          // the hard horizontal line that motivated the original fix.
+          // producing hard horizontal cutoff lines.
+          //
+          // The .layer-surface default shadow (`0 8px 32px`) needs ~40px
+          // below + ~24px above the card to render uncut. That dead band
+          // bloats inter-rail spacing past what the design wants here.
+          // Solution: override the shadow on rail cards only with a
+          // tighter `0 3px 10px` lift (extent ~13px below, ~7px above)
+          // that fits inside pt-2/pb-4 with no visible clip. Same lifted
+          // feel, smaller blur. Detail overlays / popups / non-rail cards
+          // keep the larger default shadow.
           //
           // Edge-to-edge horizontal scroll: parent has px-3 sm:px-4 padding
           // for content alignment, but we want cards to scroll OUT at the
@@ -68,9 +72,10 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
           //
           // Hide horizontal scrollbar — touch users swipe; desktop users
           // use hover arrows. Visible scrollbar also eats bottom edge room.
-          className="flex gap-3 overflow-x-auto scroll-smooth pt-3 pb-6 snap-x snap-mandatory
+          className="flex gap-3 overflow-x-auto scroll-smooth pt-2 pb-4 snap-x snap-mandatory
                      -mx-3 sm:-mx-4 px-3 sm:px-4 scroll-px-3 sm:scroll-px-4
                      [scrollbar-width:none] [&::-webkit-scrollbar]:hidden
+                     [&_.layer-surface]:shadow-[0_3px_10px_rgba(0,0,0,var(--shadow-strength,0.15))]
                      [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[min(220px,70vw)] sm:[&>*]:w-[min(280px,85vw)]"
         >
           {children}
