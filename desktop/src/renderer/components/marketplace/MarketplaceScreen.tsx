@@ -255,11 +255,14 @@ export default function MarketplaceScreen({
   const open = (t: DetailTarget) => setDetail(t);
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
-      {/* Pre-blurred wallpaper sits underneath everything so the marketplace
-          looks like the terminal does — wallpaper-backed canvas with author-
-          supplied (or runtime-blurred) treatment instead of a flat panel. */}
+    <div className="fixed inset-0 z-40">
+      {/* Pre-blurred wallpaper as a non-scrolling backdrop. Absolute-positioned
+          inside the FIXED outer wrapper (not the inner scroll container) so it
+          stays pinned to the viewport while content scrolls over it. */}
       <WallpaperBackdrop />
+      {/* Scroll happens on the inner div. overflow-x-hidden suppresses any
+          stray horizontal wiggle from rail cards / wallpaper transform. */}
+      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col">
       {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
       <div className="flex items-center justify-between gap-2 p-3">
         {/* Auth chip sits flush-left before the title so the GitHub sign-in
@@ -274,7 +277,7 @@ export default function MarketplaceScreen({
             <button
               type="button"
               onClick={onOpenLibrary}
-              className="text-fg-2 hover:text-fg text-sm rounded-md border border-edge-dim hover:border-edge px-3 py-1 sm:px-3 sm:py-1 inline-flex items-center justify-center"
+              className="panel-glass bg-inset text-fg-2 hover:text-fg text-sm rounded-md border border-edge-dim hover:border-edge px-3 py-1 sm:px-3 sm:py-1 inline-flex items-center justify-center"
               aria-label="Open Your Library"
               title="Your Library"
             >
@@ -518,9 +521,10 @@ export default function MarketplaceScreen({
         );
       })()}
 
-      {/* Docked footer — outside the scroll container so it stays fixed at the
-          bottom of the viewport regardless of scroll position. */}
+      {/* Docked footer — internally position:fixed, so its placement in the
+          JSX tree doesn't affect viewport pinning. */}
       <InstallingFooterStrip />
+      </div>
     </div>
   );
 }

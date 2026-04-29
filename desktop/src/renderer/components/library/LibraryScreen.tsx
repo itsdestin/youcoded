@@ -122,9 +122,11 @@ export default function LibraryScreen({
   }
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
-      {/* Pre-blurred wallpaper underneath — matches MarketplaceScreen treatment. */}
+    <div className="fixed inset-0 z-40">
+      {/* Pre-blurred wallpaper as a non-scrolling backdrop — pinned to the
+          fixed outer wrapper so it stays put as content scrolls. */}
       <WallpaperBackdrop />
+      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col">
       <div className="flex items-center justify-between gap-2 p-3">
         <h1 className="text-xl font-semibold text-fg pl-2 truncate min-w-0">Your Library</h1>
         <div className="flex items-center gap-2 shrink-0">
@@ -132,7 +134,7 @@ export default function LibraryScreen({
             <button
               type="button"
               onClick={onOpenMarketplace}
-              className="text-fg-2 hover:text-fg text-sm rounded-md border border-edge-dim hover:border-edge px-3 py-1 inline-flex items-center justify-center"
+              className="panel-glass bg-inset text-fg-2 hover:text-fg text-sm rounded-md border border-edge-dim hover:border-edge px-3 py-1 inline-flex items-center justify-center"
               aria-label="Open marketplace"
               title="Marketplace"
             >
@@ -268,6 +270,7 @@ export default function LibraryScreen({
           onOpenThemeShare={onOpenThemeShare}
         />
       )}
+      </div>
     </div>
   );
 }
