@@ -15,6 +15,7 @@ import MarketplaceRail from "./MarketplaceRail";
 import MarketplaceCard from "./MarketplaceCard";
 import MarketplaceGrid from "./MarketplaceGrid";
 import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetailOverlay";
+import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
@@ -255,6 +256,10 @@ export default function MarketplaceScreen({
 
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
+      {/* Pre-blurred wallpaper sits underneath everything so the marketplace
+          looks like the terminal does — wallpaper-backed canvas with author-
+          supplied (or runtime-blurred) treatment instead of a flat panel. */}
+      <WallpaperBackdrop />
       {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
       <div className="flex items-center justify-between gap-2 p-3">
         {/* Auth chip sits flush-left before the title so the GitHub sign-in
@@ -298,7 +303,7 @@ export default function MarketplaceScreen({
           <button
             type="button"
             onClick={onExit}
-            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            className="sm:hidden panel-glass bg-inset p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
             aria-label="Exit marketplace"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
@@ -607,7 +612,7 @@ function IntegrationDetailOverlay({
           <button
             type="button"
             onClick={onClose}
-            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            className="sm:hidden panel-glass bg-inset p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
             aria-label="Close"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

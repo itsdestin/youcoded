@@ -118,7 +118,7 @@ export default function MarketplaceDetailOverlay({
           <button
             type="button"
             onClick={onClose}
-            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            className="sm:hidden panel-glass bg-inset p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
             aria-label="Close"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>

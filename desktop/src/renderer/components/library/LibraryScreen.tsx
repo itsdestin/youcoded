@@ -6,6 +6,7 @@ import React, { useMemo, useState, useEffect } from "react";
 import { useMarketplace } from "../../state/marketplace-context";
 import { useEscClose } from "../../hooks/use-esc-close";
 import MarketplaceCard from "../marketplace/MarketplaceCard";
+import WallpaperBackdrop from "../WallpaperBackdrop";
 import MarketplaceGrid from "../marketplace/MarketplaceGrid";
 import MarketplaceDetailOverlay, {
   type DetailTarget,
@@ -122,6 +123,8 @@ export default function LibraryScreen({
 
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
+      {/* Pre-blurred wallpaper underneath — matches MarketplaceScreen treatment. */}
+      <WallpaperBackdrop />
       <div className="flex items-center justify-between gap-2 p-3">
         <h1 className="text-xl font-semibold text-fg pl-2 truncate min-w-0">Your Library</h1>
         <div className="flex items-center gap-2 shrink-0">
@@ -156,7 +159,7 @@ export default function LibraryScreen({
           <button
             type="button"
             onClick={onExit}
-            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            className="sm:hidden panel-glass bg-inset p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
             aria-label="Exit library"
           >
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
