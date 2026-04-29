@@ -232,6 +232,12 @@ function handleMessage(data: string): void {
       // the workspace. We forward the raw payload so the cb receives a string.
       dispatchEvent('dev:install-progress', payload);
       break;
+    case 'system:back':
+      // Android hardware back press → routed to useDismissTop via the
+      // window.claude.system.onBack subscriber registered in App.tsx. No
+      // payload is used — the event itself is the signal.
+      dispatchEvent('system:back', payload);
+      break;
   }
 }
 
