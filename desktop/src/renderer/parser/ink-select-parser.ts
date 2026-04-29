@@ -12,6 +12,14 @@ const TITLE_OVERRIDES: Record<string, string> = {
   // Key on "limit to reset" (unique to option 1) rather than the generic
   // "What do you want to do?" title to avoid false matches on future menus.
   'limit to reset': 'Usage Limit Reached',
+  // Auto-mode opt-in prompt (CC v2.1.83+) — 4-option confirmation menu:
+  // "Yes, and make it my default mode" / "Yes, enable auto mode" /
+  // "No, go back" / "No, don't ask again". Anchor on a body-text phrase
+  // ("Auto mode lets Claude…") rather than the "Enable auto mode?" title
+  // because the body description is word-wrapped, and individual wrapped
+  // lines can fall under extractTitle's < 80-char fallback and be returned
+  // as the title verbatim.
+  'auto mode lets claude': 'Enable auto mode?',
 };
 
 export interface ParsedMenu {

@@ -1,4 +1,9 @@
-export type PermissionMode = 'normal' | 'auto-accept' | 'plan' | 'bypass';
+// 'auto' is Claude Code's classifier-backed mode (CC v2.1.83+, March 2026).
+// Sits between 'auto-accept' (only file edits + 7 safe bash) and 'bypass'
+// (no checks): a background classifier blocks risky actions like mass deletion
+// or curl|bash. Plan-gated by Anthropic — only surfaced in the Shift+Tab cycle
+// when the session is running on Opus 4.7 1M.
+export type PermissionMode = 'normal' | 'auto-accept' | 'plan' | 'auto' | 'bypass';
 
 // Advanced permission overrides for bypass mode. Controls which PermissionRequest
 // categories are auto-approved when --dangerously-skip-permissions is active.

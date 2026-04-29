@@ -79,6 +79,16 @@ Update this table when you re-run snapshots after a CC version bump. Anything th
 - **Depends on:** CC's prompt-boundary phrases and idle markers rendered to the terminal buffer
 - **Break symptom:** AttentionBanner states misfire; user sees wrong guidance during PTY-based interactions.
 
+### Permission-mode banner strings
+- **Files:** `desktop/src/renderer/App.tsx` (the per-session `pty:output` listener that drives the StatusBar permission pill), `app/src/main/kotlin/com/youcoded/app/runtime/ManagedSession.kt` (`detectPermissionMode`)
+- **Depends on:** CC's literal banner text emitted after Shift+Tab cycles a mode — `"bypass permissions on"`, `"auto mode on"` (CC v2.1.83+), `"accept edits on"`, `"plan mode on"`, plus the matching `"… off"` strings when cycling back to default. Ordering matters when one substring is a prefix of another. The desktop and Android branches must stay in lockstep — drift between them appears as the same session showing different pill states across platforms.
+- **Break symptom:** StatusBar permission pill stops corroborating after a Shift+Tab — UI pill flips optimistically, then either snaps back (no detection) or stays stuck on the wrong state (detection misclassified). Worst case: auto / bypass shown when CC is actually in normal mode, lulling the user into running risky commands they expected to be classifier-checked.
+
+### Auto-mode opt-in popup
+- **Files:** `desktop/src/renderer/parser/ink-select-parser.ts` (TITLE_OVERRIDES anchor `'auto mode lets claude'` → `'Enable auto mode?'`), `desktop/src/renderer/hooks/usePromptDetector.ts` (SETUP_PROMPT_TITLES allowlist), `app/src/main/kotlin/com/youcoded/app/runtime/ManagedSession.kt` (Android SETUP_PROMPT_TITLES)
+- **Depends on:** CC v2.1.83+'s 4-option Ink confirmation menu titled `Enable auto mode?` with body text starting `Auto mode lets Claude…` and options `1. Yes, and make it my default mode` / `2. Yes, enable auto mode` / `3. No, go back` / `4. No, don't ask again`. The body-text anchor is used because the description is word-wrapped and the bare title heuristic can pick a wrapped line as the title.
+- **Break symptom:** PromptCard fails to surface (wrong title returned, or title not in the allowlist), so the Ink menu shows in the terminal pane only — confusing for chat-view users. If CC reorders or rewords the options, the keystroke mapping in `menuToButtons` still reaches the right index by anchor-then-navigate, but a button label change would surface CC's new wording in the chat UI verbatim.
+
 ### Hook protocol
 - **Files:** `app/src/main/assets/hook-relay.js` (Android), `desktop/src/main/hook-relay.ts` (desktop), `youcoded-core/hooks/hooks-manifest.json`
 - **Depends on:** CC's hook event JSON shape (`SessionStart`, `PreToolUse`, `Notification`, etc. — fields `tool_name`, `tool_input`, `session_id`, etc.), CC's `settings.json` hooks schema accepted by the loader

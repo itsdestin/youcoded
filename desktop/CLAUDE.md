@@ -18,7 +18,7 @@ Electron + React app that wraps Claude Code CLI in a GUI.
 - **IPC** — Electron contextBridge connects main process to React renderer
 - **Preload** (`src/main/preload.ts`) — IPC channel constants are inlined (not imported) because Electron's sandboxed preload cannot resolve relative imports
 - **TerminalRegistry** (`src/renderer/hooks/terminal-registry.ts`) — Coordinates xterm.js instances, screen buffer reads, and write-completion notifications. Permission prompt detection depends on the write-callback pub/sub here — do not bypass it by reading the buffer on raw `pty:output` events
-- **PermissionMode** (`src/shared/types.ts`) — `'normal' | 'auto-accept' | 'plan' | 'bypass'`. The HeaderBar badge cycles through these on click by sending Shift+Tab (`\x1b[Z`) to the PTY. Bypass mode only appears in sessions created with `skipPermissions: true`
+- **PermissionMode** (`src/shared/types.ts`) — `'normal' | 'auto-accept' | 'plan' | 'auto' | 'bypass'`. The HeaderBar badge cycles through these on click by sending Shift+Tab (`\x1b[Z`) to the PTY. `bypass` only appears in sessions created with `skipPermissions: true`. `auto` (CC v2.1.83+ classifier-backed mode) only appears when the active session is on Opus 4.7 1M — Anthropic gates it by plan/model so showing it elsewhere would be a click-but-nothing-happens state. Mode detection is PTY screen-scrape (`'auto mode on'`, `'accept edits on'`, etc.) and the optimistic UI state is corrected by that watcher within ~1 tick if the user's local cycle order disagrees with CC's.
 - **RemoteServer** (`src/main/remote-server.ts`) — HTTP + WebSocket server for remote browser access. Handles auth tokens, PTY buffer replay, hook event relay, transcript event relay, and cross-device session sync
 - **RemoteConfig** (`src/main/remote-config.ts`) — Reads/writes `~/.claude/youcoded-remote.json` for port, password hash, and Tailscale trust settings
 - **SkillScanner** (`src/main/skill-scanner.ts`) — Scans installed skills: (1) YouCoded skills at `~/.claude/plugins/youcoded-core/skills/`, (2) marketplace plugins via `~/.claude/plugins/installed_plugins.json` (inside the plugin cache dir — an earlier version wrote to `~/.claude/installed_plugins.json`, fixed in the marketplace-paths refactor)
@@ -119,7 +119,7 @@ The desktop app uses a layered keyboard system. The text input auto-focuses when
 | **Shift (release)** | Dropdown open | Switch to highlighted session |
 | **Arrow Up/Down** | Not typing | Scroll chat view (accelerates with held press) |
 | **Ctrl+`** | Any | Toggle between chat and terminal view |
-| **Shift+Tab** | Any | Cycle permission mode (normal → auto-accept → plan → bypass) |
+| **Shift+Tab** | Any | Cycle permission mode (normal → auto-accept → plan → auto* → bypass*). `auto` only on Opus 4.7 1M; `bypass` only when session was started with `skipPermissions: true`. |
 | **Shift+Enter** | Text input focused | Insert newline |
 | **Enter** | Text input focused | Send message |
 | **/** | Text input focused | Open skill/command drawer |

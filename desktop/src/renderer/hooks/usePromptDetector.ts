@@ -20,6 +20,7 @@ const SETUP_PROMPT_TITLES = new Set([
   'Skip Permissions Warning',
   'Resume Session', // Stale session resume — lets user choose summary vs full resume
   'Usage Limit Reached', // /rate-limit-options menu — Upgrade / Stop and wait
+  'Enable auto mode?', // CC v2.1.83+ first-run opt-in: 4-option auto-mode confirmation
 ]);
 
 // After a permission response (PERMISSION_RESPONDED/EXPIRED clears

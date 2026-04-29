@@ -404,6 +404,7 @@ class ManagedSession(
         "Select Login Method",
         "Resume Session", // Stale session resume — lets user choose summary vs full resume
         "Usage Limit Reached", // /rate-limit-options menu — Upgrade / Stop and wait
+        "Enable auto mode?", // CC v2.1.83+ first-run opt-in — 4-option auto-mode confirmation
     )
 
     /** Detect permission mode from visible screen only (not raw buffer).
@@ -413,8 +414,13 @@ class ManagedSession(
      *  detection in App.tsx never fires here. */
     private fun detectPermissionMode(screen: String) {
         val lower = screen.lowercase()
+        // CC v2.1.83+ adds "auto mode on" — checked before "accept edits on" because
+        // both contain the substring "on" but "auto mode" is more specific. Order
+        // mirrors desktop's pty:output handler in App.tsx so the two platforms
+        // never disagree on which mode the screen indicates.
         val newMode = when {
             "bypass permissions on" in lower -> "bypass"
+            "auto mode on" in lower -> "auto"
             "accept edits on" in lower -> "auto-accept"
             "plan mode on" in lower -> "plan"
             else -> "normal"

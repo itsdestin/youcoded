@@ -978,10 +978,15 @@ function AppInner() {
       const remove = claudeOn.ptyOutputForSession(s.id, (data: string) => {
         const lower = data.toLowerCase();
         let mode: PermissionMode | null = null;
+        // CC v2.1.83+ auto mode banner reads "auto mode on (shift+tab to cycle)" —
+        // checked before "accept edits on" because the substring "auto mode" doesn't
+        // overlap, but order is preserved for symmetry with the off-list below.
         if (lower.includes('bypass permissions on')) mode = 'bypass';
+        else if (lower.includes('auto mode on')) mode = 'auto';
         else if (lower.includes('accept edits on')) mode = 'auto-accept';
         else if (lower.includes('plan mode on')) mode = 'plan';
         else if (lower.includes('bypass permissions off')
+              || lower.includes('auto mode off')
               || lower.includes('accept edits off')
               || lower.includes('plan mode off')) mode = 'normal';
         if (mode) {
@@ -1683,15 +1688,25 @@ function AppInner() {
   const cyclePermissionRef = useRef<(() => void) | null>(null);
   const cyclePermission = useCallback(() => {
     if (!sessionId) return;
-    const cycle: PermissionMode[] = canBypass
-      ? ['normal', 'auto-accept', 'plan', 'bypass']
-      : ['normal', 'auto-accept', 'plan'];
+    // 'auto' is plan-gated by Anthropic — only included in the optimistic cycle
+    // when the active session is on Opus 4.7 1M (the only model in our
+    // ModelAlias union that has access). On other models, CC's Shift+Tab won't
+    // surface auto, so showing it would create a click-but-nothing-happens
+    // state. The PTY watcher above corrects mismatches within ~1 tick anyway.
+    const canAuto = currentModel === 'opus[1m]';
+    const cycle: PermissionMode[] = [
+      'normal',
+      'auto-accept',
+      'plan',
+      ...(canAuto ? ['auto' as PermissionMode] : []),
+      ...(canBypass ? ['bypass' as PermissionMode] : []),
+    ];
     const idx = cycle.indexOf(currentPermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
     setPermissionModes((prev) => new Map(prev).set(sessionId, next));
     // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
     window.claude.session.sendInput(sessionId, '\x1b[Z');
-  }, [sessionId, canBypass, currentPermissionMode]);
+  }, [sessionId, canBypass, currentPermissionMode, currentModel]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
