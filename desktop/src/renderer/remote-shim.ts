@@ -462,6 +462,19 @@ export function disconnect(): void {
   if (ws) { ws.close(); ws = null; }
   setConnectionState('disconnected');
   localStorage.removeItem('youcoded-remote-token');
+  // Drop any pre-auth queued messages on every disconnect path. Three reasons:
+  // (1) host switches via connectToHost / disconnectFromHost — the queue would
+  //     otherwise leak across hosts and flush to the wrong server on auth:ok.
+  // (2) MAX_RECONNECT_ATTEMPTS exhaustion in scheduleReconnect falls back to
+  //     connect('android-local', false) — that's effectively a host change too.
+  // (3) Brief reconnect to the SAME host loses the queue, but caller-side
+  //     invoke() 30s timeout still surfaces a clean error, and renderer
+  //     mount-time fetches re-issue idempotently on retry.
+  if (pendingSendQueue.length > 0) {
+    console.warn('[remote-shim] discarding', pendingSendQueue.length,
+      'queued messages on disconnect');
+    pendingSendQueue = [];
+  }
 }
 
 /**
@@ -505,13 +518,7 @@ export async function connectToHost(host: string, port: number, password: string
     entry.reject(new Error('Server switched'));
   }
   pending.clear();
-  // Discard pre-auth queued messages bound for the old server — they would
-  // otherwise leak across host switches and reach the new server post-auth.
-  if (pendingSendQueue.length > 0) {
-    console.warn('[remote-shim] discarding', pendingSendQueue.length,
-      'queued messages on host switch');
-    pendingSendQueue = [];
-  }
+  // Note: pre-auth send queue was already cleared inside disconnect() above.
 
   // Point at the desktop server (defer localStorage until auth succeeds)
   targetUrl = `ws://${host}:${port}/ws`;
@@ -547,13 +554,7 @@ export async function disconnectFromHost(): Promise<void> {
     entry.reject(new Error('Server switched'));
   }
   pending.clear();
-  // Mirror connectToHost: discard pre-auth queue on host switch so messages
-  // intended for the previous host don't leak into the local bridge.
-  if (pendingSendQueue.length > 0) {
-    console.warn('[remote-shim] discarding', pendingSendQueue.length,
-      'queued messages on host switch');
-    pendingSendQueue = [];
-  }
+  // Note: pre-auth send queue was already cleared inside disconnect() above.
 
   // Clear remote target — getWsUrl() falls back to localhost:9901
   targetUrl = null;

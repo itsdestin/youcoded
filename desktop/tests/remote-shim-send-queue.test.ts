@@ -75,13 +75,21 @@ describe('remote-shim send queue', () => {
     shim.connect('pw', false);
     const ws = FakeWebSocket.instances[0];
     shim.installShim();
+    // Each invoke() call assigns a sequential id (msg-1..msg-300). After
+    // overflow, the surviving 256 must be the LAST 256 enqueued — i.e.
+    // msg-45..msg-300 (the first 44 dropped, oldest-first FIFO).
     for (let i = 0; i < 300; i++) (window as any).claude.skills.list();
     expect(ws.sent).toEqual([]);
     ws.open();
     ws.receive({ type: 'auth:ok', token: 't', platform: 'browser' });
     await new Promise(r => setTimeout(r, 0));
-    const flushed = ws.sent.length - 1;
-    expect(flushed).toBeLessThanOrEqual(256);
+    // ws.sent[0] is the auth message; everything after is the flushed queue.
+    const flushedMsgs = ws.sent.slice(1).map(s => JSON.parse(s));
+    expect(flushedMsgs).toHaveLength(256);
+    // FIFO drop-oldest assertion: surviving ids are the LAST 256, in order.
+    const flushedIds = flushedMsgs.map(m => m.id);
+    const expectedIds = Array.from({ length: 256 }, (_, i) => `msg-${45 + i}`);
+    expect(flushedIds).toEqual(expectedIds);
     expect(warn).toHaveBeenCalled();
   });
 });
