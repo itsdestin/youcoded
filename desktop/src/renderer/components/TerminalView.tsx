@@ -31,6 +31,9 @@ interface Props {
 
 export default function TerminalView({ sessionId, visible }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
+  // Custom overlay scrollbar thumb — painted on top of xterm so the native
+  // scrollbar gutter doesn't eat the rightmost terminal column.
+  const thumbRef = useRef<HTMLDivElement>(null);
   const terminalRef = useRef<Terminal | null>(null);
   const fitAddonRef = useRef<FitAddon | null>(null);
   const webglRef = useRef<WebglAddon | null>(null);
@@ -107,6 +110,38 @@ export default function TerminalView({ sessionId, visible }: Props) {
     terminal.loadAddon(unicode11);
     terminal.unicode.activeVersion = '11';
     terminal.open(containerRef.current);
+
+    // Overlay scrollbar — sized/positioned from the active xterm buffer.
+    // Native scrollbar is hidden by `.terminal-overlay-scroll` CSS so xterm
+    // can use the full container width; this thumb sits absolutely on top of
+    // the rightmost column. Read-only (display only — not draggable) for the
+    // prototype. Mouse-wheel scrolling still goes through xterm's own handler.
+    const updateThumb = () => {
+      const thumb = thumbRef.current;
+      const term = terminalRef.current ?? terminal;
+      if (!thumb || !term) return;
+      const buf = term.buffer.active;
+      const rows = term.rows;
+      const total = buf.length;
+      // Hide thumb when there's nothing to scroll (buffer fits in viewport).
+      if (total <= rows) {
+        thumb.style.opacity = '0';
+        return;
+      }
+      // Track height excludes a 4px top/bottom inset for visual breathing room.
+      const containerH = containerRef.current?.clientHeight ?? 0;
+      const trackH = Math.max(0, containerH - 8);
+      const thumbH = Math.max(24, (rows / total) * trackH);
+      const maxTop = trackH - thumbH;
+      const scrollFraction = buf.viewportY / (total - rows);
+      const top = 4 + scrollFraction * maxTop;
+      thumb.style.height = `${thumbH}px`;
+      thumb.style.top = `${top}px`;
+      thumb.style.opacity = '0.55';
+    };
+    terminal.onScroll(updateThumb);
+    // Initial paint after layout settles (matches the existing fit timer).
+    const thumbInitTimer = setTimeout(updateThumb, 120);
 
     // WebGL renderer — always load for performance. Wallpaper visibility is
     // handled by the container's opacity, not by xterm transparency.
@@ -225,6 +260,8 @@ export default function TerminalView({ sessionId, visible }: Props) {
         const el = containerRef.current;
         if (!el || el.clientWidth === 0 || el.clientHeight === 0) return;
         fitAddon.fit();
+        // Container height changed → thumb proportions need to recompute.
+        updateThumb();
         const dims = fitAddon.proposeDimensions();
         if (!dims || !dims.cols || !dims.rows) return;
         // Dedup target: if a resize is already queued, compare against the
@@ -350,6 +387,7 @@ export default function TerminalView({ sessionId, visible }: Props) {
 
     return () => {
       clearTimeout(timer);
+      clearTimeout(thumbInitTimer);
       if (debounceTimer !== null) clearTimeout(debounceTimer);
       if (resizeRafId !== null) cancelAnimationFrame(resizeRafId);
       window.removeEventListener('resize', fitAndSync);
@@ -403,9 +441,16 @@ export default function TerminalView({ sessionId, visible }: Props) {
     ? 'var(--terminal-xterm-opacity)'
     : 1;
 
+  // `terminal-overlay-scroll` hides xterm's native scrollbar (see globals.css)
+  // so the floating thumb below paints in front of the rightmost column.
+  const wrapperClass = [
+    'terminal-overlay-scroll',
+    visible ? undefined : 'terminal-hidden',
+  ].filter(Boolean).join(' ');
+
   return (
     <div
-      className={visible ? undefined : 'terminal-hidden'}
+      className={wrapperClass}
       style={{
         position: 'absolute',
         top: 0,
@@ -448,6 +493,11 @@ export default function TerminalView({ sessionId, visible }: Props) {
           }}
         />
       )}
+      <div
+        ref={thumbRef}
+        className="terminal-scrollbar-thumb"
+        aria-hidden
+      />
       <div
         ref={containerRef}
         style={{
