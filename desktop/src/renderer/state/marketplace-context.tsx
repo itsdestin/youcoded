@@ -13,6 +13,7 @@ import React, { createContext, useContext, useState, useEffect, useCallback, use
 import type { SkillEntry, PackageInfo, FeaturedData } from '../../shared/types';
 import type { ThemeRegistryEntryWithStatus } from '../../shared/theme-marketplace-types';
 import { useTheme } from './theme-context';
+import { useSkills } from './skill-context';
 
 // window.claude is typed for skills but not for theme.marketplace — cast via any
 const claude = () => (window as any).claude;
@@ -138,6 +139,11 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // producing a "briefly applies then unapplies" flicker. Force a reload
   // synchronously after install/uninstall/update so the lookup always succeeds.
   const { reloadUserThemes } = useTheme();
+  // SkillContext.installed feeds the CommandDrawer. It's loaded once on
+  // mount and never refreshes — so without this hook, marketplace installs
+  // wouldn't appear in the drawer until app restart. Refresh after each
+  // mutator below.
+  const { refreshInstalled: refreshDrawerSkills } = useSkills();
 
   // Fetch all marketplace data in parallel on mount
   const fetchAll = useCallback(async () => {
@@ -244,13 +250,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         console.warn("[marketplace] install telemetry threw (non-fatal):", err);
       }
       await fetchAll();  // Refresh state BEFORE clearing installing flag
+      await refreshDrawerSkills();  // Keep CommandDrawer in sync after install
     } catch (err: any) {
       recordInstallError(key, err?.message || 'Install failed');
       throw err;
     } finally {
       clearInstalling(key);
     }
-  }, [fetchAll, markInstalling, clearInstalling, recordInstallError]);
+  }, [fetchAll, refreshDrawerSkills, markInstalling, clearInstalling, recordInstallError]);
 
   const uninstallSkill = useCallback(async (id: string) => {
     const key = `skill:${id}`;
@@ -258,13 +265,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     try {
       await window.claude.skills.uninstall(id);
       await fetchAll();
+      await refreshDrawerSkills();  // Keep CommandDrawer in sync after uninstall
     } catch (err: any) {
       recordInstallError(key, err?.message || 'Uninstall failed');
       throw err;
     } finally {
       clearInstalling(key);
     }
-  }, [fetchAll, markInstalling, clearInstalling, recordInstallError]);
+  }, [fetchAll, refreshDrawerSkills, markInstalling, clearInstalling, recordInstallError]);
 
   const installTheme = useCallback(async (slug: string) => {
     const key = `theme:${slug}`;
@@ -279,13 +287,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       // active-theme fallback effect reverts to the default theme.
       await reloadUserThemes();
       await fetchAll();
+      await refreshDrawerSkills();  // Keep CommandDrawer in sync after theme install
     } catch (err: any) {
       recordInstallError(key, err?.message || 'Install failed');
       throw err;
     } finally {
       clearInstalling(key);
     }
-  }, [fetchAll, reloadUserThemes, markInstalling, clearInstalling, recordInstallError]);
+  }, [fetchAll, reloadUserThemes, refreshDrawerSkills, markInstalling, clearInstalling, recordInstallError]);
 
   const uninstallTheme = useCallback(async (slug: string) => {
     const key = `theme:${slug}`;
@@ -297,13 +306,14 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       // slug and revert to the default theme.
       await reloadUserThemes();
       await fetchAll();
+      await refreshDrawerSkills();  // Keep CommandDrawer in sync after theme uninstall
     } catch (err: any) {
       recordInstallError(key, err?.message || 'Uninstall failed');
       throw err;
     } finally {
       clearInstalling(key);
     }
-  }, [fetchAll, reloadUserThemes, markInstalling, clearInstalling, recordInstallError]);
+  }, [fetchAll, reloadUserThemes, refreshDrawerSkills, markInstalling, clearInstalling, recordInstallError]);
 
   // Phase 3b: update an installed package (skill plugin or theme) by re-downloading
   // from source and overwriting files at the same install path. Config in
@@ -319,6 +329,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
       // the in-memory theme picks up the new tokens/assets immediately.
       if (type === 'theme') await reloadUserThemes();
       await fetchAll();
+      await refreshDrawerSkills();  // Keep CommandDrawer in sync after update — plugin update can change skill manifest
       return result;
     } catch (err: any) {
       recordInstallError(key, err?.message || 'Update failed');
@@ -326,7 +337,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     } finally {
       clearInstalling(key);
     }
-  }, [fetchAll, reloadUserThemes, markInstalling, clearInstalling, recordInstallError]);
+  }, [fetchAll, reloadUserThemes, refreshDrawerSkills, markInstalling, clearInstalling, recordInstallError]);
 
   const setFavorite = useCallback(async (id: string, favorited: boolean) => {
     await window.claude.skills.setFavorite(id, favorited);

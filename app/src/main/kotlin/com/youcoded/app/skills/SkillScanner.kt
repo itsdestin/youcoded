@@ -43,22 +43,27 @@ class SkillScanner(private val homeDir: File, private val context: Context) {
 
         val pluginsDir = File(homeDir, ".claude/plugins")
 
-        // Decomposition v3 §9.6: generic plugin scan. Previously youcoded-core
-        // was special-cased (scanned at ~/.claude/plugins/youcoded-core/skills/).
-        // After decomposition every package lives under a sibling directory,
-        // so we scan every plugin directory that has a plugin.json manifest.
-        // Walk BOTH the toolkit root and the marketplace subtree via the
-        // shared helper — marketplace plugins would otherwise be invisible.
+        // Pass 1: top-level scan ONLY (mirrors desktop/src/main/skill-scanner.ts).
+        // We deliberately do NOT call ClaudeCodeRegistry.listInstalledPluginDirs()
+        // here — that helper walks the marketplace subtree too, which is correct
+        // for reconcilers but wrong for the scanner: marketplace plugins are
+        // picked up by Pass 2 (installed_plugins.json) with namespaced ids, and
+        // walking them here produced duplicate bare ids for any plugin whose
+        // directory name starts with "youcoded" (the special-case branch below).
         try {
-            ClaudeCodeRegistry.listInstalledPluginDirs(homeDir).forEach { pluginRoot ->
+            pluginsDir.listFiles()?.forEach { pluginRoot ->
+                if (!pluginRoot.isDirectory) return@forEach
+                if (pluginRoot.name == "marketplaces") return@forEach
                 val hasManifest = File(pluginRoot, "plugin.json").exists() ||
                     File(pluginRoot, ".claude-plugin/plugin.json").exists()
                 if (!hasManifest) return@forEach
 
                 File(pluginRoot, "skills").listFiles()?.forEach { entry ->
                     if (entry.isDirectory) {
-                        // youcoded-core-prefixed packages use bare skill ids for
-                        // backward compat with existing favorites/curated defaults
+                        // youcoded-core (bundled, top-level) keeps bare skill ids
+                        // for backward-compat with existing favorites/curated
+                        // defaults. No marketplace plugin can reach this branch
+                        // because the marketplaces/ subtree was skipped above.
                         val skillId = if (pluginRoot.name.startsWith("youcoded")) entry.name
                             else "${pluginRoot.name}:${entry.name}"
                         val source = if (pluginRoot.name.startsWith("youcoded")) "youcoded-core" else "plugin"

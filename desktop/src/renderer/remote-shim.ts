@@ -42,6 +42,15 @@ let targetUrl: string | null = null;
 /** Whether to preserve __PLATFORM__ on next auth:ok (prevents desktop overwriting 'android') */
 let preservePlatform = false;
 
+// Fix: queue application messages sent before the WS auth handshake completes,
+// then flush on auth:ok. Without this, first-mount fetches (skills.list etc.)
+// that race the auth handshake silently disappeared, leaving contexts empty
+// for the app's lifetime. Visible on Android as "installed plugins never
+// appear in the command drawer." Bound at MAX_QUEUE to prevent unbounded
+// growth if a real flow ever fans out faster than the auth handshake.
+const MAX_QUEUE = 256;
+let pendingSendQueue: string[] = [];
+
 function setConnectionState(state: RemoteConnectionState) {
   connectionState = state;
   stateChangeCallback?.(state);
@@ -72,8 +81,33 @@ function getWsUrl(): string {
 }
 
 function send(msg: any): void {
-  if (ws?.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(msg));
+  const data = JSON.stringify(msg);
+  // Only send directly when both the socket is OPEN AND auth has completed.
+  // If OPEN but still 'authenticating', the auth message has been sent but
+  // 'auth:ok' hasn't arrived — the bridge rejects application messages here,
+  // so we still queue.
+  if (ws?.readyState === WebSocket.OPEN && connectionState === 'connected') {
+    ws.send(data);
+    return;
+  }
+  if (pendingSendQueue.length >= MAX_QUEUE) {
+    console.warn('[remote-shim] send queue overflow — dropping oldest');
+    pendingSendQueue.shift();
+  }
+  pendingSendQueue.push(data);
+}
+
+// Flush queued application messages once auth:ok has resolved.
+// Called ONLY from inside the auth:ok branch — never from ws.onopen, since
+// the bridge rejects application traffic before auth completes.
+function flushSendQueue(): void {
+  if (!ws || ws.readyState !== WebSocket.OPEN) return;
+  const queued = pendingSendQueue;
+  pendingSendQueue = [];
+  for (const data of queued) {
+    try { ws.send(data); } catch (e) {
+      console.error('[remote-shim] flush failed:', e);
+    }
   }
 }
 
@@ -288,6 +322,10 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           reconnectAttempts = 0;
           console.log('[remote-shim] auth:ok from', getWsUrl());
           setConnectionState('connected');
+          // Fix: drain any messages queued during the cold-start window
+          // (mount-time fetches that fired before auth completed). Must be
+          // here, not in ws.onopen — the bridge rejects pre-auth traffic.
+          flushSendQueue();
           // Store token for reconnection
           const token = msg.token;
           localStorage.setItem('youcoded-remote-token', token);
@@ -362,6 +400,15 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
 function scheduleReconnect(token: string): void {
   // After too many failures, give up and fall back to local mode
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    // Reconnect-fallback: switching to local bridge means any messages
+    // queued for the prior remote host are wrong-destination. Drop them
+    // here — disconnect() isn't on this path (ws.onclose only schedules
+    // the retry, doesn't disconnect).
+    if (pendingSendQueue.length > 0) {
+      console.warn('[remote-shim] discarding', pendingSendQueue.length,
+        'queued messages on reconnect fallback to local bridge');
+      pendingSendQueue = [];
+    }
     reconnectAttempts = 0;
     reconnectDelay = 1000;
     targetUrl = null;
@@ -424,6 +471,20 @@ export function disconnect(): void {
   if (ws) { ws.close(); ws = null; }
   setConnectionState('disconnected');
   localStorage.removeItem('youcoded-remote-token');
+  // Drop any pre-auth queued messages on every disconnect() path. Covered
+  // paths: explicit disconnect() calls, connectToHost (calls disconnect
+  // first), and disconnectFromHost. In all cases the queue would otherwise
+  // leak across hosts and flush to the wrong server on the next auth:ok.
+  // Brief reconnect to the SAME host also loses the queue, but caller-side
+  // invoke() 30s timeout still surfaces a clean error, and renderer
+  // mount-time fetches re-issue idempotently on retry.
+  // (MAX_RECONNECT_ATTEMPTS fallback in scheduleReconnect AND the
+  //  catch block in connectToHost both clear the queue inline.)
+  if (pendingSendQueue.length > 0) {
+    console.warn('[remote-shim] discarding', pendingSendQueue.length,
+      'queued messages on disconnect');
+    pendingSendQueue = [];
+  }
 }
 
 /**
@@ -467,6 +528,7 @@ export async function connectToHost(host: string, port: number, password: string
     entry.reject(new Error('Server switched'));
   }
   pending.clear();
+  // Note: pre-auth send queue was already cleared inside disconnect() above.
 
   // Point at the desktop server (defer localStorage until auth succeeds)
   targetUrl = `ws://${host}:${port}/ws`;
@@ -480,6 +542,18 @@ export async function connectToHost(host: string, port: number, password: string
     setConnectionMode('remote');
   } catch (err) {
     console.error('[remote-shim] connectToHost failed:', (err as Error)?.message);
+    // Same leak class as scheduleReconnect's MAX_RECONNECT branch:
+    // queue may hold messages bound for the failed remote target. They
+    // were enqueued during the 'authenticating' window after disconnect()
+    // already cleared the queue at the top of connectToHost. ws.onclose's
+    // pre-auth path doesn't call disconnect(), so we must clear here
+    // before falling back to the local bridge — otherwise stale messages
+    // would flush to the local bridge on its auth:ok.
+    if (pendingSendQueue.length > 0) {
+      console.warn('[remote-shim] discarding', pendingSendQueue.length,
+        'queued messages on connectToHost failure fallback');
+      pendingSendQueue = [];
+    }
     // Reset remote state and reconnect to local bridge
     targetUrl = null;
     preservePlatform = false;
@@ -502,6 +576,7 @@ export async function disconnectFromHost(): Promise<void> {
     entry.reject(new Error('Server switched'));
   }
   pending.clear();
+  // Note: pre-auth send queue was already cleared inside disconnect() above.
 
   // Clear remote target — getWsUrl() falls back to localhost:9901
   targetUrl = null;

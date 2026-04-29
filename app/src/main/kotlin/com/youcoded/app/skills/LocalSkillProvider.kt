@@ -40,20 +40,30 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
             val privateSkills = configStore.getPrivateSkills()
             val combined = JSONArray()
             val seenIds = mutableSetOf<String>()
+            // Track plugin ids that already have at least one scanned skill —
+            // mirrors desktop's pluginsWithScannedSkills (skill-provider.ts
+            // lines 174-178). Without this, the backfill below adds a phantom
+            // plugin-level entry alongside the real skills (e.g. an
+            // "Encyclopedia" placeholder card on top of its 5 individual skills).
+            val pluginsWithScannedSkills = mutableSetOf<String>()
             for (i in 0 until scanned.length()) {
                 val s = scanned.getJSONObject(i)
                 combined.put(s); seenIds.add(s.optString("id"))
+                val pluginName = s.optString("pluginName", "")
+                if (pluginName.isNotEmpty()) pluginsWithScannedSkills.add(pluginName)
             }
             for (i in 0 until privateSkills.length()) {
                 val s = privateSkills.getJSONObject(i)
                 combined.put(s); seenIds.add(s.optString("id"))
             }
-            // Include marketplace-installed plugins not already discovered by scanner
+            // Include marketplace-installed plugins not already discovered
+            // by scanner — but skip if the scanner already found their skills.
             val marketplaceInstalled = configStore.getInstalledPlugins()
             val keys = marketplaceInstalled.keys()
             while (keys.hasNext()) {
                 val id = keys.next()
                 if (seenIds.contains(id)) continue
+                if (pluginsWithScannedSkills.contains(id)) continue
                 val meta = marketplaceInstalled.optJSONObject(id) ?: continue
                 val installPath = meta.optString("installPath", "")
                 val dir = if (installPath.isNotEmpty()) File(installPath) else null

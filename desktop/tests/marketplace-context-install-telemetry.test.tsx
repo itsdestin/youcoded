@@ -6,6 +6,7 @@
 import React from "react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, act, cleanup } from "@testing-library/react";
+import { SkillProvider } from "../src/renderer/state/skill-context";
 import {
   MarketplaceProvider,
   useMarketplace,
@@ -42,6 +43,10 @@ function makeMock({
     list: vi.fn().mockResolvedValue([]),
     listMarketplace: vi.fn().mockResolvedValue([]),
     getFavorites: vi.fn().mockResolvedValue([]),
+    // Added when MarketplaceProvider began calling useSkills() — SkillProvider
+    // mount fetches getChips and getCuratedDefaults too.
+    getChips: vi.fn().mockResolvedValue([]),
+    getCuratedDefaults: vi.fn().mockResolvedValue([]),
     update: vi.fn().mockResolvedValue({ ok: true }),
     setFavorite: vi.fn().mockResolvedValue(undefined),
     publish: vi.fn().mockResolvedValue({ prUrl: "http://example.com/pr/1" }),
@@ -93,9 +98,11 @@ describe("installSkill telemetry", () => {
     let capturedInstall: ((id: string) => Promise<void>) | undefined;
 
     render(
-      <MarketplaceProvider>
-        <Probe onInstall={(fn) => { capturedInstall = fn; }} />
-      </MarketplaceProvider>
+      <SkillProvider>
+        <MarketplaceProvider>
+          <Probe onInstall={(fn) => { capturedInstall = fn; }} />
+        </MarketplaceProvider>
+      </SkillProvider>
     );
 
     // Let fetchAll on mount settle
@@ -117,9 +124,11 @@ describe("installSkill telemetry", () => {
     let capturedInstall: ((id: string) => Promise<void>) | undefined;
 
     render(
-      <MarketplaceProvider>
-        <Probe onInstall={(fn) => { capturedInstall = fn; }} />
-      </MarketplaceProvider>
+      <SkillProvider>
+        <MarketplaceProvider>
+          <Probe onInstall={(fn) => { capturedInstall = fn; }} />
+        </MarketplaceProvider>
+      </SkillProvider>
     );
     await act(async () => {});
 
@@ -139,9 +148,11 @@ describe("installSkill telemetry", () => {
     let capturedInstall: ((id: string) => Promise<void>) | undefined;
 
     render(
-      <MarketplaceProvider>
-        <Probe onInstall={(fn) => { capturedInstall = fn; }} />
-      </MarketplaceProvider>
+      <SkillProvider>
+        <MarketplaceProvider>
+          <Probe onInstall={(fn) => { capturedInstall = fn; }} />
+        </MarketplaceProvider>
+      </SkillProvider>
     );
     await act(async () => {});
 

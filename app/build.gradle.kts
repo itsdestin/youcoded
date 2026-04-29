@@ -219,4 +219,8 @@ dependencies {
     // MockWebServer for AnalyticsServiceTest — version matches the OkHttp
     // already on the main classpath (4.12.0).
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    // Mockito for stubbing Android Context in SkillScannerTest. Needed because
+    // SkillScanner takes a Context to read web/data/skill-registry.json from
+    // app assets — there's no in-memory fake equivalent (unlike SharedPreferences).
+    testImplementation("org.mockito:mockito-core:5.11.0")
 }
