@@ -52,15 +52,22 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
           // for content alignment, but we want cards to scroll OUT at the
           // actual screen edge (not the gutter). -mx-3 sm:-mx-4 pulls the
           // scroll container's bounds out to the screen edges, then
-          // matching px-3 sm:px-4 inside re-pads the first card to the
-          // original alignment. Net effect: first card aligns with the rest
-          // of the content; cards scrolling away disappear at the screen
-          // edge, not 12-16px before it.
+          // matching px-3 sm:px-4 inside re-pads the first card.
+          //
+          // BUT: snap-mandatory + snap-start aligns the first card's start
+          // with the snapport's start, and without scroll-padding the
+          // snapport equals the scroll container's padding box edge
+          // (= screen edge, after -mx-3). That overrides the visual px-3
+          // and snaps the first card flush to the screen. Adding
+          // scroll-px-3 sm:scroll-px-4 redefines the snapport start to
+          // match the visual padding, so snap-start lands the first card
+          // at the same 12/16px offset as the rest of the marketplace
+          // content.
           //
           // Hide horizontal scrollbar — touch users swipe; desktop users
           // use hover arrows. Visible scrollbar also eats bottom edge room.
           className="flex gap-3 overflow-x-auto scroll-smooth pt-6 pb-10 snap-x snap-mandatory
-                     -mx-3 sm:-mx-4 px-3 sm:px-4
+                     -mx-3 sm:-mx-4 px-3 sm:px-4 scroll-px-3 sm:scroll-px-4
                      [scrollbar-width:none] [&::-webkit-scrollbar]:hidden
                      [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[min(220px,70vw)] sm:[&>*]:w-[min(280px,85vw)]"
         >
