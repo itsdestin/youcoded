@@ -48,7 +48,24 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
                 val s = privateSkills.getJSONObject(i)
                 combined.put(s); seenIds.add(s.optString("id"))
             }
-            // Include marketplace-installed plugins not already discovered by scanner
+            // Include marketplace-installed plugins not already discovered by scanner.
+            // Two sources are walked, in this order, with the first hit winning per id:
+            //
+            //   1. configStore.getInstalledPlugins() — package metadata persisted
+            //      in ~/.claude/youcoded-skills.json. Carries the canonical
+            //      installedAt + installPath for each plugin.
+            //   2. The marketplace plugin subtree on disk
+            //      (~/.claude/plugins/marketplaces/youcoded/plugins/<id>/) —
+            //      ground truth for "what's actually installed". This second
+            //      pass exists as a self-heal: if youcoded-skills.json gets
+            //      desynced from disk (e.g. cleared by an APK rebuild while
+            //      the plugin files survive in app data), source #1 returns
+            //      empty and the marketplace UI would show installed plugins
+            //      as "Install". Clicking Install then returns AlreadyInstalled
+            //      from PluginInstaller without healing config, so the bug
+            //      becomes sticky. Reading directly from disk here makes
+            //      disk reality the source of truth for the UI's installed
+            //      set, breaking that loop.
             val marketplaceInstalled = configStore.getInstalledPlugins()
             val keys = marketplaceInstalled.keys()
             while (keys.hasNext()) {
@@ -69,6 +86,29 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
                     if (dir != null && !dir.exists()) put("status", "missing")
                 })
                 seenIds.add(id)
+            }
+            // Disk fallback (#2 above) — every dir under the marketplace subtree
+            // with a plugin manifest is treated as installed. Empty dirs (e.g. an
+            // install interrupted mid-clone) are skipped so they don't masquerade.
+            val marketplaceRoot = ClaudeCodeRegistry.youcodedPluginsDir(homeDir)
+            if (marketplaceRoot.exists()) {
+                marketplaceRoot.listFiles { f -> f.isDirectory }?.forEach { dir ->
+                    val id = dir.name
+                    if (seenIds.contains(id)) return@forEach
+                    val hasManifest = File(dir, ".claude-plugin/plugin.json").exists() ||
+                        File(dir, "plugin.json").exists()
+                    if (!hasManifest) return@forEach
+                    combined.put(JSONObject().apply {
+                        put("id", id)
+                        put("type", "plugin")
+                        put("displayName", id.split("-").joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } })
+                        put("description", "Installed from marketplace")
+                        put("category", "other")
+                        put("source", "marketplace")
+                        put("visibility", "published")
+                    })
+                    seenIds.add(id)
+                }
             }
             installedCache = combined
         }
