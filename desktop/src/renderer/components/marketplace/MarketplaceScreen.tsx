@@ -262,7 +262,7 @@ export default function MarketplaceScreen({
       <WallpaperBackdrop />
       {/* Scroll happens on the inner div. overflow-x-hidden suppresses any
           stray horizontal wiggle from rail cards / wallpaper transform. */}
-      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col">
+      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
       <div className="flex items-center justify-between gap-2 p-3">
         {/* Auth chip sits flush-left before the title so the GitHub sign-in

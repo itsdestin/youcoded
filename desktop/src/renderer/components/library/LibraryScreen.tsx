@@ -126,7 +126,7 @@ export default function LibraryScreen({
       {/* Pre-blurred wallpaper as a non-scrolling backdrop — pinned to the
           fixed outer wrapper so it stays put as content scrolls. */}
       <WallpaperBackdrop />
-      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col">
+      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
       <div className="flex items-center justify-between gap-2 p-3">
         <h1 className="text-xl font-semibold text-fg pl-2 truncate min-w-0">Your Library</h1>
         <div className="flex items-center gap-2 shrink-0">
