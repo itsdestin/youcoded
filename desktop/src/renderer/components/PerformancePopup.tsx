@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 import type { ExplainerSection } from './SettingsExplainer';
 
 // Explainer copy lives here as a const because it pairs tightly with the
@@ -69,6 +70,8 @@ interface Props {
 export default function PerformancePopup({
   onClose, saved, gpuList, needsRestart, setPreferPowerSaving, restart,
 }: Props) {
+  // Always mounted when open (parent uses {open && <PerformancePopup>}) — so open=true is correct here.
+  useEscClose(true, onClose);
   const bodyRef = useScrollFade<HTMLDivElement>();
   const [restarting, setRestarting] = useState(false);
 

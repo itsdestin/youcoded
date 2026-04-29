@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { FastIcon } from './Icons';
+import { useEscClose } from '../hooks/use-esc-close';
 
 // Model + effort + fast picker. Replaces the cycle-only status bar chip with
 // a full picker. Invoked by:
@@ -121,6 +122,7 @@ interface Props {
 }
 
 export default function ModelPickerPopup({ open, onClose, sessionId, currentModel, onSelectModel }: Props) {
+  useEscClose(open, onClose);
   const [fast, setFast] = useState(false);
   const [effort, setEffort] = useState<EffortLevel>('auto');
   const [loaded, setLoaded] = useState(false);

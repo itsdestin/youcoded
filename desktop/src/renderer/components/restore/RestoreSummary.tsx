@@ -1,5 +1,6 @@
 import React from 'react';
 import type { RestoreResult } from '../../../shared/types';
+import { useEscClose } from '../../hooks/use-esc-close';
 
 // Final "done" step of the wizard. Shows what was restored and offers an
 // Undo button when a snapshot was captured (snapshot-first default flow).
@@ -11,6 +12,8 @@ type Props = {
 };
 
 export function RestoreSummary({ result, onClose, onUndo }: Props) {
+  // Always mounted when shown (parent renders this only at step === 'done') — so open=true is correct here.
+  useEscClose(true, onClose);
   const seconds = Math.max(1, Math.round(result.durationMs / 1000));
   return (
     <div className="flex flex-col gap-3">

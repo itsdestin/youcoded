@@ -8,6 +8,7 @@
 import React, { useEffect, useState } from "react";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import MarkdownContent from "../MarkdownContent";
+import { useEscClose } from "../../hooks/use-esc-close";
 
 export type FileViewerTarget = {
   pluginId: string;
@@ -28,6 +29,11 @@ type LoadState =
 
 export default function FileViewerOverlay({ target, onClose }: Props) {
   const [state, setState] = useState<LoadState>({ status: "loading" });
+
+  // Always mounted when open (parent conditionally renders) — so open=true is correct here.
+  // Replaces the former raw keydown listener; useEscClose integrates with the LIFO stack
+  // so Android back and desktop ESC both dismiss this layer before the parent overlay.
+  useEscClose(true, onClose);
 
   useEffect(() => {
     let cancelled = false;
@@ -50,18 +56,6 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
       });
     return () => { cancelled = true; };
   }, [target.pluginId, target.kind, target.name]);
-
-  // Esc closes this layer only — the parent detail overlay stays open behind.
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") {
-        e.stopPropagation();
-        onClose();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   const title = fileLabel(target);
 

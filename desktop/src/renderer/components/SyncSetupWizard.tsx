@@ -11,6 +11,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { isAndroid as checkIsAndroid } from '../platform';
+import { useEscClose } from '../hooks/use-esc-close';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { ExistingBackupDetected } from './restore/ExistingBackupDetected';
 import { RestoreWizard } from './restore/RestoreWizard';
@@ -125,6 +126,8 @@ function normalizeRepoUrl(url: string): string {
 }
 
 export default function SyncSetupWizard({ initialType, existingBackends, onComplete, onClose, preselectedBackendId, preselectedBackendType }: SyncSetupWizardProps) {
+  // Always mounted when open (parent conditionally renders this component) — so open=true is correct here.
+  useEscClose(true, onClose);
   // If a specific backend needs reconnecting, jump straight to auth for that type.
   // iCloud has no auth step (no OAuth flow), so land at 'prereqs' for it instead.
   // Falls back to the initialType behavior (skip type-picker → prereqs) if set,

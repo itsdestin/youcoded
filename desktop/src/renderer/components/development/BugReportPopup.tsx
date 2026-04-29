@@ -8,6 +8,7 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useState } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { useEscClose } from '../../hooks/use-esc-close';
 
 interface Props {
   open: boolean;
@@ -28,6 +29,7 @@ const PROMPT_FEATURE = (description: string) =>
   `Both desktop and Android share the React UI — keep that in mind.`;
 
 export function BugReportPopup({ open, onClose }: Props) {
+  useEscClose(open, onClose);
   const [screen, setScreen] = useState<Screen>('describe');
   const [kind, setKind] = useState<Kind>('bug');
   const [description, setDescription] = useState('');

@@ -7,6 +7,7 @@
 import { createPortal } from 'react-dom';
 import { useEffect, useState } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { useEscClose } from '../../hooks/use-esc-close';
 
 interface Props {
   open: boolean;
@@ -14,6 +15,7 @@ interface Props {
 }
 
 export function ContributePopup({ open, onClose }: Props) {
+  useEscClose(open, onClose);
   const [installing, setInstalling] = useState(false);
   const [installLines, setInstallLines] = useState<string[]>([]);
   const [done, setDone] = useState<{ path: string } | null>(null);

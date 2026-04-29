@@ -12,6 +12,7 @@
 
 import React from 'react';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 
 export interface ExplainerBullet {
   /** Optional bold lead-in (e.g. a setting name). */
@@ -41,6 +42,8 @@ interface Props {
 }
 
 export default function SettingsExplainer({ title, intro, sections, onBack, onClose }: Props) {
+  // Always mounted when shown (host swaps this in via a boolean flag) — so open=true is correct here.
+  useEscClose(true, onClose);
   const bodyRef = useScrollFade<HTMLDivElement>();
   return (
     <div className="flex flex-col h-full">

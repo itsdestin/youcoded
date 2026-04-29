@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useTheme } from '../state/theme-context';
+import { useEscClose } from '../hooks/use-esc-close';
 
 // Native replacement for Claude Code's /config TUI. Reads/writes fields in
 // ~/.claude/settings.json via the settings:* IPC bridge.
@@ -51,6 +52,7 @@ const PERMISSION_LABELS: Record<PermissionDefault, { label: string; desc: string
 };
 
 export default function PreferencesPopup({ open, onClose, onOpenAdvanced }: Props) {
+  useEscClose(open, onClose);
   const [prefs, setPrefs] = useState<PrefsState>(DEFAULTS);
   const [loaded, setLoaded] = useState(false);
   const scrollRef = useScrollFade<HTMLDivElement>();

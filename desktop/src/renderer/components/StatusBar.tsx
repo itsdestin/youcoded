@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 import { createPortal } from 'react-dom';
 import { useTheme } from '../state/theme-context';
 import type { PermissionMode } from '../../shared/types';
@@ -419,6 +420,7 @@ function WidgetConfigPopup({ open, onClose, visible, toggle }: {
   visible: Set<WidgetId>;
   toggle: (id: WidgetId) => void;
 }) {
+  useEscClose(open, onClose);
   // Track which widget's (i) tooltip is expanded
   const [expandedInfo, setExpandedInfo] = useState<WidgetId | null>(null);
   // Track whether the Theme widget's cycle editor is expanded. Separate from
