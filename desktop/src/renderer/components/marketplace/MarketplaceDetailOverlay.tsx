@@ -330,13 +330,12 @@ function SkillBody({
               <StarRating value={rating} count={reviewCount} size="sm" />
             )}
           </div>
+          {/* Disabled when not installed — the label switches to "Install to
+              review" in that case so touch users can see the gate reason
+              without a hover tooltip (which Android has no way to surface). */}
           <button
             type="button"
             onClick={() => setRatingOpen(true)}
-            // Fix: only gate on `installed` here. Previously also disabled when
-            // signed-out, which made the existing in-modal "Sign in with GitHub"
-            // CTA unreachable — users had no way to discover they could sign in
-            // because the button that opens the modal was greyed out.
             disabled={!installed}
             className="text-sm px-3 py-1 rounded-md border border-edge-dim hover:border-edge text-fg-2 hover:text-fg disabled:opacity-50 disabled:cursor-not-allowed"
             title={
@@ -345,7 +344,7 @@ function SkillBody({
                 : "Write a review"
             }
           >
-            Write a review
+            {installed ? "Write a review" : "Install to review"}
           </button>
         </div>
         <ReviewList pluginId={entry.id} refreshKey={reviewRefresh} />
