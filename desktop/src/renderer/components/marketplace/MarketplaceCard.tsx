@@ -178,7 +178,7 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
         <div className="flex-1 min-w-0">
           <h3 className="font-medium text-fg truncate">{title}</h3>
           {author && <p className="text-xs text-fg-dim truncate">{author}</p>}
-          {blurb && <p className="text-sm text-fg-2 line-clamp-1">{blurb}</p>}
+          {blurb && <p className="text-xs text-fg-2 line-clamp-2">{blurb}</p>}
           {(rating != null && ratingCount > 0) || installs > 0 || likes > 0 ? (
             <div className="mt-1 flex items-center gap-3 text-xs text-fg-dim">
               {rating != null && ratingCount > 0 && (
@@ -353,7 +353,7 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
           </span>
         )}
       </div>
-      {blurb && <p className="text-xs sm:text-sm text-fg-2 line-clamp-1 sm:line-clamp-2">{blurb}</p>}
+      {blurb && <p className="text-xs text-fg-2 line-clamp-2">{blurb}</p>}
       {/* Plugin-name badge — jumps to the parent plugin's detail page.
           Only rendered for skills that belong to a marketplace plugin;
           stopPropagation prevents the card's own onClick from firing. */}

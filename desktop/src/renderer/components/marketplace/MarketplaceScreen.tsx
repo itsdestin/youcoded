@@ -327,11 +327,15 @@ export default function MarketplaceScreen({
         </div>
       )}
 
-      <div className="px-3 sm:px-4 mt-4">
+      <div className="px-3 sm:px-4 mt-2">
         <MarketplaceFilterBar value={filter} onChange={setFilter} />
       </div>
 
-      <div className="px-3 sm:px-4 mt-4 flex flex-col gap-6 pb-12">
+      {/* Tightened section spacing: gap-2 between rails (was gap-6) lets the
+          rail's pt-3/pb-6 shadow buffers carry the visual rhythm instead of
+          stacking gap + buffer + buffer between every section. mt-2 above
+          keeps the filter bar visually attached to the hero. */}
+      <div className="px-3 sm:px-4 mt-2 flex flex-col gap-2 pb-12">
         {mode === "discovery" ? (
           <>
             {/* Integrations rail — purpose-built cards only. Never mixed with
@@ -433,7 +437,7 @@ export default function MarketplaceScreen({
                 hid most of the marketplace as it grew. No virtualization needed
                 yet (~200-card budget renders fine on phone), but if it grows
                 beyond that consider content-visibility:auto per PITFALLS. */}
-            <section className="flex flex-col gap-2 mt-4">
+            <section className="flex flex-col gap-2">
               <h3 className="text-lg font-medium text-fg px-1">Explore everything</h3>
               <MarketplaceGrid dense>
                 {mp.skillEntries.map((s) => (
