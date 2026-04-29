@@ -254,6 +254,48 @@ describe('analytics:* channel parity', () => {
   });
 });
 
+// Regression net for system:back and system:notify-stack-state introduced by the
+// android-back-button implementation. system:notify-stack-state flows React → Android
+// (via SessionService.handleBridgeMessage). system:back flows Android → React
+// (broadcast by MainActivity, subscribed in remote-shim). Both channel names must
+// appear literally in their respective files — drift would silently break back-button
+// support on one platform.
+describe('system:back and system:notify-stack-state parity', () => {
+  test('system:notify-stack-state appears in preload.ts, types.ts, remote-shim.ts, SessionService.kt', () => {
+    const stackStateSites = {
+      'preload.ts': fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8'),
+      'types.ts': fs.readFileSync(path.join(__dirname, '../src/shared/types.ts'), 'utf8'),
+      'remote-shim.ts': fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8'),
+      'SessionService.kt': fs.readFileSync(
+        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/runtime/SessionService.kt'),
+        'utf8',
+      ),
+    };
+
+    const channel = 'system:notify-stack-state';
+    for (const [siteName, source] of Object.entries(stackStateSites)) {
+      expect(source, `expected '${channel}' to appear in ${siteName}`).toContain(channel);
+    }
+  });
+
+  test('system:back appears in preload.ts, types.ts, remote-shim.ts, MainActivity.kt', () => {
+    const backSites = {
+      'preload.ts': fs.readFileSync(path.join(__dirname, '../src/main/preload.ts'), 'utf8'),
+      'types.ts': fs.readFileSync(path.join(__dirname, '../src/shared/types.ts'), 'utf8'),
+      'remote-shim.ts': fs.readFileSync(path.join(__dirname, '../src/renderer/remote-shim.ts'), 'utf8'),
+      'MainActivity.kt': fs.readFileSync(
+        path.join(__dirname, '../../app/src/main/kotlin/com/youcoded/app/MainActivity.kt'),
+        'utf8',
+      ),
+    };
+
+    const channel = 'system:back';
+    for (const [siteName, source] of Object.entries(backSites)) {
+      expect(source, `expected '${channel}' to appear in ${siteName}`).toContain(channel);
+    }
+  });
+});
+
 describe('performance:* and app:restart parity', () => {
   const channels = ['performance:get-config', 'performance:set-config', 'app:restart'];
 
