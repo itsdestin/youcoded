@@ -639,6 +639,19 @@ body[data-mode="buddy-chat"] #theme-bg {
   background-color: color-mix(in srgb, var(--panel) calc(var(--panels-opacity, 1) * 100%), transparent);
 }
 
+/* Marketplace rail cards — tighter shadow scoped to the rail scroll
+   container. The default 0 8px 32px shadow needs ~40px of bottom
+   clearance to render uncut inside overflow-x-auto's clip box; that
+   forces excessive dead band between rails. The smaller 0 3px 10px
+   here renders fully inside pt-2/pb-4 with no visible cutoff line.
+   Plain CSS instead of a Tailwind arbitrary descendant selector
+   because Tailwind's shadow utility resolves through a chain of
+   --tw-*-shadow vars that aren't all set in our bundle, leaving the
+   box-shadow declaration invalid and falling back to the default. */
+.mp-rail-scroll .layer-surface {
+  box-shadow: 0 3px 10px rgba(0, 0, 0, var(--shadow-strength, 0.15));
+}
+
 /* Opt-in panel-tier glass for elements that ARE the surface (e.g. buttons on
    the launch screen). Re-tiers their bg-inset/bg-accent translucency from
    bubble-opacity to panels-opacity; theme-engine extends the .layer-surface
