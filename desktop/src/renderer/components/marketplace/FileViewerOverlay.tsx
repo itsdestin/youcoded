@@ -62,27 +62,43 @@ export default function FileViewerOverlay({ target, onClose }: Props) {
   return (
     <>
       <Scrim layer={3} onClick={onClose} />
+      {/* Inset matches MarketplaceDetailOverlay/IntegrationDetailOverlay so the
+          file viewer reads as a same-size full-bleed popup on phones — the
+          underlying parent popup stays mounted at layer 2 and re-appears when
+          this layer-3 viewer closes (Esc / scrim click). */}
       <OverlayPanel
         layer={3}
-        className="fixed inset-12 md:inset-24 flex flex-col overflow-hidden"
+        className="fixed inset-2 sm:inset-12 md:inset-24 flex flex-col overflow-hidden"
       >
-        <header className="flex items-center justify-between p-4 border-b border-edge-dim">
+        <header className="flex items-center justify-between gap-2 p-3 sm:p-4 border-b border-edge-dim">
           <div className="min-w-0">
             <p className="text-xs uppercase tracking-wide text-fg-dim">
               {target.pluginName} · {kindLabel(target.kind)}
             </p>
             <h2 className="text-lg font-semibold text-fg truncate">{title}</h2>
           </div>
+          {/* Wide: Esc-text. Narrow: bordered close-X — matches the marketplace top bar. */}
           <button
             type="button"
             onClick={onClose}
-            className="text-fg-dim hover:text-fg text-sm px-2 py-1 shrink-0"
+            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1 shrink-0"
             aria-label="Close file viewer"
           >
             Esc · Close
           </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="sm:hidden shrink-0 p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            aria-label="Close file viewer"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </header>
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
           {state.status === "loading" && (
             <p className="text-fg-dim text-center py-12">Loading…</p>
           )}

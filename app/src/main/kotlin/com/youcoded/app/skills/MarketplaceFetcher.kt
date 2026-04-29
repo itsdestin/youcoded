@@ -82,6 +82,32 @@ class MarketplaceFetcher(
         }
     }
 
+    // Integrations catalog — same registry, different path. Static JSON
+    // describing OAuth/API-key/plugin-wrapped integrations (Gmail, Drive,
+    // Spotify, etc.). Cached 24h. Used by the "Connect your stuff" rail in
+    // the marketplace. Mirrors desktop's IntegrationInstaller.listCatalog.
+    fun fetchIntegrations(): JSONArray {
+        val cacheFile = File(cacheDir, "integrations.json")
+        readCache(cacheFile, indexTtl)?.let {
+            return try { extractIntegrationsArray(JSONObject(it)) } catch (_: Exception) { JSONArray() }
+        }
+        return try {
+            val data = URL("$registryBase/integrations/index.json").readText()
+            writeCache(cacheFile, data)
+            extractIntegrationsArray(JSONObject(data))
+        } catch (e: Exception) {
+            Log.w("MarketplaceFetcher", "Failed to fetch integrations", e)
+            readCache(cacheFile, Long.MAX_VALUE)?.let {
+                try { extractIntegrationsArray(JSONObject(it)) } catch (_: Exception) { JSONArray() }
+            } ?: JSONArray()
+        }
+    }
+
+    // Index file is `{ "integrations": [...] }` per the desktop IntegrationIndex
+    // shape (see desktop/src/shared/types.ts). Tolerates a bare-array shape too.
+    private fun extractIntegrationsArray(obj: JSONObject): JSONArray =
+        obj.optJSONArray("integrations") ?: JSONArray()
+
     fun fetchCuratedDefaults(): JSONArray {
         val cacheFile = File(cacheDir, "curated-defaults.json")
         readCache(cacheFile, indexTtl)?.let {

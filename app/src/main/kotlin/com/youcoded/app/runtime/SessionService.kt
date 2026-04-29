@@ -986,12 +986,13 @@ class SessionService : Service() {
                 val result = skillProvider?.getFeatured() ?: JSONObject()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
-            // Marketplace redesign Phase 3 — integrations scaffold. List
-            // returns the cached catalog; the rest are stubs that will gain
-            // real wiring when the desktop Google Workspace slice ships and
-            // we port it to Android.
+            // Marketplace redesign Phase 3 — integrations.
+            // List returns the catalog (fetched from the wecoded-marketplace
+            // registry) with a default state attached; install/connect/etc.
+            // are still stubs that fail with not-implemented until the
+            // Android Workspace slice ships.
             "integrations:list" -> {
-                val result = org.json.JSONArray()
+                val result = skillProvider?.listIntegrations() ?: org.json.JSONArray()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             // Phase 4 — no-op on Android. Android MarketplaceFetcher caches

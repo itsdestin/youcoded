@@ -122,26 +122,47 @@ export default function LibraryScreen({
 
   return (
     <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
-      <div className="flex items-center justify-between p-3">
-        <h1 className="text-xl font-semibold text-fg pl-2">Your Library</h1>
-        <div className="flex items-center gap-2">
+      <div className="flex items-center justify-between gap-2 p-3">
+        <h1 className="text-xl font-semibold text-fg pl-2 truncate min-w-0">Your Library</h1>
+        <div className="flex items-center gap-2 shrink-0">
           {onOpenMarketplace && (
             <button
               type="button"
               onClick={onOpenMarketplace}
-              className="text-fg-2 hover:text-fg text-sm px-3 py-1 rounded-md border border-edge-dim hover:border-edge"
+              className="text-fg-2 hover:text-fg text-sm rounded-md border border-edge-dim hover:border-edge px-3 py-1 inline-flex items-center justify-center"
               aria-label="Open marketplace"
+              title="Marketplace"
             >
-              Marketplace
+              {/* Wide: text. Narrow: storefront icon — symmetric with MarketplaceScreen's library bookmark. */}
+              <span className="hidden sm:inline">Marketplace</span>
+              <span className="sm:hidden inline-flex p-0.5" aria-hidden>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M3 9l1-5h16l1 5" />
+                  <path d="M5 9v11h14V9" />
+                  <path d="M9 13h6" />
+                </svg>
+              </span>
             </button>
           )}
+          {/* Wide: Esc text. Narrow: bordered close-X — matches the marketplace top bar. */}
           <button
             type="button"
             onClick={onExit}
-            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1"
             aria-label="Exit library"
           >
             Esc · Back to chat
+          </button>
+          <button
+            type="button"
+            onClick={onExit}
+            className="sm:hidden p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            aria-label="Exit library"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
           </button>
         </div>
       </div>
