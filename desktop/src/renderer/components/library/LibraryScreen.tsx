@@ -200,10 +200,7 @@ export default function LibraryScreen({
         )}
       </div>
 
-      {/* Edge-to-edge on mobile (px-0), 16px gutter at sm+ — matches the
-          marketplace's mobile flush-edge treatment so Library doesn't have
-          a gap on the screen sides while Marketplace doesn't. */}
-      <div className="px-0 sm:px-4 flex flex-col gap-8 pb-12 pt-4">
+      <div className="px-4 flex flex-col gap-8 pb-12 pt-4">
 
         {/* Skills tab — starred favorites first, then the rest. Each skill
              card carries a plugin-name badge that jumps to the parent
