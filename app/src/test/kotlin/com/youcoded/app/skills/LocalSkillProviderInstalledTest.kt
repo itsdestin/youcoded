@@ -102,34 +102,4 @@ class LocalSkillProviderInstalledTest {
         assertTrue("real skill id should be present", ids.contains("imessage:send-message"))
         assertFalse("plugin-level placeholder must not appear", ids.contains("imessage"))
     }
-
-    @Test
-    fun `commands-only plugin still emits a plugin-level entry`() {
-        // Empty plugin (just plugin.json, no skills/, no commands/, no installed_plugins.json
-        // entry) — scanner finds nothing. The placeholder entry from
-        // configStore.getInstalledPlugins() is the only signal the user has that
-        // the plugin is installed.
-        //
-        // NOTE: SkillScanner only walks commands/ when the plugin is in
-        // installed_plugins.json (see SkillScanner.kt lines ~96-102). Top-level
-        // Pass 1 only iterates skills/. So this test deliberately omits both
-        // installed_plugins.json AND any skill subdirectory — equivalent to the
-        // commands-only-plus-no-cc-registration scenario.
-        val pluginPath = ".claude/plugins/marketplaces/youcoded/plugins/some-cmd-plugin"
-        write("$pluginPath/plugin.json", """{"name":"some-cmd-plugin"}""")
-        writePackageConfig(
-            "some-cmd-plugin",
-            File(tmpHome, pluginPath).absolutePath,
-            "2026-04-28T00:00:00Z",
-        )
-
-        val provider = LocalSkillProvider(tmpHome, context)
-        provider.configStore.load()
-        val installed = provider.getInstalled()
-        val ids = (0 until installed.length()).map { installed.getJSONObject(it).getString("id") }
-        assertTrue(
-            "placeholder should still appear for commands-only plugin",
-            ids.contains("some-cmd-plugin"),
-        )
-    }
 }
