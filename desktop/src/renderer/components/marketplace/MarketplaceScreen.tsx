@@ -317,8 +317,12 @@ export default function MarketplaceScreen({
         </div>
       </div>
 
+      {/* Hero/filter/main content go edge-to-edge on mobile (px-0) and only
+          gain a 16px gutter at sm+. Fixes the gap-on-both-sides complaint:
+          the rail headers and cards now sit flush with the screen edges on
+          phone — no wasted strip beside the marketplace viewport. */}
       {mode === "discovery" && mp.featured.hero && mp.featured.hero.length > 0 && (
-        <div className="px-3 sm:px-4">
+        <div className="px-0 sm:px-4">
           <MarketplaceHero
             slots={mp.featured.hero}
             lookup={(id) => skillById.get(id)}
@@ -327,11 +331,11 @@ export default function MarketplaceScreen({
         </div>
       )}
 
-      <div className="px-3 sm:px-4 mt-4">
+      <div className="px-0 sm:px-4 mt-4">
         <MarketplaceFilterBar value={filter} onChange={setFilter} />
       </div>
 
-      <div className="px-3 sm:px-4 mt-4 flex flex-col gap-6 pb-12">
+      <div className="px-0 sm:px-4 mt-4 flex flex-col gap-6 pb-12">
         {mode === "discovery" ? (
           <>
             {/* Integrations rail — purpose-built cards only. Never mixed with

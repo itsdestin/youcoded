@@ -40,18 +40,18 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
         <div
           ref={scrollRef}
           role="list"
-          // Strip box-shadow from layer-surface cards INSIDE the rail.
-          // overflow-x-auto coerces overflow-y to scroll/auto per CSS spec,
-          // so any vertical shadow extending past the cards gets clipped at
-          // the rail edge — that produces the visible hard horizontal cutoff
-          // line above/below cards. Border + glass tint already give cards
-          // visual definition in a rail context; the shadow was supplementary.
-          // Bottom catalog cards still have the shadow (no overflow gates).
+          // overflow-x-auto coerces overflow-y to scroll/auto per CSS spec —
+          // the rail's clip box becomes the cards' bounding box, so any
+          // vertical shadow extending past the card top/bottom gets sliced,
+          // producing the hard horizontal cutoff lines we kept seeing.
+          // Fix: bake enough vertical padding into the scroll container that
+          // the .layer-surface shadow (`0 8px 32px` → ~24px above, ~40px
+          // below each card) renders entirely INSIDE the clip box. pt-6/pb-10
+          // matches the shadow's actual extent without removing it.
           // Hide horizontal scrollbar — touch users swipe; desktop users use
           // hover arrows. Visible scrollbar also eats bottom edge room.
-          className="flex gap-3 overflow-x-auto scroll-smooth py-2 snap-x snap-mandatory
+          className="flex gap-3 overflow-x-auto scroll-smooth pt-6 pb-10 snap-x snap-mandatory
                      [scrollbar-width:none] [&::-webkit-scrollbar]:hidden
-                     [&_.layer-surface]:shadow-none
                      [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[min(220px,70vw)] sm:[&>*]:w-[min(280px,85vw)]"
         >
           {children}
