@@ -31,16 +31,24 @@ export default function MarketplaceGrid({ children, dense }: Props) {
       })
     : children;
 
+  // The `dense` panel-glass tray treatment was dropped — its 12px padding
+  // pushed cards to 24px from the screen edge (parent's 12px gutter + tray
+  // 12px), which made Explore Everything's cards sit deeper inset than the
+  // rail cards above. Now both share the same 12/16px gutter for visual
+  // continuity. The `dense` prop is preserved as a no-op for caller
+  // back-compat; the only difference between dense and non-dense was the
+  // tray, which we no longer apply either way.
+  void dense;
   if (compact) {
     return (
-      <div className={`flex flex-col gap-2 ${dense ? "panel-glass p-3 rounded-lg" : ""}`}>
+      <div className="flex flex-col gap-2">
         {childrenWithCompact}
       </div>
     );
   }
 
   return (
-    <div className={`grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3 ${dense ? "panel-glass p-3 rounded-lg" : ""}`}>
+    <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
       {childrenWithCompact}
     </div>
   );
