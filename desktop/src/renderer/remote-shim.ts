@@ -266,6 +266,12 @@ function handleMessage(data: string): void {
       // the workspace. We forward the raw payload so the cb receives a string.
       dispatchEvent('dev:install-progress', payload);
       break;
+    case 'system:back':
+      // Android hardware back press → routed to useDismissTop via the
+      // window.claude.system.onBack subscriber registered in App.tsx. No
+      // payload is used — the event itself is the signal.
+      dispatchEvent('system:back', payload);
+      break;
   }
 }
 
@@ -990,6 +996,24 @@ export function installShim(): void {
       add: (folderPath: string, nickname?: string) => invoke('folders:add', { folderPath, nickname }),
       remove: (folderPath: string) => invoke('folders:remove', { folderPath }),
       rename: (folderPath: string, nickname: string) => invoke('folders:rename', { folderPath, nickname }),
+    },
+    // System namespace — hardware back button bridge for Android.
+    // notifyStackState: React tells Android whether the dismissal stack is
+    //   non-empty. Android sets OnBackPressedCallback.isEnabled accordingly
+    //   (true when at least one overlay/full-screen view is open, false to
+    //   let Android default = background the app take over).
+    // onBack: subscribe to "user pressed hardware back" push events from
+    //   Android. Returns an unsubscribe function (same pattern as
+    //   dev.onInstallProgress).
+    system: {
+      notifyStackState: (empty: boolean) => {
+        fire('system:notify-stack-state', { empty });
+      },
+      onBack: (cb: () => void) => {
+        const handler: Callback = () => cb();
+        addListener('system:back', handler);
+        return () => removeListener('system:back', handler);
+      },
     },
     // Settings → Development feature — mirrors preload.ts dev namespace.
     // WHY: remote-browser users (and Android WebView) load remote-shim instead

@@ -12,6 +12,7 @@ import { Scrim, OverlayPanel } from './overlays/Overlay';
 import { CLOSE_PROMPT_SUPPRESS_KEY } from './CloseSessionPrompt';
 import { ModelInfoTooltip } from './ModelPickerPopup';
 import { useScrollFade } from '../hooks/useScrollFade';
+import { useEscClose } from '../hooks/use-esc-close';
 import AboutPopup from './AboutPopup';
 import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { BugReportPopup } from './development/BugReportPopup';
@@ -124,6 +125,7 @@ const SHORTCUTS: { keys: string; description: string }[] = [
 ];
 
 function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void }) {
+  useEscClose(open, onClose);
   if (!open) return null;
   return createPortal(
     // Overlay layer L2 — theme-driven via Scrim/OverlayPanel.
@@ -159,6 +161,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
 }
 
 export default function SettingsPanel({ open, onClose, onSendInput, hasActiveSession, onOpenThemeMarketplace, onPublishTheme, syncAutoOpen, onSyncAutoOpenHandled }: Props) {
+  useEscClose(open, onClose);
   // Slide polish: track animation window so CSS can reduce backdrop-filter cost
   // and suppress scrollbar-thumb while the 300ms transform is running. Also
   // keeps the Scrim mounted during the close animation so it can fade out

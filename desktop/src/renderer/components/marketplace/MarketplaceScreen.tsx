@@ -15,6 +15,7 @@ import MarketplaceRail from "./MarketplaceRail";
 import MarketplaceCard from "./MarketplaceCard";
 import MarketplaceGrid from "./MarketplaceGrid";
 import MarketplaceDetailOverlay, { type DetailTarget } from "./MarketplaceDetailOverlay";
+import WallpaperBackdrop from "../WallpaperBackdrop";
 import InstallingFooterStrip from "./InstallingFooterStrip";
 import MarketplaceAuthChip from "./MarketplaceAuthChip";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
@@ -160,11 +161,11 @@ export default function MarketplaceScreen({
     setSetupHint((prev) => (prev?.slug === item.slug ? null : prev));
   };
 
-  // Esc: close detail first, then exit screen. Matches App.tsx state-transition rules.
-  // When a detail overlay (plugin or integration) is open, its own useEscClose
-  // registration sits on top of the LIFO stack and captures ESC first; this
-  // registration only fires when no nested overlay is active.
-  useEscClose(!detail && !integrationDetail, onExit);
+  // Register with the dismissal stack. ESC (desktop) and hardware back
+  // (Android) both call onExit — same path as the on-screen close button.
+  // LIFO with MarketplaceDetailOverlay: when an overlay is open over the
+  // grid, its useEscClose entry sits above this one and gets dismissed first.
+  useEscClose(true, onExit);
 
   const mode: "discovery" | "search" = isActive(filter) ? "search" : "discovery";
   const installedIds = useMemo(
@@ -254,34 +255,64 @@ export default function MarketplaceScreen({
   const open = (t: DetailTarget) => setDetail(t);
 
   return (
-    <div className="fixed inset-0 z-40 overflow-y-auto flex flex-col">
-      {/* Top bar — stays visible on scroll; holds the Exit hint. */}
-      <div className="flex items-center justify-between p-3">
+    <div className="fixed inset-0 z-40">
+      {/* Pre-blurred wallpaper as a non-scrolling backdrop. Absolute-positioned
+          inside the FIXED outer wrapper (not the inner scroll container) so it
+          stays pinned to the viewport while content scrolls over it. */}
+      <WallpaperBackdrop />
+      {/* Scroll happens on the inner div. overflow-x-hidden suppresses any
+          stray horizontal wiggle from rail cards / wallpaper transform. */}
+      <div className="absolute inset-0 overflow-y-auto overflow-x-hidden flex flex-col [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+      {/* Top bar — stays visible on scroll; holds Auth, title, library, exit. */}
+      <div className="flex items-center justify-between gap-2 p-3">
         {/* Auth chip sits flush-left before the title so the GitHub sign-in
             entry point is the first thing users see when entering the
             marketplace — fixes the "no obvious way to sign in" gap. */}
-        <div className="flex items-center gap-2 pl-2">
+        <div className="flex items-center gap-2 pl-2 min-w-0">
           <MarketplaceAuthChip />
-          <h1 className="text-xl font-semibold text-fg">Marketplace</h1>
+          <h1 className="text-xl font-semibold text-fg truncate">Marketplace</h1>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 shrink-0">
           {onOpenLibrary && (
             <button
               type="button"
               onClick={onOpenLibrary}
-              className="text-fg-2 hover:text-fg text-sm px-3 py-1 rounded-md border border-edge-dim hover:border-edge"
+              className="panel-glass bg-inset text-fg-2 hover:text-fg text-sm rounded-md border border-edge-dim hover:border-edge px-3 py-1 sm:px-3 sm:py-1 inline-flex items-center justify-center"
               aria-label="Open Your Library"
+              title="Your Library"
             >
-              Your Library
+              {/* Wide: text label. Narrow: bookmark icon — matches the close-X
+                  treatment on the adjacent button. */}
+              <span className="hidden sm:inline">Your Library</span>
+              <span className="sm:hidden inline-flex p-0.5" aria-hidden>
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M19 21l-7-5-7 5V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2z" />
+                </svg>
+              </span>
             </button>
           )}
+          {/* Wide: text "Esc · Back to chat" hint, no border (Esc key does the work). */}
           <button
             type="button"
             onClick={onExit}
-            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1"
             aria-label="Exit marketplace"
           >
             Esc · Back to chat
+          </button>
+          {/* Narrow: bordered close-X button — touch users have no Esc key, so we
+              give them an obvious close affordance with a button-shaped container
+              matching the Library button next to it. */}
+          <button
+            type="button"
+            onClick={onExit}
+            className="sm:hidden panel-glass bg-inset p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            aria-label="Exit marketplace"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
           </button>
         </div>
       </div>
@@ -296,11 +327,15 @@ export default function MarketplaceScreen({
         </div>
       )}
 
-      <div className="px-3 sm:px-4 mt-4">
+      <div className="px-3 sm:px-4 mt-2">
         <MarketplaceFilterBar value={filter} onChange={setFilter} />
       </div>
 
-      <div className="px-3 sm:px-4 mt-4 flex flex-col gap-6 pb-12">
+      {/* Tightened section spacing: gap-2 between rails (was gap-6) lets the
+          rail's pt-3/pb-6 shadow buffers carry the visual rhythm instead of
+          stacking gap + buffer + buffer between every section. mt-2 above
+          keeps the filter bar visually attached to the hero. */}
+      <div className="px-3 sm:px-4 mt-2 flex flex-col gap-2 pb-12">
         {mode === "discovery" ? (
           <>
             {/* Integrations rail — purpose-built cards only. Never mixed with
@@ -397,11 +432,15 @@ export default function MarketplaceScreen({
               );
             })}
 
-            {/* Bottom catalog — denser surface; all skills + themes in default sort. */}
-            <section className="flex flex-col gap-2 mt-4">
+            {/* Bottom catalog — denser surface; ALL skills in default sort.
+                Previously slice(0, 48) capped this at 48 entries which silently
+                hid most of the marketplace as it grew. No virtualization needed
+                yet (~200-card budget renders fine on phone), but if it grows
+                beyond that consider content-visibility:auto per PITFALLS. */}
+            <section className="flex flex-col gap-2">
               <h3 className="text-lg font-medium text-fg px-1">Explore everything</h3>
               <MarketplaceGrid dense>
-                {mp.skillEntries.slice(0, 48).map((s) => (
+                {mp.skillEntries.map((s) => (
                   <MarketplaceCard
                     key={s.id}
                     item={{ kind: "skill", entry: s }}
@@ -486,9 +525,10 @@ export default function MarketplaceScreen({
         );
       })()}
 
-      {/* Docked footer — outside the scroll container so it stays fixed at the
-          bottom of the viewport regardless of scroll position. */}
+      {/* Docked footer — internally position:fixed, so its placement in the
+          JSX tree doesn't affect viewport pinning. */}
       <InstallingFooterStrip />
+      </div>
     </div>
   );
 }
@@ -559,29 +599,45 @@ function IntegrationDetailOverlay({
   return (
     <>
       <Scrim layer={2} onClick={onClose} />
+      {/* Inset shrinks at narrow so the popup fills the phone screen — see
+          MarketplaceDetailOverlay for the same treatment. */}
       <OverlayPanel
         layer={2}
-        className="fixed inset-8 md:inset-16 flex flex-col overflow-hidden"
+        className="fixed inset-2 sm:inset-8 md:inset-16 flex flex-col overflow-hidden"
         style={item.accentColor ? { borderColor: item.accentColor } : undefined}
       >
-        <header className="flex items-center justify-between p-4 border-b border-edge-dim">
+        <header className="flex items-center justify-between p-3 sm:p-4 border-b border-edge-dim">
           <h2 className="text-lg font-semibold text-fg">Integration</h2>
+          {/* Wide: Esc-text. Narrow: bordered close-X. */}
           <button
             type="button"
             onClick={onClose}
-            className="text-fg-dim hover:text-fg text-sm px-2 py-1"
+            className="hidden sm:inline-block text-fg-dim hover:text-fg text-sm px-2 py-1"
             aria-label="Close"
           >
             Esc · Close
           </button>
+          <button
+            type="button"
+            onClick={onClose}
+            className="sm:hidden panel-glass bg-inset p-1.5 rounded-md border border-edge-dim hover:border-edge text-fg-dim hover:text-fg"
+            aria-label="Close"
+          >
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <line x1="18" y1="6" x2="6" y2="18" />
+              <line x1="6" y1="6" x2="18" y2="18" />
+            </svg>
+          </button>
         </header>
-        <div className="flex-1 overflow-y-auto p-6">
+        <div className="flex-1 overflow-y-auto p-3 sm:p-6">
           <article className="flex flex-col gap-4 max-w-3xl mx-auto">
-            <header className="flex items-start justify-between gap-4">
-              <div className="flex items-start gap-4 min-w-0 flex-1">
+            {/* Header stacks at narrow so the icon+title+tagline get full row
+                width and the action button cluster drops below. */}
+            <header className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-3 sm:gap-4">
+              <div className="flex items-start gap-3 sm:gap-4 min-w-0 flex-1">
                 {/* Custom integration icon, falls back to the displayName letter. */}
                 <div
-                  className="w-16 h-16 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-2xl font-semibold"
+                  className="w-12 h-12 sm:w-16 sm:h-16 rounded-lg shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-xl sm:text-2xl font-semibold"
                   style={iconUrl ? undefined : { background: item.accentColor || 'var(--accent)' }}
                 >
                   {iconUrl ? (
@@ -591,8 +647,8 @@ function IntegrationDetailOverlay({
                   )}
                 </div>
                 <div className="flex-1 min-w-0">
-                  <h1 className="text-2xl font-semibold text-fg">{item.displayName}</h1>
-                  {item.tagline && <p className="mt-1 text-fg-2">{item.tagline}</p>}
+                  <h1 className="text-xl sm:text-2xl font-semibold text-fg">{item.displayName}</h1>
+                  {item.tagline && <p className="mt-1 text-sm sm:text-base text-fg-2">{item.tagline}</p>}
                   <div className="mt-3 flex items-center gap-2 flex-wrap">
                     <span className={`text-[10px] uppercase tracking-wide rounded-full px-2 py-0.5 border ${toneClass[statusBadge.tone]}`}>
                       {statusBadge.text}
@@ -603,7 +659,7 @@ function IntegrationDetailOverlay({
                   </div>
                 </div>
               </div>
-              <div className="shrink-0 flex items-center gap-2">
+              <div className="shrink-0 flex items-center gap-2 flex-wrap">
                 <IntegrationActions
                   state={actionState}
                   onInstall={onInstall}

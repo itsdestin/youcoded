@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { useEscClose } from '../../hooks/use-esc-close';
 import { RestorePointPicker } from './RestorePointPicker';
 import { RestorePreview } from './RestorePreview';
 import { RestoreProgress } from './RestoreProgress';
@@ -47,6 +48,8 @@ const ALL_CATEGORIES: RestoreCategory[] = [
 ];
 
 export function RestoreWizard({ backendId, backendLabel, backendType, onClose, onRestored }: Props) {
+  // Always mounted when open (parent uses {restoreTarget && <RestoreWizard>}) — so open=true is correct here.
+  useEscClose(true, onClose);
   // GitHub is the only backend with full history; others are HEAD-only.
   const needsVersionPicker = backendType === 'github';
 

@@ -40,8 +40,44 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
         <div
           ref={scrollRef}
           role="list"
-          className="flex gap-3 overflow-x-auto scroll-smooth pb-2 snap-x snap-mandatory
-                     [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[min(280px,85vw)]"
+          // overflow-x-auto coerces overflow-y to scroll/auto per CSS spec —
+          // the rail's clip box becomes the cards' bounding box, so any
+          // vertical shadow extending past the card top/bottom gets sliced,
+          // producing hard horizontal cutoff lines.
+          //
+          // The .layer-surface default shadow (`0 8px 32px`) needs ~40px
+          // below the card to render uncut. Solution: scope a tighter
+          // `0 3px 10px` shadow to rail cards via the `.mp-rail-scroll`
+          // class (rule defined in globals.css). Plain CSS rather than a
+          // Tailwind arbitrary descendant selector because Tailwind's
+          // shadow utility chains through --tw-*-shadow vars that aren't
+          // all set in this bundle — without them the resolved
+          // `box-shadow: var(--tw-inset-shadow), …` declaration becomes
+          // invalid and falls back to the default 32px-blur shadow,
+          // re-introducing the cutoff lines we're trying to fix.
+          //
+          // Edge-to-edge horizontal scroll: parent has px-3 sm:px-4 padding
+          // for content alignment, but we want cards to scroll OUT at the
+          // actual screen edge (not the gutter). -mx-3 sm:-mx-4 pulls the
+          // scroll container's bounds out to the screen edges, then
+          // matching px-3 sm:px-4 inside re-pads the first card.
+          //
+          // BUT: snap-mandatory + snap-start aligns the first card's start
+          // with the snapport's start, and without scroll-padding the
+          // snapport equals the scroll container's padding box edge
+          // (= screen edge, after -mx-3). That overrides the visual px-3
+          // and snaps the first card flush to the screen. Adding
+          // scroll-px-3 sm:scroll-px-4 redefines the snapport start to
+          // match the visual padding, so snap-start lands the first card
+          // at the same 12/16px offset as the rest of the marketplace
+          // content.
+          //
+          // Hide horizontal scrollbar — touch users swipe; desktop users
+          // use hover arrows. Visible scrollbar also eats bottom edge room.
+          className="mp-rail-scroll flex gap-3 overflow-x-auto scroll-smooth pt-2 pb-4 snap-x snap-mandatory
+                     -mx-3 sm:-mx-4 px-3 sm:px-4 scroll-px-3 sm:scroll-px-4
+                     [scrollbar-width:none] [&::-webkit-scrollbar]:hidden
+                     [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[min(220px,70vw)] sm:[&>*]:w-[min(280px,85vw)]"
         >
           {children}
         </div>

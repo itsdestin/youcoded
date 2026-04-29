@@ -134,6 +134,29 @@ class SessionService : Service() {
      */
     var onMarketplaceAuthUrlRequested: ((String) -> Unit)? = null
 
+    /**
+     * MainActivity binds this to flip OnBackPressedCallback.isEnabled.
+     * `empty = true` means the React dismissal stack is empty (so hardware
+     * back should fall through to Android default — background the app).
+     * `empty = false` means at least one overlay/full-screen view is open
+     * and back should be intercepted to call dismissTop().
+     *
+     * The setter replays the cached lastStackEmpty so MainActivity rebinds
+     * (e.g. after rotation) get the current state immediately. Without this
+     * replay, OnBackPressedCallback would default to disabled until the user
+     * opens or closes another overlay.
+     */
+    var onStackStateChanged: ((empty: Boolean) -> Unit)? = null
+        set(value) {
+            field = value
+            value?.invoke(lastStackEmpty)
+        }
+
+    /** Cached most-recent stack-empty value. Defaults to true so that until
+     *  React first signals, hardware back behaves as Android default
+     *  (back backgrounds the app — no regression vs pre-feature behavior). */
+    private var lastStackEmpty: Boolean = true
+
     private var wakeLock: PowerManager.WakeLock? = null
     private var urlObserver: FileObserver? = null
     private var usageRefreshTimer: java.util.Timer? = null
@@ -963,12 +986,13 @@ class SessionService : Service() {
                 val result = skillProvider?.getFeatured() ?: JSONObject()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
-            // Marketplace redesign Phase 3 — integrations scaffold. List
-            // returns the cached catalog; the rest are stubs that will gain
-            // real wiring when the desktop Google Workspace slice ships and
-            // we port it to Android.
+            // Marketplace redesign Phase 3 — integrations.
+            // List returns the catalog (fetched from the wecoded-marketplace
+            // registry) with a default state attached; install/connect/etc.
+            // are still stubs that fail with not-implemented until the
+            // Android Workspace slice ships.
             "integrations:list" -> {
-                val result = org.json.JSONArray()
+                val result = skillProvider?.listIntegrations() ?: org.json.JSONArray()
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, result) }
             }
             // Phase 4 — no-op on Android. Android MarketplaceFetcher caches
@@ -2796,6 +2820,18 @@ class SessionService : Service() {
             "update:progress" -> {
                 // Push-event channel — no-op on Android. Desktop pushes these; Android
                 // never subscribes because it never downloads desktop installers.
+            }
+
+            "system:notify-stack-state" -> {
+                // React signals dismissal-stack non-emptiness. Cache the
+                // value (so MainActivity rebinds get it replayed) and forward
+                // to the bound callback. Fire-and-forget — no msg.id, no
+                // response. Default to true if payload is missing or malformed
+                // so worst case is "back backgrounds the app" (Android default).
+                val payload = msg.payload as? JSONObject
+                val empty = payload?.optBoolean("empty", true) ?: true
+                lastStackEmpty = empty
+                onStackStateChanged?.invoke(empty)
             }
 
             else -> {

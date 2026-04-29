@@ -17,6 +17,7 @@ import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './Sett
 import SyncSetupWizard from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { Scrim, OverlayPanel } from './overlays/Overlay';
+import { useEscClose } from '../hooks/use-esc-close';
 import { RestoreWizard } from './restore/RestoreWizard';
 import { SnapshotsPanel } from './restore/SnapshotsPanel';
 
@@ -356,6 +357,8 @@ interface SyncPopupProps {
 }
 
 function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupProps) {
+  // Always mounted when open (parent uses {open && <SyncPopup>}) — so open=true is correct here.
+  useEscClose(true, onClose);
   const [status, setStatus] = useState<SyncStatus | null>(initialStatus);
   const [logLines, setLogLines] = useState<string[]>([]);
   const [loading, setLoading] = useState(!initialStatus);

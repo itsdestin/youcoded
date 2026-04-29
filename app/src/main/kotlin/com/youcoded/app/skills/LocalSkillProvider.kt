@@ -56,8 +56,29 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
                 val s = privateSkills.getJSONObject(i)
                 combined.put(s); seenIds.add(s.optString("id"))
             }
-            // Include marketplace-installed plugins not already discovered
-            // by scanner — but skip if the scanner already found their skills.
+            // Include marketplace-installed plugins not already discovered by scanner.
+            // Two sources are walked, in this order, with the first hit winning per id:
+            //
+            //   1. configStore.getInstalledPlugins() — package metadata persisted
+            //      in ~/.claude/youcoded-skills.json. Carries the canonical
+            //      installedAt + installPath for each plugin.
+            //   2. The marketplace plugin subtree on disk
+            //      (~/.claude/plugins/marketplaces/youcoded/plugins/<id>/) —
+            //      ground truth for "what's actually installed". This second
+            //      pass exists as a self-heal: if youcoded-skills.json gets
+            //      desynced from disk (e.g. cleared by an APK rebuild while
+            //      the plugin files survive in app data), source #1 returns
+            //      empty and the marketplace UI would show installed plugins
+            //      as "Install". Clicking Install then returns AlreadyInstalled
+            //      from PluginInstaller without healing config, so the bug
+            //      becomes sticky. Reading directly from disk here makes disk
+            //      reality the source of truth for the UI's installed set,
+            //      breaking that loop.
+            //
+            // Both passes skip plugins whose individual skills the scanner
+            // already produced (`pluginsWithScannedSkills`) so a plugin like
+            // "encyclopedia" doesn't get a phantom plugin-level card next to
+            // its 5 real skill cards.
             val marketplaceInstalled = configStore.getInstalledPlugins()
             val keys = marketplaceInstalled.keys()
             while (keys.hasNext()) {
@@ -80,6 +101,32 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
                 })
                 seenIds.add(id)
             }
+            // Disk fallback (#2 above) — every dir under the marketplace subtree
+            // with a plugin manifest is treated as installed. Empty dirs (e.g. an
+            // install interrupted mid-clone) are skipped so they don't masquerade.
+            // Also skip plugins whose individual skills the scanner already
+            // surfaced — same anti-phantom guard as the configStore pass above.
+            val marketplaceRoot = ClaudeCodeRegistry.youcodedPluginsDir(homeDir)
+            if (marketplaceRoot.exists()) {
+                marketplaceRoot.listFiles { f -> f.isDirectory }?.forEach { dir ->
+                    val id = dir.name
+                    if (seenIds.contains(id)) return@forEach
+                    if (pluginsWithScannedSkills.contains(id)) return@forEach
+                    val hasManifest = File(dir, ".claude-plugin/plugin.json").exists() ||
+                        File(dir, "plugin.json").exists()
+                    if (!hasManifest) return@forEach
+                    combined.put(JSONObject().apply {
+                        put("id", id)
+                        put("type", "plugin")
+                        put("displayName", id.split("-").joinToString(" ") { it.replaceFirstChar { c -> c.uppercase() } })
+                        put("description", "Installed from marketplace")
+                        put("category", "other")
+                        put("source", "marketplace")
+                        put("visibility", "published")
+                    })
+                    seenIds.add(id)
+                }
+            }
             installedCache = combined
         }
         val overrides = configStore.getOverrides()
@@ -93,6 +140,31 @@ class LocalSkillProvider(private val homeDir: File, private val context: Context
                 while (keys.hasNext()) { val key = keys.next(); skill.put(key, o.get(key)) }
             }
             result.put(skill)
+        }
+        return result
+    }
+
+    // Integrations list for the "Connect your stuff" rail. Returns the catalog
+    // entries with a default state attached, since the install/connect manifest
+    // (~/.claude/integrations.json on desktop) is not yet maintained on Android.
+    // Renderer-side platform check filters macOS-only / linux-only entries via
+    // the existing IntegrationCardItem.platforms field — Android entries that
+    // don't match this device get a "macOS Only"-style locked badge.
+    fun listIntegrations(): JSONArray {
+        val entries = fetcher.fetchIntegrations()
+        val result = JSONArray()
+        for (i in 0 until entries.length()) {
+            val entry = entries.getJSONObject(i)
+            val slug = entry.optString("slug")
+            // Attach IntegrationState — install/connect actions are still stubbed
+            // on Android (returns a not-implemented error), so state is constant.
+            val state = JSONObject().apply {
+                put("slug", slug)
+                put("installed", false)
+                put("connected", false)
+            }
+            entry.put("state", state)
+            result.put(entry)
         }
         return result
     }

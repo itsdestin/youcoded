@@ -6,6 +6,7 @@
 import type { ReactNode } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
+import { useEscClose } from '../../hooks/use-esc-close';
 
 interface Props {
   open: boolean;
@@ -22,6 +23,7 @@ const KNOWN_ISSUES_URL = 'https://github.com/itsdestin/youcoded/issues';
  * theme automatically via CSS tokens.
  */
 export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }: Props) {
+  useEscClose(open, onClose);
   if (!open) return null;
   return createPortal(
     <>

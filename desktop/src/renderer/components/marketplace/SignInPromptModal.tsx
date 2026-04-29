@@ -9,6 +9,7 @@
 import React from "react";
 import { Scrim, OverlayPanel } from "../overlays/Overlay";
 import { useMarketplaceAuth } from "../../state/marketplace-auth-context";
+import { useEscClose } from "../../hooks/use-esc-close";
 
 interface Props {
   open: boolean;
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export default function SignInPromptModal({ open, onClose, title, message }: Props) {
+  useEscClose(open, onClose);
   const { signedIn, signInPending, startSignIn } = useMarketplaceAuth();
 
   // Auto-close once sign-in completes — the caller's signed-out gate will

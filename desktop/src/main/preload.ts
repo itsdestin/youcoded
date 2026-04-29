@@ -237,6 +237,8 @@ const IPC = {
   // 'performance:restart' — so future restart-required settings can reuse it.
   PERFORMANCE_GET_CONFIG: 'performance:get-config',
   PERFORMANCE_SET_CONFIG: 'performance:set-config',
+  SYSTEM_NOTIFY_STACK_STATE: 'system:notify-stack-state',
+  SYSTEM_BACK: 'system:back',
   APP_RESTART: 'app:restart',
 } as const;
 
@@ -821,5 +823,20 @@ contextBridge.exposeInMainWorld('claude', {
   // restart-required setting can reuse this single generic channel.
   app: {
     restart: (): Promise<void> => ipcRenderer.invoke(IPC.APP_RESTART),
+  },
+  // System namespace — platform integrations like hardware back button.
+  // Desktop no-op stub: notifyStackState / onBack are only meaningful on
+  // Android, where MainActivity uses them to enable/disable
+  // OnBackPressedCallback and broadcast back-press events. Exposed here for
+  // shape parity with remote-shim.ts (PITFALLS.md → Cross-Platform parity).
+  system: {
+    notifyStackState: (_empty: boolean) => {
+      // No-op on desktop. Electron has no hardware back button.
+    },
+    onBack: (_cb: () => void) => {
+      // No-op on desktop. Returns an empty unsubscribe function so callers
+      // can call it unconditionally without platform branching.
+      return () => {};
+    },
   },
 });

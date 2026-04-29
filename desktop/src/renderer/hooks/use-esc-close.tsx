@@ -7,14 +7,21 @@ import React, {
   useSyncExternalStore,
 } from 'react';
 
-// Centralized ESC-key dismissal stack. Overlays call useEscClose(open, onClose);
-// a single window-level capture-phase listener pops the top of the stack on ESC
-// and invokes its onClose. When the stack is empty the listener is a no-op, so
-// ESC can fall through to the chat-passthrough handler in App.tsx (which then
-// forwards \x1b to the PTY to interrupt the active Claude session).
+// Centralized dismissal stack. Overlays call useEscClose(open, onClose); a
+// LIFO stack tracks them. The stack is triggered from two sources:
+//   1. ESC keydown on the window (desktop primary input). The capture-phase
+//      listener pops the top of the stack and invokes its onClose.
+//   2. useDismissTop() — imperative entry point used by the Android
+//      hardware-back bridge in App.tsx. Same popTop() body as the keydown
+//      listener; back press is NOT synthesized as a keyboard event.
 //
-// This replaces ~13 ad-hoc `useEffect(() => { ... if (e.key === 'Escape') onClose(); ... })`
-// copies across overlay components. Reasons for the indirection:
+// When the stack is empty, ESC falls through to the chat-passthrough handler
+// in App.tsx (which forwards \x1b to the PTY to interrupt Claude). On Android
+// the hardware-back callback is disabled when the stack is empty (Android
+// default — back backgrounds the app), so the chat-passthrough is never
+// reached from a back press.
+//
+// Reasons for the indirection:
 //   1. LIFO semantics — if two overlays are open, only the top one closes per ESC press.
 //   2. preventDefault'd events signal to the chat-passthrough listener that an
 //      overlay consumed the keypress, so we don't both close an overlay AND
@@ -119,4 +126,27 @@ export function useEscStackEmpty(): boolean {
     useCallback(() => (store ? store.isEmpty : true), [store]),
     useCallback(() => true, []),
   );
+}
+
+// Imperative dismissal trigger — pops the top of the stack and invokes its
+// onClose. Used by the Android hardware-back bridge so back press doesn't
+// synthesize a keyboard event. ESC keydown listener and this hook share
+// the same popTop() body; behavior is identical regardless of trigger source.
+//
+// The returned function is stable across renders (keyed only on the store
+// identity, which never changes within a provider). Callers can safely
+// cache it in a ref or pass it as a dependency without retriggering effects.
+export function useDismissTop(): () => void {
+  const store = useContext(EscStoreContext);
+  return useCallback(() => {
+    if (!store) return;
+    const top = store.popTop();
+    if (!top) return;
+    try {
+      top.ref.current();
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error('[useDismissTop] onClose threw:', err);
+    }
+  }, [store]);
 }

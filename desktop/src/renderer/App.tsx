@@ -94,7 +94,7 @@ const ToolSandboxRoute: React.ComponentType = import.meta.env.DEV
   : () => null;
 // ESC-passthrough: provider owns capture-phase ESC routing for overlays.
 // Mounted at app root so every overlay component is a descendant.
-import { EscCloseProvider } from './hooks/use-esc-close';
+import { EscCloseProvider, useEscStackEmpty, useDismissTop } from './hooks/use-esc-close';
 // Pure guard for the chat-focused ESC -> PTY forwarding listener below.
 import { shouldForwardEscToPty } from './state/should-forward-esc-to-pty';
 
@@ -561,6 +561,30 @@ function AppInner() {
       }
     }
   }, [chatStateMap, sessionStatuses]);
+
+  // Push stack-state changes to the host. On Android, MainActivity uses this
+  // to flip OnBackPressedCallback.isEnabled so hardware back is intercepted
+  // when an overlay is open and falls through to Android default (background)
+  // when nothing is dismissable. On desktop this call is a no-op (preload.ts's
+  // window.claude.system.notifyStackState is a stub).
+  const escStackEmpty = useEscStackEmpty();
+  useEffect(() => {
+    window.claude.system?.notifyStackState?.(escStackEmpty);
+  }, [escStackEmpty]);
+
+  // Hardware back button (Android) → dismiss top of stack. dismissTop is a
+  // hook so we capture it in a ref the WS listener (which lives outside
+  // React's render cycle) can read. Re-subscribing the listener on every
+  // dismissTop change would churn the WebSocket subscription needlessly.
+  const dismissTop = useDismissTop();
+  const dismissTopRef = useRef(dismissTop);
+  useEffect(() => { dismissTopRef.current = dismissTop; }, [dismissTop]);
+
+  useEffect(() => {
+    const handler = () => dismissTopRef.current();
+    const unsubscribe = window.claude.system?.onBack?.(handler);
+    return unsubscribe;
+  }, []);
 
   useEffect(() => {
     const createdHandler = window.claude.on.sessionCreated((info) => {

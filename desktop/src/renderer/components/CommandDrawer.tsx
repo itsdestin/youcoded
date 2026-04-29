@@ -5,6 +5,7 @@ import { useSkills } from '../state/skill-context';
 import { useMarketplace } from '../state/marketplace-context';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { isAndroid } from '../platform';
 
 interface Props {
   open: boolean;
@@ -57,13 +58,17 @@ export default function CommandDrawer({ open, searchMode, externalFilter, onSele
 
   // Focus internal search on open — only in browse mode (compass button).
   // In search mode the InputBar keeps focus so the user sees the "/" prefix.
+  // On Android (and remote-browser touch devices), focusing the search input
+  // pops the soft keyboard, which collides with the drawer animation and
+  // looks janky. Touch users can tap the search field if they want to type;
+  // the auto-focus is desktop ergonomics only.
   useEffect(() => {
-    if (open && !searchMode) {
-      setSearch('');
-      // Small delay to let the transition start before focusing
-      const t = setTimeout(() => searchRef.current?.focus(), 50);
-      return () => clearTimeout(t);
-    }
+    if (!open || searchMode) return;
+    setSearch('');
+    if (isAndroid()) return;
+    // Small delay to let the transition start before focusing
+    const t = setTimeout(() => searchRef.current?.focus(), 50);
+    return () => clearTimeout(t);
   }, [open, searchMode]);
 
   useEscClose(open, onClose);
