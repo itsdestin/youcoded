@@ -400,6 +400,15 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
 function scheduleReconnect(token: string): void {
   // After too many failures, give up and fall back to local mode
   if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+    // Reconnect-fallback: switching to local bridge means any messages
+    // queued for the prior remote host are wrong-destination. Drop them
+    // here — disconnect() isn't on this path (ws.onclose only schedules
+    // the retry, doesn't disconnect).
+    if (pendingSendQueue.length > 0) {
+      console.warn('[remote-shim] discarding', pendingSendQueue.length,
+        'queued messages on reconnect fallback to local bridge');
+      pendingSendQueue = [];
+    }
     reconnectAttempts = 0;
     reconnectDelay = 1000;
     targetUrl = null;
@@ -462,14 +471,14 @@ export function disconnect(): void {
   if (ws) { ws.close(); ws = null; }
   setConnectionState('disconnected');
   localStorage.removeItem('youcoded-remote-token');
-  // Drop any pre-auth queued messages on every disconnect path. Three reasons:
-  // (1) host switches via connectToHost / disconnectFromHost — the queue would
-  //     otherwise leak across hosts and flush to the wrong server on auth:ok.
-  // (2) MAX_RECONNECT_ATTEMPTS exhaustion in scheduleReconnect falls back to
-  //     connect('android-local', false) — that's effectively a host change too.
-  // (3) Brief reconnect to the SAME host loses the queue, but caller-side
-  //     invoke() 30s timeout still surfaces a clean error, and renderer
-  //     mount-time fetches re-issue idempotently on retry.
+  // Drop any pre-auth queued messages on every disconnect() path. Covered
+  // paths: explicit disconnect() calls, connectToHost (calls disconnect
+  // first), and disconnectFromHost. In all cases the queue would otherwise
+  // leak across hosts and flush to the wrong server on the next auth:ok.
+  // Brief reconnect to the SAME host also loses the queue, but caller-side
+  // invoke() 30s timeout still surfaces a clean error, and renderer
+  // mount-time fetches re-issue idempotently on retry.
+  // (MAX_RECONNECT_ATTEMPTS fallback in scheduleReconnect clears the queue inline.)
   if (pendingSendQueue.length > 0) {
     console.warn('[remote-shim] discarding', pendingSendQueue.length,
       'queued messages on disconnect');
