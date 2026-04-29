@@ -284,6 +284,31 @@ html, body, #root {
   display: none;
 }
 
+/* Terminal overlay scrollbar.
+   xterm's native scrollbar reserves a gutter on the right of `.xterm-viewport`,
+   which `proposeDimensions` then subtracts from the cell-grid width — i.e. the
+   gutter eats the rightmost terminal column. Hide the native scrollbar and
+   paint a thin floating thumb on top instead, so xterm gets full container
+   width back while users still see scroll position. Applies to desktop and the
+   Android WebView (Chromium on both). */
+.terminal-overlay-scroll .xterm-viewport {
+  scrollbar-width: none;
+}
+.terminal-overlay-scroll .xterm-viewport::-webkit-scrollbar {
+  display: none;
+}
+.terminal-scrollbar-thumb {
+  position: absolute;
+  right: 2px;
+  width: 6px;
+  background: var(--scrollbar-thumb);
+  border-radius: 3px;
+  opacity: 0.55;
+  pointer-events: none;
+  z-index: 1;
+  transition: opacity 0.15s ease-out;
+}
+
 /* Hide scrollbars on pure-horizontal scroll containers (quick chips, session strip) */
 .scrollbar-none::-webkit-scrollbar,
 .overflow-x-auto:not(.overflow-y-auto)::-webkit-scrollbar {
