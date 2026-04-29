@@ -121,10 +121,13 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
   // Compact list-row layout for narrow viewports. Outer click and keyboard
   // affordance match the wide layout so detail overlays open the same way.
   if (compact) {
-    // Resolve a 52x52 thumbnail. Order: explicit iconUrl, then theme preview
-    // (reuses themePreviewUrl declared above), then first-letter fallback on
-    // accent-tinted background.
-    const fallbackLetter = title.slice(0, 1).toUpperCase();
+    // 52x52 thumbnail rendered ONLY when we have a real image source —
+    // explicit iconUrl (integrations) or themePreviewUrl (themes). When
+    // neither is available (the typical skill plugin case), we drop the
+    // thumbnail entirely rather than rendering a fallback letter chip;
+    // a giant "S" / "M" / "Y" placeholder added more visual noise than
+    // information for skill cards.
+    const showThumbnail = showIcon || !!themePreviewUrl;
 
     // Status pill: "Local" for local themes wins over generic Installed/Update,
     // since local themes are always "installed" but the more interesting fact
@@ -157,20 +160,18 @@ export default function MarketplaceCard({ item, onOpen, installed, updateAvailab
         data-marketplace-card-compact="true"
         style={accentColor ? { borderColor: accentColor } : undefined}
       >
-        {/* 52x52 thumbnail. Themes use a tiny preview crop; integrations use
-            their iconUrl; otherwise a first-letter chip on accent. */}
-        <div
-          className="w-[52px] h-[52px] rounded-md shrink-0 overflow-hidden bg-inset flex items-center justify-center text-on-accent text-lg font-semibold"
-          style={!showIcon && !themePreviewUrl ? { background: accentColor || 'var(--accent)' } : undefined}
-        >
-          {showIcon ? (
-            <img src={iconUrl!} alt="" className="w-full h-full object-contain" onError={() => setIconFailed(true)} />
-          ) : themePreviewUrl ? (
-            <img src={themePreviewUrl} alt="" className="w-full h-full object-cover" loading="lazy" />
-          ) : (
-            <span aria-hidden>{fallbackLetter}</span>
-          )}
-        </div>
+        {/* 52x52 thumbnail rendered only when we have a real image source
+            (integration iconUrl or theme preview). Skill plugins without an
+            icon get no thumbnail at all — the title carries the identity. */}
+        {showThumbnail && (
+          <div className="w-[52px] h-[52px] rounded-md shrink-0 overflow-hidden bg-inset flex items-center justify-center">
+            {showIcon ? (
+              <img src={iconUrl!} alt="" className="w-full h-full object-contain" onError={() => setIconFailed(true)} />
+            ) : (
+              <img src={themePreviewUrl!} alt="" className="w-full h-full object-cover" loading="lazy" />
+            )}
+          </div>
+        )}
 
         {/* Center column. min-w-0 is load-bearing — without it the truncate
             below stops working because the flex item can grow past parent. */}

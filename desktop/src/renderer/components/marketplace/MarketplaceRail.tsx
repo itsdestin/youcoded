@@ -40,7 +40,13 @@ export default function MarketplaceRail({ title, description, onSeeAll, children
         <div
           ref={scrollRef}
           role="list"
-          className="flex gap-3 overflow-x-auto scroll-smooth pb-2 snap-x snap-mandatory
+          // Vertical padding (py-3) is load-bearing: when overflow-x is set to
+          // anything other than visible, CSS coerces overflow-y to scroll/auto
+          // too — so card shadows + accent borders get clipped at the rail's
+          // top/bottom edges. The padding gives them room to render before the
+          // scroll-clip line. Also adds px-1 so the leftmost/rightmost cards'
+          // shadows aren't clipped at horizontal edges either.
+          className="flex gap-3 overflow-x-auto scroll-smooth px-1 py-3 snap-x snap-mandatory
                      [&>*]:snap-start [&>*]:shrink-0 [&>*]:w-[min(220px,70vw)] sm:[&>*]:w-[min(280px,85vw)]"
         >
           {children}

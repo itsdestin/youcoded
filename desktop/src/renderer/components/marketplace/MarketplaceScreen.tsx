@@ -420,11 +420,15 @@ export default function MarketplaceScreen({
               );
             })}
 
-            {/* Bottom catalog — denser surface; all skills + themes in default sort. */}
+            {/* Bottom catalog — denser surface; ALL skills in default sort.
+                Previously slice(0, 48) capped this at 48 entries which silently
+                hid most of the marketplace as it grew. No virtualization needed
+                yet (~200-card budget renders fine on phone), but if it grows
+                beyond that consider content-visibility:auto per PITFALLS. */}
             <section className="flex flex-col gap-2 mt-4">
               <h3 className="text-lg font-medium text-fg px-1">Explore everything</h3>
               <MarketplaceGrid dense>
-                {mp.skillEntries.slice(0, 48).map((s) => (
+                {mp.skillEntries.map((s) => (
                   <MarketplaceCard
                     key={s.id}
                     item={{ kind: "skill", entry: s }}
