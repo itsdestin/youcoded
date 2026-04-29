@@ -1,4 +1,4 @@
-import { execFile, execSync, spawn } from 'child_process';
+import { execFile, execSync, spawn, ExecFileOptions } from 'child_process';
 import { promisify } from 'util';
 import os from 'os';
 import path from 'path';
@@ -25,6 +25,38 @@ const execFileAsync = promisify(execFile);
 // Optional — which may not be installed; fall back to bare command name
 let whichSync: ((cmd: string) => string) | null = null;
 try { const w = require('which'); whichSync = w.sync; } catch { /* noop */ }
+
+/**
+ * EINVAL-safe wrapper around execFile.
+ *
+ * Why: Node 18.20.2+ / 20.12.2+ / 21.7.1+ ship the CVE-2024-27980 mitigation,
+ * which makes `child_process.spawn` / `execFile` REFUSE to launch `.cmd`/`.bat`
+ * files on Windows unless `shell: true` is passed — failure surfaces as
+ * `Error: spawn EINVAL`. `npm`, `claude` (when installed via npm), and many
+ * other Node-CLI shims are `.cmd` files on Windows, so we route every
+ * subprocess through this helper to flip `shell: true` automatically when the
+ * resolved path's extension demands it. Real `.exe` paths take the standard
+ * no-shell route so we keep the no-shell-injection guarantee for those.
+ *
+ * Args we pass here are static or already-validated strings (npm package name,
+ * git URL, version flags, base64-ish API key) — none contain `cmd.exe`
+ * metacharacters (& | > < ^ %), so `shell: true`'s relaxed quoting is safe.
+ */
+function runCommand(
+  cmd: string,
+  args: string[] = [],
+  opts: ExecFileOptions = {},
+): Promise<{ stdout: string; stderr: string }> {
+  const needsShell =
+    process.platform === 'win32' && /\.(cmd|bat)$/i.test(cmd);
+  // Cast: we never pass `encoding: 'buffer'`, so stdout/stderr are strings.
+  // The `shell: boolean` field is supported at runtime but the overloads in
+  // @types/node default to the buffer-or-string union, so we narrow it here.
+  return execFileAsync(cmd, args, { ...opts, shell: needsShell }) as Promise<{
+    stdout: string;
+    stderr: string;
+  }>;
+}
 
 // ---------------------------------------------------------------------------
 // Types
@@ -204,7 +236,7 @@ export function downloadFile(url: string, dest: string): Promise<void> {
 export async function detectNode(): Promise<DetectionResult> {
   try {
     const nodePath = resolveCommand('node');
-    const { stdout } = await execFileAsync(nodePath, ['--version']);
+    const { stdout } = await runCommand(nodePath, ['--version']);
     const version = stdout.trim(); // e.g. "v20.19.0"
     const major = parseInt(version.replace(/^v/, ''), 10);
 
@@ -228,7 +260,7 @@ export async function detectNode(): Promise<DetectionResult> {
 export async function detectGit(): Promise<DetectionResult> {
   try {
     const gitPath = resolveCommand('git');
-    const { stdout } = await execFileAsync(gitPath, ['--version']);
+    const { stdout } = await runCommand(gitPath, ['--version']);
     const version = stdout.trim();
     log('INFO', 'prereq', `Git detected: ${version}`);
     return { installed: true, version, path: gitPath };
@@ -241,7 +273,7 @@ export async function detectGit(): Promise<DetectionResult> {
 export async function detectClaude(): Promise<DetectionResult> {
   try {
     const claudePath = resolveCommand('claude');
-    const { stdout } = await execFileAsync(claudePath, ['--version']);
+    const { stdout } = await runCommand(claudePath, ['--version']);
     const version = stdout.trim();
     log('INFO', 'prereq', `Claude Code detected: ${version}`);
     return { installed: true, version, path: claudePath };
@@ -272,7 +304,7 @@ export async function detectToolkit(): Promise<DetectionResult> {
 export async function detectAuth(): Promise<DetectionResult> {
   try {
     const claudePath = resolveCommand('claude');
-    const { stdout } = await execFileAsync(claudePath, ['auth', 'status']);
+    const { stdout } = await runCommand(claudePath, ['auth', 'status']);
     // claude auth status exits 0 even when not logged in — parse the JSON
     const parsed = JSON.parse(stdout.trim());
     if (parsed.loggedIn === true) {
@@ -295,7 +327,7 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
     log('INFO', 'prereq', 'Installing Node.js...');
 
     if (process.platform === 'win32') {
-      await execFileAsync(
+      await runCommand(
         'winget',
         [
           'install',
@@ -322,7 +354,7 @@ export async function installNode(): Promise<{ success: boolean; error?: string 
       fs.mkdirSync(installDir, { recursive: true });
       // --strip-components=1 peels the top-level `node-vX.Y.Z-darwin-<arch>/`
       // directory so bin/ lib/ include/ share/ land directly under installDir.
-      await execFileAsync('tar', [
+      await runCommand('tar', [
         '-xzf', tmpTar,
         '-C', installDir,
         '--strip-components=1',
@@ -357,7 +389,7 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
     log('INFO', 'prereq', 'Installing Git...');
 
     if (process.platform === 'win32') {
-      await execFileAsync(
+      await runCommand(
         'winget',
         [
           'install',
@@ -375,7 +407,7 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
       // still missing after the call returns, surface an actionable message
       // so the user knows to accept the dialog and click Try Again.
       try {
-        await execFileAsync('xcode-select', ['--install']);
+        await runCommand('xcode-select', ['--install']);
       } catch {
         log('INFO', 'prereq', 'xcode-select --install triggered dialog (or CLT already present)');
       }
@@ -410,22 +442,72 @@ export async function installGit(): Promise<{ success: boolean; error?: string }
   }
 }
 
-/** Install Claude Code CLI globally via npm. */
+/**
+ * Install Claude Code via Anthropic's native installer.
+ *
+ * Why not `npm install -g @anthropic-ai/claude-code` (the prior approach):
+ * `npm` on Windows is `npm.cmd`, and Node's CVE-2024-27980 mitigation
+ * (18.20.2+ / 20.12.2+ / 21.7.1+) refuses to spawn `.cmd` files via
+ * `child_process.spawn` / `execFile` without `shell: true` — failure surfaces
+ * as `Error: spawn EINVAL`. Even with the `runCommand` shell-true workaround
+ * applied here, a real-world friend's first-run install hit it and we had to
+ * triage by hand. The native installer drops a real `claude.exe` (and
+ * `claude` on POSIX) onto PATH, so the whole `.cmd` shim chain — `npm.cmd`
+ * during install, `claude.cmd` during every subsequent `claude --version` /
+ * `claude auth status` / `claude auth set-key` call — disappears.
+ *
+ * Bootstrap shape (verified 2026-04-28):
+ * - https://claude.ai/install.ps1 → bootstrap.ps1 → downloads claude-<v>-<plat>.exe
+ *   from downloads.claude.ai → runs `claude install` to wire up PATH (HKCU).
+ * - https://claude.ai/install.sh → bootstrap.sh → same shape for POSIX.
+ * Both bootstraps are non-interactive, require no admin/sudo, and exit 0 on
+ * success / 1 on failure with a descriptive message on stderr.
+ */
 export async function installClaude(): Promise<{ success: boolean; error?: string }> {
   try {
-    log('INFO', 'prereq', 'Installing Claude Code CLI...');
+    log('INFO', 'prereq', 'Installing Claude Code via native installer...');
 
-    const npmPath = resolveCommand('npm');
-    await execFileAsync(
-      npmPath,
-      ['install', '-g', '@anthropic-ai/claude-code'],
-      { timeout: 300000 },
-    );
+    if (process.platform === 'win32') {
+      // -NoProfile: skip user PowerShell profile (faster, no side effects).
+      // -ExecutionPolicy Bypass: works around per-user "Restricted" policies
+      //   that would otherwise block `iex`. Process-scoped only — does not
+      //   alter the user's persistent ExecutionPolicy.
+      await runCommand(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-ExecutionPolicy', 'Bypass',
+          '-Command',
+          'irm https://claude.ai/install.ps1 | iex',
+        ],
+        { timeout: 300000 },
+      );
+    } else if (process.platform === 'darwin' || process.platform === 'linux') {
+      // bash is guaranteed present on macOS and on every supported Linux distro.
+      // The installer itself uses `set -e`, so any failure inside `curl | bash`
+      // propagates as a non-zero exit.
+      await runCommand(
+        'bash',
+        ['-c', 'curl -fsSL https://claude.ai/install.sh | bash'],
+        { timeout: 300000 },
+      );
+    } else {
+      return { success: false, error: `Unsupported platform: ${process.platform}` };
+    }
 
     refreshPath();
     const check = await detectClaude();
     if (!check.installed) {
-      return { success: false, error: check.error ?? 'Claude Code not found after install' };
+      // Most likely cause: the installer wrote PATH to HKCU, but the parent
+      // Electron process snapshotted PATH at launch and our refreshPath() only
+      // re-reads the registry on Windows. On macOS/Linux, the installer
+      // updates ~/.zshrc / ~/.bashrc, which a still-running app can't see.
+      // Either way, a restart fixes it deterministically.
+      return {
+        success: false,
+        error:
+          'Claude Code installed but is not on this app\'s PATH yet. Quit and reopen YouCoded — the new PATH entry will be picked up on next launch.',
+      };
     }
 
     log('INFO', 'prereq', `Claude Code installed: ${check.version}`);
@@ -462,7 +544,7 @@ export async function cloneToolkit(): Promise<{ success: boolean; error?: string
     });
 
     const gitPath = resolveCommand('git');
-    await execFileAsync(gitPath, [
+    await runCommand(gitPath, [
       'clone',
       'https://github.com/itsdestin/youcoded-core.git',
       targetDir,
@@ -597,7 +679,7 @@ export async function pollAuthStatus(timeoutMs = 120000, intervalMs = 2000): Pro
 export async function submitApiKey(key: string): Promise<{ success: boolean; error?: string }> {
   try {
     const claudePath = resolveCommand('claude');
-    await execFileAsync(claudePath, ['auth', 'set-key', key]);
+    await runCommand(claudePath, ['auth', 'set-key', key]);
 
     const check = await detectAuth();
     if (!check.installed) {
@@ -663,7 +745,7 @@ export async function enableWindowsDevMode(): Promise<{ success: boolean; error?
   try {
     log('INFO', 'prereq', 'Attempting to enable Windows Developer Mode...');
 
-    await execFileAsync('powershell', [
+    await runCommand('powershell', [
       '-Command',
       'Start-Process reg -ArgumentList "add","HKLM\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\AppModelUnlock","/v","AllowDevelopmentWithoutDevLicense","/t","REG_DWORD","/d","1","/f" -Verb RunAs -Wait',
     ]);
