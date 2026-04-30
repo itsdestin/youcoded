@@ -130,10 +130,9 @@ val bundleWebUi = tasks.register<Exec>("bundleWebUi") {
 
     if (OperatingSystem.current().isWindows) {
         // Windows: bash isn't on the system PATH unless invoked from Git Bash
-        // or WSL. Try PATH first (covers Destin's `./gradlew` from Git Bash and
-        // most CI runners), then fall back to the standard Git for Windows
-        // install location. PITFALLS.md "MCP Plugin Authoring" entry documents
-        // the same lookup pattern.
+        // or WSL. Try PATH first (covers Git Bash sessions and most CI runners),
+        // then fall back to the standard Git for Windows install location.
+        // PITFALLS.md "MCP Plugin Authoring" entry documents the same lookup pattern.
         val pathBash = (System.getenv("PATH") ?: "")
             .split(File.pathSeparator)
             .asSequence()

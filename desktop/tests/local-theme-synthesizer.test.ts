@@ -10,7 +10,7 @@ const marketplaceEntry: ThemeRegistryEntryWithStatus = {
 };
 
 const localManifest = {
-  slug: 'after-the-show', name: 'After the Show', author: 'destin', dark: true,
+  slug: 'after-the-show', name: 'After the Show', author: 'test-user', dark: true,
   description: 'Cozy mint glow under fairy lights',
   tokens: { canvas: '#231731', panel: '#2d1f3f', accent: '#6ad1b9', 'on-accent': '#000', fg: '#faedd5', 'fg-muted': '#a08fb0', edge: '#3a2a4f' },
   background: { type: 'image', value: 'assets/wallpaper.jpg', 'panels-blur': 12 },

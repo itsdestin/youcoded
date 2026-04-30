@@ -185,9 +185,10 @@ export default function MarketplaceScreen({
     return m;
   }, [mp.themeEntries]);
 
-  // Set of slugs that count as "Destin's picks" — prefer the rail explicitly
-  // titled "Destin's picks" for tight scoping; fall back to the union of all
-  // rails so the chip still does something if the rail gets renamed.
+  // Set of slugs that count as "Featured picks" — prefer the rail explicitly
+  // titled "Destin's picks" in the registry for tight scoping; fall back to
+  // the union of all rails so the chip still does something if the rail gets
+  // renamed in the marketplace registry.
   const pickSlugs = useMemo(() => {
     const rails = mp.featured.rails || [];
     const named = rails.find((r) => r.title.toLowerCase() === "destin's picks");
@@ -203,7 +204,7 @@ export default function MarketplaceScreen({
 
     const skillPass = (s: SkillEntry): boolean => {
       if (filter.type !== null && filter.type !== "skill") return false;
-      // "Destin's picks" chip: hard filter against the curated slug set so the
+      // "Featured picks" chip: hard filter against the curated slug set so the
       // chip actually narrows results instead of just reordering them.
       if (picksOnly && !pickSlugs.has(s.id)) return false;
       if (filter.vibes.size > 0) {
@@ -339,10 +340,10 @@ export default function MarketplaceScreen({
         {mode === "discovery" ? (
           <>
             {/* Integrations rail — purpose-built cards only. Never mixed with
-                skill/theme cards. Rendered above Destin's picks so users see
-                OAuth-based connections (Gmail, Drive, etc.) before curated
-                plugin rails — these are the highest-value setup step. Hidden
-                when the catalog hasn't loaded. */}
+                skill/theme cards. Rendered above the curated picks rail so
+                users see OAuth-based connections (Gmail, Drive, etc.) before
+                curated plugin rails — these are the highest-value setup step.
+                Hidden when the catalog hasn't loaded. */}
             {integrations.length > 0 && (
               <MarketplaceRail title="Connect your stuff" description="Bring your data in.">
                 {integrations.map((item) => {

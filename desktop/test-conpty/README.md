@@ -57,7 +57,7 @@ function resolveClaudeCommand() {
 
 Pre-mark the cwd as trusted in `~/.claude.json` so spawning CC doesn't show the workspace-trust prompt. The trust prompt is the dominant source of test flakiness — it intercepts your test input and varies in timing across runs. **Do not skip this.**
 
-The trust state is stored at `cfg.projects[<forward-slash-path>].hasTrustDialogAccepted = true`. Note the path is stored with **forward slashes regardless of OS** — `C:\Users\desti\foo` is stored as `C:/Users/desti/foo`.
+The trust state is stored at `cfg.projects[<forward-slash-path>].hasTrustDialogAccepted = true`. Note the path is stored with **forward slashes regardless of OS** — `C:\Users\<username>\foo` is stored as `C:/Users/<username>/foo`.
 
 ```js
 function pretrustCwd(cwd) {
@@ -86,7 +86,7 @@ function stripAnsi(s) {
 
 ### Project-slug calculation
 
-CC writes transcript JSONL files to `~/.claude/projects/<slug>/<session-id>.jsonl`. The slug is derived from the cwd by replacing `\`, `/`, and `:` with `-`. Verified against observed dirs (`C:\Users\desti` → `C--Users-desti`):
+CC writes transcript JSONL files to `~/.claude/projects/<slug>/<session-id>.jsonl`. The slug is derived from the cwd by replacing `\`, `/`, and `:` with `-`. Verified against observed dirs (`C:\Users\<username>` → `C--Users-<username>`):
 
 ```js
 function projectSlug(cwd) {

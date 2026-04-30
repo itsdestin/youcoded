@@ -47,7 +47,7 @@ function resolveClaudeCommand() {
 }
 
 function projectSlug(cwd) {
-  // Verified against ~/.claude/projects/: `C:\Users\desti` → `C--Users-desti`.
+  // Verified against ~/.claude/projects/: `C:\Users\<username>` → `C--Users-<username>`.
   return cwd.replace(/[\\/:]/g, '-');
 }
 

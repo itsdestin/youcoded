@@ -4,7 +4,7 @@ import type { ThemeRegistryEntryWithStatus } from '../src/shared/theme-marketpla
 describe('ThemeRegistryEntryWithStatus', () => {
   it('accepts isLocal as an optional boolean', () => {
     const entry: ThemeRegistryEntryWithStatus = {
-      slug: 'foo', name: 'Foo', author: 'destin', dark: true,
+      slug: 'foo', name: 'Foo', author: 'test-user', dark: true,
       source: 'community', features: [], manifestUrl: 'https://example/manifest.json',
       installed: true, isLocal: true,
     };
@@ -13,7 +13,7 @@ describe('ThemeRegistryEntryWithStatus', () => {
 
   it('isLocal is optional — omitting it is valid', () => {
     const entry: ThemeRegistryEntryWithStatus = {
-      slug: 'foo', name: 'Foo', author: 'destin', dark: true,
+      slug: 'foo', name: 'Foo', author: 'test-user', dark: true,
       source: 'community', features: [], manifestUrl: 'https://example/manifest.json',
       installed: true,
     };

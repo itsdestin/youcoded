@@ -45,7 +45,7 @@ describe('ThemeMarketplaceProvider', () => {
 
   describe('filter logic', () => {
     const THEMES = [
-      { slug: 'dark', name: 'Dark', author: 'destin', dark: true, source: 'youcoded-core' as const, features: [], manifestUrl: '', created: '2026-01-01' },
+      { slug: 'dark', name: 'Dark', author: 'test-user', dark: true, source: 'youcoded-core' as const, features: [], manifestUrl: '', created: '2026-01-01' },
       { slug: 'neon-tokyo', name: 'Neon Tokyo', author: 'alice', dark: true, source: 'community' as const, features: ['particles', 'wallpaper'], manifestUrl: '', created: '2026-04-01' },
       { slug: 'pastel-dream', name: 'Pastel Dream', author: 'bob', dark: false, source: 'community' as const, features: ['custom-font'], manifestUrl: '', created: '2026-03-15' },
     ];

@@ -133,7 +133,7 @@ export default function MarketplaceFilterBar({ value, onChange }: Props) {
       <ChipGroup label="Meta">
         <Chip active={value.meta.has("new")} onClick={() => toggleMulti("meta", "new")}>New</Chip>
         <Chip active={value.meta.has("popular")} onClick={() => toggleMulti("meta", "popular")}>Popular</Chip>
-        <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Destin's picks</Chip>
+        <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Featured picks</Chip>
       </ChipGroup>
       <div className="w-full sm:w-auto sm:ml-auto">
         <input
@@ -207,7 +207,7 @@ function FilterSheet({
           <SheetGroup label="Meta">
             <Chip active={value.meta.has("new")} onClick={() => toggleMulti("meta", "new")}>New</Chip>
             <Chip active={value.meta.has("popular")} onClick={() => toggleMulti("meta", "popular")}>Popular</Chip>
-            <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Destin's picks</Chip>
+            <Chip active={value.meta.has("picks")} onClick={() => toggleMulti("meta", "picks")}>Featured picks</Chip>
           </SheetGroup>
         </div>
         <footer className="sticky bottom-0 z-10 px-4 py-3 border-t border-edge-dim bg-panel">
