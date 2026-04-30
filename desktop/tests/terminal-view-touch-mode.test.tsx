@@ -20,6 +20,9 @@ vi.mock('@xterm/xterm', () => {
       this.unicode = { activeVersion: '11' };
       this.attachCustomKeyEventHandler = vi.fn();
       this.onData = onDataSpy;
+      // onScroll added by the overlay-scrollbar feature (commit bf8ca6c7);
+      // TerminalView subscribes to drive the synthetic scrollbar position.
+      this.onScroll = vi.fn().mockReturnValue({ dispose: vi.fn() });
       this.write = vi.fn();
       this.refresh = vi.fn();
       this.focus = vi.fn();
@@ -30,6 +33,10 @@ vi.mock('@xterm/xterm', () => {
       this.paste = vi.fn();
       this.options = {};
       this.rows = 24;
+      // Scrollback API for the overlay-scrollbar — tests don't exercise it
+      // but mount-time may read it.
+      this.buffer = { active: { length: 24, viewportY: 0, ydisp: 0 } };
+      this.scrollLines = vi.fn();
     }),
   };
 });

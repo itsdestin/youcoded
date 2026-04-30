@@ -10,6 +10,7 @@ import { render, cleanup, act } from '@testing-library/react';
 import MarketplaceCard from '../src/renderer/components/marketplace/MarketplaceCard';
 import { MarketplaceProvider } from '../src/renderer/state/marketplace-context';
 import { MarketplaceStatsProvider } from '../src/renderer/state/marketplace-stats-context';
+import { SkillProvider } from '../src/renderer/state/skill-context';
 import type { SkillEntry } from '../src/shared/types';
 
 // Minimal window.claude stub — MarketplaceProvider calls these on mount, but the
@@ -27,6 +28,11 @@ function setupWindowClaude() {
       setFavorite: vi.fn().mockResolvedValue(undefined),
       update: vi.fn().mockResolvedValue({}),
       publish: vi.fn().mockResolvedValue({ prUrl: '' }),
+      // SkillProvider boot path — needs these even when the test doesn't exercise them.
+      getChips: vi.fn().mockResolvedValue([]),
+      setChips: vi.fn().mockResolvedValue(undefined),
+      setOverride: vi.fn().mockResolvedValue(undefined),
+      getCuratedDefaults: vi.fn().mockResolvedValue([]),
     },
     marketplace: {
       getPackages: vi.fn().mockResolvedValue({}),
@@ -72,11 +78,16 @@ async function renderWithProviders(ui: React.ReactElement) {
   let result: ReturnType<typeof render> | undefined;
   await act(async () => {
     result = render(
-      <MarketplaceProvider>
-        <MarketplaceStatsProvider>
-          {ui}
-        </MarketplaceStatsProvider>
-      </MarketplaceProvider>
+      // SkillProvider is required because MarketplaceProvider calls
+      // useSkills() to refresh the drawer-installed list after install/update
+      // (added by f600625a). Without it, useSkills throws on mount.
+      <SkillProvider>
+        <MarketplaceProvider>
+          <MarketplaceStatsProvider>
+            {ui}
+          </MarketplaceStatsProvider>
+        </MarketplaceProvider>
+      </SkillProvider>
     );
   });
   return result!;
