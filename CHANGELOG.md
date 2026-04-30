@@ -2,6 +2,66 @@
 
 All notable changes to YouCoded are documented in this file.
 
+## [1.2.2] — 2026-04-29
+
+**Claude Code CLI baseline:** v2.1.123
+
+Wide-scope release. Tier 2 Android terminal rewrite (xterm in WebView replaces
+native Termux TerminalView), opt-out anonymous telemetry, native Claude Code
+installer, new productivity surfaces (Open Tasks, Context popup, Performance
+Settings, Resume Browser filters, AUTO permission mode), mobile marketplace
+polish, hardware back-button navigation on Android, echo-driven PTY submit,
+vendored terminal-emulator at v0.118.1, plus ~50 fixes across desktop and Android.
+
+### Added
+- **Open Tasks tracker** — Status-bar chip + centered popup that surfaces every active TaskCreate/TaskList tool result across the active session. Toggleable, mark-inactive flow, grouped by status. Auto-deduplicates against per-session task IDs.
+- **Context popup** — Status-bar context chip is now a button that opens a popup with `/compact` (split-button main click + chevron-driven focused-compact editor), `/clear` start-over, and an `(i)` explainer of what context window means. ESC / scrim / X all close cleanly.
+- **Performance Settings** — New Performance section in SettingsPanel with discrete-GPU preference toggle, persisted to disk, applied to Chromium at startup; `usePerformanceConfig` renderer hook + `(i)` info explainer. Full `performance:*` IPC parity (desktop + Android stub) plus a new `app:restart` channel for re-applying GPU pref.
+- **Resume Browser filters** — Project, Tag, and Sort pills above the conversation list. Filters persist across sessions.
+- **AUTO permission mode** — New cycle position in the permission-mode toggle for CC v2.1.83+ classifier-backed auto-mode. Opus 4.7 1M only (gated by Anthropic plan/model).
+- **Hardware back button (Android)** — `system:back` IPC + dismiss-stack listeners pop overlays in LIFO order before the activity quits.
+- **Mobile-responsive marketplace** — Drawer keyboard handling, wallpaper backdrop, glass-on-close-X, swipe-to-cycle hero featured slots, rail clip + uncapped explore, real shadow room, no horizontal wiggle, glass toggles.
+- **Local themes in Library** — User-built themes (e.g., from `/theme-builder`) now appear in the Library tab with a "Local" badge. Marketplace entries always win on slug collision. Synthesizer is pure (unit-testable). Android parity tracked separately.
+- **Anonymous opt-out telemetry** — Install + DAU/MAU pings via the marketplace Cloudflare Worker. Random install ID, app version, platform/OS, country (server-side from CF-IPCountry — never sent from client). Opt-out toggle in About popup. Privacy-by-construction: `install_id` never logged outside `count(DISTINCT)` in the six admin SQL queries.
+- **Native Claude Code installer** — `installClaude` now uses Anthropic's `claude.ai/install.{ps1,sh}` bootstrap script instead of `npm i -g`. Eliminates the `.cmd` shim chain entirely on Windows (sidesteps Node CVE-2024-27980 EINVAL on `.cmd`/`.bat` spawn). Android still uses npm — paths intentionally diverge.
+- **Echo-driven PTY submit (desktop)** — `pty-worker.js` no longer relies on a 600ms enter-split for long messages on Windows ConPTY. New 3-path logic: passthrough for non-CR writes, atomic for `body + \r ≤ 56b`, echo-driven (chunk body in 56b pieces, wait for CC's stdout echo, then write a bare `\r`) for longer text. Empirically anchored to a CC-version-pinned snapshot; `cc-snapshot.mjs` baseline preserved in `desktop/test-conpty/snapshots/`.
+- **Tier 2 Android terminal rewrite** — Native Termux `TerminalView` Compose block removed from `ChatScreen.kt`. xterm.js in the WebView is now the sole Android terminal renderer. Vendored `terminal-emulator-vendored/` (Termux v0.118.1, Apache 2.0) owns the PTY + emulator and exposes raw bytes via `pty:raw-bytes` (base64-encoded WebSocket push). xterm is display-only on touch (typing flows through React `InputBar`); custom touch-scroll handler routes to `terminal.scrollLines()`. Single-finger touch-scroll replaces native mouse drag.
+- **In-app issue submission (Settings → Development)** — Tail logs, summarize via `claude -p`, file GitHub issue from inside the app. Six new IPC channels in cross-platform parity. Issue body assembled in main process so version + OS + platform info are correct. Workspace install can be re-run idempotently from the same surface.
+- **Restore UX on Android** — Recent-50 conversations + status chip; Restore Wizard surfaces.
+- **Statusbar widget config popup** — Per-widget reorder/hide controls.
+- **Tool-card dev sandbox** — Standalone Vite mode (`?mode=tool-sandbox`) that renders every `.jsonl` fixture as a real `<ToolCard>`. HMR-driven iteration on `ToolBody.tsx` view designs without a live PTY session.
+- **Worker test harness** — `desktop/test-conpty/test-worker-submit.mjs` runs the actual `pty-worker.js` (forked exactly as production) against real `claude` to verify all three submit paths.
+
+### Changed
+- **AttentionState union narrowed** to `'ok' | 'stuck' | 'session-died'`. The unused `'awaiting-input' | 'shell-idle' | 'error'` branches were removed in the 2026-04-26 audit because nothing dispatched them. `BufferClass` (internal to the classifier) is now distinct from the public `AttentionState`.
+- **Spinner classifier rewritten** for CC v2.1.119+ — drops the obsolete `(Ns · esc to interrupt)` suffix requirement, adds glyph-rotation detection for active-vs-stalled (same glyph for ≥30s = stalled). Anchored to live `cc-snapshot.mjs` capture against CC v2.1.119; verified through v2.1.123. Probes at `desktop/test-conpty/test-spinner-fullcapture.mjs` + `test-attention-states.mjs`.
+- **xterm overlay scrollbar** — Scrollbar now overlays the gutter rather than eating the rightmost terminal column. Per-platform CSS-only.
+- **Project slug encoding** — All four caller sites (desktop transcript-watcher, desktop sync-service, Android TranscriptWatcher, Android SyncService) now encode space → dash, fixing chat view + sync for users with spaces in cwd.
+- **Marketplace rail polish** — Card shadows, gutter alignment, side-edge scroll-out, tighter taglines, scoped shadow override via plain CSS (Tailwind arbitrary-shadow fights specificity in production builds). "Featured picks" filter chip (was "Destin's picks").
+- **Subagent end_turn no longer pollutes parent model pill** — Per-turn `model` reconciliation skips subagent transcript lines.
+- **GPU recovery on xterm WebGL context loss** — Renderer falls back gracefully instead of going blank.
+- **Native installer is the desktop default** — Old npm path removed; Android still uses npm.
+
+### Fixed
+- **Self-heal installed-plugins list on Android** — Drift between `installed_plugins.json` and on-disk plugin dirs is reconciled at startup.
+- **`system:back` dispatch on remote-shim** — Hardware back now reaches all overlay listeners.
+- **Marketplace reviews button label** — "Install to review" when gated.
+- **xterm.js mobile IME conflicts** — Resolved by `disableStdin: true` on touch + dedicated `InputBar` text path.
+- **Personal-sync remote name self-heal** — Recovers from misnamed git remotes on the personal-backup repo.
+- **Subagent end_turn pollution of parent model pill** (PR #83).
+- **Android plugin discovery** (PR #82) — Self-heals from disk after install/uninstall.
+- **Android Tier-A parity** — Status data, exec-resolve, menu navigation.
+
+### Removed
+- **Native Termux `TerminalView`** from `ChatScreen.kt` — superseded by xterm.js in WebView (Tier 2).
+- **600ms enter-split** from desktop `pty-worker.js` — superseded by echo-driven submit. Android still uses 600ms gap.
+- **`terminal-view` Maven dependency** (`com.github.termux.termux-app:terminal-view:v0.118.1`) — no longer needed after Tier 2.
+- **Three legacy AttentionState branches** (`awaiting-input | shell-idle | error`) — never dispatched, removed in audit.
+
+### Internal
+- Vendored Termux `terminal-emulator` at v0.118.1 with a single documented `RawByteListener` patch. Apache 2.0 LICENSE + NOTICE co-located. See `terminal-emulator-vendored/VENDORED.md`.
+- Project bumps `versionCode` 17 → 18.
+
 ## [1.2.1] — 2026-04-23
 
 **Claude Code CLI baseline:** v2.1.119
