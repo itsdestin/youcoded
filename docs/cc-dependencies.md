@@ -38,7 +38,7 @@ The most rigorous CC-version drift catch is: re-run `cc-snapshot.mjs` against th
 
 | Field | Value |
 |-------|-------|
-| Claude Code CLI version | **2.1.119** (April 2026) |
+| Claude Code CLI version | **2.1.123** (April 2026) |
 | Paste-classification length threshold | **64 bytes** — atomic write ≥64 bytes ending in `\r` is paste-classified, `\r` becomes literal newline |
 | Spinner glyph set | `✻ ✽ ✢ ✳ ✶ * ⏺ ◉ ·` (empirical; not from a documented contract) |
 | Input-bar echo delay | ~6.75 s on cold start (Ink batches renders; warm session is faster) |
