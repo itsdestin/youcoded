@@ -9,6 +9,10 @@ This module is a vendored copy of Termux's `terminal-emulator` Android library, 
 - Path: `terminal-emulator/`
 - Vendored on: 2026-04-24
 
+## License
+
+Apache License 2.0. See `LICENSE` and `NOTICE` in this directory for the full text and copyright notices. Termux's `LICENSE.md` at the repo root explicitly carves out the `terminal-emulator/` subdirectory as Apache 2.0 (separate from the GPLv3 used by the rest of Termux). The upstream chain is jackpal/Android-Terminal-Emulator (Apache 2.0) → Termux modifications (Apache 2.0) → YouCoded `RawByteListener` patch (this module). Preserve `LICENSE`, `NOTICE`, and `// YOUCODED PATCH` markers when re-vendoring.
+
 ## Why vendored
 
 Termux's `TerminalEmulator` owns the ANSI parse loop but exposes no pre-parse byte listener. We need raw bytes to flow to a secondary consumer (a future xterm.js renderer over WebSocket) in parallel with the existing native `TerminalView` display.

@@ -1,0 +1,26 @@
+terminal-emulator (vendored)
+============================
+
+This module contains source code from the Termux project's terminal-emulator
+library (https://github.com/termux/termux-app, tag v0.118.1, path
+terminal-emulator/), which itself derives from jackpal/Android-Terminal-Emulator
+(https://github.com/jackpal/Android-Terminal-Emulator).
+
+Both upstream sources are licensed under the Apache License, Version 2.0.
+See LICENSE in this directory for the full text. The Termux LICENSE.md at the
+repo root explicitly carves out the terminal-emulator subdirectory as Apache
+2.0, separate from the GPLv3 used by the rest of the Termux app.
+
+YouCoded modifications to this module are limited to a single documented patch
+(adding a `RawByteListener` interface to `TerminalEmulator.append`). All edits
+are marked with `// YOUCODED PATCH` comments. See VENDORED.md for the patch
+details, the vendoring procedure, and the re-vendor steps for future Termux
+version bumps.
+
+Copyright notices preserved:
+  - Copyright (C) 2002-2004,2007 Sun Microsystems, Inc. (terminal parser tables)
+  - Copyright (C) 2007-2008 The Android Open Source Project (Android-Terminal-Emulator base)
+  - Copyright (C) Termux contributors (https://github.com/termux/termux-app)
+
+This NOTICE is provided in addition to LICENSE per the conveyance practice
+encouraged by the Apache License.
