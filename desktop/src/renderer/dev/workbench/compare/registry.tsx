@@ -23,6 +23,7 @@
 import React from 'react';
 import {
   Button,
+  Callout,
   Radio,
   RadioGroup,
   SegmentedTabs,
@@ -44,6 +45,8 @@ import { PRIORITY_TAG, PRIORITY_HINT } from '../../../components/tags/built-in-t
 // Shared with the shipping surfaces — a candidate must draw the SAME mark the
 // app does, or the comparison is against something that doesn't exist.
 import { TagGlyph, NotePageGlyph, PencilGlyph } from '../../../components/tags/glyphs';
+import { FilepathToken } from '../../../components/FilepathToken';
+import { UnifiedDiff } from '../../../components/diff/UnifiedDiff';
 import type { TagRecord } from '../../../../shared/tags';
 // voice-mic: the REAL composer against a per-pane fake of window.claude.voice.
 import InputBar from '../../../components/InputBar';
@@ -122,6 +125,192 @@ import {
   CS_TOMBSTONE,
   CS_NATIVE,
 } from '../fixtures/chatsearch';
+
+// ── SFX — Session context panel ──────────────────────────────────────────────
+// Step 3 (2026-08-17, broadened): the session-start "what did the assistant
+// begin with" panel. Round 1 compares the two restyling directions Destin asked
+// for — a card-led layout (A) vs a tabbed layout (B) — against the current
+// shipped panel as basis. Both are built from the REAL primitives: cards, chips,
+// SettingRow, FilepathToken outlinks, the SegmentedTabs control.
+
+/** A complete context record — all surfaces present. The compare fixtures are
+ *  complete by construction; the real panel guards absent sections. This is the
+ *  widest shape the candidates render; structurally assignable to SessionContext. */
+interface CompleteSessionContext {
+  modelLabel: string;
+  contextWindowTokens: number;
+  summary: string;
+  systemPrompt: string;
+  projectInstructions: { path: string; text: string; fullText?: string | null; truncated: boolean; note?: string | null };
+  skills: Array<{ id: string; label: string; path?: string | null; truncated?: boolean; fullText?: string | null; note?: string | null }>;
+  tools: string[];
+  droppedMcpServers: string[];
+}
+
+/** The trimmed native-session fixture, verbatim from the workbench native.jsonl. */
+const SFX_CTX: CompleteSessionContext = {
+  modelLabel: 'qwen2.5-coder:14b',
+  contextWindowTokens: 16384,
+  summary: 'Context was trimmed to fit qwen2.5-coder:14b’s window.',
+  systemPrompt: 'You are YouCoded, a hyper-personalized AI assistant. You help the user build software, research, and manage life-admin tasks. Follow the project’s instructions and use the available tools when they help.',
+  projectInstructions: {
+    path: '/home/destin/youcoded-dev/wecoded-themes/CLAUDE.md',
+    // What the model received — the outline. Headings kept, bodies cut.
+    text: '# CLAUDE.md\n\n## Theme authoring\n- Tokens are named --bg-*, --fg-*, --border-*\n- Every theme ships a dark variant\n\n## Marketplace\n- Publish via /theme-builder\n\n## Building\n- npm run build\n\n…',
+    // The full file on disk — the diff compares this to `text`.
+    fullText: '# CLAUDE.md\n\n# Theme authoring\n\nWeCoded themes are defined by a semantic token system. Every color the\ninterface uses is a CSS custom property, not a raw hex value, so a theme\npack can restyle the whole app without touching a component.\n\nTokens are named --bg-*, --fg-*, --border-*. All --bg-* and --fg-* tokens\nmust form an accessible pair: contrast ratio 4.5:1 at normal text size,\n3:1 at large. Every theme ships a dark variant that re-derives the same\nset from a darker base.\n\nCustom CSS is supported but must never re-define a token — it layers\nON TOP of the semantic system, and only after the tokens have applied.\n\n# Marketplace\n\nPublish a theme via the /theme-builder skill. The registry validates the\nmanifest, checks token coverage, and renders the preview image.\n\n# Building\n\nThemes are plain CSS. Run `npm run build` to emit the distributable\npack and validate the manifest against the registry schema.\n\n# Testing\n\nEvery token must be present in at least one state of the app. The\ncontrast audit script in scripts/audit-theme-contrast.mjs walks every\nsurface and fails on a token pair below 3:1.\n\n# Releases\n\nVersion bumps happen through the marketplace-publisher skill. A release\nrequires a clean audit, a changelog entry, and a tagged commit.\n',
+    truncated: true,
+    note: '3 of 12 sections kept (headings only)',
+  },
+  skills: [
+    {
+      id: 'theme-builder',
+      label: 'theme-builder',
+      path: '/home/destin/youcoded-dev/wecoded-themes/skills/theme-builder/SKILL.md',
+      truncated: true,
+      note: 'body cut to fit the window',
+      fullText: '# Theme Builder\n\nUse this skill to build, preview, and publish a WeCoded theme.\n\n## When to use it\n- The user wants a new theme or to restyle an existing one\n- The user asks to publish or update a theme on the registry\n\n## Steps\n1. Load the current token set from the active theme.\n2. Present the color palette as a before/after preview.\n3. On approval, write the theme pack and run the audit.\n4. Publish via /marketplace-publisher.\n\n## Rules\n- Never hand-write a hex value; always derive from a token.\n- Keep the dark variant in lockstep with the light one.\n',
+    },
+    { id: 'marketplace-publisher', label: 'marketplace-publisher', path: '/home/destin/youcoded-dev/wecoded-marketplace/skills/marketplace-publisher/SKILL.md' },
+    { id: 'chatsearch', label: 'chatsearch', path: '/home/destin/youcoded-dev/youcoded/desktop/skills/chatsearch/SKILL.md' },
+  ],
+  tools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TodoWrite'],
+  droppedMcpServers: ['docs-index'],
+};
+
+/** The cloud (untrimmed) fixture — the "everything loaded" state. */
+const SFX_CTX_FULL: CompleteSessionContext = {
+  modelLabel: 'claude-sonnet-4-6',
+  contextWindowTokens: 200000,
+  summary: 'Started with the full project context.',
+  systemPrompt: 'You are YouCoded, a hyper-personalized AI assistant.',
+  projectInstructions: {
+    path: '/home/destin/youcoded-dev/youcoded/CLAUDE.md',
+    text: '# CLAUDE.md\n\n## About This Project\nYouCoded is an open-source cross-platform AI assistant app.',
+    truncated: false,
+  },
+  skills: [
+    { id: 'theme-builder', label: 'theme-builder', path: '/x/SKILL.md' },
+    { id: 'chatsearch', label: 'chatsearch', path: '/x/SKILL.md' },
+  ],
+  tools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep', 'TodoWrite', 'Task', 'WebFetch'],
+  droppedMcpServers: [],
+};
+
+/** A "loaded" pill — the green-full state, matching StatusBar's live color. */
+function StatusPill({ tone, children }: { tone: 'ok' | 'warn'; children: React.ReactNode }) {
+  const c = tone === 'ok' ? '#4CAF50' : '#FF9800';
+  return (
+    <span
+      className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-3xs font-medium border"
+      style={{ color: c, backgroundColor: `color-mix(in srgb, ${c} 12%, transparent)`, borderColor: `color-mix(in srgb, ${c} 30%, transparent)` }}
+    >
+      {children}
+    </span>
+  );
+}
+
+/** A tool chip — the same recipe as TagChip but neutral (tools aren't tags). */
+function ToolChip({ label }: { label: string }) {
+  return (
+    <span className="inline-flex items-center px-1.5 py-[1px] rounded-sm text-3xs leading-none bg-inset/60 border border-edge-dim text-fg-2">
+      {label}
+    </span>
+  );
+}
+
+/** The truncation diff toggle. When a surface was trimmed and the host carries
+ *  the full original text, this renders a small segmented pair — "Supplied" /
+ *  "Full vs supplied" — so the user can flip between the truncated copy the
+ *  model actually received and the UnifiedDiff showing exactly what it missed
+ *  (deleted rows = removed content). Falls back to the supplied text alone when
+ *  no full text exists (the host could not provide it; the outlink remains).
+ */
+function TruncationDiff({ fullText, supplied, label }: {
+  fullText?: string | null;
+  supplied: string;
+  label: string;
+}) {
+  const [showDiff, setShowDiff] = React.useState(false);
+  const diffable = !!fullText && fullText !== supplied;
+
+  if (!diffable) {
+    return (
+      <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+        {supplied}
+      </pre>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {/* The toggle itself — the app's segmented pair recipe, mini. */}
+      <div className="flex items-center gap-1 self-start bg-inset/50 rounded-lg p-0.5">
+        {(['supplied', 'diff'] as const).map((mode) => {
+          const active = (mode === 'diff') === showDiff;
+          return (
+            <button
+              key={mode}
+              type="button"
+              onClick={() => setShowDiff(mode === 'diff')}
+              className={`px-2 py-0.5 rounded-md text-3xs font-medium transition-colors ${
+                active ? 'bg-accent text-on-accent' : 'text-fg-2 hover:bg-inset'
+              }`}
+            >
+              {mode === 'supplied' ? 'Supplied' : 'Full vs supplied'}
+            </button>
+          );
+        })}
+      </div>
+      {showDiff ? (
+        <UnifiedDiff oldStr={fullText} newStr={supplied} />
+      ) : (
+        <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+          {supplied}
+        </pre>
+      )}
+      {showDiff && (
+        <p className="text-3xs text-fg-muted leading-snug">
+          Red lines are {label} content the model did not receive — trimmed to fit the window.
+        </p>
+      )}
+    </div>
+  );
+}
+
+/** The shared panel chrome — a real-dialog body, not the fixed Dialog. */
+function SfxPanel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col">
+      <div className="px-4 pt-4 pb-3 border-b border-edge">
+        <h2 className="text-sm font-bold text-fg">Session context</h2>
+        <p className="text-2xs text-fg-muted mt-0.5">What the assistant began this session with</p>
+      </div>
+      <div className="px-4 py-4 space-y-4">{children}</div>
+      <div className="mt-auto border-t border-edge px-4 pt-4 pb-4">
+        <Button variant="secondary" size="md" className="w-full">Manage Assistant Settings</Button>
+        <p className="text-2xs text-fg-muted mt-1.5 leading-snug">Coming soon — open the full assistant settings, model, and context management.</p>
+      </div>
+    </div>
+  );
+}
+
+/** The one-line status summary at the top of the Overview tab — amber on trim,
+ *  green when everything loaded. Rendered in its own inset card. */
+function SfxStatusLine({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boolean }) {
+  return (
+    <p className="text-2xs leading-relaxed">
+      <span className={`font-medium ${trimmed ? 'text-[#FF9800]' : 'text-[#4CAF50]'}`}>
+        {trimmed ? '⚠ ' : '✓ '}
+      </span>
+      <span className="text-fg-2">
+        {trimmed
+          ? ctx.summary
+          : `Started with the full project context — ${(ctx.skills ?? []).length} skills, ${(ctx.tools ?? []).length} tools, project instructions.`}
+      </span>
+    </p>
+  );
+}
 
 const WORK_TAG = { label: 'work', color: 'tag-blue' } as const;
 const NOTE = 'blocked on the gh dead-end';
@@ -5435,13 +5624,265 @@ const ALL_SURFACES: CompareSurface[] = [
       },
     ],
   },
+  // ── Session context panel (Step 3, 2026-08-17, broadened) ──────────────────
+  // Destin: "look at various other UI elements and think through how we can
+  // make this more closely match existing UI styling with card/pills/chips and
+  // improved visual intuitiveness and hierarchy. use compare view to give me 2
+  // alternatives." Round 1 = two restyle directions off the shipped panel.
+  {
+    id: 'session-context',
+    label: 'Session context',
+    question: 'How should the session-start context accounting be styled? Card-led (A) vs tabbed (B) — both match existing card/pill/chip language.',
+    frame: 'panel',
+    paneWidth: 420,
+    rounds: [
+      {
+        n: 1,
+        candidates: [
+          {
+            id: 'cards',
+            label: 'A — Card stack',
+            note: 'Every context surface becomes a real card (the border/inset recipe used across the app). One idea per card, status pills up top, tools as chips, skills as outlink rows, dropped-MCP as an amber card. Longest, most scannable hierarchy.',
+            render: () => (
+              <SfxPanel>
+                <SfxCardAltA ctx={SFX_CTX} trimmed />
+              </SfxPanel>
+            ),
+          },
+          {
+            id: 'tabs',
+            label: 'B — Tabbed',
+            note: 'SegmentedTabs at the top (Overview / Prompt / Instructions / Skills / Tools); one pane at a time so the dialog stays short. Rows use SettingRow-density. Fewest scroll, groups the read-most views; the "everything at once" accounting becomes per-view.',
+            render: () => <SfxTabbed ctx={SFX_CTX} trimmed />,
+          },
+        ],
+      },
+    ],
+  },
 ];
+
+// ── Session context — Alternative A: card stack ──────────────────────────────
+// The panel body rebuilt from the app's card vocabulary: border border-edge-dim
+// bg-inset rounded-lg, one surface per card, StatusPill for state, ToolChip for
+// tools, FilepathToken for outlinks. This is the RESTYLE of the shipping panel
+// (SessionContextPopup.tsx) — same data, same sections, new visual grammar.
+
+function SfxCard({ title, meta, children, warn = false }: {
+  title: string; meta?: string; children: React.ReactNode; warn?: boolean;
+}) {
+  return (
+    <div className={`rounded-lg border bg-inset px-3 py-2.5 ${warn ? 'border-[#FF9800]/40' : 'border-edge-dim'}`}>
+      <div className="flex items-center gap-2 mb-2">
+        <span className="text-2xs font-medium text-fg-muted tracking-wider uppercase">{title}</span>
+        {meta && <span className="text-3xs text-fg-faint ml-auto">{meta}</span>}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+function SfxCardAltA({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boolean }) {
+  const c = ctx;
+  return (
+    <div className="flex flex-col gap-3">
+      {/* Header card — model + status */}
+      <div className="rounded-lg border border-edge-dim bg-inset px-3 py-2.5">
+        <div className="flex items-center gap-2 flex-wrap">
+          <span className="text-sm font-semibold text-fg">{c.modelLabel}</span>
+          <span className="text-3xs text-fg-muted bg-panel rounded px-1.5 py-0.5 border border-edge-dim">
+            {c.contextWindowTokens.toLocaleString()} token window
+          </span>
+          <span className="ml-auto">
+            <StatusPill tone={trimmed ? 'warn' : 'ok'}>{trimmed ? 'Trimmed' : 'Full context'}</StatusPill>
+          </span>
+        </div>
+        <div className="mt-2"><SfxStatusLine ctx={ctx} trimmed={trimmed} /></div>
+      </div>
+
+      {/* System prompt */}
+      <SfxCard title="System prompt" meta={`${c.systemPrompt.length.toLocaleString()} chars`}>
+        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-fg-2 leading-relaxed">
+          {c.systemPrompt}
+        </pre>
+      </SfxCard>
+
+      {/* Project instructions — truncated state with outlink */}
+      <SfxCard
+        title="Project instructions"
+        meta={c.projectInstructions.truncated ? (c.projectInstructions.note ?? 'truncated') : 'full'}
+      >
+        <div className="flex items-center gap-2 text-xs text-fg-2 mb-1.5">
+          <FilepathToken path={c.projectInstructions.path} sessionId="sfx" variant="inline" label={c.projectInstructions.path.split('/').slice(-1)[0]} />
+          {c.projectInstructions.truncated && <span className="text-[#FF9800]">— read as outline</span>}
+        </div>
+        <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-fg-2 leading-relaxed">
+          {c.projectInstructions.truncated ? c.projectInstructions.text + '\n\n… (outlined to fit the window — open the full file above)' : c.projectInstructions.text}
+        </pre>
+      </SfxCard>
+
+      {/* Skills — rows with outlinks */}
+      <SfxCard title={`Skills loaded (${c.skills.length})`}>
+        <ul className="flex flex-col gap-1.5">
+          {c.skills.map((s) => (
+            <li key={s.id} className="flex items-center gap-2 text-xs min-w-0">
+              <span className={`shrink-0 ${s.truncated ? 'text-[#FF9800]' : 'text-[#4CAF50]'}`}>
+                {s.truncated ? '⚠' : '✓'}
+              </span>
+              <FilepathToken path={s.path ?? s.id} sessionId="sfx" variant="inline" label={s.label} />
+              {s.truncated && <span className="text-3xs text-[#FF9800] ml-auto shrink-0">({s.note ?? 'body cut'})</span>}
+            </li>
+          ))}
+        </ul>
+      </SfxCard>
+
+      {/* Tools — chips */}
+      <SfxCard title={`Tools (${c.tools.length})`}>
+        <div className="flex flex-wrap gap-1.5">
+          {c.tools.map((t) => <ToolChip key={t} label={t} />)}
+        </div>
+      </SfxCard>
+
+      {/* Dropped MCP — amber card, the one "never fine" surface */}
+      {c.droppedMcpServers.length > 0 && (
+        <SfxCard title="Not attached" warn>
+          <ul className="space-y-1">
+            {c.droppedMcpServers.map((s) => (
+              <li key={s} className="text-xs text-fg-2 flex items-center gap-2">
+                <span className="text-[#FF9800]">⛔</span> {s}
+                <span className="text-3xs text-fg-muted ml-auto shrink-0">dropped to fit the tools budget</span>
+              </li>
+            ))}
+          </ul>
+        </SfxCard>
+      )}
+    </div>
+  );
+}
+
+// ── Session context — Alternative B: tabbed ──────────────────────────────────
+// SegmentedTabs over per-view panes. Each pane spaced with the panel's native
+// `space-y-5`, rows at SettingRow density. The tab bar is the app's real
+// SegmentedTabs (variant="contained").
+
+function SfxTabbed({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boolean }) {
+  const [tab, setTab] = React.useState('overview');
+  const c = ctx;
+  return (
+    <SfxPanel>
+      {/* Header — model + window, status pill pinned right, always visible above
+          the tabs so the context row reads as one unit and the panes swap below. */}
+      <div className="flex items-center gap-2">
+        <span className="text-sm font-semibold text-fg truncate">{c.modelLabel}</span>
+        <span className="text-3xs text-fg-muted bg-panel rounded px-1.5 py-0.5 border border-edge-dim shrink-0">
+          {c.contextWindowTokens.toLocaleString()} ctx
+        </span>
+        <span className="ml-auto shrink-0">
+          <StatusPill tone={trimmed ? 'warn' : 'ok'}>{trimmed ? 'Trimmed' : 'Full context'}</StatusPill>
+        </span>
+      </div>
+
+      <SegmentedTabs
+        variant="contained"
+        aria-label="Session context views"
+        tabs={[
+          { id: 'overview', label: 'Overview' },
+          { id: 'prompt', label: 'Prompt' },
+          { id: 'instructions', label: 'Instructions' },
+          { id: 'skills', label: 'Skills' },
+          { id: 'tools', label: 'Tools' },
+        ]}
+        value={tab}
+        onChange={setTab}
+      />
+
+      <div className="flex flex-col gap-3">
+        {tab === 'overview' && (
+          <>
+            <div className="rounded-lg border border-edge-dim bg-inset px-3 py-2.5">
+              <SfxStatusLine ctx={ctx} trimmed={trimmed} />
+            </div>
+            <div className="flex flex-col divide-y divide-edge-dim border border-edge-dim rounded-lg overflow-hidden">
+              <SettingRow variant="item" title="Model" value={c.modelLabel} />
+              <SettingRow variant="item" title="Context window" value={`${c.contextWindowTokens.toLocaleString()} tokens`} />
+              <SettingRow
+                variant="item"
+                title="Loaded"
+                value={`${c.skills.length} skills · ${c.tools.length} tools · instructions`}
+              />
+            </div>
+            {c.droppedMcpServers.length > 0 && (
+              <Callout tone="warning" title="Not attached">
+                {c.droppedMcpServers.join(', ')} — dropped to fit the tools budget.
+              </Callout>
+            )}
+          </>
+        )}
+
+        {tab === 'prompt' && (
+          <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+            {c.systemPrompt}
+          </pre>
+        )}
+
+        {tab === 'instructions' && (
+          <div className="flex flex-col gap-2">
+            <div className="flex items-center gap-2 text-xs text-fg-2">
+              <FilepathToken path={c.projectInstructions.path} sessionId="sfx" variant="inline" label={c.projectInstructions.path.split('/').slice(-1)[0]} />
+              {c.projectInstructions.truncated && <span className="text-[#FF9800]">— read as outline</span>}
+            </div>
+            {c.projectInstructions.truncated ? (
+              <TruncationDiff
+                fullText={c.projectInstructions.fullText}
+                supplied={c.projectInstructions.text}
+                label="project-instruction"
+              />
+            ) : (
+              <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+                {c.projectInstructions.text}
+              </pre>
+            )}
+          </div>
+        )}
+
+        {tab === 'skills' && (
+          <ul className="flex flex-col gap-2">
+            {c.skills.map((s) => (
+              <li key={s.id} className="flex flex-col gap-1.5">
+                <div className="flex items-center gap-2 text-xs min-w-0">
+                  <span className={`shrink-0 ${s.truncated ? 'text-[#FF9800]' : 'text-[#4CAF50]'}`}>
+                    {s.truncated ? '⚠' : '✓'}
+                  </span>
+                  <FilepathToken path={s.path ?? s.id} sessionId="sfx" variant="inline" label={s.label} />
+                  {s.truncated && <span className="text-3xs text-[#FF9800] ml-auto shrink-0">({s.note ?? 'body cut'})</span>}
+                </div>
+                {s.truncated && (
+                  <TruncationDiff
+                    fullText={s.fullText}
+                    supplied={s.fullText ? s.fullText.split('\n').slice(0, 5).join('\n') + '\n… (body cut to fit the window)' : `… (${s.note ?? 'body cut'})`}
+                    label="skill"
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+
+        {tab === 'tools' && (
+          <div className="flex flex-wrap gap-1.5">
+            {c.tools.map((t) => <ToolChip key={t} label={t} />)}
+          </div>
+        )}
+      </div>
+    </SfxPanel>
+  );
+}
+
 
 // CompareView opens on COMPARE_SURFACES[0] and has no URL param for the surface,
 // so whichever entry is first is the one a plain ?view=compare lands on. Order by
 // what is under active design rather than by authoring order — otherwise every
 // visit starts with a dropdown hunt for the round actually being worked on.
-const ACTIVE_FIRST = 'buddy-sleep';
+const ACTIVE_FIRST = 'session-context';
 
 // ── voice-mic ────────────────────────────────────────────────────────────────
 // The real InputBar, compact (no quick chips), each pane born against its own

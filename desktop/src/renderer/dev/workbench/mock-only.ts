@@ -75,7 +75,15 @@
 // workbench can still pin signed-out / waiting / signed-in / blocked without a
 // browser round-trip — only the "no real backend" claim goes.
 //
-// The list is EMPTY, and that is the healthy state: it means nothing on screen in the
-// workbench is pretending to be a feature that does not exist yet. Add a row the moment you
-// design a channel ahead of its backend; delete the row, never the guard, when it ships.
-export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [];
+// Add a row the moment you design a channel ahead of its backend; delete the row, never the
+// guard, when it ships. An empty list is the healthy state.
+export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
+  // Step 3 (2026-08-17, broadened): the session-start context panel. The real
+  // backend (a session-start push carrying the full starting context — system
+  // prompt, fitProjectInstructions / fitInjection results, droppedMcpServers)
+  // does not exist yet — the panel is designed against claim-data seeded
+  // through the SESSION_CONTEXT reducer action (fixture-loader.ts). This names
+  // the channel the backend will provide so the design UI can never quietly
+  // ship as real.
+  { channel: 'native.onSessionContext', feature: 'session context panel (Step 3)' },
+];
