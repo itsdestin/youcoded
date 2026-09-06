@@ -78,7 +78,7 @@
     "ajv": "^8.20.0",
     "electron": "^41.10.7",
     "electron-builder": "^26.15.3",
-    "eslint": "^9.39.5",
+    "eslint": "^10.9.1",
     "eslint-plugin-react-hooks": "^7.1.1",
     "jsdom": "^30.0.1",
     "knip": "^6.34.0",
