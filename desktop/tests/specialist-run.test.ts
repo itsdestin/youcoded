@@ -58,8 +58,8 @@ describe('specialist foreground run (Task 7)', () => {
   // restarting — the factory is called once per turn, and a fresh instance per
   // call would replay script[0] forever.
   // `askHoldMs` (Task 8): overrides specialistAskHoldMs for a test that drives
-  // a routed ask (max_steps/doom_loop/deny-listed) all the way to its
-  // timeout — undefined keeps the real 5-minute production default, which
+  // a routed ask (doom_loop/deny-listed) all the way to its timeout — undefined
+  // keeps the real 5-minute production default, which
   // every OTHER test in this file relies on never actually firing.
   function boot(scripts: any[][], askHoldMs?: number) {
     const model = scriptedModel(scripts);

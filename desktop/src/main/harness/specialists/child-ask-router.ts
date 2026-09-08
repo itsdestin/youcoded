@@ -21,7 +21,7 @@ export const BUDGET_ASK_TOOL_NAMES = new Set(['doom_loop']);
 // existing permission card renders it exactly like any other ask. The child
 // waits up to SPECIALIST_ASK_HOLD_MS; if nobody answers by then, the call
 // resolves with ASK_REDIRECT_MESSAGE so the child can keep making progress
-// instead of hanging silently until its own step/time budget runs out.
+// instead of remaining blocked on an unanswered parent permission card.
 //
 // Interactive (AskUserQuestion) and external-forced asks are the two
 // exceptions that STILL deny instantly, exactly as child-ask-policy.ts always
