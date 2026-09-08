@@ -2387,7 +2387,7 @@ export function registerIpcHandlers(
     // default. ProviderType and ProfileProviderType are the same union today.
     async (binding) => {
       const p = (await providerRegistry.list()).find((x) => x.id === binding.providerId);
-      return (p?.type as ProfileProviderType) ?? null;
+      return p ? { type: p.type as ProfileProviderType, ...(p.baseUrl ? { baseUrl: p.baseUrl } : {}) } : null;
     },
     // Vision-support resolver (Task 6c): only OpenRouter's catalog carries real
     // per-model modality data (architecture.input_modalities, parsed in

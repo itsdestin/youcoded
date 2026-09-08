@@ -2092,7 +2092,7 @@ export class NativeSessionHost extends EventEmitter {
     // whose provider is unknown returns null → resolveContextAndProfile falls back
     // to a cloud-safe default. Positioned right after contextAndSlotsFor because
     // the two are resolved together for every create/resume/swap.
-    private providerTypeFor: (binding: ModelBinding) => Promise<ProfileProviderType | null>,
+    private providerTypeFor: (binding: ModelBinding) => Promise<ProfileProviderType | { type: ProfileProviderType; baseUrl?: string } | null>,
     // Per-model vision fact read from the provider catalog's declared input
     // modalities (Task 6c). Today only OpenRouter's catalog can actually
     // answer this — everyone else (direct-key providers, openai-compatible,
@@ -2396,7 +2396,7 @@ export class NativeSessionHost extends EventEmitter {
    *  ceiling (Task 5's registry clamp); the profile is resolved from the binding's
    *  provider type + model id + that clamped context. An unknown provider type
    *  falls back to 'openrouter' — the cloud-safe default (full posture). */
-  private async resolveContextAndProfile(binding: ModelBinding): Promise<{ contextLength: number | null; profile: CapabilityProfile; pricing: ModelPricing | null; free: boolean; providerType: ProfileProviderType }> {
+  private async resolveContextAndProfile(binding: ModelBinding): Promise<{ contextLength: number | null; profile: CapabilityProfile; pricing: ModelPricing | null; free: boolean; providerType: ProfileProviderType; providerBaseUrl?: string }> {
     // Fix pass 2 (Task 13): ONE call gets both the context window and the
     // engine's real slot count — see the contextAndSlotsFor constructor
     // param's comment for why this replaces two separately-injected closures
@@ -2405,7 +2405,9 @@ export class NativeSessionHost extends EventEmitter {
     // the single await that produces both values for this binding.
     const { contextLength: raw, totalSlots } = await this.contextAndSlotsFor(binding);
     const discoveredSlots = totalSlots ?? undefined;
-    const type = (await this.providerTypeFor(binding)) ?? 'openrouter';     // unknown → cloud-safe default
+    const provider = await this.providerTypeFor(binding);
+    const type = (typeof provider === 'string' ? provider : provider?.type) ?? 'openrouter'; // unknown → cloud-safe default
+    const providerBaseUrl = typeof provider === 'object' && provider !== null ? provider.baseUrl : undefined;
     // The registry ceiling (effectiveContextForModel) is a LOCAL-model concern: it
     // caps a small GGUF loaded at a too-large -c to its real trained window. But
     // matchKnownModel keys ONLY on the model-id regex, so a HOSTED model whose id
@@ -2439,7 +2441,7 @@ export class NativeSessionHost extends EventEmitter {
     // `type` is post-fallback, so a provider we could not identify counts as
     // metered — we never claim free without knowing it.
     const free = type === 'local-engine' || isFreePricing(pricing);
-    return { contextLength, profile, pricing, free, providerType: type };
+    return { contextLength, profile, pricing, free, providerType: type, ...(providerBaseUrl ? { providerBaseUrl } : {}) };
   }
 
   /** Tool + permission + prompt wiring shared by create() and resume(). Both v1
@@ -2746,7 +2748,7 @@ export class NativeSessionHost extends EventEmitter {
       await this.destroy(opts.sessionId);
     }
     const preset = resolvePreset(opts.presetId);
-    const { contextLength, profile, pricing, free, providerType } = await this.resolveContextAndProfile(opts.binding);
+    const { contextLength, profile, pricing, free, providerType, providerBaseUrl } = await this.resolveContextAndProfile(opts.binding);
     await this.store.create({
       v: 1,
       sessionId: opts.sessionId,
@@ -2780,7 +2782,7 @@ export class NativeSessionHost extends EventEmitter {
       // app's lifetime. Release the hold and rethrow the ORIGINAL error
       // unchanged (never guess/replace a cause — error-message-standards.md).
       session = new HarnessSession(
-        { sessionId: opts.sessionId, cwd: opts.cwd, harness: preset.manifest, binding: opts.binding, providerType, contextLength, profile, pricing, free,
+        { sessionId: opts.sessionId, cwd: opts.cwd, harness: preset.manifest, binding: opts.binding, providerType, providerBaseUrl, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
           ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile) },
         this.modelFactory,
@@ -3201,7 +3203,7 @@ export class NativeSessionHost extends EventEmitter {
     // the header. Profiling header.binding here would size the context window and
     // tool posture for the wrong model on every overridden resume.
     const binding = bindingOverride ?? header.binding;
-    const { contextLength, profile, pricing, free, providerType } = await this.resolveContextAndProfile(binding);
+    const { contextLength, profile, pricing, free, providerType, providerBaseUrl } = await this.resolveContextAndProfile(binding);
     // Seed the STARTING mode from the resolved preset unless the caller already
     // set one for this id (an explicit setPermissionMode always wins).
     if (!this.modeFor.has(sessionId)) this.modeFor.set(sessionId, preset.defaultMode);
@@ -3230,7 +3232,7 @@ export class NativeSessionHost extends EventEmitter {
       // error unchanged (error-message-standards.md).
       session = new HarnessSession(
         // `binding` (not header.binding) — same override reason as above.
-        { sessionId, cwd, harness: preset.manifest, binding, providerType, contextLength, profile, pricing, free,
+        { sessionId, cwd, harness: preset.manifest, binding, providerType, providerBaseUrl, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
           ...this.toolWiring(sessionId, cwd, preset, profile) },
         this.modelFactory,
@@ -3905,8 +3907,8 @@ export class NativeSessionHost extends EventEmitter {
     // Re-resolve BOTH context + profile on a swap: a cloud → small-local swap
     // (or vice versa) crosses capability tiers, so the driver must pick up the
     // new doom-loop window / tool posture on the next turn.
-    const { contextLength, profile, pricing, free, providerType } = await this.resolveContextAndProfile(binding);
-    entry.session.setBinding(binding, contextLength, profile, pricing, free, providerType);
+    const { contextLength, profile, pricing, free, providerType, providerBaseUrl } = await this.resolveContextAndProfile(binding);
+    entry.session.setBinding(binding, contextLength, profile, pricing, free, providerType, providerBaseUrl);
     if (oldModelId !== binding.modelId) {
       // Swap the ref-count: releasing the old model may unload it if this was
       // its last session (#1); retain the new one so it isn't unloaded.

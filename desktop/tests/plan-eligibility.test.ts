@@ -14,6 +14,31 @@ describe('plan eligibility', () => {
     expect(isPlanEligible(session({ providerType }))).toBe(true);
   });
 
+  it('qualifies hosted OpenAI-compatible endpoints from provider-config provenance', () => {
+    expect(isPlanEligible(session({
+      providerType: 'openai-compatible',
+      providerBaseUrl: 'https://api.groq.com/openai/v1',
+    }))).toBe(true);
+  });
+
+  it.each([
+    'http://localhost:11434/v1',
+    'http://127.0.0.1:1234/v1',
+    'http://192.168.1.40:8000/v1',
+    'http://10.0.0.8:8080/v1',
+    'http://172.20.0.2:9000/v1',
+  ])('rejects local OpenAI-compatible endpoint %s regardless of model name', (providerBaseUrl) => {
+    expect(isPlanEligible(session({
+      providerType: 'openai-compatible',
+      providerBaseUrl,
+      modelId: 'cloud-sounding-model',
+    }))).toBe(false);
+  });
+
+  it('fails closed for an OpenAI-compatible endpoint without config provenance', () => {
+    expect(isPlanEligible(session({ providerType: 'openai-compatible' }))).toBe(false);
+  });
+
   it('qualifies only reviewed 9B+ local registry entries', () => {
     expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'Qwen3.5-9B-Q8_0' }))).toBe(true);
     expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'Qwen3.5-27B-Q4' }))).toBe(true);

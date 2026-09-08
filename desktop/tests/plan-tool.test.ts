@@ -192,6 +192,62 @@ describe('HarnessSession plan integration', () => {
     expect(results.every((event) => event.data.plan.status === 'failed')).toBe(true);
   });
 
+  it('terminalizes a retryable failed attempt before retrying under a new plan tool id', async () => {
+    let call = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: call++ === 0
+          ? new ReadableStream<any>({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({ type: 'tool-input-start', id: 'retry-plan-old', toolName: 'propose_plan' });
+              },
+              pull(controller) {
+                const error = Object.assign(new Error('temporarily unavailable'), { statusCode: 503 });
+                controller.error(error);
+              },
+            })
+          : simulateReadableStream({ chunks: call === 2
+              ? stream(
+                  ...toolInputChunks('retry-plan-new', 'propose_plan', '{}'),
+                  toolCallChunk('retry-plan-new', 'propose_plan', VALID),
+                  finishChunk('tool-calls'),
+                )
+              : stream(finishChunk('stop')) }),
+      }),
+    });
+    const events: any[] = [];
+    const propose = vi.fn(async ({ toolUseId, commit }: any) => {
+      expect(commit()).toBe(true);
+      return proposed(toolUseId);
+    });
+    const session = new HarnessSession({
+      sessionId: 's-1', cwd: FAKE_SESSION_CWD, harness: HARNESS,
+      binding: { providerId: 'openrouter', modelId: 'model' }, providerType: 'openrouter',
+      profile: CLOUD_DEFAULT, tools: [], skillCatalog: EMPTY_SKILL_CATALOG, mcpServers: [],
+      specialistRoster: BUILTIN_ROSTER, toolServices: { plans: { propose } },
+      retryDelays: [0],
+    } as any, async () => model as any);
+    session.on('transcript-event', (event) => events.push(event));
+
+    await session.send('make a plan');
+
+    const oldResult = events.find((event) => event.type === 'tool-result' && event.data.toolUseId === 'retry-plan-old');
+    const newUse = events.find((event) => event.type === 'tool-use' && event.data.toolUseId === 'retry-plan-new');
+    const newResult = events.find((event) => event.type === 'tool-result' && event.data.toolUseId === 'retry-plan-new');
+    expect(oldResult?.data).toMatchObject({ isError: true, plan: { status: 'failed' } });
+    expect(events.indexOf(oldResult)).toBeLessThan(events.indexOf(newUse));
+    expect(newResult?.data.plan).toMatchObject({ status: 'proposed' });
+    expect(propose).toHaveBeenCalledTimes(1);
+    const writingIds = events
+      .filter((event) => event.type === 'tool-use' && event.data.plan?.status === 'writing')
+      .map((event) => event.data.toolUseId);
+    const terminalIds = new Set(events
+      .filter((event) => event.type === 'tool-result' && event.data.plan?.status !== 'writing')
+      .map((event) => event.data.toolUseId));
+    expect(writingIds.filter((id) => !terminalIds.has(id))).toEqual([]);
+  });
+
   it('pairs and fails a writing plan when the provider stream rejects', async () => {
     let call = 0;
     const model = new MockLanguageModelV4({

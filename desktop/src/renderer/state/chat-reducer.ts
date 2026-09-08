@@ -344,7 +344,17 @@ function endTurn(
       continue;
     }
     if (tool.status === 'running' || tool.status === 'awaiting-approval') {
-      toolCalls.set(id, { ...tool, status: 'failed', error: errorMessage });
+      toolCalls.set(id, {
+        ...tool,
+        status: 'failed',
+        error: errorMessage,
+        // A writing plan is a projection of this same unmatched tool shell. It
+        // must terminalize with the outer card during replay/end-turn rather
+        // than remain an impossible writing plan inside a failed tool.
+        ...(tool.plan?.status === 'writing'
+          ? { plan: { ...tool.plan, status: 'failed' as const, seq: Math.max(tool.plan.seq ?? 0, 1) } }
+          : {}),
+      });
     }
   }
   return {

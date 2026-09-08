@@ -901,6 +901,26 @@ describe('chatReducer TRANSCRIPT_REPLAY_COMPLETE', () => {
     expect(state.get('sess-1')!.isThinking).toBe(false);
   });
 
+  it('fails both the tool and its unmatched writing plan projection', () => {
+    let state = initState();
+    state = chatReducer(state, {
+      type: 'TRANSCRIPT_TOOL_USE',
+      sessionId: 'sess-1', uuid: 'u-plan',
+      toolUseId: 'plan-writing', toolName: 'propose_plan', toolInput: {},
+      plan: {
+        planId: 'writing:plan-writing', toolUseId: 'plan-writing', title: 'Writing plan',
+        status: 'writing', steps: [], ceilingTokens: 0, ceilingUsd: null,
+        model: { label: 'Model' }, seq: 0,
+      },
+    } as any);
+
+    state = chatReducer(state, { type: 'TRANSCRIPT_REPLAY_COMPLETE', sessionId: 'sess-1', sessionIdle: true } as any);
+
+    const tool = state.get('sess-1')!.toolCalls.get('plan-writing')!;
+    expect(tool.status).toBe('failed');
+    expect(tool.plan).toMatchObject({ status: 'failed', seq: 1 });
+  });
+
   it('leaves a completed replayed tool alone', () => {
     let state = initState();
     state = chatReducer(state, {

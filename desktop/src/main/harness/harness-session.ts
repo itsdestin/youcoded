@@ -165,6 +165,8 @@ export interface HarnessSessionOpts {
    *  distinguishes reviewed local models from cloud routes; profile alone
    *  intentionally erases that provenance. */
   providerType?: import('./capability-profile').ProfileProviderType;
+  /** Configured endpoint provenance for openai-compatible locality checks. */
+  providerBaseUrl?: string;
   /** Model context window (from the catalog); null → conservative 32k default. */
   contextLength?: number | null;
   /** Resolved price for the bound model, or null when none is published.
@@ -823,7 +825,8 @@ export class HarnessSession extends EventEmitter {
    *  profile and passes it in; applied only when provided. */
   setBinding(binding: ModelBinding, contextLength?: number | null, profile?: CapabilityProfile,
              pricing?: ModelPricing | null, free?: boolean,
-             providerType?: import('./capability-profile').ProfileProviderType): void {
+             providerType?: import('./capability-profile').ProfileProviderType,
+             providerBaseUrl?: string): void {
     this.binding = binding;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
@@ -833,6 +836,9 @@ export class HarnessSession extends EventEmitter {
     if (pricing !== undefined) this.opts.pricing = pricing;
     if (free !== undefined) this.opts.free = free;
     if (providerType !== undefined) this.opts.providerType = providerType;
+    // Unlike pricing, an absent URL is meaningful on a swap: clear stale
+    // compatible-endpoint provenance when moving to another provider.
+    this.opts.providerBaseUrl = providerBaseUrl;
   }
 
   /** What this session's CURRENT model costs to run, as resolved when the
@@ -1050,6 +1056,7 @@ export class HarnessSession extends EventEmitter {
     // Missing provenance cannot be promoted to a cloud route: fail closed.
     const wanted = this.opts.providerType !== undefined && isPlanEligible({
       providerType: this.opts.providerType,
+      providerBaseUrl: this.opts.providerBaseUrl,
       modelId: this.binding.modelId,
       supportsTools: this.profile.supportsTools,
       isSpecialistChild: this.opts.isSpecialistChild ?? false,
@@ -1964,9 +1971,24 @@ export class HarnessSession extends EventEmitter {
         // CONSUMPTION (not just the streamText call): the SDK surfaces provider
         // errors as {type:'error'} fullStream parts AND rejected promises, so
         // only wrapping the call would miss them (verified ai@7 facts).
-        const step = await this.withRetry(() =>
-          this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; }),
-        );
+        const step = await this.withRetry(async () => {
+          try {
+            return await this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; });
+          } catch (err) {
+            // A retry starts a fresh provider stream which may use a fresh tool
+            // id. Close every shell announced by the failed attempt BEFORE
+            // withRetry sleeps/re-enters consumeStep, or the old writing plan
+            // survives beside the successful retry as an orphan.
+            const text = `Plan proposal failed: ${describeProviderError(err)}`;
+            const failedPlans = this.terminateWritingPlans(text, false);
+            if (failedPlans.length > 0) {
+              this.history.push(this.assistantMessage(partialAssistantText, failedPlans));
+              this.history.push({ role: 'tool', content: failedPlans.map((call) => this.toolResultPart(call, text)) });
+              partialAssistantText = '';
+            }
+            throw err;
+          }
+        });
 
         lastInputTokens = step.usage.inputTokens;   // feed the NEXT compaction check
         lastOutputTokens = step.usage.outputTokens;
