@@ -59,6 +59,15 @@ describe('loadPersonalDefinition', () => {
     expect(result.value.warnings).toContain('charter is not a setting — it follows the tools');
   });
 
+  it('personal: legacy stepCap is ignored without a warning or stepCap', () => {
+    const raw = '---\ndescription: Test.\nstepCap: 1\n---\nDo the thing.';
+    const result = loadPersonalDefinition('/x/foo.md', raw);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.value.definition).not.toHaveProperty('stepCap');
+    expect(result.value.warnings.some((warning) => warning.includes('stepCap'))).toBe(false);
+  });
+
   it('personal: empty body → error', () => {
     const raw = '---\ndescription: Test.\n---\n   \n';
     const result = loadPersonalDefinition('/x/foo.md', raw);
@@ -254,12 +263,13 @@ describe('loadClaudeCodeDefinition', () => {
     ).toBe(true);
   });
 
-  it('cc: maxTurns → stepCap', () => {
+  it('cc: legacy maxTurns is ignored without a warning or stepCap', () => {
     const raw = '---\nname: Docs Writer\ndescription: Test.\nmaxTurns: 12\n---\nDo the thing.';
     const result = loadClaudeCodeDefinition('/agents/docs-writer.md', raw, 'user');
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.definition.stepCap).toBe(12);
+    expect(result.value.definition).not.toHaveProperty('stepCap');
+    expect(result.value.warnings.some((warning) => warning.includes('maxTurns'))).toBe(false);
   });
 
   it('cc: permissionMode → warning, never a failure', () => {

@@ -108,12 +108,10 @@ Boundaries:
 
 ${SHARED_SUFFIX}`;
 
-// stepCap and reportBudgetTokens are static in plan 1a (Task 5 wires stepCap to
-// harness.limits.maxSteps; Task 7 wires reportBudgetTokens into headroom-aware
-// truncation of the child's final message). Values are hand-picked per role:
-// worker gets the largest budget because implementation + test runs take more
-// turns than a read-only lookup; researcher's report budget is largest among the
-// read-only roles because citing sources takes more words than a file path list.
+// reportBudgetTokens is static in plan 1a. Task 7 wires it into headroom-aware
+// truncation of the child's final message. Values are hand-picked per role:
+// researcher's report budget is largest among the read-only roles because citing
+// sources takes more words than a file path list.
 // Not individually exported (YAGNI) — registry.ts is the only intended consumer,
 // via BUILTIN_SPECIALISTS below; a per-role export would just be more unused
 // surface for knip to flag until a later task actually needs one by name.
@@ -124,7 +122,6 @@ const EXPLORER: SpecialistDefinition = {
   systemPrompt: EXPLORER_PROMPT,
   allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
   charter: 'read-only',
-  stepCap: 25,
   reportBudgetTokens: 2000,
   source: 'builtin',
   grantScope: 'builtin',
@@ -137,7 +134,6 @@ const RESEARCHER: SpecialistDefinition = {
   systemPrompt: RESEARCHER_PROMPT,
   allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
   charter: 'read-only',
-  stepCap: 25,
   reportBudgetTokens: 2500,
   source: 'builtin',
   grantScope: 'builtin',
@@ -150,7 +146,6 @@ const REVIEWER: SpecialistDefinition = {
   systemPrompt: REVIEWER_PROMPT,
   allowedTools: ['Read', 'Glob', 'Grep'],
   charter: 'read-only',
-  stepCap: 20,
   reportBudgetTokens: 2000,
   source: 'builtin',
   grantScope: 'builtin',
@@ -163,7 +158,6 @@ const WORKER: SpecialistDefinition = {
   systemPrompt: WORKER_PROMPT,
   allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
   charter: 'read-write',
-  stepCap: 40,
   reportBudgetTokens: 1500,
   source: 'builtin',
   grantScope: 'builtin',

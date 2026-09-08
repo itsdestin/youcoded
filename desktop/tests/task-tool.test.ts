@@ -403,7 +403,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
   const DOCS_WRITER: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-    stepCap: 10, reportBudgetTokens: 500, source: 'personal',
+    reportBudgetTokens: 500, source: 'personal',
     grantScope: 'user', fingerprint: 'aaaaaaaaaaaa',
   };
   const FAKE_ROSTER: SpecialistRoster = {
@@ -453,7 +453,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
     const FILE_WORKER: SpecialistDefinition = {
       id: 'repo-worker', displayName: 'Repo Worker', description: 'A worker a repo shipped.',
       systemPrompt: 'Do repo work.', allowedTools: ['Read', 'Write', 'Bash'], charter: 'read-write',
-      stepCap: 25, reportBudgetTokens: 2000, source: 'claude-code',
+      reportBudgetTokens: 2000, source: 'claude-code',
       grantScope: 'project', fingerprint: 'bbbbbbbbbbbb',
     };
     const MIXED_ROSTER: SpecialistRoster = {
@@ -481,7 +481,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
     const mk = (over: Partial<SpecialistDefinition>): SpecialistDefinition => ({
       id: 'code-reviewer', displayName: 'code-reviewer', description: 'Reviews code.',
       systemPrompt: 'Review.', allowedTools: ['Read', 'Grep'], charter: 'read-only',
-      stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+      reportBudgetTokens: 500, source: 'claude-code',
       grantScope: 'project', fingerprint: 'f1f1f1f1f1f1', ...over,
     });
     const rosterOf = (d: SpecialistDefinition): SpecialistRoster =>
@@ -562,7 +562,7 @@ describe('Task tool — one roster lookup per id, per tool instance (D2)', () =>
   const BASE: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-    stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+    reportBudgetTokens: 500, source: 'claude-code',
     grantScope: 'project', fingerprint: 'aaaaaaaaaaaa',
   };
   const ARGS = { agent: 'docs-writer', work_dir: '/proj', description: 'd', prompt: 'a'.repeat(60) };
@@ -991,7 +991,7 @@ describe('Task tool — task_id management surface (Task 6)', () => {
     const DOCS_WRITER: SpecialistDefinition = {
       id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
       systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-      stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+      reportBudgetTokens: 500, source: 'claude-code',
       grantScope: 'project', fingerprint: 'bbbbbbbbbbbb',
     };
     const ROSTER: SpecialistRoster = {

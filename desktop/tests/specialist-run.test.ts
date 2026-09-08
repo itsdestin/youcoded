@@ -424,29 +424,6 @@ describe('specialist foreground run (Task 7)', () => {
     })).rejects.toThrow(/no final message|without producing a report/i);
   });
 
-  it("a step-capped child is NOT a failure: its last text comes back with a '(stopped at its step limit)' suffix", async () => {
-    // stepCap 1 means the very first tool step trips the budget gate, which
-    // ends the turn with stopReason 'max_steps' (harness-session's max_steps
-    // ask). Task 8: that ask now ROUTES to the parent instead of denying
-    // instantly, so this run only completes once it times out — a small
-    // askHoldMs override keeps the test fast instead of waiting 5 real minutes.
-    const CAPPED = { ...EXPLORER, stepCap: 1 };
-    await withParent([
-      stream(...textChunks('t', 'Found half of it in src/a.ts'), toolCallChunk('c1', 'Glob', { pattern: '*.ts' }), finishChunk('tool-calls')),
-    ], 20);
-
-    const { childId, report } = await host.spawnSpecialist('root-1', {
-      specialist: CAPPED, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
-      token: { parentId: 'root-1', writer: false },
-    });
-
-    expect(report).toContain('Found half of it in src/a.ts');
-    expect(report).toContain('(stopped at its step limit)');
-    // A capped run must NOT be nudged — the child is out of steps, so another
-    // turn would just burn the cap again.
-    expect(store.readEvents(childId, root).filter((e) => e.type === 'user-message')).toHaveLength(1);
-  });
-
   it('caps the report against the specialist budget and says what it cut', async () => {
     // A report far over the explorer's 2000-token static cap. The parent has no
     // measured occupancy in this test, so the static cap is the binding one.
@@ -1866,7 +1843,7 @@ describe('R12 (Task 4, plan 1c) — a running child keeps its spawn-time definit
     const SPEC_V1: SpecialistDefinition = {
       id: 'custom-helper', displayName: 'Custom Helper', description: 'A file-defined helper.',
       systemPrompt: 'Help with reading files.', allowedTools: ['Read'], charter: 'read-only',
-      stepCap: 10, reportBudgetTokens: 500, source: 'personal',
+      reportBudgetTokens: 500, source: 'personal',
     };
 
     let capturedTools: string[] = [];
