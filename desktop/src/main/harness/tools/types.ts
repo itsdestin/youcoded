@@ -202,6 +202,11 @@ export interface ToolServices {
       maximumAttempts: number;
       ceilingTokens: number;
       maxFanOut: number;
+      /** The turn's live cancellation signal. A service must stop preparation
+       * promptly when it aborts and call commit() immediately before its durable
+       * write; commit is one-shot and fails after cancellation. */
+      signal: AbortSignal;
+      commit(): boolean;
     }): Promise<PlanView>;
   };
   modelCatalog?(): Promise<CatalogModel[] | null>;

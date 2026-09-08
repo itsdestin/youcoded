@@ -28,6 +28,10 @@ export function failedPlanProjection(toolUseId: string, modelLabel: string): Pla
   return { ...writingPlanProjection(toolUseId, modelLabel), status: 'failed', seq: 1 };
 }
 
+export function stoppedPlanProjection(toolUseId: string, modelLabel: string): PlanView {
+  return { ...writingPlanProjection(toolUseId, modelLabel), status: 'stopped', seq: 1 };
+}
+
 export function createProposePlanTool(roster: SpecialistRoster): NativeTool<PlanDocumentV1> {
   return defineTool<PlanDocumentV1>({
     name: 'propose_plan',
@@ -49,23 +53,68 @@ export function createProposePlanTool(roster: SpecialistRoster): NativeTool<Plan
           planArgsInvalid: true,
         };
       }
+      const toolUseId = ctx.toolCallId ?? '';
+      const modelLabel = ctx.binding?.modelId ?? 'Unknown model';
       const propose = ctx.services?.plans?.propose;
       if (!propose) {
-        return { text: 'propose_plan failed: no plan proposal service is wired for this session (configuration error).', isError: true };
+        return {
+          text: 'propose_plan failed: no plan proposal service is wired for this session (configuration error).',
+          isError: true,
+          plan: failedPlanProjection(toolUseId, modelLabel),
+        };
       }
-      if (ctx.signal.aborted) return { text: 'Canceled: the user interrupted this plan proposal.', isError: true };
+      if (ctx.signal.aborted) {
+        return {
+          text: 'Canceled: the user interrupted this plan proposal.',
+          isError: true,
+          plan: stoppedPlanProjection(toolUseId, modelLabel),
+        };
+      }
 
-      // Persistence belongs to Task 2. WHY the tool only calls this structural
-      // callback: tests can prove invalid/aborted inputs never touch durable state,
-      // and the future PlanService remains the sole journal writer.
-      const plan = await propose({
-        sessionId: ctx.sessionId,
-        toolUseId: ctx.toolCallId ?? '',
-        document: validated.document,
-        maximumAttempts: validated.maximumAttempts,
-        ceilingTokens: validated.ceilingTokens,
-        maxFanOut: validated.maxFanOut,
-      });
+      // Persistence belongs to Task 2. The service may prepare asynchronously,
+      // but its durable write must be immediately preceded by this one-shot guard.
+      // JavaScript's run-to-completion makes the abort check + latch atomic with
+      // respect to an AbortSignal event: once interrupt wins, commit cannot.
+      let committed = false;
+      const commit = (): boolean => {
+        if (committed || ctx.signal.aborted) return false;
+        committed = true;
+        return true;
+      };
+      let plan: PlanView;
+      try {
+        plan = await propose({
+          sessionId: ctx.sessionId,
+          toolUseId,
+          document: validated.document,
+          maximumAttempts: validated.maximumAttempts,
+          ceilingTokens: validated.ceilingTokens,
+          maxFanOut: validated.maxFanOut,
+          signal: ctx.signal,
+          commit,
+        });
+      } catch (err: any) {
+        return {
+          text: ctx.signal.aborted
+            ? 'Canceled: the user interrupted this plan proposal.'
+            : `propose_plan failed: ${err?.message ?? String(err)}`,
+          isError: true,
+          plan: ctx.signal.aborted
+            ? stoppedPlanProjection(toolUseId, modelLabel)
+            : failedPlanProjection(toolUseId, modelLabel),
+        };
+      }
+      if (ctx.signal.aborted || !committed) {
+        return {
+          text: ctx.signal.aborted
+            ? 'Canceled: the user interrupted this plan proposal.'
+            : 'propose_plan failed: the proposal service did not commit the plan.',
+          isError: true,
+          plan: ctx.signal.aborted
+            ? stoppedPlanProjection(toolUseId, modelLabel)
+            : failedPlanProjection(toolUseId, modelLabel),
+        };
+      }
       return {
         text: `Plan proposed: ${plan.title}. Waiting for the user to approve or comment.`,
         isError: false,

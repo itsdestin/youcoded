@@ -5,7 +5,7 @@ import { BUILTIN_ROSTER } from '../src/main/harness/specialists/registry';
 import { CLOUD_DEFAULT, resolveProfile } from '../src/main/harness/capability-profile';
 import { HarnessSession } from '../src/main/harness/harness-session';
 import { HARNESS, EMPTY_SKILL_CATALOG, FAKE_SESSION_CWD } from './helpers/harness-fakes';
-import { finishChunk, stream, toolCallChunk, toolInputChunks } from './helpers/scripted-model';
+import { finishChunk, stream, textChunks, toolCallChunk, toolInputChunks } from './helpers/scripted-model';
 import type { PlanView } from '../src/shared/types';
 
 const VALID = {
@@ -25,7 +25,10 @@ function scriptedSession(scripts: any[][], over: Record<string, unknown> = {}) {
     doStream: async () => ({ stream: simulateReadableStream({ chunks: scripts[Math.min(call++, scripts.length - 1)] }) }),
   });
   const events: any[] = [];
-  const propose = vi.fn(async ({ toolUseId }: { toolUseId: string }) => proposed(toolUseId));
+  const propose = vi.fn(async ({ toolUseId, commit }: { toolUseId: string; commit(): boolean }) => {
+    if (!commit()) throw new Error('commit refused');
+    return proposed(toolUseId);
+  });
   const session = new HarnessSession({
     sessionId: 's-1', cwd: FAKE_SESSION_CWD, harness: HARNESS,
     binding: { providerId: 'openrouter', modelId: 'model' }, providerType: 'openrouter',
@@ -40,7 +43,10 @@ function scriptedSession(scripts: any[][], over: Record<string, unknown> = {}) {
 
 describe('propose_plan tool', () => {
   it('validates semantically and persists only through the injected callback', async () => {
-    const propose = vi.fn(async ({ toolUseId }: { toolUseId: string }) => proposed(toolUseId));
+    const propose = vi.fn(async ({ toolUseId, commit }: { toolUseId: string; commit(): boolean }) => {
+      if (!commit()) throw new Error('commit refused');
+      return proposed(toolUseId);
+    });
     const tool = createProposePlanTool(BUILTIN_ROSTER);
     const result = await tool.execute(VALID, {
       sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: new AbortController().signal,
@@ -62,9 +68,68 @@ describe('propose_plan tool', () => {
       sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: controller.signal,
       toolCallId: 'call-1', readRegistry: new Map(), todos: [], services: { plans: { propose } },
     });
-    expect(result).toMatchObject({ isError: true });
+    expect(result).toMatchObject({ isError: true, plan: { toolUseId: 'call-1', status: 'stopped' } });
     expect(result.text).toMatch(/canceled/i);
     expect(propose).not.toHaveBeenCalled();
+  });
+
+  it('threads an abort signal and one-shot commit guard across the persistence seam', async () => {
+    const controller = new AbortController();
+    let firstCommit: boolean | undefined;
+    let secondCommit: boolean | undefined;
+    let receivedSignal: AbortSignal | undefined;
+    const propose = vi.fn(async (proposal: any) => {
+      receivedSignal = proposal.signal;
+      firstCommit = proposal.commit();
+      secondCommit = proposal.commit();
+      return proposed(proposal.toolUseId);
+    });
+    const tool = createProposePlanTool(BUILTIN_ROSTER);
+    const result = await tool.execute(VALID, {
+      sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: controller.signal,
+      toolCallId: 'call-1', binding: { providerId: 'openrouter', modelId: 'model' },
+      readRegistry: new Map(), todos: [], services: { plans: { propose } },
+    });
+    expect(result.isError).toBe(false);
+    expect(receivedSignal).toBe(controller.signal);
+    expect(firstCommit).toBe(true);
+    expect(secondCommit).toBe(false);
+  });
+
+  it('fails the commit guard when interruption wins the persistence race', async () => {
+    const controller = new AbortController();
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => { release = resolve; });
+    let commits = 0;
+    const propose = vi.fn(async (proposal: any) => {
+      await held;
+      if (proposal.commit()) commits++;
+      return proposed(proposal.toolUseId);
+    });
+    const tool = createProposePlanTool(BUILTIN_ROSTER);
+    const pending = tool.execute(VALID, {
+      sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: controller.signal,
+      toolCallId: 'call-1', binding: { providerId: 'openrouter', modelId: 'model' },
+      readRegistry: new Map(), todos: [], services: { plans: { propose } },
+    });
+    controller.abort();
+    release();
+    const result = await pending;
+    expect(commits).toBe(0);
+    expect(result).toMatchObject({ isError: true, plan: { status: 'stopped' } });
+  });
+
+  it.each([
+    ['missing service', undefined],
+    ['callback throw', { propose: async () => { throw new Error('disk exploded'); } }],
+  ])('terminates the projection on %s', async (_name, plans) => {
+    const tool = createProposePlanTool(BUILTIN_ROSTER);
+    const result = await tool.execute(VALID, {
+      sessionId: 's-1', cwd: FAKE_SESSION_CWD, signal: new AbortController().signal,
+      toolCallId: 'call-1', binding: { providerId: 'openrouter', modelId: 'model' },
+      readRegistry: new Map(), todos: [], ...(plans ? { services: { plans } } : {}),
+    } as any);
+    expect(result).toMatchObject({ isError: true, plan: { toolUseId: 'call-1', status: 'failed' } });
   });
 
   it('returns validator issues and creates no proposal for invalid arguments', async () => {
@@ -125,6 +190,74 @@ describe('HarnessSession plan integration', () => {
     expect(results[0].data.toolResult).toMatch(/one plan-specific repair opportunity/i);
     expect(results[1].data.toolResult).toMatch(/repair exhausted/i);
     expect(results.every((event) => event.data.plan.status === 'failed')).toBe(true);
+  });
+
+  it('pairs and fails a writing plan when the provider stream rejects', async () => {
+    let call = 0;
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: call++ === 0
+          ? new ReadableStream<any>({
+              start(controller) {
+                controller.enqueue({ type: 'stream-start', warnings: [] });
+                controller.enqueue({ type: 'tool-input-start', id: 'errored-plan', toolName: 'propose_plan' });
+              },
+              pull(controller) { controller.error(new Error('provider disconnected')); },
+            })
+          : simulateReadableStream({ chunks: stream(finishChunk('stop')) }),
+      }),
+    });
+    const events: any[] = [];
+    const session = new HarnessSession({
+      sessionId: 's-1', cwd: FAKE_SESSION_CWD, harness: HARNESS,
+      binding: { providerId: 'openrouter', modelId: 'model' }, providerType: 'openrouter',
+      profile: CLOUD_DEFAULT, tools: [], skillCatalog: EMPTY_SKILL_CATALOG, mcpServers: [],
+      specialistRoster: BUILTIN_ROSTER, toolServices: { plans: { propose: vi.fn() } },
+      retryDelays: [],
+    } as any, async () => model as any);
+    session.on('transcript-event', (event) => events.push(event));
+    await session.send('make a plan');
+    const results = events.filter((event) => event.type === 'tool-result' && event.data.toolUseId === 'errored-plan');
+    expect(results).toHaveLength(1);
+    expect(results[0].data).toMatchObject({ isError: true, plan: { status: 'failed' } });
+    expect(events.some((event) => event.type === 'session-error')).toBe(true);
+  });
+
+  it('gives invalid propose_plan siblings one shared repair turn', async () => {
+    const bad = { ...VALID, steps: [{ ...VALID.steps[0], specialist: 'missing' }] };
+    const { session, events, propose, calls } = scriptedSession([
+      stream(
+        toolCallChunk('bad-a', 'propose_plan', bad),
+        toolCallChunk('bad-b', 'propose_plan', bad),
+        finishChunk('tool-calls'),
+      ),
+      stream(toolCallChunk('fixed', 'propose_plan', VALID), finishChunk('tool-calls')),
+      stream(...textChunks('done', 'Plan ready.'), finishChunk('stop')),
+    ]);
+    await session.send('make a plan');
+    expect(calls()).toBe(3);
+    expect(propose).toHaveBeenCalledTimes(1);
+    expect(events.find((event) => event.type === 'tool-result' && event.data.toolUseId === 'bad-a')?.data.toolResult).toMatch(/repair opportunity/i);
+    expect(events.find((event) => event.type === 'tool-result' && event.data.toolUseId === 'bad-b')?.data.toolResult).toMatch(/not run.*sibling/i);
+    expect(events.find((event) => event.type === 'tool-result' && event.data.toolUseId === 'fixed')?.data.plan.status).toBe('proposed');
+  });
+
+  it('removes and restores propose_plan across actual setBinding eligibility transitions', () => {
+    const { session } = scriptedSession([stream(finishChunk('stop'))]);
+    const tools = () => Object.keys((session as any).buildAiTools());
+    expect(tools()).toContain('propose_plan');
+
+    const small = resolveProfile({ providerType: 'local-engine', modelId: 'Qwen3.5-2B-Q8_0', contextLength: 32_768 });
+    session.setBinding({ providerId: 'local', modelId: 'Qwen3.5-2B-Q8_0' }, 32_768, small, null, true, 'local-engine');
+    expect(tools()).not.toContain('propose_plan');
+
+    session.setBinding({ providerId: 'openrouter', modelId: 'model-2' }, null, CLOUD_DEFAULT, null, false, 'openrouter');
+    expect(tools()).toContain('propose_plan');
+  });
+
+  it('fails closed when providerType is absent', () => {
+    const { session } = scriptedSession([stream(finishChunk('stop'))], { providerType: undefined });
+    expect(Object.keys((session as any).buildAiTools())).not.toContain('propose_plan');
   });
 
   it('pairs and terminates a truncated plan input without calling the model again or persisting', async () => {
