@@ -31,28 +31,30 @@
 //
 // Usage: node test-engine/probe-plan-grammar.mjs <baseURL> <modelId> [trials=3]
 import Ajv from 'ajv';
+import { pathToFileURL } from 'node:url';
 
-const [base, model, trialsArg] = process.argv.slice(2);
-if (!base || !model) { console.error('usage: probe-plan-grammar.mjs <baseURL> <modelId> [trials]'); process.exit(2); }
-const TRIALS = Number(trialsArg ?? 3);
-if (!Number.isInteger(TRIALS) || TRIALS < 1) { console.error(`usage: trials must be a positive integer, got "${trialsArg}"`); process.exit(2); }
+let base;
+let model;
+let TRIALS;
 
-const STEP_SCHEMA = {
+// Exported so the production schema can be pinned byte-for-byte (as data) to
+// the exact constrained-decoding grammar that the live model probe exercised.
+export const STEP_SCHEMA = {
   $defs: {
     step: {
       type: 'object',
       additionalProperties: false,
       required: ['id', 'kind', 'specialist', 'task', 'budget_tokens'],
       properties: {
-        id: { type: 'string', description: 'Short unique step id, e.g. "s1".' },
+        id: { type: 'string', minLength: 1, maxLength: 64, description: 'Short unique step id, e.g. "s1".' },
         kind: { type: 'string', enum: ['map', 'verify', 'combine', 'repeat'] },
         specialist: { type: 'string', enum: ['explorer', 'researcher', 'reviewer', 'worker'] },
-        task: { type: 'string', description: 'What each child does. For map, may reference {item}.' },
+        task: { type: 'string', minLength: 1, maxLength: 4000, description: 'What each child does. For map, may reference {item}.' },
         budget_tokens: { type: 'integer', minimum: 500, maximum: 20000 },
-        items: { type: 'array', items: { type: 'string' }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
-        of: { type: 'string', description: 'verify/combine: the id of the step whose results this consumes.' },
+        items: { type: 'array', items: { type: 'string', minLength: 1, maxLength: 2000 }, minItems: 1, maxItems: 8, description: 'map only: one child per item.' },
+        of: { type: 'string', minLength: 1, maxLength: 64, description: 'verify/combine: the id of the step whose results this consumes.' },
         max_iterations: { type: 'integer', minimum: 1, maximum: 5, description: 'repeat only: hard cap.' },
-        until: { type: 'string', description: 'repeat only: plain-words stop condition.' },
+        until: { type: 'string', minLength: 1, maxLength: 2000, description: 'repeat only: plain-words stop condition.' },
         steps: { type: 'array', items: { $ref: '#/$defs/step' }, minItems: 1, maxItems: 4, description: 'repeat only: the steps to repeat.' },
       },
     },
@@ -61,7 +63,7 @@ const STEP_SCHEMA = {
   additionalProperties: false,
   required: ['goal', 'steps'],
   properties: {
-    goal: { type: 'string', description: 'One sentence: what the whole plan achieves.' },
+    goal: { type: 'string', minLength: 1, maxLength: 2000, description: 'One sentence: what the whole plan achieves.' },
     steps: { type: 'array', items: { $ref: '#/$defs/step' }, minItems: 1, maxItems: 6 },
   },
 };
@@ -126,7 +128,15 @@ async function trial(i) {
   return { i, wall, outcome: sense.length ? `VALID BUT ODD (${sense.join('; ')})` : 'VALID + SENSIBLE', kinds, args };
 }
 
-(async () => {
+async function main() {
+  const [baseArg, modelArg, trialsArg] = process.argv.slice(2);
+  if (!baseArg || !modelArg) { console.error('usage: probe-plan-grammar.mjs <baseURL> <modelId> [trials]'); process.exitCode = 2; return; }
+  const parsedTrials = Number(trialsArg ?? 3);
+  if (!Number.isInteger(parsedTrials) || parsedTrials < 1) { console.error(`usage: trials must be a positive integer, got "${trialsArg}"`); process.exitCode = 2; return; }
+  base = baseArg;
+  model = modelArg;
+  TRIALS = parsedTrials;
+
   console.log(`probe-plan-grammar: ${model} @ ${base}, ${TRIALS} trials`);
   const results = [];
   for (let i = 1; i <= TRIALS; i++) {
@@ -145,4 +155,8 @@ async function trial(i) {
   if (truncated) console.log(`\n${truncated}/${TRIALS} trials were cut off by max_tokens — a budget failure, not a grammar failure.`);
   const sensible = results.filter((r) => r.outcome === 'VALID + SENSIBLE').length;
   console.log(`\nSUMMARY ${model}: ${valid}/${TRIALS} schema-valid, ${sensible}/${TRIALS} valid and sensible`);
-})().catch((e) => { console.error(String(e.message || e)); process.exit(1); });
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  main().catch((e) => { console.error(String(e.message || e)); process.exitCode = 1; });
+}

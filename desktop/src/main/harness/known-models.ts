@@ -58,7 +58,7 @@ export const KNOWN_MODELS: KnownModelEntry[] = [
   //       window, which is why it is not guessed lower.
   //   (b) 'simplified' is a capability judgment from parameter count, not a
   //       sourced claim about this model's tool-calling.
-  { match: 'qwen\\W?3\\.?5.*[0-4]b', label: 'Qwen 3.5 (small, ≤4B)', maxToolPresentation: 'simplified', doomLoopThreshold: 2, supportsTools: true, maxContextWindow: 262144 },
+  { match: 'qwen\\W?3\\.?5(?:(?!\\d+b).)*[0-4]b', label: 'Qwen 3.5 (small, ≤4B)', maxToolPresentation: 'simplified', doomLoopThreshold: 2, supportsTools: true, maxContextWindow: 262144 },
   // Qwen 3.5 "large": CORRECTED from the seed assumption of dense — research found no dense
   // Qwen 3.5 variant above 27B. The actual large-end release is 122B-A10B, an MoE model
   // (122B total / 10B active, 256 experts). Keeping "70b" in the match pattern as a tolerant

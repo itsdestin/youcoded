@@ -1,7 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import { PLAN_DOCUMENT_JSON_SCHEMA, PlanDocumentSchema } from '../src/main/harness/plans/schema';
 import { validatePlanDocument } from '../src/main/harness/plans/validator';
-import { BUILTIN_ROSTER } from '../src/main/harness/specialists/registry';
+import { BUILTIN_ROSTER, type SpecialistRoster } from '../src/main/harness/specialists/registry';
+import { STEP_SCHEMA as PROBE_PLAN_DOCUMENT_JSON_SCHEMA } from '../test-engine/probe-plan-grammar.mjs';
 
 const mapVerifyCombine = {
   goal: 'Review each source and produce one report.',
@@ -24,11 +25,64 @@ const nestedRepeat = {
 };
 
 describe('plan schema and semantic validator', () => {
-  it('keeps the probe-compatible strict recursive JSON schema', () => {
-    expect(PLAN_DOCUMENT_JSON_SCHEMA.additionalProperties).toBe(false);
+  it('pins the complete model-facing schema to the schema proven by the live probe', () => {
+    expect(PLAN_DOCUMENT_JSON_SCHEMA).toEqual(PROBE_PLAN_DOCUMENT_JSON_SCHEMA);
+    expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.specialist.enum).toEqual(['explorer', 'researcher', 'reviewer', 'worker']);
     expect(PLAN_DOCUMENT_JSON_SCHEMA.$defs.step.properties.steps.items.$ref).toBe('#/$defs/step');
     expect(PlanDocumentSchema.safeParse(mapVerifyCombine).success).toBe(true);
     expect(PlanDocumentSchema.safeParse(nestedRepeat).success).toBe(true);
+  });
+
+  it('keeps the live semantic specialist field open to custom roster ids', () => {
+    const custom = { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], specialist: 'security-auditor' }] };
+    const customDefinition = { ...BUILTIN_ROSTER.list()[0], id: 'security-auditor' };
+    const roster: SpecialistRoster = {
+      list: () => [...BUILTIN_ROSTER.list(), customDefinition],
+      resolve: (id) => id === customDefinition.id ? customDefinition : BUILTIN_ROSTER.resolve(id),
+    };
+    expect(PlanDocumentSchema.safeParse(custom).success).toBe(true);
+    expect(validatePlanDocument(custom, roster).ok).toBe(true);
+  });
+
+  it.each([
+    ['goal', { ...mapVerifyCombine, goal: '' }],
+    ['goal length', { ...mapVerifyCombine, goal: 'g'.repeat(2_001) }],
+    ['id', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], id: '' }] }],
+    ['id length', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], id: 'i'.repeat(65) }] }],
+    ['task', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], task: '' }] }],
+    ['task length', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], task: 't'.repeat(4_001) }] }],
+    ['of', { ...mapVerifyCombine, steps: [mapVerifyCombine.steps[0], { ...mapVerifyCombine.steps[1], of: '' }] }],
+    ['of length', { ...mapVerifyCombine, steps: [mapVerifyCombine.steps[0], { ...mapVerifyCombine.steps[1], of: 'o'.repeat(65) }] }],
+    ['until', { ...nestedRepeat, steps: [{ ...nestedRepeat.steps[0], until: '' }] }],
+    ['until length', { ...nestedRepeat, steps: [{ ...nestedRepeat.steps[0], until: 'u'.repeat(2_001) }] }],
+    ['item', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], items: [''] }] }],
+    ['item length', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], items: ['x'.repeat(2_001)] }] }],
+  ])('rejects empty or oversized %s text', (_name, document) => {
+    expect(PlanDocumentSchema.safeParse(document).success).toBe(false);
+  });
+
+  it.each([
+    ['goal', { ...mapVerifyCombine, goal: '   ' }],
+    ['id', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], id: '   ' }] }],
+    ['task', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], task: '\n\t' }] }],
+    ['of', { ...mapVerifyCombine, steps: [mapVerifyCombine.steps[0], { ...mapVerifyCombine.steps[1], of: '  ' }] }],
+    ['until', { ...nestedRepeat, steps: [{ ...nestedRepeat.steps[0], until: '\t' }] }],
+    ['item', { ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], items: ['\n'] }] }],
+  ])('rejects whitespace-only %s text', (_name, document) => {
+    expect(PlanDocumentSchema.safeParse(document).success).toBe(false);
+  });
+
+  it('accepts every text field at its exact bound', () => {
+    const document = {
+      goal: 'g'.repeat(2_000),
+      steps: [{
+        id: 'i'.repeat(64), kind: 'repeat', specialist: 'worker', task: 't'.repeat(4_000), budget_tokens: 500,
+        max_iterations: 1, until: 'u'.repeat(2_000), steps: [{
+          id: 'm'.repeat(64), kind: 'map', specialist: 'worker', task: 't', budget_tokens: 500, items: ['x'.repeat(2_000)],
+        }],
+      }],
+    };
+    expect(PlanDocumentSchema.safeParse(document).success).toBe(true);
   });
 
   it('accepts a valid map → verify → combine document and derives every attempt', () => {
@@ -66,5 +120,27 @@ describe('plan schema and semantic validator', () => {
     expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[1], of: 'combine' }] }, BUILTIN_ROSTER).ok).toBe(false);
     expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], specialist: 'missing' }] }, BUILTIN_ROSTER).ok).toBe(false);
     expect(validatePlanDocument({ ...mapVerifyCombine, steps: [{ ...mapVerifyCombine.steps[0], budget_tokens: 499 }] }, BUILTIN_ROSTER).ok).toBe(false);
+  });
+
+  it('allows repeat-body references only to globally earlier steps or earlier siblings', () => {
+    const valid = structuredClone(nestedRepeat);
+    valid.steps.unshift({ ...mapVerifyCombine.steps[0], id: 'source' });
+    valid.steps[1].steps[0].id = 'draft';
+    valid.steps[1].steps[1].of = 'source';
+    expect(validatePlanDocument(valid, BUILTIN_ROSTER).ok).toBe(true);
+
+    const self = structuredClone(nestedRepeat);
+    self.steps[0].steps[1].of = 'check';
+    expect(validatePlanDocument(self, BUILTIN_ROSTER).ok).toBe(false);
+
+    const laterSibling = structuredClone(nestedRepeat);
+    laterSibling.steps[0].steps[0] = { ...mapVerifyCombine.steps[1], id: 'early-check', of: 'later-map' };
+    laterSibling.steps[0].steps[1] = { ...mapVerifyCombine.steps[0], id: 'later-map' };
+    expect(validatePlanDocument(laterSibling, BUILTIN_ROSTER).ok).toBe(false);
+
+    const laterTopLevel = structuredClone(nestedRepeat);
+    laterTopLevel.steps[0].steps[1].of = 'after-repeat';
+    laterTopLevel.steps.push({ ...mapVerifyCombine.steps[0], id: 'after-repeat' });
+    expect(validatePlanDocument(laterTopLevel, BUILTIN_ROSTER).ok).toBe(false);
   });
 });
