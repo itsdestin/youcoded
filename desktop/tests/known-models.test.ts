@@ -26,6 +26,26 @@ describe('known-models registry', () => {
     expect(match?.label).toBe(large.label);
     expect(match?.maxToolPresentation).toBe('full');
   });
+  it.each([
+    ['Qwen3.5-9B-Q8_0', 'Qwen 3.5 9B'],
+    ['unsloth_Qwen3.5_9B_GGUF', 'Qwen 3.5 9B'],
+    ['Qwen3.5-27B-Q4', 'Qwen 3.5 27B'],
+    ['unsloth_Qwen3.5_27B_GGUF', 'Qwen 3.5 27B'],
+  ])('matches the reviewed exact parameter class across supported punctuation: %s', (modelId, label) => {
+    expect(matchKnownModel(modelId)?.label).toBe(label);
+  });
+
+  it.each([
+    ['Qwen3.5-29B-Q4', 'Qwen 3.5 9B'],
+    ['unsloth_Qwen3.5_29B_GGUF', 'Qwen 3.5 9B'],
+    ['Qwen3.5-127B-Q4', 'Qwen 3.5 27B'],
+    ['unsloth_Qwen3.5_127B_GGUF', 'Qwen 3.5 27B'],
+  ])('does not match a lookalike parameter count as a reviewed class: %s', (modelId, reviewedLabel) => {
+    const reviewed = KNOWN_MODELS.find((entry) => entry.label === reviewedLabel)!;
+    expect(new RegExp(reviewed.match, 'i').test(modelId)).toBe(false);
+    expect(matchKnownModel(modelId)?.label).not.toBe(reviewedLabel);
+  });
+
   it('every entry carries a verified supportsTools boolean and a context ceiling', () => {
     for (const e of KNOWN_MODELS) {
       expect(typeof e.supportsTools).toBe('boolean');

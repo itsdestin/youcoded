@@ -42,10 +42,10 @@ export const KNOWN_MODELS: KnownModelEntry[] = [
   // tighter doom-loop. Native 262,144-token context (YaRN-extensible to ~1,010,000).
   // Tool calling confirmed via model card's Agentic Usage section (qwen3_coder parser).
   // source: https://huggingface.co/Qwen/Qwen3.5-9B
-  { match: 'qwen\\W?3\\.?5.*9b', label: 'Qwen 3.5 9B', maxToolPresentation: 'simplified', doomLoopThreshold: 2, supportsTools: true, maxContextWindow: 262144 },
+  { match: 'qwen\\W?3\\.?5.*(?<!\\d)9b(?!\\d)', label: 'Qwen 3.5 9B', maxToolPresentation: 'simplified', doomLoopThreshold: 2, supportsTools: true, maxContextWindow: 262144 },
   // Reviewed 27B local class for plan authoring. It remains a distinct registry
   // row so eligibility can fail closed for lookalike/unknown local model ids.
-  { match: 'qwen\\W?3\\.?5.*27b', label: 'Qwen 3.5 27B', maxToolPresentation: 'full', doomLoopThreshold: 3, supportsTools: true, maxContextWindow: 262144 },
+  { match: 'qwen\\W?3\\.?5.*(?<!\\d)27b(?!\\d)', label: 'Qwen 3.5 27B', maxToolPresentation: 'full', doomLoopThreshold: 3, supportsTools: true, maxContextWindow: 262144 },
   // Qwen 3.5 small (≤4B). Exists for a specific reason: without an entry, a 2B
   // fell through to the window-only fallback, which read the `-c 128000` it was
   // launched with, judged it a full-capability model, and handed it the whole

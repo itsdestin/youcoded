@@ -23,6 +23,10 @@ describe('plan eligibility', () => {
   it('fails closed for 2B, unreviewed 122B, Gemma, unknown local, tool-less, and child sessions', () => {
     expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'Qwen3.5-2B-Q8_0' }))).toBe(false);
     expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'Qwen3.5-122B-A10B-Q4_K_M' }))).toBe(false);
+    expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'Qwen3.5-29B-Q4' }))).toBe(false);
+    expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'unsloth_Qwen3.5_29B_GGUF' }))).toBe(false);
+    expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'Qwen3.5-127B-Q4' }))).toBe(false);
+    expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'unsloth_Qwen3.5_127B_GGUF' }))).toBe(false);
     expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'Gemma-4-27B-it-Q4' }))).toBe(false);
     expect(isPlanEligible(session({ providerType: 'local-engine', modelId: 'unreviewed-70b' }))).toBe(false);
     expect(isPlanEligible(session({ supportsTools: false }))).toBe(false);
