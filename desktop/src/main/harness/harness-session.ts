@@ -141,6 +141,8 @@ import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
 import { createTaskTool } from './tools/task';
+import { createProposePlanTool, failedPlanProjection, writingPlanProjection } from './tools/propose-plan';
+import { isPlanEligible } from './plans/eligibility';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
 import type { ShellRegistry } from './shell-registry';
@@ -159,6 +161,10 @@ import { log } from '../logger';
 
 export interface HarnessSessionOpts {
   sessionId: string; cwd: string; harness: HarnessManifest; binding: ModelBinding;
+  /** Resolved provider type. WHY retained beside the profile: plan eligibility
+   *  distinguishes reviewed local models from cloud routes; profile alone
+   *  intentionally erases that provenance. */
+  providerType?: import('./capability-profile').ProfileProviderType;
   /** Model context window (from the catalog); null → conservative 32k default. */
   contextLength?: number | null;
   /** Resolved price for the bound model, or null when none is published.
@@ -299,6 +305,10 @@ interface StepResult {
    *  card would spin beside the retry's own cards until the turn ends (the
    *  same reason the manual-Retry and stall-retry paths withdraw theirs). */
   pendingPreparing: { toolCallId: string; toolName: string; chars: number }[];
+  /** propose_plan calls announced through tool-input-start. WHY carried out of
+   *  stream consumption: truncation/abort must close the ordinary tool-use shell
+   *  even when no completed SDK tool-call part ever arrives. */
+  writingPlanIds: string[];
 }
 
 // v7 stream parts carry the chunk in .text (verified against ai@7.0.22:
@@ -808,7 +818,8 @@ export class HarnessSession extends EventEmitter {
    *  capability tiers (e.g. cloud → small local), so the host re-resolves the
    *  profile and passes it in; applied only when provided. */
   setBinding(binding: ModelBinding, contextLength?: number | null, profile?: CapabilityProfile,
-             pricing?: ModelPricing | null, free?: boolean): void {
+             pricing?: ModelPricing | null, free?: boolean,
+             providerType?: import('./capability-profile').ProfileProviderType): void {
     this.binding = binding;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
@@ -817,6 +828,7 @@ export class HarnessSession extends EventEmitter {
     // model had, so `null` is a real value here and only `undefined` skips.
     if (pricing !== undefined) this.opts.pricing = pricing;
     if (free !== undefined) this.opts.free = free;
+    if (providerType !== undefined) this.opts.providerType = providerType;
   }
 
   /** What this session's CURRENT model costs to run, as resolved when the
@@ -1026,6 +1038,20 @@ export class HarnessSession extends EventEmitter {
     if (!this.toolByName.has('ModelSearch')) this.toolByName.set('ModelSearch', ModelSearchTool);
   }
 
+  /** Keep propose_plan aligned with the CURRENT binding and session kind.
+   * WHY this is separate from Task's canDelegate gate: plan authoring has its
+   * own reviewed-local threshold, while every cloud tool-capable route qualifies. */
+  private syncPlanTool(): void {
+    const wanted = isPlanEligible({
+      providerType: this.opts.providerType ?? 'openrouter',
+      modelId: this.binding.modelId,
+      supportsTools: this.profile.supportsTools,
+      isSpecialistChild: this.opts.isSpecialistChild ?? false,
+    });
+    if (!wanted) { this.toolByName.delete('propose_plan'); return; }
+    this.toolByName.set('propose_plan', createProposePlanTool(this.opts.specialistRoster ?? BUILTIN_ROSTER));
+  }
+
   /** Add or remove MCP server tools to match the CURRENT profile's budget
    *  (Task 6, spec §6).
    *
@@ -1114,6 +1140,7 @@ export class HarnessSession extends EventEmitter {
     if (!this.profile.supportsTools) { this._droppedMcpServers = []; return {}; }
     this.syncSkillTool();
     this.syncTaskTool();
+    this.syncPlanTool();
     this.syncMcpTools();
     // Simplified presentation (spec §4.2): small local models get each tool's
     // compact shortDescription (falling back to the full description when a tool
@@ -1851,6 +1878,9 @@ export class HarnessSession extends EventEmitter {
     // it, so an all-empty turn costs exactly two provider calls.
     let consecutiveEmptySteps = 0;
     let stopReason = 'end_turn';
+    // One repair is an ordinary next loop iteration, not an out-of-band provider
+    // call. WHY turn-scoped: a later user request gets its own fresh opportunity.
+    let planRepairUsed = false;
     // Latest step's partial text — the ONLY thing the catch pushes to history
     // (earlier steps already pushed their assistant + tool messages). Reset per
     // step; an immediate-error retry never touches it (it emits nothing before
@@ -1936,10 +1966,32 @@ export class HarnessSession extends EventEmitter {
         // v0 interrupt semantics: push the partial, emit user-interrupt, return.
         // (An interrupted turn NEVER completes as a normal turn-complete.)
         if (step.interrupted || this.interrupted || this.abort.signal.aborted) {
-          // trim() gate: same emptiness class as stepHasText below — a
-          // whitespace-only partial is no partial at all, and recording it
-          // leaves a junk assistant message in history for every later turn.
-          if (step.text && step.text.trim().length > 0) this.history.push({ role: 'assistant', content: step.text });
+          // A started plan input already has a visible ordinary tool-use shell.
+          // WHY pair it here: no completed SDK tool-call exists to enter the
+          // normal execution loop, but leaving it unmatched or writing forever
+          // would corrupt both transcript history and the plan card lifecycle.
+          const canceledPlans = step.writingPlanIds.map((toolUseId) => ({
+            toolCallId: toolUseId, toolName: 'propose_plan', input: {},
+          }));
+          for (const call of canceledPlans) {
+            const terminal = failedPlanProjection(call.toolCallId, this.binding.modelId);
+            this.emitEvent('tool-result', {
+              toolUseId: call.toolCallId, toolName: call.toolName, toolResult: CANCELED_TOOL_TEXT,
+              isError: true, plan: terminal,
+            });
+          }
+          if (canceledPlans.length > 0) {
+            // The provider never emitted a completed call, so synthesize only the
+            // model-history pair represented by the already-emitted transcript
+            // shell/result. WHY: live continuation and restart replay must agree.
+            this.history.push(this.assistantMessage(step.text, canceledPlans));
+            this.history.push({ role: 'tool', content: canceledPlans.map((call) => this.toolResultPart(call, CANCELED_TOOL_TEXT)) });
+          } else if (step.text && step.text.trim().length > 0) {
+            // trim() gate: same emptiness class as stepHasText below — a
+            // whitespace-only partial is no partial at all, and recording it
+            // leaves a junk assistant message in history for every later turn.
+            this.history.push({ role: 'assistant', content: step.text });
+          }
           this.emitEvent('user-interrupt', {});
           return;
         }
@@ -2015,11 +2067,35 @@ export class HarnessSession extends EventEmitter {
         consecutiveEmptySteps = 0;   // any real step re-arms the single retry
 
         if (step.toolCalls.length === 0) {
+          // A plan-input stream that ended without a completed tool-call is not
+          // a generic preparing orphan: it already projected `writing`, so close
+          // it through a paired ordinary result and do not silently retry a
+          // truncated/invalid provider response.
+          if (step.writingPlanIds.length > 0) {
+            const calls = step.writingPlanIds.map((toolUseId) => ({ toolCallId: toolUseId, toolName: 'propose_plan', input: {} }));
+            const text = step.finishReason === 'length'
+              ? 'Plan proposal failed: the model response was truncated before the plan arguments completed.'
+              : 'Plan proposal failed: the plan arguments did not complete.';
+            for (const call of calls) {
+              const terminal = failedPlanProjection(call.toolCallId, this.binding.modelId);
+              this.emitEvent('tool-result', { toolUseId: call.toolCallId, toolName: call.toolName, toolResult: text, isError: true, plan: terminal });
+            }
+            // Match the transcript pair in model history even though the SDK did
+            // not complete the call; otherwise a later turn's wire request and a
+            // restart rebuild would disagree about whether this call existed.
+            this.history.push(this.assistantMessage(step.text, calls));
+            this.history.push({ role: 'tool', content: calls.map((call) => this.toolResultPart(call, text)) });
+          }
           // Natural stop. finishReason 'length' (truncated output, including a
           // truncated tool-call) collapses to 'max_tokens' via mapStopReason.
           stopReason = mapStopReason(step.finishReason);
           break;
         }
+
+        // A completed call supersedes its stream-start shell by stable id. Keep
+        // only non-plan entries in the generic preparing withdrawal path: plan
+        // writing is replaced below by the ordinary tool-use/result lifecycle.
+        step.pendingPreparing = step.pendingPreparing.filter((prep) => prep.toolName !== 'propose_plan');
 
         // Emit ALL of this step's tool-use events FIRST (one per call, in order),
         // THEN execute serially — so the persisted event stream mirrors the
@@ -2042,14 +2118,29 @@ export class HarnessSession extends EventEmitter {
         this.withdrawOrphanedPreparing(step.pendingPreparing);
 
         for (const call of step.toolCalls) {
-          this.emitEvent('tool-use', { toolUseId: call.toolCallId, toolName: call.toolName, toolInput: call.input });
+          // tool-input-start already emitted the plan's one persisted tool-use
+          // shell under this id. WHY do not duplicate it here: reducer placement
+          // is idempotent, but replay/history pairing must not depend on silently
+          // deduplicating two uses for one result.
+          if (call.toolName === 'propose_plan' && step.writingPlanIds.includes(call.toolCallId)) continue;
+          this.emitEvent('tool-use', {
+            toolUseId: call.toolCallId, toolName: call.toolName, toolInput: call.input,
+            // Providers that omit tool-input-start still get the same stable
+            // writing projection at the completed-call seam.
+            ...(call.toolName === 'propose_plan'
+              ? { plan: writingPlanProjection(call.toolCallId, this.binding.modelId) }
+              : {}),
+          });
         }
 
         // Execute tool calls SERIALLY; collect their results for the next step.
         const resultParts: any[] = [];
         for (let i = 0; i < step.toolCalls.length; i++) {
           const call = step.toolCalls[i];
-          const payload = await this.runOneTool(call, recentCalls);   // NEVER throws
+          const payload = await this.runOneTool(call, recentCalls, planRepairUsed);   // NEVER throws
+          if (payload !== 'interrupted' && !('kind' in payload) && payload.planArgsInvalid) {
+            planRepairUsed = true;
+          }
           if (payload === 'interrupted') {
             // Interrupt during a permission ask. Back-fill canceled tool-results
             // for THIS call AND every remaining un-executed call in the step
@@ -2101,13 +2192,36 @@ export class HarnessSession extends EventEmitter {
           this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
+            ...(payload.plan ? { plan: payload.plan } : {}),
             ...(payload.structuredPatch ? { structuredPatch: payload.structuredPatch } : {}),
             // Paths only — events carry no binary; resume re-reads (history-rebuild.ts).
             ...(delivered.images.length ? { images: delivered.images.map((i) => i.path) } : {}),
           });
           resultParts.push(this.toolResultPart(call, delivered.text, delivered.images));
+          if (payload.planRepairExhausted) {
+            // Exactly one repair is safe only inside this established agent loop.
+            // WHY stop here: a third provider call would exceed that contract.
+            // Pair every sibling the model already emitted, but execute none of
+            // them after repair exhaustion — termination means termination even
+            // on a provider capable of parallel tool calls.
+            stopReason = 'plan_repair_exhausted';
+            for (let j = i + 1; j < step.toolCalls.length; j++) {
+              const rem = step.toolCalls[j];
+              const text = 'Not run: the plan repair opportunity was exhausted.';
+              const plan = rem.toolName === 'propose_plan'
+                ? failedPlanProjection(rem.toolCallId, this.binding.modelId)
+                : undefined;
+              this.emitEvent('tool-result', {
+                toolUseId: rem.toolCallId, toolName: rem.toolName,
+                toolResult: text, isError: true, ...(plan ? { plan } : {}),
+              });
+              resultParts.push(this.toolResultPart(rem, text));
+            }
+            break;
+          }
         }
         this.history.push({ role: 'tool', content: resultParts });
+        if (stopReason === 'plan_repair_exhausted') break turnLoop;
         // Path-triggered content (M3 item 3): a project rule or a nested
         // AGENTS.md/CLAUDE.md governing a path this step just touched. Appended
         // AFTER the tool results so the model reads the rule alongside what it
@@ -2624,9 +2738,22 @@ export class HarnessSession extends EventEmitter {
             const prepName = typeof part.toolName === 'string' ? part.toolName : '';
             if (!prepId || !prepName) break;
             preparing.set(prepId, { toolName: prepName, chars: 0, lastEmitAt: Date.now() });
-            this.emitEvent('assistant-thinking', {
-              toolPreparing: { toolCallId: prepId, toolName: prepName, chars: 0 },
-            });
+            if (prepName === 'propose_plan') {
+              // Unlike ordinary preparing cards, a plan has a stable product
+              // lifecycle while arguments stream. WHY emit the EXISTING tool-use
+              // event here: the renderer already anchors PlanView to that card,
+              // and the completed call/result reuse this provider-stable id.
+              this.emitEvent('tool-use', {
+                toolUseId: prepId,
+                toolName: prepName,
+                toolInput: {},
+                plan: writingPlanProjection(prepId, this.binding.modelId),
+              });
+            } else {
+              this.emitEvent('assistant-thinking', {
+                toolPreparing: { toolCallId: prepId, toolName: prepName, chars: 0 },
+              });
+            }
             break;
           }
           case 'tool-input-delta': {
@@ -2714,7 +2841,7 @@ export class HarnessSession extends EventEmitter {
     if (interrupted || this.interrupted || abortSignal.aborted) {
       // Don't await usage/finishReason on the interrupt path — the stream was
       // torn down; those promises may never settle.
-      return { text: assistantText, toolCalls, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, finishReason: undefined, interrupted: true, generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0, pendingPreparing: [] };
+      return { text: assistantText, toolCalls, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, finishReason: undefined, interrupted: true, generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0, pendingPreparing: [], writingPlanIds: [...preparing].filter(([, entry]) => entry.toolName === 'propose_plan').map(([id]) => id) };
     }
 
     const usage = await result.usage;
@@ -2732,6 +2859,7 @@ export class HarnessSession extends EventEmitter {
       text: assistantText,
       toolCalls,
       pendingPreparing,
+      writingPlanIds: [...preparing].filter(([, entry]) => entry.toolName === 'propose_plan').map(([id]) => id),
       usage: {
         inputTokens: usage?.inputTokens ?? 0,
         outputTokens: usage?.outputTokens ?? Math.ceil(outputChars / APPROX_CHARS_PER_TOKEN),
@@ -2754,7 +2882,7 @@ export class HarnessSession extends EventEmitter {
    *  every failure mode is a tool RESULT the model can repair from, except a
    *  user cancel which returns the 'interrupted' sentinel, and a dismissed
    *  question which returns EndTurnResult — both let the loop unwind. */
-  private async runOneTool(call: ToolCall, recentCalls: string[]): Promise<ToolResultPayload | 'interrupted' | EndTurnResult> {
+  private async runOneTool(call: ToolCall, recentCalls: string[], planRepairUsed = false): Promise<ToolResultPayload | 'interrupted' | EndTurnResult> {
     const tool = this.toolByName.get(call.toolName);
     if (!tool) return { text: `Unknown tool ${call.toolName}. Available: ${[...this.toolByName.keys()].join(', ')}.`, isError: true };
 
@@ -2782,7 +2910,14 @@ export class HarnessSession extends EventEmitter {
       // Worded in arg-errors.ts (ledger D-2): names the unknown / missing /
       // mistyped parameter and, for an unknown one, the parameters that exist —
       // the strict schemas below make that the common case for CC-trained models.
-      return { text: formatArgErrors(call.toolName, parsed.error, tool.inputSchema), isError: true };
+      const detail = formatArgErrors(call.toolName, parsed.error, tool.inputSchema);
+      if (call.toolName === 'propose_plan') {
+        const terminal = failedPlanProjection(call.toolCallId, this.binding.modelId);
+        return planRepairUsed
+          ? { text: `${detail}\nPlan repair exhausted; stop and wait for the user's next message.`, isError: true, plan: terminal, planArgsInvalid: true, planRepairExhausted: true }
+          : { text: `${detail}\nYou have exactly one plan-specific repair opportunity. Call propose_plan once more with corrected arguments.`, isError: true, plan: terminal, planArgsInvalid: true };
+      }
+      return { text: detail, isError: true };
     }
     const args = parsed.data;
 
@@ -2876,9 +3011,14 @@ export class HarnessSession extends EventEmitter {
 
     // 4. Configured decision. An external-directory path forces 'ask' regardless
     //    of rules; otherwise consult decide() (default: ask — never silent-allow).
-    const decision: PermissionDecision = externalAsk
-      ? { action: 'ask', denyListed: false }
-      : await (this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
+    const decision: PermissionDecision = call.toolName === 'propose_plan'
+      // Proposing is not execution consent: it only creates the card whose
+      // Approve action authorizes specialists. WHY skip an approval ask here:
+      // asking before the proposal exists would duplicate and invert that flow.
+      ? { action: 'allow', denyListed: false }
+      : externalAsk
+        ? { action: 'ask', denyListed: false }
+        : await (this.opts.decide?.(call.toolName, subject) ?? Promise.resolve<PermissionDecision>({ action: 'ask', denyListed: false }));
     // A deny may carry its own model-facing reason (PermissionDecision.message):
     // the specialist caps (child-permissions.ts) refuse with "not available to
     // this specialist" / "read-only charter", which tells the model what to do
@@ -2924,7 +3064,7 @@ export class HarnessSession extends EventEmitter {
 
     // 5. Execute (defineTool owns truncation + the actionable-error catch).
     this.toolCallCount += 1;
-    return tool.execute(args, {
+    const payload = await tool.execute(args, {
       sessionId: this.opts.sessionId,
       cwd: this.opts.cwd,
       signal: this.abort!.signal,
@@ -2957,6 +3097,21 @@ export class HarnessSession extends EventEmitter {
       supportsVision: this.profile.supportsVision,
       ...(this.opts.toolServices ? { services: this.opts.toolServices } : {}),
     });
+    if (call.toolName !== 'propose_plan' || !payload.planArgsInvalid) return payload;
+
+    const terminal = payload.plan ?? failedPlanProjection(call.toolCallId, this.binding.modelId);
+    return planRepairUsed
+      ? {
+          ...payload,
+          text: `${payload.text}\nPlan repair exhausted; stop and wait for the user's next message.`,
+          plan: terminal,
+          planRepairExhausted: true,
+        }
+      : {
+          ...payload,
+          text: `${payload.text}\nYou have exactly one plan-specific repair opportunity. Call propose_plan once more with corrected arguments.`,
+          plan: terminal,
+        };
   }
 
   /** Exponential backoff for transient provider errors (429/5xx/network),

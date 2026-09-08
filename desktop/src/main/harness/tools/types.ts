@@ -7,6 +7,8 @@ import type { CatalogModel, ModelBinding } from '../../../shared/provider-types'
 import type { SpecialistDefinition } from '../specialists/registry';
 import type { DelegatedModels } from '../specialists/delegated-models';
 import type { ShellRegistry } from '../shell-registry';
+import type { PlanView } from '../../../shared/types';
+import type { PlanDocumentV1 } from '../plans/schema';
 
 /** Task 6 — what the Task tool's execute() hands the host to actually run a
  *  specialist. Structural, mirroring the rest of ToolServices: the tool never
@@ -189,6 +191,19 @@ export interface ToolServices {
    *  `services.models.catalog()`. Absent → toolWiring() falls back to a
    *  `null`-returning catalog, the same safe "not loaded" default as before
    *  this fix pass. */
+  /** Specialists stage two: plan persistence remains host-owned. WHY this is a
+   *  structural callback: propose_plan can validate without importing Task 2's
+   *  journal/service, and invalid/aborted calls provably never cross this seam. */
+  plans?: {
+    propose(proposal: {
+      sessionId: string;
+      toolUseId: string;
+      document: PlanDocumentV1;
+      maximumAttempts: number;
+      ceilingTokens: number;
+      maxFanOut: number;
+    }): Promise<PlanView>;
+  };
   modelCatalog?(): Promise<CatalogModel[] | null>;
   /** Task 14 — delegated model tiers + user-directed per-hire override.
    *  `designated` is the on-disk budget/frontier bindings (the Settings UI,
@@ -313,6 +328,15 @@ export interface ToolResultPayload {
    *  and amends `text` with a named note for anything it skips — the tool only
    *  ever promises what it has already stat'd (resolve-before-promise). */
   images?: string[];
+  /** propose_plan only: attached to the existing tool-result event so the durable
+   *  projection replaces writing without inventing a transcript event type. */
+  plan?: PlanView;
+  /** Driver-private validation classification. WHY structured: exactly one
+   *  plan-specific repair is counted without brittle parsing of error prose. */
+  planArgsInvalid?: boolean;
+  /** Driver-private: the one plan repair has already been consumed, so the
+   *  current turn ends after recording this paired terminal result. */
+  planRepairExhausted?: boolean;
 }
 
 export interface NativeTool<A = any> {

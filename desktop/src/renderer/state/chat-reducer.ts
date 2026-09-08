@@ -1669,6 +1669,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         toolUseId: action.toolUseId,
         toolName: action.toolName,
         input: action.toolInput,
+        ...(action.plan ? { plan: action.plan } : {}),
         ...carriedAsk,
       });
 
@@ -1720,11 +1721,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         if (action.isError) {
           toolCalls.set(action.toolUseId, {
             ...existing, status: 'failed', error: action.result,
+            ...(action.plan ? { plan: action.plan } : {}),
             ...(patch ? { structuredPatch: patch } : {}),
           });
         } else {
           toolCalls.set(action.toolUseId, {
             ...existing, status: 'complete', response: action.result,
+            ...(action.plan ? { plan: action.plan } : {}),
             ...(patch ? { structuredPatch: patch } : {}),
           });
         }

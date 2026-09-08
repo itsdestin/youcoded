@@ -1202,6 +1202,7 @@ function AppInner() {
             toolUseId: event.data.toolUseId,
             toolName: event.data.toolName,
             toolInput: event.data.toolInput || {},
+            plan: event.data.plan,
             // Carried so a specialist's mid-run note can be placed among its
             // tool rows by time (reconcileNoteSegments); the top-level card
             // ignores it. Three mirrors must stay identical: this switch,
@@ -1220,6 +1221,7 @@ function AppInner() {
             toolUseId: event.data.toolUseId,
             result: event.data.toolResult || '',
             isError: event.data.isError || false,
+            plan: event.data.plan,
             structuredPatch: event.data.structuredPatch,
             parentAgentToolUseId: event.data.parentAgentToolUseId,
             agentId: event.data.agentId,

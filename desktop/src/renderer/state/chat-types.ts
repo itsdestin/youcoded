@@ -670,6 +670,8 @@ export type ChatAction =
       toolUseId: string;
       toolName: string;
       toolInput: Record<string, unknown>;
+      /** propose_plan lifecycle projection carried on the ordinary transcript event. */
+      plan?: import('../../shared/types').PlanView;
       // The transcript event's own stamp (epoch ms). Optional because the
       // top-level card never needed it; a CHILD tool row (parentAgentToolUseId
       // set) carries it onto its segment so a specialist's mid-run note can be
@@ -686,6 +688,7 @@ export type ChatAction =
       toolUseId: string;
       result: string;
       isError: boolean;
+      plan?: import('../../shared/types').PlanView;
       structuredPatch?: import('../../shared/types').StructuredPatchHunk[];
       parentAgentToolUseId?: string;
       agentId?: string;

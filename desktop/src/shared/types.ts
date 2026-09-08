@@ -210,6 +210,9 @@ export interface TranscriptEvent {
     toolInput?: Record<string, unknown>;
     toolResult?: string;
     isError?: boolean;
+    /** Specialists stage two: projection attached to the existing propose_plan
+     * tool-use/result seam; this is deliberately not a transcript event type. */
+    plan?: PlanView;
     stopReason?: string;
     /** Edit/MultiEdit tool-result payloads carry structuredPatch hunks. */
     structuredPatch?: StructuredPatchHunk[];
