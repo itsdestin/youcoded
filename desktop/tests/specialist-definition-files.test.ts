@@ -64,7 +64,7 @@ describe('loadPersonalDefinition', () => {
     const result = loadPersonalDefinition('/x/foo.md', raw);
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.definition).not.toHaveProperty('stepCap');
+    expect(Object.hasOwn(result.value.definition, 'stepCap')).toBe(false);
     expect(result.value.warnings.some((warning) => warning.includes('stepCap'))).toBe(false);
   });
 
@@ -268,7 +268,7 @@ describe('loadClaudeCodeDefinition', () => {
     const result = loadClaudeCodeDefinition('/agents/docs-writer.md', raw, 'user');
     expect(result.ok).toBe(true);
     if (!result.ok) return;
-    expect(result.value.definition).not.toHaveProperty('stepCap');
+    expect(Object.hasOwn(result.value.definition, 'stepCap')).toBe(false);
     expect(result.value.warnings.some((warning) => warning.includes('maxTurns'))).toBe(false);
   });
 

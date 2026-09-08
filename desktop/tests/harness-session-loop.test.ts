@@ -299,6 +299,31 @@ describe('HarnessSession — multi-step turn driver', () => {
     }
   });
 
+  it('specialist children exceed the root model budget without a max_steps ask and finish normally', async () => {
+    const read = fakeTool('Read');
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
+    const toolStep = (i: number) => stream(
+      toolCallChunk(`c${i}`, 'Read', { file_path: `file-${i}.ts` }),
+      finishChunk('tool-calls'),
+    );
+    // The default root budget for this test model is 25. A child must not inherit it.
+    const model = scriptedModel([
+      ...Array.from({ length: 26 }, (_, i) => toolStep(i + 1)),
+      stream(...textChunks('done', 'REPORT: complete'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(
+      makeOpts({ tools: [read], decide: async () => ALLOW, askUser, isSpecialistChild: true }),
+      async () => model as any,
+    );
+    const events = collect(session);
+
+    await session.send('go');
+
+    expect((read as any).calls).toHaveLength(26);
+    expect(askUser.mock.calls.some((call) => call[0].toolName === 'max_steps')).toBe(false);
+    expect(events.find((event) => event.type === 'turn-complete')?.data.stopReason).toBe('end_turn');
+  });
+
   it('maxSteps: allow → loop continues (counter resets); deny → turn-complete stopReason max_steps', async () => {
     const twoStepHarness: HarnessManifest = { ...HARNESS, limits: { maxSteps: 2, maxTokens: 256 } };
     // deny path: two tool-calls hit the budget, ask denies → stopReason max_steps.

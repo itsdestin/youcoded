@@ -1874,10 +1874,12 @@ export class HarnessSession extends EventEmitter {
     let generationMs = 0;
     const recentCalls: string[] = [];           // doom-loop window (turn-level)
     const imageBudget = { count: 0, bytes: 0 };  // per-turn image delivery budget (spec "Budgets")
-    // Budget precedence: an explicit harness override wins; otherwise the step
-    // ceiling is chosen by MODEL tier (frontier models sustain longer autonomous
-    // runs than the conservative 25 — see model-step-budget.ts).
-    const maxSteps = this.opts.harness.limits?.maxSteps ?? stepBudgetFor(this.binding.modelId);
+    // WHY: specialist work is bounded by its narrow tool set, parent-managed
+    // lifecycle controls, and the delegation spawn backstop—not an arbitrary
+    // per-child action count. Root sessions retain their own max_steps gate.
+    const maxSteps = this.opts.isSpecialistChild
+      ? undefined
+      : (this.opts.harness.limits?.maxSteps ?? stepBudgetFor(this.binding.modelId));
     let stepsSinceApproval = 0;
     // Consecutive contentless steps (empty-step recovery, spec 2026-08-21).
     // The single silent retry is allowed only at count 1; any real step resets
@@ -2152,7 +2154,7 @@ export class HarnessSession extends EventEmitter {
         // Budget gate (spec §2.4) — surfaces as a permission ASK, not a new
         // event. Allow resets the counter and continues; anything else ends the
         // turn with stopReason 'max_steps'; canceled is an interrupt.
-        if (stepsSinceApproval >= maxSteps) {
+        if (maxSteps !== undefined && stepsSinceApproval >= maxSteps) {
           const d = await this.opts.askUser?.({ sessionId: this.opts.sessionId, toolName: 'max_steps', toolInput: { steps: stepsSinceApproval }, denyListed: false });
           if (d?.behavior === 'canceled') { this.emitEvent('user-interrupt', {}); return; }
           if (d?.behavior !== 'allow') { stopReason = 'max_steps'; break turnLoop; }

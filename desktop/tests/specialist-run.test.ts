@@ -92,7 +92,7 @@ describe('specialist foreground run (Task 7)', () => {
     stream(...textChunks('t', 'REPORT: found it at src/x.ts'), finishChunk('stop')),
   ];
 
-  it('re-stamps the child\'s display events onto the parent and returns its report', async () => {
+  it('returns a normal multi-tool final report without a step-limit suffix or report nudge', async () => {
     await withParent(TWO_TOOLS_THEN_REPORT);
     const events = collect();
 
@@ -144,7 +144,9 @@ describe('specialist foreground run (Task 7)', () => {
     const childEvents = store.readEvents(childId, root);
     expect(childEvents.length).toBeGreaterThan(1);
     expect(childEvents.map((e) => e.type)).toContain('turn-complete');
-    expect(childEvents.map((e) => e.type)).toContain('user-message');
+    const childMessages = childEvents.filter((e) => e.type === 'user-message');
+    expect(childMessages).toHaveLength(1); // final report means runSpecialist never sends EMPTY_REPORT_NUDGE
+    expect(childMessages[0].data.text).not.toContain('Your final message is your report');
     expect(childEvents.every((e) => e.sessionId === childId)).toBe(true);
 
     // (d) the parent's file contains NO child-stamped events (display-only
@@ -165,6 +167,8 @@ describe('specialist foreground run (Task 7)', () => {
     // tag (1c's card-linking anchor) — 1a's "[full transcript: ...]" wording
     // is now reserved for the truncated case's real file pointer below.
     expect(report).toContain('REPORT: found it');
+    expect(report).not.toContain('stopped at its step limit');
+    expect(report).not.toContain('Your final message is your report');
     expect(report).toMatch(new RegExp(`## Report from \\w+ the \\w+ Explorer \\(${EXPLORER.id}\\)`));
     expect(report).toContain(`[specialist session ${childId}]`);
   });

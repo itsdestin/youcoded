@@ -1719,6 +1719,9 @@ describe('NativeSessionHost', () => {
       expect(header?.title).toMatch(/^\w+ the \w+ (Explorer|Researcher|Reviewer|Worker)$/);
       // Exactly the definition's allowlist — no Write/Edit/Bash/TodoWrite/AskUserQuestion.
       expect(toolNames(h, childId).sort()).toEqual([...EXPLORER.allowedTools].sort());
+      // WHY: specialist children are lifecycle-bounded by their parent rather than
+      // an arbitrary child action count; their selected preset stays unmodified.
+      expect((childSession(h, childId) as any).opts.harness.limits?.maxSteps).toBeUndefined();
       await h.destroyAll();
     });
 
@@ -2357,8 +2360,8 @@ describe('NativeSessionHost', () => {
     });
 
     it("an external-directory Write is declined instantly, factually, by the wired ask router — not the config-error stub (mutation-proof pin for createChild's askUser wiring)", async () => {
-      // Important review fix: the Task 5.5 Step 4 pin (stepCap, below) exercises
-      // askUser only through the max_steps gate, which short-circuits identically
+      // Important review fix: the earlier max_steps pin exercised askUser only
+      // through the removed child budget gate, which short-circuited identically
       // whether `askUser: childAskRouter(...)` is wired or deleted from createChild
       // — so that pin alone cannot catch the wiring being dropped. This drives a
       // DIFFERENT askUser call site: the external-directory forced ask
@@ -2447,46 +2450,6 @@ describe('NativeSessionHost', () => {
       expect(res.data.isError).toBe(true);
       expect(res.data.toolResult).toMatch(/read-only charter/i);
       expect(fs.existsSync(path.join(root, 'charter.txt'))).toBe(false);
-      await h.destroyAll();
-    });
-
-    // Task 5.5 step 4 — the behavioral pin the ask-policy/ask-router exists
-    // for. Four paths in harness-session call askUser directly, bypassing
-    // decide(); the step-cap gate is one of them. Plan 1a's childAskPolicy
-    // denied this instantly so the turn could never hang; plan 1b Task 8
-    // routes it to the parent's card instead — still never hangs (the
-    // timeout redirect guarantees an eventual answer), but it is no longer
-    // instant and an ask now genuinely reaches the host.
-    it("stepCap is enforced: the turn ends with stopReason 'max_steps' once the routed ask times out — never hangs", async () => {
-      const CAPPED = { ...EXPLORER, stepCap: 2 };   // definition-driven, not a global
-      // A model that never stops calling tools (scriptedModel replays its last
-      // script forever), so only the step cap can end this turn.
-      const loops = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Glob', { pattern: '*.ts' }), finishChunk('tool-calls')),
-      ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => loops());
-      const { childId } = await h.createChild('root-1', {
-        specialist: CAPPED, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      const events: any[] = [];
-      const asks: any[] = [];
-      h.on('hook-event', (e) => asks.push(e));
-      childSession(h, childId).on('transcript-event', (e: any) => events.push(e));
-
-      await childSession(h, childId).send('go');   // must SETTLE — a hang fails by timeout
-
-      const done = events.find((e) => e.type === 'turn-complete');
-      expect(done).toBeDefined();
-      expect(done.data.stopReason).toBe('max_steps');
-      // The DEFINITION's cap is what stopped it, not the model-tier default:
-      // exactly two steps ran. Without the harness.limits.maxSteps wiring this
-      // model would loop to stepBudgetFor(modelId) — same stopReason, ~25 steps.
-      expect(events.filter((e) => e.type === 'tool-use')).toHaveLength(2);
-      // Task 8: the ask DOES now reach the host — under the PARENT's id, never
-      // answered here, ended only by the timeout redirect.
-      const maxStepsAsk = asks.find((e) => e.type === 'PermissionRequest');
-      expect(maxStepsAsk?.sessionId).toBe('root-1');
-      expect(maxStepsAsk?.payload.tool_name).toBe('max_steps');
       await h.destroyAll();
     });
 
