@@ -10,7 +10,7 @@
 // router or the broker can know — those two cases are pinned instead in
 // native-session-host.test.ts, against the real host.
 import { describe, it, expect, vi } from 'vitest';
-import { childAskRouter, ASK_REDIRECT_MESSAGE } from '../src/main/harness/specialists/child-ask-router';
+import { childAskRouter, ASK_REDIRECT_MESSAGE, BUDGET_ASK_TOOL_NAMES } from '../src/main/harness/specialists/child-ask-router';
 import { PermissionBroker } from '../src/main/harness/permission-broker';
 import { SPECIALIST_ASK_HOLD_MS } from '../src/main/harness/specialists/limits';
 
@@ -19,6 +19,11 @@ function firstPayload(emitted: any[]) {
 }
 
 describe('childAskRouter', () => {
+  it('treats doom_loop, but not max_steps, as a non-rememberable budget ask', () => {
+    expect(BUDGET_ASK_TOOL_NAMES).toContain('doom_loop');
+    expect(BUDGET_ASK_TOOL_NAMES).not.toContain('max_steps');
+  });
+
   it('a routed ask reaches the broker under the PARENT sessionId with the specialist payload', async () => {
     const broker = new PermissionBroker();
     const emitted: any[] = [];

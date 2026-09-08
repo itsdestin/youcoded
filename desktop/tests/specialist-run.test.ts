@@ -167,7 +167,6 @@ describe('specialist foreground run (Task 7)', () => {
     // tag (1c's card-linking anchor) — 1a's "[full transcript: ...]" wording
     // is now reserved for the truncated case's real file pointer below.
     expect(report).toContain('REPORT: found it');
-    expect(report).not.toContain('stopped at its step limit');
     expect(report).not.toContain('Your final message is your report');
     expect(report).toMatch(new RegExp(`## Report from \\w+ the \\w+ Explorer \\(${EXPLORER.id}\\)`));
     expect(report).toContain(`[specialist session ${childId}]`);

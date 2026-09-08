@@ -1600,9 +1600,9 @@ export class NativeSessionHost extends EventEmitter {
     // `entry.sessionId`, which childAskRouter already rewrote to the PARENT's
     // id before ever calling broker.ask() (see AskRequest.raisedBy's own
     // comment) — the same session/cwd pair the in-time path writes against.
-    // Budget asks (max_steps/doom_loop) never support "Always allow" even for
-    // a root session (child-ask-router.ts's BUDGET_ASK_TOOL_NAMES) — excluded
-    // here for the same reason the in-time path excludes them.
+    // The doom_loop synthetic budget ask never supports "Always allow" even
+    // for a root session (child-ask-router.ts's BUDGET_ASK_TOOL_NAMES) —
+    // excluded here for the same reason the in-time path excludes it.
     //
     // Fix (Important 6, final review): same fix as child-ask-router.ts's
     // in-time path, applied to the LATE path — this used to hand-build
@@ -1905,8 +1905,8 @@ export class NativeSessionHost extends EventEmitter {
       // never observe teardown-time events (and so a run that throws does not
       // leave a listener attached to a session the caller may keep alive).
       entry.session.off('transcript-event', onEvent);
-      // Task 7: cleared on EVERY exit path (success, throw, nudge, step-cap) —
-      // a leaked interval per child would keep the process awake and pile up
+      // Task 7: cleared on EVERY exit path (success, throw, or nudge) — a
+      // leaked interval per child would keep the process awake and pile up
       // across every specialist ever spawned.
       clearInterval(staleCheck);
     }
