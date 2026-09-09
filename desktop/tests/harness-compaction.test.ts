@@ -4,7 +4,6 @@
 // a NON-fatal fall-through (fitToContext remains the hard floor) — never a
 // session-error. The compaction MATH itself is pinned in compaction.test.ts.
 import { describe, it, expect } from 'vitest';
-import { MockLanguageModelV4 } from 'ai/test';
 import { makeSession, scriptModel, drainTurn, hangingFirstCallModel } from './helpers/harness-fakes';
 
 describe('driver compaction', () => {

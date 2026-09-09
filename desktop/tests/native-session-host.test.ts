@@ -4103,9 +4103,9 @@ describe('NativeSessionHost', () => {
     });
   });
 
-  // Task 5 (plan 1b): the per-turn specialist status block. wire() attaches
-  // opts.specialistStatus to every ROOT session; this suite pins what that
-  // callback reports given a stamped ledger, reaching the private ledger
+  // Task 5 (plan 1b), retired to on-demand on 2026-09-09: buildSpecialistStatus
+  // now answers the Task tool's `list: true` (toolServices.listStatus) instead of
+  // a per-turn block; this suite pins what it reports given a stamped ledger, reaching the private ledger
   // directly (same pattern the Task 2 tests above use) rather than driving a
   // real specialist run end-to-end.
   describe('specialist status text (Task 5, plan 1b — on demand since 2026-09-09)', () => {
