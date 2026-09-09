@@ -90,3 +90,51 @@ it('stops projecting a preview name when its source title advances', () => {
   rerender({ sources: { a: 'New automatic title' } });
   expect(result.current.a).toBeUndefined();
 });
+
+it('closes on save even though the rename changes the name the parent passes back', async () => {
+  // The regression Destin saw: Save made the dialog flicker and come back
+  // instead of closing. Both rename paths feed the new name straight back into
+  // the list the parent renders from, so the dialog is re-rendered with a
+  // DIFFERENT `name` prop in the same tick as the save completing. This test
+  // models exactly that: a parent that updates the name when told.
+  // The ordering that matters: main SENDS session:renamed and only THEN returns
+  // from the rename call (ipc-handlers namingRename), so the parent has already
+  // re-rendered with the new name by the time `await api.rename(...)` resumes.
+  const rename = vi.fn(async (_id: string, title: string) => {
+    window.dispatchEvent(new CustomEvent('youcoded:session-renamed', { detail: { id: 's1', title } }));
+    await Promise.resolve();
+  });
+  window.claude = { sessionNaming: {
+    title: vi.fn().mockResolvedValue({ title: 'Old name', manual: false }), rename,
+  } } as any;
+  const onClose = vi.fn();
+  function Parent() {
+    const [name, setName] = React.useState('Old name');
+    React.useEffect(() => {
+      const h = (e: Event) => setName((e as CustomEvent).detail.title);
+      window.addEventListener('youcoded:session-renamed', h);
+      return () => window.removeEventListener('youcoded:session-renamed', h);
+    }, []);
+    return <SessionRenameDialog id="s1" name={name} onClose={onClose} />;
+  }
+  render(<Parent />);
+  const input = await screen.findByDisplayValue('Old name') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: 'Biology revision' } });
+  await act(async () => { screen.getByRole('button', { name: 'Save name' }).click(); });
+  expect(rename).toHaveBeenCalledWith('s1', 'Biology revision');
+  expect(onClose).toHaveBeenCalledTimes(1);
+});
+
+it('keeps what you are typing when the name changes underneath you', async () => {
+  // Same root cause, other half: a rename arriving from another window (or the
+  // assistant naming the session) must not wipe a draft mid-edit.
+  window.claude = { sessionNaming: {
+    title: vi.fn().mockResolvedValue({ title: 'Old name', manual: false }), rename: vi.fn(),
+  } } as any;
+  const view = render(<SessionRenameDialog id="s1" name="Old name" onClose={() => {}} />);
+  const input = await screen.findByDisplayValue('Old name') as HTMLInputElement;
+  fireEvent.change(input, { target: { value: 'half typed' } });
+  view.rerender(<SessionRenameDialog id="s1" name="Named by the assistant" onClose={() => {}} />);
+  await act(async () => {});
+  expect((screen.getByRole('textbox') as HTMLInputElement).value).toBe('half typed');
+});

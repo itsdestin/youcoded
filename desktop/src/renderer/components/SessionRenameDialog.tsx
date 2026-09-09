@@ -4,8 +4,19 @@ import { namingApi } from './assistant-settings/naming-api';
 
 type Props = { id: string; name: string; onClose: () => void };
 export default function SessionRenameDialog(props: Props) {
-  // WHY: a new identity owns a fresh draft, errors and retry actions.
-  return <RenameForm key={JSON.stringify([props.id, props.name])} {...props} />;
+  // WHY the key is the id ALONE: a new identity owns a fresh draft, errors and
+  // retry actions — and a conversation's identity is the conversation, not
+  // whatever it is currently called.
+  //
+  // Keying on the name too made Save fail to close the dialog. Main sends
+  // session:renamed BEFORE it returns from the rename call, so the parent has
+  // already re-rendered with the new name by the time `await api.rename(...)`
+  // resumes. A name in the key turns that into a remount: the in-flight save's
+  // `alive` ref is cleared by the unmount, its onClose() is skipped, and a
+  // fresh form mounts showing its loading state — a flicker, and the dialog
+  // stays open. It also threw away whatever the user was typing whenever the
+  // name changed underneath them.
+  return <RenameForm key={props.id} {...props} />;
 }
 function RenameForm({ id, name, onClose }: Props) {
   const alive = useRef(false);
@@ -29,7 +40,11 @@ function RenameForm({ id, name, onClose }: Props) {
       setError('The session name could not be loaded.'); setRetry(() => load);
     });
   };
-  useEffect(load, [api, id, name]);
+  // Deliberately NOT keyed on `name`: a rename arriving from another window or
+  // from automatic naming must not reload over a draft mid-edit. `name` is the
+  // starting value and the read's fallback, not a reason to start again.
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [api, id]);
   const save = async () => {
     if (!api || saving) return;
     setSaving(true); setError(null);
