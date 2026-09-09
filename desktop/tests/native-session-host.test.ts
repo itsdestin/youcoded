@@ -4040,15 +4040,13 @@ describe('NativeSessionHost', () => {
       });
 
       const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status = rootSession.opts.specialistStatus?.();
 
-      expect(status).toBeTruthy();
-      expect(status).toContain('Nadia');
-      expect(status).toContain('running');
-      expect(status).toContain('Otis');
-      expect(status).toContain('report delivery pending');
-      // Delivered specialist never appears.
-      expect(status).not.toContain('Priya');
+      expect(status).toEqual(expect.arrayContaining([
+        expect.objectContaining({ childId: 'child-running', title: 'Nadia', status: 'running', delivered: false }),
+        expect.objectContaining({ childId: 'child-finished', title: 'Otis', status: 'completed', delivered: false }),
+        expect.objectContaining({ childId: 'child-delivered', title: 'Priya', status: 'completed', delivered: true }),
+      ]));
 
       await h.destroyAll();
     });
@@ -4062,7 +4060,7 @@ describe('NativeSessionHost', () => {
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
 
       const rootSession = (h as any).live.get('root-1').session;
-      expect(rootSession.opts.specialistStatus?.()).toBeNull();
+      expect(rootSession.opts.specialistStatus?.()).toEqual([]);
 
       await h.destroyAll();
     });
@@ -4088,11 +4086,12 @@ describe('NativeSessionHost', () => {
       });
 
       const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status = rootSession.opts.specialistStatus?.();
 
-      expect(status).toBeTruthy();
-      expect(status).not.toContain('step 0');
-      expect(status).not.toMatch(/step \d/);
+      expect(status).toEqual([
+        expect.objectContaining({ childId: 'child-running', status: 'running', startedAt: expect.any(Number) }),
+      ]);
+      expect(JSON.stringify(status)).not.toContain('steps');
 
       await h.destroyAll();
     });
@@ -4117,9 +4116,11 @@ describe('NativeSessionHost', () => {
       });
 
       const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status = rootSession.opts.specialistStatus?.();
 
-      expect(status).toContain('no activity for at least 2m');
+      expect(status).toEqual([
+        expect.objectContaining({ childId: 'child-stale', stale: true }),
+      ]);
 
       await h.destroyAll();
     });
@@ -4162,16 +4163,12 @@ describe('NativeSessionHost', () => {
       });
 
       const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
-      const lines = (status ?? '').split('\n');
+      const status = rootSession.opts.specialistStatus?.();
 
-      const failedLine = lines.find((l) => l.startsWith('Fiona'));
-      expect(failedLine).toBe('Fiona (debugger): failed — ENOENT: no such file or directory — report delivery pending');
-      expect(failedLine).not.toContain('no report will arrive');
-
-      const interruptedLine = lines.find((l) => l.startsWith('Greg'));
-      expect(interruptedLine).toBe('Greg (writer): interrupted — no report will arrive');
-      expect(interruptedLine).not.toContain('delivery pending');
+      expect(status).toEqual(expect.arrayContaining([
+        expect.objectContaining({ childId: 'child-failed', status: 'failed', failureText: 'ENOENT: no such file or directory' }),
+        expect.objectContaining({ childId: 'child-interrupted', status: 'interrupted' }),
+      ]));
 
       await h.destroyAll();
     });

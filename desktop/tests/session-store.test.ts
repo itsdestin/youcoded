@@ -44,6 +44,33 @@ describe('SessionStore', () => {
     expect(store.list()[0]).not.toHaveProperty('stepGuard');
   });
 
+  it('returns an exact successful-persistence barrier for coalesced ranges under the first UUID', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'Hel', partId: 'p1' }, 'a1') as any);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'lo', partId: 'p1' }, 'a2') as any);
+
+    await expect(store.flushReferences('s-1', ['a1', 'a2'])).resolves.toEqual({
+      ok: true,
+      references: [
+        { eventUuid: 'a1', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 0, end: 3 },
+        { eventUuid: 'a2', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 3, end: 5 },
+      ],
+    });
+    expect(store.readEvents('s-1', HEADER.cwd)[0]).toMatchObject({ uuid: 'a1', data: { text: 'Hello' } });
+  });
+
+  it('refuses a reference barrier when the underlying flush failed', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'lost', partId: 'p1' }, 'a1') as any);
+    const home = (store as any).home;
+    const append = home.appendSessionLine.bind(home);
+    home.appendSessionLine = async (...args: any[]) => {
+      if (args[2]?.uuid === 'a1') throw new Error('disk');
+      return append(...args);
+    };
+    await expect(store.flushReferences('s-1', ['a1'])).resolves.toEqual({ ok: false, reason: 'persistence-failed' });
+  });
+
   it('coalesces same-partId text deltas into ONE persisted event with concatenated text', async () => {
     await store.create(HEADER);
     await store.append(HEADER.cwd, ev('user-message', { text: 'hi' }, 'u1') as any);

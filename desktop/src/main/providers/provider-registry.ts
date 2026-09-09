@@ -6,6 +6,11 @@
 // Thrown error messages here surface DIRECTLY in the UI error banner, so they
 // are written as plain language telling the user what to do — not debug codes.
 import { ulid } from 'ulid';
+import { app } from 'electron';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { bindOpenAIContinuationModel } from '../harness/openai-continuation';
+import { ChatGptRequestDiagnostics } from './chatgpt-request-diagnostics';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 import { openRouterCostExtractor } from '../harness/pricing';
 import { withPrefillProgress, type PrefillProgress } from './prefill-progress';
@@ -60,6 +65,7 @@ const TEST_TIMEOUT_MS = 10_000;
 interface ProvidersFile { v: 1; providers: ProviderConfig[]; }
 
 export class ProviderRegistry {
+  private diagnostics?: ChatGptRequestDiagnostics;
   constructor(private home: NativeHome, private secrets: SecretsStore,
               /** Plan B injects the EngineManager hook; null keeps the Plan A
                *  "coming in a later update" behavior (also what unit tests
@@ -412,15 +418,36 @@ export class ProviderRegistry {
             originator: CHATGPT_ORIGINATOR,
             'OpenAI-Beta': 'responses=experimental',
           },
-          fetch: this.chatgpt.fetch(),
+          // Bind the SDK model to the account generation whose continuation
+          // passed the harness check; auth rechecks after async serialization.
+          fetch: this.chatgpt.fetch(acct),
         });
         // The middleware (chatgpt-model.ts) owns the request shape the endpoint
         // insists on: store:false, instructions, encrypted reasoning, the cache
         // key, and streaming for the one caller that would not.
-        return wrapLanguageModel({
+        // WHY: profile-private diagnostics must never enter synced NativeHome.
+        // Even profile-path lookup failure must not prevent model construction.
+        try {
+          this.diagnostics ??= new ChatGptRequestDiagnostics({
+            directory: join(app.getPath('userData'), 'private-diagnostics', 'chatgpt-cache'),
+          });
+        } catch { /* diagnostics are optional; never log a sensitive exception */ }
+        const model = wrapLanguageModel({
           model: provider.responses(binding.modelId),
-          middleware: chatGptMiddleware(opts?.cacheKey),
+          middleware: chatGptMiddleware(opts?.cacheKey, this.diagnostics),
         });
+        // WHY: ciphertext must never cross accounts. Hash the non-secret account
+        // id before handing identity to the harness, and never expose it through
+        // diagnostics or a public model/binding shape.
+        const continuationOwner = () => {
+          // Read live state for every dispatch/acceptance, not only once when
+          // this turn's model was constructed. A same-account reauth increments
+          // authGeneration, and an account switch also changes the fingerprint.
+          const live = this.chatgpt!.signedInAccount();
+          const accountFingerprint = createHash('sha256').update(live.accountId).digest('hex');
+          return `${binding.providerId}\0${binding.modelId}\0${accountFingerprint}\0${live.authGeneration}`;
+        };
+        return bindOpenAIContinuationModel(model, continuationOwner);
       }
       default:
         // Unreachable with the current ProviderType union, but a corrupt

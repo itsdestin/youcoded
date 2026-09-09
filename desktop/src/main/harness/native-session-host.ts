@@ -42,6 +42,7 @@ import { childAskRouter, BUDGET_ASK_TOOL_NAMES } from './specialists/child-ask-r
 import { assignSpecialistName } from './specialists/names';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION, SPECIALIST_IDLE_STALE_MS, SPECIALIST_IN_TOOL_STALE_MS, SPECIALIST_ASK_HOLD_MS, SPECIALIST_NOTE_MAX_CHARS } from './specialists/limits';
 import { DelegationLedger, OWNER, RAW_REPORT_CAP_CHARS, isOwnerAlive, toRunView, type DelegationRecord } from './specialists/delegation-ledger';
+import type { SpecialistStatusSnapshotRecord } from './specialists/status-snapshot';
 import { DelegatedModels, delegatedModelsView, type DelegatedTier } from './specialists/delegated-models';
 import type { NativeHome } from '../native-home';
 import { computeReportBudget } from './specialists/report-budget';
@@ -2566,94 +2567,31 @@ export class NativeSessionHost extends EventEmitter {
     }
   }
 
-  /** Task 5 (plan 1b): one line per NON-DELIVERED delegation for `sessionId`
-   *  (its parent), or null when there's nothing to report. "Zero cost" here
-   *  is about the MODEL's context window, not disk I/O: a null return injects
-   *  nothing, so a session that never delegates never pays a status line —
-   *  but reaching that null still costs one `listFor` read of the delegation
-   *  sidecar (native-home.ts readJson's fast ENOENT path) on every turn, same
-   *  as resume()'s reconcileDelegations and getHistory()'s card-replay merge
-   *  (Task 9) each pay one more such read per call for the identical reason:
-   *  correctness requires checking, and checking a missing sidecar is cheap
-   *  but not free. A record with `delivered: true` never appears: its report
-   *  already rode into the parent's history, so restating it here would be
-   *  stale noise, not a status.
-   *
-   *  Fix pass, Finding 1: NO step count on the running line. `steps` is only
-   *  ever written by the ledger's write path AT COMPLETION (see
-   *  spawnSpecialist's `update(...steps: run.steps...)`) — recordStart never
-   *  sets it, so a RUNNING record's `steps` is ALWAYS undefined; there is no
-   *  live, per-child step counter surfaced anywhere a status line could read
-   *  from without reaching into spawnSpecialist/createChild's own bookkeeping
-   *  (out of scope here — a different in-flight lane owns those methods). The
-   *  old `step ${r.steps ?? 0}` therefore rendered a permanently-wrong
-   *  "step 0" for the ENTIRE life of every running child — a known-wrong
-   *  number, not an approximation, and the never-mislead-the-model rule does
-   *  not allow reporting it. Elapsed time (which IS live and real) is
-   *  reported instead; nothing invented fills the gap.
-   *
-   *  `stale` likewise only ever surfaces the ledger's own boolean (Task 7 sets
-   *  it) — this method never re-derives staleness. Fix pass, Finding 2: the
-   *  "no activity for {m}m" minute count is worded as a FLOOR ("at least"),
-   *  not a measurement — the ledger stores no last-activity TIMESTAMP, only
-   *  the boolean, so there is no exact duration to surface, and the actual
-   *  threshold that fired can be the 5m in-tool one, not the 2m idle one this
-   *  reports. What IS true by construction (setStale below) is that `stale`
-   *  never flips true before SPECIALIST_IDLE_STALE_MS has elapsed with no
-   *  activity, so "at least" is always accurate even when it understates.
-   *
-   *  Fix pass, Finding 3 (original): 'interrupted' gets its OWN line, not the
-   *  running-record's "finished — report delivery pending" wording — a parent
-   *  teardown killed the child (see updateIfRunning's WHY comment above), so
-   *  no claim ever gets made against this record and no report ever arrives.
-   *
-   *  Final-review fix (Finding 1): 'failed' used to get the SAME
-   *  "no report will arrive" treatment as 'interrupted', on the reasoning
-   *  that claimUndelivered() (delegation-ledger.ts) "only ever claims
-   *  status === 'completed' records". That eligibility was later widened
-   *  (Important 4, final review) to claim 'completed' OR 'failed' — a
-   *  background run that dies still owes the parent a typed
-   *  "[Background specialist failed] ..." notice, not silence — so telling
-   *  the model no report is coming was, from that point on, actively wrong:
-   *  the model would be told nothing is coming and then have one arrive a
-   *  turn or two later. 'failed' now gets the SAME "delivery pending" framing
-   *  as 'completed', with the real failureText named inline (never a guessed
-   *  cause — error-message-standards.md). Only 'interrupted' still says "no
-   *  report will arrive", because that one claim stayed true.
-   *
-   *  The final branch below is an explicit `switch`, not a trailing
-   *  `if`/`else` — a plain `else` would silently render any FUTURE fifth
-   *  DelegationRecord status as "interrupted" instead of failing to compile;
-   *  the `never` assignment in `default` turns that into a typecheck error
-   *  the day the status union grows. */
-  private buildSpecialistStatus(sessionId: string, cwd: string): string | null {
-    if (!this.ledger) return null;
-    const lines = this.ledger.listFor(cwd, sessionId)
-      .filter((r) => !r.delivered)
-      .map((r) => {
-        switch (r.status) {
-          case 'running': {
-            const elapsedS = Math.max(0, Math.round((Date.now() - r.startedAt) / 1000));
-            const staleNote = r.stale ? `, may be stuck — no activity for at least ${Math.round(SPECIALIST_IDLE_STALE_MS / 60_000)}m` : '';
-            return `${r.title} (${r.agentType}): running — ${elapsedS}s${staleNote}`;
-          }
-          case 'completed':
-            return `${r.title} (${r.agentType}): finished — report delivery pending`;
-          case 'failed':
-            return `${r.title} (${r.agentType}): failed${r.failureText ? ` — ${r.failureText}` : ''} — report delivery pending`;
-          case 'interrupted':
-            return `${r.title} (${r.agentType}): interrupted — no report will arrive`;
-          default: {
-            // Exhaustiveness guard: a status literal added to
-            // DelegationRecord['status'] without a case here fails `tsc`
-            // right here (assigning a non-`never` type to `never`), instead
-            // of silently falling through and mislabeling the new status.
-            const _exhaustive: never = r.status;
-            return `${r.title} (${r.agentType}): ${_exhaustive}`;
-          }
-        }
-      });
-    return lines.length > 0 ? lines.join('\n') : null;
+  /** Structured ledger facts for append-only status comparison. This still
+   *  performs one sidecar read per root turn. Formatting lives in the pure
+   *  helper so elapsed time cannot participate in equality. Delivered records
+   *  stay present here so delivery transitions are observable, then normalize
+   *  out as no longer reportable. `steps` remains deliberately absent because
+   *  the ledger has no live running-step count. */
+  private buildSpecialistStatus(sessionId: string, cwd: string): SpecialistStatusSnapshotRecord[] {
+    if (!this.ledger) return [];
+    // WHY: childId is the ledger's stable task identity (the public task_id).
+    // Keep report/failure/delivery/stale facts structured until the harness has
+    // compared them; elapsed display time is intentionally derived later.
+    return this.ledger.listFor(cwd, sessionId)
+      .map((record) => ({
+        childId: record.childId,
+        title: record.title,
+        agentType: record.agentType,
+        status: record.status,
+        delivered: record.delivered,
+        stale: record.stale ?? false,
+        startedAt: record.startedAt,
+        rawReport: record.rawReport,
+        reportPath: record.reportPath,
+        failureText: record.failureText,
+      }))
+      .sort((left, right) => left.childId.localeCompare(right.childId));
   }
 
   /** Record ONE remembered "Always allow" under `sessionId`'s in-memory bucket

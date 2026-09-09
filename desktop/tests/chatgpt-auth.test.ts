@@ -43,6 +43,10 @@ import {
   chatGptModelsUrl,
 } from '../src/main/providers/chatgpt-oauth';
 import { chatGptLimitMessage } from '../src/shared/chatgpt-types';
+import { ChatGptRequestDiagnostics, withChatGptRequest, bindChatGptRequest } from '../src/main/providers/chatgpt-request-diagnostics';
+import { chatGptMiddleware } from '../src/main/providers/chatgpt-model';
+import { createOpenAI } from '@ai-sdk/openai';
+import { wrapLanguageModel, streamText } from 'ai';
 
 // The lock primitive is real everywhere except the one test that pins the
 // retry-then-throw, which makes it report "lock held" five times.
@@ -369,7 +373,7 @@ describe('ChatGptAuth: the sign-in round', () => {
     expect(status.state).toBe('signed-in');
     expect(status).toMatchObject({ email: 'd@example.com' });
     expect(auth.isSignedIn()).toBe(true);
-    expect(auth.signedInAccount()).toEqual({ accountId: 'acct-1', email: 'd@example.com', plan: 'plus' });
+    expect(auth.signedInAccount()).toEqual({ accountId: 'acct-1', email: 'd@example.com', plan: 'plus', authGeneration: 1 });
 
     // Token hygiene: the account file holds a ref, never the token; the
     // secrets file holds only ciphertext; no log line carries it.
@@ -880,6 +884,68 @@ describe('ChatGptAuth: fetch()', () => {
     await f(CODEX_RESPONSES_URL, { method: 'POST', headers: { authorization: 'Bearer chatgpt' }, body: '{}' });
     expect(sentHeaders(1).get('authorization')).toBe(`Bearer ${blob.access_token}`);
     expect(sentHeaders(1).get('authorization')).not.toBe(`Bearer ${first}`);
+  });
+
+  it('a fetch bound to an earlier account generation refuses before network', async () => {
+    await h.seedSignedIn();
+    const auth = h.build();
+    h.fetch.routes.push(capture());
+    const live = auth.signedInAccount();
+    const expected = { ...live, accountId: 'account-a', authGeneration: live.authGeneration - 1 };
+    await expect(auth.fetch(expected)(CODEX_RESPONSES_URL, {
+      method: 'POST', headers: { authorization: 'Bearer chatgpt', 'chatgpt-account-id': expected.accountId }, body: '{}',
+    })).rejects.toThrow(/account changed|Sign in with ChatGPT/);
+    expect(h.fetch.calls.filter(call => call.url === CODEX_RESPONSES_URL)).toHaveLength(0);
+  });
+
+  it('diagnoses actual 401 sends under one logical step without touching bytes', async () => {
+    await h.seedSignedIn();
+    const auth = h.build({ pollUsage: false });
+    const rows: any[] = [];
+    const d = new ChatGptRequestDiagnostics({ directory: h.dir, write: async row => { rows.push(row); } });
+    let n = 0;
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => json(++n === 1 ? 401 : 200, {})]);
+    const body = '{"model":"gpt-5","input":[{"content":"PRIVATE_BODY"}]}';
+    await withChatGptRequest('session', 'chat', () => bindChatGptRequest(d, 'session', async context => {
+      await auth.fetch()(CODEX_RESPONSES_URL, { method: 'POST', body });
+      d.finish(context.attemptId, 'success');
+    }));
+    await d.flush();
+    expect(rows).toHaveLength(2);
+    expect(rows[0].outcome).toBe('failed');
+    expect(rows[1]).toMatchObject({ resendParentId: rows[0].attemptId, logicalStepId: rows[0].logicalStepId, change: 'identical', outcome: 'success' });
+    expect(h.fetch.calls.filter(c => c.url === CODEX_RESPONSES_URL).map(c => c.init.body)).toEqual([body, body]);
+    expect(JSON.stringify(rows)).not.toContain('PRIVATE_BODY');
+  });
+
+  it('observes raw missing-vs-zero usage through the actual SDK and auth boundary', async () => {
+    await h.seedSignedIn();
+    const auth = h.build({ pollUsage: false });
+    const rows: any[] = [];
+    const d = new ChatGptRequestDiagnostics({ directory: h.dir, write: async row => { rows.push(row); } });
+    let n = 0;
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => {
+      const usage = { input_tokens: 100, output_tokens: 1, total_tokens: 101, ...(n++ ? { input_tokens_details: { cached_tokens: 0 } } : {}) };
+      const events = [
+        { type: 'response.created', response: { id: 'r', model: 'gpt-5', created_at: 1 } },
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'm', role: 'assistant', content: [] } },
+        { type: 'response.output_text.delta', item_id: 'm', output_index: 0, content_index: 0, delta: 'ok' },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id: 'm', role: 'assistant', content: [{ type: 'output_text', text: 'ok', annotations: [] }] } },
+        { type: 'response.completed', response: { id: 'r', status: 'completed', usage } },
+      ];
+      return new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+    }]);
+    const provider = createOpenAI({ apiKey: 'placeholder', baseURL: CHATGPT_CODEX_BASE_URL, fetch: auth.fetch() });
+    const model = wrapLanguageModel({ model: provider.responses('gpt-5'), middleware: chatGptMiddleware('session', d) });
+    for (let i = 0; i < 2; i++) {
+      const result = withChatGptRequest('session', 'chat', () => streamText({ model, prompt: 'PRIVATE_INPUT' }));
+      await result.consumeStream();
+    }
+    await d.flush();
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ purpose: 'chat', outcome: 'success', inputTokens: 100, cacheDetailPresent: false, cachedInputTokens: null });
+    expect(rows[1]).toMatchObject({ change: 'identical', cacheDetailPresent: true, cachedInputTokens: 0 });
+    expect(JSON.stringify(rows)).not.toContain('PRIVATE_INPUT');
   });
 
   it('a 401 refreshes once and re-sends the SAME body with the new bearer', async () => {

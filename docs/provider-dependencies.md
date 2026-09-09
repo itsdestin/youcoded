@@ -6,12 +6,23 @@ in the youcoded-dev workspace).
 
 ## Pinned versions
 
-- **ai** — `7.0.22` (Vercel AI SDK). Stream-part, finish-reason, and
+- **ai** — `7.0.89` (Vercel AI SDK). Stream-part, finish-reason, and
   tool-call/tool-result message shapes pinned by
   `desktop/tests/harness-*.test.ts`.
 - **@modelcontextprotocol/sdk** — `^1.30.0` (native MCP phase 1). `Client`,
   `StdioClientTransport`, `StreamableHTTPClientTransport`, `UnauthorizedError`,
   `ErrorCode`/`McpError` from `types.js`. Consumer: `harness/mcp/mcp-client.ts`.
+
+## ChatGPT diagnostics SDK coupling (Stage 1, unshipped)
+
+`@ai-sdk/openai` 4.0.55 Responses `includeRawChunks` exposes `rawValue` before
+normalized usage fills absent cache fields. `chatgpt-model.ts` reduces those
+chunks to allowlisted usage at consumer demand, then removes raw parts from the
+outward stream. It does not clone/tee HTTP bodies or add wire fields. Auth owns
+actual-send and 401 resend identity; async-local middleware context associates
+the successful stream with its transport attempt. Tests in `chatgpt-auth.test.ts`
+exercise fake SSE through the actual installed SDK. Storage limits, local CLI,
+privacy and measured hashing costs: `native-runtime.md` → ChatGPT request diagnostics.
 
 ## Touchpoints (to be filled as built)
 

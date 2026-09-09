@@ -4,6 +4,39 @@
 
 `SessionProvider = 'claude' | 'native' | 'shell'`. The third member arrived 2026-09-05 with the local engine's set-up flow: a `'shell'` session is a plain terminal running the user's own `$SHELL` (`powershell.exe` on Windows) with **no AI in it at all** — no hook pipe, no transcript watcher, no model, no binding. It exists so the app can offer "Run in terminal" for a set-up command (`engine:run-in-terminal`, minted only by `prepareRunInTerminal` in `session-manager.ts`) instead of sending the user off to find a terminal. It is never offered in the new-session form, but the button SELECTS the session it makes, so every renderer branch that reads a provider can see it. The native runtime is a cloud-first + local slice layered so a native session emits the exact `TranscriptEventType` shapes CC does, letting the shared chat reducer/UI render it unchanged. `native.supported=true` in production as of 2026-07-16 (env kill switch: `YOUCODED_NATIVE=0`) — known Phase 2 Plan B/C gaps still apply (see roadmap spec). Modules: `desktop/src/main/harness/`, `desktop/src/main/providers/`, `native-home.ts`, `desktop/src/renderer/components/native-send.ts`. Governing specs: `docs/active/specs/2026-07-09-platform-vision-roadmap.md`, the archived phase0/phase1 design docs, ADRs 006–010. Empirical couplings: `youcoded/docs/provider-dependencies.md`.
 
+## ChatGPT request diagnostics (Stage 1, unshipped)
+
+The provider registry owns a process-local diagnostic observer under
+`<userData>/private-diagnostics/chatgpt-cache/`, outside NativeHome, transcripts,
+sync and ordinary bug-report logs. Actual sends (including internal 401 resends)
+are observed inside the credential wrapper without handing it headers. Chat,
+specialist, summary and title scopes are separate; the logical step is allocated
+outside the harness retry loop. Dispatch, not completion, advances comparison.
+Raw SDK usage distinguishes missing cache detail from a real zero. Comparisons
+are item counts, never cached-token-prefix estimates or proof of cache residency.
+
+The observer retains per-process HMAC fingerprints only in memory (8 MiB bound),
+256 unfinished observations for at most ten minutes, and at most 1,000 sanitized
+queued records. Two rotating JSONL files are each limited to 5 MiB, with private
+permissions where supported. File failures are nonfatal; cumulative loss counters
+make incomplete diagnostic coverage visible. No raw body, fingerprint, cache
+key, reasoning, account identity or provider error is written.
+
+Local summary (from `youcoded/desktop`, pass only diagnostic files):
+
+```sh
+node scripts/chatgpt-cache-summary.mjs /path/to/requests.previous.jsonl /path/to/requests.jsonl
+```
+
+It groups by opaque session/model/purpose, reports valid-subset weighted reuse
+and fresh input, overall input/output, request/token coverage, changes and timing.
+Unknown reuse is `null`, not zero. Offline tests do not establish cache savings.
+Parsing and hashing remain synchronous: a 2026-09-09 offline 20-iteration CPU
+measurement averaged **23.45 ms** for a 433,018-byte, 100k-token-like request and
+**50.00 ms** with an additional 4 MiB encrypted part (4,627,366 bytes total).
+These are observations, not performance budgets. Stage 1 does not alter
+specialist status history or continuation acceptance/persistence.
+
 ## Provider seam (Phase 0, PR #115)
 
 - **`'native'` has NO runtime in Phase 0.** `SessionManager.createSession` throws loudly for any non-claude provider — a deliberate guard so a stray native create (e.g. from a remote client payload) fails instead of spawning a broken PTY. Phase 1 branches BEFORE the PTY worker spawn.
@@ -603,10 +636,13 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   completed, never spliced in. A report too large for the ledger's cap spills to
   `<childId>.report.md` (`NativeHome.writeSessionArtifact`); the parent can `Read` its own spill
   directory without an external-directory ask (`internalReadRoots`).
-- **A compact per-turn status block, never polling.** `HarnessSessionOpts.specialistStatus`
-  injects one `<specialists-status>` history message before each real user turn, listing running
-  and undelivered-finished specialists; the PREVIOUS turn's block is removed first, so exactly one
-  ever lives in history — never an accumulating, increasingly stale list.
+- **Specialist status is append-only on meaningful change, never polling.**
+  `HarnessSessionOpts.specialistStatus` returns normalized ledger facts keyed by `childId`.
+  The harness appends a compact `<specialists-status>` snapshot only when lifecycle,
+  delivery, stale, report or failure state changes; elapsed time and ledger iteration order
+  do not count. A new snapshot explicitly supersedes earlier ones, and an empty transition
+  emits one clearing snapshot. Read failure preserves prior memory. `/clear` resets it;
+  resume and compaction recover a retained encoded snapshot or introduce current state again.
 - **Steering (`postSteer`) lands at the next iteration boundary — a tool call is never cut.**
   Posted text queues and drains as a `<steer>` history message at the top of the next turn-loop
   iteration. A steer posted with no turn in flight, or during the child's own FINAL step (too late

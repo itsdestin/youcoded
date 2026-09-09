@@ -11,11 +11,13 @@
 // surface is FROZEN — this driver emits ONLY the pre-existing TranscriptEventType
 // values; max_steps and doom_loop surface as PERMISSION ASKS (askUser), never as
 // new event types.
+import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { streamText, tool, zodSchema, jsonSchema, type LanguageModel, type ModelMessage } from 'ai';
+import { openAIContinuationBinding, openAIContinuationMessages } from './openai-continuation';
 import type { TranscriptEvent, InjectedMeta } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 import type { HarnessManifest } from '../../shared/harness-manifest';
@@ -168,6 +170,13 @@ import { createSkillTool } from './tools/skill';
 import { createTaskTool } from './tools/task';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
+import {
+  normalizeSpecialistStatusSnapshot,
+  recoverSpecialistStatusSnapshot,
+  specialistStatusUpdate,
+  type SpecialistStatusSnapshot,
+  type SpecialistStatusSnapshotRecord,
+} from './specialists/status-snapshot';
 import type { ShellRegistry } from './shell-registry';
 import { createSkillCatalog, type SkillCatalog } from './skills/skill-catalog';
 import { fitInjection } from './injection/injection-budget';
@@ -245,15 +254,9 @@ export interface HarnessSessionOpts {
    *  either check alone still cannot let a specialist spawn its own
    *  specialists. Absent/false for every ordinary (non-child) session. */
   isSpecialistChild?: boolean;
-  /** Per-turn specialist status block (Task 5, MOIM pattern). Evaluated at the
-   *  START of every turn; a non-null return is injected as a `<specialists-
-   *  status>` history message so the model can see which delegated children
-   *  are running or finished-and-unread WITHOUT ever polling for them. Wired
-   *  by NativeSessionHost.wire() — root sessions only, since wire() is never
-   *  called for a specialist child (see createChild's own "NOT wire()" note).
-   *  Absent → no injection, which is exactly the pre-Task-5 behavior every
-   *  existing test relies on (zero cost for a session that never delegates). */
-  specialistStatus?: () => string | null;
+  /** Per-turn structured specialist state. The harness compares facts before
+   *  formatting so elapsed time alone cannot churn the request prefix. */
+  specialistStatus?: () => SpecialistStatusSnapshotRecord[];
   /** Task 10 (plan 1b): directories checkPathGuard treats as internal to THIS
    *  session — readable without an external_directory ask, the same way
    *  Bash's own spillRoot() is (tools/guards.ts). Wired by NativeSessionHost
@@ -299,7 +302,13 @@ export type ModelFactory = (
 
 // One collected tool-call from a step's stream (input already PARSED to an
 // object by streamText — see the ai@7 contract test).
-interface ToolCall { toolCallId: string; toolName: string; input: any }
+interface ParallelToolCallMetadata {
+  itemId: string; toolCallId: string; toolName: string; input: string; index: number; count: number;
+}
+interface ToolCall {
+  toolCallId: string; toolName: string; input: any;
+  parallelToolCall?: ParallelToolCallMetadata;
+}
 // Normalized per-step usage (v7's nested cache details flattened into our fixed
 // transcript usage shape).
 interface StepUsage { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreationTokens: number }
@@ -307,6 +316,9 @@ interface StepUsage { inputTokens: number; outputTokens: number; cacheReadTokens
 interface StepResult {
   text: string; toolCalls: ToolCall[]; usage: StepUsage;
   finishReason: string | undefined; interrupted: boolean;
+  /** Completed, allowlisted SDK assistant messages. Empty for non-Responses
+   * models and interrupted/abandoned attempts; local tool messages never enter. */
+  responseMessages: ModelMessage[];
   /** What the PROVIDER itself says this one request cost, in USD — OpenRouter
    *  reports it on every response (pricing.ts's openRouterCostExtractor).
    *  `undefined` means the provider reported nothing, which is every other
@@ -616,6 +628,7 @@ export function prefillBudgetMs(promptTokens: number): number {
 // surfaces loudly instead of silently scrambling history.
 export class HarnessSession extends EventEmitter {
   private history: ModelMessage[] = [];
+  private specialistSnapshot: SpecialistStatusSnapshot | null = null;
   private abort: AbortController | null = null;
   private interrupted = false;
   // Task 3 — queued mid-run course corrections (postSteer), drained as
@@ -655,6 +668,9 @@ export class HarnessSession extends EventEmitter {
    *  rather than a repeat of the reported one. */
   private lastLoggedSessionCostGap: number | null = null;
   binding: ModelBinding;
+  /** Identity stamped by the provider factory (provider/model/non-secret account).
+   * A refreshed account can change this without a host setBinding call. */
+  private continuationBinding: string | undefined;
 
   // Tool runtime state (Task 9). readRegistry + todos are per-SESSION runtime
   // state — NOT persisted transcript. seedHistory() clears both on resume.
@@ -822,6 +838,9 @@ export class HarnessSession extends EventEmitter {
   /** Resume path: NativeSessionHost rebuilds history from stored events. */
   seedHistory(messages: ModelMessage[]): void {
     this.history = messages;
+    // WHY: a retained append-only snapshot remains authoritative after resume;
+    // legacy or compacted-away blocks are unknown and current state is reintroduced.
+    this.specialistSnapshot = recoverSpecialistStatusSnapshot(messages);
     // Reset-on-resume (spec §2.5 — Task 10 relies on this): a resumed session
     // has NO live read-before-edit state and NO todo list. Those are process/
     // session runtime, never persisted to the transcript. Clearing here prevents
@@ -840,7 +859,13 @@ export class HarnessSession extends EventEmitter {
    *  profile and passes it in; applied only when provided. */
   setBinding(binding: ModelBinding, contextLength?: number | null, profile?: CapabilityProfile,
              pricing?: ModelPricing | null, free?: boolean): void {
+    const changed = this.binding.providerId !== binding.providerId || this.binding.modelId !== binding.modelId;
     this.binding = binding;
+    // WHY: continuation ciphertext is scoped to its original backend/model.
+    // Filtering (rather than clearing all history) preserves ordinary text and
+    // local call/results while preventing incompatible private parts reaching wire.
+    if (changed) this.stripOpenAIContinuation();
+    this.continuationBinding = undefined;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
     // Same applied-only-when-provided shape as contextLength: a swap to a
@@ -848,6 +873,19 @@ export class HarnessSession extends EventEmitter {
     // model had, so `null` is a real value here and only `undefined` skips.
     if (pricing !== undefined) this.opts.pricing = pricing;
     if (free !== undefined) this.opts.free = free;
+  }
+
+  private stripOpenAIContinuation(): void {
+    this.history = this.history.flatMap(message => {
+      if (message.role !== 'assistant' || !Array.isArray(message.content)) return [message];
+      const content = (message.content as any[]).filter(part => part?.type !== 'reasoning')
+        .map(part => {
+          if (!part?.providerOptions?.openai) return part;
+          const { providerOptions: _providerOptions, ...plain } = part;
+          return plain;
+        });
+      return content.length > 0 ? [{ ...message, content } as ModelMessage] : [];
+    });
   }
 
   /** What this session's CURRENT model costs to run, as resolved when the
@@ -885,8 +923,28 @@ export class HarnessSession extends EventEmitter {
    *  session right after construction — opts is already built by then, so this
    *  is the same late-bind-onto-opts shape setBinding uses above, not a new
    *  pattern. Never called for a specialist child (wire() isn't). */
-  setSpecialistStatus(fn: () => string | null): void {
+  setSpecialistStatus(fn: () => SpecialistStatusSnapshotRecord[]): void {
     this.opts.specialistStatus = fn;
+  }
+
+  /** Re-establish status immediately after an explicit history rewrite. A read
+   *  failure remains unknown and therefore appends neither status nor clear. */
+  private restoreSpecialistStatusAfterRewrite(): void {
+    const retained = recoverSpecialistStatusSnapshot(this.history);
+    this.specialistSnapshot = retained;
+    if (retained || !this.opts.specialistStatus) return;
+    try {
+      const current = normalizeSpecialistStatusSnapshot(this.opts.specialistStatus());
+      // WHY: after compaction removed the authoritative snapshot, the very next
+      // model step must receive current known state, including a known clearing.
+      const update = specialistStatusUpdate(null, current, Date.now(), 2, true);
+      if (update) {
+        this.history.push({ role: 'user', content: update.message });
+        this.specialistSnapshot = update.snapshot;
+      }
+    } catch (err) {
+      log('ERROR', 'HarnessSession', 'specialist status callback threw after history rewrite — no status inferred', { error: String(err) });
+    }
   }
 
   /** Effective system prompt: the assembled one (Task 11) or the harness's own. */
@@ -1181,6 +1239,19 @@ export class HarnessSession extends EventEmitter {
     return { role: 'assistant', content } as ModelMessage;
   }
 
+  private validParallelToolCall(value: unknown): ParallelToolCallMetadata | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined;
+    const v = value as Record<string, unknown>;
+    if (typeof v.itemId !== 'string' || typeof v.toolCallId !== 'string'
+      || typeof v.toolName !== 'string' || typeof v.input !== 'string'
+      || !Number.isInteger(v.index) || !Number.isInteger(v.count)
+      || Number(v.index) < 0 || Number(v.count) <= Number(v.index)) return undefined;
+    return {
+      itemId: v.itemId, toolCallId: v.toolCallId, toolName: v.toolName,
+      input: v.input, index: Number(v.index), count: Number(v.count),
+    };
+  }
+
   /** Tool-result history part. The `output: { type:'text', value }` shape is
    *  pinned (Task 1) — `result`/other field names throw AI_InvalidPromptError.
    *  `images` defaults to `[]` so every existing caller (including the interrupt
@@ -1189,11 +1260,15 @@ export class HarnessSession extends EventEmitter {
    *  'content' shape — @ai-sdk/anthropic maps it to native tool_result image
    *  blocks; every other wire is rewritten by adaptForWire (wire-adapter.ts). */
   private toolResultPart(call: ToolCall, text: string, images: Array<{ mediaType: string; data: Buffer; filename?: string }> = []): any {
+    const providerOptions = call.parallelToolCall
+      ? { openai: { parallelToolCall: call.parallelToolCall } }
+      : undefined;
     if (!images.length) {
-      return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'text', value: text } };
+      return { type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName, output: { type: 'text', value: text }, ...(providerOptions ? { providerOptions } : {}) };
     }
     return {
       type: 'tool-result', toolCallId: call.toolCallId, toolName: call.toolName,
+      ...(providerOptions ? { providerOptions } : {}),
       output: {
         type: 'content',
         value: [
@@ -1378,6 +1453,7 @@ export class HarnessSession extends EventEmitter {
     // automatically at 75% context instead of only on an explicit /clear.
     this.shownImages.clear();
     this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
+    this.restoreSpecialistStatusAfterRewrite();
   }
 
   // Live prefill progress from llama.cpp, forwarded onto the SAME
@@ -1515,6 +1591,8 @@ export class HarnessSession extends EventEmitter {
       // images this summary just removed.
       this.shownImages.clear();
       this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
+      // WHY: manual compaction has the same immediate-authority requirement.
+      this.restoreSpecialistStatusAfterRewrite();
       return { ok: true };
     } finally {
       this.abort = null;
@@ -1537,6 +1615,8 @@ export class HarnessSession extends EventEmitter {
   clearHistory(): { ok: true } | { ok: false; reason: 'turn-in-flight' } {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     this.history = [];
+    // WHY: /clear is also the explicit specialist-status generation barrier.
+    this.specialistSnapshot = null;
     // Fix 1 (CRITICAL, 2026-08-11): the dedupe cache must not outlive the
     // history it was vouching for. Left alive, a model that re-Reads an
     // unchanged file after /clear gets "already visible earlier in this
@@ -1600,7 +1680,8 @@ export class HarnessSession extends EventEmitter {
     // Summaries are text about text: images are ALWAYS stripped here, regardless
     // of the session's actual profile — the summarizer may be a non-vision local
     // model, and pixels add nothing to a compression prompt.
-    const result = streamText({ model, system: 'You compress conversation history. Be faithful and concise.', messages: [...adaptForWire(bounded, { nativeImageToolResults: false, supportsVision: false }), { role: 'user', content: summarizePrompt() } as ModelMessage], abortSignal: this.abort!.signal });
+    // WHY: compression is not the next dispatched conversation prefix.
+    const result = withChatGptRequest(this.opts.sessionId, 'summary', () => streamText({ model, system: 'You compress conversation history. Be faithful and concise.', messages: [...adaptForWire(bounded, { nativeImageToolResults: false, supportsVision: false }), { role: 'user', content: summarizePrompt() } as ModelMessage], abortSignal: this.abort!.signal }));
 
     // Race iterator.next() against the abort signal AND a 30s wall-clock floor —
     // the same hardening consumeStep uses, since a stalled local stream honors
@@ -1800,44 +1881,20 @@ export class HarnessSession extends EventEmitter {
     this.interrupted = false;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
     emit();
-    // WHY (spec §3, MOIM pattern): the model never polls and never forgets a child
-    // exists — a compact status block rides every turn while specialists are live.
-    // History-only (no transcript event), so replay and the emit surface are untouched.
-    // Exactly ONE block lives in history: the previous turn's is removed first
-    // (external review 2026-08-12 — appending accumulates stale, contradictory
-    // blocks over a long child run). Accepted cost: removing a mid-history message
-    // invalidates local KV prefix cache from that point while specialists run.
-    //
-    // Fix pass, Finding 6: guarded on opts.specialistStatus being wired at all.
-    // That field stays permanently undefined for any session wire() never
-    // touched (every specialist child, per its own "NOT wire()" comment) — for
-    // those sessions there is never a block to remove or add, so the whole
-    // history scan below is skipped rather than run as an unconditional no-op
-    // every single turn.
+    // WHY (cache-efficiency design §2): ordinary turns must preserve every prior
+    // message byte-for-byte. Compare normalized ledger facts and append only a
+    // changed authoritative snapshot; callback failure is unknown, never a clear.
     if (this.opts.specialistStatus) {
-      const statusIdx = this.history.findIndex(
-        (m) => typeof m.content === 'string' && m.content.startsWith('<specialists-status>'),
-      );
-      if (statusIdx >= 0) this.history.splice(statusIdx, 1);
-      // Fix pass, Finding 4: opts.specialistStatus() reaches
-      // NativeSessionHost.buildSpecialistStatus -> DelegationLedger.listFor ->
-      // NativeHome.readJson, which deliberately RETHROWS any non-ENOENT I/O
-      // error (permissions, disk full, AV lock — see native-home.ts). Before
-      // this try/catch, that throw escaped beginTurn uncaught: it ran AFTER
-      // emit() had already announced the user's message but BEFORE this.abort
-      // was set and before the turn's own try block began, so the throw was
-      // never caught anywhere — no assistant reply, no error surfaced, and the
-      // re-entrancy guard never got set (stranding every later send() on this
-      // session). Degrade the same way this file's other fallible side-read
-      // already does (acquireMcp, above: log and continue with no MCP
-      // servers) — a missing status block must never cost the user a turn.
-      let status: string | null = null;
       try {
-        status = this.opts.specialistStatus() ?? null;
+        const current = normalizeSpecialistStatusSnapshot(this.opts.specialistStatus());
+        const update = specialistStatusUpdate(this.specialistSnapshot, current);
+        if (update) {
+          this.history.push({ role: 'user', content: update.message });
+          this.specialistSnapshot = update.snapshot;
+        }
       } catch (err) {
-        log('ERROR', 'HarnessSession', 'specialist status callback threw — turn continues with no status block', { error: String(err) });
+        log('ERROR', 'HarnessSession', 'specialist status callback threw — turn continues with prior status memory', { error: String(err) });
       }
-      if (status) this.history.push({ role: 'user', content: `<specialists-status>\n${status}\n</specialists-status>` });
     }
     // A plain string when there are no image parts — that is the byte-identical
     // shape every existing test and rebuildHistory() already assert on, so the
@@ -1904,6 +1961,14 @@ export class HarnessSession extends EventEmitter {
         onPrefillProgress: (p) => this.emitPrefillProgress(p),
         cacheKey: this.opts.sessionId,
       });
+      const modelContinuationBinding = openAIContinuationBinding(model);
+      if (modelContinuationBinding !== this.continuationBinding) {
+        // WHY: account refresh/switch is observable only when the next factory
+        // runs. Fence old ciphertext before constructing that request even when
+        // no host setBinding call occurred.
+        if (this.continuationBinding !== undefined) this.stripOpenAIContinuation();
+        this.continuationBinding = modelContinuationBinding;
+      }
       const aiTools = this.buildAiTools();       // {} when no tools → v0 chat path
 
       // Tracks the LAST step's real input-token count (from provider usage) so
@@ -1930,7 +1995,7 @@ export class HarnessSession extends EventEmitter {
         // Two-stage compaction FIRST (spec §4.4) — prune, then summarize only if
         // pruning can't get under budget. Inert (returns immediately) below the
         // trigger, so the existing loop behavior is unchanged for normal turns.
-        await this.maybeCompact(model, lastInputTokens);
+        await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0));
         // Reset per STEP (not per retry attempt inside withRetry): the required
         // immediate-error retry never needs this reset itself, since it emits
         // nothing before it throws. A manual Retry is the opposite case — it CAN
@@ -1942,9 +2007,10 @@ export class HarnessSession extends EventEmitter {
         // CONSUMPTION (not just the streamText call): the SDK surfaces provider
         // errors as {type:'error'} fullStream parts AND rejected promises, so
         // only wrapping the call would miss them (verified ai@7 facts).
-        const step = await this.withRetry(() =>
+        // WHY: all retries belong to this logical step, not newly allocated steps.
+        const step = await withChatGptRequest(this.opts.sessionId, this.opts.isSpecialistChild ? 'specialist' : 'chat', () => this.withRetry(() =>
           this.consumeStep(model, aiTools, (t) => { partialAssistantText = t; }),
-        );
+        ));
 
         lastInputTokens = step.usage.inputTokens;   // feed the NEXT compaction check
         lastOutputTokens = step.usage.outputTokens;
@@ -1992,7 +2058,12 @@ export class HarnessSession extends EventEmitter {
         // empty one (no real text and no calls) so we never push a content-less
         // turn.
         if (stepHasText || step.toolCalls.length > 0) {
-          this.history.push(this.assistantMessage(step.text, step.toolCalls));
+          // WHY: the completed SDK response is the only faithful ordering and
+          // metadata authority. Non-Responses models keep the established
+          // flattened shape; SDK tool messages are never copied.
+          this.history.push(...(step.responseMessages.length > 0
+            ? step.responseMessages
+            : [this.assistantMessage(step.text, step.toolCalls)]));
         }
 
         // Empty-step recovery (spec: docs/archive/specs/2026-08-21-empty-final-
@@ -2358,6 +2429,17 @@ export class HarnessSession extends EventEmitter {
     // Only pass tools when there are any — keeps the no-tools path byte-identical
     // to v0 (no tool plumbing reaches the SDK).
     if (Object.keys(aiTools).length > 0) streamArgs.tools = aiTools;
+    // Recheck immediately before dispatch: one model serves every turn step,
+    // while auth ownership can change between steps without rebuilding it.
+    const dispatchBinding = openAIContinuationBinding(model);
+    if (dispatchBinding !== this.continuationBinding) {
+      if (this.continuationBinding !== undefined) this.stripOpenAIContinuation();
+      this.continuationBinding = dispatchBinding;
+      streamArgs.messages = adaptForWire(this.fitToContext(this.history), {
+        nativeImageToolResults: this.profile.nativeImageToolResults,
+        supportsVision: this.profile.supportsVision,
+      });
+    }
     const result = streamText(streamArgs);
 
     let assistantText = '';
@@ -2687,12 +2769,18 @@ export class HarnessSession extends EventEmitter {
             });
             break;
           }
-          case 'tool-call':
+          case 'tool-call': {
             // input is the PARSED object here (streamText parses the raw JSON-string
             // args — verified ai@7 contract). Collected; executed by the loop.
             emittedAny = true;
-            toolCalls.push({ toolCallId: part.toolCallId, toolName: part.toolName, input: part.input });
+            const rawParallel = (part.providerMetadata ?? part.providerOptions)?.openai?.parallelToolCall;
+            const parallelToolCall = this.validParallelToolCall(rawParallel);
+            toolCalls.push({
+              toolCallId: part.toolCallId, toolName: part.toolName, input: part.input,
+              ...(parallelToolCall ? { parallelToolCall } : {}),
+            });
             break;
+          }
           case 'abort':
             // The SDK can surface an interrupt as a clean 'abort' part (instead of
             // a thrown AbortError). Mark it so the loop emits user-interrupt.
@@ -2749,7 +2837,7 @@ export class HarnessSession extends EventEmitter {
     if (interrupted || this.interrupted || abortSignal.aborted) {
       // Don't await usage/finishReason on the interrupt path — the stream was
       // torn down; those promises may never settle.
-      return { text: assistantText, toolCalls, usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, finishReason: undefined, interrupted: true, generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0, pendingPreparing: [] };
+      return { text: assistantText, toolCalls, responseMessages: [], usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, finishReason: undefined, interrupted: true, generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0, pendingPreparing: [] };
     }
 
     const usage = await result.usage;
@@ -2757,6 +2845,28 @@ export class HarnessSession extends EventEmitter {
     // for THIS request when the provider reported one; undefined otherwise.
     const providerCostUsd = providerCostFromMetadata(await result.providerMetadata);
     const finishReason = await result.finishReason;
+    const reasoningTokens = usage?.outputTokenDetails?.reasoningTokens;
+    // Acceptance is fenced separately from dispatch. If auth ownership moved
+    // while bytes were in flight, visible text remains but its old-generation
+    // IDs/ciphertext/calls are never made eligible for a later request.
+    const acceptanceBinding = openAIContinuationBinding(model);
+    const sdkResponseMessages = dispatchBinding && acceptanceBinding === dispatchBinding
+      ? (await result.response).messages as ModelMessage[]
+      : [];
+    const responseMessages = openAIContinuationMessages(sdkResponseMessages, reasoningTokens);
+    // Match reduced execution calls back to the adapter's completed SDK parts;
+    // retaining this metadata on BOTH assistant calls and locally-owned results
+    // is what lets the Responses converter reconstruct one wrapper group.
+    const responseParts = responseMessages.flatMap(message => Array.isArray(message.content) ? message.content as any[] : []);
+    for (const call of toolCalls) {
+      const part = responseParts.find(candidate => candidate?.type === 'tool-call' && candidate.toolCallId === call.toolCallId);
+      const parallel = this.validParallelToolCall(part?.providerOptions?.openai?.parallelToolCall);
+      if (parallel) call.parallelToolCall = parallel;
+    }
+    if (acceptanceBinding !== this.continuationBinding) {
+      if (this.continuationBinding !== undefined) this.stripOpenAIContinuation();
+      this.continuationBinding = acceptanceBinding;
+    }
     // `preparing` entries are NOT deleted when their call completes (the card
     // transitions in place under the same id), so filter by completed
     // toolCalls to find the truly orphaned ones. Empty in the common case.
@@ -2766,6 +2876,7 @@ export class HarnessSession extends EventEmitter {
     return {
       text: assistantText,
       toolCalls,
+      responseMessages,
       pendingPreparing,
       usage: {
         inputTokens: usage?.inputTokens ?? 0,

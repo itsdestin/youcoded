@@ -4,7 +4,9 @@
 // a NON-fatal fall-through (fitToContext remains the hard floor) — never a
 // session-error. The compaction MATH itself is pinned in compaction.test.ts.
 import { describe, it, expect } from 'vitest';
+import { MockLanguageModelV4 } from 'ai/test';
 import { makeSession, scriptModel, drainTurn, hangingFirstCallModel } from './helpers/harness-fakes';
+import { normalizeSpecialistStatusSnapshot, specialistStatusUpdate } from '../src/main/harness/specialists/status-snapshot';
 
 describe('driver compaction', () => {
   it('prunes when last step reports high input tokens — no compact-summary', async () => {
@@ -30,6 +32,46 @@ describe('driver compaction', () => {
     await drainTurn(session, 'continue');
     expect(events.filter((e) => e.type === 'compact-summary')).toHaveLength(1);
     expect(events.some((e) => e.type === 'turn-complete')).toBe(true);
+  });
+
+  it('automatic compaction immediately restores a fresh authoritative status before the next request', async () => {
+    const inner = scriptModel([
+      { text: 'SUMMARY: earlier work' },
+      { toolCalls: [{ name: 'Read', input: { file_path: 'next.txt' } }], usage: { inputTokens: 3500 } },
+      { text: 'done' },
+    ]);
+    const requests: any[][] = [];
+    const model = new MockLanguageModelV4({
+      doStream: async (options: any) => {
+        requests.push(options.prompt);
+        return inner.doStream(options);
+      },
+    });
+    const session = makeSession({ contextLength: 4096, model });
+    const status = [{
+      childId: 'child-1', title: 'Nadia', agentType: 'researcher', status: 'running' as const,
+      delivered: false, stale: false, startedAt: 1_000,
+    }];
+    const statusMessage = specialistStatusUpdate(null, normalizeSpecialistStatusSnapshot(status), 5_000)!.message;
+    const filler = 'x'.repeat(4_000);
+    session.seedHistory([
+      { role: 'assistant', content: `bulk 0 ${filler}` },
+      { role: 'user', content: statusMessage },
+      { role: 'user', content: `bulk 1 ${filler}` },
+      { role: 'assistant', content: `bulk 2 ${filler}` },
+      { role: 'user', content: `bulk 3 ${filler}` },
+      { role: 'assistant', content: `bulk 4 ${filler}` },
+    ] as any);
+    session.setSpecialistStatus(() => status);
+
+    await drainTurn(session, 'continue');
+
+    expect(requests).toHaveLength(3);
+    const immediatePostCompactionRequest = JSON.stringify(requests[1]);
+    expect(immediatePostCompactionRequest).toContain('[Earlier conversation summary]');
+    expect(immediatePostCompactionRequest).toContain('<specialists-status>');
+    expect(immediatePostCompactionRequest).toContain('Nadia (researcher): running');
+    expect(immediatePostCompactionRequest).toContain('current specialist status snapshot');
   });
 
   it('FAIL-SAFE: a summary call that throws does not error the turn (falls through to truncation)', async () => {

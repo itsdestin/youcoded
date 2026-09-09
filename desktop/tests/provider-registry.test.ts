@@ -340,10 +340,10 @@ describe('ProviderRegistry', () => {
         signedInAccount: () => {
           if (!signedIn) throw new Error(SIGN_IN_REQUIRED);
           if (o.blockedReason) { const e = new Error(o.blockedReason); e.name = 'ChatGptBlockedError'; throw e; }
-          return { accountId: 'acct_123', email: 'd@example.com', plan: 'free' };
+          return { accountId: 'acct_123', email: 'd@example.com', plan: 'free', authGeneration: 1 };
         },
         models: async () => [],
-        fetch: () => async (input: any, init: any) => {
+        fetch: (_expected?: { accountId: string; authGeneration: number }) => async (input: any, init: any) => {
           const headers = new Headers(init?.headers);
           headers.set('authorization', `Bearer ${token}`);
           requests.push({

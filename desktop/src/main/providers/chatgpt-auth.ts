@@ -35,6 +35,7 @@
  * an error or log line.
  */
 
+import { currentChatGptRequest } from './chatgpt-request-diagnostics';
 import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
@@ -457,11 +458,11 @@ export class ChatGptAuth {
 
   /** For the registry: throws the sentence the card renders when the model
    *  cannot be used — signed out, or OpenAI's own refusal when blocked. */
-  signedInAccount(): { accountId: string; email: string; plan: string } {
+  signedInAccount(): { accountId: string; email: string; plan: string; authGeneration: number } {
     const a = this.account;
     if (!a || !this.secrets.has(a.secretRef)) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
     if (a.blocked) throw blockedError(a.blocked.reason);
-    return { accountId: a.accountId, email: a.email, plan: a.plan };
+    return { accountId: a.accountId, email: a.email, plan: a.plan, authGeneration: this.generation };
   }
 
   /** The cached windows with any whose reset has passed dropped — including
@@ -876,26 +877,68 @@ export class ChatGptAuth {
    *  `authorization` at construction; `Headers.set` overwrites that one key,
    *  where adding `Authorization` would make undici merge the two into
    *  "Bearer chatgpt, Bearer <real>" and 401 every request. */
-  fetch(): typeof fetch {
-    return (input, init) => this.authedFetch(input, init);
+  fetch(expected?: { accountId: string; authGeneration: number }): typeof fetch {
+    return (input, init) => this.authedFetch(input, init, expected);
   }
 
-  private async authedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  private async liveCredentials(): Promise<{ token: string; accountId: string; authGeneration: number }> {
+    // WHY: model construction and token lookup are separated by async work. Pair
+    // the bearer with the account generation observed on both sides so a switch
+    // can never combine the old frozen account header with a new account's token.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const before = this.signedInAccount();
+      const token = await this.accessToken();
+      const after = this.signedInAccount();
+      if (before.accountId === after.accountId && before.authGeneration === after.authGeneration) {
+        return { token, accountId: after.accountId, authGeneration: after.authGeneration };
+      }
+    }
+    throw new Error('The ChatGPT account changed while preparing this request. Try again.');
+  }
+
+  private async authedFetch(input: RequestInfo | URL, init?: RequestInit,
+                            expected?: { accountId: string; authGeneration: number }): Promise<Response> {
+    const context = currentChatGptRequest();
+    let parent: string | undefined;
     // The SDK always calls fetch(url, init) with a string body, so the 401
     // re-send below reuses `init.body` verbatim. A `Request` input with a
     // stream body could not be re-sent; none reaches this wrapper today.
-    const send = (token: string) => {
+    const send = async (credentials: { token: string; accountId: string; authGeneration: number }) => {
+      const live = this.signedInAccount();
+      if (live.accountId !== credentials.accountId || live.authGeneration !== credentials.authGeneration
+        || (expected && (live.accountId !== expected.accountId || live.authGeneration !== expected.authGeneration))) {
+        throw new Error('The ChatGPT account changed while preparing this request. Try again.');
+      }
       const headers = new Headers(init?.headers ?? (input instanceof Request ? input.headers : undefined));
-      headers.set('authorization', `Bearer ${token}`);
-      return this.realFetch(input, { ...init, headers });
+      headers.set('authorization', `Bearer ${credentials.token}`);
+      headers.set('chatgpt-account-id', credentials.accountId);
+      // WHY: only actual sends count, including the wrapper's invisible 401 resend.
+      // Credentials never cross the observer boundary; the outgoing body is untouched.
+      const attempt = context?.diagnostics?.dispatch(context, init?.body, parent ?? null);
+      if (context) context.attemptId = attempt;
+      parent = attempt;
+      try {
+        const response = await this.realFetch(input, { ...init, headers });
+        if (!response.ok) context?.diagnostics?.finish(attempt, 'failed');
+        return response;
+      } catch (error) {
+        context?.diagnostics?.finish(attempt, init?.signal?.aborted ? 'aborted' : 'failed');
+        throw error;
+      }
     };
-    const first = await this.accessToken();
+    const first = await this.liveCredentials();
     let res = await send(first);
     if (res.status === 401) {
       // Refresh once and re-send the SAME body with the new bearer; a second
-      // 401 means the sign-in is over.
-      const second = await this.tokenAfter401(first);
-      res = await send(second);
+      // 401 means the sign-in is over. Keep the refresh scoped to the same
+      // account generation that received the 401.
+      const secondToken = await this.tokenAfter401(first.token);
+      const secondAccount = this.signedInAccount();
+      if (secondAccount.accountId !== first.accountId || secondAccount.authGeneration !== first.authGeneration
+        || (expected && (secondAccount.accountId !== expected.accountId || secondAccount.authGeneration !== expected.authGeneration))) {
+        throw new Error('The ChatGPT account changed while preparing this request. Try again.');
+      }
+      res = await send({ ...first, token: secondToken });
       if (res.status === 401) {
         this.log('warn', 'request refused twice with 401; signing out');
         await this.clearAccount();

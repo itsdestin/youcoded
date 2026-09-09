@@ -31,6 +31,7 @@
 // be made to reject in tests — the #177 lesson (youcoded #177): a fake that
 // cannot express failure certifies the bug it should have caught.
 
+import { withChatGptRequest } from './providers/chatgpt-request-diagnostics';
 import type { TranscriptEvent } from '../shared/types';
 import type { ModelBinding } from '../shared/provider-types';
 
@@ -149,7 +150,8 @@ export function createNativeTitleFeeder(deps: NativeTitleFeederDeps): NativeTitl
       state.attempts += 1;
       let raw: string;
       try {
-        raw = await deps.generate(binding, prompt);
+        // WHY: title work shares the binding, never the conversation comparison baseline.
+        raw = await withChatGptRequest(sessionId, 'title', () => deps.generate(binding, prompt));
       } catch {
         // Provider/timeout failure — stay silent, retry on the NEXT
         // turn-complete (bounded by MAX_ATTEMPTS above).

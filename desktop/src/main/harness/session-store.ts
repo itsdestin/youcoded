@@ -48,6 +48,15 @@ const COALESCED_TYPES = new Set(['assistant-text', 'assistant-thinking']);
 // auto-title hook, so the first user message stands in (spec §2.6).
 const DERIVED_TITLE_MAX = 60;
 
+export interface PersistedEventReference {
+  eventUuid: string;
+  anchorUuid: string;
+  type: TranscriptEvent['type'];
+  partId?: string;
+  start: number;
+  end: number;
+}
+
 export class SessionStore {
   // One open (still-streaming) part per session, buffered until flushed by a
   // different partId, a non-delta event, or a turn boundary. The slug is
@@ -61,8 +70,12 @@ export class SessionStore {
   // though its own line is never persisted) — so in practice parts flush every
   // turn, and a hard crash mid-stream loses at most the one in-flight part.
   private open = new Map<string, { slug: string; event: TranscriptEvent }>();
+  // Successful append authority, kept separately from the buffered public event.
+  // Later deltas map to byte ranges under the first event UUID that reaches disk.
+  private references = new Map<string, Map<string, PersistedEventReference>>();
+  private failed = new Set<string>();
 
-  constructor(private home: NativeHome) {}
+  constructor(private home: NativeHome, readonly continuationRoot?: string) {}
 
   /** Write the session header as line 1 of a fresh session file. */
   async create(header: NativeSessionHeader): Promise<void> {
@@ -133,7 +146,13 @@ export class SessionStore {
         // Same still-streaming part: concatenate into the buffered CLONE.
         // The clone (made below when the part opened) is what makes this safe
         // — we never mutate an object the caller still owns.
-        open.event.data.text = String(open.event.data.text ?? '') + String(event.data?.text ?? '');
+        const start = String(open.event.data.text ?? '').length;
+        const delta = String(event.data?.text ?? '');
+        open.event.data.text = String(open.event.data.text ?? '') + delta;
+        if (event.uuid && open.event.uuid) this.referenceMap(event.sessionId).set(event.uuid, {
+          eventUuid: event.uuid, anchorUuid: open.event.uuid, type: event.type,
+          partId: String(partId), start, end: start + delta.length,
+        });
         return;
       }
       // A different part started: the previous one is complete — flush it,
@@ -149,6 +168,13 @@ export class SessionStore {
         slug,
         event: { ...event, data: { ...event.data } },
       });
+      if (event.uuid) {
+        const textLength = String(event.data?.text ?? '').length;
+        this.referenceMap(event.sessionId).set(event.uuid, {
+          eventUuid: event.uuid, anchorUuid: event.uuid, type: event.type,
+          partId: String(partId), start: 0, end: textLength,
+        });
+      }
       return;
     }
 
@@ -159,7 +185,37 @@ export class SessionStore {
     // session); un-awaited overlapping appends could interleave the underlying
     // file writes and scramble on-disk order.
     await this.flush(event.sessionId);
-    await this.home.appendSessionLine(slug, event.sessionId, event);
+    try {
+      await this.home.appendSessionLine(slug, event.sessionId, event);
+      if (event.uuid) this.referenceMap(event.sessionId).set(event.uuid, {
+        eventUuid: event.uuid, anchorUuid: event.uuid, type: event.type,
+        start: 0, end: JSON.stringify(event.data ?? {}).length,
+      });
+    } catch (error) {
+      this.failed.add(event.sessionId);
+      throw error;
+    }
+  }
+
+  /**
+   * Explicit continuation barrier: flush an open referenced part, then return
+   * only references whose underlying append completed successfully.
+   */
+  async flushReferences(sessionId: string, eventUuids: string[]): Promise<
+    { ok: true; references: PersistedEventReference[] } | { ok: false; reason: 'persistence-failed' | 'unknown-reference' }
+  > {
+    try { await this.flush(sessionId); } catch { return { ok: false, reason: 'persistence-failed' }; }
+    if (this.failed.has(sessionId)) return { ok: false, reason: 'persistence-failed' };
+    const refs = this.references.get(sessionId);
+    const references = eventUuids.map(uuid => refs?.get(uuid));
+    if (references.some(ref => !ref)) return { ok: false, reason: 'unknown-reference' };
+    return { ok: true, references: references as PersistedEventReference[] };
+  }
+
+  private referenceMap(sessionId: string): Map<string, PersistedEventReference> {
+    let refs = this.references.get(sessionId);
+    if (!refs) { refs = new Map(); this.references.set(sessionId, refs); }
+    return refs;
   }
 
   /** Write the buffered open part (if any) and clear it. */

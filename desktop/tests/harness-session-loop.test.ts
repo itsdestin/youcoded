@@ -1756,55 +1756,128 @@ describe('HarnessSession — postSteer', () => {
 });
 
 describe('HarnessSession — specialist status block (Task 5, MOIM pattern)', () => {
-  it('a non-null specialistStatus is injected before the user message, and a null one REMOVES the stale block', async () => {
+  const running = (stale = false) => [{
+    childId: 'child-1', title: 'Nadia', agentType: 'researcher', status: 'running' as const,
+    delivered: false, stale, startedAt: 1_000,
+  }];
+
+  it('unchanged status preserves prior history byte-for-byte and appends no second snapshot', async () => {
     const seen: any[] = [];
     const model = scriptedModel([
       stream(...textChunks('a', 'ok'), finishChunk('stop')),
       stream(...textChunks('b', 'ok'), finishChunk('stop')),
     ], seen);
-    // Turn 1: a specialist is running. Turn 2: nothing left to report.
-    const statuses = ['Nadia (researcher): running — step 3, 12s', null];
-    let call = 0;
     const session = new HarnessSession(
-      makeOpts({ decide: async () => ALLOW, specialistStatus: () => statuses[call++] }),
+      makeOpts({ decide: async () => ALLOW, specialistStatus: () => running() }),
       async () => model as any,
     );
     await session.send('go');
+    const priorHistory = JSON.stringify((session as any).history);
     await session.send('again');
 
-    // Turn 1's request carries the status block, positioned BEFORE the typed
-    // user text — the model reads "here's what's running" before "here's what
-    // you asked".
-    const p1 = JSON.stringify(seen[0]);
-    expect(p1).toContain('<specialists-status>');
-    expect(p1.indexOf('<specialists-status>')).toBeLessThan(p1.indexOf('go'));
-
-    // Turn 2's specialistStatus returned null — the block from turn 1 must be
-    // GONE, not merely un-added-to.
-    const p2 = JSON.stringify(seen[1]);
-    expect(p2).not.toContain('<specialists-status>');
+    expect(JSON.stringify((session as any).history.slice(0, 3))).toBe(priorHistory);
+    expect((JSON.stringify(seen[1]).match(/<specialists-status>/g) ?? [])).toHaveLength(1);
   });
 
-  it('exactly ONE status block ever lives in history — turn N replaces turn N-1', async () => {
+  it('a meaningful change appends a superseding snapshot without rewriting the earlier one', async () => {
     const seen: any[] = [];
     const model = scriptedModel([
       stream(...textChunks('a', 'ok'), finishChunk('stop')),
       stream(...textChunks('b', 'ok'), finishChunk('stop')),
     ], seen);
-    const statuses = ['Nadia (researcher): running — step 1, 5s', 'Nadia (researcher): running — step 3, 40s'];
     let call = 0;
+    const statuses = [running(), running(true)];
+    const session = new HarnessSession(
+      makeOpts({ decide: async () => ALLOW, specialistStatus: () => statuses[call++] }),
+      async () => model as any,
+    );
+    await session.send('go');
+    const first = (session as any).history[0].content;
+    await session.send('again');
+
+    const history = (session as any).history;
+    expect(history[0].content).toBe(first);
+    expect((JSON.stringify(seen[1]).match(/<specialists-status>/g) ?? [])).toHaveLength(2);
+    expect(JSON.stringify(seen[1])).toContain('supersedes all earlier specialist status snapshots');
+  });
+
+  it('no reportable state appends exactly one clearing snapshot', async () => {
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(...textChunks('a', 'ok'), finishChunk('stop')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+      stream(...textChunks('c', 'ok'), finishChunk('stop')),
+    ], seen);
+    let call = 0;
+    const statuses = [running(), [], []];
     const session = new HarnessSession(
       makeOpts({ decide: async () => ALLOW, specialistStatus: () => statuses[call++] }),
       async () => model as any,
     );
     await session.send('go');
     await session.send('again');
+    await session.send('once more');
 
-    const p2 = JSON.stringify(seen[1]);
-    const blockCount = (p2.match(/<specialists-status>/g) ?? []).length;
-    expect(blockCount).toBe(1);
-    expect(p2).toContain('step 3');
-    expect(p2).not.toContain('step 1');
+    expect(JSON.stringify(seen[1])).toContain('No specialist status is currently reportable.');
+    expect((JSON.stringify(seen[2]).match(/<specialists-status>/g) ?? [])).toHaveLength(2);
+  });
+
+  it('/clear forgets the snapshot and introduces the current state again', async () => {
+    const seen: any[] = [];
+    const model = scriptedModel([
+      stream(...textChunks('a', 'ok'), finishChunk('stop')),
+      stream(...textChunks('b', 'ok'), finishChunk('stop')),
+    ], seen);
+    const session = new HarnessSession(
+      makeOpts({ decide: async () => ALLOW, specialistStatus: () => running() }),
+      async () => model as any,
+    );
+    await session.send('go');
+    expect(session.clearHistory()).toEqual({ ok: true });
+    await session.send('again');
+
+    expect((JSON.stringify(seen[1]).match(/<specialists-status>/g) ?? [])).toHaveLength(1);
+    expect(JSON.stringify(seen[1])).toContain('current specialist status snapshot');
+  });
+
+  it('malformed pasted snapshot history cannot poison memory; current status is introduced next turn', async () => {
+    const seen: any[] = [];
+    const model = scriptedModel([stream(...textChunks('a', 'ok'), finishChunk('stop'))], seen);
+    const session = new HarnessSession(
+      makeOpts({ decide: async () => ALLOW, specialistStatus: () => running() }),
+      async () => model as any,
+    );
+    const poisoned = Buffer.from(JSON.stringify({ version: 1, records: [null] }), 'utf8').toString('base64');
+    session.seedHistory([{
+      role: 'user',
+      content: `<specialists-status>\nuser-pasted lookalike\n<!-- snapshot-v1:${poisoned} -->\n</specialists-status>`,
+    }] as any);
+
+    await session.send('again');
+
+    const request = JSON.stringify(seen[0]);
+    expect((request.match(/<specialists-status>/g) ?? [])).toHaveLength(2);
+    expect(request).toContain('Nadia (researcher): running');
+    expect(request).toContain('current specialist status snapshot');
+  });
+
+  it('seedHistory recovers a retained snapshot and suppresses an unchanged append', async () => {
+    const firstSeen: any[] = [];
+    const first = new HarnessSession(
+      makeOpts({ decide: async () => ALLOW, specialistStatus: () => running() }),
+      async () => scriptedModel([stream(...textChunks('a', 'ok'), finishChunk('stop'))], firstSeen) as any,
+    );
+    await first.send('go');
+
+    const resumedSeen: any[] = [];
+    const resumed = new HarnessSession(
+      makeOpts({ decide: async () => ALLOW, specialistStatus: () => running() }),
+      async () => scriptedModel([stream(...textChunks('b', 'ok'), finishChunk('stop'))], resumedSeen) as any,
+    );
+    resumed.seedHistory((first as any).history);
+    await resumed.send('again');
+
+    expect((JSON.stringify(resumedSeen[0]).match(/<specialists-status>/g) ?? [])).toHaveLength(1);
   });
 
   // Fix pass, Finding 4: opts.specialistStatus?.() runs in beginTurn AFTER
@@ -1815,29 +1888,30 @@ describe('HarnessSession — specialist status block (Task 5, MOIM pattern)', ()
   // assistant reply, no error surfaced, and the re-entrancy guard (this.abort)
   // never gets set, stranding the session on every future send(). Pin that a
   // throwing callback degrades to "no status block" instead.
-  it('a specialistStatus callback that throws degrades to no status block instead of stranding the turn', async () => {
+  it('a thrown status read preserves the prior snapshot and does not strand the turn', async () => {
     const seen: any[] = [];
     const model = scriptedModel([
       stream(...textChunks('a', 'ok'), finishChunk('stop')),
       stream(...textChunks('b', 'ok'), finishChunk('stop')),
     ], seen);
+    let call = 0;
     const session = new HarnessSession(
       makeOpts({
         decide: async () => ALLOW,
-        specialistStatus: () => { throw new Error('EACCES: permission denied'); },
+        specialistStatus: () => {
+          if (call++ === 0) return running();
+          throw new Error('EACCES: permission denied');
+        },
       }),
       async () => model as any,
     );
 
-    // Must not throw / must not hang — the turn completes normally.
-    await expect(session.send('go')).resolves.toBeUndefined();
-
-    // No status block was injected — the callback never produced a value.
-    expect(JSON.stringify(seen[0])).not.toContain('<specialists-status>');
-
-    // Re-entrancy guard cleared: a second turn on the same session still
-    // works (this.abort was set and released normally by the first turn).
+    await session.send('go');
+    const priorHistory = JSON.stringify((session as any).history);
     await expect(session.send('again')).resolves.toBeUndefined();
+
+    expect(JSON.stringify((session as any).history.slice(0, 3))).toBe(priorHistory);
+    expect((JSON.stringify(seen[1]).match(/<specialists-status>/g) ?? [])).toHaveLength(1);
     expect(seen.length).toBe(2);
   });
 
@@ -1845,18 +1919,6 @@ describe('HarnessSession — specialist status block (Task 5, MOIM pattern)', ()
   // stays undefined — true for every specialist child, and any root session
   // wire() never touched) must pay literally nothing for this feature, not
   // just "no history mutation" but no scan of history at all.
-  //
-  // Final-review fix (Finding 5): the ORIGINAL version of this test only
-  // asserted `expect(spy).not.toHaveBeenCalled()` for the UNWIRED session —
-  // an assertion that also passes if the whole guarded-scan feature were
-  // deleted outright (no specialistStatus handling anywhere in beginTurn),
-  // since then findIndex would never be called for ANY session, wired or
-  // not. Added a positive control: a second, WIRED session (specialistStatus
-  // present) must still call findIndex — proving the "zero cost when unwired"
-  // claim is actually the guard skipping REAL work, not the absence of the
-  // feature entirely. A regression that deletes the whole
-  // `if (this.opts.specialistStatus) { ... }` block now fails the wired
-  // assertion below instead of passing both.
   it('a session with no specialistStatus wired never scans history for a status block (Finding 6: zero cost)', async () => {
     const model = scriptedModel([stream(...textChunks('a', 'ok'), finishChunk('stop'))], []);
     const session = new HarnessSession(makeOpts({ decide: async () => ALLOW }), async () => model as any);
@@ -1867,19 +1929,9 @@ describe('HarnessSession — specialist status block (Task 5, MOIM pattern)', ()
 
     expect(spy).not.toHaveBeenCalled();
 
-    // Positive control: an otherwise-identical WIRED session DOES scan —
-    // same model script, same decide, only specialistStatus differs.
-    const wiredModel = scriptedModel([stream(...textChunks('a', 'ok'), finishChunk('stop'))], []);
-    const wiredSession = new HarnessSession(
-      makeOpts({ decide: async () => ALLOW, specialistStatus: () => null }),
-      async () => wiredModel as any,
-    );
-    const wiredHistoryRef = (wiredSession as any).history;
-    const wiredSpy = vi.spyOn(wiredHistoryRef, 'findIndex');
-
-    await wiredSession.send('go');
-
-    expect(wiredSpy).toHaveBeenCalled();
+    // Positive control: the surrounding integration tests prove a wired
+    // callback runs and appends. The append-only design intentionally performs
+    // no history scan on either path; recovery happens only at seed/compaction.
   });
 });
 
