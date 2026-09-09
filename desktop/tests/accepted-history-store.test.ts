@@ -80,6 +80,15 @@ describe('AcceptedHistoryStore', () => {
     return fs.readFileSync(store.manifestPathForTest(sessionId), 'utf8');
   }
 
+  /** Every JSON key path in the manifest whose string value contains `marker`, so a
+   *  privacy test can assert WHERE a kept string lives, not just that it appears. */
+  function markerPaths(value: unknown, marker: string, trail: string[] = []): string[][] {
+    if (typeof value === 'string') return value.includes(marker) ? [trail] : [];
+    if (Array.isArray(value)) return value.flatMap((item, index) => markerPaths(item, marker, [...trail, String(index)]));
+    if (value && typeof value === 'object') return Object.entries(value).flatMap(([key, item]) => markerPaths(item, marker, [...trail, key]));
+    return [];
+  }
+
   it('publishes references to exact transcript content and restores private metadata without duplicating transcript text', async () => {
     const revision = await store.invalidate(sessionId, 'history-mutation');
     await expect(store.publish({ ...proposal(), revision })).resolves.toEqual({ ok: true });
@@ -157,21 +166,109 @@ describe('AcceptedHistoryStore', () => {
     expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'ineligible' });
   });
 
-  it('stores only provider metadata for a tool call and its result, never the tool input or output text', async () => {
+  it('keeps the parallel-call wrapper argument string and nothing else: no per-call input, no tool output', async () => {
     const events: Fixture[] = [
       { type: 'tool-use', sessionId, uuid: 't1', data: { toolUseId: 'call_1', toolName: 'Bash', toolInput: { command: 'SECRET_TOOL_INPUT' } } },
       { type: 'tool-result', sessionId, uuid: 't2', data: { toolUseId: 'call_1', toolName: 'Bash', toolResult: 'SECRET_TOOL_OUTPUT' } },
     ];
     writeTranscript(events);
+    const wrapper = {
+      itemId: 'fc_parallel', toolCallId: 'call_1', toolName: 'Bash',
+      input: '{"calls":[{"name":"Bash","arguments":"{\\"command\\":\\"WRAPPER_ARGUMENT_MARKER\\"}"}]}',
+      index: 0, count: 1,
+    };
     const messages = [
-      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'Bash', input: { command: 'SECRET_TOOL_INPUT' }, providerOptions: { openai: { itemId: 'fc_1' } } }] },
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'Bash', output: { type: 'text', value: 'SECRET_TOOL_OUTPUT' }, providerOptions: { openai: { parallelToolCall: { itemId: 'fc_1', toolCallId: 'call_1', toolName: 'Bash', input: '{}', index: 0, count: 1 } } } }] },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'Bash', input: { command: 'SECRET_TOOL_INPUT' }, providerOptions: { openai: { itemId: 'fc_1', parallelToolCall: wrapper } } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call_1', toolName: 'Bash', output: { type: 'text', value: 'SECRET_TOOL_OUTPUT' }, providerOptions: { openai: { parallelToolCall: wrapper } } }] },
     ];
     const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
-    expect(sidecar()).toContain('fc_1');
+
+    // The real per-call input and the tool output stay in the transcript only.
     expect(sidecar()).not.toContain('SECRET_TOOL_INPUT');
     expect(sidecar()).not.toContain('SECRET_TOOL_OUTPUT');
+    // The one documented exemption: the wrapper's raw argument string is kept, and it
+    // may live ONLY under providerOptions.openai.parallelToolCall.input.
+    const marked = markerPaths(JSON.parse(sidecar()), 'WRAPPER_ARGUMENT_MARKER');
+    expect(marked.length).toBe(2);
+    expect(marked.map(p => p.slice(-3).join('.'))).toEqual(['openai.parallelToolCall.input', 'openai.parallelToolCall.input']);
     expect(restored).toEqual({ ok: true, messages, eventUuids: ['t1', 't2'], revision: store.currentRevision(sessionId) });
+  });
+
+  it('refuses provider metadata outside the per-kind allowlist instead of copying it', async () => {
+    const events: Fixture[] = [{ type: 'tool-use', sessionId, uuid: 't1', data: { toolUseId: 'call_1', toolName: 'Bash', toolInput: {} } }];
+    writeTranscript(events);
+    const toolCall = (providerOptions: any) => [{ role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'call_1', toolName: 'Bash', input: {}, providerOptions }] }];
+    for (const providerOptions of [
+      { openai: { itemId: 'fc_1', providerExecuted: true } },                                  // unknown key under openai
+      { openai: { parallelToolCall: { itemId: 'fc_1', arguments: 'SMUGGLED' } } },             // unknown key under the wrapper
+      { anthropic: { cacheControl: 'ephemeral' } },                                            // unknown provider entirely
+    ]) {
+      await expect(roundTrip({ references: events.map(refFor), messages: toolCall(providerOptions) as any }))
+        .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+    }
+
+    // Reasoning-only metadata on a plain text part is not that part's allowlist either.
+    writeTranscript(base);
+    const leaky = proposal().messages as any[];
+    await expect(roundTrip({ messages: [leaky[0], { role: 'assistant', content: [{ type: 'text', text: 'answer', providerOptions: { openai: { reasoningEncryptedContent: 'LEAK' } } }] }] as any }))
+      .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+  });
+
+  it('cites the real anchor for a user message preceded by an empty accepted one, never a literal', async () => {
+    const events: Fixture[] = [
+      { type: 'user-message', sessionId, uuid: 'u-empty', data: { text: '' } },
+      { type: 'user-message', sessionId, uuid: 'u-real', data: { text: 'REAL_USER_TEXT' } },
+      { type: 'user-message', sessionId, uuid: 'u-next', data: { text: 'SECOND_USER_TEXT' } },
+    ];
+    writeTranscript(events);
+    const messages = [{ role: 'user', content: 'REAL_USER_TEXT' }, { role: 'user', content: 'SECOND_USER_TEXT' }];
+    const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
+    // The empty anchor must not be spent as the head of a two-anchor run: that would
+    // both copy real user text into the sidecar and burn the anchor the next message needs.
+    expect(JSON.parse(sidecar()).messages.map((m: any) => m.content)).toEqual([
+      { kind: 'event', uuid: 'u-real', field: 'user-text' },
+      { kind: 'event', uuid: 'u-next', field: 'user-text' },
+    ]);
+    expect(sidecar()).not.toContain('REAL_USER_TEXT');
+    expect(restored).toEqual({ ok: true, messages, eventUuids: ['u-empty', 'u-real', 'u-next'], revision: store.currentRevision(sessionId) });
+  });
+
+  it('accepts references that tile one persisted part and rejects a gap or an overlap', async () => {
+    const events: Fixture[] = [{ type: 'assistant-text', sessionId, uuid: 'a1', data: { partId: 'text-0', text: 'hello' } }];
+    writeTranscript(events);
+    const messages = [{ role: 'assistant', content: 'hello' }];
+    const ref = (start: number, end: number): PersistedEventReference =>
+      ({ eventUuid: `delta-${start}-${end}`, anchorUuid: 'a1', type: 'assistant-text' as any, partId: 'text-0', start, end });
+
+    await expect(roundTrip({ references: [ref(0, 3), ref(3, 5)], messages: messages as any }))
+      .resolves.toEqual({ ok: true, messages, eventUuids: ['a1'], revision: store.currentRevision(sessionId) });
+    await expect(roundTrip({ references: [ref(0, 2), ref(3, 5)], messages: messages as any }))
+      .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+    await expect(roundTrip({ references: [ref(0, 3), ref(2, 5)], messages: messages as any }))
+      .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+  });
+
+  it('never rejects: an unexpected failure while describing publishes as unreferenced-history', async () => {
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    const exploding = [{ role: 'user', get content(): string { throw new Error('boom'); } }];
+    await expect(store.publish(proposal({ revision, messages: exploding as any })))
+      .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+  });
+
+  it('refuses a tampered manifest: bad role, bad transformation shape, or a non-text field', async () => {
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    await store.publish(proposal({ revision }));
+    const original = sidecar();
+    const tamper = (mutate: (manifest: any) => void) => {
+      const manifest = JSON.parse(original);
+      mutate(manifest);
+      fs.writeFileSync(store.manifestPathForTest(sessionId), JSON.stringify(manifest));
+      return store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
+    };
+    expect(tamper(m => { m.messages[0].role = 'root'; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(tamper(m => { m.transformation = { kind: 'summary' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(tamper(m => { m.transformation = { kind: 'rewritten' }; })).toEqual({ ok: false, reason: 'malformed' });
+    expect(tamper(m => { m.messages[0].content = { kind: 'event', uuid: 'u1', field: 'tool-call' }; })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('re-reads a tool-delivered image by path and refuses a changed one', async () => {
@@ -214,6 +311,12 @@ describe('AcceptedHistoryStore', () => {
     expect(sidecar()).not.toContain('LONG_TOOL_OUTPUT');
     expect(sidecar()).not.toContain('see this');
     expect(restored).toEqual({ ok: true, messages, eventUuids: ['t1', 't2'], revision: store.currentRevision(sessionId), transformation: { kind: 'pruned' } });
+
+    // A keep-length the event text cannot support is a corrupt manifest, not a shorter result.
+    const manifest = JSON.parse(sidecar());
+    manifest.messages[0].content.parts[0].pruned.keepChars = long.length + 1;
+    fs.writeFileSync(store.manifestPathForTest(sessionId), JSON.stringify(manifest));
+    expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
   });
 
   it('keeps injected user strings as bounded literals and refuses an oversized one', async () => {

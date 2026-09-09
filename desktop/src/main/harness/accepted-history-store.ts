@@ -35,6 +35,31 @@ const FIELD_EVENT_TYPE = {
 type Field = keyof typeof FIELD_EVENT_TYPE;
 type TextField = 'user-text' | 'skill-text' | 'summary-text' | 'assistant-text' | 'reasoning-text';
 
+const TEXT_FIELDS: readonly string[] = ['user-text', 'skill-text', 'summary-text', 'assistant-text', 'reasoning-text'];
+const ROLES: readonly string[] = ['user', 'assistant', 'tool', 'system'];
+
+/** The keys of OpenAI's parallel-tool-call wrapper. `input` is the ONE documented
+ *  exemption to "never copy tool input": it is the wrapper's raw argument string,
+ *  which @ai-sdk/openai re-emits verbatim as the wrapper call's arguments. The
+ *  transcript stores only each child call's parsed input, so this string cannot be
+ *  re-derived byte-exactly; dropping it would make every parallel-call turn
+ *  unrestorable. It stays inside the same private 0600 sidecar as the reasoning
+ *  ciphertext and nowhere else. Per-call input, tool output, text and image bytes
+ *  are still never copied. See the architecture doc, "Store proposal and restore". */
+const PARALLEL_TOOL_CALL: KeySpec = { itemId: true, toolCallId: true, toolName: true, input: true, index: true, count: true };
+
+type KeySpec = true | { [key: string]: KeySpec };
+
+/** Exactly which provider metadata each part kind may carry into the manifest.
+ *  Anything else — another key under `openai`, or another provider entirely —
+ *  fails the publish rather than being copied or silently dropped. */
+const PROVIDER_OPTIONS_ALLOWLIST: Record<'text' | 'reasoning' | 'tool-call' | 'tool-result', KeySpec> = {
+  text: { openai: { itemId: true, phase: true } },
+  reasoning: { openai: { itemId: true, reasoningEncryptedContent: true } },
+  'tool-call': { openai: { itemId: true, parallelToolCall: PARALLEL_TOOL_CALL } },
+  'tool-result': { openai: { parallelToolCall: PARALLEL_TOOL_CALL } },
+};
+
 /** Delta types SessionStore coalesces into one persisted part; their references
  *  carry a partId and must tile the whole persisted text. */
 const COALESCED_TYPES = new Set(['assistant-text', 'assistant-thinking']);
@@ -75,6 +100,17 @@ interface Manifest {
 }
 
 interface Eligibility { v: 1; sessionId: string; revision: number; eligible: boolean; reason: string }
+
+/** The transformation is handed back to the harness as history provenance, so only
+ *  the two shapes it knows may survive a restore. */
+function validTransformation(value: unknown): boolean {
+  if (value === undefined) return true;
+  const transformation = record(value);
+  if (!transformation) return false;
+  if (transformation.kind === 'pruned') return Object.keys(transformation).length === 1;
+  return transformation.kind === 'summary' && typeof transformation.summaryEventUuid === 'string'
+    && Object.keys(transformation).length === 2;
+}
 
 export interface AcceptedHistoryProposal {
   sessionId: string;
@@ -121,8 +157,45 @@ function onlyKeys(part: Record<string, any>, allowed: string[]): boolean {
   return Object.keys(part).every(key => allowed.includes(key));
 }
 
+/** True when every key of `value`, recursively, is named by `spec`. A `true` leaf
+ *  accepts whatever value sits there; an object leaf must itself be an object. */
+function withinSpec(value: unknown, spec: KeySpec): boolean {
+  if (spec === true) return true;
+  const object = record(value);
+  if (!object) return false;
+  return Object.keys(object).every(key =>
+    Object.prototype.hasOwnProperty.call(spec, key) && withinSpec(object[key], spec[key]));
+}
+
+/** The `providerOptions` tail for a descriptor, or null when the part carries
+ *  metadata outside its kind's allowlist — which must fail the publish, so the
+ *  session falls back to a rebuilt history instead of restoring an approximation. */
+function providerOptionsFor(value: unknown, kind: keyof typeof PROVIDER_OPTIONS_ALLOWLIST): { providerOptions?: unknown } | null {
+  if (value === undefined) return {};
+  return withinSpec(value, PROVIDER_OPTIONS_ALLOWLIST[kind]) ? { providerOptions: value } : null;
+}
+
 function readDigest(file: string): string | null {
   try { return digest(fs.readFileSync(file)); } catch { return null; }
+}
+
+/** Path digests memoised for the life of ONE publish, keyed by identity+mtime+size.
+ *  WHY: without it a turn carrying N image parts re-hashes every attachment of every
+ *  accepted user message N times; a single stat per lookup keeps that to one read. */
+function createDigestCache(): (file: string) => string | null {
+  const cache = new Map<string, string | null>();
+  return (file: string) => {
+    let key: string;
+    try {
+      const stat = fs.statSync(file);
+      key = `${stat.mtimeMs}:${stat.size}:${file}`;
+    } catch { return null; }
+    const hit = cache.get(key);
+    if (hit !== undefined || cache.has(key)) return hit ?? null;
+    const value = readDigest(file);
+    cache.set(key, value);
+    return value;
+  };
 }
 
 function rawTranscript(file: string): { bytes: number; digest: string; events: Map<string, TranscriptEvent> } | null {
@@ -167,13 +240,16 @@ function eventText(event: TranscriptEvent, field: TextField): string | null {
  */
 class AnchorSet {
   readonly uuids: string[] = [];
+  /** WHY: one cache per AnchorSet means one cache per publish — attachment and
+   *  tool-image lookups within a turn hash each file once, and nothing outlives it. */
+  readonly digestOf = createDigestCache();
   private byField = new Map<Field, Array<{ uuid: string; event: TranscriptEvent }>>();
   private cursor = new Map<Field, number>();
 
   constructor(uuids: string[], private events: Map<string, TranscriptEvent>) {
     for (const uuid of uuids) {
-      const event = events.get(uuid);
-      if (!event) continue;
+      // WHY: acceptedAnchors() already proved every accepted uuid resolves to an event.
+      const event = events.get(uuid)!;
       this.uuids.push(uuid);
       for (const field of Object.keys(FIELD_EVENT_TYPE) as Field[]) {
         if (FIELD_EVENT_TYPE[field] !== event.type) continue;
@@ -184,18 +260,32 @@ class AnchorSet {
     }
   }
 
-  /** N ≥ 1 consecutive unspent anchors of `field` whose texts concatenate to `target`. */
-  matchText(field: TextField, target: string): string[] | null {
+  /** N consecutive unspent anchors of `field` whose texts concatenate to `target`,
+   *  N bounded by `maxAnchors`. The cursor advances ONLY for a run this returns —
+   *  a caller that can accept single anchors only must say so here, because a run it
+   *  rejects afterwards would otherwise have spent anchors a later message needs. */
+  matchText(field: TextField, target: string, maxAnchors = Number.MAX_SAFE_INTEGER): string[] | null {
+    const run = this.findRun(field, target, maxAnchors);
+    if (run) this.cursor.set(field, run.end + 1);
+    return run?.uuids ?? null;
+  }
+
+  /** Whether any run of unspent anchors reproduces `target`, spending nothing. */
+  hasTextMatch(field: TextField, target: string): boolean {
+    return this.findRun(field, target, Number.MAX_SAFE_INTEGER) !== null;
+  }
+
+  private findRun(field: TextField, target: string, maxAnchors: number): { uuids: string[]; end: number } | null {
     const list = this.byField.get(field) ?? [];
     for (let start = this.cursor.get(field) ?? 0; start < list.length; start++) {
       let accumulated = '';
       const uuids: string[] = [];
-      for (let end = start; end < list.length; end++) {
+      for (let end = start; end < list.length && uuids.length < maxAnchors; end++) {
         const text = eventText(list[end].event, field);
         if (text === null) break;
         accumulated += text;
         uuids.push(list[end].uuid);
-        if (accumulated === target) { this.cursor.set(field, end + 1); return uuids; }
+        if (accumulated === target) return { uuids, end };
         if (accumulated.length >= target.length) break;
       }
     }
@@ -220,7 +310,7 @@ class AnchorSet {
       const event = this.events.get(uuid);
       if (event?.type !== 'user-message' || !Array.isArray(event.data?.attachments)) continue;
       for (const candidate of event.data.attachments as string[]) {
-        if (readDigest(candidate) === wanted) return candidate;
+        if (this.digestOf(candidate) === wanted) return candidate;
       }
     }
     return null;
@@ -301,20 +391,28 @@ export class AcceptedHistoryStore {
   async publish(proposal: AcceptedHistoryProposal): Promise<{ ok: true } | { ok: false; reason: 'stale-generation' | 'oversized' | 'write-failed' | 'unreferenced-history' }> {
     return this.enqueue(proposal.sessionId, async () => {
       if (this.disabled.has(proposal.sessionId) || proposal.revision !== this.currentRevision(proposal.sessionId)) return { ok: false, reason: 'stale-generation' } as const;
-      const raw = rawTranscript(proposal.transcriptPath);
-      if (!raw) return { ok: false, reason: 'unreferenced-history' } as const;
-      const eventUuids = acceptedAnchors(proposal.references, raw.events);
-      if (!eventUuids) return { ok: false, reason: 'unreferenced-history' } as const;
-      const messages = describeMessages(proposal.messages, new AnchorSet(eventUuids, raw.events));
-      if (!messages) return { ok: false, reason: 'unreferenced-history' } as const;
-      const manifest: Manifest = {
-        v: VERSION, sessionId: proposal.sessionId, transcriptPath: proposal.transcriptPath,
-        transcript: { bytes: raw.bytes, digest: raw.digest }, binding: proposal.binding,
-        assemblyDigest: proposal.assemblyDigest, revision: proposal.revision,
-        eventUuids, messages,
-        ...(proposal.transformation ? { transformation: proposal.transformation } : {}),
-      };
-      const json = JSON.stringify(manifest);
+      let json: string;
+      try {
+        const raw = rawTranscript(proposal.transcriptPath);
+        if (!raw) return { ok: false, reason: 'unreferenced-history' } as const;
+        const eventUuids = acceptedAnchors(proposal.references, raw.events);
+        if (!eventUuids) return { ok: false, reason: 'unreferenced-history' } as const;
+        const messages = describeMessages(proposal.messages, new AnchorSet(eventUuids, raw.events));
+        if (!messages) return { ok: false, reason: 'unreferenced-history' } as const;
+        const manifest: Manifest = {
+          v: VERSION, sessionId: proposal.sessionId, transcriptPath: proposal.transcriptPath,
+          transcript: { bytes: raw.bytes, digest: raw.digest }, binding: proposal.binding,
+          assemblyDigest: proposal.assemblyDigest, revision: proposal.revision,
+          eventUuids, messages,
+          ...(proposal.transformation ? { transformation: proposal.transformation } : {}),
+        };
+        json = JSON.stringify(manifest);
+      } catch {
+        // WHY: publish runs on the session's append chain, so a rejection here would
+        // poison unrelated session work. An unexpected message shape is exactly the
+        // "cannot describe this history" case, and reports as that.
+        return { ok: false, reason: 'unreferenced-history' } as const;
+      }
       if (Buffer.byteLength(json) > ACCEPTED_HISTORY_MAX_BYTES) return { ok: false, reason: 'oversized' } as const;
       try {
         await this.atomicWrite(this.manifestPathForTest(proposal.sessionId), json);
@@ -337,7 +435,8 @@ export class AcceptedHistoryStore {
     if (stat.size > ACCEPTED_HISTORY_MAX_BYTES) return { ok: false, reason: 'oversized' };
     const manifest = this.readBoundedJson(file) as Manifest | null;
     if (!manifest || manifest.v !== VERSION || manifest.sessionId !== input.sessionId || manifest.revision !== eligibility.revision
-      || !Array.isArray(manifest.messages) || !Array.isArray(manifest.eventUuids)) return { ok: false, reason: 'malformed' };
+      || !Array.isArray(manifest.messages) || !Array.isArray(manifest.eventUuids)
+      || !validTransformation(manifest.transformation)) return { ok: false, reason: 'malformed' };
     if (manifest.binding !== input.binding) return { ok: false, reason: 'binding-mismatch' };
     if (manifest.assemblyDigest !== input.assemblyDigest) return { ok: false, reason: 'assembly-mismatch' };
     if (path.resolve(manifest.transcriptPath) !== path.resolve(input.transcriptPath)) return { ok: false, reason: 'missing-transcript' };
@@ -347,6 +446,9 @@ export class AcceptedHistoryStore {
     const accepted = new Set(manifest.eventUuids);
     const messages: ModelMessage[] = [];
     for (const descriptor of manifest.messages) {
+      // WHY: the role goes straight into a ModelMessage the provider will send, so an
+      // unrecognised one is a corrupt manifest, not something to pass through.
+      if (!record(descriptor) || !ROLES.includes(descriptor.role)) return { ok: false, reason: 'malformed' };
       const content = restoreContent(descriptor?.content, raw.events, accepted);
       if ('reason' in content) return { ok: false, reason: content.reason };
       const message = { role: descriptor.role, content: content.value } as ModelMessage;
@@ -420,16 +522,16 @@ export class AcceptedHistoryStore {
 // ---------------------------------------------------------------------------
 
 /** `event` for a single anchor, `concat` for a run of them. */
-function textDescriptor(uuids: string[], field: 'assistant-text' | 'reasoning-text', providerOptions: unknown): PartDescriptor {
+function textDescriptor(uuids: string[], field: 'assistant-text' | 'reasoning-text', options: { providerOptions?: unknown }): PartDescriptor {
   return uuids.length === 1
-    ? { kind: 'event', uuid: uuids[0], field, ...(providerOptions !== undefined ? { providerOptions } : {}) }
-    : { kind: 'concat', uuids, field, ...(providerOptions !== undefined ? { providerOptions } : {}) };
+    ? { kind: 'event', uuid: uuids[0], field, ...options }
+    : { kind: 'concat', uuids, field, ...options };
 }
 
 /** How a live tool-result part relates to its persisted event text: unchanged,
  *  pruned, image-collapsed, or image-bearing. Null when it is none of those, in
  *  which case the part cannot be rebuilt exactly and the publish must fail. */
-function describeToolResult(part: Record<string, any>, event: TranscriptEvent): { images?: ImageDescriptor[]; pruned?: PrunedDescriptor } | null {
+function describeToolResult(part: Record<string, any>, event: TranscriptEvent, digestOf: (file: string) => string | null): { images?: ImageDescriptor[]; pruned?: PrunedDescriptor } | null {
   const text = String(event.data?.toolResult ?? '');
   const paths = Array.isArray(event.data?.images) ? (event.data.images as string[]) : [];
   const output = record(part.output);
@@ -459,7 +561,7 @@ function describeToolResult(part: Record<string, any>, event: TranscriptEvent): 
     let found: string | null = null;
     while (scan < paths.length) {
       const candidate = paths[scan++];
-      if (readDigest(candidate) === wanted) { found = candidate; break; }
+      if (digestOf(candidate) === wanted) { found = candidate; break; }
     }
     if (!found) return null;
     images.push({ path: found, mediaType: file.mediaType, digest: wanted, ...(file.filename !== undefined ? { filename: String(file.filename) } : {}) });
@@ -489,30 +591,39 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
 
     if (part.type === 'text' || part.type === 'reasoning') {
       if (typeof part.text !== 'string' || !onlyKeys(part, ['type', 'text', 'providerOptions'])) return null;
+      const options = providerOptionsFor(part.providerOptions, part.type);
+      if (!options) return null;
       const field: TextField = part.type === 'reasoning' ? 'reasoning-text' : message.role === 'user' ? 'user-text' : 'assistant-text';
-      const uuids = anchors.matchText(field, part.text);
-      if (!uuids) return null;
       if (field === 'user-text') {
-        if (uuids.length !== 1) return null;
-        parts.push({ kind: 'event', uuid: uuids[0], field, ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}) });
+        // WHY: user text has no concat descriptor, so only a single-anchor run may be
+        // claimed — asking for one keeps a rejected longer run from spending anchors.
+        const uuids = anchors.matchText(field, part.text, 1);
+        if (!uuids) return null;
+        parts.push({ kind: 'event', uuid: uuids[0], field, ...options });
       } else {
-        parts.push(textDescriptor(uuids, field, part.providerOptions));
+        const uuids = anchors.matchText(field, part.text);
+        if (!uuids) return null;
+        parts.push(textDescriptor(uuids, field, options));
       }
       continue;
     }
 
     if (part.type === 'tool-call') {
       if (!onlyKeys(part, ['type', 'toolCallId', 'toolName', 'input', 'providerOptions'])) return null;
+      const options = providerOptionsFor(part.providerOptions, 'tool-call');
+      if (!options) return null;
       const match = anchors.matchEvent('tool-call', event => String(event.data?.toolUseId ?? '') === part.toolCallId
         && String(event.data?.toolName ?? '') === part.toolName
         && canonical(event.data?.toolInput ?? {}) === canonical(part.input ?? {}));
       if (!match) return null;
-      parts.push({ kind: 'event', uuid: match.uuid, field: 'tool-call', ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}) });
+      parts.push({ kind: 'event', uuid: match.uuid, field: 'tool-call', ...options });
       continue;
     }
 
     if (part.type === 'tool-result') {
       if (typeof part.toolName !== 'string' || !onlyKeys(part, ['type', 'toolCallId', 'toolName', 'output', 'providerOptions'])) return null;
+      const options = providerOptionsFor(part.providerOptions, 'tool-result');
+      if (!options) return null;
       let described: { images?: ImageDescriptor[]; pruned?: PrunedDescriptor } | null = null;
       const match = anchors.matchEvent('tool-result', event => {
         // WHY: the shape check IS the match test — a tool-result whose output no
@@ -520,13 +631,12 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
         // is kept rather than recomputed so images are digested once.
         described = null;
         if (String(event.data?.toolUseId ?? '') !== part.toolCallId || String(event.data?.toolName ?? '') !== part.toolName) return false;
-        described = describeToolResult(part, event);
+        described = describeToolResult(part, event, anchors.digestOf);
         return described !== null;
       });
       if (!match || !described) return null;
       parts.push({
-        kind: 'event', uuid: match.uuid, field: 'tool-result',
-        ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}),
+        kind: 'event', uuid: match.uuid, field: 'tool-result', ...options,
         ...(described as { images?: ImageDescriptor[]; pruned?: PrunedDescriptor }),
       });
       continue;
@@ -576,8 +686,15 @@ function describeString(message: ModelMessage, anchors: AnchorSet): ContentDescr
   }
   if (message.role !== 'user') return null;
   for (const field of ['user-text', 'skill-text', 'summary-text'] as const) {
-    const uuids = anchors.matchText(field, text);
-    if (uuids?.length === 1) return { kind: 'event', uuid: uuids[0], field };
+    // Only a single anchor is describable here, and asking for one leaves the cursor
+    // untouched when a longer run would have matched.
+    const uuids = anchors.matchText(field, text, 1);
+    if (uuids) return { kind: 'event', uuid: uuids[0], field };
+  }
+  // WHY: text that a run of anchors reproduces IS transcript content — copying it as a
+  // literal would put real user text in the private sidecar, so it fails the publish.
+  for (const field of ['user-text', 'skill-text', 'summary-text'] as const) {
+    if (anchors.hasTextMatch(field, text)) return null;
   }
   // WHY: rules, steers and status snapshots are injected by the app and have no
   // transcript anchor to point at, so they are copied — bounded, and user-role only.
@@ -595,8 +712,12 @@ function acceptedEvent(uuid: unknown, events: Map<string, TranscriptEvent>, acce
   return typeof uuid === 'string' && accepted.has(uuid) ? events.get(uuid) ?? null : null;
 }
 
+function isTextField(value: unknown): value is TextField {
+  return typeof value === 'string' && TEXT_FIELDS.includes(value);
+}
+
 function concatText(uuids: unknown, field: TextField, events: Map<string, TranscriptEvent>, accepted: Set<string>): string | null {
-  if (!Array.isArray(uuids) || uuids.length === 0) return null;
+  if (!isTextField(field) || !Array.isArray(uuids) || uuids.length === 0) return null;
   let text = '';
   for (const uuid of uuids) {
     const event = acceptedEvent(uuid, events, accepted);
@@ -637,8 +758,13 @@ function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, 
     const toolName = String(event.data?.toolName ?? '');
     const text = String(event.data?.toolResult ?? '');
     let output: any;
-    if (part.pruned && 'keepChars' in part.pruned) output = { type: 'text', value: prunedToolResultText(text, part.pruned.keepChars) };
-    else if (part.pruned) output = { type: 'text', value: imageCollapsedToolResultText(text, toolName) };
+    if (part.pruned && 'keepChars' in part.pruned) {
+      // WHY: keepChars indexes into the event text; a value the text cannot support
+      // would silently produce a DIFFERENT string than the model was sent.
+      const keepChars = part.pruned.keepChars;
+      if (!Number.isSafeInteger(keepChars) || keepChars < 0 || keepChars > text.length) return { reason: 'malformed' };
+      output = { type: 'text', value: prunedToolResultText(text, keepChars) };
+    } else if (part.pruned) output = { type: 'text', value: imageCollapsedToolResultText(text, toolName) };
     else if (part.images?.length) {
       const files: any[] = [];
       for (const image of part.images) {
@@ -665,6 +791,9 @@ function restoreContent(raw: ContentDescriptor | undefined, events: Map<string, 
     return text === null ? { reason: 'malformed' } : { value: text };
   }
   if (descriptor.kind === 'event') {
+    // WHY: message-level content is a STRING; a tool-call/tool-result field here would
+    // otherwise resolve through the text path and restore as an empty message.
+    if (!isTextField(descriptor.field)) return { reason: 'malformed' };
     const event = acceptedEvent(descriptor.uuid, events, accepted);
     const text = event && eventText(event, descriptor.field);
     return text === null || text === undefined ? { reason: 'malformed' } : { value: text };
