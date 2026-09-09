@@ -5657,6 +5657,29 @@ const ALL_SURFACES: CompareSurface[] = [
           },
         ],
       },
+      {
+        // WHY a second round with no new design: the work sat unmerged for three weeks and was
+        // rebuilt on top of ~1,000 master commits on 2026-09-09. This round is the rebase check —
+        // the approved B, unchanged, in BOTH states it has (a small local model that was trimmed,
+        // and a cloud model that got everything), so the review deck can show each as its own
+        // live pane. The cloud state uses SFX_CTX_FULL, which round 1 defined but never rendered.
+        n: 2,
+        basis: 'R1 · B (Tabbed) approved 2026-08-17. Rebased onto master 2026-09-09 with no design change; shown in both of its states for the rebase check.',
+        candidates: [
+          {
+            id: 'tabs-trimmed',
+            label: 'B — small local model, trimmed',
+            note: 'qwen2.5-coder:14b with a 16k window: the project instructions were read as an outline, one skill body was cut, and one MCP server was left unattached. Amber status pill and the Not attached callout.',
+            render: () => <SfxTabbed ctx={SFX_CTX} trimmed />,
+          },
+          {
+            id: 'tabs-full',
+            label: 'B — cloud model, everything loaded',
+            note: 'claude-sonnet-4-6 with a 200k window: nothing was cut, so the same layout reads green — Full context pill, no callout, no Full-vs-supplied toggle anywhere.',
+            render: () => <SfxTabbed ctx={SFX_CTX_FULL} trimmed={false} />,
+          },
+        ],
+      },
     ],
   },
 ];
