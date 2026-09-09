@@ -854,7 +854,7 @@ PermissionRequest`, now carrying `specialist.parentToolCallId`; the 5-minute hol
 a `PermissionResolved` purge signal that stops a stale answered ask from replaying with live buttons.
 
 **File formats.** A personal specialist is frontmatter (`name`, `description`, `tools:`, `model:
-budget|frontier|parent`, `stepCap`, `reportBudgetTokens`) + a system-prompt body, in
+budget|frontier|parent`, `reportBudgetTokens`) + a system-prompt body, in
 `~/.youcoded/specialists/*.md`; `charter` (`read-only`/`read-write`) is always DERIVED from the
 mapped tools, never declared. A Claude Code agent file (`~/.claude/agents/*.md` or
 `<cwd>/.claude/agents/*.md`) maps through the same pipeline — see the mapping table below. Ids are

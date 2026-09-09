@@ -299,29 +299,57 @@ describe('HarnessSession — multi-step turn driver', () => {
     }
   });
 
-  it('specialist children exceed the root model budget without a max_steps ask and finish normally', async () => {
+  it.each([
+    { modelId: 'm', steps: 26, tier: 'default (25-step)' },
+    { modelId: 'anthropic/claude-opus-4-8', steps: 51, tier: 'frontier (50-step)' },
+  ])('specialist children bypass the $tier root fallback without a max_steps ask', async ({ modelId, steps }) => {
     const read = fakeTool('Read');
     const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
     const toolStep = (i: number) => stream(
       toolCallChunk(`c${i}`, 'Read', { file_path: `file-${i}.ts` }),
       finishChunk('tool-calls'),
     );
-    // The default root budget for this test model is 25. A child must not inherit it.
     const model = scriptedModel([
-      ...Array.from({ length: 26 }, (_, i) => toolStep(i + 1)),
+      ...Array.from({ length: steps }, (_, i) => toolStep(i + 1)),
       stream(...textChunks('done', 'REPORT: complete'), finishChunk('stop')),
     ]);
     const session = new HarnessSession(
-      makeOpts({ tools: [read], decide: async () => ALLOW, askUser, isSpecialistChild: true }),
+      makeOpts({
+        binding: { providerId: 'openrouter', modelId },
+        tools: [read],
+        decide: async () => ALLOW,
+        askUser,
+        isSpecialistChild: true,
+      }),
       async () => model as any,
     );
     const events = collect(session);
 
     await session.send('go');
 
-    expect((read as any).calls).toHaveLength(26);
+    expect((read as any).calls).toHaveLength(steps);
     expect(askUser.mock.calls.some((call) => call[0].toolName === 'max_steps')).toBe(false);
     expect(events.find((event) => event.type === 'turn-complete')?.data.stopReason).toBe('end_turn');
+  });
+
+  it('root sessions retain the default 25-step fallback when no explicit maxSteps is set', async () => {
+    const read = fakeTool('Read');
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
+    const toolStep = (i: number) => stream(
+      toolCallChunk(`c${i}`, 'Read', { file_path: `file-${i}.ts` }),
+      finishChunk('tool-calls'),
+    );
+    const model = scriptedModel(Array.from({ length: 25 }, (_, i) => toolStep(i + 1)));
+    const session = new HarnessSession(
+      makeOpts({ tools: [read], decide: async () => ALLOW, askUser }),
+      async () => model as any,
+    );
+    const events = collect(session);
+
+    await session.send('go');
+
+    expect(askUser.mock.calls.some((call) => call[0].toolName === 'max_steps')).toBe(true);
+    expect(events.find((event) => event.type === 'turn-complete')?.data.stopReason).toBe('max_steps');
   });
 
   it('maxSteps: allow → loop continues (counter resets); deny → turn-complete stopReason max_steps', async () => {
