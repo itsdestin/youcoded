@@ -187,6 +187,7 @@ export function FilesTab({
   onMutated,
   onCurrentDirChange,
   onClearSearch,
+  hidden,
 }: {
   project: CentralIndexProject;
   search: string;     // lifted to ProjectView — lives on the shared seg-row now
@@ -217,6 +218,12 @@ export function FilesTab({
   // Clears the shared search box (owned by ProjectView) from the no-results
   // empty state — without it that state would be a dead end.
   onClearSearch?: () => void;
+  // Another tab is showing. ProjectView keeps this component MOUNTED and hides
+  // it instead of unmounting, because unmounting drops the project watcher and
+  // the file list, and coming back rebuilds both — the main-process watcher
+  // rebuild alone froze the app for ~300 ms per switch (perf-lab 2026-09-09).
+  // Staying mounted also returns you to the folder and file you were looking at.
+  hidden?: boolean;
 }) {
   // Root breadcrumb label + empty-state wording — constant now that this tab
   // renders only the one on-disk section.
@@ -553,7 +560,10 @@ export function FilesTab({
   const emptyHere = !flat && dirView.folders.length === 0 && dirView.files.length === 0;
 
   return (
-    <div className="relative flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 gap-3 min-w-0 max-sm:h-auto max-sm:overflow-visible">
+    // `hidden` REPLACES the layout classes rather than riding alongside them:
+    // Tailwind's `flex` utility and the `[hidden]` preflight rule have equal
+    // specificity, so the display class would win and the tab would stay visible.
+    <div className={hidden ? 'hidden' : 'relative flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 gap-3 min-w-0 max-sm:h-auto max-sm:overflow-visible'}>
       {/* Breadcrumb line — folder path on the left, view switch on the right.
           Rendered even when search/type-filter has flattened the tree (which
           hides the path itself): the switch has to stay reachable while you
