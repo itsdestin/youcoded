@@ -956,7 +956,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           separate keyboard handling. R5-1 keeps both edit cues visible even at rest. */}
       <div className={`flex items-center gap-1 px-3 pt-2 ${ICON_GUTTER}`}>
         {namingApi() ? <Button variant="ghost" size="sm"
-          className="group flex items-center justify-start gap-1.5 min-w-0 px-2 py-1 rounded-md cursor-text hover:bg-well transition-colors"
+          // -ml-2 cancels the button's own px-2 so the NAME's first letter lands
+          // on the same left edge as the metadata line below it, while the hover
+          // background keeps its padding. Without it the title sat 8px right of
+          // everything else in the card and the row read as indented.
+          className="group flex items-center justify-start gap-1.5 min-w-0 -ml-2 px-2 py-1 rounded-md cursor-text hover:bg-well transition-colors"
           aria-label={`Rename ${s.name}`} aria-haspopup="dialog"
           onKeyDown={(e) => {
             // WHY: Enter did not synthesize a click in the isolated workbench

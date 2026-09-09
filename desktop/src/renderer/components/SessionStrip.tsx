@@ -2369,7 +2369,6 @@ export default function SessionStrip({
                         </span>
                       </span>
                     </button>
-                    {namingApi() && <Button variant="ghost" size="sm" aria-label={`Rename ${s.name}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setRenameId(s.id); }}>Rename</Button>}
                     <button
                       // Close the dropdown so the CloseSessionPrompt (L2 popup)
                       // isn't competing with the still-open session menu above it.
