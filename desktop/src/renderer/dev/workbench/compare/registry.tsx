@@ -6278,11 +6278,6 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
   const dropped = c.droppedMcpServers;
   const skillsWord = `${c.skills.length} skill${c.skills.length === 1 ? '' : 's'}`;
   const toolsWord = `${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}`;
-  const cuts: string[] = [];
-  if (c.projectInstructions.truncated) cuts.push('this project’s rules were shortened to headings');
-  if (cutSkills.length) cuts.push(`${cutSkills.length} skill${cutSkills.length === 1 ? ' was' : 's were'} cut short`);
-  if (dropped.length) cuts.push(`${dropped.length} add-on${dropped.length === 1 ? ' was' : 's were'} left out`);
-  const cutSentence = cuts.length <= 1 ? (cuts[0] ?? '') : `${cuts.slice(0, -1).join(', ')} and ${cuts[cuts.length - 1]}`;
   const basename = (p: string) => p.split('/').slice(-1)[0];
 
   return (
@@ -6298,10 +6293,12 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
 
       {/* Dialog.tsx scroll track */}
       <div className="px-4 py-4 space-y-5">
+        {/* Destin, deck 3 (2026-09-09): "shrink the top banner to 1 sentence with (See details
+            below)". The itemised cuts moved out — the list under WHAT WAS LEFT OUT already
+            carries them — and the one sentence keeps the consequence, which is the point. */}
         {trimmed ? (
           <Callout tone="warning" title="Not everything fit">
-            This model’s context window is small ({sfxWindowLabel(c.contextWindowTokens)}), so {cutSentence}.
-            It may miss rules or skip steps it would normally follow.
+            This model’s context window is small ({sfxWindowLabel(c.contextWindowTokens)}), so some rules and skills were cut and it may miss steps it would normally follow (see details below).
           </Callout>
         ) : (
           <div className="rounded-lg bg-inset/50 px-3 py-2.5 flex items-start gap-2">
