@@ -35,6 +35,7 @@ import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
 import { buildCatalog } from './fixtures/marketplace/catalog';
+import { createRemoteAccessPreview } from './fixtures/remote-access';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -1684,7 +1685,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // Ns<'remote'> (Partial<Window['claude']['remote']>) rejects this literal: the real
   // setConfig/setPassword resolve to void, but the mock returns the updated config so
   // a filmed take can show the change take effect without a second round trip.
-  const remote: Record<string, (...a: any[]) => Promise<unknown>> | undefined = remoteSwitch ? {
+  const previewState = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remotePreview') : null;
+  const preview = previewState ? createRemoteAccessPreview(previewState) : undefined;
+  const remote = remoteSwitch || preview ? {
+    // MOCK_ONLY: an explicit preview API, never a real transport or host operation.
+    ...(preview ? { preview: () => preview } : {}),
     getConfig: async () => remoteConfig,
     setConfig: async (updates: Partial<typeof remoteConfig>) => { remoteConfig = { ...remoteConfig, ...updates }; return remoteConfig; },
     setPassword: async () => { remoteConfig = { ...remoteConfig, hasPassword: true }; return remoteConfig; },

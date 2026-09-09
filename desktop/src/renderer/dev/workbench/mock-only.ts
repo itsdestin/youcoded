@@ -78,4 +78,6 @@
 // The list is EMPTY, and that is the healthy state: it means nothing on screen in the
 // workbench is pretending to be a feature that does not exist yet. Add a row the moment you
 // design a channel ahead of its backend; delete the row, never the guard, when it ships.
-export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [];
+export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
+  { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+];

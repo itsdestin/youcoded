@@ -4,6 +4,8 @@ declare const __APP_VERSION__: string;
 declare const __BUILD_CHANNEL__: string;
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
+
 import { QRCodeSVG } from 'qrcode.react';
 import { isAndroid } from '../platform';
 import { useCurrentPlatform } from '../state/platform';
@@ -1193,7 +1195,83 @@ export function BuddyButton() {
 
 // ─── Remote settings popup button ─────────────────────────────────────────
 
+/**
+ * The mock secure-setup stages, drawn with the banner's OWN vocabulary — a status strip for
+ * a state, a warning callout for something to read first, an ErrorState for a failure.
+ * WHY no bespoke panel: round-2 review rejected one for not looking like the app.
+ */
+function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
+  if (view.stage === 'consent') {
+    // WHY the address is shown whole: the public record is the machine name, and a user
+    // cannot approve publishing a name we did not put in front of them.
+    let host = '';
+    try { const u = new URL(view.address); if (u.protocol === 'https:') host = u.hostname; } catch { /* shown as unavailable */ }
+    return (
+      <div className="space-y-2">
+        <Callout tone="warning" title="Before continuing:">
+          This computer&apos;s connection name — <span className="font-mono">{host || 'unavailable'}</span> — becomes part of a public certificate record. Your conversations and files stay private.
+        </Callout>
+        <Button onClick={() => act({ type: 'check' })} className="w-full" disabled={!host}>
+          Approve and continue
+        </Button>
+      </div>
+    );
+  }
+  if (view.stage === 'checking') {
+    return <StatusStrip tone="busy" detail="Keep YouCoded open">Checking this computer&apos;s connection…</StatusStrip>;
+  }
+  if (view.stage === 'conflict') {
+    return (
+      <ErrorState
+        mode="recoverable"
+        message="Tailscale is already using this address for another service. Nothing was replaced. Check that service before trying again."
+        onRetry={() => act({ type: 'check' })}
+        variant="inline"
+      />
+    );
+  }
+  if (view.stage === 'error') {
+    return (
+      <ErrorState
+        mode="general"
+        title="Unable to check the connection."
+        explainer="The check didn't report a reason. Diagnosing will collect the connection log so Claude can look at what happened."
+        onReportBug={() => act({ type: 'report' })}
+        onDiagnose={() => act({ type: 'diagnose' })}
+      />
+    );
+  }
+  if (view.stage === 'disabled') {
+    return (
+      <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'check' })}>Turn on</Button>}>
+        Remote access is off.
+      </StatusStrip>
+    );
+  }
+  if (view.prerequisite === 'not-installed') {
+    return (
+      <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'prerequisite' })}>Install Tailscale</Button>}>
+        Not set up yet.
+      </StatusStrip>
+    );
+  }
+  if (view.prerequisite === 'sign-in-required') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={() => act({ type: 'prerequisite' })}>Sign in</Button>}>
+        Tailscale is installed, but you&apos;re not signed in yet.
+      </StatusStrip>
+    );
+  }
+  return (
+    <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'consent' })}>Set up</Button>}>
+      Not set up yet.
+    </StatusStrip>
+  );
+}
+
 interface RemoteButtonProps {
+  mockView?: RemoteAccessView;
+  mockAction?: (action: RemoteAccessAction) => void;
   config: RemoteConfig | null;
   tailscale: TailscaleInfo | null;
   clients: ClientInfo[];
@@ -1230,14 +1308,20 @@ interface RemoteButtonProps {
   onReportIssue: () => void;
 }
 
-function RemoteButton({
+function RemoteButton(props: RemoteButtonProps) {
+  let {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
   onSetNewPassword, onSetPassword, onToggleEnabled, enableError, onToggleTailscaleTrust,
   onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onDisconnectClient, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
-}: RemoteButtonProps) {
-  const [open, setOpen] = useState(false);
+  } = props;
+  const [open, setOpen] = useState(!!props.mockView);
+  const [mockPassword, setMockPassword] = useState('');
+  const [mockSaved, setMockSaved] = useState(false);
+  const [mockAwake, setMockAwake] = useState(4); // WHY 4: matches the Before capture's fixture, so the deck shows only the changes under review
+  const [mockAdd, setMockAdd] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
   // showInfo flips the popup body to the plain-language explainer view.
   // Reset to false whenever the popup re-opens so users always start on the
   // main settings, not whichever screen they last viewed.
@@ -1259,9 +1343,33 @@ function RemoteButton({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
+  // WHY this explicit MOCK_ONLY gate: reviewed mockups must not replace real host settings before the contract/backend exists.
+  const previewApi = (window.claude?.remote as unknown as { preview?: () => RemoteAccessPreview } | undefined)?.preview;
+  const servicePreview = typeof previewApi === 'function' ? previewApi() : undefined;
+  const preview = props.mockView && props.mockAction ? { act: props.mockAction } : servicePreview;
+  const storedView = React.useSyncExternalStore(
+    servicePreview?.subscribe ?? (() => () => {}), servicePreview?.getView ?? (() => null),
+  );
+  const previewView = props.mockView ?? storedView;
+  // WHY reuse the original body: mock review must retain familiar controls, while every write stays local.
+  if (previewView && preview) {
+    loading = false;
+    config = { enabled: previewView.stage !== 'disabled', hasPassword: true, port: 9900, trustTailscale: false, keepAwakeHours: mockAwake, clientCount: previewView.devices.length };
+    tailscale = { installed: previewView.prerequisite !== 'not-installed', connected: previewView.prerequisite === 'ready' || !previewView.prerequisite, ip: '100.82.14.7', hostname: 'home-laptop', url: previewView.stage === 'ready' ? previewView.address : null };
+    clients = previewView.devices.map(d => ({ id: d.id, ip: d.name, connectedAt: 0 }));
+    newPassword = mockPassword; passwordStatus = mockSaved ? 'saved' : 'idle';
+    onSetNewPassword = value => { setMockPassword(value); setMockSaved(false); };
+    onSetPassword = () => { if (mockPassword.trim()) { setMockSaved(true); setMockPassword(''); } };
+    onSetKeepAwake = setMockAwake;
+    onToggleEnabled = () => preview.act({ type: previewView.stage === 'disabled' ? 'check' : 'disable' });
+    showAddDevice = mockAdd && previewView.stage === 'ready'; onSetShowAddDevice = setMockAdd;
+    onRunSetup = () => preview.act({ type: 'prerequisite' });
+    onCopyLink = () => { void navigator.clipboard.writeText(previewView.address); };
+    enableError = '';
+  }
   const hasClients = clients.length > 0;
   // Green: enabled + Tailscale installed + VPN active. Gray otherwise (disabled, or VPN not connected).
-  const isFullyConnected = config?.enabled && tailscale?.installed && tailscale?.connected;
+  const isFullyConnected = previewView ? previewView.stage === 'ready' : config?.enabled && tailscale?.installed && tailscale?.connected;
   const statusText = loading
     ? 'Loading...'
     : !config?.enabled
@@ -1278,7 +1386,8 @@ function RemoteButton({
   // showed a separate "Tailscale" tag next to the title whenever installed;
   // folding it into the subtitle only when it adds information (fully
   // connected) avoids a redundant "Tailscale VPN not active · Tailscale".
-  const subtitle = isFullyConnected ? `${statusText} · Tailscale` : statusText;
+  const previewLabels = { setup: 'Set up secure access', consent: 'Approval needed', checking: 'Checking connection…', ready: 'Ready to connect', conflict: 'Address in use', error: 'Check failed', disabled: 'Remote access is off' };
+  const subtitle = previewView ? previewLabels[previewView.stage] : isFullyConnected ? `${statusText} · Tailscale` : statusText;
 
   return (
     <>
@@ -1301,24 +1410,25 @@ function RemoteButton({
         onClose={() => setOpen(false)}
         title={showInfo ? 'About Remote Access' : 'Remote Access'}
         onBack={showInfo ? () => setShowInfo(false) : undefined}
+        // WHY: Workbench catch-all APIs can return a truthy Promise; only a rendered preview view replaces the legacy Info action.
         headerActions={showInfo ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
         size="panel"
         fill
         panelRef={popupRef}
       >
-            {showInfo ? (
+            {showInfo ? (previewView ? <p className="text-xs text-fg-2">Connect your other device to Tailscale, then use Add Device to open YouCoded and pair. Paired devices can use the assistant, not just read conversations. Keep this computer awake while connecting.</p> : (
               <SettingsExplainer
                 intro={REMOTE_ACCESS_EXPLAINER.intro}
                 sections={REMOTE_ACCESS_EXPLAINER.sections}
               />
-            ) : (
-            <div className="space-y-6">
+            )) : (
+            <div className="space-y-4">
                 {loading ? (
                   <LoadingState what="remote access" />
                 ) : (
                   <>
                     {/* Setup banner — shown when no clients connected */}
-                    {!hasClients && (
+                    {(previewView ? previewView.stage !== 'ready' : !hasClients) && (
                       // Info callouts are accent-tinted, warnings are amber. The
                       // amber "setup required" boxes below stay amber — they're a
                       // true warning status, not information.
@@ -1327,7 +1437,7 @@ function RemoteButton({
                           Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
 
-                        {tailscale?.installed && tailscale.url && config?.hasPassword ? (
+                        {previewView && preview ? renderPreviewSetup(previewView, preview.act) : tailscale?.installed && tailscale.url && config?.hasPassword ? (
                           showSetupQR ? (
                             <div className="mt-2">
                               {/* Remind users that Tailscale must be installed + running on the receiving device too */}
@@ -1507,8 +1617,9 @@ function RemoteButton({
                         no variant. Destin's call (spec §11.8 A): plain `secondary`. Unlike the
                         orange billing button, nothing here is a warning — the blue was decorative,
                         not signal. */}
-                    {tailscale?.installed && tailscale?.connected && tailscale?.url && config?.hasPassword && (
+                    {(previewView || (tailscale?.installed && tailscale?.connected && tailscale?.url && config?.hasPassword)) && (
                       <Button
+                        disabled={!!previewView && previewView.stage !== 'ready'}
                         onClick={() => onSetShowAddDevice(!showAddDevice)}
                         variant="secondary"
                         className="w-full py-2"
@@ -1523,7 +1634,7 @@ function RemoteButton({
                     {/* Remote Clients section */}
                     {hasClients && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Connected Devices</h3>
+                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">{previewView ? 'Devices' : 'Connected Devices'}</h3>
 
                         <div className="space-y-1">
                           {clients.map(client => (
@@ -1536,10 +1647,10 @@ function RemoteButton({
                             <SettingRow
                               key={client.id}
                               variant="item"
-                              icon={<span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />}
+                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${previewView && !previewView.devices.find(d => d.id === client.id)?.online ? 'bg-fg-faint' : 'bg-green-500'}`} />}
                               title={client.ip}
-                              description={timeAgo(client.connectedAt)}
-                              control={
+                              description={previewView ? (revoking === client.id ? 'Unpair this device? It must pair again to reconnect.' : previewView.devices.find(d => d.id === client.id)?.online ? 'Online' : 'Offline') : timeAgo(client.connectedAt)}
+                              control={previewView && preview ? revoking === client.id ? <div className="flex gap-1"><Button variant="ghost" size="sm" onClick={() => setRevoking(null)}>Cancel</Button><Button variant="danger-outline" size="sm" onClick={() => { preview.act({ type: 'revoke', deviceId: client.id }); setRevoking(null); }}>Confirm unpair</Button></div> : <Button variant="ghost" size="sm" aria-label={`Unpair ${client.ip}`} onClick={() => setRevoking(client.id)}>Unpair</Button> :
                                 <Button variant="ghost" size="sm" onClick={() => onDisconnectClient(client.id)}>
                                   Disconnect
                                 </Button>
@@ -1577,7 +1688,7 @@ function RemoteButton({
 
                     {/* Tailscale section */}
                     <section>
-                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Tailscale</h3>
+                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Tailscale</h3>
 
                       {tailscale?.installed ? (
                         // space-y-1 replaces the py-2 each bare row used to carry
@@ -1604,25 +1715,28 @@ function RemoteButton({
                             }
                           />
                           <SettingRow variant="item" title="IP" value={tailscale.ip ?? '—'} />
-                          <SettingRow
+                          {!previewView && <SettingRow
                             variant="item"
                             title="Skip password on Tailscale"
                             onClick={onToggleTailscaleTrust}
                             control={<Toggle enabled={!!config?.trustTailscale} onToggle={onToggleTailscaleTrust} label="Skip password on Tailscale" />}
-                          />
+                          />}
                         </div>
                       ) : (
                         <div className="py-2">
                           <p className="text-xs text-fg-muted mb-2">
                             Tailscale is not installed. It creates a secure private network so you can access YouCoded from anywhere.
                           </p>
-                          <Button
+                          {/* WHY hidden in the preview: the setup banner above already offers
+                              Install, and two identical actions in one dialog is the duplicate
+                              this review is meant to remove, not reproduce. */}
+                          {!previewView && <Button
                             variant="secondary"
                             onClick={onRunSetup}
                             disabled={setupStatus === 'installing' || setupStatus === 'authenticating'}
                           >
                             {setupStatus === 'installing' ? 'Installing...' : setupStatus === 'authenticating' ? 'Authenticating...' : 'Install Tailscale'}
-                          </Button>
+                          </Button>}
                         </div>
                       )}
                     </section>
@@ -1636,6 +1750,12 @@ function RemoteButton({
 }
 
 // ─── Tier selector popup ───────────────────────────────────────────────────
+
+/** Same dialog and body as Settings; the candidate provides no real settings callbacks. */
+export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessView; onAction: (action: RemoteAccessAction) => void }) {
+  const noop = () => {};
+  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onToggleTailscaleTrust={noop} onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onDisconnectClient={noop} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
+}
 
 // Mirrors PackageTier.kt — descriptions list the actual packages each tier
 // installs, matching the native first-run TierPickerScreen labels.
