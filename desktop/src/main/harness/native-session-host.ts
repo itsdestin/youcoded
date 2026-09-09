@@ -19,7 +19,8 @@ import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
-import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts } from './harness-session';
+import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
+import type { AcceptedHistoryStore } from './accepted-history-store';
 import { rebuildHistory } from './history-rebuild';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
@@ -287,6 +288,21 @@ interface LiveEntry {
   // back-pointer that lets destroy() de-register this child from its parent's
   // childrenOf set without re-reading the header off disk (see childrenOf).
   parentSessionId?: string;
+}
+
+/** The transcript events that END a turn — the moments a session's model
+ *  history is settled and worth a durable checkpoint (cache Stage 4). All three
+ *  also flush SessionStore's open streaming part, so the referenced text is on
+ *  disk by the time the publication runs behind them on the append chain. */
+const CONTINUATION_BOUNDARY = new Set<TranscriptEvent['type']>(['turn-complete', 'user-interrupt', 'session-error']);
+
+/** Every persisted event uuid after the last context-clear barrier: exactly the
+ *  events a rebuilt history is made of (rebuildHistory empties itself at that
+ *  marker), so a fallback resume can still name its own accepted set. */
+function persistedUuidsAfterLastClear(events: TranscriptEvent[]): string[] {
+  let start = 0;
+  events.forEach((event, index) => { if (event.type === 'context-clear') start = index + 1; });
+  return events.slice(start).map((event) => event.uuid).filter((uuid): uuid is string => typeof uuid === 'string' && uuid.length > 0);
 }
 
 export class NativeSessionHost extends EventEmitter {
@@ -872,7 +888,7 @@ export class NativeSessionHost extends EventEmitter {
     // readRegistry + todos too (the same reset-on-resume contract root
     // sessions get in resume() above); readImageFromDisk re-reads any
     // persisted attachment paths so images survive the resume.
-    session.seedHistory(rebuildHistory(this.store.readEvents(opts.childId, workDir), readImageFromDisk));
+    this.seedResumedHistory(opts.childId, workDir, session);
     this.bindReservation(opts.reservation, opts.childId);
     this.wireChildLive(parentId, opts.childId, workDir, session, binding, opts.parentToolCallId);
 
@@ -2173,6 +2189,17 @@ export class NativeSessionHost extends EventEmitter {
     // WHY inject once at the host boundary: create snapshots this preference,
     // while resume uses only its header, so call sites cannot make them diverge.
     private readStepGuard: () => number | null = () => null,
+    // Durable accepted-history continuation (cache Stage 4). ONE optional
+    // options object, LAST, so every existing construction is untouched: with
+    // it absent the host behaves exactly as it did before — a resume is a plain
+    // rebuild and nothing is ever published. ipc-handlers passes the profile-
+    // private AcceptedHistoryStore (Electron userData, never NativeHome) and
+    // the registry's single continuation-identity method, which THROWS when
+    // ChatGPT is signed out; the host treats that throw as one more fallback.
+    private continuation: {
+      acceptedHistory?: AcceptedHistoryStore;
+      continuationIdentityFor?: (binding: ModelBinding) => string;
+    } = {},
   ) {
     super();
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
@@ -2664,6 +2691,106 @@ export class NativeSessionHost extends EventEmitter {
     return held;
   }
 
+  /** The private continuation store, but ONLY when an identity resolver came
+   *  with it: without one nothing could ever be restored, so publishing would
+   *  write checkpoints no resume can read. Absent → today's exact behaviour. */
+  private continuationStore(): AcceptedHistoryStore | undefined {
+    return this.continuation.continuationIdentityFor ? this.continuation.acceptedHistory : undefined;
+  }
+
+  /** One line, one fixed reason code, no content — continuation never explains
+   *  itself with a raw error, and a failed checkpoint is not a user-visible
+   *  failure (the conversation and its transcript are untouched). */
+  private logContinuation(sessionId: string, reason: string): void {
+    log('INFO', 'NativeSessionHost', 'accepted-history checkpoint not published', { sessionId, reason });
+  }
+
+  /**
+   * Publish one immutable accepted-history proposal (cache Stage 4).
+   *
+   * Three steps, in this order, and the order is the whole design:
+   *  1. SNAPSHOT SYNCHRONOUSLY at the mutation boundary — the proposal must
+   *     describe the history as it is HERE, never as a later turn leaves it.
+   *  2. FENCE SYNCHRONOUSLY — invalidate() bumps its in-memory revision before
+   *     its own first await, so any publication still in flight (or parked
+   *     inside flushReferences) loses immediately. Deferring this into the
+   *     append chain would queue a /clear BEHIND the very publication it is
+   *     meant to cancel, and the stale one would win.
+   *  3. PUBLISH ON THE APPEND CHAIN — the referenced events must be on disk
+   *     before they are cited, and publication must never overtake an append.
+   *
+   * Never rejects and never throws into a turn: every failure is one log line
+   * with a fixed reason code, and the checkpoint simply stays ineligible.
+   */
+  private publishAcceptedHistory(sessionId: string, entry: LiveEntry, reason: string): void {
+    const store = this.continuationStore();
+    if (!store) return;
+    const snapshot: AcceptedHistorySnapshot = entry.session.acceptedHistory();
+    const fence = store.invalidate(sessionId, reason);
+    const transcriptPath = this.store.transcriptPath(sessionId, entry.cwd);
+    entry.appendChain = entry.appendChain.then(async () => {
+      try {
+        const revision = await fence;
+        const references = await this.store.flushReferences(sessionId, snapshot.eventUuids);
+        if (!references.ok) { this.logContinuation(sessionId, references.reason); return; }
+        const published = await store.publish({
+          sessionId, transcriptPath, binding: snapshot.binding, assemblyDigest: snapshot.assemblyDigest,
+          revision, references: references.references, messages: snapshot.messages,
+          ...(snapshot.transformation ? { transformation: snapshot.transformation } : {}),
+        });
+        if (!published.ok) this.logContinuation(sessionId, published.reason);
+      } catch {
+        // A store that REJECTS is one more failure mode, not an exception the
+        // append chain (or the turn that scheduled this) may ever see.
+        this.logContinuation(sessionId, 'publish-failed');
+      }
+    });
+  }
+
+  /**
+   * Seed a resumed session's model history — the durable private checkpoint
+   * when one is eligible for this exact transcript, identity and assembled
+   * prompt, otherwise the ordinary rebuild.
+   *
+   * Called AFTER the session object exists (its assemblyDigest is what the
+   * checkpoint was published against) and instead of the bare seedHistory the
+   * two resume paths used to do. Never throws: a signed-out ChatGPT makes
+   * continuationIdentityFor throw, which is just another fallback.
+   */
+  private seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): void {
+    const store = this.continuationStore();
+    const persisted = this.store.readEvents(sessionId, cwd);
+    if (store) {
+      // WHY hydrate: `references` is in-memory, so every accepted uuid from a
+      // previous process is unknown to this one. Without this the session's
+      // NEXT publication fails 'unknown-reference' and a reopened conversation
+      // could never become durable again.
+      this.store.hydrateReferences(sessionId, persisted);
+      let identity: string | undefined;
+      try { identity = this.continuation.continuationIdentityFor!(session.binding); }
+      catch { this.logContinuation(sessionId, 'identity-unavailable'); }
+      if (identity !== undefined) {
+        const restored = store.restore({
+          sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
+          binding: identity, assemblyDigest: session.assemblyDigest(),
+        });
+        if (restored.ok) {
+          session.seedHistory(restored.messages, {
+            eventUuids: restored.eventUuids, revision: restored.revision,
+            transformation: restored.transformation, continuationBinding: identity,
+          });
+          return;
+        }
+        this.logContinuation(sessionId, restored.reason);
+      }
+    }
+    // Ordinary reconstruction (spec §2.5), seeded with every persisted uuid
+    // after the last context-clear barrier so a session that has no checkpoint
+    // — a cross-device transcript, a fallback, an app that predates this —
+    // still becomes durable at its very next publication.
+    session.seedHistory(rebuildHistory(persisted, readImageFromDisk), { eventUuids: persistedUuidsAfterLastClear(persisted) });
+  }
+
   /** Subscribe a freshly-built HarnessSession: forward its events to the
    *  renderer immediately, and enqueue each on the session's append chain. */
   private wire(sessionId: string, cwd: string, session: HarnessSession, mcpLease?: McpLease): void {
@@ -2694,6 +2821,9 @@ export class NativeSessionHost extends EventEmitter {
             sessionId, type: event.type, error: String(err),
           });
         });
+      // (3) Cache Stage 4: a turn boundary settles the model history — snapshot
+      // it NOW (synchronously, at the emit) and publish behind the append above.
+      if (CONTINUATION_BOUNDARY.has(event.type)) this.publishAcceptedHistory(sessionId, entry, 'turn-boundary');
     });
     // Anything the user typed while this session was still being built goes now,
     // in the order they typed it. The FIRST one is dispatched through the normal
@@ -3047,6 +3177,10 @@ export class NativeSessionHost extends EventEmitter {
             sessionId: childId, type: event.type, error: String(err),
           });
         });
+      // Cache Stage 4: a child's own accepted history is published on the
+      // child's own chain, against the child's own transcript — same contract
+      // as wire()'s, so a resumed specialist continues its own conversation.
+      if (CONTINUATION_BOUNDARY.has(event.type)) this.publishAcceptedHistory(childId, entry, 'turn-boundary');
       // (2) DISPLAY (Task 7) — a stamped COPY, for what the renderer's
       // subagent card consumes and NOTHING else (see isSubagentDisplayEvent /
       // SUBAGENT_DISPLAY_TYPES for what a stamped turn-complete would break,
@@ -3252,7 +3386,7 @@ export class NativeSessionHost extends EventEmitter {
       // already clears readRegistry + todos (the reset-on-resume ruling) — those
       // are runtime state, never persisted. readImageFromDisk re-reads any
       // persisted attachment paths so images survive resume (#290 follow-up fix 2).
-      session.seedHistory(rebuildHistory(this.store.readEvents(sessionId, cwd), readImageFromDisk));
+      this.seedResumedHistory(sessionId, cwd, session);
     } catch (err) {
       await mcpLease?.release();
       throw err;
@@ -3768,7 +3902,14 @@ export class NativeSessionHost extends EventEmitter {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
     if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
-    return entry.session.compactNow();
+    const result = await entry.session.compactNow();
+    // Cache Stage 4: compaction is a history-only mutation — no new turn will
+    // arrive to publish it, so the checkpoint is refreshed here or never.
+    // UNCONDITIONAL, including on a not-ok return: compactNow prunes BEFORE it
+    // can fail on 'nothing-to-compact' / 'summary-failed', so a refusal still
+    // leaves a rewritten history that the old checkpoint no longer describes.
+    this.publishAcceptedHistory(sessionId, entry, 'compaction');
+    return result;
   }
 
   /** User-initiated /clear for a native session (M3 item 2) — a context BARRIER,
@@ -3778,7 +3919,13 @@ export class NativeSessionHost extends EventEmitter {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
     if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
-    return entry.session.clearHistory();
+    const result = entry.session.clearHistory();
+    // Cache Stage 4: /clear is the sharpest history-only mutation there is —
+    // the synchronous fence inside publishAcceptedHistory is what stops a
+    // publication from the turn BEFORE the clear landing after it. Same
+    // unconditional reasoning as compact() above.
+    this.publishAcceptedHistory(sessionId, entry, 'clear');
+    return result;
   }
 
   /** User-initiated /skill-name for a native session (M3 item 1).
@@ -3944,6 +4091,10 @@ export class NativeSessionHost extends EventEmitter {
     // new doom-loop window / tool posture on the next turn.
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
+    // Cache Stage 4: a model swap changes the assembled prefix (and, for a
+    // ChatGPT account swap, the identity the ciphertext was accepted under),
+    // so the old checkpoint must be fenced now rather than left eligible.
+    this.publishAcceptedHistory(sessionId, entry, 'rebinding');
     if (oldModelId !== binding.modelId) {
       // Swap the ref-count: releasing the old model may unload it if this was
       // its last session (#1); retain the new one so it isn't unloaded.

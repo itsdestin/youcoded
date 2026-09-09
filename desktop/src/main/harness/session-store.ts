@@ -75,7 +75,41 @@ export class SessionStore {
   private references = new Map<string, Map<string, PersistedEventReference>>();
   private failed = new Set<string>();
 
-  constructor(private home: NativeHome, readonly continuationRoot?: string) {}
+  constructor(private home: NativeHome) {}
+
+  /** Absolute path of this session's JSONL — the file a private continuation
+   *  manifest names, digests and re-reads. Derived here (not by the caller) so
+   *  the slug encoding stays in this file's hands. */
+  transcriptPath(sessionId: string, cwd: string): string {
+    return this.home.sessionFilePath(nativeStoreSlug(cwd), sessionId);
+  }
+
+  /**
+   * Re-register references for events THIS process never appended (resume).
+   *
+   * WHY: `references` is in-memory, so after a restart a resumed session's
+   * accepted uuids — whether they came from a restored manifest or from the
+   * rebuild fallback — resolve to nothing, and every later publication would
+   * fail with `unknown-reference`. Rebuilding them from the persisted lines is
+   * exact: a line on disk IS the anchor, and a coalesced part's persisted text
+   * is by definition the whole part (one reference tiling [0, length)).
+   * Never overwrites a live reference — this process's own appends win.
+   * Takes the already-read events so a resume reads the JSONL exactly once.
+   */
+  hydrateReferences(sessionId: string, events: TranscriptEvent[]): void {
+    const refs = this.referenceMap(sessionId);
+    for (const event of events) {
+      if (!event.uuid || refs.has(event.uuid)) continue;
+      const partId = event.data?.partId;
+      const coalesced = COALESCED_TYPES.has(event.type) && partId != null;
+      refs.set(event.uuid, {
+        eventUuid: event.uuid, anchorUuid: event.uuid, type: event.type,
+        ...(coalesced ? { partId: String(partId) } : {}),
+        start: 0,
+        end: coalesced ? String(event.data?.text ?? '').length : JSON.stringify(event.data ?? {}).length,
+      });
+    }
+  }
 
   /** Write the session header as line 1 of a fresh session file. */
   async create(header: NativeSessionHeader): Promise<void> {

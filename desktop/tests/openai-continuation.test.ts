@@ -11,54 +11,7 @@ import {
 } from '../src/main/harness/openai-continuation';
 import { planCompaction } from '../src/main/harness/compaction';
 import { fakeTool, HARNESS, makeOpts } from './helpers/harness-fakes';
-
-function sse(events: unknown[]): Response {
-  return new Response(events.map(event => `data: ${JSON.stringify(event)}\n\n`).join('') + 'data: [DONE]\n\n', {
-    headers: { 'content-type': 'text/event-stream' },
-  });
-}
-
-function completed(usage: Record<string, unknown> = {}): unknown {
-  return {
-    type: 'response.completed',
-    response: {
-      id: 'resp', status: 'completed',
-      usage: { input_tokens: 20, output_tokens: 8, total_tokens: 28, ...usage },
-    },
-  };
-}
-
-function richToolStep(): unknown[] {
-  return [
-    { type: 'response.created', response: { id: 'resp-1', model: 'gpt-test', created_at: 1 } },
-    { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', id: 'rs-1', encrypted_content: 'CIPHERTEXT'.repeat(10_000), ignored_private_field: 'must-not-round-trip' } },
-    { type: 'response.reasoning_summary_part.added', item_id: 'rs-1', output_index: 0, summary_index: 0 },
-    { type: 'response.reasoning_summary_text.delta', item_id: 'rs-1', output_index: 0, summary_index: 0, delta: 'brief reason' },
-    { type: 'response.reasoning_summary_part.done', item_id: 'rs-1', output_index: 0, summary_index: 0 },
-    { type: 'response.output_item.done', output_index: 0, item: { type: 'reasoning', id: 'rs-1', encrypted_content: 'CIPHERTEXT'.repeat(10_000) } },
-    { type: 'response.output_item.added', output_index: 1, item: { type: 'message', id: 'msg-commentary', role: 'assistant', phase: 'commentary', content: [] } },
-    { type: 'response.output_text.delta', item_id: 'msg-commentary', output_index: 1, content_index: 0, delta: 'checking ' },
-    { type: 'response.output_item.done', output_index: 1, item: { type: 'message', id: 'msg-commentary', role: 'assistant', phase: 'commentary', status: 'completed', content: [] } },
-    { type: 'response.output_item.added', output_index: 2, item: { type: 'function_call', id: 'fc-1', call_id: 'call-1', name: 'Read', arguments: '' } },
-    { type: 'response.output_item.done', output_index: 2, item: { type: 'function_call', id: 'fc-1', call_id: 'call-1', name: 'Read', arguments: '{"file_path":"a.txt"}', status: 'completed' } },
-    { type: 'response.output_item.added', output_index: 3, item: { type: 'function_call', id: 'fc-2', call_id: 'call-2', name: 'Read', arguments: '' } },
-    { type: 'response.output_item.done', output_index: 3, item: { type: 'function_call', id: 'fc-2', call_id: 'call-2', name: 'Read', arguments: '{"file_path":"b.txt"}', status: 'completed' } },
-    { type: 'response.output_item.added', output_index: 4, item: { type: 'message', id: 'msg-final', role: 'assistant', phase: 'final_answer', content: [] } },
-    { type: 'response.output_text.delta', item_id: 'msg-final', output_index: 4, content_index: 0, delta: 'both files' },
-    { type: 'response.output_item.done', output_index: 4, item: { type: 'message', id: 'msg-final', role: 'assistant', phase: 'final_answer', status: 'completed', content: [] } },
-    completed({ output_tokens_details: { reasoning_tokens: 7 } }),
-  ];
-}
-
-function textStep(id: string, text: string): unknown[] {
-  return [
-    { type: 'response.created', response: { id: `resp-${id}`, model: 'gpt-test', created_at: 1 } },
-    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id, role: 'assistant', phase: 'final_answer', content: [] } },
-    { type: 'response.output_text.delta', item_id: id, output_index: 0, content_index: 0, delta: text },
-    { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id, role: 'assistant', phase: 'final_answer', status: 'completed', content: [] } },
-    completed(),
-  ];
-}
+import { completed, richToolStep, sse, textStep } from './helpers/responses-fakes';
 
 function harnessWithFetch(fetchImpl: typeof fetch, bindingIdentity: string | (() => string) = 'chatgpt\u0000gpt-test\u0000account-a\u00001'): HarnessSession {
   const read = fakeTool('Read', {

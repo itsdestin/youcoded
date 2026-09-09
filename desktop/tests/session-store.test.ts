@@ -59,6 +59,42 @@ describe('SessionStore', () => {
     expect(store.readEvents('s-1', HEADER.cwd)[0]).toMatchObject({ uuid: 'a1', data: { text: 'Hello' } });
   });
 
+  it('transcriptPath names the file the store actually appended to', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('user-message', { text: 'hi' }, 'u1') as any);
+    const file = store.transcriptPath('s-1', HEADER.cwd);
+    expect(fs.existsSync(file)).toBe(true);
+    expect(fs.readFileSync(file, 'utf8')).toContain('"text":"hi"');
+  });
+
+  it('hydrateReferences makes a PREVIOUS process\'s persisted events referenceable again', async () => {
+    await store.create(HEADER);
+    await store.append(HEADER.cwd, ev('user-message', { text: 'hi' }, 'u1') as any);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'Hel', partId: 'p1' }, 'a1') as any);
+    await store.append(HEADER.cwd, ev('assistant-text', { text: 'lo', partId: 'p1' }, 'a2') as any);
+    await store.append(HEADER.cwd, ev('turn-complete', { stopReason: 'end_turn' }, 't1') as any);
+
+    // A fresh instance is a fresh process: its reference map has never seen
+    // these uuids, so a resumed session could not publish without hydration.
+    const reopened = new SessionStore(new NativeHome(root));
+    await expect(reopened.flushReferences('s-1', ['u1', 'a1'])).resolves.toEqual({ ok: false, reason: 'unknown-reference' });
+
+    reopened.hydrateReferences('s-1', reopened.readEvents('s-1', HEADER.cwd));
+    await expect(reopened.flushReferences('s-1', ['u1', 'a1'])).resolves.toEqual({
+      ok: true,
+      references: [
+        { eventUuid: 'u1', anchorUuid: 'u1', type: 'user-message', start: 0, end: JSON.stringify({ text: 'hi' }).length },
+        // The coalesced part tiles its WHOLE persisted text, not the first delta's range.
+        { eventUuid: 'a1', anchorUuid: 'a1', type: 'assistant-text', partId: 'p1', start: 0, end: 5 },
+      ],
+    });
+    // A live append in THIS process still wins over the hydrated copy.
+    await reopened.append(HEADER.cwd, ev('user-message', { text: 'again' }, 'u2') as any);
+    reopened.hydrateReferences('s-1', reopened.readEvents('s-1', HEADER.cwd));
+    const after = await reopened.flushReferences('s-1', ['u2']);
+    expect(after).toEqual({ ok: true, references: [{ eventUuid: 'u2', anchorUuid: 'u2', type: 'user-message', start: 0, end: JSON.stringify({ text: 'again' }).length }] });
+  });
+
   it('refuses a reference barrier when the underlying flush failed', async () => {
     await store.create(HEADER);
     await store.append(HEADER.cwd, ev('assistant-text', { text: 'lost', partId: 'p1' }, 'a1') as any);
