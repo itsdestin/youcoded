@@ -1702,6 +1702,23 @@ export class HarnessSession extends EventEmitter {
     }));
   }
 
+  /** The quiet twin of runNotice: the same text and the same `user-message`
+   *  transcript event, but NO model turn — the report goes into history and
+   *  the model reads it at the start of the next turn the user begins.
+   *  Used only after a Stop (NativeSessionHost.holdDeliveries): the user asked
+   *  for silence, so a finished helper must not be the thing that breaks it.
+   *  Consecutive user-role history entries are already the shipped shape of
+   *  the `<specialists-status>` block (beginTurn), so no provider sees a new
+   *  pattern here. Same idle-only precondition as runNotice: never mid-turn. */
+  async spliceNotice(text: string, meta?: InjectedMeta): Promise<void> {
+    if (this.abort) {
+      throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
+    }
+    const injected = meta?.kind === 'shell' ? 'shell-complete' : 'specialist-report';
+    this.emitEvent('user-message', { text, injected, ...(meta ? { injectedMeta: meta } : {}) });
+    this.history.push({ role: 'user', content: text });
+  }
+
   /** Image parts for a user message, or [] when the model cannot see images / none
    *  were attached. Unreadable or oversized files are SKIPPED rather than thrown:
    *  a turn must not die because one attachment went missing between the composer
