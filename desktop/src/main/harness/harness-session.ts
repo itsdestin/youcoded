@@ -245,15 +245,6 @@ export interface HarnessSessionOpts {
    *  either check alone still cannot let a specialist spawn its own
    *  specialists. Absent/false for every ordinary (non-child) session. */
   isSpecialistChild?: boolean;
-  /** Per-turn specialist status block (Task 5, MOIM pattern). Evaluated at the
-   *  START of every turn; a non-null return is injected as a `<specialists-
-   *  status>` history message so the model can see which delegated children
-   *  are running or finished-and-unread WITHOUT ever polling for them. Wired
-   *  by NativeSessionHost.wire() — root sessions only, since wire() is never
-   *  called for a specialist child (see createChild's own "NOT wire()" note).
-   *  Absent → no injection, which is exactly the pre-Task-5 behavior every
-   *  existing test relies on (zero cost for a session that never delegates). */
-  specialistStatus?: () => string | null;
   /** Task 10 (plan 1b): directories checkPathGuard treats as internal to THIS
    *  session — readable without an external_directory ask, the same way
    *  Bash's own spillRoot() is (tools/guards.ts). Wired by NativeSessionHost
@@ -879,14 +870,6 @@ export class HarnessSession extends EventEmitter {
     agentId: string;
   }): void {
     this.emitEvent('subagent-usage', data);
-  }
-
-  /** Task 5 (MOIM pattern): NativeSessionHost.wire() calls this on every ROOT
-   *  session right after construction — opts is already built by then, so this
-   *  is the same late-bind-onto-opts shape setBinding uses above, not a new
-   *  pattern. Never called for a specialist child (wire() isn't). */
-  setSpecialistStatus(fn: () => string | null): void {
-    this.opts.specialistStatus = fn;
   }
 
   /** Effective system prompt: the assembled one (Task 11) or the harness's own. */
@@ -1563,18 +1546,14 @@ export class HarnessSession extends EventEmitter {
    *  pushes them as `<project-rule source="...">...`, and that's the only
    *  thing this method has to go on — synthetic wire messages never enter
    *  history at all, so they were already immune by construction.
-   *
-   *  Task 5's `<specialists-status>` block gets the SAME exclusion for the
-   *  same reason: it is also role:'user', also synthetic, and — unlike the
-   *  one-shot rule injections above — it rides EVERY turn while a specialist
-   *  is live, so miscounting it would shrink the protected window on every
-   *  single turn of a long delegated run, not just an occasional one. */
+   *  (The per-turn `<specialists-status>` block that once shared this
+   *  exclusion was retired 2026-09-09; Task `list: true` replaced it.) */
   private summarizeCutIndex(): number {
     const userIdx: number[] = [];
     this.history.forEach((m, i) => {
       const c = (m as any).content;
       const isSyntheticInjection = typeof c === 'string'
-        && (c.startsWith('<project-rule ') || c.startsWith('<specialists-status>'));
+        && c.startsWith('<project-rule ');
       if ((m as any).role === 'user' && !isSyntheticInjection) userIdx.push(i);
     });
     return userIdx.length < 2 ? 0 : userIdx[userIdx.length - 2];
@@ -1707,9 +1686,10 @@ export class HarnessSession extends EventEmitter {
    *  the model reads it at the start of the next turn the user begins.
    *  Used only after a Stop (NativeSessionHost.holdDeliveries): the user asked
    *  for silence, so a finished helper must not be the thing that breaks it.
-   *  Consecutive user-role history entries are already the shipped shape of
-   *  the `<specialists-status>` block (beginTurn), so no provider sees a new
-   *  pattern here. Same idle-only precondition as runNotice: never mid-turn. */
+   *  Consecutive user-role history entries are a shape every provider we ship
+   *  already accepts: the retired per-turn `<specialists-status>` block ran it
+   *  in production for weeks, and `<project-rule>` injections still do.
+   *  Same idle-only precondition as runNotice: never mid-turn. */
   async spliceNotice(text: string, meta?: InjectedMeta): Promise<void> {
     if (this.abort) {
       throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
@@ -1817,45 +1797,6 @@ export class HarnessSession extends EventEmitter {
     this.interrupted = false;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
     emit();
-    // WHY (spec §3, MOIM pattern): the model never polls and never forgets a child
-    // exists — a compact status block rides every turn while specialists are live.
-    // History-only (no transcript event), so replay and the emit surface are untouched.
-    // Exactly ONE block lives in history: the previous turn's is removed first
-    // (external review 2026-08-12 — appending accumulates stale, contradictory
-    // blocks over a long child run). Accepted cost: removing a mid-history message
-    // invalidates local KV prefix cache from that point while specialists run.
-    //
-    // Fix pass, Finding 6: guarded on opts.specialistStatus being wired at all.
-    // That field stays permanently undefined for any session wire() never
-    // touched (every specialist child, per its own "NOT wire()" comment) — for
-    // those sessions there is never a block to remove or add, so the whole
-    // history scan below is skipped rather than run as an unconditional no-op
-    // every single turn.
-    if (this.opts.specialistStatus) {
-      const statusIdx = this.history.findIndex(
-        (m) => typeof m.content === 'string' && m.content.startsWith('<specialists-status>'),
-      );
-      if (statusIdx >= 0) this.history.splice(statusIdx, 1);
-      // Fix pass, Finding 4: opts.specialistStatus() reaches
-      // NativeSessionHost.buildSpecialistStatus -> DelegationLedger.listFor ->
-      // NativeHome.readJson, which deliberately RETHROWS any non-ENOENT I/O
-      // error (permissions, disk full, AV lock — see native-home.ts). Before
-      // this try/catch, that throw escaped beginTurn uncaught: it ran AFTER
-      // emit() had already announced the user's message but BEFORE this.abort
-      // was set and before the turn's own try block began, so the throw was
-      // never caught anywhere — no assistant reply, no error surfaced, and the
-      // re-entrancy guard never got set (stranding every later send() on this
-      // session). Degrade the same way this file's other fallible side-read
-      // already does (acquireMcp, above: log and continue with no MCP
-      // servers) — a missing status block must never cost the user a turn.
-      let status: string | null = null;
-      try {
-        status = this.opts.specialistStatus() ?? null;
-      } catch (err) {
-        log('ERROR', 'HarnessSession', 'specialist status callback threw — turn continues with no status block', { error: String(err) });
-      }
-      if (status) this.history.push({ role: 'user', content: `<specialists-status>\n${status}\n</specialists-status>` });
-    }
     // A plain string when there are no image parts — that is the byte-identical
     // shape every existing test and rebuildHistory() already assert on, so the
     // no-attachment path must not become a one-element parts array.

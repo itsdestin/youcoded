@@ -70,6 +70,7 @@ interface RunOpts {
   // built-in roster unmodified; only the new per-cwd-roster tests below pass
   // a fake one.
   roster?: SpecialistRoster;
+  listStatus?: string | null;
 }
 
 function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
@@ -96,6 +97,7 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
         },
         release,
         trySpendSpawnBudget: () => opts.budgetOk !== false,
+        listStatus: () => opts.listStatus ?? null,
         spawn,
       },
       ...(opts.models ? { models: opts.models } : {}),
@@ -106,6 +108,27 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
     ctx,
   );
 }
+
+describe('Task tool — list: true (2026-09-09, replaces the per-turn status block)', () => {
+  it('returns the host\'s status text, and never spawns', async () => {
+    const spawn = vi.fn();
+    const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { spawn, listStatus: 'Nadia (explorer): running — 12s' });
+    expect(r.text).toBe('Nadia (explorer): running — 12s');
+    expect(r.isError).toBeFalsy();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('says so plainly when nothing is running or pending', async () => {
+    const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { listStatus: null });
+    expect(r.text).toBe('No specialists are running or awaiting delivery in this conversation.');
+  });
+
+  it('is described to the model as ask-once, never a loop', () => {
+    const tool = createTaskTool();
+    expect((tool.inputSchema as any).shape.list.description).toContain('never in a loop');
+    expect(tool.description).not.toContain('<specialists-status>');
+  });
+});
 
 describe('Task tool — typed refusals (plan 1a)', () => {
   it('refuses an unknown specialist with the available list', async () => {

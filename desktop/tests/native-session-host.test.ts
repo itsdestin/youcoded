@@ -4108,7 +4108,7 @@ describe('NativeSessionHost', () => {
   // callback reports given a stamped ledger, reaching the private ledger
   // directly (same pattern the Task 2 tests above use) rather than driving a
   // real specialist run end-to-end.
-  describe('specialist status block (Task 5, plan 1b)', () => {
+  describe('specialist status text (Task 5, plan 1b — on demand since 2026-09-09)', () => {
     it('the host status block lists running and undelivered-finished specialists and omits delivered ones', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
@@ -4133,8 +4133,7 @@ describe('NativeSessionHost', () => {
         status: 'completed', startedAt: Date.now(), endedAt: Date.now(), delivered: true, owner: OWNER, missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toBeTruthy();
       expect(status).toContain('Nadia');
@@ -4155,8 +4154,7 @@ describe('NativeSessionHost', () => {
       );
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      expect(rootSession.opts.specialistStatus?.()).toBeNull();
+      expect((h as any).buildSpecialistStatus('root-1', root)).toBeNull();
 
       await h.destroyAll();
     });
@@ -4181,8 +4179,7 @@ describe('NativeSessionHost', () => {
         status: 'running', startedAt: Date.now(), delivered: false, owner: OWNER, missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toBeTruthy();
       expect(status).not.toContain('step 0');
@@ -4210,8 +4207,7 @@ describe('NativeSessionHost', () => {
         status: 'running', startedAt: Date.now(), delivered: false, owner: OWNER, missedSteers: [], stale: true,
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toContain('no activity for at least 2m');
 
@@ -4255,8 +4251,7 @@ describe('NativeSessionHost', () => {
         missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
       const lines = (status ?? '').split('\n');
 
       const failedLine = lines.find((l) => l.startsWith('Fiona'));

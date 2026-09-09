@@ -133,6 +133,13 @@ function buildSchema(roster: SpecialistRoster) {
       + "belongs to a different conversation or never existed at all — you can only manage specialists you yourself started.",
     ),
     interrupt: z.boolean().optional().describe('With task_id: cancel that specialist instead of steering or resuming it.'),
+    // 2026-09-09 — replaces the per-turn `<specialists-status>` block. Codex
+    // (list_agents) and Hermes (action='list') give the model a list it asks
+    // for; none of the harnesses we compared remind it every turn.
+    list: z.boolean().optional().describe(
+      'Alone, with no other fields: list this conversation\'s specialists and their state (running, finished with report '
+      + 'pending, failed, interrupted). Ask once when you need it — never in a loop; you are told when a report arrives.',
+    ),
   }).strict(); // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
 }
 
@@ -201,7 +208,7 @@ const DOCTRINE =
 const BACKGROUND_ACK =
   'Their report will be delivered to you when they finish — do not wait, poll, or send status requests, and do not '
   + 'redo the job yourself. Continue with work that does not depend on it; when nothing else is left, tell the user '
-  + 'what is still running and end your turn. A status block at the start of your turns lists running specialists.';
+  + 'what is still running and end your turn. Task with list: true shows what is still running — once, if you need it.';
 
 // Task 6 — the task_id management surface, documented VERBATIM in the tool
 // description (per the plan's own instruction) so a model reads these four
@@ -365,6 +372,10 @@ export function createTaskTool(
         return { text: 'Task failed: no specialist services are wired for this session (configuration error).', isError: true };
       }
       const parentId = ctx.sessionId;
+      if (args.list) {
+        const status = services.listStatus(parentId);
+        return { text: status ?? 'No specialists are running or awaiting delivery in this conversation.' };
+      }
 
       // ---- Task 6: task_id management surface — checked BEFORE the spawn
       // path entirely (order per the plan): steer a running child, resume a

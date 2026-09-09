@@ -603,10 +603,16 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   completed, never spliced in. A report too large for the ledger's cap spills to
   `<childId>.report.md` (`NativeHome.writeSessionArtifact`); the parent can `Read` its own spill
   directory without an external-directory ask (`internalReadRoots`).
-- **A compact per-turn status block, never polling.** `HarnessSessionOpts.specialistStatus`
-  injects one `<specialists-status>` history message before each real user turn, listing running
-  and undelivered-finished specialists; the PREVIOUS turn's block is removed first, so exactly one
-  ever lives in history — never an accumulating, increasingly stale list.
+- **Status on demand, never a per-turn reminder (2026-09-09).** `Task` with `list: true` returns
+  the ledger's view of this conversation's specialists (running, finished-pending-delivery,
+  failed, interrupted). The earlier per-turn `<specialists-status>` block was retired: the
+  transcript audit showed it kept helpers top-of-mind and invited "report now" steers, and
+  re-inserting it every turn discarded cached prompt prefix. Matches Codex (`list_agents`) and
+  Hermes (`delegate_task(action='list')`); the compaction summary prompt now asks the model to
+  carry "still running" helpers and background commands across a summary.
+- **Stop holds deliveries (2026-09-09).** `interrupt()` sets `LiveEntry.holdDeliveries`; while
+  set, no background report or shell notice starts a turn. The next user-started turn splices
+  them into history quietly (`HarnessSession.spliceNotice`) ahead of the user's message.
 - **Steering (`postSteer`) lands at the next iteration boundary — a tool call is never cut.**
   Posted text queues and drains as a `<steer>` history message at the top of the next turn-loop
   iteration. A steer posted with no turn in flight, or during the child's own FINAL step (too late

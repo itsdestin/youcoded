@@ -2525,6 +2525,12 @@ export class NativeSessionHost extends EventEmitter {
           spawnBackground: (parentId: string, spawnOpts: Parameters<NativeSessionHost['spawnSpecialistBackground']>[1]) =>
             this.spawnSpecialistBackground(parentId, spawnOpts),
           // Task 6 — the task_id management surface: steer/interrupt/resume.
+          // 2026-09-09 — replaces the per-turn status block: the model asks
+          // once (Task list: true) instead of being reminded every turn.
+          listStatus: (parentId: string) => {
+            const e = this.live.get(parentId);
+            return e ? this.buildSpecialistStatus(parentId, e.cwd) : null;
+          },
           steerSpecialist: (parentId: string, childId: string, text: string) => this.steerSpecialist(parentId, childId, text),
           interruptSpecialist: (parentId: string, childId: string) => this.interruptSpecialist(parentId, childId),
           resumeSpecialist: (parentId: string, resumeOpts: Parameters<NativeSessionHost['resumeSpecialist']>[1]) =>
@@ -2647,6 +2653,11 @@ export class NativeSessionHost extends EventEmitter {
    *  DelegationRecord status as "interrupted" instead of failing to compile;
    *  the `never` assignment in `default` turns that into a typecheck error
    *  the day the status union grows. */
+  // 2026-09-09: no longer injected every turn (that block kept helpers
+  // top-of-mind and invited the "report now" steers the transcript audit
+  // measured, and re-inserting it each turn threw away cached prompt prefix).
+  // Now the text behind Task's `list: true` — read on demand, like Codex's
+  // list_agents and Hermes's delegate_task(action='list').
   private buildSpecialistStatus(sessionId: string, cwd: string): string | null {
     if (!this.ledger) return null;
     const lines = this.ledger.listFor(cwd, sessionId)
@@ -2753,10 +2764,6 @@ export class NativeSessionHost extends EventEmitter {
     const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), queue: [], inFlight: false, mcpLease };
     this.live.set(sessionId, entry);
     this.retainModel(sessionId, session.binding.modelId); // ref-count this model
-    // Task 5 (plan 1b): wired for ROOT sessions only — wire() is never called
-    // for a specialist child (createChild has its own inline live.set, see its
-    // "NOT wire()" comment), so a child never grows its own status block.
-    session.setSpecialistStatus(() => this.buildSpecialistStatus(sessionId, cwd));
     // Persist "Always allow" decisions for THIS session's project. The session
     // emits 'remember-rule' {tool, pattern?, action} — a plain EventEmitter
     // event, NOT a transcript event (the frozen transcript surface is untouched)
