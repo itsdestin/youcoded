@@ -2315,9 +2315,26 @@ export default function SessionStrip({
                     >
                       <DragGrip />
                     </span>
-                    <button
+                    {/* A <div role="button"> rather than a <button>, for the
+                        same reason SkillCard's root is one: the rename pencil
+                        below is a real <button> and must not be nested inside
+                        another. Clicking the row — the name included — still
+                        selects the session; only the pencil does anything else.
+                        Keyboard parity is the onKeyDown, which a native button
+                        gave for free. */}
+                    <div
+                      role="button"
+                      tabIndex={0}
+                      aria-label={s.name}
                       onClick={() => { if (!suppressClick.current) { onSelectSession(s.id); setMenuOpen(false); } }}
-                      className="flex-1 text-left pl-1 pr-1.5 py-1.5 flex items-center min-w-0"
+                      onKeyDown={(e) => {
+                        if (e.key !== 'Enter' && e.key !== ' ') return;
+                        // Space scrolls the menu otherwise, and Enter would
+                        // fall through to whatever else is listening.
+                        e.preventDefault();
+                        if (!suppressClick.current) { onSelectSession(s.id); setMenuOpen(false); }
+                      }}
+                      className="flex-1 text-left pl-1 pr-1.5 py-1.5 flex items-center min-w-0 cursor-pointer"
                     >
                       {/* P-8 (2026-08-28): name and project start at the SAME left
                           edge, one under the other; what used to be a bare dot at
@@ -2325,7 +2342,34 @@ export default function SessionStrip({
                           name, with the session's tag marks under it. */}
                       <span className="flex-1 min-w-0 flex flex-col gap-0.5">
                         <span className="flex items-center gap-2 min-w-0">
-                          <span className="flex-1 min-w-0"><SessionName name={s.name} /></span>
+                          {/* The pencil sits with the name, not at the row's
+                              right edge (deck session-switcher-rename, SR-3:
+                              "pencil only"). Same icon and same meaning as the
+                              saved-conversation list, minus its dotted
+                              underline — here the name itself must stay a
+                              switch-to-this-session target, which is the whole
+                              reason the underline treatment was not chosen. */}
+                          <span className="flex-1 min-w-0 flex items-center gap-1.5">
+                            <span className="min-w-0 truncate"><SessionName name={s.name} /></span>
+                            {namingApi() && (
+                              <button
+                                type="button"
+                                aria-label={`Rename ${s.name}`}
+                                aria-haspopup="dialog"
+                                className="shrink-0 text-fg-muted hover:text-fg focus-visible:ring-2 focus-visible:ring-accent rounded-sm"
+                                // The row is the drag source; without this a
+                                // press on the pencil starts dragging the
+                                // session instead of arming the click.
+                                onPointerDown={(e) => e.stopPropagation()}
+                                onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setRenameId(s.id); }}
+                              >
+                                <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+                                  <path d="M12 20h9" />
+                                  <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+                                </svg>
+                              </button>
+                            )}
+                          </span>
                           {s.permissionMode === 'bypass' && (
                             <span className="shrink-0 text-4xs font-medium px-1 py-0.5 rounded-sm bg-[#DD4444]/20 text-[#DD4444]">
                               DANGER
@@ -2368,7 +2412,7 @@ export default function SessionStrip({
                           <SessionTagMarks sessionId={s.id} byId={tagsById} />
                         </span>
                       </span>
-                    </button>
+                    </div>
                     <button
                       // Close the dropdown so the CloseSessionPrompt (L2 popup)
                       // isn't competing with the still-open session menu above it.
