@@ -1,57 +1,130 @@
+// AcceptedHistoryCapture — the harness's in-memory bookkeeping for WHICH
+// transcript events the CURRENT model history was accepted from (Stage 4 of the
+// ChatGPT cache-efficiency work, architecture doc
+// docs/active/plans/2026-09-09-cache-stage4-architecture.md → "Capture").
+//
+// Two intents this file exists to pin:
+//  1. ATTEMPT SCOPING. A stream attempt that gets abandoned (a stall auto-retry,
+//     a manual Retry, an interrupt before any text) emitted real transcript
+//     events the user saw — but its text never entered history, so its uuids
+//     must never be published as the provenance of a message.
+//  2. REVISION HONESTY. Every mutation of history bumps the revision (the fence
+//     the durable store checks); request-only work (fitToContext) never reaches
+//     this class at all, so it cannot bump it.
 import { describe, expect, it } from 'vitest';
-import type { ModelMessage } from 'ai';
 import { AcceptedHistoryCapture } from '../src/main/harness/accepted-history-capture';
-import { openAIContinuationMessages } from '../src/main/harness/openai-continuation';
-
-const event = (type: string, uuid: string, data: any) => ({ type, sessionId: 's', uuid, timestamp: 1, data } as any);
 
 describe('AcceptedHistoryCapture', () => {
-  it('maps SDK multipart order to attempt-scoped exact event refs and excludes abandoned retries', () => {
-    const capture = new AcceptedHistoryCapture('s');
-    capture.recordUser(event('user-message', 'u1', { text: 'inspect' }));
+  it('accepts an attempt in emit order and excludes an abandoned retry entirely', () => {
+    const capture = new AcceptedHistoryCapture();
+    capture.recordEvent('u1');
+
     const abandoned = capture.beginAttempt();
-    capture.recordDelta(abandoned, event('assistant-text', 'bad-1', { partId: 'text-0', text: 'wrong' }));
+    capture.recordAttemptEvent(abandoned, 'bad-text', 'text');
+    capture.recordAttemptEvent(abandoned, 'bad-reasoning', 'reasoning');
     capture.abandonAttempt(abandoned);
 
     const accepted = capture.beginAttempt();
-    capture.recordDelta(accepted, event('assistant-thinking', 'r1', { partId: 'reasoning-0', text: 'brief reason' }));
-    capture.recordDelta(accepted, event('assistant-text', 'a1', { partId: 'text-0', text: 'checking ' }));
-    capture.recordToolUse(accepted, event('tool-use', 'c1', { toolUseId: 'call-1', toolName: 'Read', toolInput: { file_path: 'a' } }));
-    capture.recordToolResult(event('tool-result', 'o1', { toolUseId: 'call-1', toolName: 'Read', toolResult: 'result' }));
-    const sdk = openAIContinuationMessages([{
-      role: 'assistant', content: [
-        { type: 'reasoning', text: 'brief reason', providerOptions: { openai: { itemId: 'rs-1', reasoningEncryptedContent: 'cipher' } } },
-        { type: 'text', text: 'checking ', providerOptions: { openai: { itemId: 'msg-1', phase: 'commentary' } } },
-        { type: 'tool-call', toolCallId: 'call-1', toolName: 'Read', input: { file_path: 'a' }, providerOptions: { openai: { itemId: 'fc-1' } } },
-      ],
-    } as any], 7);
-    expect(capture.acceptAttempt(accepted, sdk)).toBe(true);
+    capture.recordAttemptEvent(accepted, 'r1', 'reasoning');
+    capture.recordAttemptEvent(accepted, 'a1', 'text');
+    capture.acceptAttempt(accepted);
+    capture.recordEvent('c1');
+    capture.recordEvent('o1');
 
-    const proposal = capture.proposal({ binding: 'binding', assemblyDigest: 'assembly' });
-    expect(proposal.acceptedEventUuids).toEqual(['u1', 'r1', 'a1', 'c1', 'o1']);
-    expect(proposal.acceptedEventUuids).not.toContain('bad-1');
-    expect(proposal.messages).toEqual([
-      { role: 'user', content: 'inspect' },
-      ...sdk,
-      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'call-1', toolName: 'Read', output: { type: 'text', value: 'result' } }] },
-    ]);
+    expect(capture.snapshot().eventUuids).toEqual(['u1', 'r1', 'a1', 'c1', 'o1']);
   });
 
-  it('records every history mutation and post-summary/prune descriptors, but request-only fit is inert', () => {
-    const capture = new AcceptedHistoryCapture('s');
-    capture.inject({ role: 'user', content: '<steer>later</steer>' });
-    const beforeFit = capture.proposal({ binding: 'b', assemblyDigest: 'a' });
-    capture.requestProjection([{ role: 'user', content: 'temporary fitted view' }]);
-    expect(capture.proposal({ binding: 'b', assemblyDigest: 'a' })).toEqual(beforeFit);
+  it('an interrupted attempt contributes its text uuids only — reasoning is never partial-accepted', () => {
+    const capture = new AcceptedHistoryCapture();
+    const attempt = capture.beginAttempt();
+    capture.recordAttemptEvent(attempt, 'r1', 'reasoning');
+    capture.recordAttemptEvent(attempt, 'a1', 'text');
+    capture.recordAttemptEvent(attempt, 'a2', 'text');
+    capture.acceptAttemptText(attempt);
 
-    capture.replaceAfterPrune([{ role: 'user', content: 'kept' }], ['tool-result-1']);
-    expect(capture.proposal({ binding: 'b', assemblyDigest: 'a' }).transformation).toEqual({
-      kind: 'pruned', prunedToolResultUuids: ['tool-result-1'], retainedEventUuids: [],
+    expect(capture.snapshot().eventUuids).toEqual(['a1', 'a2']);
+  });
+
+  it('an attempt can only be consumed once, and an unknown attempt is inert', () => {
+    const capture = new AcceptedHistoryCapture();
+    const attempt = capture.beginAttempt();
+    capture.recordAttemptEvent(attempt, 'a1', 'text');
+    capture.acceptAttempt(attempt);
+    const afterAccept = capture.snapshot().revision;
+
+    capture.acceptAttempt(attempt);          // double-accept (a caller bug) adds nothing
+    capture.acceptAttempt(-1 as any);        // never begun
+    capture.abandonAttempt(-1 as any);
+
+    expect(capture.snapshot().eventUuids).toEqual(['a1']);
+    expect(capture.snapshot().revision).toBe(afterAccept);
+  });
+
+  it('a new attempt discards a still-pending one — a stream that threw is never accepted', () => {
+    const capture = new AcceptedHistoryCapture();
+    const threw = capture.beginAttempt();
+    capture.recordAttemptEvent(threw, 'thrown-text', 'text');
+
+    const rerun = capture.beginAttempt();
+    capture.recordAttemptEvent(rerun, 'rerun-text', 'text');
+    capture.acceptAttempt(rerun);
+    capture.acceptAttempt(threw);            // too late — the entry is gone
+
+    expect(capture.snapshot().eventUuids).toEqual(['rerun-text']);
+  });
+
+  it('every history mutation bumps the revision; only accepted attempts and events add uuids', () => {
+    const capture = new AcceptedHistoryCapture();
+    const start = capture.revision;
+
+    capture.mutated();                       // steer / status snapshot / rule injection / strip
+    expect(capture.revision).toBe(start + 1);
+    expect(capture.snapshot().eventUuids).toEqual([]);
+
+    capture.recordEvent('u1');
+    expect(capture.revision).toBe(start + 2);
+
+    const attempt = capture.beginAttempt();  // beginning/abandoning changes no history
+    capture.recordAttemptEvent(attempt, 'a1', 'text');
+    expect(capture.revision).toBe(start + 2);
+    capture.abandonAttempt(attempt);
+    expect(capture.revision).toBe(start + 2);
+
+    const kept = capture.beginAttempt();
+    capture.acceptAttempt(kept);             // an empty step still pushed a message
+    expect(capture.revision).toBe(start + 3);
+  });
+
+  it('records prune and summary transformations, each a durable change', () => {
+    const capture = new AcceptedHistoryCapture();
+    capture.recordEvent('u1');
+    const beforePrune = capture.revision;
+
+    capture.markPruned();
+    expect(capture.snapshot().transformation).toEqual({ kind: 'pruned' });
+    expect(capture.revision).toBe(beforePrune + 1);
+
+    capture.markSummary('summary-1');
+    expect(capture.snapshot().transformation).toEqual({ kind: 'summary', summaryEventUuid: 'summary-1' });
+    expect(capture.revision).toBe(beforePrune + 2);
+  });
+
+  it('reset clears or seeds, and every snapshot hands back a fresh array', () => {
+    const capture = new AcceptedHistoryCapture();
+    capture.recordEvent('u1');
+    capture.markPruned();
+    const beforeClear = capture.revision;
+
+    capture.reset();                         // /clear — a durable change with no seed
+    expect(capture.snapshot()).toEqual({ revision: beforeClear + 1, eventUuids: [], transformation: undefined });
+
+    capture.reset({ eventUuids: ['a', 'b'], revision: 42, transformation: { kind: 'summary', summaryEventUuid: 's' } });
+    expect(capture.snapshot()).toEqual({
+      revision: 42, eventUuids: ['a', 'b'], transformation: { kind: 'summary', summaryEventUuid: 's' },
     });
-    capture.replaceAfterSummary(event('compact-summary', 'summary-1', { summary: 'short' }), [{ role: 'assistant', content: 'suffix' }] as ModelMessage[], ['suffix-1']);
-    const summary = capture.proposal({ binding: 'b', assemblyDigest: 'a' });
-    expect(summary.messages).toEqual([{ role: 'user', content: '[Earlier conversation summary]\nshort' }, { role: 'assistant', content: 'suffix' }]);
-    expect(summary.transformation).toEqual({ kind: 'summary', summaryEventUuid: 'summary-1', retainedEventUuids: ['suffix-1'] });
-    expect(summary.revision).toBeGreaterThan(beforeFit.revision);
+
+    const first = capture.snapshot().eventUuids;
+    first.push('mutating the caller\'s copy');
+    expect(capture.snapshot().eventUuids).toEqual(['a', 'b']);
   });
 });

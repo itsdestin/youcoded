@@ -13,11 +13,17 @@
 // new event types.
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
 import { EventEmitter } from 'events';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { streamText, tool, zodSchema, jsonSchema, type LanguageModel, type ModelMessage } from 'ai';
 import { openAIContinuationBinding, openAIContinuationMessages } from './openai-continuation';
+import {
+  AcceptedHistoryCapture,
+  type AcceptedHistorySeed,
+  type AcceptedHistoryTransformation,
+  type AttemptId,
+} from './accepted-history-capture';
 import type { TranscriptEvent, InjectedMeta } from '../../shared/types';
 import type { ModelBinding } from '../../shared/provider-types';
 import type { HarnessManifest } from '../../shared/harness-manifest';
@@ -316,6 +322,10 @@ interface StepUsage { inputTokens: number; outputTokens: number; cacheReadTokens
 interface StepResult {
   text: string; toolCalls: ToolCall[]; usage: StepUsage;
   finishReason: string | undefined; interrupted: boolean;
+  /** The stream attempt that produced this step, so the turn loop can tell the
+   *  accepted-history capture what became of it. Module-private by construction
+   *  (StepResult is not exported) — nothing outside this driver sees an attempt id. */
+  attempt: AttemptId;
   /** Completed, allowlisted SDK assistant messages. Empty for non-Responses
    * models and interrupted/abandoned attempts; local tool messages never enter. */
   responseMessages: ModelMessage[];
@@ -621,6 +631,19 @@ export function prefillBudgetMs(promptTokens: number): number {
   return Math.min(scaled, PREFILL_MAX_MS);
 }
 
+/** What a durable accepted-history checkpoint is made of (cache Stage 4). The
+ *  host adds the transcript path and the flushed references; nothing here is
+ *  message CONTENT beyond the messages themselves, which the store turns into
+ *  references rather than copying. */
+export interface AcceptedHistorySnapshot {
+  revision: number;
+  eventUuids: string[];
+  transformation: AcceptedHistoryTransformation | undefined;
+  messages: ModelMessage[];
+  binding: string;
+  assemblyDigest: string;
+}
+
 // CONCURRENCY PRECONDITION: `send()` is NOT re-entrant. `abort`, `interrupted`,
 // and `history` are single-slot per session — a second send() before the first
 // resolves would corrupt turn state. Callers MUST serialize sends per session
@@ -671,6 +694,19 @@ export class HarnessSession extends EventEmitter {
   /** Identity stamped by the provider factory (provider/model/non-secret account).
    * A refreshed account can change this without a host setBinding call. */
   private continuationBinding: string | undefined;
+  /** The identity a RESTORED history was accepted under, kept beside the live
+   *  one because a resumed session has not dispatched yet: until the first
+   *  factory runs there is nothing else to publish a checkpoint against, and a
+   *  checkpoint published under the wrong identity is one that would later be
+   *  replayed to a backend that never issued its ciphertext. */
+  private seededContinuationBinding: string | undefined;
+  /** Which transcript events the CURRENT history is accepted from (cache Stage 4).
+   *  Every `this.history` mutation below reports here — see accepted-history-capture.ts. */
+  private capture = new AcceptedHistoryCapture();
+  /** The most recent stream attempt, for the ONE acceptance decision that happens
+   *  outside the turn loop: send()'s catch, which pushes in-flight partial text
+   *  after the step threw and so never saw a StepResult. */
+  private lastAttempt: AttemptId | undefined;
 
   // Tool runtime state (Task 9). readRegistry + todos are per-SESSION runtime
   // state — NOT persisted transcript. seedHistory() clears both on resume.
@@ -835,9 +871,18 @@ export class HarnessSession extends EventEmitter {
     this.profile = opts.profile ?? CLOUD_DEFAULT;
   }
 
-  /** Resume path: NativeSessionHost rebuilds history from stored events. */
-  seedHistory(messages: ModelMessage[]): void {
+  /** Resume path: NativeSessionHost rebuilds history from stored events, or —
+   *  with a `seed` — restores a durable accepted-history checkpoint (cache
+   *  Stage 4). Without a seed the capture starts empty at the next revision, so
+   *  the session becomes durable again at its first publish. */
+  seedHistory(messages: ModelMessage[], seed?: AcceptedHistorySeed & { continuationBinding?: string }): void {
     this.history = messages;
+    this.capture.reset(seed);
+    // WHY both: the restored ciphertext was accepted under THIS identity, so the
+    // first dispatch must compare against it and strip on a mismatch — and the
+    // published checkpoint must keep naming it until a live factory replaces it.
+    this.seededContinuationBinding = seed?.continuationBinding;
+    this.continuationBinding = seed?.continuationBinding;
     // WHY: a retained append-only snapshot remains authoritative after resume;
     // legacy or compacted-away blocks are unknown and current state is reintroduced.
     this.specialistSnapshot = recoverSpecialistStatusSnapshot(messages);
@@ -852,6 +897,47 @@ export class HarnessSession extends EventEmitter {
     this.todos.length = 0;
     this.shellCwd = null; // a resumed session starts back at the workspace root
     this.shellEnv = null; // same contract — a resumed session starts with a fresh env too
+  }
+
+  /** Everything a durable accepted-history checkpoint needs, taken atomically
+   *  (cache Stage 4). The host reads this at a turn boundary and hands it to the
+   *  store; `messages` is a copy because publication continues on an async chain
+   *  while the next turn may already be mutating history. */
+  acceptedHistory(): AcceptedHistorySnapshot {
+    const snapshot = this.capture.snapshot();
+    return {
+      revision: snapshot.revision,
+      eventUuids: snapshot.eventUuids,
+      transformation: snapshot.transformation,
+      messages: [...this.history],
+      binding: this.continuationBinding ?? this.seededContinuationBinding
+        ?? `${this.binding.providerId}\u0000${this.binding.modelId}`,
+      assemblyDigest: this.assemblyDigest(),
+    };
+  }
+
+  /** Fingerprint of the request PREFIX this session assembles — what a restored
+   *  history would be replayed into. Pure over constructor options and the
+   *  current binding/profile, so it is identical before a resumed session's
+   *  first turn and at the moment the checkpoint was published; a mismatch is
+   *  how the store refuses a history assembled against a different prompt.
+   *
+   *  WHY opts.tools rather than the live toolByName: that map is re-synced per
+   *  turn (Skill catalog, MCP budget). Per-turn tool DESCRIPTIONS change the
+   *  prefix without changing whether the accepted history is still valid, and
+   *  including them would invalidate every checkpoint whenever a skill was
+   *  installed (architecture doc → "Identity strings"). */
+  assemblyDigest(): string {
+    const shape = {
+      system: this.systemText,
+      tools: (this.opts.tools ?? []).map((t) => t.name).sort(),
+      mcp: (this.opts.mcpServers ?? []).map((s) => s.id).sort(),
+      maxTokens: this.opts.harness.limits?.maxTokens ?? null,
+      promptVariant: this.profile.promptVariant,
+      providerId: this.binding.providerId,
+      modelId: this.binding.modelId,
+    };
+    return createHash('sha256').update(JSON.stringify(shape)).digest('hex');
   }
 
   /** Mid-session model swap (next turn uses the new binding). A swap can cross
@@ -886,6 +972,10 @@ export class HarnessSession extends EventEmitter {
         });
       return content.length > 0 ? [{ ...message, content } as ModelMessage] : [];
     });
+    // A strip rewrites history in place: the messages that survive no longer
+    // descend byte-for-byte from the events they were accepted from, so any
+    // checkpoint taken before this one is stale.
+    this.capture.mutated();
   }
 
   /** What this session's CURRENT model costs to run, as resolved when the
@@ -940,6 +1030,7 @@ export class HarnessSession extends EventEmitter {
       const update = specialistStatusUpdate(null, current, Date.now(), 2, true);
       if (update) {
         this.history.push({ role: 'user', content: update.message });
+        this.capture.mutated();   // a driver-authored message, backed by no event
         this.specialistSnapshot = update.snapshot;
       }
     } catch (err) {
@@ -958,9 +1049,13 @@ export class HarnessSession extends EventEmitter {
       + messagesTokens(this.history);   // binary-aware — see message-size.ts
   }
 
-  private emitEvent(type: TranscriptEvent['type'], data: TranscriptEvent['data']): void {
+  /** Returns the uuid it minted so a caller that ALSO changes history can record
+   *  where that history came from (cache Stage 4). The public event shape is
+   *  unchanged — this is a return value, not a new field. */
+  private emitEvent(type: TranscriptEvent['type'], data: TranscriptEvent['data']): string {
     const event: TranscriptEvent = { type, sessionId: this.opts.sessionId, uuid: randomUUID(), timestamp: Date.now(), data };
     this.emit('transcript-event', event);
+    return event.uuid;
   }
 
   /**
@@ -1021,6 +1116,7 @@ export class HarnessSession extends EventEmitter {
           role: 'user',
           content: `<project-rule source="${t.source}">\n${fitted.text}\n</project-rule>`,
         });
+        this.capture.mutated();   // injected rule text, backed by no event
       }
     }
   }
@@ -1411,6 +1507,7 @@ export class HarnessSession extends EventEmitter {
     // below, including the plain 'prune' early-return two lines down.
     const imagesBeforePrune = countImageOutputs(this.history);
     this.history = pruneToolOutputs(this.history, cfg);   // always prune first
+    this.capture.markPruned();   // tool outputs no longer equal their events' text
     if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
     // G-11: prune may have sliced an old Read result down to 2,000 chars (and
     // summarize below discards it outright) — forget what was served so Read
@@ -1440,7 +1537,7 @@ export class HarnessSession extends EventEmitter {
     // even though the manual-/compact `compactionPending` flag was never set —
     // CC's own compact-summary events never carry it, so the manual path is
     // untouched.
-    this.emitEvent('compact-summary', { summary, autoCompaction: true });
+    const summaryUuid = this.emitEvent('compact-summary', { summary, autoCompaction: true });
     // Fix 2 (2026-08-11): the summarized-away span can still contain a
     // delivered image. pruneToolOutputs (above) now DOES collapse 'content'
     // (image) outputs too, but only ones OUTSIDE its own token-budget
@@ -1453,6 +1550,9 @@ export class HarnessSession extends EventEmitter {
     // automatically at 75% context instead of only on an explicit /clear.
     this.shownImages.clear();
     this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
+    // The new leading message IS that event's summary text — naming its uuid is
+    // what lets the store reference the summary instead of copying it.
+    this.capture.markSummary(summaryUuid);
     this.restoreSpecialistStatusAfterRewrite();
   }
 
@@ -1561,6 +1661,7 @@ export class HarnessSession extends EventEmitter {
       // keyed on an actual count decrease, not on whether summarize runs next.
       const imagesBeforePrune = countImageOutputs(this.history);
       this.history = pruneToolOutputs(this.history, cfg);
+      this.capture.markPruned();   // same reasoning as maybeCompact's prune
       if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
       this.servedReads.clear(); // G-11: same reasoning as maybeCompact — prune may have cut a served Read
       const cut = this.summarizeCutIndex();
@@ -1584,13 +1685,14 @@ export class HarnessSession extends EventEmitter {
       // the PRUNED history in place rather than discarding anything. The user
       // still gets a real (if smaller) reduction, and never a lost conversation.
       if (!summary.trim()) return { ok: false, reason: 'summary-failed' };
-      this.emitEvent('compact-summary', { summary });
+      const summaryUuid = this.emitEvent('compact-summary', { summary });
       // Fix 2 (2026-08-11): same reasoning as maybeCompact above — the manual
       // /compact path discards the summarized span exactly the same way, so
       // the dedupe cache must be cleared here too or it keeps vouching for
       // images this summary just removed.
       this.shownImages.clear();
       this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
+      this.capture.markSummary(summaryUuid);   // same reasoning as maybeCompact's
       // WHY: manual compaction has the same immediate-authority requirement.
       this.restoreSpecialistStatusAfterRewrite();
       return { ok: true };
@@ -1615,6 +1717,9 @@ export class HarnessSession extends EventEmitter {
   clearHistory(): { ok: true } | { ok: false; reason: 'turn-in-flight' } {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     this.history = [];
+    // No seed: the accepted list empties AND takes the next revision, so a
+    // checkpoint published before the clear can never be restored over it.
+    this.capture.reset();
     // WHY: /clear is also the explicit specialist-status generation barrier.
     this.specialistSnapshot = null;
     // Fix 1 (CRITICAL, 2026-08-11): the dedupe cache must not outlive the
@@ -1871,7 +1976,7 @@ export class HarnessSession extends EventEmitter {
   /** The turn driver. `emit` names how this turn ENTERED the conversation — a
    *  typed message, or a skill invocation — which is the only thing that differs
    *  between send() and runSkill(). Everything downstream is identical. */
-  private async beginTurn(text: string, emit: () => void, attachments: string[] = []): Promise<void> {
+  private async beginTurn(text: string, emit: () => string, attachments: string[] = []): Promise<void> {
     // Re-entrancy guard: a non-null abort means a turn is already streaming.
     // Throw loudly rather than corrupt the single-slot turn state (see the
     // class-level CONCURRENCY PRECONDITION note).
@@ -1880,7 +1985,9 @@ export class HarnessSession extends EventEmitter {
     }
     this.interrupted = false;
     this.bashOutputReadsThisTurn = 0;   // G-1 (D7): the cap is per TURN, notice turns included
-    emit();
+    // The uuid of the user-message / skill-invoked event this turn entered on —
+    // recorded at the history push below, which is the mutation it accounts for.
+    const enteringEventUuid = emit();
     // WHY (cache-efficiency design §2): ordinary turns must preserve every prior
     // message byte-for-byte. Compare normalized ledger facts and append only a
     // changed authoritative snapshot; callback failure is unknown, never a clear.
@@ -1890,6 +1997,7 @@ export class HarnessSession extends EventEmitter {
         const update = specialistStatusUpdate(this.specialistSnapshot, current);
         if (update) {
           this.history.push({ role: 'user', content: update.message });
+          this.capture.mutated();   // a driver-authored message, backed by no event
           this.specialistSnapshot = update.snapshot;
         }
       } catch (err) {
@@ -1903,6 +2011,9 @@ export class HarnessSession extends EventEmitter {
     this.history.push(imageParts.length
       ? { role: 'user', content: [{ type: 'text', text }, ...imageParts] } as any
       : { role: 'user', content: text });
+    // Both shapes descend from the SAME event — its text, and (for the image
+    // parts) the attachment paths it carries.
+    this.capture.recordEvent(enteringEventUuid);
     this.abort = new AbortController();
     this.turnEverParked = false;   // cleared at the start of every turn — see field WHY
     this.lastStepPromptTokens = 0;   // a new turn always begins with a full prefill
@@ -1990,6 +2101,7 @@ export class HarnessSession extends EventEmitter {
         if (this.pendingSteers.length > 0) {
           for (const s of this.pendingSteers.splice(0)) {
             this.history.push({ role: 'user', content: `<steer>\n${s}\n</steer>` });
+            this.capture.mutated();   // history-only, exactly like an injection
           }
         }
         // Two-stage compaction FIRST (spec §4.4) — prune, then summarize only if
@@ -2040,7 +2152,14 @@ export class HarnessSession extends EventEmitter {
           // trim() gate: same emptiness class as stepHasText below — a
           // whitespace-only partial is no partial at all, and recording it
           // leaves a junk assistant message in history for every later turn.
-          if (step.text && step.text.trim().length > 0) this.history.push({ role: 'assistant', content: step.text });
+          if (step.text && step.text.trim().length > 0) {
+            this.history.push({ role: 'assistant', content: step.text });
+            // Only the TEXT deltas: the pushed string is exactly their
+            // concatenation, and this attempt's reasoning never completed.
+            this.capture.acceptAttemptText(step.attempt);
+          } else {
+            this.capture.abandonAttempt(step.attempt);   // nothing was pushed
+          }
           this.emitEvent('user-interrupt', {});
           return;
         }
@@ -2064,6 +2183,11 @@ export class HarnessSession extends EventEmitter {
           this.history.push(...(step.responseMessages.length > 0
             ? step.responseMessages
             : [this.assistantMessage(step.text, step.toolCalls)]));
+          this.capture.acceptAttempt(step.attempt);
+        } else {
+          // An empty step pushed nothing — whether it re-runs once (below) or
+          // ends the turn, its deltas back no message and never become provenance.
+          this.capture.abandonAttempt(step.attempt);
         }
 
         // Empty-step recovery (spec: docs/archive/specs/2026-08-21-empty-final-
@@ -2148,7 +2272,11 @@ export class HarnessSession extends EventEmitter {
         this.withdrawOrphanedPreparing(step.pendingPreparing);
 
         for (const call of step.toolCalls) {
-          this.emitEvent('tool-use', { toolUseId: call.toolCallId, toolName: call.toolName, toolInput: call.input });
+          // The call parts are already in the accepted assistant message above;
+          // recording the event is what lets the store cite id/name/input from
+          // the transcript rather than copying them into the manifest.
+          this.capture.recordEvent(
+            this.emitEvent('tool-use', { toolUseId: call.toolCallId, toolName: call.toolName, toolInput: call.input }));
         }
 
         // Execute tool calls SERIALLY; collect their results for the next step.
@@ -2170,7 +2298,8 @@ export class HarnessSession extends EventEmitter {
             // the model-facing history.
             for (let j = i; j < step.toolCalls.length; j++) {
               const rem = step.toolCalls[j];
-              this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: CANCELED_TOOL_TEXT, isError: true });
+              this.capture.recordEvent(
+                this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: CANCELED_TOOL_TEXT, isError: true }));
               resultParts.push(this.toolResultPart(rem, CANCELED_TOOL_TEXT));
             }
             this.history.push({ role: 'tool', content: resultParts });
@@ -2186,14 +2315,15 @@ export class HarnessSession extends EventEmitter {
           // over. The max_steps gate below is the existing precedent for a
           // driver-decided orderly stop.
           if ('kind' in payload) {
-            this.emitEvent('tool-result', {
+            this.capture.recordEvent(this.emitEvent('tool-result', {
               toolUseId: call.toolCallId, toolName: call.toolName,
               toolResult: payload.payload.text, isError: true,
-            });
+            }));
             resultParts.push(this.toolResultPart(call, payload.payload.text));
             for (let j = i + 1; j < step.toolCalls.length; j++) {
               const rem = step.toolCalls[j];
-              this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: NOT_RUN_TOOL_TEXT, isError: true });
+              this.capture.recordEvent(
+                this.emitEvent('tool-result', { toolUseId: rem.toolCallId, toolName: rem.toolName, toolResult: NOT_RUN_TOOL_TEXT, isError: true }));
               resultParts.push(this.toolResultPart(rem, NOT_RUN_TOOL_TEXT));
             }
             this.history.push({ role: 'tool', content: resultParts });
@@ -2204,13 +2334,13 @@ export class HarnessSession extends EventEmitter {
           // the per-turn budget/dedupe and amending the text with a named note
           // for every skip (Task 5 — the driver never promises silently).
           const delivered = this.resolveToolImages(payload, imageBudget);
-          this.emitEvent('tool-result', {
+          this.capture.recordEvent(this.emitEvent('tool-result', {
             toolUseId: call.toolCallId, toolName: call.toolName,
             toolResult: delivered.text, isError: payload.isError ?? false,
             ...(payload.structuredPatch ? { structuredPatch: payload.structuredPatch } : {}),
             // Paths only — events carry no binary; resume re-reads (history-rebuild.ts).
             ...(delivered.images.length ? { images: delivered.images.map((i) => i.path) } : {}),
-          });
+          }));
           resultParts.push(this.toolResultPart(call, delivered.text, delivered.images));
         }
         this.history.push({ role: 'tool', content: resultParts });
@@ -2341,7 +2471,14 @@ export class HarnessSession extends EventEmitter {
       // v0's catch, unchanged: push any in-flight partial, then split
       // interrupt vs error. withRetry has already exhausted retries for a
       // transient provider error before it lands here.
-      if (partialAssistantText) this.history.push({ role: 'assistant', content: partialAssistantText });
+      // The attempt that produced this partial threw, so the loop never saw its
+      // StepResult — this is the one acceptance decision made outside it.
+      if (partialAssistantText) {
+        this.history.push({ role: 'assistant', content: partialAssistantText });
+        if (this.lastAttempt !== undefined) this.capture.acceptAttemptText(this.lastAttempt);
+      } else if (this.lastAttempt !== undefined) {
+        this.capture.abandonAttempt(this.lastAttempt);
+      }
       if (this.interrupted || err?.name === 'AbortError' || this.abort?.signal.aborted) {
         this.emitEvent('user-interrupt', {});
       } else {
@@ -2397,6 +2534,10 @@ export class HarnessSession extends EventEmitter {
     reportPartial: (text: string) => void,
     isFirstAttempt: boolean,
   ): Promise<StepResult | typeof STALL_RETRY> {
+    // One capture attempt per stream attempt. Its delta uuids stay provisional
+    // until the turn loop (or send()'s catch) says what became of the step.
+    const attempt = this.capture.beginAttempt();
+    this.lastAttempt = attempt;
     const streamArgs: any = {
       model,
       system: this.systemText,
@@ -2642,6 +2783,9 @@ export class HarnessSession extends EventEmitter {
           if (emittedPartIds.size > 0) {
             this.emitEvent('assistant-thinking', { dropPart: { partIds: [...emittedPartIds] } });
           }
+          // The fourth place Retry erases: the model's memory, the screen and
+          // the store already forget this text, so its provenance must too.
+          this.capture.abandonAttempt(attempt);
           return STALL_RETRY;
         }
         if (chunk === 'stall') {
@@ -2662,6 +2806,7 @@ export class HarnessSession extends EventEmitter {
                 toolPreparing: { toolCallId: prepId, toolName: entry.toolName, chars: entry.chars, cleared: true },
               });
             }
+            this.capture.abandonAttempt(attempt);   // the re-run starts this step over
             return STALL_RETRY;
           }
           // Name the phase honestly: a model that never STARTED (prefill) has not
@@ -2712,7 +2857,8 @@ export class HarnessSession extends EventEmitter {
             // segment always separates consecutive text STEPS in the reducer, so a
             // repeated id across steps can't wrongly merge two bubbles.
             emittedPartIds.add(part.id ?? 'text-0');
-            this.emitEvent('assistant-text', { text: t, partId: part.id ?? 'text-0' });
+            this.capture.recordAttemptEvent(
+              attempt, this.emitEvent('assistant-text', { text: t, partId: part.id ?? 'text-0' }), 'text');
             break;
           }
           case 'reasoning-delta': {
@@ -2723,7 +2869,10 @@ export class HarnessSession extends EventEmitter {
             // assistant-thinking WITH data.text → the reducer's reasoning path;
             // payload-less would stay a heartbeat.
             emittedPartIds.add(part.id ?? 'reasoning-0');
-            this.emitEvent('assistant-thinking', { text: t, partId: part.id ?? 'reasoning-0' });
+            // Text-bearing thinking only: the payload-less heartbeats on this
+            // same event type are display and are never even persisted.
+            this.capture.recordAttemptEvent(
+              attempt, this.emitEvent('assistant-thinking', { text: t, partId: part.id ?? 'reasoning-0' }), 'reasoning');
             break;
           }
           case 'tool-input-start': {
@@ -2837,7 +2986,9 @@ export class HarnessSession extends EventEmitter {
     if (interrupted || this.interrupted || abortSignal.aborted) {
       // Don't await usage/finishReason on the interrupt path — the stream was
       // torn down; those promises may never settle.
-      return { text: assistantText, toolCalls, responseMessages: [], usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, finishReason: undefined, interrupted: true, generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0, pendingPreparing: [] };
+      // The CALLER decides this attempt's fate: an interrupt that pushed partial
+      // text accepts its text uuids, one that pushed nothing abandons them.
+      return { text: assistantText, toolCalls, responseMessages: [], usage: { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 }, finishReason: undefined, interrupted: true, generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0, pendingPreparing: [], attempt };
     }
 
     const usage = await result.usage;
@@ -2892,6 +3043,7 @@ export class HarnessSession extends EventEmitter {
       // reporting steps, and "present but undefined" would muddy that.
       ...(providerCostUsd === undefined ? {} : { providerCostUsd }),
       generationMs: firstChunkAt ? Date.now() - firstChunkAt : 0,
+      attempt,
     };
   }
 
