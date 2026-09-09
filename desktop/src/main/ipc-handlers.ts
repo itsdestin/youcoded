@@ -36,7 +36,8 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 // HarnessSession.send(), which hard-throws on re-entrancy).
 import { generateText } from 'ai';
 import type { ModelBinding } from '../shared/provider-types';
-import { createNativeTitleFeeder } from './native-title-feeder';
+import { createSessionNamer } from './session-namer';
+import { NamingSettings } from './naming-settings';
 import { reapplyStoredTitle, type ResumeTitleDeps } from './native-resume-title';
 import { ModelCatalog } from './providers/model-catalog';
 import { EngineManager } from './engine/engine-manager';
@@ -151,7 +152,17 @@ import { listProjectConversations, projectConversationHistory } from './project-
 // Conversation Store (Phase 2a): live intake of transcript activity, session
 // cwd, title and flag changes. Keyed by CLAUDE session id (resolved from the
 // desktop id via sessionIdMap below), matching the store's record id.
-import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged, noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace, buildLocalProjectResolver, emitConversationMetaChanged } from './conversations/service';
+import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleChanged,
+  noteFlagChanged, noteSessionNote, noteModelUsed, getConversationStore, flushSessionToSpace,
+  buildLocalProjectResolver, emitConversationMetaChanged,
+  noteAutomaticTitle,
+  getNamingRecord,
+  mutateNamingRecord,
+  isSessionNameOwned,
+  resolveSessionName,
+  setManualSessionName,
+  clearManualSessionName,
+} from './conversations/service';
 import { requestChatsearchRefresh } from './chatsearch-index/index-service';
 // Task 4: resolves a native session's live model binding into the store's
 // portable {modelId, providerType, providerLabel} shape — see
@@ -1002,7 +1013,7 @@ export function registerIpcHandlers(
     // Task 7: drop the title feeder's per-session state too — a no-op for
     // non-native ids (the feeder was never fed events for them) and cheap
     // idempotent Map.delete for native ones.
-    nativeTitleFeeder.forget(sessionId);
+    sessionNamer.forget(sessionId);
     // Deliberately NOT dropped on session-EXIT: a conversation whose process
     // has ended stays on screen and must stay scrollable, and exit is what
     // stops the transcript watcher. Closing the conversation is the point where
@@ -2439,6 +2450,10 @@ export function registerIpcHandlers(
     // This listener is on the CC TranscriptWatcher only — native transcript
     // events are routed separately (Task 4 wires the native listener's feed).
     if (claudeId) noteTranscriptEvent(claudeId, event, 'claude');
+    // Claude Code sessions are named by the SAME policy as native ones: this
+    // tailer emits 'turn-complete' only when stop_reason !== 'tool_use', so a
+    // turn that ran twenty tools counts as the one reply it is.
+    sessionNamer.noteEvent(event);
     // Record which model a CC turn ran on, mirroring what resolvePortableModel
     // does for native sessions. The transcript watcher already parses
     // `message.model` off every assistant message and forwards it on
@@ -2725,47 +2740,107 @@ export function registerIpcHandlers(
     });
   };
 
-  // Task 7: native auto-title feeder. CC sessions get titled by the topic
-  // watcher below (~/.claude/topics, fed by the Auto-Title hook); native
-  // sessions have no such feed, so this generates one from the bound model
-  // at first turn-complete. See native-title-feeder.ts's header for the full
-  // rationale (JSONL-never, ordering, M6 floor-gating hook).
-  const nativeTitleFeeder = createNativeTitleFeeder({
+  // Session naming (2026-09-09 contract). ONE policy for both lanes: Off,
+  // Basic (quote the opening request, no model call) and AI (review at
+  // completed replies 1, 3, then every 25). It replaces the old
+  // native-title-feeder, whose rule was "one bound-model call at the first
+  // turn-complete, native only". See session-namer.ts for the schedule, the
+  // ownership guard and the commit-time re-checks.
+  const namingSettings = new NamingSettings(nativeHome);
+
+  /**
+   * Publish the current mode where the bundled Auto-Title hook can read it.
+   * The hook runs inside the Claude Code process and cannot ask the app
+   * anything, so this one-word file is the whole protocol: it is what makes Off
+   * and Basic stop the hook from interrupting a reply to request a title, and
+   * what switches AI onto the app's review schedule instead of the hook's old
+   * 120s/600s timer. Written at startup and after every settings change.
+   */
+  const publishNamingMode = () => {
+    try {
+      fs.mkdirSync(topicDir, { recursive: true });
+      fs.writeFileSync(path.join(topicDir, 'naming-mode'), `${namingSettings.read().mode}\n`);
+    } catch { /* best-effort: the hook falls back to its own timer */ }
+  };
+
+  // Store identity for a live session, or null when it is not knowable yet.
+  // Native ids are identity-mapped into sessionIdMap; a CC session only
+  // becomes identifiable once a hook event has told us its Claude id.
+  const namingIdentity = (sessionId: string): { provider: string; storeId: string } | null => {
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    if (nativeHost.isNativeSessionId(resolved)) return { provider: 'native', storeId: resolved };
+    if (sessionIdMap.has(sessionId)) return { provider: 'claude', storeId: resolved };
+    return null;
+  };
+
+  /**
+   * Publish an AUTOMATIC name: persist, then paint. Every generated title in
+   * the app goes through here — the topic watcher below included — so the
+   * ownership check and the persist-before-broadcast order exist in exactly
+   * one place. Returns false when the user owns the name, so a caller that
+   * caches "the last topic I applied" does not record one it did not apply.
+   */
+  const applyAutomaticTitle = async (
+    desktopId: string, storeId: string, provider: SessionProvider, title: string,
+  ): Promise<boolean> => {
+    // Checked BEFORE the broadcast, not only at the write: noteAutomaticTitle
+    // can refuse a disk write, but nothing can un-paint a session pill.
+    if (await isSessionNameOwned(provider, storeId)) return false;
+    await noteAutomaticTitle(storeId, title, provider);
+    sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, title);
+    broadcastRename(desktopId, title);
+    return true;
+  };
+
+  const sessionNamer = createSessionNamer({
+    settings: () => namingSettings.read(),
+    identify: namingIdentity,
+    readNaming: (provider, storeId) => getNamingRecord(provider as SessionProvider, storeId),
+    mutateNaming: async (provider, storeId, fn) => {
+      const rec = await mutateNamingRecord(provider, storeId, fn);
+      // A null store (no managed roots this launch) must not look like a
+      // successful write — the namer treats a throw as "skip this reply".
+      if (!rec) throw new Error('conversation storage is not available');
+      return rec;
+    },
+    getBinding: (sessionId: string) => nativeHost.getBinding(sessionId),
     // Bounded with a 15s abort — a bare unbounded generateText await would
-    // hang the feeder (same hazard class as the compaction-hang rule).
-    // providerRegistry.languageModel() itself throws for an unconfigured/
-    // disabled/removed provider; that rejection propagates to the feeder's
-    // own try/catch around `generate`, which is exactly the "unresolvable =
-    // skip silently, never an error event" contract — no separate handling
-    // needed here.
+    // hang the namer (same hazard class as the compaction-hang rule).
+    // providerRegistry.languageModel() throws for an unconfigured/disabled/
+    // removed provider; that rejection is the namer's "stay silent, retry"
+    // path, which is why nothing is caught here.
     generate: async (binding: ModelBinding, prompt: string) => {
       const model = await providerRegistry.languageModel(binding);
       const { text } = await generateText({ model, prompt, abortSignal: AbortSignal.timeout(15_000) });
       return text;
     },
-    getBinding: (sessionId: string) => nativeHost.getBinding(sessionId),
-    // Store title wins; falls back to the live session name for the boot
-    // window before the store's first upsert lands (mirrors the browse/store
-    // title-overlay precedence Task 3/5 established — store wins unless
-    // placeholder).
-    //
-    // Fix (2026-08-06): both halves now go through the SHARED placeholder
-    // predicate. The old fallback only excluded 'New Session', so a RESUMED
-    // session — whose live name is 'Resuming…' — answered "already titled" and
-    // this feeder skipped generation on every turn-complete, permanently. A
-    // resumed, never-titled native session could never get a title at all.
+    // The free lane for a Claude Code session with no separately chosen naming
+    // model: its model lives inside the CLI, so the bundled Auto-Title hook
+    // asks it, in-session, at no extra cost. This file is the whole protocol —
+    // the hook writes a topic only when it finds one (hook-scripts/
+    // title-update.sh), which is what turned ~6 unsolicited title requests per
+    // conversation into exactly the scheduled ones.
+    askInSessionModel: (_sessionId: string, storeId: string) => {
+      try {
+        fs.mkdirSync(topicDir, { recursive: true });
+        fs.writeFileSync(path.join(topicDir, `ask-${storeId}`), '');
+      } catch { /* best-effort: a missed ask retries at the next review */ }
+    },
+    currentName: (sessionId: string) => sessionManager.getSession(sessionId)?.name ?? '',
+    // Store title wins; the live session name covers the boot window before
+    // the store's first upsert. BOTH halves go through the shared placeholder
+    // predicate — the 2026-08-06 lesson: a check that only excluded 'New
+    // Session' read a resumed session's 'Resuming…' as a real title.
     hasTitle: async (sessionId: string) => {
-      const rec = await getConversationStore()?.get('native', sessionId);
+      const ident = namingIdentity(sessionId);
+      if (!ident) return true; // unknown identity: assume named rather than overwrite
+      const rec = await getConversationStore()?.get(ident.provider, ident.storeId);
       return hasRealTitle(rec?.title, sessionManager.getSession(sessionId)?.name);
     },
-    // Both halves, or the Resume Browser (store title) and the live pill
-    // (session.name) disagree. Native ids are identity-mapped (see the WHY
-    // comment on noteTranscriptEvent's native call just below), so
-    // sessionId doubles as both the desktop id and the store's record id.
-    onTitle: async (sessionId: string, title: string) => {
-      sendForSession(sessionId, IPC.SESSION_RENAMED, sessionId, title);
-      broadcastRename(sessionId, title);
-      await noteTitleChanged(sessionId, title, 'native');
+    publish: async (sessionId: string, name: string) => {
+      const ident = namingIdentity(sessionId);
+      if (!ident) return;
+      await applyAutomaticTitle(sessionId, ident.storeId, ident.provider as SessionProvider, name);
     },
   });
 
@@ -2783,9 +2858,9 @@ export function registerIpcHandlers(
     // below, which resolves through sessionIdMap — event.sessionId IS already
     // the store's record id; no lookup needed.
     noteTranscriptEvent(event.sessionId, event, 'native');
-    // Task 7: feed the SAME event stream into the title feeder. Pure/injected
-    // logic — see native-title-feeder.ts — never throws synchronously.
-    nativeTitleFeeder.noteEvent(event);
+    // Feed the SAME event stream into the namer. Pure/injected logic — see
+    // session-namer.ts — never throws synchronously.
+    sessionNamer.noteEvent(event);
     if (event.type === 'turn-complete') {
       // The model may have changed mid-session (NATIVE_SET_BINDING) — refresh
       // the portable ref on every turn rather than trusting a stale snapshot
@@ -3362,6 +3437,26 @@ export function registerIpcHandlers(
 
   const pendingWatchers = new Set<string>();
 
+  /**
+   * Apply a topic the Auto-Title hook wrote. The hook asks the conversation's
+   * OWN model, in-session, so this is the free naming lane for Claude Code —
+   * but it is still automatic naming, so it goes through the same ownership
+   * gate and the same persist-then-paint order as everything else.
+   */
+  async function applyTopic(desktopId: string, claudeId: string, topic: string): Promise<void> {
+    try {
+      const applied = await applyAutomaticTitle(desktopId, claudeId, 'claude', topic);
+      if (!applied) return;
+      lastTopics.set(desktopId, topic);
+      // A topic that landed is also a completed review: advance the cursor so
+      // the next ask is the next SCHEDULED one. (applyAutomaticTitle already
+      // recorded the name itself.)
+      await mutateNamingRecord('claude', claudeId, (cur) => ({
+        ...cur, reviewed: Math.max(cur.reviewed, cur.replies),
+      }));
+    } catch { /* best-effort: the next topic write retries */ }
+  }
+
   function startWatching(desktopId: string, claudeId: string) {
     if (topicWatchers.has(desktopId) || pendingWatchers.has(desktopId)) return;
     pendingWatchers.add(desktopId);
@@ -3369,15 +3464,10 @@ export function registerIpcHandlers(
     // Read initial value
     const initial = readTopicFile(claudeId);
     if (initial && initial !== 'New Session') {
-      lastTopics.set(desktopId, initial);
-      sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, initial);
-      broadcastRename(desktopId, initial);
-      // Conversation Store (Phase 2a): mirror the auto-title into the record.
-      // Keyed by claudeId (the store's record id). This is the only sanctioned
-      // title writer (carry-forward 5) — no user-rename path exists yet.
-      // Result ignored (best-effort, no UI to revert here) — void per Item 6's
-      // Promise<MetaWriteResult> shape.
-      void noteTitleChanged(claudeId, initial, 'claude');
+      // lastTopics is set only if the title was actually APPLIED. A topic
+      // refused because the user owns the name must stay un-recorded, or a
+      // later Use-automatic-name would find it "unchanged" and never repaint.
+      void applyTopic(desktopId, claudeId, initial);
     }
 
     const topicFilePath = path.join(topicDir, `topic-${claudeId}`);
@@ -3388,10 +3478,7 @@ export function registerIpcHandlers(
       const watcher = fs.watch(topicFilePath, { persistent: false }, () => {
         const topic = readTopicFile(claudeId);
         if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-          lastTopics.set(desktopId, topic);
-          sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, topic);
-          broadcastRename(desktopId, topic);
-          void noteTitleChanged(claudeId, topic, 'claude'); // Conversation Store (Phase 2a) title write-through; result ignored
+          void applyTopic(desktopId, claudeId, topic);
         }
       });
       watcher.on('error', () => {
@@ -3413,10 +3500,7 @@ export function registerIpcHandlers(
     const interval = setInterval(() => {
       const topic = readTopicFile(claudeId);
       if (topic && topic !== 'New Session' && topic !== lastTopics.get(desktopId)) {
-        lastTopics.set(desktopId, topic);
-        sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, topic);
-        broadcastRename(desktopId, topic);
-        void noteTitleChanged(claudeId, topic, 'claude'); // Conversation Store (Phase 2a) title write-through; result ignored
+        void applyTopic(desktopId, claudeId, topic);
       }
     }, 2000);
     topicWatchers.set(desktopId, interval);
@@ -3588,7 +3672,7 @@ export function registerIpcHandlers(
     // path also covers crashes/takeovers that never went through
     // SESSION_DESTROY, so the feeder's per-session state needs the same
     // cleanup here too.
-    nativeTitleFeeder.forget(sessionId);
+    sessionNamer.forget(sessionId);
     // Clean up context + session stats cache files
     const claudeId = sessionIdMap.get(sessionId);
     if (claudeId) {
@@ -3809,6 +3893,123 @@ export function registerIpcHandlers(
   });
 
   // --- Set/clear a session note ---
+  /* ── Session naming ────────────────────────────────────────────────────
+   * Five handlers: the Assistant-settings preference, and per-conversation
+   * name ownership. `sessionId` here may be a LIVE desktop id (the session
+   * strip) or a SAVED conversation id (the Resume Browser) — sessionIdMap
+   * resolves the first and passes the second through unchanged, the same
+   * resolution session:set-note uses.
+   */
+
+  const namingGet = async () => {
+    const prefs = namingSettings.read();
+    // The picker speaks ModelChoice; the preference stores a ModelBinding.
+    // Converted here rather than storing the renderer's shape, so a future
+    // picker change cannot reinterpret what is already on disk.
+    return {
+      mode: prefs.mode,
+      model: prefs.model
+        ? { runtime: 'native' as const, providerId: prefs.model.providerId, modelId: prefs.model.modelId }
+        : null,
+    };
+  };
+
+  const namingSet = async (value: unknown) => {
+    const v = (value && typeof value === 'object' ? value : {}) as { mode?: unknown; model?: unknown };
+    const choice = v.model as { runtime?: string; providerId?: string; modelId?: string } | null | undefined;
+    try {
+      let model: ModelBinding | null = null;
+      if (choice && choice.providerId && choice.modelId) {
+        // Naming runs through the provider registry, so a Claude-runtime
+        // choice has nowhere to execute. The picker is opened with
+        // includeClaude={false}; this refuses the case anyway rather than
+        // storing a choice that would silently never be used.
+        if (choice.runtime !== 'native') {
+          return { ok: false, error: 'Pick a model from a provider you have set up.' };
+        }
+        // Same confirm-against-the-catalog rule as the specialist defaults: a
+        // model we cannot see is refused, never quietly swapped for another.
+        const catalog = await modelCatalog.get(await providerRegistry.list()).catch(() => null);
+        if (catalog && !catalog.some((m) => m.id === choice.modelId && m.providerId === choice.providerId)) {
+          return { ok: false, error: `"${choice.modelId}" isn’t in the model list right now — pick it from the list.` };
+        }
+        model = { providerId: choice.providerId, modelId: choice.modelId };
+      }
+      await namingSettings.update({ mode: v.mode, model });
+      publishNamingMode();
+      // A mode or model change invalidates every generation in flight: a name
+      // produced under the old setting must not land after it changed.
+      sessionNamer.invalidateAll();
+      return { ok: true };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'Your naming settings were not saved.' };
+    }
+  };
+
+  const namingTitle = async (sessionId: string, fallback: string) => {
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    const provider = await sessionProviderFor(resolved);
+    const { name, manual } = await resolveSessionName(provider, resolved, String(fallback ?? ''));
+    return { title: name, manual };
+  };
+
+  const namingRename = async (sessionId: string, title: string) => {
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    const provider = await sessionProviderFor(resolved);
+    try {
+      const res = await setManualSessionName(provider, resolved, String(title ?? ''));
+      if (!res.ok) return res;
+      // Stop work already in flight for this session BEFORE painting: a
+      // generation that returns after this must be discarded, not raced.
+      sessionNamer.invalidate(sessionId);
+      sessionNamer.invalidate(resolved);
+      sendForSession(resolved, IPC.SESSION_RENAMED, resolved, res.name);
+      broadcastRename(resolved, res.name);
+      emitConversationMetaChanged();
+      return { ok: true, name: res.name };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'The name was not saved.' };
+    }
+  };
+
+  const namingAutomatic = async (sessionId: string) => {
+    const resolved = sessionIdMap.get(sessionId) || sessionId;
+    const provider = await sessionProviderFor(resolved);
+    try {
+      const live = sessionManager.getSession(resolved)?.name ?? '';
+      const res = await clearManualSessionName(provider, resolved, live);
+      if (!res.ok) return res;
+      sessionNamer.invalidate(sessionId);
+      sessionNamer.invalidate(resolved);
+      if (res.name) {
+        sendForSession(resolved, IPC.SESSION_RENAMED, resolved, res.name);
+        broadcastRename(resolved, res.name);
+      }
+      emitConversationMetaChanged();
+      return { ok: true, name: res.name };
+    } catch (e: any) {
+      return { ok: false, error: e?.message || 'That could not be saved.' };
+    }
+  };
+
+  ipcMain.handle(IPC.SESSION_NAMING_GET, () => namingGet());
+  ipcMain.handle(IPC.SESSION_NAMING_SET, (_e, value: unknown) => namingSet(value));
+  ipcMain.handle(IPC.SESSION_NAMING_TITLE, (_e, sessionId: string, fallback: string) => namingTitle(sessionId, fallback));
+  ipcMain.handle(IPC.SESSION_NAMING_RENAME, (_e, sessionId: string, title: string) => namingRename(sessionId, title));
+  ipcMain.handle(IPC.SESSION_NAMING_AUTOMATIC, (_e, sessionId: string) => namingAutomatic(sessionId));
+
+  // Same five, for a phone or browser driving THIS desktop. One implementation,
+  // so a remote rename cannot bypass a gate the local path enforces — the
+  // reason session:set-tag / set-note got the same treatment (design §12).
+  publishNamingMode();
+  remoteServer?.setSessionNamingWiring({
+    get: namingGet,
+    set: namingSet,
+    title: namingTitle,
+    rename: namingRename,
+    automatic: namingAutomatic,
+  });
+
   ipcMain.handle(IPC.SESSION_SET_NOTE, async (_e, sessionId: string, note: string) => {
     const resolved = sessionIdMap.get(sessionId) || sessionId;
     const text = String(note ?? '');

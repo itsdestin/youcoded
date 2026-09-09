@@ -93,6 +93,14 @@ export interface ClientInfo {
   connectedAt: number;
 }
 
+interface SessionNamingWiring {
+  get: () => Promise<{ mode: string; model: unknown }>;
+  set: (value: unknown) => Promise<{ ok: boolean; error?: string }>;
+  title: (sessionId: string, fallback: string) => Promise<{ title: string; manual: boolean }>;
+  rename: (sessionId: string, title: string) => Promise<{ ok: boolean; error?: string }>;
+  automatic: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
+}
+
 export class RemoteServer {
   private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -257,6 +265,13 @@ export class RemoteServer {
     resolve: (sessionId: string) => string;
     canWrite: (sessionId: string, resolved: string) => boolean;
   };
+
+  /** Session naming, injected from ipc-handlers so a remote client runs the
+   *  SAME implementation as the local one — ownership checks, model-catalog
+   *  validation and the persist-then-broadcast order included. Absent until
+   *  registerIpcHandlers runs; the dispatch below answers honestly meanwhile. */
+  setSessionNamingWiring(w: SessionNamingWiring): void { this.sessionNamingWiring = w; }
+  private sessionNamingWiring?: SessionNamingWiring;
 
   private loadTokens(): void {
     try {
@@ -760,7 +775,12 @@ export class RemoteServer {
       this.saveTokens();
       this.config.markPaired();
       this.addClient(ws, token, ip);
-      ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
+      // `sessionNaming` is a CAPABILITY, announced in the handshake rather than
+        // probed with an extra round trip: the remote UI decides whether the
+        // naming card and the rename pencil exist at all, and it must decide
+        // before first paint. An Android host answers this handshake without
+        // the flag, so those controls stay hidden there.
+        ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop', sessionNaming: true }));
       this.replayBuffers(ws).catch((err) => {
         console.error('[remote-server] replayBuffers failed:', err);
       });
@@ -807,7 +827,12 @@ export class RemoteServer {
           this.saveTokens();
           this.config.markPaired();
           this.addClient(ws, token, ip);
-          ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
+          // `sessionNaming` is a CAPABILITY, announced in the handshake rather than
+        // probed with an extra round trip: the remote UI decides whether the
+        // naming card and the rename pencil exist at all, and it must decide
+        // before first paint. An Android host answers this handshake without
+        // the flag, so those controls stay hidden there.
+        ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop', sessionNaming: true }));
           this.replayBuffers(ws).catch((err) => {
             console.error('[remote-server] replayBuffers failed:', err);
           });
@@ -1357,6 +1382,44 @@ export class RemoteServer {
         // the payload and refetch meta).
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, flag: tagFlagKey(tagId), value: !!payload?.value } });
         this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      // Session naming. `unavailable` is answered as a refusal, not silence:
+      // the shim's capability probe reads a well-formed preference as "this
+      // host can name sessions", so a half-started host must not look ready.
+      case 'session-naming:get': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.get()
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
+        break;
+      }
+      case 'session-naming:set': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.set(payload?.value)
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
+        break;
+      }
+      case 'session-naming:title': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.title(String(payload?.sessionId ?? ''), String(payload?.fallback ?? ''))
+          : { title: String(payload?.fallback ?? ''), manual: false });
+        break;
+      }
+      case 'session-naming:rename': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.rename(String(payload?.sessionId ?? ''), String(payload?.title ?? ''))
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
+        break;
+      }
+      case 'session-naming:automatic': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.automatic(String(payload?.sessionId ?? ''))
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
         break;
       }
       case 'session:set-note': {

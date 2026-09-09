@@ -12,6 +12,7 @@ import {
 } from '../ModelProvidersPopup';
 import SkipPermissionsSection, { type PermissionOverrides } from './SkipPermissionsSection';
 import FolderSwitcher from '../FolderSwitcher';
+import SessionNaming from './SessionNaming';
 import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
@@ -284,6 +285,8 @@ function GeneralPage(ctx: PageContext) {
           )}
         </FieldRow>
         <ProjectFolderRow {...ctx} />
+        {/* WHY: naming belongs with conversation defaults, not provider setup. */}
+        <SessionNaming />
         {window.claude.native.supported === true && <StepGuardRow />}
         <SettingRow
           variant="item"

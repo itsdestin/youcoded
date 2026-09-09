@@ -2,6 +2,9 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
 import { Button, Toggle, LoadingState, EmptyState } from './ui';
+import SessionRenameDialog from './SessionRenameDialog';
+import { namingApi } from './assistant-settings/naming-api';
+import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
@@ -271,7 +274,12 @@ interface Props {
 export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions }: Props) {
   // Live tag registry — drives the Tag Picker, chips, and custom-tag filter.
   const registry = useTagRegistry();
-  const [sessions, setSessions] = useState<PastSession[]>([]);
+  const [sourceSessions, setSessions] = useState<PastSession[]>([]);
+  const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.sessionId, s.name])), [sourceSessions]);
+  const previewNames = useRenamedSessions(sourceNames);
+  const sessions = useMemo(() => sourceSessions.map((s) => previewNames[s.sessionId] === undefined
+    ? s : { ...s, name: previewNames[s.sessionId] }), [sourceSessions, previewNames]);
+  const [renameSession, setRenameSession] = useState<PastSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
   const searchRef = useRef<HTMLInputElement>(null);
@@ -381,7 +389,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     else if (expandedId) setExpandedId(null);
     else onClose();
   }, [tagManagerOpen, organizeId, openPill, expandedId, onClose]);
-  useEscClose(open, handleEscClose);
+  useEscClose(open && !renameSession, handleEscClose);
 
   // Close the active filter dropdown on outside click. Recognizes clicks
   // inside the trigger row AND the portaled dropdowns (which live in
@@ -943,6 +951,31 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           isExpanded ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
         }`}
       >
+      {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
+          the organize icons. Keep the viewer unchanged and retain this dialog's
+          separate keyboard handling. R5-1 keeps both edit cues visible even at rest. */}
+      <div className={`flex items-center gap-1 px-3 pt-2 ${ICON_GUTTER}`}>
+        {namingApi() ? <Button variant="ghost" size="sm"
+          className="group flex items-center justify-start gap-1.5 min-w-0 px-2 py-1 rounded-md cursor-text hover:bg-well transition-colors"
+          aria-label={`Rename ${s.name}`} aria-haspopup="dialog"
+          onKeyDown={(e) => {
+            // WHY: Enter did not synthesize a click in the isolated workbench
+            // keyboard check; activate it explicitly. Space stays native.
+            if (e.key === 'Enter') { e.preventDefault(); e.stopPropagation(); setRenameSession(s); }
+          }}
+          onClick={(e) => { e.stopPropagation(); setRenameSession(s); }}>
+          <span className="text-sm-tight font-semibold text-fg truncate decoration-dotted underline-offset-[3px] underline decoration-fg-muted">{s.name}</span>
+          <span className="text-fg-muted shrink-0">
+            <svg width={12} height={12} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+              <path d="M12 20h9" />
+              <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
+            </svg>
+          </span>
+        </Button> : <button type="button" className="text-sm truncate text-left min-w-0 focus-visible:ring-2 focus-visible:ring-accent"
+          onClick={() => { if (!inert) handleSelectSession(s); }} aria-disabled={inert || undefined}>
+          {s.name}
+        </button>}
+      </div>
       <button
         // Resume is disabled for conversations whose project folder isn't on
         // this device (synced in from elsewhere) OR whose transcript hasn't
@@ -951,7 +984,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         onClick={() => { if (!inert) handleSelectSession(s); }}
         aria-disabled={inert || undefined}
         aria-expanded={inert ? undefined : isExpanded}
-        className={`w-full text-left p-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
+        className={`w-full text-left px-3 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           inert ? 'text-fg-dim cursor-default' : isExpanded ? 'text-fg' : 'text-fg-dim'
         }`}
       >
@@ -969,7 +1002,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               conversation title right on every native row. The model chip on
               the line below says the same thing in the user's terms — a model
               name — and says it for Claude Code rows too. */}
-          <div className={`text-sm truncate ${ICON_GUTTER}`}>{s.name}</div>
           {/* Tag chips after the name. Priority is FIRST and rendered with the
               same TagChip as everything else — it is a built-in tag, not a
               separate species of label (built-in-tags.ts). Complete has no chip:
@@ -1153,6 +1185,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   return (
     <>
+      {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
       <Scrim layer={1} onClick={onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>

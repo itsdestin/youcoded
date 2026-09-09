@@ -6,6 +6,7 @@ import React from 'react';
 // "Ask about this" was Destin's pick (2026-07-17 icon review).
 
 export type MenuIconName =
+  | 'rename'
   | 'copy'
   | 'cut'
   | 'paste'
@@ -18,6 +19,8 @@ export type MenuIconName =
   | 'path';
 
 const PATHS: Record<MenuIconName, React.ReactNode> = {
+  // WHY: renaming needs its own pencil, not the unrelated move-window icon.
+  rename: <path d="m16 3 5 5-12 12-6 1 1-6L16 3Zm-2 2 5 5M4 15l5 5" />,
   copy: (
     <>
       <rect x="9" y="9" width="11" height="11" rx="2" />

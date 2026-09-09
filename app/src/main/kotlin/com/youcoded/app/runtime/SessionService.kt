@@ -4276,6 +4276,21 @@ class SessionService : Service() {
             // state instead of timing out. specialists:event (the ledger push) is
             // OUTBOUND-only — same as native:model-state above — so it needs no
             // entry here at all.
+            // Session naming (2026-09-09). The ownership store, the naming
+            // preference and the provider-registry call that generates a name
+            // all live in the desktop main process; Android has none of them.
+            // Answering not-implemented is what keeps the shared React UI
+            // HONEST here: the remote shim's capability probe leaves
+            // window.claude.sessionNaming.available false, so the naming card,
+            // the Rename item and the saved-session pencil render nothing at
+            // all rather than appearing and then failing. Android conversations
+            // keep being named by the bundled Auto-Title hook, which falls back
+            // to its own timer when no mode file is present.
+            "session-naming:get",
+            "session-naming:set",
+            "session-naming:title",
+            "session-naming:rename",
+            "session-naming:automatic",
             "specialists:list",
             "specialists:delegated-get",
             "specialists:delegated-set",

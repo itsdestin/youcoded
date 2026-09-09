@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { createConversationStore, ConversationStore } from './conversation-store';
+import { createNamingStore, NamingStore } from './naming-store';
+import { NamingRecord, effectiveName, isManuallyNamed, normalizeManualName } from './naming-core';
 import { log } from '../logger';
 import { NativeHome } from '../native-home';
 import type { ConversationRecord, PortableModelRef } from './store-core';
@@ -53,6 +55,11 @@ interface SessionCtx {
 }
 
 let store: ConversationStore | null = null;
+// Session name OWNERSHIP (who chose the name). Deliberately a SECOND store:
+// see naming-store.ts for why it cannot be fields on ConversationRecord.
+// It shares the conversation store's lifecycle but not its record shape,
+// its healer or its activity-ranked merge.
+let namingStore: NamingStore | null = null;
 // WHY: IPC meta handlers go live (main.ts:745) before the store starts
 // (main.ts:1701, fire-and-forget), so a tag/flag/note set in that boot window
 // used to vanish while the store?. chains silently no-op'd — the IPC handler
@@ -149,7 +156,7 @@ export function emitConversationMetaChanged(): void {
 }
 
 export async function startConversationStore(opts?: {
-  conversationsRoot?: string; projectsDir?: string; topicsDir?: string; device?: string;
+  conversationsRoot?: string; namesRoot?: string; projectsDir?: string; topicsDir?: string; device?: string;
   nativeHomeRoot?: string;  // tests only — production reads ~/.youcoded
   // Fix: main.ts passes true so the startup reconcile/materialize kicks below
   // land as PENDING instead of running, giving the one-shot slug repair a
@@ -178,6 +185,11 @@ export async function startConversationStore(opts?: {
   nativeHomeRootOpt = opts?.nativeHomeRoot;
   device = opts?.device ?? os.hostname();
   store = createConversationStore(root);
+  // Sibling of Conversations, never inside it — older clients scan and
+  // rewrite that directory and would drop what they do not recognise.
+  namingStore = createNamingStore(
+    opts?.namesRoot ?? (personalRoot ? path.join(personalRoot, 'ConversationNames') : path.join(root, '..', 'ConversationNames')),
+  );
   storePhase = 'ready';
   await settlePendingMetaWrites();
 
@@ -241,6 +253,7 @@ export function stopConversationStore(): void {
   // dangling from a PRIOR store's slug-repair run (or a caller that paused
   // and never resumed) must not silently carry into the next start and stick
   // every future sweep trigger in "pending" forever.
+  namingStore = null;
   pauseDepth = 0;
   reconcilePending = false;
   materializePending = false;
@@ -437,15 +450,130 @@ export function noteTranscriptEvent(claudeSessionId: string, ev: TranscriptEvent
   }
 }
 
-// Carry-forward 5: the auto-title flows call this — the topic-watcher for
-// 'claude' sessions (~/.claude/topics -> broadcastRename), and the native
-// title feeder (native-title-feeder.ts, Task 7) for 'native' ones, which has
-// no topic file to watch and instead generates a title from a single bound-
-// model call at first turn-complete. setTitle is timestamp-less — it never
-// fabricates activity. No user-rename path exists for conversations yet
-// (Plan 2b/2c scope).
+// The raw title writer. setTitle is timestamp-less — it never fabricates
+// activity. Two callers: setManualSessionName below, projecting a name the
+// user typed so every existing reader (Resume Browser, chatsearch, remote,
+// older clients on other devices) shows it; and noteAutomaticTitle, which
+// adds the ownership gate. Generated titles must use THAT one.
 export function noteTitleChanged(claudeSessionId: string, title: string, sessionProvider: SessionProvider): Promise<MetaWriteResult> {
   return metaWrite(() => store!.setTitle(sessionProvider, claudeSessionId, title));
+}
+
+/**
+ * The AUTOMATIC title write. Identical to noteTitleChanged except that it
+ * refuses when the user has named this conversation by hand — which is the
+ * "a name you chose is never replaced" promise, enforced at the disk write so
+ * a future automatic writer cannot forget it. Every generated-title path must
+ * use this; noteTitleChanged stays the raw writer for the manual projection.
+ *
+ * A caller that ALSO paints the live pill must check ownership itself before
+ * broadcasting: this refuses the write, it cannot un-send a broadcast.
+ */
+export async function noteAutomaticTitle(
+  claudeSessionId: string, title: string, sessionProvider: SessionProvider,
+): Promise<MetaWriteResult> {
+  if (await isSessionNameOwned(sessionProvider, claudeSessionId)) return { ok: true };
+  // Remember it as THE automatic name as well as writing the projection: it is
+  // what Use automatic name puts back, immediately, instead of leaving the row
+  // on the manual name until the next review comes round.
+  await mutateNamingRecord(sessionProvider, claudeSessionId, (cur) => (
+    cur.manual ? cur : { ...cur, auto: title, autoAt: new Date().toISOString() }
+  )).catch(() => null);
+  return noteTitleChanged(claudeSessionId, title, sessionProvider);
+}
+
+/* ── Session name ownership ──────────────────────────────────────────────
+ * The naming sidecar is the authority on WHO chose a conversation's name;
+ * ConversationRecord.title is kept as the compatibility projection so every
+ * existing reader (Resume Browser, chatsearch, remote, older clients on other
+ * devices) shows the right text without knowing this store exists.
+ */
+
+/** The ownership record, or null when there is none / the store is off. */
+export async function getNamingRecord(
+  sessionProvider: SessionProvider, sessionId: string,
+): Promise<NamingRecord | null> {
+  if (!namingStore) return null;
+  try { return await namingStore.get(sessionProvider, sessionId); } catch { return null; }
+}
+
+/** Read-modify-write the ownership record under its cross-process lock. */
+export async function mutateNamingRecord(
+  sessionProvider: string, sessionId: string, fn: (cur: NamingRecord) => NamingRecord,
+): Promise<NamingRecord | null> {
+  if (!namingStore) return null;
+  return namingStore.mutate(sessionProvider, sessionId, fn);
+}
+
+/** True when the user has chosen this conversation's name by hand. */
+export async function isSessionNameOwned(
+  sessionProvider: SessionProvider, sessionId: string,
+): Promise<boolean> {
+  return isManuallyNamed(await getNamingRecord(sessionProvider, sessionId));
+}
+
+/**
+ * The name to show, given whatever the caller already had. Manual name wins,
+ * then the stored automatic name, then the caller's fallback — so a session
+ * with no ownership record looks exactly as it did before this store existed.
+ */
+export async function resolveSessionName(
+  sessionProvider: SessionProvider, sessionId: string, fallback: string,
+): Promise<{ name: string; manual: boolean }> {
+  return effectiveName(await getNamingRecord(sessionProvider, sessionId), fallback);
+}
+
+/**
+ * Save a name the user typed. Refuses blank input: clearing is a separate,
+ * explicitly-chosen action, so an accidental Save on an empty box must not
+ * silently hand the conversation back to automatic naming.
+ *
+ * Saving the SAME text still establishes ownership — that is the point of the
+ * button for someone who likes the generated name and wants it to stop moving.
+ */
+export async function setManualSessionName(
+  sessionProvider: SessionProvider, sessionId: string, raw: string,
+): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  const name = normalizeManualName(raw);
+  if (!name) return { ok: false, error: 'Enter a name.' };
+  if (!namingStore) {
+    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
+  }
+  const at = new Date().toISOString();
+  try {
+    await namingStore.mutate(sessionProvider, sessionId, (cur) => ({ ...cur, manual: name, manualAt: at }));
+  } catch {
+    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
+  }
+  // Project into the record AFTER ownership is durable, so a crash between the
+  // two leaves the user owning the name rather than owning nothing.
+  await metaWrite(() => store!.setTitle(sessionProvider, sessionId, name));
+  return { ok: true, name };
+}
+
+/**
+ * Hand the name back to automatic naming. The clear carries its own timestamp
+ * so it can beat an older rename from another device instead of losing to it.
+ * Returns the name that should now be displayed — the stored automatic name
+ * when there is one, so the row changes back immediately rather than waiting
+ * for the next review.
+ */
+export async function clearManualSessionName(
+  sessionProvider: SessionProvider, sessionId: string, fallback: string,
+): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
+  if (!namingStore) {
+    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
+  }
+  const at = new Date().toISOString();
+  let rec: NamingRecord;
+  try {
+    rec = await namingStore.mutate(sessionProvider, sessionId, (cur) => ({ ...cur, manual: '', manualAt: at }));
+  } catch {
+    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
+  }
+  const { name } = effectiveName(rec, fallback);
+  if (name) await metaWrite(() => store!.setTitle(sessionProvider, sessionId, name));
+  return { ok: true, name };
 }
 
 // C1: resolve which store bucket a meta write lands in. `knownNative` is the

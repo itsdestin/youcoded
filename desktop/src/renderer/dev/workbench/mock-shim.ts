@@ -73,6 +73,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
  *  top-level bridge members (`'getPlatform'`). The contract test
  *  (tests/workbench-mock-contract.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
+  'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename', 'sessionNaming.automatic',
   'devLabel', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
   'getIncognito', 'setIncognito', 'onChatExportSnapshot',
   'sendChatSnapshotResponse', 'fireRemoteAttentionChanged',
@@ -358,11 +359,20 @@ const NAMESPACES = [
   'search',
 ];
 
+import { createNamingPreview } from './naming-preview';
+
 export function createMockShim(store: MockStore): Window['claude'] {
   const impls = handWritten(store);
 
   const bridge: Record<string, unknown> = {
-    devLabel: 'Workbench',
+    devLabel: 'Session Naming · Workbench',
+    sessionNaming: createNamingPreview((id, title) => {
+      store.setState((s) => ({ ...s,
+        sessions: s.sessions.map((row) => row.id === id ? { ...row, name: title } : row),
+        past: s.past.map((row) => row.sessionId === id ? { ...row, name: title } : row),
+      }));
+      window.dispatchEvent(new CustomEvent('youcoded:session-renamed', { detail: { id, title } }));
+    }, { wait: () => delay(undefined), refuseWrites: () => store.refuseWrites }),
 
     // Top-level CALLABLE bridge members — NOT namespaces. The catch-all is
     // callable now, so a missing one degrades instead of crashing; these are

@@ -28,6 +28,9 @@ import {
   beginLocalSessionDrag, endLocalSessionDrag, localSessionDrag,
 } from '../session-drag-model';
 import { ContextMenu } from './context-menu/ContextMenu';
+import SessionRenameDialog from './SessionRenameDialog';
+import { namingApi } from './assistant-settings/naming-api';
+import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import type { MenuEntry } from './context-menu/build-menu';
 
 // Stable empty map for the non-dragging render, so a new Map is not allocated
@@ -331,12 +334,16 @@ function blankDragImage(): HTMLCanvasElement {
 /* ── Main component ──────────────────────────────────────── */
 
 export default function SessionStrip({
-  sessions, activeSessionId, onSelectSession,
+  sessions: sourceSessions, activeSessionId, onSelectSession,
   onCreateSession, onCloseSession, sessionStatuses,
   onOpenResumeBrowser, onReorderSessions,
   defaultModel, defaultStartModel, defaultSkipPermissions, defaultProjectFolder,
   windowDirectory, myWindowId,
 }: Props) {
+  const sourceNames = useMemo(() => Object.fromEntries(sourceSessions.map((s) => [s.id, s.name])), [sourceSessions]);
+  const previewNames = useRenamedSessions(sourceNames);
+  const sessions = useMemo(() => sourceSessions.map((s) => previewNames[s.id] === undefined
+    ? s : { ...s, name: previewNames[s.id] }), [sourceSessions, previewNames]);
   // One registry read for the whole menu: the rows need tag COLOURS, and a hook
   // per row would be one tags.list() per row.
   const tagsById = useTagRegistry().byId;
@@ -1434,6 +1441,7 @@ export default function SessionStrip({
   // window N". Cannot fail on any platform, works by keyboard, and it is the
   // ONLY way a finger moves a session between windows on Linux/Wayland (touch
   // never becomes a browser drag there — measured 2026-09-04).
+  const [renameId, setRenameId] = useState<string | null>(null);
   const [pillMenu, setPillMenu] = useState<{ x: number; y: number; sessionId: string } | null>(null);
   const handlePillContextMenu = useCallback((e: React.MouseEvent, sessionId: string) => {
     const det = (window as any).claude?.detach;
@@ -1468,6 +1476,7 @@ export default function SessionStrip({
         run: () => det?.dragDropped?.({ sessionId, targetWindowId: w.window.id, insertIndex: 0 }),
       });
     }
+    if (namingApi()) entries.unshift({ type: 'item', id: 'rename-session', label: 'Rename session…', icon: 'rename', run: () => setRenameId(sessionId) });
     return entries;
   }, [pillMenu, sessions.length, windowDirectory, myWindowId]);
 
@@ -2081,6 +2090,7 @@ export default function SessionStrip({
             </React.Fragment>
           );
         })}
+        {renameId && <SessionRenameDialog id={renameId} name={sessions.find((s) => s.id === renameId)?.name ?? 'Untitled session'} onClose={() => setRenameId(null)} />}
         {pillMenu && (
           <ContextMenu x={pillMenu.x} y={pillMenu.y} entries={pillMenuEntries} onClose={() => setPillMenu(null)} />
         )}
@@ -2359,6 +2369,7 @@ export default function SessionStrip({
                         </span>
                       </span>
                     </button>
+                    {namingApi() && <Button variant="ghost" size="sm" aria-label={`Rename ${s.name}`} onPointerDown={(e) => e.stopPropagation()} onClick={(e) => { e.stopPropagation(); setMenuOpen(false); setRenameId(s.id); }}>Rename</Button>}
                     <button
                       // Close the dropdown so the CloseSessionPrompt (L2 popup)
                       // isn't competing with the still-open session menu above it.
