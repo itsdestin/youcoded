@@ -22,12 +22,16 @@ interface Props {
 }
 
 function fullSummary(ctx: SessionContext): string {
+  // WHY plain nouns, not "context": Destin's 2026-09-09 review — users should be able to
+  // tell what the strip means without knowing the word. It names what the assistant was
+  // handed: this project's rules, N skills, N tools.
   const parts: string[] = [];
+  if (ctx.projectInstructions) parts.push('this project’s rules');
   if (ctx.skills?.length) parts.push(`${ctx.skills.length} skill${ctx.skills.length === 1 ? '' : 's'}`);
-  if (ctx.tools?.length) parts.push(`${ctx.tools.length} tool${ctx.tools?.length === 1 ? '' : 's'}`);
-  if (ctx.projectInstructions) parts.push('project instructions');
-  if (ctx.droppedMcpServers?.length) parts.push(`${ctx.droppedMcpServers.length} MCP server${ctx.droppedMcpServers.length === 1 ? '' : 's'} dropped`);
-  return parts.length ? parts.join(', ') : 'a fresh session';
+  if (ctx.tools?.length) parts.push(`${ctx.tools.length} tool${ctx.tools.length === 1 ? '' : 's'}`);
+  if (parts.length === 0) return 'Started with no extra instructions';
+  const last = parts.pop();
+  return parts.length ? `Started with ${parts.join(', ')} and ${last}` : `Started with ${last}`;
 }
 
 function wasTrimmed(ctx: SessionContext): boolean {
@@ -45,7 +49,7 @@ export function SessionContextBanner({ context, onOpen }: Props) {
     <button
       type="button"
       onClick={onOpen}
-      title="View the full session context — system prompt, instructions, skills, tools"
+      title="See everything the assistant was given for this chat"
       className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
         trimmed
           ? 'border-[#FF9800]/40 bg-[#FF9800]/10 hover:bg-[#FF9800]/15 text-fg-2'
@@ -57,11 +61,11 @@ export function SessionContextBanner({ context, onOpen }: Props) {
       </span>
       <span className="text-xs leading-snug min-w-0">
         {trimmed
-          ? (context.summary ?? 'Context was trimmed to fit this model’s window')
-          : `Started with the full context — ${fullSummary(context)}`}
+          ? 'This model’s context window is small, so some rules and skills were left out'
+          : fullSummary(context)}
       </span>
       <span className="ml-auto shrink-0 text-3xs text-fg-dim uppercase tracking-wider">
-        View
+        Details
       </span>
     </button>
   );

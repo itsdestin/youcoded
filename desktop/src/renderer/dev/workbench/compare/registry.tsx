@@ -5680,6 +5680,40 @@ const ALL_SURFACES: CompareSurface[] = [
           },
         ],
       },
+      {
+        // Round 3 (2026-09-09): Destin — "review this yourself for a moment and clean it up
+        // visually and try to make it clearer to users what the panel actually does/means."
+        // Before = R2's approved B untouched; after = the same layout reworded and reordered
+        // (SfxTabbedClear, numbered changes in its header comment).
+        n: 3,
+        basis: 'R2 · B rebased. Same tabbed layout; the words and the first tab are reworked so a non-developer can tell what the panel is and what a trim costs them.',
+        candidates: [
+          {
+            id: 'before-trimmed',
+            label: 'Before — small model, trimmed',
+            note: 'The approved panel as it was: "Session context", a "16,384 ctx" chip, a Trimmed pill, and the cuts scattered across three tabs behind amber glyphs.',
+            render: () => <SfxTabbed ctx={SFX_CTX} trimmed />,
+          },
+          {
+            id: 'clear-trimmed',
+            label: 'After — small model, trimmed',
+            note: '"What the assistant was given"; the first tab says what was cut and what that costs, with one tappable row per cut; tabs are Overview / YouCoded / Project / Skills / Tools.',
+            render: () => <SfxTabbedClear ctx={SFX_CTX} trimmed />,
+          },
+          {
+            id: 'before-full',
+            label: 'Before — cloud model, everything fit',
+            note: 'The approved panel, green state.',
+            render: () => <SfxTabbed ctx={SFX_CTX_FULL} trimmed={false} />,
+          },
+          {
+            id: 'clear-full',
+            label: 'After — cloud model, everything fit',
+            note: 'Same rewording in the green state: "Everything fit" pill, one plain sentence, one summary row, no list.',
+            render: () => <SfxTabbedClear ctx={SFX_CTX_FULL} trimmed={false} />,
+          },
+        ],
+      },
     ],
   },
 ];
@@ -5897,6 +5931,265 @@ function SfxTabbed({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boo
         )}
       </div>
     </SfxPanel>
+  );
+}
+
+
+// ── Session context — Round 3: the approved tabs, made legible ───────────────
+// Destin, 2026-09-09: "clean it up visually and try to make it clearer to users
+// what the panel actually does/means." Same layout as SfxTabbed (B, approved
+// 2026-08-17); what changes is the WORDS and what the first tab leads with.
+// WHY each move (numbered as on the review deck):
+//  1 title says what the panel IS in plain words — "context" is the app's word for
+//    how full the window is (ContextPopup), so reusing it here meant two different
+//    things wore one name;
+//  2 the status pill is a dot + neutral text (design guide §2.3), not coloured text;
+//  3 the first tab leads with the CONSEQUENCE ("it may miss rules") not the mechanism;
+//  4 what was left out is a list the user can tap, one row per cut, instead of being
+//    scattered across three tabs behind amber glyphs;
+//  5 model and window rows left the first tab — the header already shows both;
+//  6 tab names are short nouns a non-developer can place ("YouCoded", "Project"),
+//    which also stops the fifth tab clipping at 420px (measured 406px in 386px);
+//  7 every tab opens with one line saying what that thing is;
+//  8 the diff toggle says "What it got | What was cut", and the caption says who
+//    missed what;
+//  9 per-item notes are two words ("shortened", "cut short"), not mechanism;
+// 10 the Tools tab carries the not-attached add-on, since that is where its tools
+//    would have been;
+// 11 the footer explains the button in one clause.
+
+function SfxPill({ tone, children }: { tone: 'ok' | 'warn'; children: React.ReactNode }) {
+  const c = tone === 'ok' ? '#4CAF50' : '#FF9800';
+  return (
+    <span className="inline-flex items-center gap-1.5 pl-1.5 pr-2 py-0.5 rounded-full text-3xs font-medium border border-edge-dim bg-inset/60 text-fg-2 shrink-0">
+      <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: c }} aria-hidden />
+      {children}
+    </span>
+  );
+}
+
+/** "16k" for 16,384; "200k" for 200,000; "1M" for a million. Users compare sizes, not digits. */
+function sfxWindowLabel(tokens: number): string {
+  if (tokens >= 1_000_000) return `${Math.round(tokens / 100_000) / 10}M`;
+  return `${Math.round(tokens / 1000)}k`;
+}
+
+/** One line telling the user what a pane holds, above its content. */
+function SfxPaneNote({ children }: { children: React.ReactNode }) {
+  return <p className="text-2xs text-fg-muted leading-snug">{children}</p>;
+}
+
+/** The trimmed-copy viewer with the diff toggle, reworded (change 8). */
+function SfxCutDiff({ fullText, supplied, what }: { fullText?: string | null; supplied: string; what: string }) {
+  const [showDiff, setShowDiff] = React.useState(false);
+  const diffable = !!fullText && fullText !== supplied;
+  const pre = (
+    <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+      {supplied}
+    </pre>
+  );
+  if (!diffable) return pre;
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-1 self-start bg-inset/50 rounded-lg p-0.5" role="tablist" aria-label={`${what}: what the assistant got, or what was cut`}>
+        {([false, true] as const).map((diff) => (
+          <button
+            key={String(diff)}
+            type="button"
+            role="tab"
+            aria-selected={showDiff === diff}
+            onClick={() => setShowDiff(diff)}
+            className={`px-2 py-0.5 rounded-md text-3xs font-medium transition-colors ${
+              showDiff === diff ? 'bg-accent text-on-accent' : 'text-fg-2 hover:bg-inset'
+            }`}
+          >
+            {diff ? 'What was cut' : 'What it got'}
+          </button>
+        ))}
+      </div>
+      {showDiff ? <UnifiedDiff oldStr={fullText} newStr={supplied} /> : pre}
+      {showDiff && (
+        <p className="text-3xs text-fg-muted leading-snug">
+          Red lines were cut to fit this model’s context window — the assistant never saw them. Green lines are the shorter version it got instead.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SfxTabbedClear({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boolean }) {
+  const [tab, setTab] = React.useState('overview');
+  const c = ctx;
+  const cutSkills = c.skills.filter((s) => s.truncated);
+  const dropped = c.droppedMcpServers;
+  const skillsWord = `${c.skills.length} skill${c.skills.length === 1 ? '' : 's'}`;
+  const toolsWord = `${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}`;
+
+  // Change 3: the consequence sentence is built from what was actually cut.
+  const cuts: string[] = [];
+  if (c.projectInstructions.truncated) cuts.push('this project’s rules were shortened to headings');
+  if (cutSkills.length) cuts.push(`${cutSkills.length} skill${cutSkills.length === 1 ? ' was' : 's were'} cut short`);
+  if (dropped.length) cuts.push(`${dropped.length} add-on${dropped.length === 1 ? ' was' : 's were'} left out`);
+  const cutSentence = cuts.length
+    ? cuts.length === 1 ? cuts[0] : `${cuts.slice(0, -1).join(', ')} and ${cuts[cuts.length - 1]}`
+    : '';
+
+  return (
+    <div className="flex flex-col">
+      {/* Change 1: the title says what this is. */}
+      <div className="px-4 pt-4 pb-3 border-b border-edge">
+        <h2 className="text-sm font-bold text-fg">What the assistant was given</h2>
+        <p className="text-2xs text-fg-muted mt-0.5">The instructions, skills and tools it started this chat with. They don’t change mid-chat.</p>
+      </div>
+
+      <div className="px-4 py-4 space-y-4">
+        {/* WHY two lines, no tooltip: at 420px the model name truncated behind the chip and
+            the pill, and the chip explained itself only on hover — Destin reviews on a
+            touchscreen, where hover never happens. The explanation is now plain text. */}
+        <div className="flex flex-col gap-0.5 min-w-0">
+          <div className="flex items-center gap-2 min-w-0">
+            <span className="text-sm font-semibold text-fg truncate">{c.modelLabel}</span>
+            <span className="ml-auto shrink-0">
+              {/* Change 2 */}
+              <SfxPill tone={trimmed ? 'warn' : 'ok'}>{trimmed ? 'Some left out' : 'Everything fit'}</SfxPill>
+            </span>
+          </div>
+          <p className="text-3xs text-fg-muted leading-snug">
+            {sfxWindowLabel(c.contextWindowTokens)} context window — how much it can hold at once
+            {trimmed ? ', which is small' : ''}.
+          </p>
+        </div>
+
+        {/* Change 6 */}
+        <SegmentedTabs
+          variant="contained"
+          aria-label="What the assistant was given"
+          tabs={[
+            { id: 'overview', label: 'Overview' },
+            { id: 'builtin', label: 'YouCoded' },
+            { id: 'project', label: 'Project' },
+            { id: 'skills', label: 'Skills' },
+            { id: 'tools', label: 'Tools' },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+
+        <div className="flex flex-col gap-3">
+          {tab === 'overview' && (
+            <>
+              {trimmed ? (
+                <Callout tone="warning" title="Not everything fit">
+                  This model’s context window is small ({sfxWindowLabel(c.contextWindowTokens)}), so {cutSentence}.
+                  It may miss rules or skip steps it would normally follow.
+                </Callout>
+              ) : (
+                <div className="rounded-lg border border-edge-dim bg-inset px-3 py-2.5 flex items-start gap-2">
+                  <span className="inline-block w-1.5 h-1.5 rounded-full mt-1.5 shrink-0" style={{ backgroundColor: '#4CAF50' }} aria-hidden />
+                  <p className="text-xs text-fg-2 leading-snug">
+                    <span className="font-medium text-fg">Everything fit.</span> The assistant has this project’s full rules, all {skillsWord} and all {toolsWord}.
+                  </p>
+                </div>
+              )}
+
+              {/* Change 4: one tappable row per cut, leading to the tab that shows it. */}
+              {trimmed && (
+                <div className="flex flex-col gap-1.5">
+                  <p className="text-3xs font-medium text-fg-muted uppercase tracking-wider">What was left out</p>
+                  <div className="flex flex-col divide-y divide-edge-dim border border-edge-dim rounded-lg overflow-hidden">
+                    {c.projectInstructions.truncated && (
+                      <SettingRow variant="item" title="This project’s rules" description="Shortened to headings only" onClick={() => setTab('project')} />
+                    )}
+                    {cutSkills.map((sk) => (
+                      <SettingRow key={sk.id} variant="item" title={`${sk.label} skill`} description="Cut short" onClick={() => setTab('skills')} />
+                    ))}
+                    {dropped.map((d) => (
+                      <SettingRow key={d} variant="item" title={`${d} add-on`} description="Not attached — its tools can’t be used in this chat" onClick={() => setTab('tools')} />
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Change 5: one summary row instead of three. */}
+              <div className="flex flex-col border border-edge-dim rounded-lg overflow-hidden">
+                <SettingRow variant="item" title="Given" value={`this project’s rules · ${skillsWord} · ${toolsWord}`} />
+              </div>
+            </>
+          )}
+
+          {tab === 'builtin' && (
+            <>
+              <SfxPaneNote>YouCoded’s standing instructions. The same in every chat, whatever the project.</SfxPaneNote>
+              <pre className="max-h-72 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+                {c.systemPrompt}
+              </pre>
+            </>
+          )}
+
+          {tab === 'project' && (
+            <>
+              <SfxPaneNote>Rules written for this project, read once when the chat started.</SfxPaneNote>
+              <div className="flex items-center gap-2 text-xs text-fg-2 min-w-0">
+                <FilepathToken path={c.projectInstructions.path} sessionId="sfx" variant="inline" label={c.projectInstructions.path.split('/').slice(-1)[0]} />
+                {c.projectInstructions.truncated && <span className="text-3xs text-fg-muted ml-auto shrink-0">shortened to headings</span>}
+              </div>
+              {c.projectInstructions.truncated ? (
+                <SfxCutDiff fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" />
+              ) : (
+                <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11.5px] text-fg-2 bg-inset/50 rounded-lg p-3 border border-edge-dim">
+                  {c.projectInstructions.text}
+                </pre>
+              )}
+            </>
+          )}
+
+          {tab === 'skills' && (
+            <>
+              <SfxPaneNote>Step-by-step guides the assistant follows when a task matches one.</SfxPaneNote>
+              <ul className="flex flex-col gap-2">
+                {c.skills.map((sk) => (
+                  <li key={sk.id} className="flex flex-col gap-1.5">
+                    <div className="flex items-center gap-2 text-xs min-w-0">
+                      <span className="inline-block w-1.5 h-1.5 rounded-full shrink-0" style={{ backgroundColor: sk.truncated ? '#FF9800' : '#4CAF50' }} aria-hidden />
+                      <FilepathToken path={sk.path ?? sk.id} sessionId="sfx" variant="inline" label={sk.label} />
+                      {sk.truncated && <span className="text-3xs text-fg-muted ml-auto shrink-0">cut short</span>}
+                    </div>
+                    {sk.truncated && (
+                      <SfxCutDiff
+                        fullText={sk.fullText}
+                        supplied={sk.fullText ? sk.fullText.split('\n').slice(0, 5).join('\n') + '\n… (cut here)' : '… (cut short)'}
+                        what={`${sk.label} skill`}
+                      />
+                    )}
+                  </li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {tab === 'tools' && (
+            <>
+              <SfxPaneNote>Actions the assistant can take in this chat, like reading a file or running a command.</SfxPaneNote>
+              <div className="flex flex-wrap gap-1.5">
+                {c.tools.map((t) => <ToolChip key={t} label={t} />)}
+              </div>
+              {/* Change 10 */}
+              {dropped.length > 0 && (
+                <Callout tone="warning" title="Not attached">
+                  {dropped.join(', ')} — there was no room for {dropped.length === 1 ? 'its' : 'their'} tools, so the assistant can’t use them in this chat.
+                </Callout>
+              )}
+            </>
+          )}
+        </div>
+      </div>
+
+      {/* Change 11 */}
+      <div className="mt-auto border-t border-edge px-4 pt-4 pb-4">
+        <Button variant="secondary" size="md" className="w-full">Manage Assistant Settings</Button>
+        <p className="text-2xs text-fg-muted mt-1.5 leading-snug">Coming soon: change the model, or what the assistant is given.</p>
+      </div>
+    </div>
   );
 }
 
