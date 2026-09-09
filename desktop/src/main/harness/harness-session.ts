@@ -952,12 +952,19 @@ export class HarnessSession extends EventEmitter {
     // local call/results while preventing incompatible private parts reaching wire.
     if (changed) this.stripOpenAIContinuation();
     this.continuationBinding = undefined;
-    // WHY both (fix pass, review finding 1): a swap makes the OLD identity
-    // unquotable. Left in place, the seeded one would keep acceptedHistory()
-    // reporting the resumed session's ORIGINAL binding after its ciphertext was
-    // just stripped and the assembly digest moved to the new model — a
-    // checkpoint labelled with an identity its content no longer descends from.
-    this.seededContinuationBinding = undefined;
+    // WHY only when `changed` (fix pass, review finding 1, then this pass):
+    // a real swap makes the OLD identity unquotable — left in place, the seeded
+    // one would keep acceptedHistory() reporting the resumed session's ORIGINAL
+    // binding after its ciphertext was just stripped and the assembly digest
+    // moved to the new model, i.e. a checkpoint labelled with an identity its
+    // content no longer descends from. A SAME-binding call is not that: it is
+    // ipc-handlers/remote-server re-applying the current model (a context-length
+    // or pricing refresh), the strip above correctly does nothing, and the
+    // ciphertext stays — so clearing here would downgrade the published identity
+    // to the model-only fallback and make the next checkpoint ineligible for a
+    // ChatGPT replay it is in fact still valid for. Gated on the SAME flag as
+    // the strip so the two can never disagree about what happened.
+    if (changed) this.seededContinuationBinding = undefined;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
     // Same applied-only-when-provided shape as contextLength: a swap to a
@@ -1529,13 +1536,14 @@ export class HarnessSession extends EventEmitter {
     const beforePrune = this.history;
     this.history = pruneToolOutputs(this.history, cfg);   // always prune first
     // WHY the per-message identity check (fix pass, review finding 2):
-    // pruneToolOutputs always returns a NEW array but hands back every message
-    // it did not touch unchanged, so array identity says nothing. Most
-    // compactions above the trigger prune NOTHING (short tool outputs, or all of
-    // them inside the protected window); tagging those as a transformation would
-    // bump the revision and invalidate a published checkpoint for a history that
-    // never moved. Only a changed message means "tool output no longer equals
-    // its event's text".
+    // pruneToolOutputs always returns a NEW array, so array identity says
+    // nothing — but it returns each individual message it did not touch as the
+    // SAME object (its documented identity contract, pinned by
+    // tests/compaction.test.ts). Most compactions above the trigger prune
+    // NOTHING (short tool outputs, or all of them inside the protected window);
+    // tagging those as a transformation would bump the revision and invalidate a
+    // published checkpoint for a history that never moved. Only a changed
+    // message means "tool output no longer equals its event's text".
     if (this.history.some((m, i) => m !== beforePrune[i])) this.capture.markPruned();
     if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
     // G-11: prune may have sliced an old Read result down to 2,000 chars (and
@@ -1579,8 +1587,13 @@ export class HarnessSession extends EventEmitter {
     // automatically at 75% context instead of only on an explicit /clear.
     this.shownImages.clear();
     this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
-    // The new leading message IS that event's summary text — naming its uuid is
-    // what lets the store reference the summary instead of copying it.
+    // The new leading message IS that event's summary text, so the uuid enters
+    // BOTH lists: the transformation says how history was rewritten, while the
+    // accepted list is what the store turns into content references. Without the
+    // recordEvent the summary has no event to point at and gets persisted as a
+    // bounded copy of its own text (architecture doc → Capture: recordEvent
+    // covers "user-message, skill-invoked, tool-use, tool-result, compact-summary").
+    this.capture.recordEvent(summaryUuid);
     this.capture.markSummary(summaryUuid);
     this.restoreSpecialistStatusAfterRewrite();
   }
@@ -1723,7 +1736,8 @@ export class HarnessSession extends EventEmitter {
       // images this summary just removed.
       this.shownImages.clear();
       this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
-      this.capture.markSummary(summaryUuid);   // same reasoning as maybeCompact's
+      this.capture.recordEvent(summaryUuid);   // same reasoning as maybeCompact's
+      this.capture.markSummary(summaryUuid);
       // WHY: manual compaction has the same immediate-authority requirement.
       this.restoreSpecialistStatusAfterRewrite();
       return { ok: true };
@@ -2195,6 +2209,12 @@ export class HarnessSession extends EventEmitter {
             // Only the TEXT deltas: the pushed string is exactly their
             // concatenation, and this attempt's reasoning never completed.
             this.capture.acceptAttemptText(step.attempt);
+            // WHY here and not at the next loop top: this text is now IN history.
+            // The user-interrupt emit below can still throw (a transcript-event
+            // listener is the host's own persistence wire), and send()'s catch
+            // pushes whatever partial it still holds — a second copy of text the
+            // model would then read back as an extra turn.
+            partialAssistantText = '';
           } else {
             this.capture.abandonAttempt(step.attempt);   // nothing was pushed
           }
@@ -2222,6 +2242,14 @@ export class HarnessSession extends EventEmitter {
             ? step.responseMessages
             : [this.assistantMessage(step.text, step.toolCalls)]));
           this.capture.acceptAttempt(step.attempt);
+          // WHY the clear lands HERE, not only at the next loop top: everything
+          // between this push and that loop top can throw into send()'s catch —
+          // the tool-use emits, a permission ask, the turn-complete emit, the
+          // tool execution itself. The catch pushes whatever partial it still
+          // holds, so a stale one re-pushes text that is already in history (and
+          // already accepted). The loop-top reset stays: it also covers the
+          // steer/compaction window and a step that pushed nothing.
+          partialAssistantText = '';
         } else {
           // An empty step pushed nothing — whether it re-runs once (below) or
           // ends the turn, its deltas back no message and never become provenance.

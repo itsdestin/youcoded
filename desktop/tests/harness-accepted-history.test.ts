@@ -473,4 +473,114 @@ describe('HarnessSession accepted history', () => {
     expect(contentEvents.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'tool-use', 'tool-result', 'assistant-text']);
     expect(accepted.eventUuids).toEqual(contentEvents.map((e) => e.uuid));
   });
+  it('a summary ACCEPTS the compact-summary event uuid, on both the automatic and the manual path', async () => {
+    // WHY (review leftover 1): the transformation names the summary event, but
+    // the accepted list is what the store turns into content references. Without
+    // the uuid in that list the summary message has no event to point at, so it
+    // is persisted as a bounded copy of its own text instead of a reference to
+    // the compact-summary event that already holds it.
+    const autoEvents: TranscriptEvent[] = [];
+    const summarized = makeSession({
+      contextLength: 4096, seedBulkHistoryTokens: 6000, onEvent: (e) => autoEvents.push(e),
+      model: scriptModel([{ text: 'SUMMARY: user wants X; did Y.' }, { text: 'here is the answer' }]),
+    });
+    await drainTurn(summarized, 'continue');
+    const autoUuid = autoEvents.find((e) => e.type === 'compact-summary')!.uuid;
+    expect(summarized.acceptedHistory().eventUuids).toContain(autoUuid);
+
+    // The manual /compact path is a second, independent summary site.
+    const manualEvents: TranscriptEvent[] = [];
+    const manual = makeSession({
+      onEvent: (e) => manualEvents.push(e),
+      model: scriptModel([{ text: 'Earlier: user asked about X; we did Y.' }]),
+    });
+    manual.seedHistory(Array.from({ length: 4 }, (_, i) => [
+      { role: 'user', content: `question ${i} ${'x'.repeat(400)}` },
+      { role: 'assistant', content: `answer ${i} ${'y'.repeat(400)}` },
+    ]).flat() as any);
+    expect(await manual.compactNow()).toEqual({ ok: true });
+    const manualUuid = manualEvents.find((e) => e.type === 'compact-summary')!.uuid;
+    // seedHistory without a seed empties the capture, so the summary uuid is the
+    // ONLY thing this session ever accepted — an exact-equality assertion.
+    expect(manual.acceptedHistory().eventUuids).toEqual([manualUuid]);
+  });
+
+  it('a listener that throws on the tool-use emit never re-pushes the accepted step\'s text', async () => {
+    // WHY (review leftover 3): the step's text is pushed and accepted at the top
+    // of the loop body, but everything after it — the tool-use emits, a
+    // permission ask, the turn-complete emit — can still throw into send()'s
+    // catch, which pushes whatever partial is still in hand. A transcript-event
+    // listener is the production throw: it is the host's own persistence wire.
+    const read = fakeTool('Read');
+    const events: TranscriptEvent[] = [];
+    const session = makeSession({
+      tools: [read],
+      model: scriptModel([
+        { text: 'first answer', toolCalls: [{ name: 'Read', input: { file_path: 'a.txt' } }] },
+        { text: 'unreached' },
+      ]),
+    });
+    let exploded = false;
+    session.on('transcript-event', (e: TranscriptEvent) => {
+      events.push(e);
+      if (e.type === 'tool-use' && !exploded) { exploded = true; throw new Error('persistence wire exploded'); }
+    });
+
+    await session.send('go');
+
+    expect(exploded).toBe(true);
+    const history = (session as any).history as any[];
+    // Pushed twice, the model reads its own answer back as an extra turn.
+    expect(JSON.stringify(history).match(/first answer/g) ?? []).toHaveLength(1);
+    const accepted = session.acceptedHistory();
+    expect(accepted.eventUuids.filter((u) => u === uuidOfText(events, 'first answer'))).toHaveLength(1);
+    expect(accepted.messages).toEqual(history);
+  });
+
+  it('a same-binding setBinding after a resume keeps the seeded continuation identity', () => {
+    // WHY (review leftover 4): ipc-handlers/remote-server re-apply the CURRENT
+    // model on ordinary paths. The ciphertext strip is gated on a real change,
+    // so it correctly does nothing here — but clearing the seeded identity
+    // anyway would downgrade the published binding to the model-only fallback,
+    // describing accepted history the checkpoint no longer matches and making
+    // the next checkpoint ineligible for replay.
+    const identity = ['chatgpt', 'gpt-test', 'hashed-account', 'epoch-1'].join('\u0000');
+    const session = new HarnessSession(
+      makeOpts({ binding: { providerId: 'chatgpt', modelId: 'gpt-test' } }),
+      async () => scriptModel([{ text: 'ok' }]) as any,
+    );
+    session.seedHistory([{ role: 'user', content: 'earlier' }] as any, { eventUuids: ['u1'], revision: 4, continuationBinding: identity });
+    expect(session.acceptedHistory().binding).toBe(identity);
+
+    session.setBinding({ providerId: 'chatgpt', modelId: 'gpt-test' });
+    expect(session.acceptedHistory().binding).toBe(identity);
+  });
+  it('a listener that throws on the user-interrupt emit never re-pushes the interrupted partial', async () => {
+    // The interrupt push is the SECOND acceptance site inside the loop, and the
+    // user-interrupt emit right after it is reachable throw-territory for the
+    // same reason as the tool-use emit above.
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({ stream: hangingStream(...textChunks('a', 'visible partial')) }),
+    });
+    const session = new HarnessSession(makeOpts({}), async () => model as any);
+    const events: TranscriptEvent[] = [];
+    let exploded = false;
+    session.on('transcript-event', (e: TranscriptEvent) => {
+      events.push(e);
+      // One-shot: send()'s catch emits user-interrupt a second time, and a
+      // listener that threw there too would take the whole turn down with it —
+      // which is not what this test is about.
+      if (e.type === 'user-interrupt' && !exploded) { exploded = true; throw new Error('persistence wire exploded'); }
+    });
+
+    const sent = session.send('go');
+    await waitForEvent(events, (e) => e.type === 'assistant-text');
+    session.interrupt();
+    await sent;
+
+    expect(exploded).toBe(true);
+    const history = (session as any).history as any[];
+    expect(JSON.stringify(history).match(/visible partial/g) ?? []).toHaveLength(1);
+    expect(session.acceptedHistory().messages).toEqual(history);
+  });
 });
