@@ -101,6 +101,73 @@ describe('MarkdownContent fenced code blocks', () => {
   });
 });
 
+describe('MarkdownContent HTML disclosures', () => {
+  const disclosure = [
+    '<details>',
+    '<summary>Key code evidence</summary>',
+    '',
+    'The renderer keeps **Markdown** inside the disclosure.',
+    '',
+    '```ts',
+    'const value = 1;',
+    '```',
+    '',
+    '</details>',
+  ].join('\n');
+
+  it('renders model-generated details markup as an interactive disclosure', () => {
+    const { container } = render(<MarkdownContent content={disclosure} />);
+    const details = container.querySelector('details');
+
+    expect(details).not.toBeNull();
+    expect(details!.querySelector('summary')).toHaveTextContent('Key code evidence');
+    expect(details).toHaveTextContent('The renderer keeps Markdown inside the disclosure.');
+    expect(details!.querySelector('strong')).toHaveTextContent('Markdown');
+    expect(details!.querySelector('pre code')).toHaveTextContent('const value = 1;');
+    expect(container).not.toHaveTextContent('<details>');
+    expect(container).not.toHaveTextContent('</details>');
+  });
+
+  it('does not expose tags from unsupported HTML blocks', () => {
+    const { container } = render(
+      <MarkdownContent content={'<aside>\n\nReadable **content**.\n\n</aside>'} />,
+    );
+
+    expect(container).toHaveTextContent('Readable content.');
+    expect(container).not.toHaveTextContent('<aside>');
+    expect(container).not.toHaveTextContent('</aside>');
+  });
+
+  it('does not expose or link unsupported HTML attributes', () => {
+    const { container } = render(
+      <MarkdownContent content={'<span title="> https://example.com">Visible</span>'} />,
+    );
+
+    expect(container).toHaveTextContent('Visible');
+    expect(container).not.toHaveTextContent('title=');
+    expect(container).not.toHaveTextContent('https://example.com');
+    expect(container.querySelector('a')).toBeNull();
+  });
+
+  it('accepts a blank line between details and summary', () => {
+    const spaced = disclosure.replace('<details>\n<summary>', '<details>\n\n<summary>');
+    const { container } = render(<MarkdownContent content={spaced} />);
+
+    expect(container.querySelector('details > summary')).toHaveTextContent('Key code evidence');
+    expect(container.querySelector('details')).toHaveTextContent('The renderer keeps Markdown inside the disclosure.');
+    expect(container).not.toHaveTextContent('</details>');
+  });
+
+  it('keeps disclosure markup non-interactive in preview mode', () => {
+    const { container } = render(<MarkdownContent content={disclosure} preview />);
+
+    expect(container.querySelector('details')).toBeNull();
+    expect(container).toHaveTextContent('Key code evidence');
+    expect(container).toHaveTextContent('The renderer keeps Markdown inside the disclosure.');
+    expect(container).not.toHaveTextContent('</details>');
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Clickable URLs and file paths.
 // The regression this pins: a URL inside backticks (`http://127.0.0.1:8931/`)
