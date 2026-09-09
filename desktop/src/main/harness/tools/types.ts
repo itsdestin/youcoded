@@ -127,8 +127,8 @@ export interface ToolServices {
     /** 2026-09-09: the on-demand replacement for the retired per-turn
      *  `<specialists-status>` block (Destin: "better match what the others
      *  do"). Codex and Hermes give the model a list tool and no per-turn
-     *  reminder; ours read the delegation ledger. null when this parent has
-     *  no specialist running or awaiting delivery. */
+     *  reminder; ours reads the delegation ledger AND the session's background
+     *  commands. null when this parent has nothing running or awaiting delivery. */
     listStatus(parentId: string): string | null;
     reserve(parentId: string, opts: { writer: boolean }):
       { ok: true; token: SpecialistReservation }

@@ -137,8 +137,9 @@ function buildSchema(roster: SpecialistRoster) {
     // (list_agents) and Hermes (action='list') give the model a list it asks
     // for; none of the harnesses we compared remind it every turn.
     list: z.boolean().optional().describe(
-      'Alone, with no other fields: list this conversation\'s specialists and their state (running, finished with report '
-      + 'pending, failed, interrupted). Ask once when you need it — never in a loop; you are told when a report arrives.',
+      'Alone, with no other fields: list this conversation\'s specialists (running, finished with report pending, failed, '
+      + 'interrupted) and its background commands, with their state. Ask once when you need it — never in a loop; you are '
+      + 'told when a report or a command finishes.',
     ),
   }).strict(); // .strict(): an unknown parameter is an error the model can fix, never silently dropped (ledger D-2)
 }
@@ -208,7 +209,7 @@ const DOCTRINE =
 const BACKGROUND_ACK =
   'Their report will be delivered to you when they finish — do not wait, poll, or send status requests, and do not '
   + 'redo the job yourself. Continue with work that does not depend on it; when nothing else is left, tell the user '
-  + 'what is still running and end your turn. Task with list: true shows what is still running — once, if you need it.';
+  + 'what is still running and end your turn. Task with list: true shows what is still running, specialists and background commands alike — once, if you need it.';
 
 // Task 6 — the task_id management surface, documented VERBATIM in the tool
 // description (per the plan's own instruction) so a model reads these four
@@ -374,7 +375,7 @@ export function createTaskTool(
       const parentId = ctx.sessionId;
       if (args.list) {
         const status = services.listStatus(parentId);
-        return { text: status ?? 'No specialists are running or awaiting delivery in this conversation.' };
+        return { text: status ?? 'No specialists or background commands are running or awaiting delivery in this conversation.' };
       }
 
       // ---- Task 6: task_id management surface — checked BEFORE the spawn

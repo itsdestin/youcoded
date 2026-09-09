@@ -120,7 +120,7 @@ describe('Task tool — list: true (2026-09-09, replaces the per-turn status blo
 
   it('says so plainly when nothing is running or pending', async () => {
     const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { listStatus: null });
-    expect(r.text).toBe('No specialists are running or awaiting delivery in this conversation.');
+    expect(r.text).toBe('No specialists or background commands are running or awaiting delivery in this conversation.');
   });
 
   it('is described to the model as ask-once, never a loop', () => {

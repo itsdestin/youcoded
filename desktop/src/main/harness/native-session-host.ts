@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta } from '../../shared/types';
-import { ShellRegistry, formatFinishedNotice, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
+import { ShellRegistry, formatFinishedNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts } from './harness-session';
 import { rebuildHistory } from './history-rebuild';
@@ -2529,7 +2529,20 @@ export class NativeSessionHost extends EventEmitter {
           // once (Task list: true) instead of being reminded every turn.
           listStatus: (parentId: string) => {
             const e = this.live.get(parentId);
-            return e ? this.buildSpecialistStatus(parentId, e.cwd) : null;
+            if (!e) return null;
+            const specialists = this.buildSpecialistStatus(parentId, e.cwd);
+            // Background commands too (Destin, 2026-09-09): one list for
+            // everything the model may be waiting on, same line shape as
+            // BashOutput's own listing so the two never disagree.
+            const shells = (this.shellRegistries.get(parentId)?.list() ?? []).map((r) => {
+              const cmd = r.command.length > 60 ? `${r.command.slice(0, 55)}…` : r.command;
+              return `${r.shellId} · ${stateText(r)} · ${cmd}`;
+            });
+            if (!specialists && shells.length === 0) return null;
+            return [
+              specialists ? `Specialists:\n${specialists}` : null,
+              shells.length ? `Background commands:\n${shells.join('\n')}` : null,
+            ].filter(Boolean).join('\n\n');
           },
           steerSpecialist: (parentId: string, childId: string, text: string) => this.steerSpecialist(parentId, childId, text),
           interruptSpecialist: (parentId: string, childId: string) => this.interruptSpecialist(parentId, childId),

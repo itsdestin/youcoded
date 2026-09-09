@@ -5244,6 +5244,22 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
   });
   afterEach(async () => { await host.destroyAll(); rmHostRoot(root); });
 
+  // 2026-09-09: the on-demand list (Task list: true) covers background
+  // commands as well as specialists — one answer to "what am I waiting on?".
+  it.skipIf(!posix)('listStatus names background commands alongside specialists, and is null when nothing is running', async () => {
+    const listStatus = (host as any).live.get('p1').session.opts.toolServices.specialists.listStatus as (id: string) => string | null;
+    expect(listStatus('p1')).toBeNull();
+    const run = startIn('p1', 'sleep 5', 'tl');
+    const text = listStatus('p1');
+    expect(text).toContain('Background commands:');
+    expect(text).toContain(`${run.shellId} · running`);
+    expect(text).toContain('sleep 5');
+    expect(text).not.toContain('Specialists:');   // none delegated in this conversation
+    await reg('p1').kill(run.shellId, 'assistant');
+    expect(listStatus('p1')).toContain('stopped');   // finished runs still list, with their state, as BashOutput does
+    expect(listStatus('nope')).toBeNull();
+  });
+
   it('every live session has a registry, reachable by the tool as ctx.shells', () => {
     expect(reg('p1')).toBeTruthy();
     expect((host as any).live.get('p1').session.opts.shells).toBe(reg('p1'));
