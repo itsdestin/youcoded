@@ -1873,9 +1873,12 @@ export class HarnessSession extends EventEmitter {
     let generationMs = 0;
     const recentCalls: string[] = [];           // doom-loop window (turn-level)
     const imageBudget = { count: 0, bytes: 0 };  // per-turn image delivery budget (spec "Budgets")
-    // WHY optional: ordinary root sessions run without this gate unless their
-    // creation-time preference snapshot supplied an explicit limit.
-    const maxSteps = this.opts.harness.limits?.maxSteps;
+// WHY: specialist work is bounded by its narrow tool set, parent-managed
+    // lifecycle controls, and the delegation spawn backstop—not an arbitrary
+    // per-child action count. Root sessions preserve any explicit step limit.
+    const maxSteps = this.opts.isSpecialistChild
+      ? undefined
+      : this.opts.harness.limits?.maxSteps;
     let stepsSinceApproval = 0;
     // Consecutive contentless steps (empty-step recovery, spec 2026-08-21).
     // The single silent retry is allowed only at count 1; any real step resets

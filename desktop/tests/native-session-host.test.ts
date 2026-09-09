@@ -2494,47 +2494,6 @@ describe('NativeSessionHost', () => {
       await h.destroyAll();
     });
 
-    // Task 5.5 step 4 — the behavioral pin the ask-policy/ask-router exists
-    // for. Four paths in harness-session call askUser directly, bypassing
-    // decide(); the step-cap gate is one of them. Plan 1a's childAskPolicy
-    // denied this instantly so the turn could never hang; plan 1b Task 8
-    // routes it to the parent's card instead — still never hangs (the
-    // timeout redirect guarantees an eventual answer), but it is no longer
-    // instant and an ask now genuinely reaches the host.
-    it("stepCap is enforced: the turn ends with stopReason 'max_steps' once the routed ask times out — never hangs", async () => {
-      const CAPPED = { ...EXPLORER, stepCap: 2 };   // definition-driven, not a global
-      // A model that never stops calling tools (scriptedModel replays its last
-      // script forever), so only the step cap can end this turn.
-      const loops = () => scriptedModel([
-        stream(toolCallChunk('c1', 'Glob', { pattern: '*.ts' }), finishChunk('tool-calls')),
-      ]) as any;
-      const { h } = await withParentFastAskHold(20, async () => loops());
-      const { childId } = await h.createChild('root-1', {
-        specialist: CAPPED, prompt: 'p', workDir: root, parentToolCallId: 'tc-1',
-      });
-      expect((childSession(h, childId) as any).opts.harness.limits.maxSteps).toBe(CAPPED.stepCap);
-      const events: any[] = [];
-      const asks: any[] = [];
-      h.on('hook-event', (e) => asks.push(e));
-      childSession(h, childId).on('transcript-event', (e: any) => events.push(e));
-
-      await childSession(h, childId).send('go');   // must SETTLE — a hang fails by timeout
-
-      const done = events.find((e) => e.type === 'turn-complete');
-      expect(done).toBeDefined();
-      expect(done.data.stopReason).toBe('max_steps');
-      // The DEFINITION's cap is what stopped it, not the model-tier default:
-      // exactly two steps ran. Without the harness.limits.maxSteps wiring this
-      // model uses only an explicit maxSteps cap.
-      expect(events.filter((e) => e.type === 'tool-use')).toHaveLength(2);
-      // Task 8: the ask DOES now reach the host — under the PARENT's id, never
-      // answered here, ended only by the timeout redirect.
-      const maxStepsAsk = asks.find((e) => e.type === 'PermissionRequest');
-      expect(maxStepsAsk?.sessionId).toBe('root-1');
-      expect(maxStepsAsk?.payload.tool_name).toBe('max_steps');
-      await h.destroyAll();
-    });
-
     it("the child's permissions are keyed to the PARENT's project, not its work subdirectory", async () => {
       // buildDecide looks remembered "Always allow" rules up by cwd. A child
       // narrowed to a subdirectory must still read the rules the user granted

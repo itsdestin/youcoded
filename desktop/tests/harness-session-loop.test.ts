@@ -299,7 +299,40 @@ describe('HarnessSession — multi-step turn driver', () => {
     }
   });
 
-  it('absent maxSteps runs beyond the former 50-step boundary without asking', async () => {
+  it.each([
+    { modelId: 'm', steps: 26, tier: 'default (former 25-step)' },
+    { modelId: 'anthropic/claude-opus-4-8', steps: 51, tier: 'frontier (former 50-step)' },
+  ])('specialist children bypass the $tier fallback without a max_steps ask', async ({ modelId, steps }) => {
+    const read = fakeTool('Read');
+    const askUser = vi.fn(async (_r: AskRequest): Promise<AskDecision> => ({ behavior: 'deny' }));
+    const toolStep = (i: number) => stream(
+      toolCallChunk(`c${i}`, 'Read', { file_path: `file-${i}.ts` }),
+      finishChunk('tool-calls'),
+    );
+    const model = scriptedModel([
+      ...Array.from({ length: steps }, (_, i) => toolStep(i + 1)),
+      stream(...textChunks('done', 'REPORT: complete'), finishChunk('stop')),
+    ]);
+    const session = new HarnessSession(
+      makeOpts({
+        binding: { providerId: 'openrouter', modelId },
+        tools: [read],
+        decide: async () => ALLOW,
+        askUser,
+        isSpecialistChild: true,
+      }),
+      async () => model as any,
+    );
+    const events = collect(session);
+
+    await session.send('go');
+
+    expect((read as any).calls).toHaveLength(steps);
+    expect(askUser.mock.calls.some((call) => call[0].toolName === 'max_steps')).toBe(false);
+    expect(events.find((event) => event.type === 'turn-complete')?.data.stopReason).toBe('end_turn');
+  });
+
+  it('root sessions without an explicit maxSteps run beyond the former 50-step boundary without asking', async () => {
     const read = fakeTool('Read');
     const askUser = vi.fn(async (): Promise<AskDecision> => ({ behavior: 'deny' }));
     const scripts = Array.from({ length: 51 }, (_, index) =>

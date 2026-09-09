@@ -58,8 +58,8 @@ describe('specialist foreground run (Task 7)', () => {
   // restarting — the factory is called once per turn, and a fresh instance per
   // call would replay script[0] forever.
   // `askHoldMs` (Task 8): overrides specialistAskHoldMs for a test that drives
-  // a routed ask (max_steps/doom_loop/deny-listed) all the way to its
-  // timeout — undefined keeps the real 5-minute production default, which
+  // a routed ask (doom_loop/deny-listed) all the way to its timeout — undefined
+  // keeps the real 5-minute production default, which
   // every OTHER test in this file relies on never actually firing.
   function boot(scripts: any[][], askHoldMs?: number) {
     const model = scriptedModel(scripts);
@@ -92,7 +92,7 @@ describe('specialist foreground run (Task 7)', () => {
     stream(...textChunks('t', 'REPORT: found it at src/x.ts'), finishChunk('stop')),
   ];
 
-  it('re-stamps the child\'s display events onto the parent and returns its report', async () => {
+  it('returns a normal multi-tool final report without a step-limit suffix or report nudge', async () => {
     await withParent(TWO_TOOLS_THEN_REPORT);
     const events = collect();
 
@@ -144,7 +144,9 @@ describe('specialist foreground run (Task 7)', () => {
     const childEvents = store.readEvents(childId, root);
     expect(childEvents.length).toBeGreaterThan(1);
     expect(childEvents.map((e) => e.type)).toContain('turn-complete');
-    expect(childEvents.map((e) => e.type)).toContain('user-message');
+    const childMessages = childEvents.filter((e) => e.type === 'user-message');
+    expect(childMessages).toHaveLength(1); // final report means runSpecialist never sends EMPTY_REPORT_NUDGE
+    expect(childMessages[0].data.text).not.toContain('Your final message is your report');
     expect(childEvents.every((e) => e.sessionId === childId)).toBe(true);
 
     // (d) the parent's file contains NO child-stamped events (display-only
@@ -165,6 +167,7 @@ describe('specialist foreground run (Task 7)', () => {
     // tag (1c's card-linking anchor) — 1a's "[full transcript: ...]" wording
     // is now reserved for the truncated case's real file pointer below.
     expect(report).toContain('REPORT: found it');
+    expect(report).not.toContain('Your final message is your report');
     expect(report).toMatch(new RegExp(`## Report from \\w+ the \\w+ Explorer \\(${EXPLORER.id}\\)`));
     expect(report).toContain(`[specialist session ${childId}]`);
   });
@@ -422,29 +425,6 @@ describe('specialist foreground run (Task 7)', () => {
       specialist: EXPLORER, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
       token: { parentId: 'root-1', writer: false },
     })).rejects.toThrow(/no final message|without producing a report/i);
-  });
-
-  it("a step-capped child is NOT a failure: its last text comes back with a '(stopped at its step limit)' suffix", async () => {
-    // stepCap 1 means the very first tool step trips the budget gate, which
-    // ends the turn with stopReason 'max_steps' (harness-session's max_steps
-    // ask). Task 8: that ask now ROUTES to the parent instead of denying
-    // instantly, so this run only completes once it times out — a small
-    // askHoldMs override keeps the test fast instead of waiting 5 real minutes.
-    const CAPPED = { ...EXPLORER, stepCap: 1 };
-    await withParent([
-      stream(...textChunks('t', 'Found half of it in src/a.ts'), toolCallChunk('c1', 'Glob', { pattern: '*.ts' }), finishChunk('tool-calls')),
-    ], 20);
-
-    const { childId, report } = await host.spawnSpecialist('root-1', {
-      specialist: CAPPED, prompt: 'find the config loader and report where it lives', workDir: root, parentToolCallId: 'tc-1',
-      token: { parentId: 'root-1', writer: false },
-    });
-
-    expect(report).toContain('Found half of it in src/a.ts');
-    expect(report).toContain('(stopped at its step limit)');
-    // A capped run must NOT be nudged — the child is out of steps, so another
-    // turn would just burn the cap again.
-    expect(store.readEvents(childId, root).filter((e) => e.type === 'user-message')).toHaveLength(1);
   });
 
   it('caps the report against the specialist budget and says what it cut', async () => {
@@ -1866,7 +1846,7 @@ describe('R12 (Task 4, plan 1c) — a running child keeps its spawn-time definit
     const SPEC_V1: SpecialistDefinition = {
       id: 'custom-helper', displayName: 'Custom Helper', description: 'A file-defined helper.',
       systemPrompt: 'Help with reading files.', allowedTools: ['Read'], charter: 'read-only',
-      stepCap: 10, reportBudgetTokens: 500, source: 'personal',
+      reportBudgetTokens: 500, source: 'personal',
     };
 
     let capturedTools: string[] = [];

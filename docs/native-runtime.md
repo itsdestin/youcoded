@@ -624,14 +624,15 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   can never re-enter through the root `resume()` path (it would get the preset's prompt and could
   re-acquire the Task tool) — `resumeSpecialist` is the only door back in.
 - **A child's ask now reaches a real user — routed to the parent's card, with a 5-minute
-  redirect.** `childAskRouter` replaces 1a's synchronous refusal: the ask re-registers on the
-  broker under the PARENT's own sessionId (the existing permission card renders it) and holds for
-  `SPECIALIST_ASK_HOLD_MS` (5 minutes, `specialists/limits.ts`). Only if nobody answers by then
-  does it resolve with `ASK_REDIRECT_MESSAGE` — copy that tells the child to keep working on
-  anything that doesn't depend on the blocked action and never route around it — while the ask
-  entry stays answerable past the timeout, not canceled. A real answer that lands late either
-  steers the still-live child (`APPROVED`/`DENIED`, naming the tool) or, once the child has
-  already ended, queues a parent delivery naming the `task_id` to resume.
+  redirect.** `childAskRouter` replaces 1a's synchronous refusal: a child's `doom_loop` or
+  decide-originated ask re-registers on the broker under the PARENT's own sessionId (the existing
+  permission card renders it) and holds for `SPECIALIST_ASK_HOLD_MS` (5 minutes,
+  `specialists/limits.ts`). Only if nobody answers by then does it resolve with
+  `ASK_REDIRECT_MESSAGE` — copy that tells the child to keep working on anything that doesn't
+  depend on the blocked action and never route around it — while the ask entry stays answerable
+  past the timeout, not canceled. A real answer that lands late either steers the still-live child
+  (`APPROVED`/`DENIED`, naming the tool) or, once the child has already ended, queues a parent
+  delivery naming the `task_id` to resume.
   <!-- verify: {"path": "youcoded/desktop/src/main/harness/specialists/child-ask-router.ts", "contains": "ASK_REDIRECT_MESSAGE"} -->
 - **Permission-store rule identity is now a quad, and the store is versioned.** `specialist?:
   string` (the agentType) joined `(tool, pattern, action)` as identity's fourth axis at every
@@ -665,9 +666,10 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
 - **Weak-model hardening, three independent guards.** A single JSON-string tool-arg (`"{\"prompt\":
   ...}"`) is re-parsed once before failing. Placeholder prompts (`todo`, `task 1`, an unexpanded
   `{{...}}` template) are refused against the WHOLE trimmed prompt only, never per-line — a
-  narrower check than the 40-char floor alone, which a padded placeholder can clear. A
-  per-conversation spawn budget (`SPECIALIST_SPAWN_BUDGET_PER_SESSION`, 30) is a runaway backstop,
-  not a normal-use limit.
+  narrower check than the 40-char floor alone, which a padded placeholder can clear. Specialists
+  have no per-child step cap; the per-parent lifetime spawn budget
+  (`SPECIALIST_SPAWN_BUDGET_PER_SESSION`, 30) is the remaining runaway-delegation backstop, not a
+  normal-use limit.
 
 ## A stalled turn parks instead of dying (2026-08-16, youcoded master `28d3f82e`)
 
@@ -853,7 +855,7 @@ PermissionRequest`, now carrying `specialist.parentToolCallId`; the 5-minute hol
 a `PermissionResolved` purge signal that stops a stale answered ask from replaying with live buttons.
 
 **File formats.** A personal specialist is frontmatter (`name`, `description`, `tools:`, `model:
-budget|frontier|parent`, `stepCap`, `reportBudgetTokens`) + a system-prompt body, in
+budget|frontier|parent`, `reportBudgetTokens`) + a system-prompt body, in
 `~/.youcoded/specialists/*.md`; `charter` (`read-only`/`read-write`) is always DERIVED from the
 mapped tools, never declared. A Claude Code agent file (`~/.claude/agents/*.md` or
 `<cwd>/.claude/agents/*.md`) maps through the same pipeline — see the mapping table below. Ids are

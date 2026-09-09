@@ -36,8 +36,8 @@ export const SPECIALIST_IDLE_STALE_MS = 120_000;
 export const SPECIALIST_IN_TOOL_STALE_MS = 300_000;
 
 // Task 8 (plan 1b, spec: child asks route to the parent): how long a routed
-// ask (max_steps / doom_loop / a deny-listed permission ask carried through
-// from child-permissions.ts) waits on the PARENT's screen before the child's
+// ask (doom_loop / a deny-listed permission ask carried through from
+// child-permissions.ts) waits on the PARENT's screen before the child's
 // blocked call is unblocked with the scripted redirect. 5 minutes is enough
 // for a user who is at their machine to notice and answer, without leaving a
 // background specialist stalled indefinitely on a card nobody may ever see.

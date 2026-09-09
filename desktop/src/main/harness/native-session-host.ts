@@ -1600,9 +1600,9 @@ export class NativeSessionHost extends EventEmitter {
     // `entry.sessionId`, which childAskRouter already rewrote to the PARENT's
     // id before ever calling broker.ask() (see AskRequest.raisedBy's own
     // comment) — the same session/cwd pair the in-time path writes against.
-    // Budget asks (max_steps/doom_loop) never support "Always allow" even for
-    // a root session (child-ask-router.ts's BUDGET_ASK_TOOL_NAMES) — excluded
-    // here for the same reason the in-time path excludes them.
+    // The doom_loop synthetic budget ask never supports "Always allow" even
+    // for a root session (child-ask-router.ts's BUDGET_ASK_TOOL_NAMES) —
+    // excluded here for the same reason the in-time path excludes it.
     //
     // Fix (Important 6, final review): same fix as child-ask-router.ts's
     // in-time path, applied to the LATE path — this used to hand-build
@@ -1723,9 +1723,8 @@ export class NativeSessionHost extends EventEmitter {
    *  drain (`entry.running`) never rejects — runTurns try/catches its send()
    *  (see send()) — so awaiting it only tells us the turn SETTLED, never
    *  whether it succeeded. The transcript stream is what says which: a
-   *  `session-error` means the provider/stream failed, `user-interrupt` means
-   *  the user (or a parent teardown) stopped it, and `turn-complete`'s
-   *  stopReason distinguishes a natural finish from the step cap.
+   *  `session-error` means the provider/stream failed, while `user-interrupt`
+   *  means the user (or a parent teardown) stopped it.
    *
    *  Throws (typed, with the child id) on every no-report outcome; the Task
    *  tool renders that as an isError result for the parent model to read. */
@@ -1781,15 +1780,10 @@ export class NativeSessionHost extends EventEmitter {
     // ---- Observation state, written by the listener below ----
     let errorText: string | null = null;      // a session-error ended a turn
     let interrupted = false;                  // Stop / parent teardown reached the child
-    let stopReason: string | undefined;       // the LAST turn's stopReason
     // Assistant text since the last tool-use. Text emitted BEFORE a tool call
     // is narration ("let me check X"), not the report — the report is whatever
     // the child says after its final tool call, so a tool-use resets this.
     let sinceLastTool = '';
-    // The most recent non-empty block, kept for the step-cap case: a child cut
-    // off mid-plan never gets to write a final message, and its last narration
-    // beats returning nothing at all.
-    let lastNonEmpty = '';
     let steps = 0;
     const usage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
     // Task 12, item 4 — compaction-finalize: counts SPONTANEOUS auto-compactions
@@ -1813,7 +1807,6 @@ export class NativeSessionHost extends EventEmitter {
       switch (event.type) {
         case 'assistant-text':
           sinceLastTool += String(event.data.text ?? '');
-          if (sinceLastTool.trim()) lastNonEmpty = sinceLastTool;
           break;
         case 'tool-use':
           if (event.data.toolUseId) openTools.add(event.data.toolUseId);
@@ -1829,7 +1822,6 @@ export class NativeSessionHost extends EventEmitter {
           if (event.data.toolUseId) openTools.delete(event.data.toolUseId);
           break;
         case 'turn-complete': {
-          stopReason = event.data.stopReason;
           const u = event.data.usage;
           if (u) {
             usage.inputTokens += u.inputTokens; usage.outputTokens += u.outputTokens;
@@ -1869,7 +1861,6 @@ export class NativeSessionHost extends EventEmitter {
 
     /** Run one turn and wait for its whole drain to settle. */
     const runTurn = async (text: string): Promise<void> => {
-      stopReason = undefined;
       sinceLastTool = '';
       const res = this.send(childId, text);
       // send() only refuses for reasons that cannot apply to a freshly-minted,
@@ -1880,14 +1871,7 @@ export class NativeSessionHost extends EventEmitter {
     };
 
     /** The report this turn produced, or null when the child said nothing. */
-    const reportSoFar = (): string | null => {
-      const capped = stopReason === 'max_steps';
-      const text = (sinceLastTool.trim() || (capped ? lastNonEmpty.trim() : '')) || '';
-      if (!text) return null;
-      // A step-capped child DID work and DID say something — the parent needs
-      // both the partial finding and the fact that it is partial.
-      return capped ? `${text}\n\n(stopped at its step limit)` : text;
-    };
+    const reportSoFar = (): string | null => sinceLastTool.trim() || null;
 
     /** Turn the run's terminal conditions into a typed throw. Checked after
      *  EVERY turn, because the nudge turn can fail the same ways the first one
@@ -1906,12 +1890,7 @@ export class NativeSessionHost extends EventEmitter {
 
       let report = reportSoFar();
       if (report === null) {
-        // ONE nudge, then accept or fail (retry budget 1, spec §3). NOT when
-        // the step cap is what ended the turn: that child has no steps left, so
-        // another turn would burn the same cap again and still say nothing.
-        if (stopReason === 'max_steps') {
-          throw new Error(`the specialist hit its step limit without producing a report (specialist session ${childId}).`);
-        }
+        // ONE nudge, then accept or fail (retry budget 1, spec §3).
         await runTurn(EMPTY_REPORT_NUDGE);
         throwIfEnded();
         report = reportSoFar();
@@ -1926,8 +1905,8 @@ export class NativeSessionHost extends EventEmitter {
       // never observe teardown-time events (and so a run that throws does not
       // leave a listener attached to a session the caller may keep alive).
       entry.session.off('transcript-event', onEvent);
-      // Task 7: cleared on EVERY exit path (success, throw, nudge, step-cap) —
-      // a leaked interval per child would keep the process awake and pile up
+      // Task 7: cleared on EVERY exit path (success, throw, or nudge) — a
+      // leaked interval per child would keep the process awake and pile up
       // across every specialist ever spawned.
       clearInterval(staleCheck);
     }
@@ -2993,9 +2972,10 @@ export class NativeSessionHost extends EventEmitter {
     return new HarnessSession(
       {
         sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free,
-        // STEP CAP: the definition's own explicit budget; root preference
-        // snapshots never flow into specialist children.
-        harness: { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: specialist.stepCap } },
+// WHY: specialist work is bounded by its narrow tool set, parent-managed
+        // lifecycle controls, and the delegation spawn backstop—not an arbitrary
+        // per-child action count, so root limits never flow into a child.
+        harness: preset.manifest,
         // TOOLS: the definition's allowlist, filtered out of the same CORE_TOOLS
         // set every session is built from. The Task tool is structurally absent
         // because no definition lists it — that omission IS the depth-1 rule.
