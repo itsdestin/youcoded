@@ -1,195 +1,162 @@
-// Dev-only page: renders every fixture through the real ToolCard/ToolBody so
-// we can iterate on compact views with Vite HMR. Reached via the workbench's
-// view switcher (?mode=workbench&view=tools) — must not be reachable in prod
-// builds. Absorbed from the former ?mode=tool-sandbox route.
+// Dev-only catalog for reviewing real tool components against their reducer-backed
+// fixtures. Reached through ?mode=workbench&view=tools; it is never part of the
+// production navigation.
 //
-// Why ChatProvider: ToolCard internally calls useChatDispatch() for click
-// handlers (expand/collapse, approval), so it crashes outside the provider
-// even though the fixtures don't actually drive the store's session state.
+// Why ChatProvider: ToolCard dispatches expand/collapse and approval actions, so
+// its real interaction surface needs this provider even though fixtures are static.
 
 import React from 'react';
 import { ChatProvider } from '../../state/chat-context';
 import ToolCard from '../../components/ToolCard';
 import { CollapsedToolGroup } from '../../components/AssistantTurnBubble';
-import { loadFixture, type FixtureBlock } from './fixture-loader';
+import { DeliverablesCard, isSentFilesTool, isSentLinksTool } from '../../components/DeliverablesCard';
+import { loadFixture, type FixtureBlock, type LoadResult } from './fixture-loader';
 import type { ToolCallState } from '../../../shared/types';
 
-// Vite's import.meta.glob eagerly reads every fixture as a raw string at build
-// time. We silence tsc because our tsconfig uses `module: "commonjs"` which
-// rejects the `import.meta` syntax (TS1343) — Vite still rewrites this call
-// statically during bundling, so the literal syntax must be preserved. Only
-// Vite ever bundles this file; the Electron main process never loads it.
-// @ts-ignore TS1343 — import.meta is intercepted by Vite at build time
+// Vite replaces this static glob at bundle time. tsconfig uses CommonJS and
+// therefore rejects import.meta even though this dev-only renderer is Vite-only.
+// @ts-ignore TS1343 — Vite statically transforms import.meta.glob
 const fixtures = import.meta.glob('./fixtures/tools/*.jsonl', {
   query: '?raw',
   import: 'default',
   eager: true,
 }) as Record<string, string>;
 
-// Skills float to the end of the turn in real chat (see AssistantTurnBubble
-// extraction in Task 3); mirror that here so the sandbox shows the real
-// layout outcome when we prototype the compact Skill variant.
-function orderedBlocks(blocks: FixtureBlock[]): FixtureBlock[] {
-  const skillBlocks: FixtureBlock[] = [];
-  const otherBlocks: FixtureBlock[] = [];
-  for (const b of blocks) {
-    if (b.kind === 'tool' && b.tool.toolName === 'Skill') {
-      skillBlocks.push(b);
-    } else {
-      otherBlocks.push(b);
-    }
-  }
-  return [...otherBlocks, ...skillBlocks];
-}
-
-// Walks the (already Skill-reordered) blocks. Consecutive non-Skill tools
-// share one real CollapsedToolGroup, exactly as production groups them, so
-// the gallery's "Grouped turns" section shows the actual headline/expand
-// behaviour rather than an approximation of it. Skill tools always render
-// standalone — they extract from groups in production (Task 3) and we
-// mirror that here.
 const GALLERY_SESSION_ID = 'sandbox';
 
-function renderBlocks(blocks: FixtureBlock[]): React.ReactNode[] {
-  const out: React.ReactNode[] = [];
-  let toolBuffer: ToolCallState[] = [];
+type FixtureEntry = { name: string; result: LoadResult };
+type CatalogKind = 'tools' | 'group' | 'deliverables';
 
-  function flushToolBuffer(key: string) {
-    if (toolBuffer.length === 0) return;
-    if (toolBuffer.length === 1) {
-      const t = toolBuffer[0];
-      out.push(<ToolCard key={t.toolUseId} tool={t} />);
-    } else {
-      out.push(
-        <div key={key} className="my-1">
-          <CollapsedToolGroup tools={toolBuffer} sessionId={GALLERY_SESSION_ID} />
-        </div>
-      );
-    }
-    toolBuffer = [];
+interface CatalogSection {
+  title: string;
+  description: string;
+  kind: CatalogKind;
+  names: string[];
+}
+
+// Explicit curation keeps related states together instead of letting filename
+// order bury an approval, error, or background-run variant among ordinary cards.
+const CATALOG: CatalogSection[] = [
+  {
+    title: 'Individual tool cards',
+    description: 'Common completed calls and MCP integrations.',
+    kind: 'tools',
+    names: ['askuserquestion', 'bash', 'big-bash', 'edit', 'glob', 'grep', 'mcp-gmail-read', 'mcp-todoist', 'mcp-windows-control', 'read', 'todowrite', 'webfetch', 'websearch', 'write'],
+  },
+  {
+    title: 'Agents & specialists',
+    description: 'Delegated work and its compact Task/Agent treatment.',
+    kind: 'tools',
+    names: ['agent'],
+  },
+  {
+    title: 'Failures & status variants',
+    description: 'Failed, approval-gated, and background execution states.',
+    kind: 'tools',
+    names: ['bash-awaiting-approval', 'bash-awaiting-approval-denylisted', 'bash-background-running', 'bash-background-finished', 'bash-background-failed', 'bash-background-stopped', 'bash-background-detached', 'bash-failed'],
+  },
+  {
+    title: 'Chatsearch cards',
+    description: 'Conversation find and preview cards rendered through their Bash calls.',
+    kind: 'tools',
+    names: ['chatsearch-find', 'chatsearch-find-piped', 'chatsearch-show'],
+  },
+  {
+    title: 'Deliverable cards',
+    description: 'File and link handoffs, including loading and failed delivery states.',
+    kind: 'deliverables',
+    names: ['senduserfile', 'senduserfile-running', 'senduserfile-failed', 'senduserlink', 'senduserlink-claude-code'],
+  },
+  {
+    title: 'Skill cards',
+    description: 'Skill invocation states use the same ToolCard treatment as chat.',
+    kind: 'tools',
+    names: ['skill', 'skill-failed'],
+  },
+  {
+    title: 'Grouped tool cards',
+    description: 'Every entry remains a real CollapsedToolGroup, not a gallery approximation.',
+    kind: 'group',
+    names: ['group-active-mixed-complete', 'group-active-with-failure', 'group-agent-followed-by-tools', 'group-all-active', 'group-bash-read-skill', 'group-bash-then-read', 'group-failed-bash-with-retry', 'group-four-kinds-settled', 'group-mcp-mixed'],
+  },
+];
+
+function toolBlocks(blocks: FixtureBlock[]): ToolCallState[] {
+  return blocks.flatMap((block) => block.kind === 'tool' ? [block.tool] : []);
+}
+
+function FixtureCard({ entry, kind }: { entry: FixtureEntry; kind: CatalogKind }) {
+  if (entry.result.error) {
+    return <p className="text-xs text-red-400 font-mono">{entry.result.error}</p>;
   }
 
-  blocks.forEach((block, i) => {
-    if (block.kind === 'text') {
-      flushToolBuffer(`group-${i}`);
-      out.push(
-        <p key={`text-${i}`} style={{ margin: '8px 0', lineHeight: 1.5, opacity: 0.9 }}>
-          {block.text}
-        </p>
-      );
-    } else if (block.tool.toolName === 'Skill') {
-      flushToolBuffer(`group-${i}`);
-      out.push(<ToolCard key={block.tool.toolUseId} tool={block.tool} />);
-    } else {
-      toolBuffer.push(block.tool);
-    }
+  const tools = toolBlocks(entry.result.blocks);
+  const deliverables = tools.filter((tool) => isSentFilesTool(tool) || isSentLinksTool(tool));
+
+  // WHY grouped fixtures bypass the normal per-tool loop: the catalog must
+  // exercise the production group headline, state aggregation, and expansion
+  // behavior as one unit — the former bubble wrapper only imitated that layout.
+  const content = kind === 'group' ? (
+    tools.length > 1
+      ? <CollapsedToolGroup tools={tools} sessionId={GALLERY_SESSION_ID} />
+      : <ToolCard tool={tools[0]} sessionId={GALLERY_SESSION_ID} />
+  ) : kind === 'deliverables' ? (
+    <DeliverablesCard tools={deliverables} sessionId={GALLERY_SESSION_ID} />
+  ) : (
+    <div className="space-y-1">{tools.map((tool) => <ToolCard key={tool.toolUseId} tool={tool} sessionId={GALLERY_SESSION_ID} />)}</div>
+  );
+
+  return (
+    <article className="min-w-0 rounded-lg border border-edge-dim bg-panel/40 p-2.5">
+      <h3 className="mb-2 text-2xs font-mono font-medium text-fg-muted">{entry.name}</h3>
+      {content}
+    </article>
+  );
+}
+
+function CatalogSectionView({ section, entries }: { section: CatalogSection; entries: Map<string, FixtureEntry> }) {
+  const items = section.names.flatMap((name) => {
+    const entry = entries.get(name);
+    return entry ? [entry] : [];
   });
-  flushToolBuffer('group-final');
 
-  return out;
-}
-
-// Derive the group heading for a fixture: multi-block fixtures go under
-// "Grouped turns"; single-tool fixtures group by their tool's name, with
-// all mcp__*__* tools folded under "MCP" so ecosystem tools share one header.
-function groupKey(name: string, blocks: FixtureBlock[]): string {
-  if (name.startsWith('group-')) return 'Grouped turns';
-  const firstTool = blocks.find((b) => b.kind === 'tool');
-  if (!firstTool || firstTool.kind !== 'tool') return 'Other';
-  const t = firstTool.tool.toolName;
-  if (t.startsWith('mcp__')) return 'MCP';
-  return t;
-}
-
-// Keep "Grouped turns" at the bottom of the page; the single-tool groups
-// sort alphabetically above it so "Agent", "Bash", "Edit"... read in order.
-function compareGroups(a: string, b: string): number {
-  if (a === 'Grouped turns') return 1;
-  if (b === 'Grouped turns') return -1;
-  return a.localeCompare(b);
+  return (
+    <section aria-labelledby={`tool-gallery-${section.title}`} className="space-y-2">
+      <header className="sticky top-0 z-10 -mx-1 bg-canvas/95 px-1 pt-3 pb-2 backdrop-blur-sm border-b border-edge-dim">
+        <h2 id={`tool-gallery-${section.title}`} className="text-sm font-semibold text-fg">{section.title}</h2>
+        <p className="mt-0.5 text-2xs text-fg-muted">{section.description}</p>
+      </header>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        {items.map((entry) => <FixtureCard key={entry.name} entry={entry} kind={section.kind} />)}
+      </div>
+    </section>
+  );
 }
 
 export function ToolGallery() {
-  const entries = Object.entries(fixtures).map(([path, raw]) => {
+  const entries = new Map<string, FixtureEntry>(Object.entries(fixtures).map(([path, raw]) => {
     const name = path.split('/').pop()!.replace(/\.jsonl$/, '');
-    return { name, result: loadFixture(name, raw) };
-  });
-
-  // Bucket each fixture by its derived group, sort fixtures alphabetically
-  // within each group.
-  const groups = new Map<string, typeof entries>();
-  for (const entry of entries) {
-    const key = groupKey(entry.name, entry.result.blocks);
-    if (!groups.has(key)) groups.set(key, []);
-    groups.get(key)!.push(entry);
-  }
-  for (const list of groups.values()) list.sort((a, b) => a.name.localeCompare(b.name));
-  const sortedGroups = Array.from(groups.entries()).sort((a, b) => compareGroups(a[0], b[0]));
+    return [name, { name, result: loadFixture(name, raw) }];
+  }));
 
   return (
     <ChatProvider>
-      {/* App root CSS pins html/body to 100vh + overflow:hidden so chat/terminal
-          panes can manage their own scroll. Sandbox is a normal document, so
-          we opt the scroll back in on this outer container. */}
-      <div style={{ height: '100vh', overflowY: 'auto' }}>
-      <div style={{ padding: 24, maxWidth: 960, margin: '0 auto' }}>
-        <h1 style={{ fontSize: 20, marginBottom: 16 }}>Tool Gallery</h1>
-        <p style={{ opacity: 0.7, marginBottom: 24, fontSize: 13 }}>
-          Dev-only. Each card renders a real &lt;ToolCard&gt; against a fixture
-          tool_use/tool_result pair. Edit ToolBody.tsx and save to see changes
-          via HMR. Unlike the sandbox this replaces, it runs inside the real
-          ThemeProvider, so theme switching applies here too.
-        </p>
-        {sortedGroups.map(([groupName, fixturesInGroup]) => (
-          <section key={groupName} style={{ marginBottom: 40 }}>
-            <h2
-              style={{
-                fontSize: 18,
-                marginBottom: 12,
-                paddingBottom: 6,
-                borderBottom: '1px solid var(--edge-dim, #333)',
-              }}
-            >
-              {groupName}
-            </h2>
-            {fixturesInGroup.map(({ name, result }) => {
-              // Multi-block fixtures (or any fixture with text) get a bubble frame
-              // so the grouping reads as "one assistant turn". Single-tool fixtures
-              // render bare — matches the original sandbox look.
-              const hasText = result.blocks.some((b) => b.kind === 'text');
-              const wrap = result.blocks.length > 1 || hasText;
-              return (
-                <div key={name} style={{ marginBottom: 24 }}>
-                  <h3 style={{ fontSize: 13, opacity: 0.6, marginBottom: 8, fontWeight: 400 }}>
-                    {name}
-                  </h3>
-                  {result.error ? (
-                    <div style={{ color: 'tomato', fontFamily: 'monospace' }}>
-                      {result.error}
-                    </div>
-                  ) : wrap ? (
-                    // Light outline + padding so the grouping reads visually.
-                    // Intentionally minimal; the point is "this is all one turn", not theming.
-                    <div
-                      style={{
-                        border: '1px solid var(--edge-dim, #333)',
-                        borderRadius: 8,
-                        padding: 16,
-                        margin: '8px 0',
-                      }}
-                    >
-                      {renderBlocks(orderedBlocks(result.blocks))}
-                    </div>
-                  ) : (
-                    renderBlocks(orderedBlocks(result.blocks))
-                  )}
-                </div>
-              );
-            })}
-          </section>
-        ))}
-      </div>
-      </div>
+      {/* WHY this pane owns its scroll: app-root intentionally locks document
+          scrolling for the live split-pane UI. The catalog needs a stable title
+          and independent, full-height browsing without affecting that UI. */}
+      <main className="h-screen flex flex-col bg-canvas text-fg">
+        <header className="shrink-0 border-b border-edge px-5 py-4">
+          <div className="mx-auto max-w-7xl">
+            <h1 className="text-lg font-semibold">Tool gallery</h1>
+            <p className="mt-1 text-xs text-fg-muted">Dev-only component catalog · reducer-backed fixtures · real chat cards</p>
+          </div>
+        </header>
+        <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 pb-8">
+          <div className="mx-auto max-w-7xl space-y-7">
+            {CATALOG.map((section) => <CatalogSectionView key={section.title} section={section} entries={entries} />)}
+          </div>
+        </div>
+      </main>
     </ChatProvider>
   );
 }

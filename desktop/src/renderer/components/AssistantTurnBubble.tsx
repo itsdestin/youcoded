@@ -166,6 +166,10 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
   const groupRunning = (t: ToolCallState) => t.specialistRun ? stillWorking(t) : t.status === 'running';
   const runningCount = tools.filter(groupRunning).length;
   const failedCount = tools.filter((t) => t.status === 'failed').length;
+  // WHY the group icon reflects only the latest call: an earlier failure is
+  // already preserved in the group's detail text, while the top-level status
+  // should describe the most recent result.
+  const latestToolFailed = tools.at(-1)?.status === 'failed';
   const stoppedCount = tools.filter((t) => t.specialistRun?.status === 'interrupted').length;
   const askingCount = tools.filter(hasNestedAsk).length;
   // Plain-language "Created a file and ran a command" in place of the raw
@@ -182,7 +186,7 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
           <QuestionIcon className="w-3.5 h-3.5 shrink-0 text-amber-500" />
         ) : runningCount > 0 ? (
           <BrailleSpinner size="sm" />
-        ) : failedCount > 0 ? (
+        ) : latestToolFailed ? (
           <FailIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
         ) : stoppedCount > 0 ? (
           <span data-testid="tool-group-stopped"><StoppedIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" /></span>
