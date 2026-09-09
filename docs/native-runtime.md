@@ -31,10 +31,21 @@ node scripts/chatgpt-cache-summary.mjs /path/to/requests.previous.jsonl /path/to
 It groups by opaque session/model/purpose, reports valid-subset weighted reuse
 and fresh input, overall input/output, request/token coverage, changes and timing.
 Unknown reuse is `null`, not zero. Offline tests do not establish cache savings.
-Parsing and hashing remain synchronous: a 2026-09-09 offline 20-iteration CPU
-measurement averaged **23.45 ms** for a 433,018-byte, 100k-token-like request and
-**50.00 ms** with an additional 4 MiB encrypted part (4,627,366 bytes total).
-These are observations, not performance budgets. Stage 1 does not alter
+Parsing and hashing remain synchronous, and the body is now walked ONCE: the
+hand-rolled serialized-value scanner reports the input-array length and the model
+id itself, so the second full `JSON.parse` is gone. A scan that does not reach its
+container's closing bracket is dropped as an unparseable observation (counted,
+new baseline) rather than compared — a short walk yields a short fingerprint, and
+two short fingerprints of different requests would compare `identical`. A
+2026-09-09 offline 20-iteration CPU measurement, five runs each on one machine,
+medians: **12.98 ms -> 12.72 ms** for a 433,018-byte, 100k-token-like request and
+**29.33 ms -> 27.99 ms** with an additional 4 MiB encrypted part (4,627,366 bytes
+total). The single-parser change is worth a few percent; hashing dominates.
+Absolute figures move with machine load — an earlier same-day run of the same
+benchmark read 23.45 ms / 50.00 ms — so compare before/after within one run, not
+across sessions. These are observations, not performance budgets. The benchmark
+is opt-in: `YOUCODED_DIAG_BENCH=1 npx vitest run
+tests/chatgpt-request-diagnostics.test.ts` from `youcoded/desktop`. Stage 1 does not alter
 specialist status history or continuation acceptance/persistence.
 
 ## Durable accepted history (Stage 4, unshipped)
@@ -66,8 +77,17 @@ status snapshot) is stored as a literal capped at 64 KiB, and
 `providerOptions.openai.parallelToolCall.input` is kept verbatim because the
 pinned `@ai-sdk/openai` converter re-emits that wrapper argument string byte for
 byte and the transcript (which keeps only each child call's parsed input) cannot
-rebuild it. Anything the descriptor cannot express fails the publish rather than
-restoring an approximation. Pinned by `tests/accepted-history-privacy.test.ts`,
+rebuild it. Be honest about what that second exception holds: the wrapper
+argument string is the concatenated RAW ARGUMENTS of that step's child calls, so
+a parallel step's tool input does sit in the sidecar — as the wrapper's own
+string, never as a per-call copy — and it is kept only because the SDK re-emits
+it verbatim and it cannot be rebuilt from the transcript. One further descriptor
+cites nothing at all: `{kind:'empty', field:'reasoning-text'}`, for an encrypted
+reasoning item whose summary never emitted a token (`@ai-sdk/openai` still opens
+the part, so `ai` hands over `text:''`, and no anchor can reproduce an empty
+string). Reasoning is the only part allowed to be empty; an empty part of any
+other kind still fails the publish. Anything the descriptor cannot express fails
+the publish rather than restoring an approximation. Pinned by `tests/accepted-history-privacy.test.ts`,
 which runs a real session whose reasoning ciphertext is a sentinel and proves it
 reaches the manifest and no other reader.
 
@@ -84,7 +104,9 @@ correct but loses the ciphertext. Publish: `stale-generation`, `oversized`,
 itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
 `missing-transcript`, `transcript-advanced`, `binding-mismatch`,
 `assembly-mismatch`, `image-mismatch`, plus `identity-unavailable` when the
-continuation identity cannot be built (ChatGPT signed out).
+continuation identity cannot be built (ChatGPT signed out). The line carries a
+`phase` of `publish` or `restore`, because a restore fallback is routine (no
+sidecar yet, another device, a changed model) and used to read as a failed write.
 
 **Credential epoch.** The checkpoint is bound to a continuation identity, which
 for ChatGPT is `providerId\0modelId\0sha256(accountId)\0credentialEpoch`. The

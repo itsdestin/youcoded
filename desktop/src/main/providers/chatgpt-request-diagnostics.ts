@@ -37,9 +37,14 @@ const object = (x: unknown): Record<string, unknown> => x !== null && typeof x =
 const MEMORY = 8 * 1024 * 1024;
 const FILE_BYTES = 5 * 1024 * 1024;
 
+/** What one scan of a JSON container yielded, and whether the walk actually reached
+ *  that container's closing bracket at the end of the text. */
+interface Scan { entries: Array<[string, string]>; complete: boolean }
+type Scanner = (text: string, array?: boolean) => Scan;
+
 // WHY: re-stringifying parsed objects erases whitespace/number spelling. Compare
 // exact serialized values, not a canonical approximation of the outgoing bytes.
-function serializedValues(text: string, array = false): Array<[string, string]> {
+function serializedValues(text: string, array = false): Scan {
   const entries: Array<[string, string]> = [];
   let i = 1;
   const space = () => { while (/\s/.test(text[i] ?? '') && i < text.length) i++; };
@@ -71,7 +76,12 @@ function serializedValues(text: string, array = false): Array<[string, string]> 
     if (text[i] === ',') i++;
     else break;
   }
-  return entries;
+  space();
+  // WHY: this scanner is the ONLY parser of the outgoing body, so it has to say when it
+  // stopped early. A short walk yields a SHORT fingerprint, and two short fingerprints
+  // of different requests compare equal — the caller must drop such an observation
+  // rather than report it as a comparison.
+  return { entries, complete: text[0] === (array ? '[' : '{') && i === text.length - 1 && text[i] === (array ? ']' : '}') };
 }
 
 export class ChatGptRequestDiagnostics {
@@ -90,8 +100,13 @@ export class ChatGptRequestDiagnostics {
   private scheduled = false;
   private expiryTimer?: ReturnType<typeof setTimeout>;
   private readonly now: () => number;
-  constructor(private readonly options: { directory: string; now?: () => number; write?: (row: DiagnosticRecord) => Promise<void> }) {
+  /** WHY: `scan` is a test seam beside `now`/`write`. A scanner shortfall cannot be
+   *  provoked with valid JSON, so the only way to pin "a short walk is never a
+   *  comparison" is to hand dispatch a scanner that reports one. */
+  private readonly scan: Scanner;
+  constructor(private readonly options: { directory: string; now?: () => number; write?: (row: DiagnosticRecord) => Promise<void>; scan?: Scanner }) {
     this.now = options.now ?? Date.now;
+    this.scan = options.scan ?? serializedValues;
   }
   private hash(value: string): string { return createHmac('sha256', this.key).update(value).digest('hex'); }
   private counters() { return { dropped: this.dropped, evicted: this.evicted, expired: this.expired, writeFailures: this.writeFailures }; }
@@ -113,10 +128,23 @@ export class ChatGptRequestDiagnostics {
       const sessionId = this.hash(scope.sessionId);
       laneId = this.hash(`${sessionId}:${scope.purpose}`);
       if (this.unfinished.size >= 256 || typeof body !== 'string') { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
-      const parsed = object(JSON.parse(body));
-      if (!Array.isArray(parsed.input)) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
+      // WHY: one parser, not two. The scanner already walks every top-level key and every
+      // input item, so a second full JSON.parse bought only three facts (input is an
+      // array, its length, the model id) at the cost of parsing the whole body twice on
+      // the synchronous pre-send path — for a 100k-token request that is megabytes.
+      const top = this.scan(body.trim());
+      const serialized = Object.fromEntries(top.entries);
+      const inputText = serialized.input;
+      // WHY: a walk that stopped early yields a SHORT fingerprint, and two short
+      // fingerprints of DIFFERENT requests compare equal — the observation would report
+      // `identical` for a request that changed. There is no second parser left to
+      // cross-check against, so an incomplete walk is dropped: a counted loss and a
+      // fresh baseline, never a comparison.
+      if (!top.complete || typeof inputText !== 'string' || inputText[0] !== '[') { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
+      const scanned = this.scan(inputText, true);
+      if (!scanned.complete) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
       // Buffer storage makes the fingerprint-byte limit exact rather than guessing JS string overhead.
-      const size = parsed.input.length * 32 + 1024;
+      const size = scanned.entries.length * 32 + 1024;
       if (size > MEMORY) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
       while (this.bytes + size > MEMORY) {
         const active = new Set([...this.unfinished.values()].map(row => row.laneId));
@@ -124,11 +152,12 @@ export class ChatGptRequestDiagnostics {
         if (!inactive) { this.dropped++; this.forget(laneId); this.schedule(); return undefined; }
         this.forget(inactive[0]);
       }
-      const serialized = Object.fromEntries(serializedValues(body.trim()));
-      const items = Buffer.alloc(parsed.input.length * 32);
-      serializedValues(serialized.input, true).forEach(([, item], index) => Buffer.from(this.hash(item), 'hex').copy(items, index * 32));
+      const items = Buffer.alloc(scanned.entries.length * 32);
+      scanned.entries.forEach(([, item], index) => Buffer.from(this.hash(item), 'hex').copy(items, index * 32));
       const { input: _input, instructions, tools, model: serializedModel, prompt_cache_key: cacheKey, ...settings } = serialized;
-      const model = parsed.model;
+      // WHY: model IDs are a bounded grammar with no escapes, so the serialized fragment
+      // is read directly rather than parsed — anything else is reported as 'unknown'.
+      const model = /^"[a-zA-Z0-9._-]{1,100}"$/.test(serializedModel ?? '') ? serializedModel.slice(1, -1) : 'unknown';
       const values = { instructions, tools, model: serializedModel, settings: JSON.stringify(settings), cacheKey };
       const components = Object.fromEntries(COMPONENTS.map(k => [k, this.hash(values[k] ?? 'undefined')])) as Components;
       const previous = this.lanes.get(laneId);
@@ -142,9 +171,7 @@ export class ChatGptRequestDiagnostics {
       const row: DiagnosticRecord = {
         version: 1, sessionId, laneId, logicalStepId: this.hash(scope.logicalStepId), attemptId, resendParentId,
         dispatchSequence: sequence, baselineAttemptId: previous?.attemptId ?? null, lastSuccessfulAttemptId: previous?.successful?.id ?? null,
-        timestamp: now, durationMs: 0,
-        // Model IDs are bounded grammar, never an arbitrary provider/body string.
-        model: typeof model === 'string' && /^[a-zA-Z0-9._-]{1,100}$/.test(model) ? model : 'unknown',
+        timestamp: now, durationMs: 0, model,
         purpose: scope.purpose, outcome: 'failed', inputItems: length, stablePrefixItems: prefix,
         firstDifferingItem: previous && change !== 'identical' ? prefix : null, change,
         changed: Object.fromEntries(COMPONENTS.map(k => [k, !!previous && previous.components[k] !== components[k]])) as DiagnosticRecord['changed'],

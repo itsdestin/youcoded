@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
+import { ChatGptRequestDiagnostics } from '../src/main/providers/chatgpt-request-diagnostics';
 
 it('summarizes only known valid cache reporting and rejects unknown fields', () => {
   const dir = mkdtempSync(join(tmpdir(), 'cache-summary-'));
@@ -33,4 +34,23 @@ it('summarizes only known valid cache reporting and rejects unknown fields', () 
     expect(result.rejected).toBe(1 + malformed.length);
     expect(result.groups[0]).toMatchObject({ reuse: 0.125, freshInput: 350, inputTokens: 1000, outputTokens: 35, requestCoverage: 2 / 3, inputTokenCoverage: 0.4 });
   } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
+});
+
+it('reports the loss counters from a record the real writer produced', async () => {
+  // WHY: the loss row is the ONLY evidence of diagnostic coverage gaps, and writer and
+  // reader agreed on its shape by inspection only. This drives the real writer into a
+  // real file and hands that file to the real script — both ends, no fixture in between.
+  const dir = mkdtempSync(join(tmpdir(), 'cache-summary-loss-'));
+  const d = new ChatGptRequestDiagnostics({ directory: dir, now: () => 99 });
+  try {
+    const body = JSON.stringify({ model: 'gpt-5', input: ['a'], instructions: 'PRIVATE_PROMPT' });
+    for (let i = 0; i < 257; i++) d.dispatch({ sessionId: String(i), purpose: 'chat', logicalStepId: 'step' }, body);
+    d.dispatch({ sessionId: 'x', purpose: 'chat', logicalStepId: 'step' }, 12345 as any);
+    await d.flush();
+
+    const text = execFileSync(process.execPath, [resolve('scripts/chatgpt-cache-summary.mjs'), join(dir, 'requests.jsonl')], { encoding: 'utf8' });
+    expect(text).not.toContain('PRIVATE_PROMPT');
+    // The row is UNDERSTOOD, not merely tolerated: counted as loss, never as a rejection.
+    expect(JSON.parse(text)).toEqual({ rejected: 0, lossCounters: { dropped: 2, evicted: 0, expired: 0, writeFailures: 0 }, groups: [] });
+  } finally { await d.flush(); rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); }
 });

@@ -2701,8 +2701,13 @@ export class NativeSessionHost extends EventEmitter {
   /** One line, one fixed reason code, no content — continuation never explains
    *  itself with a raw error, and a failed checkpoint is not a user-visible
    *  failure (the conversation and its transcript are untouched). */
-  private logContinuation(sessionId: string, reason: string): void {
-    log('INFO', 'NativeSessionHost', 'accepted-history checkpoint not published', { sessionId, reason });
+  private logContinuation(sessionId: string, reason: string, phase: 'publish' | 'restore' = 'publish'): void {
+    // WHY: publish failures and restore fallbacks shared one line, so an ordinary
+    // rebuild on reopen (no sidecar yet, another device, a changed model) read in the
+    // log as a failed checkpoint WRITE. The phase says which half spoke.
+    log('INFO', 'NativeSessionHost',
+      phase === 'publish' ? 'accepted-history checkpoint not published' : 'accepted-history checkpoint not restored',
+      { sessionId, reason, phase });
   }
 
   /**
@@ -2768,7 +2773,7 @@ export class NativeSessionHost extends EventEmitter {
       this.store.hydrateReferences(sessionId, persisted);
       let identity: string | undefined;
       try { identity = this.continuation.continuationIdentityFor!(session.binding); }
-      catch { this.logContinuation(sessionId, 'identity-unavailable'); }
+      catch { this.logContinuation(sessionId, 'identity-unavailable', 'restore'); }
       if (identity !== undefined) {
         const restored = store.restore({
           sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
@@ -2781,7 +2786,7 @@ export class NativeSessionHost extends EventEmitter {
           });
           return;
         }
-        this.logContinuation(sessionId, restored.reason);
+        this.logContinuation(sessionId, restored.reason, 'restore');
       }
     }
     // Ordinary reconstruction (spec §2.5), seeded with every persisted uuid

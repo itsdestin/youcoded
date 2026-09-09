@@ -61,3 +61,23 @@ export function textStep(id: string, text: string): unknown[] {
     completed(),
   ];
 }
+
+/**
+ * A step whose reasoning item carries ciphertext but NEVER emits a summary
+ * delta — the real shape a low-reasoning-effort ChatGPT turn puts on the wire.
+ * `@ai-sdk/openai` still opens a reasoning part for it, so `ai` hands the
+ * harness a reasoning part whose text is `''` and whose providerOptions carry
+ * the encrypted content. Nothing in the transcript can anchor empty text.
+ */
+export function silentReasoningStep(id = 'msg-silent', text = 'answered', cipher = 'SILENT-CIPHERTEXT'): unknown[] {
+  const item = { type: 'reasoning', id: 'rs-silent', encrypted_content: cipher };
+  return [
+    { type: 'response.created', response: { id: `resp-${id}`, model: 'gpt-test', created_at: 1 } },
+    { type: 'response.output_item.added', output_index: 0, item },
+    { type: 'response.output_item.done', output_index: 0, item },
+    { type: 'response.output_item.added', output_index: 1, item: { type: 'message', id, role: 'assistant', phase: 'final_answer', content: [] } },
+    { type: 'response.output_text.delta', item_id: id, output_index: 1, content_index: 0, delta: text },
+    { type: 'response.output_item.done', output_index: 1, item: { type: 'message', id, role: 'assistant', phase: 'final_answer', status: 'completed', content: [] } },
+    completed({ output_tokens_details: { reasoning_tokens: 7 } }),
+  ];
+}

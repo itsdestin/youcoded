@@ -39,6 +39,12 @@ const SENTINEL = 'REASONING-SENTINEL-4f1c9ae207b3d6e8';
  *  searches below are looking at real, populated artefacts. */
 const VISIBLE_SUMMARY = 'VISIBLE-SUMMARY-b28f5c';
 const USER_TEXT = 'USER-PROMPT-7d0a41';
+/** A sentinel carried in a PER-CALL tool input. The transcript owns tool inputs, and
+ *  the sidecar cites the tool-use event instead of copying them — the store unit test
+ *  proves that for a hand-built proposal, this proves it for a driven session. The one
+ *  documented exemption (a parallel-call WRAPPER argument string) is not in play here:
+ *  this is a single, unwrapped function call. */
+const TOOL_INPUT_SENTINEL = 'TOOL-INPUT-SENTINEL-a71b3e';
 
 const BINDING = { providerId: 'chatgpt', modelId: 'gpt-test' } as const;
 const NO_CONTEXT = async () => ({ contextLength: null, totalSlots: null });
@@ -47,9 +53,10 @@ const identityFor = (binding: { modelId: string }) =>
 
 type Fetch = typeof fetch;
 
-/** One step: encrypted reasoning whose ciphertext is the sentinel, a visible
- *  reasoning summary, and a final answer. No tool call — the turn ends here. */
-function sentinelStep(): unknown[] {
+/** Step one: encrypted reasoning whose ciphertext is the sentinel, a visible reasoning
+ *  summary, and ONE `Read` call whose argument carries the tool-input sentinel. */
+function sentinelStep(sentinelFile: string): unknown[] {
+  const call = { type: 'function_call', id: 'fc-1', call_id: 'call-1', name: 'Read', arguments: JSON.stringify({ file_path: sentinelFile }), status: 'completed' };
   return [
     { type: 'response.created', response: { id: 'resp-1', model: 'gpt-test', created_at: 1 } },
     { type: 'response.output_item.added', output_index: 0, item: { type: 'reasoning', id: 'rs-1', encrypted_content: SENTINEL } },
@@ -57,10 +64,20 @@ function sentinelStep(): unknown[] {
     { type: 'response.reasoning_summary_text.delta', item_id: 'rs-1', output_index: 0, summary_index: 0, delta: VISIBLE_SUMMARY },
     { type: 'response.reasoning_summary_part.done', item_id: 'rs-1', output_index: 0, summary_index: 0 },
     { type: 'response.output_item.done', output_index: 0, item: { type: 'reasoning', id: 'rs-1', encrypted_content: SENTINEL } },
-    { type: 'response.output_item.added', output_index: 1, item: { type: 'message', id: 'msg-final', role: 'assistant', phase: 'final_answer', content: [] } },
-    { type: 'response.output_text.delta', item_id: 'msg-final', output_index: 1, content_index: 0, delta: 'answered' },
-    { type: 'response.output_item.done', output_index: 1, item: { type: 'message', id: 'msg-final', role: 'assistant', phase: 'final_answer', status: 'completed', content: [] } },
+    { type: 'response.output_item.added', output_index: 1, item: { ...call, arguments: '' } },
+    { type: 'response.output_item.done', output_index: 1, item: call },
     completed({ output_tokens_details: { reasoning_tokens: 7 } }),
+  ];
+}
+
+/** Step two: the answer that ends the turn. */
+function answerStep(): unknown[] {
+  return [
+    { type: 'response.created', response: { id: 'resp-2', model: 'gpt-test', created_at: 1 } },
+    { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'msg-final', role: 'assistant', phase: 'final_answer', content: [] } },
+    { type: 'response.output_text.delta', item_id: 'msg-final', output_index: 0, content_index: 0, delta: 'answered' },
+    { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id: 'msg-final', role: 'assistant', phase: 'final_answer', status: 'completed', content: [] } },
+    completed(),
   ];
 }
 
@@ -107,11 +124,13 @@ describe('accepted history privacy sentinels', () => {
 
   it('keeps the reasoning ciphertext in the private manifest and out of every reader the app has', async () => {
     const sessionId = 'privacy';
+    const sentinelFile = path.join(cwd, `${TOOL_INPUT_SENTINEL}.txt`);
+    fs.writeFileSync(sentinelFile, 'file contents\n');
     const nativeHome = new NativeHome(home);
     const sessionStore = new SessionStore(nativeHome);
     const acceptedHistory = new AcceptedHistoryStore(userData);
     const factory = async (binding: { modelId: string }) => {
-      const provider = createOpenAI({ apiKey: 'fake', baseURL: 'https://fake.invalid/v1', fetch: scriptedFetch([], [sentinelStep()]) });
+      const provider = createOpenAI({ apiKey: 'fake', baseURL: 'https://fake.invalid/v1', fetch: scriptedFetch([], [sentinelStep(sentinelFile), answerStep()]) });
       const model = wrapLanguageModel({ model: provider.responses('gpt-test'), middleware: chatGptMiddleware('session') });
       return bindOpenAIContinuationModel(model, () => identityFor(binding)) as any;
     };
@@ -142,10 +161,15 @@ describe('accepted history privacy sentinels', () => {
     await host.destroyAll();
 
     // ---- The sentinel IS in the private manifest -------------------------
-    const manifestPath = acceptedHistory.manifestPathForTest(sessionId);
+    const manifestPath = acceptedHistory.manifestPath(sessionId);
     expect(fs.existsSync(manifestPath)).toBe(true);
     const manifest = fs.readFileSync(manifestPath, 'utf8');
     expect(manifest).toContain(SENTINEL);
+    // ---- and the per-call tool input is in the transcript ONLY ------------
+    // End-to-end confirmation of what the store unit test proves in isolation: the
+    // manifest cites the tool-use event, it never copies the arguments the model sent.
+    expect(fs.readFileSync(sessionStore.transcriptPath(sessionId, cwd), 'utf8')).toContain(TOOL_INPUT_SENTINEL);
+    expect(manifest).not.toContain(TOOL_INPUT_SENTINEL);
     expect(path.dirname(manifestPath)).toBe(path.join(userData, 'private-continuation'));
     // 0600 file inside a 0700 directory, on POSIX.
     if (process.platform !== 'win32') {

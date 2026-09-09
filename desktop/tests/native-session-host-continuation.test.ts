@@ -10,7 +10,7 @@ import { SpecialistCatalog } from '../src/main/harness/specialists/catalog';
 import { resolveSpecialist } from '../src/main/harness/specialists/registry';
 import { bindOpenAIContinuationModel } from '../src/main/harness/openai-continuation';
 import { chatGptMiddleware } from '../src/main/providers/chatgpt-model';
-import { completed, richToolStep, sse, textStep } from './helpers/responses-fakes';
+import { completed, richToolStep, silentReasoningStep, sse, textStep } from './helpers/responses-fakes';
 
 /** The identity string the registry would build for a signed-in ChatGPT account
  *  (`provider\0model\0sha256(accountId)\0credentialEpoch`) — the host never
@@ -214,14 +214,14 @@ describe('NativeSessionHost durable continuation', () => {
     // First run publishes nothing: no continuation options at all.
     const plain = await firstRun('no-sidecar', { withoutContinuation: true });
     await plain.host.destroy('no-sidecar');
-    expect(fs.existsSync(plain.acceptedHistory.manifestPathForTest('no-sidecar'))).toBe(false);
+    expect(fs.existsSync(plain.acceptedHistory.manifestPath('no-sidecar'))).toBe(false);
 
     // Second run HAS the store: nothing to restore, so it rebuilds — and the
     // turn it then runs must publish a usable checkpoint even though every
     // accepted uuid predates this process.
     const second = await reopenAndSend('no-sidecar');
     expect(carriesCiphertext(second.body)).toBe(false);
-    expect(fs.existsSync(second.fx.acceptedHistory.manifestPathForTest('no-sidecar'))).toBe(true);
+    expect(fs.existsSync(second.fx.acceptedHistory.manifestPath('no-sidecar'))).toBe(true);
 
     // Third run restores what the second one published.
     const third = await reopenAndSend('no-sidecar');
@@ -235,7 +235,7 @@ describe('NativeSessionHost durable continuation', () => {
     const fx = await firstRun('crash-b', { hooks: { beforeRename: () => { if (++writes >= 2) throw new Error('power cut'); } } });
     await fx.host.destroy('crash-b');
     // The fence landed, the manifest did not — that IS the crash window.
-    expect(fs.existsSync(fx.acceptedHistory.manifestPathForTest('crash-b'))).toBe(false);
+    expect(fs.existsSync(fx.acceptedHistory.manifestPath('crash-b'))).toBe(false);
     expect(fs.readdirSync(path.join(userData, 'private-continuation')).some((f) => f.endsWith('.eligibility.json'))).toBe(true);
 
     const { body } = await reopenAndSend('crash-b');
@@ -247,7 +247,7 @@ describe('NativeSessionHost durable continuation', () => {
   it('reopening under a different credential epoch rebuilds instead of replaying another account\'s ciphertext', async () => {
     const fx = await firstRun('epoch');
     await fx.host.destroy('epoch');
-    expect(fs.existsSync(fx.acceptedHistory.manifestPathForTest('epoch'))).toBe(true);   // there IS one to refuse
+    expect(fs.existsSync(fx.acceptedHistory.manifestPath('epoch'))).toBe(true);   // there IS one to refuse
 
     const { body } = await reopenAndSend('epoch', { identity: identityFor('epoch-2') });
     expect(carriesCiphertext(body)).toBe(false);
@@ -257,7 +257,7 @@ describe('NativeSessionHost durable continuation', () => {
   it('a transcript that advanced after publication rejects the checkpoint', async () => {
     const fx = await firstRun('advanced');
     await fx.host.destroy('advanced');
-    expect(fs.existsSync(fx.acceptedHistory.manifestPathForTest('advanced'))).toBe(true);
+    expect(fs.existsSync(fx.acceptedHistory.manifestPath('advanced'))).toBe(true);
     // A line the manifest's byte/digest high-water cannot possibly cover.
     fs.appendFileSync(fx.sessionStore.transcriptPath('advanced', cwd),
       JSON.stringify({ type: 'user-message', uuid: 'stray', sessionId: 'advanced', timestamp: 1, data: { text: 'from another process' } }) + '\n');
@@ -269,8 +269,8 @@ describe('NativeSessionHost durable continuation', () => {
   it('a malformed sidecar falls back without touching the visible transcript', async () => {
     const fx = await firstRun('malformed');
     await fx.host.destroy('malformed');
-    expect(fs.existsSync(fx.acceptedHistory.manifestPathForTest('malformed'))).toBe(true);
-    fs.writeFileSync(fx.acceptedHistory.manifestPathForTest('malformed'), '{ not json');
+    expect(fs.existsSync(fx.acceptedHistory.manifestPath('malformed'))).toBe(true);
+    fs.writeFileSync(fx.acceptedHistory.manifestPath('malformed'), '{ not json');
 
     const { body } = await reopenAndSend('malformed');
     expect(carriesCiphertext(body)).toBe(false);
@@ -280,7 +280,7 @@ describe('NativeSessionHost durable continuation', () => {
   it('startup orphan cleanup removes a sidecar whose transcript is gone', async () => {
     const fx = await firstRun('orphan');
     await fx.host.destroy('orphan');
-    const manifest = fx.acceptedHistory.manifestPathForTest('orphan');
+    const manifest = fx.acceptedHistory.manifestPath('orphan');
     expect(fs.existsSync(manifest)).toBe(true);
 
     fs.rmSync(fx.sessionStore.transcriptPath('orphan', cwd));
@@ -296,7 +296,7 @@ describe('NativeSessionHost durable continuation', () => {
     const { body, fx: reopened } = await reopenAndSend('plain', { withoutContinuation: true });
     expect(carriesCiphertext(body)).toBe(false);
     expect(JSON.stringify(body.input)).toContain('both files');
-    expect(fs.existsSync(reopened.acceptedHistory.manifestPathForTest('plain'))).toBe(false);
+    expect(fs.existsSync(reopened.acceptedHistory.manifestPath('plain'))).toBe(false);
   });
   it('a publication still in flight when /clear runs is fenced, and the reopened session starts empty', async () => {
     const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], richTurn()) });
@@ -316,7 +316,7 @@ describe('NativeSessionHost durable continuation', () => {
     await fx.host.drain('late-clear');
     // The parked one lost; the clear's own (empty) checkpoint won.
     expect(outcomes).toEqual(['stale-generation', 'ok']);
-    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPathForTest('late-clear'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('late-clear'), 'utf8'));
     expect(manifest.messages).toEqual([]);
     expect(manifest.eventUuids).toEqual([]);
     await fx.host.destroy('late-clear');
@@ -375,6 +375,30 @@ describe('NativeSessionHost durable continuation', () => {
     expect(wire).not.toContain('abandoned reasoning');
     expect(wire).not.toContain('cipher-empty-1');
   });
+  it('a reasoning item that never emits a summary still publishes, and its ciphertext returns to the wire', async () => {
+    // WHY: the SDK opens a reasoning part for an encrypted item even with no summary
+    // token, and `ai` keeps that text:'' part. An empty string has no transcript anchor,
+    // so before the store's `empty` descriptor this whole turn was unpublishable and the
+    // session could never become durable — the ciphertext was lost at every close.
+    const fx = makeHost({ home, userData, fetchImpl: scriptedFetch([], [silentReasoningStep('msg-silent', 'answered', 'SILENT-CIPHERTEXT')]) });
+    const outcomes = recordPublishes(fx.acceptedHistory);
+    await fx.host.create({ sessionId: 'silent', cwd, binding: BINDING });
+    await turn(fx.host, 'silent', 'quick one');
+    expect(outcomes).toEqual(['ok']);
+
+    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('silent'), 'utf8'));
+    const parts = manifest.messages.flatMap((m: any) => m.content?.parts ?? []);
+    expect(parts.filter((p: any) => p.kind === 'empty')).toEqual([
+      { kind: 'empty', field: 'reasoning-text', providerOptions: { openai: { itemId: 'rs-silent', reasoningEncryptedContent: 'SILENT-CIPHERTEXT' } } },
+    ]);
+    await fx.host.destroy('silent');
+
+    const { body } = await reopenAndSend('silent');
+    expect(body.input.filter((i: any) => i.type === 'reasoning'))
+      .toMatchObject([{ id: 'rs-silent', encrypted_content: 'SILENT-CIPHERTEXT' }]);
+    expect(JSON.stringify(body.input)).toContain('answered');
+  });
+
   it('a summary compaction restores as the persisted receipt plus the retained suffix', async () => {
     const replies = [
       ...richTurn(),
@@ -389,14 +413,14 @@ describe('NativeSessionHost durable continuation', () => {
     await turn(fx.host, 'summarised', 'and after that?');
     expect(await fx.host.compact('summarised')).toEqual({ ok: true });
     await fx.host.drain('summarised');
-    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPathForTest('summarised'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('summarised'), 'utf8'));
     expect(manifest.transformation).toEqual({ kind: 'summary', summaryEventUuid: expect.any(String) });
     // The receipt is a REFERENCE to the persisted compact-summary event, not a
     // copy of it: the capture records the summary uuid into the accepted set,
     // so the store can cite it. That is what keeps a long summary — real user
     // conversation, compressed — out of the private sidecar entirely.
     expect(manifest.messages[0].content).toEqual({ kind: 'event', field: 'summary-text', uuid: expect.any(String) });
-    expect(fs.readFileSync(fx.acceptedHistory.manifestPathForTest('summarised'), 'utf8')).not.toContain('Compressed history.');
+    expect(fs.readFileSync(fx.acceptedHistory.manifestPath('summarised'), 'utf8')).not.toContain('Compressed history.');
     await fx.host.destroy('summarised');
 
     const { body } = await reopenAndSend('summarised');
@@ -476,7 +500,7 @@ describe('NativeSessionHost durable continuation', () => {
     // The checkpoint still describes the whole history, including the message
     // the request had to drop.
     const longUuid = fx.host.getHistory('fitted')!.find((e: any) => e.data?.text?.startsWith('LLL'))!.uuid;
-    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPathForTest('fitted'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('fitted'), 'utf8'));
     expect(manifest.eventUuids).toContain(longUuid);
     expect(JSON.stringify(manifest.messages)).toContain(longUuid);
     await fx.host.destroyAll();
@@ -495,7 +519,7 @@ describe('NativeSessionHost durable continuation', () => {
     await vi.waitFor(() => expect(fx.host.isIdle('pictured')).toBe(true));
     await fx.host.drain('pictured');
     // The manifest points at the file; it never copies the pixels.
-    const manifest = fs.readFileSync(fx.acceptedHistory.manifestPathForTest('pictured'), 'utf8');
+    const manifest = fs.readFileSync(fx.acceptedHistory.manifestPath('pictured'), 'utf8');
     expect(manifest).toContain(shot);
     expect(manifest).not.toContain(png.toString('base64'));
     await fx.host.destroy('pictured');
@@ -527,7 +551,7 @@ describe('NativeSessionHost durable continuation', () => {
       parentToolCallId: 'tc-1', token: (first as any).token, description: 'inspect both files',
     });
     await fx.host.drain(spawned.childId);
-    expect(fs.existsSync(fx.acceptedHistory.manifestPathForTest(spawned.childId))).toBe(true);
+    expect(fs.existsSync(fx.acceptedHistory.manifestPath(spawned.childId))).toBe(true);
 
     const again = fx.host.reserveSpecialist('parent', { writer: false });
     const outcome = await fx.host.resumeSpecialist('parent', {
@@ -559,7 +583,7 @@ describe('NativeSessionHost durable continuation', () => {
     await turn(fx.host, 'pruned', 'and now?');
     await fx.host.compact('pruned');
     await fx.host.drain('pruned');
-    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPathForTest('pruned'), 'utf8'));
+    const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPath('pruned'), 'utf8'));
     expect(manifest.transformation).toEqual({ kind: 'pruned' });
     // The shortened text is DESCRIBED (keepChars), never copied.
     expect(JSON.stringify(manifest.messages)).toContain('"pruned":{"keepChars"');

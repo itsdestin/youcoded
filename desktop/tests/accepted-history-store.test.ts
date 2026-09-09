@@ -77,7 +77,7 @@ describe('AcceptedHistoryStore', () => {
   }
 
   function sidecar(): string {
-    return fs.readFileSync(store.manifestPathForTest(sessionId), 'utf8');
+    return fs.readFileSync(store.manifestPath(sessionId), 'utf8');
   }
 
   /** Every JSON key path in the manifest whose string value contains `marker`, so a
@@ -96,8 +96,8 @@ describe('AcceptedHistoryStore', () => {
     expect(sidecar()).toContain('PRIVATE_SENTINEL');
     expect(sidecar()).not.toContain('"text":"hello"');
     expect(sidecar()).not.toContain('"text":"answer"');
-    expect((fs.statSync(path.dirname(store.manifestPathForTest(sessionId))).mode & 0o077)).toBe(0);
-    expect((fs.statSync(store.manifestPathForTest(sessionId)).mode & 0o077)).toBe(0);
+    expect((fs.statSync(path.dirname(store.manifestPath(sessionId))).mode & 0o077)).toBe(0);
+    expect((fs.statSync(store.manifestPath(sessionId)).mode & 0o077)).toBe(0);
 
     expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest }))
       .toEqual({ ok: true, messages: proposal().messages, eventUuids: ['u1', 'r1', 'a1'], revision });
@@ -194,6 +194,72 @@ describe('AcceptedHistoryStore', () => {
     expect(restored).toEqual({ ok: true, messages, eventUuids: ['t1', 't2'], revision: store.currentRevision(sessionId) });
   });
 
+  it('publishes an empty-summary reasoning part with no transcript reference and restores it byte-for-byte', async () => {
+    // WHY: @ai-sdk/openai emits reasoning-start for an encrypted reasoning item that never
+    // produces summary text, so `ai` builds a reasoning part whose text is ''. No anchor can
+    // ever reproduce an empty target, so before this every such turn published
+    // `unreferenced-history` forever and the session could never become durable.
+    const events: Fixture[] = [
+      { type: 'user-message', sessionId, uuid: 'u1', data: { text: 'hello' } },
+      { type: 'assistant-text', sessionId, uuid: 'a1', data: { partId: 'text-0', text: 'answer' } },
+    ];
+    writeTranscript(events);
+    const messages = [
+      { role: 'user', content: 'hello' },
+      { role: 'assistant', content: [
+        { type: 'reasoning', text: '', providerOptions: { openai: { itemId: 'rs_empty', reasoningEncryptedContent: 'EMPTY_SUMMARY_SENTINEL' } } },
+        { type: 'text', text: 'answer', providerOptions: { openai: { itemId: 'msg_1', phase: 'final_answer' } } },
+      ] },
+    ];
+    const restored = await roundTrip({ references: events.map(refFor), messages: messages as any });
+    expect(JSON.parse(sidecar()).messages[1].content.parts[0]).toEqual({
+      kind: 'empty', field: 'reasoning-text',
+      providerOptions: { openai: { itemId: 'rs_empty', reasoningEncryptedContent: 'EMPTY_SUMMARY_SENTINEL' } },
+    });
+    expect(restored).toEqual({ ok: true, messages, eventUuids: ['u1', 'a1'], revision: store.currentRevision(sessionId) });
+  });
+
+  it('lets ONLY reasoning be empty, and only with allowlisted metadata', async () => {
+    const events: Fixture[] = [{ type: 'assistant-text', sessionId, uuid: 'a1', data: { partId: 'text-0', text: 'answer' } }];
+    writeTranscript(events);
+    for (const part of [
+      { type: 'text', text: '', providerOptions: { openai: { itemId: 'msg_1', phase: 'final_answer' } } },   // empty visible text is never anchorless
+      { type: 'reasoning', text: '', providerOptions: { openai: { reasoningEncryptedContent: 'x', providerExecuted: true } } },  // outside the allowlist
+    ]) {
+      await expect(roundTrip({ references: events.map(refFor), messages: [{ role: 'assistant', content: [part] }] as any }))
+        .resolves.toEqual({ ok: false, reason: 'unreferenced-history' });
+    }
+  });
+
+  it('leaves no eligibility file behind and finishes the sweep past an undecodable name', async () => {
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    await expect(store.publish(proposal({ revision }))).resolves.toEqual({ ok: true });
+    const dir = path.dirname(store.manifestPath(sessionId));
+    // A name `encodeURIComponent` could never have produced: decodeURIComponent THROWS
+    // on it, and that used to abandon the whole sweep at whatever readdir order it hit.
+    fs.writeFileSync(path.join(dir, '%E0%A4%A.manifest.json'), '{}');
+    // A fence whose manifest never landed — the crash window leaves exactly this.
+    fs.writeFileSync(path.join(dir, 'gone.eligibility.json'), JSON.stringify({ v: 1, sessionId: 'gone', revision: 1, eligible: false, reason: 'x' }));
+
+    fs.rmSync(transcript);
+    await store.cleanupOrphans();
+
+    // Both orphan pairs are gone; only the entry no session id can name is skipped.
+    expect(fs.readdirSync(dir).sort()).toEqual(['%E0%A4%A.manifest.json']);
+  });
+
+  it('remove() takes the eligibility fence with the manifest', async () => {
+    const revision = await store.invalidate(sessionId, 'history-mutation');
+    await expect(store.publish(proposal({ revision }))).resolves.toEqual({ ok: true });
+    const dir = path.dirname(store.manifestPath(sessionId));
+    expect(fs.readdirSync(dir).sort()).toEqual([`${sessionId}.eligibility.json`, `${sessionId}.manifest.json`]);
+
+    await expect(store.remove(sessionId)).resolves.toEqual({ ok: true });
+    expect(fs.readdirSync(dir)).toEqual([]);
+    // And the in-memory fence still wins, so a stale in-flight publish cannot land.
+    expect(store.currentRevision(sessionId)).toBe(revision + 1);
+  });
+
   it('refuses provider metadata outside the per-kind allowlist instead of copying it', async () => {
     const events: Fixture[] = [{ type: 'tool-use', sessionId, uuid: 't1', data: { toolUseId: 'call_1', toolName: 'Bash', toolInput: {} } }];
     writeTranscript(events);
@@ -262,7 +328,7 @@ describe('AcceptedHistoryStore', () => {
     const tamper = (mutate: (manifest: any) => void) => {
       const manifest = JSON.parse(original);
       mutate(manifest);
-      fs.writeFileSync(store.manifestPathForTest(sessionId), JSON.stringify(manifest));
+      fs.writeFileSync(store.manifestPath(sessionId), JSON.stringify(manifest));
       return store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest });
     };
     expect(tamper(m => { m.messages[0].role = 'root'; })).toEqual({ ok: false, reason: 'malformed' });
@@ -315,7 +381,7 @@ describe('AcceptedHistoryStore', () => {
     // A keep-length the event text cannot support is a corrupt manifest, not a shorter result.
     const manifest = JSON.parse(sidecar());
     manifest.messages[0].content.parts[0].pruned.keepChars = long.length + 1;
-    fs.writeFileSync(store.manifestPathForTest(sessionId), JSON.stringify(manifest));
+    fs.writeFileSync(store.manifestPath(sessionId), JSON.stringify(manifest));
     expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
   });
 
@@ -343,9 +409,9 @@ describe('AcceptedHistoryStore', () => {
     fs.appendFileSync(transcript, `${JSON.stringify({ type: 'user-message', sessionId, uuid: 'u2', data: { text: 'later' } })}\n`);
     expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'transcript-advanced' });
 
-    fs.writeFileSync(store.manifestPathForTest(sessionId), '{bad');
+    fs.writeFileSync(store.manifestPath(sessionId), '{bad');
     expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'malformed' });
-    fs.writeFileSync(store.manifestPathForTest(sessionId), Buffer.alloc(16 * 1024 * 1024 + 1));
+    fs.writeFileSync(store.manifestPath(sessionId), Buffer.alloc(16 * 1024 * 1024 + 1));
     expect(store.restore({ sessionId, transcriptPath: transcript, binding, assemblyDigest })).toEqual({ ok: false, reason: 'oversized' });
   });
 
@@ -386,6 +452,6 @@ describe('AcceptedHistoryStore', () => {
 
     fs.rmSync(transcript);
     await store.cleanupOrphans();
-    expect(fs.existsSync(store.manifestPathForTest(sessionId))).toBe(false);
+    expect(fs.existsSync(store.manifestPath(sessionId))).toBe(false);
   });
 });

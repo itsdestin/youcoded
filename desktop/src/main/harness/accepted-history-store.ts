@@ -70,6 +70,10 @@ interface ImageDescriptor { path: string; mediaType: string; digest: string; fil
 type PartDescriptor =
   | { kind: 'event'; uuid: string; field: Field; providerOptions?: unknown; images?: ImageDescriptor[]; pruned?: PrunedDescriptor }
   | { kind: 'concat'; uuids: string[]; field: 'assistant-text' | 'reasoning-text'; providerOptions?: unknown }
+  /** The ONE descriptor that cites no transcript content, because there is none to
+   *  cite: an encrypted reasoning item whose summary never produced a single token.
+   *  Restricted to reasoning — an empty part of any other kind still fails the publish. */
+  | { kind: 'empty'; field: 'reasoning-text'; providerOptions?: unknown }
   | { kind: 'image'; path: string; mediaType: string; digest: string };
 
 type ContentDescriptor =
@@ -363,7 +367,7 @@ export class AcceptedHistoryStore {
     this.dir = path.join(userDataRoot, 'private-continuation');
   }
 
-  manifestPathForTest(sessionId: string): string { return path.join(this.dir, `${encodeURIComponent(sessionId)}.manifest.json`); }
+  manifestPath(sessionId: string): string { return path.join(this.dir, `${encodeURIComponent(sessionId)}.manifest.json`); }
   private eligibilityPath(sessionId: string): string { return path.join(this.dir, `${encodeURIComponent(sessionId)}.eligibility.json`); }
 
   currentRevision(sessionId: string): number {
@@ -415,7 +419,7 @@ export class AcceptedHistoryStore {
       }
       if (Buffer.byteLength(json) > ACCEPTED_HISTORY_MAX_BYTES) return { ok: false, reason: 'oversized' } as const;
       try {
-        await this.atomicWrite(this.manifestPathForTest(proposal.sessionId), json);
+        await this.atomicWrite(this.manifestPath(proposal.sessionId), json);
         // Recheck after writing the immutable proposal and immediately before eligibility publication.
         if (proposal.revision !== this.currentRevision(proposal.sessionId)) return { ok: false, reason: 'stale-generation' } as const;
         await this.atomicWrite(this.eligibilityPath(proposal.sessionId), JSON.stringify({ v: VERSION, sessionId: proposal.sessionId, revision: proposal.revision, eligible: true, reason: 'published' } satisfies Eligibility));
@@ -429,7 +433,7 @@ export class AcceptedHistoryStore {
   restore(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): AcceptedHistoryRestore {
     const eligibility = this.readBoundedJson(this.eligibilityPath(input.sessionId)) as Eligibility | null;
     if (!eligibility || eligibility.v !== VERSION || eligibility.sessionId !== input.sessionId || !eligibility.eligible) return { ok: false, reason: 'ineligible' };
-    const file = this.manifestPathForTest(input.sessionId);
+    const file = this.manifestPath(input.sessionId);
     let stat: fs.Stats;
     try { stat = fs.statSync(file); } catch { return { ok: false, reason: 'ineligible' }; }
     if (stat.size > ACCEPTED_HISTORY_MAX_BYTES) return { ok: false, reason: 'oversized' };
@@ -463,25 +467,43 @@ export class AcceptedHistoryStore {
 
   async remove(sessionId: string): Promise<{ ok: true } | { ok: false; reason: 'unlink-failed' }> {
     await this.invalidate(sessionId, 'deleted');
-    try {
-      const unlink = this.hooks.unlink ?? ((file: string) => fs.promises.unlink(file));
-      await unlink(this.manifestPathForTest(sessionId));
-      return { ok: true };
-    } catch (error: any) {
-      if (error?.code === 'ENOENT') return { ok: true };
-      return { ok: false, reason: 'unlink-failed' };
-    }
+    const unlink = this.hooks.unlink ?? ((file: string) => fs.promises.unlink(file));
+    const drop = async (file: string): Promise<boolean> => {
+      try { await unlink(file); return true; }
+      catch (error: any) { return error?.code === 'ENOENT'; }
+    };
+    // WHY: the fence outlives the checkpoint it fenced otherwise. invalidate() just
+    // rewrote it, so leaving it behind strands a file for a session that no longer has
+    // one — and cleanupOrphans would have to sweep what remove() should never leave.
+    // Manifest first: an eligibility file without a manifest is refused on restore,
+    // whereas a manifest without a fence is what a torn removal must never leave.
+    const manifest = await drop(this.manifestPath(sessionId));
+    const eligibility = await drop(this.eligibilityPath(sessionId));
+    return manifest && eligibility ? { ok: true } : { ok: false, reason: 'unlink-failed' };
   }
 
   async cleanupOrphans(): Promise<void> {
     let files: string[];
     try { files = fs.readdirSync(this.dir); } catch { return; }
+    // WHY: a name this store did not write (or a torn temp file) makes
+    // decodeURIComponent THROW, and one such entry used to abandon the whole sweep at
+    // whatever position readdir handed it — every orphan after it survived forever.
+    const sessionIdOf = (name: string, suffix: string): string | null => {
+      try { return decodeURIComponent(name.slice(0, -suffix.length)); } catch { return null; }
+    };
     for (const name of files.filter(name => name.endsWith('.manifest.json'))) {
       const manifest = this.readBoundedJson(path.join(this.dir, name)) as Manifest | null;
-      if (!manifest || !fs.existsSync(manifest.transcriptPath)) {
-        const encoded = name.slice(0, -'.manifest.json'.length);
-        await this.remove(decodeURIComponent(encoded));
-      }
+      if (manifest && typeof manifest.transcriptPath === 'string' && fs.existsSync(manifest.transcriptPath)) continue;
+      const sessionId = sessionIdOf(name, '.manifest.json');
+      if (sessionId !== null) await this.remove(sessionId);
+    }
+    // WHY: a crash between the fence and the manifest write leaves an eligibility file
+    // with nothing to make eligible. Restore already refuses it, but nothing ever
+    // deleted it, so the private directory grew one dead fence per lost checkpoint.
+    for (const name of files.filter(name => name.endsWith('.eligibility.json'))) {
+      const sessionId = sessionIdOf(name, '.eligibility.json');
+      if (sessionId === null || fs.existsSync(this.manifestPath(sessionId))) continue;
+      await this.remove(sessionId);
     }
   }
 
@@ -594,6 +616,15 @@ function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescripto
       const options = providerOptionsFor(part.providerOptions, part.type);
       if (!options) return null;
       const field: TextField = part.type === 'reasoning' ? 'reasoning-text' : message.role === 'user' ? 'user-text' : 'assistant-text';
+      if (part.type === 'reasoning' && part.text === '') {
+        // WHY: @ai-sdk/openai opens a reasoning part for an encrypted item even when no
+        // summary token ever arrives, and `ai` keeps that text:'' part in the response
+        // message. No run of anchors can reproduce an empty target, so without this the
+        // whole turn — ciphertext included — is unpublishable forever. Nothing is copied:
+        // the descriptor carries only the allowlisted provider metadata.
+        parts.push({ kind: 'empty', field: 'reasoning-text', ...options });
+        continue;
+      }
       if (field === 'user-text') {
         // WHY: user text has no concat descriptor, so only a single-anchor run may be
         // claimed — asking for one keeps a rejected longer run from spending anchors.
@@ -745,6 +776,12 @@ function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, 
     const text = concatText(part.uuids, part.field, events, accepted);
     if (text === null) return { reason: 'malformed' };
     return { value: { type: part.field === 'reasoning-text' ? 'reasoning' : 'text', text, ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}) } };
+  }
+  if (part.kind === 'empty') {
+    // WHY: only reasoning is publishable with empty text, so only reasoning may restore
+    // from an anchorless descriptor — anything else here is a corrupt manifest.
+    if (part.field !== 'reasoning-text') return { reason: 'malformed' };
+    return { value: { type: 'reasoning', text: '', ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}) } };
   }
   if (part.kind !== 'event') return { reason: 'malformed' };
   const event = acceptedEvent(part.uuid, events, accepted);

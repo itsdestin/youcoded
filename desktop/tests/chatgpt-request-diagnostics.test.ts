@@ -76,8 +76,56 @@ describe('private request diagnostics', () => {
     await d.flush();
   });
 
-  it('measures representative request parsing and hashing CPU (not a savings claim)', async () => {
-    const d = new ChatGptRequestDiagnostics({ directory: '/unused', write: async () => {} });
+  it('drops a scan that did not walk every item instead of reporting differing requests as identical', async () => {
+    const rows: any[] = [];
+    // A scanner that reads the top level faithfully but silently loses the LAST array
+    // item and says so. Real bodies cannot provoke this (valid JSON always walks), so a
+    // stub is the only way to hand dispatch the shortfall the buffer sizing used to
+    // paper over with zero blocks — two DIFFERENT requests comparing equal.
+    const scan = (items: string[]) => ((text: string, array = false) => array
+      ? { entries: items.slice(0, -1).map((v, i) => [String(i), v] as [string, string]), complete: false }
+      : { entries: [['input', `[${items.join(',')}]`], ['model', '"gpt-5"']] as Array<[string, string]>, complete: true });
+
+    const first = ['"same"', '"FIRST"'];
+    const second = ['"same"', '"SECOND"'];
+    const d = new ChatGptRequestDiagnostics({ directory: '/unused', write: async row => { rows.push(row); }, scan: scan(first) as any });
+    d.finish(d.dispatch(scope, body(first.map(x => JSON.parse(x)))), 'success');
+    (d as any).scan = scan(second);
+    d.finish(d.dispatch(scope, body(second.map(x => JSON.parse(x)))), 'success');
+    await d.flush();
+
+    // Neither observation may become a comparison, and both are counted as loss.
+    expect(rows.map(r => r.change)).not.toContain('identical');
+    expect(rows).toHaveLength(0);
+    expect(d.stats().dropped).toBe(2);
+
+    // The lane was forgotten too, so the next healthy request is an honest baseline.
+    (d as any).scan = undefined;
+    const healthy = new ChatGptRequestDiagnostics({ directory: '/unused', write: async row => { rows.push(row); } });
+    healthy.finish(healthy.dispatch(scope, body(['a'])), 'success');
+    await healthy.flush();
+    expect(rows.at(-1)).toMatchObject({ change: 'baseline', inputItems: 1 });
+  });
+
+  it('drops a body whose input array the scanner cannot finish walking', async () => {
+    // WHY: with the full JSON.parse gone, a truncated/unterminated body reaches the
+    // scanner directly. Half a walk is half a fingerprint; it must never be compared.
+    const rows: any[] = [];
+    const d = new ChatGptRequestDiagnostics({ directory: '/unused', write: async row => { rows.push(row); } });
+    d.finish(d.dispatch(scope, body(['a', 'b'])), 'success');
+    expect(d.dispatch(scope, '{"model":"gpt-5","input":[{"a":1},{"b":2}')).toBeUndefined();
+    expect(d.dispatch(scope, '{"model":"gpt-5","input":')).toBeUndefined();
+    await d.flush();
+    expect(rows.map(r => r.change)).toEqual(['baseline']);
+    expect(d.stats().dropped).toBe(2);
+  });
+
+  // WHY: this is a stopwatch, not a regression test — it asserts one invariant and
+  // otherwise only prints numbers, so it is opt-in (`YOUCODED_DIAG_BENCH=1 npx vitest
+  // run tests/chatgpt-request-diagnostics.test.ts`) and never taxes an ordinary run.
+  it.skipIf(!process.env.YOUCODED_DIAG_BENCH)('measures representative request parsing and hashing CPU (not a savings claim)', async () => {
+    const rows: any[] = [];
+    const d = new ChatGptRequestDiagnostics({ directory: '/unused', write: async row => { rows.push(row); } });
     const input = Array.from({ length: 1000 }, (_, i) => ({ role: 'user', content: `${i}:` + 'word '.repeat(80) }));
     const representative = body(input);
     const encrypted = body([...input, { type: 'reasoning', encrypted_content: 'e'.repeat(4 * 1024 * 1024) }]);
@@ -88,7 +136,37 @@ describe('private request diagnostics', () => {
       console.log(JSON.stringify({ measurement: name, bytes: Buffer.byteLength(payload), iterations: 20, userMicros: cpu.user, systemMicros: cpu.system, cpuMsPerRequest: (cpu.user + cpu.system) / 20000 }));
     }
     await d.flush();
+    // The measurement is only meaningful if every dispatch was actually observed:
+    // 40 recorded comparisons, none of them a dropped or unparsed observation.
+    expect(rows).toHaveLength(40);
+    expect(rows.every(r => r.inputItems > 0 && r.outcome === 'success')).toBe(true);
+    expect(d.stats().dropped).toBe(0);
   });
+  it('writes a loss record to the real file when observations are lost and nothing completes', async () => {
+    // WHY: loss that never accompanies a completed request would otherwise be invisible —
+    // the counters ride on ordinary records, and there are none. Real directory, real
+    // writer: the `kind:'loss'` row is a persisted schema, not an internal counter.
+    const dir = await mkdtemp(join(tmpdir(), 'cache-loss-'));
+    const d = new ChatGptRequestDiagnostics({ directory: dir, now: () => 4_242 });
+    try {
+      // 257 dispatches, none finished: the 256-unfinished bound drops the last one.
+      for (let i = 0; i < 257; i++) d.dispatch({ ...scope, sessionId: String(i) }, body(['a']));
+      expect(d.stats()).toMatchObject({ unfinished: 256, dropped: 1, queued: 0 });
+      await d.flush();
+
+      const lines = (await readFile(join(dir, 'requests.jsonl'), 'utf8')).trim().split('\n');
+      expect(lines).toHaveLength(1);
+      expect(JSON.parse(lines[0])).toEqual({ version: 1, kind: 'loss', timestamp: 4_242, dropped: 1, evicted: 0, expired: 0, writeFailures: 0 });
+      // It reports loss and NOTHING else — no session, lane, model or body-derived field.
+      expect(lines[0]).not.toContain('PRIVATE_SESSION');
+      expect(lines[0]).not.toContain('gpt-5');
+
+      // Unchanged counters must not append a second, redundant loss row.
+      await d.flush();
+      expect((await readFile(join(dir, 'requests.jsonl'), 'utf8')).trim().split('\n')).toHaveLength(1);
+    } finally { await d.flush(); await rm(dir, { recursive: true, force: true, maxRetries: 3 }); }
+  });
+
   it('compares ordered appends, edits and removals at dispatch and isolates lanes', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'cache-test-'));
     const d = new ChatGptRequestDiagnostics({ directory: dir });
