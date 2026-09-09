@@ -17,7 +17,7 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta } from '../../shared/types';
-import { ShellRegistry, formatFinishedNotice, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
+import { ShellRegistry, formatFinishedNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts } from './harness-session';
 import { rebuildHistory } from './history-rebuild';
@@ -286,7 +286,25 @@ interface LiveEntry {
   // back-pointer that lets destroy() de-register this child from its parent's
   // childrenOf set without re-reading the header off disk (see childrenOf).
   parentSessionId?: string;
+  // WHY (2026-09-09, Destin: "when I interrupt that should pause or end the
+  // turn without a new message immediately starting the turn back up again"):
+  // Stop used to be the exact moment a parked background report was delivered.
+  // isIdle() is "no turn in flight", the Stop button ends the turn, and
+  // drainDeliveries runs at the tail of every turn regardless of how it ended
+  // — so pressing Stop CAUSED a fresh model turn on whatever had finished in
+  // the background (transcript audit: 10 of 15 stops were followed within a
+  // minute by an auto-started turn). This flag is set by interrupt() and
+  // cleared by the next USER-started turn; while it is set, nothing is
+  // delivered as a turn. The held reports are then spliced into history
+  // silently, right before that next user message, so the model still sees
+  // them — as context for what the user asked, not as a reason to speak.
+  holdDeliveries?: boolean;
 }
+
+// The no-op opener kickIdleDeliveryPass dispatches purely to reach runTurns'
+// delivery tail. A named constant so runTurns can tell "a user started this
+// pass" (a typed message, a queued message, a skill) from "the host did".
+const IDLE_PASS = async (): Promise<void> => {};
 
 export class NativeSessionHost extends EventEmitter {
   private live = new Map<string, LiveEntry>();
@@ -1480,9 +1498,12 @@ export class NativeSessionHost extends EventEmitter {
   private kickIdleDeliveryPass(parentId: string): void {
     const entry = this.live.get(parentId);
     if (!entry || !this.isIdle(parentId)) return;
+    // Held after Stop (see LiveEntry.holdDeliveries): the report stays queued
+    // and rides in with the user's next message instead of waking the model.
+    if (entry.holdDeliveries) return;
     entry.inFlight = true;
     entry.running = new Promise<void>((resolve) => {
-      setImmediate(() => { void this.runTurns(parentId, entry, async () => {}).then(resolve, resolve); });
+      setImmediate(() => { void this.runTurns(parentId, entry, IDLE_PASS).then(resolve, resolve); });
     });
   }
 
@@ -2504,6 +2525,25 @@ export class NativeSessionHost extends EventEmitter {
           spawnBackground: (parentId: string, spawnOpts: Parameters<NativeSessionHost['spawnSpecialistBackground']>[1]) =>
             this.spawnSpecialistBackground(parentId, spawnOpts),
           // Task 6 — the task_id management surface: steer/interrupt/resume.
+          // 2026-09-09 — replaces the per-turn status block: the model asks
+          // once (Task list: true) instead of being reminded every turn.
+          listStatus: (parentId: string) => {
+            const e = this.live.get(parentId);
+            if (!e) return null;
+            const specialists = this.buildSpecialistStatus(parentId, e.cwd);
+            // Background commands too (Destin, 2026-09-09): one list for
+            // everything the model may be waiting on, same line shape as
+            // BashOutput's own listing so the two never disagree.
+            const shells = (this.shellRegistries.get(parentId)?.list() ?? []).map((r) => {
+              const cmd = r.command.length > 60 ? `${r.command.slice(0, 55)}…` : r.command;
+              return `${r.shellId} · ${stateText(r)} · ${cmd}`;
+            });
+            if (!specialists && shells.length === 0) return null;
+            return [
+              specialists ? `Specialists:\n${specialists}` : null,
+              shells.length ? `Background commands:\n${shells.join('\n')}` : null,
+            ].filter(Boolean).join('\n\n');
+          },
           steerSpecialist: (parentId: string, childId: string, text: string) => this.steerSpecialist(parentId, childId, text),
           interruptSpecialist: (parentId: string, childId: string) => this.interruptSpecialist(parentId, childId),
           resumeSpecialist: (parentId: string, resumeOpts: Parameters<NativeSessionHost['resumeSpecialist']>[1]) =>
@@ -2626,6 +2666,11 @@ export class NativeSessionHost extends EventEmitter {
    *  DelegationRecord status as "interrupted" instead of failing to compile;
    *  the `never` assignment in `default` turns that into a typecheck error
    *  the day the status union grows. */
+  // 2026-09-09: no longer injected every turn (that block kept helpers
+  // top-of-mind and invited the "report now" steers the transcript audit
+  // measured, and re-inserting it each turn threw away cached prompt prefix).
+  // Now the text behind Task's `list: true` — read on demand, like Codex's
+  // list_agents and Hermes's delegate_task(action='list').
   private buildSpecialistStatus(sessionId: string, cwd: string): string | null {
     if (!this.ledger) return null;
     const lines = this.ledger.listFor(cwd, sessionId)
@@ -2732,10 +2777,6 @@ export class NativeSessionHost extends EventEmitter {
     const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), queue: [], inFlight: false, mcpLease };
     this.live.set(sessionId, entry);
     this.retainModel(sessionId, session.binding.modelId); // ref-count this model
-    // Task 5 (plan 1b): wired for ROOT sessions only — wire() is never called
-    // for a specialist child (createChild has its own inline live.set, see its
-    // "NOT wire()" comment), so a child never grows its own status block.
-    session.setSpecialistStatus(() => this.buildSpecialistStatus(sessionId, cwd));
     // Persist "Always allow" decisions for THIS session's project. The session
     // emits 'remember-rule' {tool, pattern?, action} — a plain EventEmitter
     // event, NOT a transcript event (the frozen transcript surface is untouched)
@@ -3481,6 +3522,16 @@ export class NativeSessionHost extends EventEmitter {
       if (!entry.parentSessionId) await this.specialistCatalog.ensureFresh(entry.cwd);
       let next: SendUnit | (() => Promise<void>) | undefined = first;
       while (next !== undefined) {
+        // A user-started turn lifts the post-Stop hold: everything parked since
+        // the Stop is spliced into history NOW, silently, so the model reads it
+        // as context for this message rather than getting a turn of its own.
+        // Checked per turn, not once per pass, because a message queued before
+        // the Stop still runs after it (pinned: "the queue still drains").
+        if (entry.holdDeliveries && next !== IDLE_PASS) {
+          entry.holdDeliveries = false;
+          await this.drainDeliveries(sessionId, entry, 'splice');
+          if (this.live.get(sessionId) !== entry) return;
+        }
         try {
           if (typeof next === 'function') await next();
           else await entry.session.send(next.text, next.attachments);
@@ -3493,7 +3544,9 @@ export class NativeSessionHost extends EventEmitter {
         // removeQueued(); shift() here is what makes a removed entry unreachable.
         next = entry.queue.shift();
       }
-      await this.drainDeliveries(sessionId, entry);
+      // Stop pressed during this pass: leave everything parked (holdDeliveries'
+      // own WHY). The next user message drains it via the splice above.
+      if (!entry.holdDeliveries) await this.drainDeliveries(sessionId, entry, 'turn');
     } finally {
       entry.inFlight = false;
     }
@@ -3509,7 +3562,15 @@ export class NativeSessionHost extends EventEmitter {
    *  still fall through to the fallback lane in the SAME pass (see below);
    *  the outer finally is what protects against a throw from anywhere this
    *  function didn't anticipate. */
-  private async drainDeliveries(sessionId: string, entry: LiveEntry): Promise<void> {
+  /** `mode` — 'turn': each notice is a real model turn (runNotice); 'splice':
+   *  each notice is written into history and the transcript with NO model
+   *  call (spliceNotice) — the post-Stop path, run right before the user's
+   *  next message so the model reads the reports as that message's context. */
+  private deliverNotice(entry: LiveEntry, mode: 'turn' | 'splice', text: string, meta?: InjectedMeta): Promise<void> {
+    return mode === 'splice' ? entry.session.spliceNotice(text, meta) : entry.session.runNotice(text, meta);
+  }
+
+  private async drainDeliveries(sessionId: string, entry: LiveEntry, mode: 'turn' | 'splice'): Promise<void> {
     // Plan 1b Task 8: plain-text host notices drain FIRST, unconditionally —
     // no `this.ledger` gate, since this lane exists whether or not a
     // NativeHome/ledger was ever wired (see pendingHostNotices' own WHY).
@@ -3533,7 +3594,7 @@ export class NativeSessionHost extends EventEmitter {
           ? { kind: 'shell', runs: batch.flatMap((n) => (n.meta?.kind === 'shell' ? n.meta.runs : [])) }
           : head.meta;
         try {
-          await entry.session.runNotice(text, meta);
+          await this.deliverNotice(entry, mode, text, meta);
         } catch (err) {
           log('WARN', 'NativeSessionHost', 'host notice delivery failed — will retry at the next idle boundary', { sessionId, error: String((err as any)?.message ?? err) });
           break;
@@ -3674,7 +3735,7 @@ export class NativeSessionHost extends EventEmitter {
                 log('WARN', 'NativeSessionHost', 'failed to record a truncation-time spill path in the ledger', { childId: rec.childId, parentId: sessionId, error: String((err as any)?.message ?? err) });
               }
             }
-            await entry.session.runNotice(delivery.text, {
+            await this.deliverNotice(entry, mode, delivery.text, {
               // Header data for the renderer's compact SpecialistReportCard —
               // from the ledger record, the same source formatDelivery's prose
               // is written from, so header and body can never disagree.
@@ -3752,7 +3813,7 @@ export class NativeSessionHost extends EventEmitter {
           // has no live ledger row in a deliverable state to attach it to (see
           // this lane's own WHY, right above); the correct path is still what
           // lands in THIS injection's footer either way.
-          await entry.session.runNotice(this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text);
+          await this.deliverNotice(entry, mode, this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text);
           if (this.live.get(sessionId) !== entry) {
             // destroy() landed mid-notice: runNotice on a torn-down session
             // resolves normally without showing the report to anyone (same
@@ -3940,6 +4001,9 @@ export class NativeSessionHost extends EventEmitter {
     // it (spec pending-ask ruling). Also expires the renderer's approval cards.
     this.broker.cancelSession(sessionId);
     entry?.session.interrupt();
+    // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
+    // Root sessions only: a child's own deliveries go to its parent, not to it.
+    if (entry && !entry.parentSessionId) entry.holdDeliveries = true;
     return !!entry;
   }
 
