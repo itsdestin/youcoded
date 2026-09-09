@@ -25,6 +25,7 @@ import { isTypingTarget } from '../../utils/is-typing-target';
 import { isAndroid, isRemoteMode } from '../../platform';
 import { MascotRig, type RigMotion } from '../mascot/MascotRig';
 import { sanitizeRigSvg } from '../mascot/sanitize-rig-svg';
+import { defaultMascotPaint } from '../mascot/default-mascot-paint';
 import type { PoseName } from '../mascot/mascot-poses';
 import { Button } from '../ui';
 import type { SoloGameProps } from './game-registry';
@@ -235,7 +236,7 @@ function hasWings(svgText: string): boolean {
 }
 
 export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
-  const { activeTheme, reducedEffects } = useTheme();
+  const { theme, activeTheme, reducedEffects } = useTheme();
   const rigUrl = useWingedRig();
   // Where the theme ships a wallpaper, THAT is the sky (§5.1) — the playfield
   // paints no background of its own and the theme's image shows through.
@@ -595,6 +596,8 @@ export default function FlappyGame({ onEnd, best, onExit }: SoloGameProps) {
               ['--rig-accent' as string]: 'var(--accent)',
               ['--rig-on-accent' as string]: 'var(--on-accent)',
               ['--rig-line' as string]: 'var(--fg)',
+              // Default-only paint also covers an unusable community rig fallback.
+              ...defaultMascotPaint(theme, true),
             }}
           >
             <MascotRig

@@ -21,7 +21,12 @@ vi.mock('../src/renderer/state/theme-context', () => ({
 vi.mock('../src/renderer/hooks/useThemeMascot', () => ({ useThemeMascot: () => null }));
 vi.mock('../src/renderer/hooks/useAnyAttentionNeeded', () => ({ useAnyAttentionNeeded: () => false }));
 vi.mock('../src/renderer/components/mascot/MascotRig', () => ({
-  MascotRig: () => <div data-testid="rig" />,
+  MascotRig: () => (
+    <svg data-testid="rig">
+      <path data-testid="default-rig-paint" fill="var(--rig-accent, #f0a828)" />
+      <path data-testid="authored-rig-paint" fill="#2d6a4f" />
+    </svg>
+  ),
 }));
 
 import { BuddyMascot } from '../src/renderer/components/buddy/BuddyMascot';
@@ -67,6 +72,19 @@ function move(el: HTMLElement, client: { x: number; y: number }, screenAt: { x: 
   fireEvent.pointerMove(el, { pointerId: 1, clientX: client.x, clientY: client.y, screenX: screenAt.x, screenY: screenAt.y });
   nextFrame();
 }
+
+describe('the buddy rig tint', () => {
+  it('maps theme tokens on the shared mascot wrapper so rig and peek hands inherit them', () => {
+    const el = mascotEl();
+
+    expect(el.style.getPropertyValue('--rig-accent')).toBe('var(--accent)');
+    expect(el.style.getPropertyValue('--rig-on-accent')).toBe('var(--on-accent)');
+    expect(el.style.getPropertyValue('--rig-line')).toBe('var(--fg)');
+    // Default rig fallbacks inherit the wrapper variable; authored fills stay literal.
+    expect(el.querySelector('[data-testid="default-rig-paint"]')?.getAttribute('fill')).toBe('var(--rig-accent, #f0a828)');
+    expect(el.querySelector('[data-testid="authored-rig-paint"]')?.getAttribute('fill')).toBe('#2d6a4f');
+  });
+});
 
 describe('the drag payload', () => {
   it('is how far the finger has moved from the pixel it grabbed, inside the window', () => {

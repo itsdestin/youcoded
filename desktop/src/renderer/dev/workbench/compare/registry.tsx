@@ -82,6 +82,7 @@ import { SessionStripMotionDemo } from '../mockups/SessionStripMotion';
 // actual settle → breathe → wake. A sleep pose cannot be judged from a still —
 // two thirds of it is motion.
 import { BuddySleepDemo } from '../mockups/BuddySleep';
+import { FriendlyMascots } from '../mockups/FriendlyMascots';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
 // its options would be comparing wording against something that cannot happen.
 import { bashGrantOptions } from '../../../../shared/bash-grant-shapes';
@@ -5485,6 +5486,15 @@ function VoiceComposerDemo({ state, style, loop }: { state: 'ready' | 'needs-dow
 }
 
 export const COMPARE_SURFACES: CompareSurface[] = [
+  {
+    id: 'friendly-mascots', label: 'Default buddy palette',
+    question: 'Does the lighter body and dark face feel friendlier?',
+    frame: 'canvas', paneWidth: 752,
+    rounds: [{ n: 1, candidates: [
+      { id: 'before', label: 'Before', render: () => <FriendlyMascots after={false} /> },
+      { id: 'after', label: 'After', render: () => <FriendlyMascots after /> },
+    ] }],
+  },
   {
     id: 'voice-listening-feedback',
     label: 'Message box — listening feedback',
