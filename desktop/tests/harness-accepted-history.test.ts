@@ -135,7 +135,7 @@ describe('HarnessSession accepted history', () => {
     expect(accepted.messages.at(-1)).toEqual({ role: 'assistant', content: 'visible partial' });
   });
 
-  it('a steer, a status snapshot and a rule injection each bump the revision without adding a uuid', async () => {
+  it('a steer and a rule injection each bump the revision without adding a uuid', async () => {
     const READ_SUBJECT = fakeTool('Read', { permissionSubject: (a: any) => a.file_path });
     const script = () => scriptModel([
       { toolCalls: [{ name: 'Read', input: { file_path: 'a.txt' } }] },
@@ -156,21 +156,36 @@ describe('HarnessSession accepted history', () => {
     expect(steered.acceptedHistory().eventUuids).toHaveLength(plain.eventUuids.length);
     expect(steered.acceptedHistory().revision).toBe(plain.revision + 1);
 
-    const status = [{
-      childId: 'child-1', title: 'Nadia', agentType: 'researcher', status: 'running' as const,
-      delivered: false, stale: false, startedAt: 1_000,
-    }];
-    const withStatus = build({ specialistStatus: () => status });
-    await withStatus.send('go');
-    expect(withStatus.acceptedHistory().eventUuids).toHaveLength(plain.eventUuids.length);
-    expect(withStatus.acceptedHistory().revision).toBe(plain.revision + 1);
-
     const triggers: TriggerIndex = { match: () => [{ id: 'r1', source: '.claude/rules/api.md', body: 'Always validate input.' }] };
     const injected = build({ triggers });
     await injected.send('go');
     expect(injected.acceptedHistory().eventUuids).toHaveLength(plain.eventUuids.length);
     expect(injected.acceptedHistory().revision).toBe(plain.revision + 1);
     expect(JSON.stringify(injected.acceptedHistory().messages)).toContain('Always validate input');
+  });
+
+  it('spliceNotice records the user-message uuid it emitted and advances the revision', async () => {
+    // The post-Stop path (NativeSessionHost.drainDeliveries in 'splice' mode)
+    // pushes a finished helper's report into history WITHOUT running a turn.
+    // That push is byte-identical to the event it emitted, so it must be
+    // recorded like beginTurn's — otherwise the store has no anchor for it and
+    // falls back to a bounded literal copy of the whole report.
+    const session = makeSession({ model: scriptModel([{ text: 'ok' }]) });
+    const events: TranscriptEvent[] = [];
+    session.on('transcript-event', (e: TranscriptEvent) => events.push(e));
+    const before = session.acceptedHistory();
+
+    await session.spliceNotice('[Background specialist] Nadia finished: the answer is 42.');
+
+    const spliced = events.find((e) => e.type === 'user-message' && e.data.injected === 'specialist-report')!;
+    expect(spliced).toBeDefined();
+    const after = session.acceptedHistory();
+    expect(after.eventUuids).toContain(spliced.uuid);
+    expect(after.eventUuids).toHaveLength(before.eventUuids.length + 1);
+    expect(after.revision).toBe(before.revision + 1);
+    expect(after.messages.at(-1)).toEqual({
+      role: 'user', content: '[Background specialist] Nadia finished: the answer is 42.',
+    });
   });
 
   it('a prune records a pruned transformation; a summary records the compact-summary uuid', async () => {

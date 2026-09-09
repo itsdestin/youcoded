@@ -46,7 +46,7 @@ benchmark read 23.45 ms / 50.00 ms — so compare before/after within one run, n
 across sessions. These are observations, not performance budgets. The benchmark
 is opt-in: `YOUCODED_DIAG_BENCH=1 npx vitest run
 tests/chatgpt-request-diagnostics.test.ts` from `youcoded/desktop`. Stage 1 does not alter
-specialist status history or continuation acceptance/persistence.
+continuation acceptance/persistence.
 
 ## Durable accepted history (Stage 4, unshipped)
 
@@ -72,8 +72,8 @@ at restore, and pruned tool output is RECOMPUTED with the same helpers
 compaction uses (`prunedToolResultText`, `imageCollapsedToolResultText`). What
 the manifest does hold is provider continuation metadata under a per-part key
 allowlist — reasoning ciphertext, item ids, response phase — plus two bounded
-exceptions: a user string with no matching anchor (an injected rule, steer or
-status snapshot) is stored as a literal capped at 64 KiB, and
+exceptions: a user string with no matching anchor (an injected rule or steer)
+is stored as a literal capped at 64 KiB, and
 `providerOptions.openai.parallelToolCall.input` is kept verbatim because the
 pinned `@ai-sdk/openai` converter re-emits that wrapper argument string byte for
 byte and the transcript (which keeps only each child call's parsed input) cannot

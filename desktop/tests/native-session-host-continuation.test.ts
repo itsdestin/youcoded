@@ -450,6 +450,42 @@ describe('NativeSessionHost durable continuation', () => {
     const { body } = await reopenAndSend('injected');
     expect(JSON.stringify(body.input)).toContain('Always mention the raven.');
   });
+  it('a spliced background report restores from its transcript event, never as a manifest literal', async () => {
+    // The post-Stop delivery path (drainDeliveries in 'splice' mode) pushes a
+    // finished helper's report into history at an IDLE boundary and runs NO
+    // turn of its own — the user's next turn is what carries it to the model,
+    // and that turn's own boundary publication is what makes it durable. So
+    // the splice needs no fence of its own; what it DOES need is for the push
+    // to be recorded against the `user-message` event it emitted, or the whole
+    // report gets copied into the private sidecar as a bounded literal.
+    const REPORT = `[Background specialist] Nadia finished: ${'the answer is 42. '.repeat(40)}`;
+    const fx = makeHost({
+      home, userData,
+      fetchImpl: scriptedFetch([], [...richTurn(), textStep('msg-step-3', 'noted')]),
+    });
+    await fx.host.create({ sessionId: 'spliced', cwd, binding: BINDING });
+    await turn(fx.host, 'spliced', 'inspect both');
+    await (fx.host as any).live.get('spliced').session.spliceNotice(REPORT, undefined);
+    // The user's next turn is the boundary that publishes the spliced message.
+    await turn(fx.host, 'spliced', 'thanks');
+    await fx.host.destroy('spliced');
+
+    // The checkpoint references the report's event; it holds no copy of it.
+    const manifest = fs.readFileSync(fx.acceptedHistory.manifestPath('spliced'), 'utf8');
+    expect(manifest).not.toContain('the answer is 42.');
+    expect(JSON.parse(manifest).messages.some((m: any) => m.content?.kind === 'literal')).toBe(false);
+
+    // And a reopened session really does put the report back on the wire —
+    // from the RESTORED checkpoint, proven by the ciphertext riding with it.
+    const bodies: any[] = [];
+    const reopened = makeHost({ home, userData, fetchImpl: scriptedFetch(bodies, [textStep('msg-next', 'later')]) });
+    expect(await reopened.host.resume('spliced', cwd)).toBe(true);
+    await turn(reopened.host, 'spliced', 'again');
+    await reopened.host.destroyAll();
+    expect(JSON.stringify(bodies[0].input)).toContain('the answer is 42.');
+    expect(carriesCiphertext(bodies[0])).toBe(true);
+  });
+
   it('an oversized replacement leaves the older checkpoint ineligible, never restorable', async () => {
     // Ciphertext big enough that the manifest cannot be written at all. The
     // measured reasoning count keeps compaction out of it (7 tokens, not 4M).

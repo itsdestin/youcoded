@@ -1895,8 +1895,15 @@ export class HarnessSession extends EventEmitter {
       throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
     }
     const injected = meta?.kind === 'shell' ? 'shell-complete' : 'specialist-report';
-    this.emitEvent('user-message', { text, injected, ...(meta ? { injectedMeta: meta } : {}) });
+    const uuid = this.emitEvent('user-message', { text, injected, ...(meta ? { injectedMeta: meta } : {}) });
     this.history.push({ role: 'user', content: text });
+    // WHY (cache Stage 4): this push is exactly beginTurn's user push — the
+    // message text IS the emitted event's text — so it must be recorded the
+    // same way. Without this the store has no event to reference and falls
+    // back to copying the whole report into the private sidecar as a literal,
+    // which both duplicates transcript content and fails publication outright
+    // once a report exceeds the 64 KiB literal bound.
+    this.capture.recordEvent(uuid);
   }
 
   /** Image parts for a user message, or [] when the model cannot see images / none
