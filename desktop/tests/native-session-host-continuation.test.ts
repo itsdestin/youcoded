@@ -391,12 +391,12 @@ describe('NativeSessionHost durable continuation', () => {
     await fx.host.drain('summarised');
     const manifest = JSON.parse(fs.readFileSync(fx.acceptedHistory.manifestPathForTest('summarised'), 'utf8'));
     expect(manifest.transformation).toEqual({ kind: 'summary', summaryEventUuid: expect.any(String) });
-    // KNOWN GAP (reported, not fixed here — it lives in the capture, which this
-    // task may not edit): the compact-summary uuid is not added to the accepted
-    // set, so the receipt lands as a BOUNDED LITERAL rather than as a reference
-    // to the persisted event. Behaviour below is correct either way; pinning the
-    // current shape here so the fix is visibly a change.
-    expect(manifest.messages[0].content).toEqual({ kind: 'literal', value: '[Earlier conversation summary]\nCompressed history.' });
+    // The receipt is a REFERENCE to the persisted compact-summary event, not a
+    // copy of it: the capture records the summary uuid into the accepted set,
+    // so the store can cite it. That is what keeps a long summary — real user
+    // conversation, compressed — out of the private sidecar entirely.
+    expect(manifest.messages[0].content).toEqual({ kind: 'event', field: 'summary-text', uuid: expect.any(String) });
+    expect(fs.readFileSync(fx.acceptedHistory.manifestPathForTest('summarised'), 'utf8')).not.toContain('Compressed history.');
     await fx.host.destroy('summarised');
 
     const { body } = await reopenAndSend('summarised');
@@ -524,7 +524,7 @@ describe('NativeSessionHost durable continuation', () => {
     expect(first.ok).toBe(true);
     const spawned = await fx.host.spawnSpecialist('parent', {
       specialist: explorer, prompt: 'inspect both files', workDir: cwd,
-      parentToolCallId: 'tc-1', token: (first as any).token,
+      parentToolCallId: 'tc-1', token: (first as any).token, description: 'inspect both files',
     });
     await fx.host.drain(spawned.childId);
     expect(fs.existsSync(fx.acceptedHistory.manifestPathForTest(spawned.childId))).toBe(true);

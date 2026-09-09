@@ -37,6 +37,73 @@ measurement averaged **23.45 ms** for a 433,018-byte, 100k-token-like request an
 These are observations, not performance budgets. Stage 1 does not alter
 specialist status history or continuation acceptance/persistence.
 
+## Durable accepted history (Stage 4, unshipped)
+
+A ChatGPT continuation only stays cache-warm if the session can put the SAME
+earlier items back on the wire after the app closes. The transcript cannot do
+that: it never stores reasoning ciphertext, item ids or provider metadata.
+Stage 4 therefore keeps a private per-session sidecar beside nothing else.
+
+**Where.** `<userData>/private-continuation/<sessionId>.manifest.json` (the
+checkpoint) and `<sessionId>.eligibility.json` (the revision fence), both with
+the session id URL-encoded. Directory 0700, files 0600 where the platform
+supports it. This is the Electron profile, NOT NativeHome — so the sidecar is
+outside the transcript tree, outside sync, and outside every reader that walks
+either. Owned by `harness/accepted-history-store.ts`, which is the only module
+in the app that names the directory.
+
+**Referenced, not copied.** The manifest describes each history message as
+POINTERS into the persisted transcript: an event uuid (plus a byte range when a
+coalesced text/reasoning part was streamed in deltas), or a concatenation of
+consecutive uuids. Message text, tool input, tool output and image bytes are
+never copied; images are re-read from their transcript paths and digest-checked
+at restore, and pruned tool output is RECOMPUTED with the same helpers
+compaction uses (`prunedToolResultText`, `imageCollapsedToolResultText`). What
+the manifest does hold is provider continuation metadata under a per-part key
+allowlist — reasoning ciphertext, item ids, response phase — plus two bounded
+exceptions: a user string with no matching anchor (an injected rule, steer or
+status snapshot) is stored as a literal capped at 64 KiB, and
+`providerOptions.openai.parallelToolCall.input` is kept verbatim because the
+pinned `@ai-sdk/openai` converter re-emits that wrapper argument string byte for
+byte and the transcript (which keeps only each child call's parsed input) cannot
+rebuild it. Anything the descriptor cannot express fails the publish rather than
+restoring an approximation. Pinned by `tests/accepted-history-privacy.test.ts`,
+which runs a real session whose reasoning ciphertext is a sentinel and proves it
+reaches the manifest and no other reader.
+
+**Bound.** A serialized manifest over **16 MiB** (`ACCEPTED_HISTORY_MAX_BYTES`)
+is refused, and a stored file over that size is refused at restore. The refusal
+happens after the fence, so an oversized replacement leaves the older checkpoint
+ineligible rather than restorable-but-stale.
+
+**Fallback reason codes.** Every failure logs one fixed code and no content; the
+session silently falls back to rebuilding history from the transcript, which is
+correct but loses the ciphertext. Publish: `stale-generation`, `oversized`,
+`write-failed`, `unreferenced-history`, plus `persistence-failed` /
+`unknown-reference` from the transcript flush and `publish-failed` if the store
+itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
+`missing-transcript`, `transcript-advanced`, `binding-mismatch`,
+`assembly-mismatch`, `image-mismatch`, plus `identity-unavailable` when the
+continuation identity cannot be built (ChatGPT signed out).
+
+**Credential epoch.** The checkpoint is bound to a continuation identity, which
+for ChatGPT is `providerId\0modelId\0sha256(accountId)\0credentialEpoch`. The
+epoch is 16 random bytes stored in `chatgpt-account.json`, minted on every fresh
+sign-in and removed with the account on sign-out; a legacy row without one reads
+`legacy` until the next sign-in. `ProviderRegistry.continuationIdentity()` is
+the single place that string is built. Changing account, model or credentials
+therefore mismatches the manifest and falls back instead of replaying one
+account's ciphertext under another's credentials.
+
+**Lifecycle.** There is no native transcript-deletion UI today, so there is no
+delete hook to attach to. The two boundaries are `cleanupOrphans()`, run once at
+startup from `ipc-handlers.ts`, which drops sidecars whose transcript is gone,
+and restore's own removal when the transcript it names is missing.
+
+**Cross-device.** The sidecar is profile-local and never syncs. A session taken
+over on another device finds no manifest, falls back to a rebuild, and becomes
+durable again on that device at its next publication.
+
 ## Provider seam (Phase 0, PR #115)
 
 - **`'native'` has NO runtime in Phase 0.** `SessionManager.createSession` throws loudly for any non-claude provider — a deliberate guard so a stray native create (e.g. from a remote client payload) fails instead of spawning a broken PTY. Phase 1 branches BEFORE the PTY worker spawn.

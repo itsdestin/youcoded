@@ -24,6 +24,19 @@ the successful stream with its transport attempt. Tests in `chatgpt-auth.test.ts
 exercise fake SSE through the actual installed SDK. Storage limits, local CLI,
 privacy and measured hashing costs: `native-runtime.md` → ChatGPT request diagnostics.
 
+## ChatGPT continuation identity (Stage 4, unshipped)
+
+`chatgpt-account.json` carries a `credentialEpoch` field: 16 random bytes (hex),
+minted on every fresh sign-in, dropped with the account on sign-out, reported as
+`legacy` for a row written before the field existed. It is the durable half of
+the continuation identity `ProviderRegistry.continuationIdentity()` builds
+(`providerId\0modelId\0sha256(accountId)\0credentialEpoch`) — the in-memory
+`authGeneration` counter restarts at 0 each process and so cannot fence a
+checkpoint across a restart. The identity is what the durable accepted-history
+sidecar is bound to, and what the pinned `@ai-sdk/openai` 4.0.55 Responses
+continuation metadata is only ever replayed under. Depth:
+`native-runtime.md` → Durable accepted history.
+
 ## Touchpoints (to be filled as built)
 
 - **Vercel AI SDK surface** — `streamText` stream-part shapes, tool-approval
