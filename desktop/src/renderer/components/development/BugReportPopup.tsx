@@ -6,6 +6,7 @@
 // Uses the shared <Dialog> shell — no hardcoded colors, blur, or z-indexes
 // (PITFALLS overlay invariant).
 import { useEffect, useState } from 'react';
+import { ReportDesign } from './ReportDesign';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, Dialog, SegmentedTabs, Textarea } from '../ui';
 
@@ -27,7 +28,13 @@ const PROMPT_FEATURE = (description: string) =>
   `Read \`docs/PITFALLS.md\`, then use the brainstorming skill to design it before writing code. ` +
   `Both desktop and Android share the React UI — keep that in mind.`;
 
-export function BugReportPopup({ open, onClose }: Props) {
+// WHY: review-only design is deliberately disconnected from AI, reports and installation.
+export function BugReportPopup(props: Props) {
+  return new URLSearchParams(window.location.search).get('mode') === 'workbench'
+    ? <ReportDesign {...props} /> : <LegacyBugReportPopup {...props} />;
+}
+
+export function LegacyBugReportPopup({ open, onClose }: Props) {
   useEscClose(open, onClose);
   const [screen, setScreen] = useState<Screen>('describe');
   const [kind, setKind] = useState<Kind>('bug');

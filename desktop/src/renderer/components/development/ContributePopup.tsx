@@ -5,6 +5,7 @@
 // Uses the shared <Dialog> shell — no hardcoded colors, blur, or z-indexes
 // (PITFALLS overlay invariant).
 import { createPortal } from 'react-dom';
+import { ContributionDesign } from './ContributionDesign';
 import { useEffect, useState } from 'react';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, Dialog } from '../ui';
@@ -14,7 +15,14 @@ interface Props {
   onClose: () => void;
 }
 
-export function ContributePopup({ open, onClose }: Props) {
+// WHY: the proposed managed setup must never invoke the legacy pull/setup installer.
+// Keep the legacy screen separate until the design is approved and backend work starts.
+export function ContributePopup(props: Props) {
+  return new URLSearchParams(window.location.search).get('mode') === 'workbench'
+    ? <ContributionDesign {...props} /> : <LegacyContributePopup {...props} />;
+}
+
+export function LegacyContributePopup({ open, onClose }: Props) {
   useEscClose(open, onClose);
   const [installing, setInstalling] = useState(false);
   const [installLines, setInstallLines] = useState<string[]>([]);
