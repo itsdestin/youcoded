@@ -455,7 +455,7 @@ export function registerIpcHandlers(
   };
 
   // --- Theme file watcher ---
-  const stopThemeWatcher = startThemeWatcher(mainWindow);
+  const stopThemeWatcher = startThemeWatcher();
 
   ipcMain.handle(IPC.THEME_LIST, async () => {
     return listUserThemes();

@@ -4,6 +4,7 @@ import { useTheme } from '../state/theme-context';
 import { isAndroid, isRemoteMode } from '../platform';
 import { MascotRig, type RigMotion } from './mascot/MascotRig';
 import { MascotScene } from './mascot/MascotScene';
+import { defaultMascotPaint } from './mascot/default-mascot-paint';
 import type { PoseName } from './mascot/mascot-poses';
 import type { MascotVariant } from '../themes/theme-types';
 
@@ -222,10 +223,10 @@ export function WelcomeAppIcon({ className = 'w-6 h-6' }: IconProps) {
         </radialGradient>
       </defs>
       {/* Eye backgrounds — navy base with blue-gray + plum swirls */}
-      <ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="#1e2636" />
+      <ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="var(--default-icon-face, #1e2636)" />
       <ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="url(#eye-swirl-a)" />
       <ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="url(#eye-swirl-b)" />
-      <ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="#1e2636" />
+      <ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="var(--default-icon-face, #1e2636)" />
       <ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="url(#eye-swirl-a)" />
       <ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="url(#eye-swirl-b)" />
       {/* Body with eye cutouts (left slightly lower, right slightly higher) */}
@@ -241,7 +242,7 @@ export function WelcomeAppIcon({ className = 'w-6 h-6' }: IconProps) {
       <circle cx="14.8" cy="10.55" r="0.18" />
       <circle cx="15.7" cy="10.55" r="0.13" />
       {/* Half-circle smile, tilted -2° */}
-      <g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="#222030" /></g>
+      <g transform="rotate(-2 12 13.3)"><path data-mascot-face d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="var(--default-icon-face, #222030)" /></g>
       {/* Left arm (tilted slightly clockwise, lowered) */}
       <g transform="translate(0.3 1.0) rotate(-10 2.5 11)"><path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" /></g>
       {/* Right arm (waving, rotated near head corner) */}
@@ -275,6 +276,9 @@ export function AppIcon({ className = 'w-6 h-6' }: IconProps) {
 }
 
 interface ThemeMascotProps {
+  /** WHY: the 24px silhouette rim must not scale up on hero/gate artwork.
+   * Large callers explicitly opt out; CSS class names are not a size API. */
+  small?: boolean;
   variant: MascotVariant;
   fallback: React.ComponentType<IconProps>;
   className?: string;
@@ -299,8 +303,8 @@ const VARIANT_POSE: Record<MascotVariant, PoseName> = {
 
 /** Renders a themed mascot: the rig when the theme ships one (rig-first, spec §3.5),
  *  else the flat variant image, else the built-in fallback glyph. */
-export function ThemeMascot({ variant, fallback: Fallback, className = 'w-6 h-6', scene = false }: ThemeMascotProps) {
-  const { activeTheme, reducedEffects } = useTheme();
+export function ThemeMascot({ variant, fallback: Fallback, className = 'w-6 h-6', scene = false, small = true }: ThemeMascotProps) {
+  const { theme, activeTheme, reducedEffects } = useTheme();
   const overrideSrc = useThemeMascot(variant);
   // Rig rendering is Electron-desktop-only for now: it fetches theme-asset://
   // URLs, which don't exist in the Android WebView or the remote-browser shim.
@@ -324,6 +328,7 @@ export function ThemeMascot({ variant, fallback: Fallback, className = 'w-6 h-6'
           ['--rig-accent' as string]: 'var(--accent)',
           ['--rig-on-accent' as string]: 'var(--on-accent)',
           ['--rig-line' as string]: 'var(--fg)',
+          ...defaultMascotPaint(theme, small),
         }}
       >
         <MascotRig
@@ -337,7 +342,9 @@ export function ThemeMascot({ variant, fallback: Fallback, className = 'w-6 h-6'
   } else if (overrideSrc) {
     mascot = <img src={overrideSrc} className={className} alt="" aria-hidden="true" draggable={false} />;
   } else {
-    mascot = <Fallback className={className} />;
+    // WHY: scope art paint to the fallback, never a theme's authored rig/image.
+    const paint = defaultMascotPaint(theme, small);
+    mascot = <span data-default-mascot="icon" data-soft-palette={!!paint['--default-icon-body']} style={{ display: 'contents', ...paint }}><Fallback className={className} /></span>;
   }
 
   if (companions.length) {

@@ -1,4 +1,4 @@
-import { contextBridge, ipcRenderer, IpcRendererEvent } from 'electron';
+import { contextBridge, ipcRenderer, IpcRendererEvent, webFrame } from 'electron';
 import type { AuthStartResponse, AuthPollResponse, PostRatingInput } from '../renderer/state/marketplace-api-client';
 import type { MarketplaceUser } from './marketplace-auth-store';
 import type { ApiResult } from './marketplace-api-handlers';
@@ -7,6 +7,16 @@ import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, Sess
 // runtime — same footing as the '../shared/types' line above.
 import type { FirstRunState } from '../shared/first-run-types';
 import type { ChatGptAccountStatus } from '../shared/chatgpt-types';
+
+// WHY: buddy geometry and pointer offsets are native DIPs, so its CSS pixels
+// must stay at 100% even when a same-origin main window is zoomed. In Electron
+// 41 webFrame sets a temporary per-frame zoom (unlike webContents' host zoom).
+// Reapply on every preload/reload, without splitting theme protocol or storage
+// into another session, or resetting the main window's chosen zoom.
+const buddyMode = new URLSearchParams(location.search).get('mode');
+if (['buddy-mascot', 'buddy-chat', 'buddy-bar', 'buddy-overlay'].includes(buddyMode ?? '')) {
+  webFrame.setZoomFactor(1);
+}
 
 // Mirrored type — must match ChangelogResult in src/main/changelog-service.ts.
 interface ChangelogIpcResult {

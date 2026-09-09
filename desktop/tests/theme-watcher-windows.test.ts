@@ -1,0 +1,21 @@
+import { afterEach, expect, it, vi } from 'vitest';
+import path from 'path';
+const mocks = vi.hoisted(() => ({ handlers: new Map<string, (...args: any[]) => void>(), windows: [] as any[] }));
+vi.mock('electron', () => ({ BrowserWindow: { getAllWindows: () => mocks.windows } }));
+vi.mock('chokidar', () => ({ default: { watch: () => ({ on: (event: string, cb: (...args: any[]) => void) => mocks.handlers.set(event, cb), close: vi.fn() }) } }));
+vi.mock('../src/main/theme-migration', () => ({ migrateBarJsonFiles: () => 0 }));
+import { startThemeWatcher, THEMES_DIR } from '../src/main/theme-watcher';
+afterEach(() => vi.useRealTimers());
+it.each(['add', 'change', 'unlink', 'unlinkDir'])('notifies every living theme consumer on %s', event => {
+  vi.useFakeTimers();
+  const window = (dead = false) => ({ isDestroyed: () => dead, webContents: { send: vi.fn() } });
+  const main = window(); const buddy = window(); const destroyed = window(true);
+  mocks.windows = [main, buddy, destroyed];
+  const stop = startThemeWatcher();
+  mocks.handlers.get(event)!(path.join(THEMES_DIR, 'devils-garden', ...(event === 'unlinkDir' ? [] : ['manifest.json'])));
+  vi.runAllTimers();
+  expect(main.webContents.send).toHaveBeenCalledWith('theme:reload', 'devils-garden');
+  expect(buddy.webContents.send).toHaveBeenCalledWith('theme:reload', 'devils-garden');
+  expect(destroyed.webContents.send).not.toHaveBeenCalled();
+  stop();
+});

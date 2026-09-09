@@ -346,7 +346,9 @@ if (process.platform === 'win32') {
 
 // Must be called before app.whenReady() — Electron requirement
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, stream: true } },
+  // WHY: supportFetchAPI alone does not allow cross-origin fetch from the
+  // renderer. Inline mascot rigs need the scheme in Chromium's CORS allowlist.
+  { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
 // --- Permission override classification ---

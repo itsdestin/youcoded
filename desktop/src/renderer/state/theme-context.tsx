@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 // @ts-ignore — Vite inline CSS import
 import hljsDarkCss from 'highlight.js/styles/github-dark.css?inline';
 // @ts-ignore — Vite inline CSS import
@@ -276,6 +276,38 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const allThemes = useMemo(() => allThemesInternal.filter(t => t.slug !== PREVIEW_SLUG), [allThemesInternal]);
   const activeThemeRaw = useMemo(() => allThemesInternal.find(t => t.slug === activeSlug) ?? BUILTIN_THEMES[0], [allThemesInternal, activeSlug]);
 
+  const selectionGeneration = useRef(0);
+  const themesRef = useRef(allThemesInternal);
+  themesRef.current = allThemesInternal;
+
+  // WHY: appearance sync can beat the install notification in another window.
+  // Never expose an unknown slug to the uninstall fallback: load it first,
+  // then publish the definition and selection together. A failed peer read is
+  // not authority to overwrite global appearance, nor is a late read a choice.
+  const applyIncomingTheme = useCallback(async (slug: string) => {
+    const generation = ++selectionGeneration.current;
+    try {
+      let loaded: LoadedTheme | undefined;
+      if (!themesRef.current.some(t => t.slug === slug)) {
+        const raw = await (window as any).claude?.theme?.readFile(slug);
+        const theme = validateTheme(JSON.parse(raw));
+        if (theme.slug !== slug) return;
+        const source = (theme as any).source === 'community' ? 'community' as const : 'user' as const;
+        loaded = resolveAllAssetPaths({ ...theme, source });
+      }
+      if (generation !== selectionGeneration.current) return;
+      if (loaded) {
+        const incoming = loaded;
+        setUserThemes(prev => [...prev.filter(t => t.slug !== slug), incoming]);
+      }
+      setActiveSlug(slug);
+      try { localStorage.setItem(STORAGE_KEY, slug); } catch {}
+    } catch {
+      // Keep the current theme on unavailable/invalid peer data; never persist a fallback.
+    }
+  }, []);
+  useEffect(() => () => { selectionGeneration.current++; }, []);
+
   // Merge glass overrides into the active theme for non-user themes.
   // User themes write glass values directly to the theme file. For solid
   // themes the sliders are disabled (see ThemeScreen.tsx) so overrides
@@ -340,6 +372,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Load appearance preferences from disk (source of truth) on mount
   useEffect(() => {
+    const generation = selectionGeneration.current;
     const loadAppearance = async () => {
       try {
         const claude = (window as any).claude;
@@ -347,10 +380,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         const prefs = await claude.appearance.get();
         if (!prefs) return; // First launch — no file yet, keep localStorage/defaults
 
-        if (prefs.theme && typeof prefs.theme === 'string') {
-          setActiveSlug(prefs.theme);
-          try { localStorage.setItem(STORAGE_KEY, prefs.theme); } catch {}
-          document.documentElement.setAttribute('data-theme', prefs.theme);
+        if (prefs.theme && typeof prefs.theme === 'string' && generation === selectionGeneration.current) {
+          void applyIncomingTheme(prefs.theme);
         }
         if (Array.isArray(prefs.themeCycle) && prefs.themeCycle.length > 0) {
           setCycleListState(prefs.themeCycle);
@@ -385,7 +416,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       } catch {}
     };
     loadAppearance();
-  }, []);
+  }, [applyIncomingTheme]);
 
   // Listen for cross-window appearance broadcasts from peer windows. The
   // source window already persisted to disk, so we only update in-memory
@@ -396,8 +427,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const unsub = onSync((prefs: any) => {
       if (!prefs || typeof prefs !== 'object') return;
       if (typeof prefs.theme === 'string' && prefs.theme) {
-        setActiveSlug(prefs.theme);
-        try { localStorage.setItem(STORAGE_KEY, prefs.theme); } catch {}
+        void applyIncomingTheme(prefs.theme);
       }
       if (Array.isArray(prefs.themeCycle) && prefs.themeCycle.length > 0) {
         setCycleListState(prefs.themeCycle);
@@ -430,7 +460,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       }
     });
     return () => { try { unsub?.(); } catch {} };
-  }, []);
+  }, [applyIncomingTheme]);
 
   // Track the slug the user had before preview auto-switch
   const [prePreviewSlug, setPrePreviewSlug] = useState<string | null>(null);
@@ -559,6 +589,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [activeTheme, reducedEffects]);
 
   const setTheme = useCallback((slug: string) => {
+    selectionGeneration.current++;
     setActiveSlug(slug);
     try { localStorage.setItem(STORAGE_KEY, slug); } catch {}
     if (slug !== PREVIEW_SLUG) persistAppearance({ theme: slug });
@@ -620,6 +651,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const cycleTheme = useCallback(() => {
+    // WHY: cycling (including leaving preview) is a newer choice than an in-flight peer read.
+    selectionGeneration.current++;
     setActiveSlug(prev => {
       // If currently previewing, exit preview and cycle from the pre-preview theme
       if (prev === PREVIEW_SLUG && prePreviewSlug) {

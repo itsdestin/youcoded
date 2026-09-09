@@ -3267,7 +3267,7 @@ function AppInner() {
                  z-10: must stay below glassmorphism chrome (z-20) so header/bottom bars remain accessible */}
               {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
-                  <ThemeMascot variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
+                  <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
                   <p className="text-sm text-fg-dim font-medium">Initializing session...</p>
                   {initSlowWarning && (
                     <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
@@ -3454,7 +3454,7 @@ function AppInner() {
             <p className="text-xl text-fg-muted">No Active Session</p>
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping. */}
-            <ThemeMascot variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+            <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
             {/* Welcome screen: New Session (expandable) + Resume Session */}
             <div className="flex flex-col items-center gap-2 mt-1 w-64">
               {welcomeFormOpen ? (

@@ -5,9 +5,9 @@
  * (trailing limbs, eight faces, peek hands) out of the box, and doubles as
  * the rig contract's reference implementation.
  *
- * Tinting: body/limbs use var(--rig-accent), face/sockets var(--rig-on-accent)
- * (the buddy renderer maps these from the theme's accent/on-accent tokens,
- * whose contrast rules guarantee ≥4.5:1). The skin's amber-derived highlight/
+ * Tinting: body/limbs use var(--default-mascot-body), face/sockets var(--default-mascot-face)
+ * (default-mascot-paint owns the Light/Crème art palette; other themes keep
+ * accent/on-accent). Catchlights use independent --default-mascot-catchlight paint. The skin's amber-derived highlight/
  * shade colors are replaced with white/black overlays at matching opacities so
  * the lighting works on ANY accent color, not just amber. Fallbacks keep the
  * demo palette so the SVG previews standalone.
@@ -16,7 +16,7 @@
  * Limbs are drawn HANGING DOWN from their data-pivot (the pose-data
  * convention) and painted before the body so they sit behind it.
  */
-export const DEFAULT_BUDDY_RIG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3 -5 30 30">
+export const DEFAULT_BUDDY_RIG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3 -5 30 30" data-default-mascot="rig">
   <defs>
     <radialGradient id="g-hi" cx="33%" cy="20%" r="80%">
       <stop offset="0%" stop-color="#ffffff" stop-opacity="0.42"/>
@@ -40,60 +40,60 @@ export const DEFAULT_BUDDY_RIG = `<svg xmlns="http://www.w3.org/2000/svg" viewBo
   </defs>
   <g id="rig-root">
     <g id="rig-arm-left" data-pivot="2.5 9">
-      <path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" fill="var(--rig-accent, #f0a828)"/>
+      <path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" fill="var(--default-mascot-body, #f0a828)"/>
       <path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" fill="url(#g-limb-shade)"/>
     </g>
     <g id="rig-arm-right" data-pivot="21.5 9">
-      <path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" fill="var(--rig-accent, #f0a828)"/>
+      <path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" fill="var(--default-mascot-body, #f0a828)"/>
       <path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" fill="url(#g-limb-shade)"/>
       <g id="slot-item"/>
     </g>
     <g id="rig-leg-left" data-pivot="8.95 17">
-      <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" fill="var(--rig-accent, #f0a828)"/>
+      <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" fill="var(--default-mascot-body, #f0a828)"/>
       <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" fill="url(#g-limb-shade)"/>
     </g>
     <g id="rig-leg-right" data-pivot="15.05 17">
-      <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" fill="var(--rig-accent, #f0a828)"/>
+      <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" fill="var(--default-mascot-body, #f0a828)"/>
       <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" fill="url(#g-limb-shade)"/>
     </g>
     <g id="rig-body">
-      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="var(--rig-accent, #f0a828)"/>
+      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="var(--default-mascot-body, #f0a828)"/>
       <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="url(#g-lo)"/>
       <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="url(#g-hi)"/>
       <ellipse cx="9.6" cy="6.4" rx="3.4" ry="1.9" fill="url(#g-spec)" transform="rotate(-14 9.6 6.4)"/>
       <path d="M5 10.5 L5 8 A4 4 0 0 1 9 4 L11 4" fill="none" stroke="#ffffff" stroke-opacity="0.55" stroke-width="0.32" filter="url(#f-soft)"/>
       <g id="rig-face-idle">
-        <path d="M8 10.2 Q9.3 9.1 10.6 10.2" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.95 Q14.7 8.85 16 9.95" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><ellipse cx="12" cy="13.35" rx="0.5" ry="0.42" fill="var(--rig-on-accent, #2a1004)"/>
+        <path d="M8 10.2 Q9.3 9.1 10.6 10.2" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.95 Q14.7 8.85 16 9.95" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><ellipse cx="12" cy="13.35" rx="0.5" ry="0.42" fill="var(--default-mascot-face, #2a1004)"/>
       </g>
       <g id="rig-face-welcome" style="display:none">
-        <ellipse cx="9.3" cy="9.55" rx="1.60" ry="2.20" fill="var(--rig-on-accent, #2a1004)"/><g class="pupil"><circle cx="10.00" cy="10.25" r="0.30" fill="var(--rig-accent, #ffc030)"/><circle cx="9.35" cy="10.85" r="0.20" fill="var(--rig-accent, #ffe090)" fill-opacity="0.8"/><circle cx="10.30" cy="10.85" r="0.14" fill="var(--rig-accent, #ffd060)" fill-opacity="0.65"/></g><ellipse cx="14.7" cy="9.25" rx="1.60" ry="2.20" fill="var(--rig-on-accent, #2a1004)"/><g class="pupil"><circle cx="15.40" cy="9.95" r="0.30" fill="var(--rig-accent, #ffc030)"/><circle cx="14.75" cy="10.55" r="0.20" fill="var(--rig-accent, #ffe090)" fill-opacity="0.8"/><circle cx="15.70" cy="10.55" r="0.14" fill="var(--rig-accent, #ffd060)" fill-opacity="0.65"/></g><g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="var(--rig-on-accent, #2a1004)"/></g>
+        <ellipse cx="9.3" cy="9.55" rx="1.60" ry="2.20" fill="var(--default-mascot-face, #2a1004)"/><g class="pupil"><circle cx="10.00" cy="10.25" r="0.30" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffc030))"/><circle cx="9.35" cy="10.85" r="0.20" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffe090))" fill-opacity="0.8"/><circle cx="10.30" cy="10.85" r="0.14" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffd060))" fill-opacity="0.65"/></g><ellipse cx="14.7" cy="9.25" rx="1.60" ry="2.20" fill="var(--default-mascot-face, #2a1004)"/><g class="pupil"><circle cx="15.40" cy="9.95" r="0.30" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffc030))"/><circle cx="14.75" cy="10.55" r="0.20" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffe090))" fill-opacity="0.8"/><circle cx="15.70" cy="10.55" r="0.14" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffd060))" fill-opacity="0.65"/></g><g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="var(--default-mascot-face, #2a1004)"/></g>
       </g>
       <g id="rig-face-curious" style="display:none">
-        <ellipse cx="9.3" cy="9.55" rx="1.60" ry="2.20" fill="var(--rig-on-accent, #2a1004)"/><g class="pupil"><circle cx="10.00" cy="10.25" r="0.30" fill="var(--rig-accent, #ffc030)"/><circle cx="9.35" cy="10.85" r="0.20" fill="var(--rig-accent, #ffe090)" fill-opacity="0.8"/><circle cx="10.30" cy="10.85" r="0.14" fill="var(--rig-accent, #ffd060)" fill-opacity="0.65"/></g><ellipse cx="14.7" cy="9.25" rx="1.60" ry="2.20" fill="var(--rig-on-accent, #2a1004)"/><g class="pupil"><circle cx="15.40" cy="9.95" r="0.30" fill="var(--rig-accent, #ffc030)"/><circle cx="14.75" cy="10.55" r="0.20" fill="var(--rig-accent, #ffe090)" fill-opacity="0.8"/><circle cx="15.70" cy="10.55" r="0.14" fill="var(--rig-accent, #ffd060)" fill-opacity="0.65"/></g><path d="M8 7.1 L10.6 6.9" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.6 Q14.7 5.7 16.05 6" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12.05" cy="13.35" rx="0.45" ry="0.5" fill="var(--rig-on-accent, #2a1004)"/>
+        <ellipse cx="9.3" cy="9.55" rx="1.60" ry="2.20" fill="var(--default-mascot-face, #2a1004)"/><g class="pupil"><circle cx="10.00" cy="10.25" r="0.30" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffc030))"/><circle cx="9.35" cy="10.85" r="0.20" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffe090))" fill-opacity="0.8"/><circle cx="10.30" cy="10.85" r="0.14" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffd060))" fill-opacity="0.65"/></g><ellipse cx="14.7" cy="9.25" rx="1.60" ry="2.20" fill="var(--default-mascot-face, #2a1004)"/><g class="pupil"><circle cx="15.40" cy="9.95" r="0.30" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffc030))"/><circle cx="14.75" cy="10.55" r="0.20" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffe090))" fill-opacity="0.8"/><circle cx="15.70" cy="10.55" r="0.14" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffd060))" fill-opacity="0.65"/></g><path d="M8 7.1 L10.6 6.9" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.6 Q14.7 5.7 16.05 6" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12.05" cy="13.35" rx="0.45" ry="0.5" fill="var(--default-mascot-face, #2a1004)"/>
       </g>
       <g id="rig-face-shocked" style="display:none">
-        <ellipse cx="9.3" cy="9.7" rx="1.79" ry="2.46" fill="var(--rig-on-accent, #2a1004)"/><g class="pupil"><circle cx="10.08" cy="10.48" r="0.34" fill="var(--rig-accent, #ffc030)"/><circle cx="9.36" cy="11.16" r="0.22" fill="var(--rig-accent, #ffe090)" fill-opacity="0.8"/><circle cx="10.42" cy="11.16" r="0.16" fill="var(--rig-accent, #ffd060)" fill-opacity="0.65"/></g><ellipse cx="14.7" cy="9.4" rx="1.79" ry="2.46" fill="var(--rig-on-accent, #2a1004)"/><g class="pupil"><circle cx="15.48" cy="10.18" r="0.34" fill="var(--rig-accent, #ffc030)"/><circle cx="14.76" cy="10.86" r="0.22" fill="var(--rig-accent, #ffe090)" fill-opacity="0.8"/><circle cx="15.82" cy="10.86" r="0.16" fill="var(--rig-accent, #ffd060)" fill-opacity="0.65"/></g><path d="M7.950000000000001 6.5 Q9.3 5.9 10.65 6.5" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.2 Q14.7 5.6000000000000005 16.05 6.2" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12" cy="13.6" rx="0.7" ry="0.85" fill="var(--rig-on-accent, #2a1004)"/>
+        <ellipse cx="9.3" cy="9.7" rx="1.79" ry="2.46" fill="var(--default-mascot-face, #2a1004)"/><g class="pupil"><circle cx="10.08" cy="10.48" r="0.34" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffc030))"/><circle cx="9.36" cy="11.16" r="0.22" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffe090))" fill-opacity="0.8"/><circle cx="10.42" cy="11.16" r="0.16" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffd060))" fill-opacity="0.65"/></g><ellipse cx="14.7" cy="9.4" rx="1.79" ry="2.46" fill="var(--default-mascot-face, #2a1004)"/><g class="pupil"><circle cx="15.48" cy="10.18" r="0.34" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffc030))"/><circle cx="14.76" cy="10.86" r="0.22" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffe090))" fill-opacity="0.8"/><circle cx="15.82" cy="10.86" r="0.16" fill="var(--default-mascot-catchlight, var(--default-mascot-body, #ffd060))" fill-opacity="0.65"/></g><path d="M7.950000000000001 6.5 Q9.3 5.9 10.65 6.5" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.2 Q14.7 5.6000000000000005 16.05 6.2" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12" cy="13.6" rx="0.7" ry="0.85" fill="var(--default-mascot-face, #2a1004)"/>
       </g>
       <g id="rig-face-dizzy" style="display:none">
-        <path d="M9.3 9.8 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.6" stroke-linecap="round"/><path d="M14.7 9.6 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.6" stroke-linecap="round"/><path d="M10.4 13.6 L11.2 13 L12 13.6 L12.8 13 L13.6 13.6" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M9.3 9.8 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.6" stroke-linecap="round"/><path d="M14.7 9.6 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.6" stroke-linecap="round"/><path d="M10.4 13.6 L11.2 13 L12 13.6 L12.8 13 L13.6 13.6" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>
       </g>
       <g id="rig-face-blink" style="display:none">
-        <path d="M8 10 Q9.3 10.5 10.6 10" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.8 Q14.7 10.3 16 9.8" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="var(--rig-on-accent, #2a1004)"/></g>
+        <path d="M8 10 Q9.3 10.5 10.6 10" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.8 Q14.7 10.3 16 9.8" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.85" stroke-linecap="round"/><g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="var(--default-mascot-face, #2a1004)"/></g>
       </g>
       <g id="rig-face-happy" style="display:none">
-        <path d="M8 10.4 Q9.3 8.6 10.6 10.4" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.9" stroke-linecap="round"/><path d="M13.4 10.1 Q14.7 8.3 16 10.1" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.9" stroke-linecap="round"/><path d="M10.3 13 Q10.3 12.7 12 12.7 Q13.7 12.7 13.7 13 A1.7 1.5 0 0 1 10.3 13 Z" fill="var(--rig-on-accent, #2a1004)"/>
+        <path d="M8 10.4 Q9.3 8.6 10.6 10.4" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.9" stroke-linecap="round"/><path d="M13.4 10.1 Q14.7 8.3 16 10.1" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.9" stroke-linecap="round"/><path d="M10.3 13 Q10.3 12.7 12 12.7 Q13.7 12.7 13.7 13 A1.7 1.5 0 0 1 10.3 13 Z" fill="var(--default-mascot-face, #2a1004)"/>
       </g>
       <g id="rig-face-shutdown" style="display:none">
-        <path d="M8 10 L10.6 10" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.8" stroke-linecap="round"/><path d="M13.4 9.8 L16 9.8" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.8" stroke-linecap="round"/><path d="M11.3 13.3 L12.7 13.3" fill="none" stroke="var(--rig-on-accent, #2a1004)" stroke-width="0.5" stroke-linecap="round"/>
+        <path d="M8 10 L10.6 10" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.8" stroke-linecap="round"/><path d="M13.4 9.8 L16 9.8" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.8" stroke-linecap="round"/><path d="M11.3 13.3 L12.7 13.3" fill="none" stroke="var(--default-mascot-face, #2a1004)" stroke-width="0.5" stroke-linecap="round"/>
       </g>
       <g id="slot-eyewear"/>
     </g>
     <g id="slot-hat"/>
     <g id="rig-hand-peek-right" style="display:none">
-      <rect x="20.7" y="8.3" width="2.6" height="3.4" rx="1.17" fill="var(--rig-accent, #f0a828)" stroke="#000000" stroke-opacity="0.4" stroke-width="0.34"/>
+      <rect x="20.7" y="8.3" width="2.6" height="3.4" rx="1.17" fill="var(--default-mascot-body, #f0a828)" stroke="#000000" stroke-opacity="0.4" stroke-width="0.34"/>
     </g>
     <g id="rig-hand-peek-left" style="display:none">
-      <rect x="0.7" y="8.3" width="2.6" height="3.4" rx="1.17" fill="var(--rig-accent, #f0a828)" stroke="#000000" stroke-opacity="0.4" stroke-width="0.34"/>
+      <rect x="0.7" y="8.3" width="2.6" height="3.4" rx="1.17" fill="var(--default-mascot-body, #f0a828)" stroke="#000000" stroke-opacity="0.4" stroke-width="0.34"/>
     </g>
   </g>
 </svg>`;
