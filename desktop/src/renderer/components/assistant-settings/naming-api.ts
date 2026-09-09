@@ -10,7 +10,6 @@ export interface NamingApi {
   set(value: NamingPreferences): Promise<void>;
   title(id: string, fallback: string): Promise<{ title: string; manual: boolean }>;
   rename(id: string, title: string): Promise<void>;
-  automatic(id: string): Promise<void>;
 }
 // WHY an own-property check rather than a truthiness one: the bridge has a
 // callable catch-all, so `window.claude.sessionNaming` answers "yes" for a host

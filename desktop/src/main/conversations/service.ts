@@ -551,30 +551,6 @@ export async function setManualSessionName(
   return { ok: true, name };
 }
 
-/**
- * Hand the name back to automatic naming. The clear carries its own timestamp
- * so it can beat an older rename from another device instead of losing to it.
- * Returns the name that should now be displayed — the stored automatic name
- * when there is one, so the row changes back immediately rather than waiting
- * for the next review.
- */
-export async function clearManualSessionName(
-  sessionProvider: SessionProvider, sessionId: string, fallback: string,
-): Promise<{ ok: true; name: string } | { ok: false; error: string }> {
-  if (!namingStore) {
-    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
-  }
-  const at = new Date().toISOString();
-  let rec: NamingRecord;
-  try {
-    rec = await namingStore.mutate(sessionProvider, sessionId, (cur) => ({ ...cur, manual: '', manualAt: at }));
-  } catch {
-    return { ok: false, error: 'Could not save — conversation storage is not available on this device.' };
-  }
-  const { name } = effectiveName(rec, fallback);
-  if (name) await metaWrite(() => store!.setTitle(sessionProvider, sessionId, name));
-  return { ok: true, name };
-}
 
 // C1: resolve which store bucket a meta write lands in. `knownNative` is the
 // caller's SYNCHRONOUS isNativeSessionId(id) result — true only when the record

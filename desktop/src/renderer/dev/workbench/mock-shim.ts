@@ -73,7 +73,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
  *  top-level bridge members (`'getPlatform'`). The contract test
  *  (tests/workbench-mock-contract.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
-  'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename', 'sessionNaming.automatic',
+  'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
   'devLabel', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
   'getIncognito', 'setIncognito', 'onChatExportSnapshot',
   'sendChatSnapshotResponse', 'fireRemoteAttentionChanged',

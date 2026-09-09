@@ -984,6 +984,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         onClick={() => { if (!inert) handleSelectSession(s); }}
         aria-disabled={inert || undefined}
         aria-expanded={inert ? undefined : isExpanded}
+        // WHY an explicit label: the session name used to be this button's only
+        // text, and R12 moved it into the rename control above. Without this the
+        // resume control announces nothing but its metadata line.
+        aria-label={s.name}
         className={`w-full text-left px-3 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
           inert ? 'text-fg-dim cursor-default' : isExpanded ? 'text-fg' : 'text-fg-dim'
         }`}

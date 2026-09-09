@@ -136,12 +136,22 @@ export function createSessionNamer(deps: SessionNamerDeps): SessionNamer {
     return s;
   }
 
+  /**
+   * Count one completed reply, then review if one is due.
+   *
+   * WHY the count is NOT inside the in-flight guard: a review can take up to
+   * fifteen seconds (the generate timeout), and on a fast-replying session
+   * several replies land inside that window. Guarding the count as well as the
+   * generation silently dropped them, so the schedule drifted longer and
+   * longer on exactly the busiest conversations. The count is a locked
+   * increment on its own; only the model call needs to be exclusive.
+   */
   async function review(sessionId: string, state: SessionState): Promise<void> {
-    // Synchronous re-entrancy guard, set before the first await: two
-    // turn-complete events arriving back to back must not each start a
-    // generation and double-name the session.
-    if (state.inFlight) return;
-    state.inFlight = true;
+    // Did THIS call take the generation guard? The finally below must only
+    // release a flag it set — a concurrent call that returns early (mode Off,
+    // no review due) would otherwise clear the flag of the review that is
+    // actually running, and the next reply would start a second generation.
+    let acquired = false;
     try {
       const prefs = deps.settings();
       // Off does not merely discard results — it never counts, never reads a
@@ -159,13 +169,20 @@ export function createSessionNamer(deps: SessionNamerDeps): SessionNamer {
       // feature is named after.
       if (existing?.manual) return;
 
-      const generation = state.generation;
       const counted = await deps.mutateNaming(ident.provider, ident.storeId, (cur) => (
         // Re-checked under the lock: a rename that landed between the read
         // above and this write must stop the counter too.
         cur.manual ? cur : { ...cur, replies: cur.replies + 1 }
       ));
       if (counted.manual || !isReviewDue(counted)) return;
+
+      // Re-entrancy guard for the GENERATION only. Two reviews falling due
+      // back to back (a takeover/resume transition, or a reply landing while a
+      // slow one runs) must not each ask a model and double-name the session.
+      if (state.inFlight) return;
+      state.inFlight = true;
+      acquired = true;
+      const generation = state.generation;
 
       if (prefs.mode === 'basic') {
         // Basic quotes the opening request and then keeps that name — it does
@@ -227,7 +244,7 @@ export function createSessionNamer(deps: SessionNamerDeps): SessionNamer {
     } catch {
       // Naming must never take a turn down with it.
     } finally {
-      state.inFlight = false;
+      if (acquired) state.inFlight = false;
     }
   }
 

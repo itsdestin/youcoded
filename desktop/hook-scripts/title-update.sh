@@ -10,8 +10,14 @@
 # unless naming is set to AI.
 #
 # TWO gate files, both written by the app, both cheap to read:
-#   $TOPIC_DIR/naming-mode   one word: off | basic | ai
-#   $TOPIC_DIR/ask-<id>      exists = the app wants a name for this session now
+#   $YOUCODED_NAMING_MODE_FILE   one word: off | basic | ai. Under the app
+#                                instance's own userData, named by an env var
+#                                the session inherits, so a dev instance cannot
+#                                retune the installed app's naming.
+#   $TOPIC_DIR/ask-<id>          exists = the app wants a name for this session
+#                                now. Keyed by the Claude session id, which is
+#                                unique per session, so the shared directory is
+#                                safe for these.
 #
 # A MISSING mode file falls back to the old timer. That is not laziness: this
 # same script ships to Android, whose runtime does not write these files yet,
@@ -58,7 +64,8 @@ ASK_FILE="$TOPIC_DIR/ask-$SESSION_ID"
 CURRENT_TOPIC=""
 [ -f "$TOPIC_FILE" ] && CURRENT_TOPIC=$(head -1 "$TOPIC_FILE" 2>/dev/null)
 
-MODE=$(head -1 "$TOPIC_DIR/naming-mode" 2>/dev/null)
+MODE_FILE="${YOUCODED_NAMING_MODE_FILE:-$TOPIC_DIR/naming-mode}"
+MODE=$(head -1 "$MODE_FILE" 2>/dev/null)
 if [ -n "$MODE" ]; then
     # Off and Basic must not merely discard the result: by the time a title
     # comes back the model has already been interrupted and asked to write one,

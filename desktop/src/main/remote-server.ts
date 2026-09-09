@@ -98,7 +98,6 @@ interface SessionNamingWiring {
   set: (value: unknown) => Promise<{ ok: boolean; error?: string }>;
   title: (sessionId: string, fallback: string) => Promise<{ title: string; manual: boolean }>;
   rename: (sessionId: string, title: string) => Promise<{ ok: boolean; error?: string }>;
-  automatic: (sessionId: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export class RemoteServer {
@@ -827,11 +826,7 @@ export class RemoteServer {
           this.saveTokens();
           this.config.markPaired();
           this.addClient(ws, token, ip);
-          // `sessionNaming` is a CAPABILITY, announced in the handshake rather than
-        // probed with an extra round trip: the remote UI decides whether the
-        // naming card and the rename pencil exist at all, and it must decide
-        // before first paint. An Android host answers this handshake without
-        // the flag, so those controls stay hidden there.
+          // Capability flag — see the auth:ok above; the two sites must stay in step.
         ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop', sessionNaming: true }));
           this.replayBuffers(ws).catch((err) => {
             console.error('[remote-server] replayBuffers failed:', err);
@@ -1412,13 +1407,6 @@ export class RemoteServer {
         const w = this.sessionNamingWiring;
         this.respond(client.ws, type, id, w
           ? await w.rename(String(payload?.sessionId ?? ''), String(payload?.title ?? ''))
-          : { ok: false, error: 'The assistant isn’t ready yet.' });
-        break;
-      }
-      case 'session-naming:automatic': {
-        const w = this.sessionNamingWiring;
-        this.respond(client.ws, type, id, w
-          ? await w.automatic(String(payload?.sessionId ?? ''))
           : { ok: false, error: 'The assistant isn’t ready yet.' });
         break;
       }

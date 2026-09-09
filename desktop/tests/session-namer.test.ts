@@ -171,6 +171,25 @@ describe('the AI review schedule', () => {
     expect(h.generated).toHaveLength(1);
   });
 
+  it('counts replies that land while a slow review is still running', async () => {
+    // A fifteen-second generation used to swallow every reply inside its
+    // window, so the schedule drifted longest on the busiest conversations.
+    let release: (v: string) => void = () => {};
+    let calls = 0;
+    const h = harness({ generate: () => { calls += 1; return new Promise<string>((r) => { release = r; }); } });
+    h.namer.noteEvent(userMessage('opening'));
+    h.namer.noteEvent(turnComplete());          // reply 1 — starts the review
+    await settle();
+    h.namer.noteEvent(turnComplete());          // reply 2 — lands mid-generation
+    h.namer.noteEvent(turnComplete());          // reply 3
+    await settle();
+    expect(h.record.replies).toBe(3);
+    // …and only ONE model call was made for that window.
+    expect(calls).toBe(1);
+    release('Generated name');
+    await settle();
+  });
+
   it('still reviews after completions were missed', async () => {
     const h = harness();
     h.record = { ...h.record, replies: 30, reviewed: 3 };

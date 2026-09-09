@@ -83,26 +83,22 @@ describe('name ownership, end to end', () => {
     expect(await svc.isSessionNameOwned('claude', 'c1')).toBe(true);
   });
 
-  it('Use automatic name shows the stored generated name straight away', async () => {
-    // The generated name is remembered while the manual one is in force, so
-    // clearing does not leave the row blank until the next review.
+  it('remembers the automatic name it displaced, for whatever offers it back later', async () => {
+    // R11 took the reset action off the dialog, so nothing reaches this today.
+    // The record still keeps the generated name, because a name that was shown
+    // and then covered is not the same thing as a name that never existed —
+    // and re-deriving it later would mean another model call.
     await svc.noteAutomaticTitle('c1', 'Fix chat scroll', 'claude');
     await svc.setManualSessionName('claude', 'c1', 'Biology revision');
-
-    expect(await svc.clearManualSessionName('claude', 'c1', 'Untitled'))
-      .toEqual({ ok: true, name: 'Fix chat scroll' });
-    expect(await svc.isSessionNameOwned('claude', 'c1')).toBe(false);
-    expect(await storedTitle('c1')).toBe('Fix chat scroll');
-
-    // …and automatic naming is free to move it again.
-    await svc.noteAutomaticTitle('c1', 'Now about photosynthesis', 'claude');
-    expect(await storedTitle('c1')).toBe('Now about photosynthesis');
+    const rec = await svc.getNamingRecord('claude', 'c1');
+    expect(rec).toMatchObject({ manual: 'Biology revision', auto: 'Fix chat scroll' });
   });
 
-  it('keeps the name on screen when clearing a session that never had a generated one', async () => {
+  it('a later automatic pass does not overwrite the remembered one while owned', async () => {
+    await svc.noteAutomaticTitle('c1', 'Fix chat scroll', 'claude');
     await svc.setManualSessionName('claude', 'c1', 'Biology revision');
-    const res = await svc.clearManualSessionName('claude', 'c1', 'Biology revision');
-    expect(res).toEqual({ ok: true, name: 'Biology revision' });
+    await svc.noteAutomaticTitle('c1', 'Something else', 'claude');
+    expect((await svc.getNamingRecord('claude', 'c1'))!.auto).toBe('Fix chat scroll');
   });
 
   it('ownership is per conversation and per lane', async () => {

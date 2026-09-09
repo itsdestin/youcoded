@@ -950,8 +950,6 @@ export function installShim(): void {
         invoke('session-naming:title', { sessionId, fallback }),
       rename: (sessionId: string, title: string) =>
         unwrapRemote(invoke('session-naming:rename', { sessionId, title })),
-      automatic: (sessionId: string) =>
-        unwrapRemote(invoke('session-naming:automatic', { sessionId })),
     },
     session: {
       create: (opts: any) => invoke('session:create', opts),

@@ -92,17 +92,18 @@ export function createNamingStore(namesRoot: string): NamingStore {
   ): Promise<NamingRecord> {
     const target = recordPath(provider, id);
     fs.mkdirSync(path.dirname(target), { recursive: true });
-    // Fold BEFORE taking the lock on the canonical file: the copies are
-    // separate files the lock does not cover, and folding inside the callback
-    // would do disk reads while holding it.
-    const { folded } = foldConflicts(provider, id, emptyNamingRecord(id, provider));
     let result: NamingRecord | undefined;
+    // Every copy that was MERGED INTO the written record, so the delete below
+    // can never remove one whose content did not make it in. Collected from
+    // inside the lock (a copy can land between the mkdir above and the lock)
+    // rather than from a pre-lock listing — that earlier version deleted only
+    // what it saw first and re-folded the rest on every later read.
+    let folded: string[] = [];
     const committed = await mutateFileUnderLock(target, (onDisk) => {
       const existing = (onDisk ? parseNamingRecord(onDisk) : null) ?? emptyNamingRecord(id, provider);
-      // Re-fold inside the lock against the CURRENT on-disk record, so a copy
-      // that arrived between the two reads is still merged in.
-      const merged = foldConflicts(provider, id, existing).rec;
-      result = fn(merged);
+      const fold = foldConflicts(provider, id, existing);
+      folded = fold.folded;
+      result = fn(fold.rec);
       return JSON.stringify(result, null, 2);
     });
     if (!committed || !result) {
@@ -125,7 +126,12 @@ export function createNamingStore(namesRoot: string): NamingStore {
         // A read that discovered conflict copies must persist the fold before
         // answering, or the next read re-does it and a crash in between drops
         // the copies' content.
-        try { return await mutate(provider, id, () => rec); } catch { return rec; }
+        //
+        // MERGE what the lock hands back — never `() => rec`. `rec` was read
+        // outside the lock, so writing it verbatim would silently discard
+        // anything another process wrote in between, which is the exact data
+        // loss this whole store exists to prevent.
+        try { return await mutate(provider, id, (cur) => mergeNamingRecords(cur, rec)); } catch { return rec; }
       }
       return onDisk;
     },

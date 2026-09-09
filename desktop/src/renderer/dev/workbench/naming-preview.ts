@@ -26,11 +26,5 @@ export function createNamingPreview(onTitle?: (id: string, title: string) => voi
       if (!title.trim()) throw new Error('Enter a name.');
       titles.set(id, title.trim()); onTitle?.(id, title.trim());
     },
-    automatic: async (id) => {
-      await wait(true);
-      titles.delete(id);
-      const original = originals.get(id);
-      if (original) onTitle?.(id, original);
-    },
   };
 }

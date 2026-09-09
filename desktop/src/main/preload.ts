@@ -118,14 +118,11 @@ const IPC = {
   SESSION_SET_TAG: 'session:set-tag',
   SESSION_SET_NOTE: 'session:set-note',
   // Session naming (2026-09-09). get/set are the Assistant-settings preference;
-  // title/rename/automatic are per-conversation name ownership. `rename` and
-  // `automatic` accept EITHER a live desktop session id or a saved
-  // conversation id — the handler resolves both through sessionIdMap.
+  // title/rename are per-conversation name ownership.
   SESSION_NAMING_GET: 'session-naming:get',       // () -> { mode, model }
   SESSION_NAMING_SET: 'session-naming:set',       // ({ mode, model })
   SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
   SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
-  SESSION_NAMING_AUTOMATIC: 'session-naming:automatic', // (sessionId)
   SESSION_GET_META: 'session:get-meta',
   // Tag registry CRUD + change push
   TAGS_LIST: 'tags:list',
@@ -474,7 +471,7 @@ contextBridge.exposeInMainWorld('claude', {
   // present (components/assistant-settings/naming-api.ts) — a nested member
   // behind the bridge's callable catch-all would answer "yes" everywhere.
   //
-  // The four writes REJECT on refusal instead of resolving {ok:false}: the
+  // The writes REJECT on refusal instead of resolving {ok:false}: the
   // settings card and the rename dialog show <ErrorState> from a caught error
   // and keep the previously saved value, which a resolved failure would paint
   // over as success.
@@ -485,8 +482,6 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SESSION_NAMING_TITLE, sessionId, fallback),
     rename: (sessionId: string, title: string) =>
       unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_RENAME, sessionId, title)),
-    automatic: (sessionId: string) =>
-      unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_AUTOMATIC, sessionId)),
   },
   session: {
     create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }) =>

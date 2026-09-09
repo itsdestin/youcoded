@@ -161,7 +161,6 @@ import { noteTranscriptEvent, noteSessionStarted, noteSessionEnded, noteTitleCha
   isSessionNameOwned,
   resolveSessionName,
   setManualSessionName,
-  clearManualSessionName,
 } from './conversations/service';
 import { requestChatsearchRefresh } from './chatsearch-index/index-service';
 // Task 4: resolves a native session's live model binding into the store's
@@ -2755,11 +2754,22 @@ export function registerIpcHandlers(
    * and Basic stop the hook from interrupting a reply to request a title, and
    * what switches AI onto the app's review schedule instead of the hook's old
    * 120s/600s timer. Written at startup and after every settings change.
+   *
+   * WHY it lives under userData and travels by ENV rather than sitting at a
+   * fixed path in ~/.claude/topics: that directory is shared by every YouCoded
+   * process on the machine, so a dev instance set to Off would silently switch
+   * off auto-titling in Destin's installed app. run-dev.sh isolates userData,
+   * so one file per instance is one setting per instance. The env var is set on
+   * the MAIN process before any session spawns, and the pty worker passes its
+   * whole environment down, so every Claude Code session inherits it. A session
+   * that somehow has neither falls back to the hook's own timer.
    */
+  const namingModeFile = path.join(app.getPath('userData'), 'naming-mode');
   const publishNamingMode = () => {
     try {
-      fs.mkdirSync(topicDir, { recursive: true });
-      fs.writeFileSync(path.join(topicDir, 'naming-mode'), `${namingSettings.read().mode}\n`);
+      fs.mkdirSync(path.dirname(namingModeFile), { recursive: true });
+      fs.writeFileSync(namingModeFile, `${namingSettings.read().mode}\n`);
+      process.env.YOUCODED_NAMING_MODE_FILE = namingModeFile;
     } catch { /* best-effort: the hook falls back to its own timer */ }
   };
 
@@ -3446,8 +3456,13 @@ export function registerIpcHandlers(
   async function applyTopic(desktopId: string, claudeId: string, topic: string): Promise<void> {
     try {
       const applied = await applyAutomaticTitle(desktopId, claudeId, 'claude', topic);
-      if (!applied) return;
+      // Recorded even when REFUSED (the user owns the name). This map's job is
+      // "have I already dealt with this exact topic string" — not "did I paint
+      // it". The polling fallback re-reads every 2s, so a refused topic left
+      // unrecorded meant an ownership read plus a conflict-directory scan every
+      // two seconds, per manually-named session, for the life of the session.
       lastTopics.set(desktopId, topic);
+      if (!applied) return;
       // A topic that landed is also a completed review: advance the cursor so
       // the next ask is the next SCHEDULED one. (applyAutomaticTitle already
       // recorded the name itself.)
@@ -3894,7 +3909,7 @@ export function registerIpcHandlers(
 
   // --- Set/clear a session note ---
   /* ── Session naming ────────────────────────────────────────────────────
-   * Five handlers: the Assistant-settings preference, and per-conversation
+   * Four handlers: the Assistant-settings preference, and per-conversation
    * name ownership. `sessionId` here may be a LIVE desktop id (the session
    * strip) or a SAVED conversation id (the Resume Browser) — sessionIdMap
    * resolves the first and passes the second through unchanged, the same
@@ -3954,7 +3969,15 @@ export function registerIpcHandlers(
   };
 
   const namingRename = async (sessionId: string, title: string) => {
+    // TWO id spaces meet here. The session strip renames a LIVE session by its
+    // desktop id; the Resume Browser renames a SAVED conversation by its store
+    // id. sessionIdMap resolves the first to the store's id and passes the
+    // second through — but the live-session broadcast must go back out under
+    // the DESKTOP id, because that is what App.tsx matches its rows on. For a
+    // Claude Code session the two genuinely differ (desktop id -> Claude UUID),
+    // and broadcasting the resolved one silently repainted nothing.
     const resolved = sessionIdMap.get(sessionId) || sessionId;
+    const desktopId = sessionIdMap.has(sessionId) ? sessionId : resolved;
     const provider = await sessionProviderFor(resolved);
     try {
       const res = await setManualSessionName(provider, resolved, String(title ?? ''));
@@ -3963,8 +3986,8 @@ export function registerIpcHandlers(
       // generation that returns after this must be discarded, not raced.
       sessionNamer.invalidate(sessionId);
       sessionNamer.invalidate(resolved);
-      sendForSession(resolved, IPC.SESSION_RENAMED, resolved, res.name);
-      broadcastRename(resolved, res.name);
+      sendForSession(desktopId, IPC.SESSION_RENAMED, desktopId, res.name);
+      broadcastRename(desktopId, res.name);
       emitConversationMetaChanged();
       return { ok: true, name: res.name };
     } catch (e: any) {
@@ -3972,33 +3995,12 @@ export function registerIpcHandlers(
     }
   };
 
-  const namingAutomatic = async (sessionId: string) => {
-    const resolved = sessionIdMap.get(sessionId) || sessionId;
-    const provider = await sessionProviderFor(resolved);
-    try {
-      const live = sessionManager.getSession(resolved)?.name ?? '';
-      const res = await clearManualSessionName(provider, resolved, live);
-      if (!res.ok) return res;
-      sessionNamer.invalidate(sessionId);
-      sessionNamer.invalidate(resolved);
-      if (res.name) {
-        sendForSession(resolved, IPC.SESSION_RENAMED, resolved, res.name);
-        broadcastRename(resolved, res.name);
-      }
-      emitConversationMetaChanged();
-      return { ok: true, name: res.name };
-    } catch (e: any) {
-      return { ok: false, error: e?.message || 'That could not be saved.' };
-    }
-  };
-
   ipcMain.handle(IPC.SESSION_NAMING_GET, () => namingGet());
   ipcMain.handle(IPC.SESSION_NAMING_SET, (_e, value: unknown) => namingSet(value));
   ipcMain.handle(IPC.SESSION_NAMING_TITLE, (_e, sessionId: string, fallback: string) => namingTitle(sessionId, fallback));
   ipcMain.handle(IPC.SESSION_NAMING_RENAME, (_e, sessionId: string, title: string) => namingRename(sessionId, title));
-  ipcMain.handle(IPC.SESSION_NAMING_AUTOMATIC, (_e, sessionId: string) => namingAutomatic(sessionId));
 
-  // Same five, for a phone or browser driving THIS desktop. One implementation,
+  // Same four, for a phone or browser driving THIS desktop. One implementation,
   // so a remote rename cannot bypass a gate the local path enforces — the
   // reason session:set-tag / set-note got the same treatment (design §12).
   publishNamingMode();
@@ -4007,7 +4009,6 @@ export function registerIpcHandlers(
     set: namingSet,
     title: namingTitle,
     rename: namingRename,
-    automatic: namingAutomatic,
   });
 
   ipcMain.handle(IPC.SESSION_SET_NOTE, async (_e, sessionId: string, note: string) => {

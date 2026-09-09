@@ -33,7 +33,18 @@ function RenameForm({ id, name, onClose }: Props) {
   const save = async () => {
     if (!api || saving) return;
     setSaving(true); setError(null);
-    try { await api.rename(id, draft); if (alive.current) onClose(); }
+    try {
+      const saved = draft.trim();
+      await api.rename(id, saved);
+      // Tell this window's already-fetched lists. Renaming a SAVED conversation
+      // touches no live session, so there is no SESSION_RENAMED broadcast to
+      // ride and the Resume Browser only refetches when it opens — without
+      // this the row keeps the old name until it is closed and reopened.
+      // Live sessions get repainted by the broadcast as well; the projection
+      // hook drops a name once the parent's own snapshot catches up.
+      window.dispatchEvent(new CustomEvent('youcoded:session-renamed', { detail: { id, title: saved } }));
+      if (alive.current) onClose();
+    }
     catch (e) { if (alive.current) { setError(e instanceof Error ? e.message : 'The name was not saved.'); setRetry(() => () => { void save(); }); } }
     finally { if (alive.current) setSaving(false); }
   };
