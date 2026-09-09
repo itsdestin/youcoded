@@ -138,6 +138,13 @@ export interface ChatGptAccountFile {
   blocked?: { reason: string; at: string };
   usage?: ChatGptUsage & { at: string };
   models?: { rows: CatalogModel[]; at: string };
+  // Cache stage 4: durable identity for OpenAI continuation state, minted
+  // fresh whenever a sign-in round writes a NEW account row (Task 1). Unlike
+  // `generation` below (in-memory, restarts at 0 every process) this survives
+  // closing and reopening the app, which is what makes a persisted
+  // continuation manifest possible to match up against the live account.
+  // Optional so a row written before this field existed still parses.
+  credentialEpoch?: string;
 }
 
 /** What the secrets store holds under `secretRef`, as JSON. */
@@ -458,11 +465,15 @@ export class ChatGptAuth {
 
   /** For the registry: throws the sentence the card renders when the model
    *  cannot be used — signed out, or OpenAI's own refusal when blocked. */
-  signedInAccount(): { accountId: string; email: string; plan: string; authGeneration: number } {
+  signedInAccount(): { accountId: string; email: string; plan: string; authGeneration: number; credentialEpoch: string } {
     const a = this.account;
     if (!a || !this.secrets.has(a.secretRef)) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
     if (a.blocked) throw blockedError(a.blocked.reason);
-    return { accountId: a.accountId, email: a.email, plan: a.plan, authGeneration: this.generation };
+    // WHY 'legacy': a row written before credentialEpoch existed has none on
+    // disk; reporting a fixed sentinel (rather than undefined) keeps every
+    // caller's string-concatenation identity well-formed until the next
+    // sign-in mints a real epoch.
+    return { accountId: a.accountId, email: a.email, plan: a.plan, authGeneration: this.generation, credentialEpoch: a.credentialEpoch ?? 'legacy' };
   }
 
   /** The cached windows with any whose reset has passed dropped — including
@@ -688,6 +699,13 @@ export class ChatGptAuth {
           v: 1, secretRef, accountId: claims.accountId, email: claims.email,
           // Keep the plan the last poll reported if the claim has none.
           plan: claims.plan || cur?.plan || '',
+          // WHY: this IS the "a sign-in round writes a NEW account row" branch
+          // (Task 1) — first sign-in AND every re-sign-in on the same account
+          // land here, so each one mints a fresh durable epoch. Token refresh,
+          // usage polls and model-cache writes go through `{ ...cur, ... }`
+          // elsewhere in this file and so carry the existing epoch forward
+          // unchanged; this is the one place that overwrites it.
+          credentialEpoch: Buffer.from(this.randomBytes(16)).toString('hex'),
           ...(cur?.usage ? { usage: cur.usage } : {}),
           ...(cur?.models ? { models: cur.models } : {}),
         };

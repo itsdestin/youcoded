@@ -13,6 +13,7 @@ import { openRouterCostExtractor } from '../src/main/harness/pricing';
 import type { LocalEngineHook } from '../src/main/engine/engine-manager';
 import type { ChatGptAuth } from '../src/main/providers/chatgpt-auth';
 import { limitError } from '../src/main/providers/chatgpt-oauth';
+import { openAIContinuationBinding } from '../src/main/harness/openai-continuation';
 import { streamText, generateText } from 'ai';
 
 describe('ProviderRegistry', () => {
@@ -321,6 +322,7 @@ describe('ProviderRegistry', () => {
       signedIn?: boolean;
       blockedReason?: string;
       token?: string;
+      credentialEpoch?: string;
       /** What the fake network answers with; default = a one-message stream. */
       reply?: () => Response | Promise<Response>;
     }
@@ -340,7 +342,10 @@ describe('ProviderRegistry', () => {
         signedInAccount: () => {
           if (!signedIn) throw new Error(SIGN_IN_REQUIRED);
           if (o.blockedReason) { const e = new Error(o.blockedReason); e.name = 'ChatGptBlockedError'; throw e; }
-          return { accountId: 'acct_123', email: 'd@example.com', plan: 'free', authGeneration: 1 };
+          // credentialEpoch: the durable half of continuation identity (Task
+          // 1) — fixed per fake so `continuationIdentity()` produces a stable,
+          // well-formed string in tests without a real ChatGptAuth.
+          return { accountId: 'acct_123', email: 'd@example.com', plan: 'free', authGeneration: 1, credentialEpoch: o.credentialEpoch ?? 'epoch-1' };
         },
         models: async () => [],
         fetch: (_expected?: { accountId: string; authGeneration: number }) => async (input: any, init: any) => {
@@ -577,6 +582,41 @@ describe('ProviderRegistry', () => {
         .rejects.toThrow(SIGN_IN_REQUIRED);
       await expect(make(fakeChatGpt({ blockedReason: 'Codex is disabled for this workspace.' }).auth).languageModel({ providerId: 'chatgpt', modelId: 'gpt-5.5' }))
         .rejects.toThrow('Codex is disabled for this workspace.');
+    });
+
+    // Task 1: continuationIdentity() is the ONE place this string is built —
+    // the harness's continuationOwner closure and the future restore path
+    // both call it, so they can never disagree (cache-stage4-architecture §
+    // "Identity strings").
+    describe('continuationIdentity()', () => {
+      it('a non-ChatGPT binding is provider\\0model, with no ChatGptAuth involved', () => {
+        const reg = make(null);
+        expect(reg.continuationIdentity({ providerId: 'openrouter', modelId: 'meta-llama/llama-3-8b' }))
+          .toBe('openrouter\0meta-llama/llama-3-8b');
+      });
+
+      it('equals what languageModel() binds onto the ChatGPT model, and never contains the raw accountId', async () => {
+        const { auth } = fakeChatGpt();
+        const reg = make(auth);
+        const binding = { providerId: 'chatgpt', modelId: 'gpt-5.5' };
+        const model = await reg.languageModel(binding);
+        const identity = reg.continuationIdentity(binding);
+        expect(openAIContinuationBinding(model)).toBe(identity);
+        expect(identity.startsWith('chatgpt\0gpt-5.5\0')).toBe(true);
+        expect(identity).not.toContain('acct_123');
+      });
+
+      it('changes when the credential epoch changes (a reauth), same account', () => {
+        const binding = { providerId: 'chatgpt', modelId: 'gpt-5.5' };
+        const before = make(fakeChatGpt({ credentialEpoch: 'epoch-1' }).auth).continuationIdentity(binding);
+        const after = make(fakeChatGpt({ credentialEpoch: 'epoch-2' }).auth).continuationIdentity(binding);
+        expect(after).not.toBe(before);
+      });
+
+      it('throws the sign-in-required sentence when signed out', () => {
+        const reg = make(fakeChatGpt({ signedIn: false }).auth);
+        expect(() => reg.continuationIdentity({ providerId: 'chatgpt', modelId: 'gpt-5.5' })).toThrow(SIGN_IN_REQUIRED);
+      });
     });
 
     it('kill switch (chatgpt = null): no row, and a ChatGPT binding is refused with the sentence', async () => {

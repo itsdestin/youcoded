@@ -436,17 +436,13 @@ export class ProviderRegistry {
           model: provider.responses(binding.modelId),
           middleware: chatGptMiddleware(opts?.cacheKey, this.diagnostics),
         });
-        // WHY: ciphertext must never cross accounts. Hash the non-secret account
-        // id before handing identity to the harness, and never expose it through
-        // diagnostics or a public model/binding shape.
-        const continuationOwner = () => {
-          // Read live state for every dispatch/acceptance, not only once when
-          // this turn's model was constructed. A same-account reauth increments
-          // authGeneration, and an account switch also changes the fingerprint.
-          const live = this.chatgpt!.signedInAccount();
-          const accountFingerprint = createHash('sha256').update(live.accountId).digest('hex');
-          return `${binding.providerId}\0${binding.modelId}\0${accountFingerprint}\0${live.authGeneration}`;
-        };
+        // WHY: continuationIdentity() is the ONE place this string is built
+        // (cache-stage4-architecture.md "Identity strings") — read live state
+        // on every dispatch/acceptance, not only once when this turn's model
+        // was constructed, so a same-account reauth or an account switch is
+        // never missed. The future restore path calls the same method, so
+        // the two can never disagree.
+        const continuationOwner = () => this.continuationIdentity(binding);
         return bindOpenAIContinuationModel(model, continuationOwner);
       }
       default:
@@ -454,6 +450,30 @@ export class ProviderRegistry {
         // providers.json could hold anything — fail with a real message.
         throw new Error(`${p.label} has an unknown type and cannot be used.`);
     }
+  }
+
+  /**
+   * THE one durable identity string for OpenAI continuation state (cache
+   * stage 4, Task 1). Non-ChatGPT bindings need no account context: provider
+   * + model IS the identity. ChatGPT additionally needs to know WHICH signed
+   * -in account and credential era produced the ciphertext, so a restored
+   * manifest is never applied against a different account's tokens — but the
+   * raw account id must never leave this process (it would be a stable,
+   * unhashed identifier sitting in a private-but-not-secret file), so only
+   * its hash travels. `credentialEpoch` (durable, minted per sign-in) — NOT
+   * `authGeneration` (in-memory, restarts at 0 every process) — is what
+   * still changes this string on a same-account reauth; see
+   * `ChatGptAuth.signedInAccount()`.
+   */
+  continuationIdentity(binding: ModelBinding): string {
+    if (!VIRTUAL_IDS.has(binding.providerId)) return `${binding.providerId}\0${binding.modelId}`;
+    if (!this.chatgpt) throw new Error(CHATGPT_TURNED_OFF_MESSAGE);
+    // Throws the sign-in-required sentence when signed out, or OpenAI's own
+    // refusal when blocked — both are real states the caller (a dispatch, or
+    // a restore) must see, not swallow.
+    const live = this.chatgpt.signedInAccount();
+    const accountFingerprint = createHash('sha256').update(live.accountId).digest('hex');
+    return `${binding.providerId}\0${binding.modelId}\0${accountFingerprint}\0${live.credentialEpoch}`;
   }
 
   /**

@@ -373,7 +373,13 @@ describe('ChatGptAuth: the sign-in round', () => {
     expect(status.state).toBe('signed-in');
     expect(status).toMatchObject({ email: 'd@example.com' });
     expect(auth.isSignedIn()).toBe(true);
-    expect(auth.signedInAccount()).toEqual({ accountId: 'acct-1', email: 'd@example.com', plan: 'plus', authGeneration: 1 });
+    // credentialEpoch: 16 random bytes as hex, minted by THIS sign-in round —
+    // the durable half of the continuation identity (Task 1; authGeneration
+    // stays in-memory-only and is not what survives a restart).
+    expect(auth.signedInAccount()).toEqual({
+      accountId: 'acct-1', email: 'd@example.com', plan: 'plus', authGeneration: 1,
+      credentialEpoch: expect.stringMatching(/^[0-9a-f]{32}$/),
+    });
 
     // Token hygiene: the account file holds a ref, never the token; the
     // secrets file holds only ciphertext; no log line carries it.
@@ -384,6 +390,37 @@ describe('ChatGptAuth: the sign-in round', () => {
     expect(JSON.stringify(h.logs)).not.toContain(TOKEN_MARKER);
     // The listener is gone.
     expect(await portOpen(h.port)).toBe(false);
+  });
+
+  // Task 1: the credential epoch replaces the in-memory authGeneration counter
+  // as the durable half of continuation identity — it must survive the
+  // process restart authGeneration (0 every launch) never could.
+  it('the credential epoch survives a fresh ChatGptAuth over the same userData dir, changes on a fresh sign-in, and is gone after sign-out', async () => {
+    const auth = h.build();
+    await completeSignIn(auth);
+    const epoch1 = auth.signedInAccount().credentialEpoch;
+    expect(epoch1).toMatch(/^[0-9a-f]{32}$/);
+
+    // A second ChatGptAuth constructed over the SAME userData dir (what a
+    // fresh process does after a restart) reads the identical epoch back
+    // from disk — durability, not memory.
+    const restarted = h.build();
+    expect(restarted.signedInAccount().credentialEpoch).toBe(epoch1);
+
+    // A second, successful sign-in round on the SAME account (re-auth) mints
+    // a NEW epoch — this is what still changes the continuation identity on
+    // reauth now that authGeneration no longer does.
+    await completeSignIn(auth);
+    const epoch2 = auth.signedInAccount().credentialEpoch;
+    expect(epoch2).not.toBe(epoch1);
+    expect(epoch2).toMatch(/^[0-9a-f]{32}$/);
+
+    // Sign-out removes the account file — the epoch goes with it — and a
+    // fresh construct over the same dir reports signed out, not a stale epoch.
+    expect(await auth.signOut()).toBe(true);
+    const afterSignOut = h.build();
+    expect(afterSignOut.status()).toEqual({ state: 'signed-out' });
+    expect(() => afterSignOut.signedInAccount()).toThrow(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
   });
 
   it('after the callback the poll starts, usage and models are kicked, and `plan` follows the poll', async () => {
@@ -709,6 +746,17 @@ describe('ChatGptAuth: the account on disk', () => {
     // which is the leg that could have deleted the secret.
     expect(h.fetch.calls).toHaveLength(0);
     expect(fs.existsSync(h.file)).toBe(true);
+  });
+
+  // Task 1: an account file written before credentialEpoch existed has no
+  // such field on disk; signedInAccount() must not crash on it or read
+  // undefined — it reports the fixed sentinel 'legacy' until the next
+  // sign-in mints a real one.
+  it('a legacy account file with no credentialEpoch reports \'legacy\'', async () => {
+    await h.seedSignedIn();
+    const auth = h.build();
+    expect(JSON.parse(fs.readFileSync(h.file, 'utf8'))).not.toHaveProperty('credentialEpoch');
+    expect(auth.signedInAccount().credentialEpoch).toBe('legacy');
   });
 
   it('a blocked file reads blocked with the verbatim reason, is not signed in, and starts no poll', async () => {
