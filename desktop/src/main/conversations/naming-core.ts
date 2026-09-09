@@ -176,20 +176,127 @@ export function sanitizeAutoName(raw: string): string {
   return t.replace(/\s+/g, ' ').trim().slice(0, AUTO_NAME_MAX);
 }
 
+// How people open a request. Stripping these is what turns a quoted sentence
+// into something that reads like a name: "can you help me fix the scroll bug"
+// is a sentence about ME asking; "Fix the scroll bug" is what the conversation
+// is ABOUT. Ordered longest-first so "i would like you to" wins over "i".
+// Deliberately conservative — an opener only goes if what follows still says
+// something, which the caller checks.
+const OPENERS = [
+  'i would like you to', 'i would like to', "i'd like you to", "i'd like to",
+  'i want you to', 'i want to', 'i need you to', 'i need to',
+  'can you please', 'could you please', 'would you please', 'will you please',
+  'can you', 'could you', 'would you', 'will you', 'can we', 'could we',
+  'we should probably', 'we should', 'we need to', 'we could',
+  'please help me', 'help me out with', 'help me with', 'help me', 'help',
+  'lets try to', "let's try to", 'lets try', "let's try", 'lets', "let's",
+  'id like you to', 'id like to',
+  'please', 'pls', 'plz',
+  'hey', 'hi', 'hello', 'yo', 'ok', 'okay', 'so', 'right',
+  'quick question', 'question',
+];
+// Filler that survives an opener strip and still adds nothing: "just", as in
+// "just fix the scroll bug".
+const LEADING_FILLER = ['just', 'quickly', 'now', 'also', 'then', 'first'];
+// Politeness at the end, which a title never wants.
+const TRAILING_FILLER = ['please', 'pls', 'plz', 'thanks', 'thank you', 'thx', 'ta', 'cheers'];
+/** A derived name is a phrase, not a sentence. Past this it stops reading as
+ *  a name and starts reading as a quote — which is what this replaced. */
+const BASIC_NAME_WORDS = 7;
+
+const stripLeading = (text: string, phrases: readonly string[]): string => {
+  for (const phrase of phrases) {
+    // Word-boundary match, so "sofa" is not read as the opener "so".
+    if (text.toLowerCase().startsWith(phrase) && /^[\s,:]/.test(text.slice(phrase.length) || ' ')) {
+      return text.slice(phrase.length).replace(/^[\s,:]+/, '');
+    }
+  }
+  return text;
+};
+
 /**
- * Basic mode's whole algorithm: quote the opening request, shortened to a word
- * boundary. No model call, no summary, no pretence of understanding the
- * conversation — which is exactly what the settings copy promises.
+ * Basic mode's whole algorithm — and it is an algorithm, not a quotation. No
+ * model call, no network, no cost.
+ *
+ * WHY it is not simply the opening request, which is what it used to be:
+ * quoting the message back is indistinguishable from the transcript-derived
+ * fallback the app already had, so Basic looked like it had done nothing
+ * (Destin, 2026-09-09: "I thought it would still be a bit more semantically
+ * useful ... rather than just literally re-typing my original message").
+ *
+ * What it does: take the first sentence, drop the way people open a request
+ * ("can you", "i want you to", "please"), drop trailing politeness, keep the
+ * first few words, and capitalise. Every step is a subtraction — nothing is
+ * invented, so the name can never claim something the message did not say.
+ * When subtraction leaves nothing usable it falls back to the quoted opening,
+ * which is always better than a blank.
  */
 export function basicNameFrom(firstMessage: string): string {
-  const collapsed = String(firstMessage ?? '').replace(/\s+/g, ' ').trim();
+  const collapsed = String(firstMessage ?? '')
+    // Markdown marks are formatting, not words. A message that opens with a
+    // heading or bold text would otherwise be named "## Source Extractor" —
+    // which looks like the app is showing you its own plumbing.
+    .replace(/^[#>\s]*[#>][#>\s]*/, '')
+    .replace(/[*_`]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
   if (!collapsed) return '';
-  if (collapsed.length <= BASIC_NAME_MAX) return collapsed;
-  const cut = collapsed.slice(0, BASIC_NAME_MAX);
-  const lastSpace = cut.lastIndexOf(' ');
-  // Same word-boundary rule as session-browser's cleanTitle: back off to the
-  // last space, unless that leaves a stub, in which case hard-cut.
-  return (lastSpace > 20 ? cut.slice(0, lastSpace) : cut) + '…';
+
+  // The first sentence, or the first line — whichever ends sooner. A request
+  // usually leads with what it wants and follows with the detail.
+  const firstSentence = collapsed.split(/(?<=[.!?])\s+/)[0] ?? collapsed;
+
+  // Trailing politeness FIRST: "please help me, thanks" must lose the thanks
+  // before the openers run, or stripping "please help me" leaves "thanks" as
+  // the name — which is the one word in it that means least.
+  const dropTrailing = (text: string): string => {
+    let out = text;
+    for (const phrase of TRAILING_FILLER) {
+      out = out.replace(new RegExp(`(^|[\\s,]+)${phrase}[.!?\\s]*$`, 'i'), '');
+    }
+    return out.replace(/[\s.,!?;:]+$/, '');
+  };
+  const base = dropTrailing(firstSentence) || firstSentence;
+
+  let core = stripLeading(base, OPENERS);
+  core = stripLeading(core, LEADING_FILLER);
+  // A second opener often hides behind the first: "hey can you fix this".
+  core = stripLeading(core, OPENERS);
+  core = stripLeading(core, LEADING_FILLER);
+  core = dropTrailing(core);
+
+  // Everything was an opener ("please help me") — the subtraction has nothing
+  // left to name, so keep the words the user actually wrote.
+  if (core.replace(/[^A-Za-z0-9]/g, '').length < 3) core = base;
+
+  // Cut at the first clause boundary when there is a real clause before it.
+  // "Waywallen isn't working again, currently stuck on a black wallpaper"
+  // names itself in its first four words; cutting mid-phrase at the word
+  // budget instead would read as a quote that ran out of room. The guard is
+  // the 3-word minimum — "Currently, the app has a home page" must not become
+  // "Currently".
+  const clause = core.split(/,\s+/)[0];
+  let dropped = false;
+  if (clause && clause !== core && clause.split(' ').filter(Boolean).length >= 3) {
+    core = clause;
+    dropped = true; // the rest of the sentence went with it — say so
+  }
+
+  const words = core.split(' ').filter(Boolean);
+  let name = words.slice(0, BASIC_NAME_WORDS).join(' ');
+  const trimmedWords = dropped || words.length > BASIC_NAME_WORDS;
+  if (name.length > BASIC_NAME_MAX) {
+    const cut = name.slice(0, BASIC_NAME_MAX);
+    const lastSpace = cut.lastIndexOf(' ');
+    // Same word-boundary rule as session-browser's cleanTitle: back off to the
+    // last space, unless that leaves a stub, in which case hard-cut.
+    name = (lastSpace > 20 ? cut.slice(0, lastSpace) : cut) + '…';
+  } else if (trimmedWords) {
+    name = `${name}…`;
+  }
+  // Sentence case, not Title Case: this is a phrase the user wrote, and
+  // Title-Casing It Reads Like A Headline Someone Else Chose.
+  return name.charAt(0).toUpperCase() + name.slice(1);
 }
 
 /**

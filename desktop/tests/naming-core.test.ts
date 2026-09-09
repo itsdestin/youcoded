@@ -9,6 +9,9 @@ import {
   nextReviewAt, isReviewDue, MANUAL_NAME_MAX, AUTO_NAME_MAX,
 } from '../src/main/conversations/naming-core';
 
+// The phrase cap basicNameFrom trims to.
+const BASIC_NAME_CAP = 49;
+
 const rec = (over: Partial<ReturnType<typeof emptyNamingRecord>> = {}) => ({
   ...emptyNamingRecord('c1', 'claude'), ...over,
 });
@@ -119,15 +122,70 @@ describe('name cleaning', () => {
     expect(sanitizeAutoName('   ')).toBe('');
   });
 
-  it('basicNameFrom quotes the opening request, cut at a word boundary', () => {
-    expect(basicNameFrom('help me fix the scroll')).toBe('help me fix the scroll');
-    expect(basicNameFrom('   ')).toBe('');
-    const long = basicNameFrom('please look at the landing page and tell me what is wrong with the hero');
+  it('basicNameFrom drops the way people open a request', () => {
+    expect(basicNameFrom('can you fix the chat scroll')).toBe('Fix the chat scroll');
+    expect(basicNameFrom('i want you to rewrite the landing page')).toBe('Rewrite the landing page');
+    expect(basicNameFrom('please help me plan a birthday dinner')).toBe('Plan a birthday dinner');
+    expect(basicNameFrom('hey can you just look at the sync bug')).toBe('Look at the sync bug');
+    expect(basicNameFrom("let's rename these sessions")).toBe('Rename these sessions');
+  });
+
+  it('does not mistake a real word for an opener', () => {
+    // "so" is an opener; "software" is not. Word boundaries, not prefixes.
+    expect(basicNameFrom('software licences need checking')).toBe('Software licences need checking');
+    expect(basicNameFrom('hitting a wall with the build')).toBe('Hitting a wall with the build');
+  });
+
+  it('drops trailing politeness', () => {
+    expect(basicNameFrom('fix the scroll bug please')).toBe('Fix the scroll bug');
+    expect(basicNameFrom('rewrite the hero copy, thanks')).toBe('Rewrite the hero copy');
+  });
+
+  it('names the request, not the paragraph after it', () => {
+    expect(basicNameFrom('Fix the chat scroll. It sticks when I page up, and the bar jumps.'))
+      .toBe('Fix the chat scroll');
+  });
+
+  it('keeps the words the user wrote when subtraction leaves nothing', () => {
+    // Every word is filler — a blank name is never the better answer.
+    expect(basicNameFrom('please help me, thanks')).toBe('Please help me');
+    expect(basicNameFrom('hi')).toBe('Hi');
+  });
+
+  it('cuts at a clause boundary when the clause says enough on its own', () => {
+    expect(basicNameFrom("waywallen isn't working again, currently stuck on a black wallpaper"))
+      .toBe("Waywallen isn't working again…");
+    // …but not when the clause is a single scene-setting word.
+    expect(basicNameFrom('currently, the app has a home page and a profile page'))
+      .toBe('Currently, the app has a home page…');
+  });
+
+  it('drops markdown marks rather than naming a session after them', () => {
+    expect(basicNameFrom('## Source Extractor\nResearch question: which model'))
+      .toBe('Source Extractor Research question: which model');
+    expect(basicNameFrom('**fix** the `scroll` bug')).toBe('Fix the scroll bug');
+  });
+
+  it('is a phrase, not a quotation', () => {
+    const long = basicNameFrom('look at the landing page and tell me what is wrong with the hero image');
     expect(long.endsWith('…')).toBe(true);
-    expect(long.length).toBeLessThanOrEqual(49);
+    expect(long.split(' ').length).toBeLessThanOrEqual(8);
     expect(long).not.toMatch(/ …$/); // no dangling space before the ellipsis
+    expect(long.length).toBeLessThanOrEqual(BASIC_NAME_CAP);
+  });
+
+  it('never invents a word the message did not contain', () => {
+    // Every step is a subtraction. This is what makes a no-AI name safe.
+    const message = 'could you please investigate the flaky sync test';
+    const name = basicNameFrom(message).toLowerCase().replace(/…$/, '');
+    for (const word of name.split(' ')) expect(message).toContain(word);
+  });
+
+  it('survives input with no letters at all', () => {
+    expect(basicNameFrom('   ')).toBe('');
+    expect(basicNameFrom('...')).toBe('...');
     // A single very long word hard-cuts rather than shrinking to nothing.
-    expect(basicNameFrom('x'.repeat(90))).toBe('x'.repeat(48) + '…');
+    expect(basicNameFrom('x'.repeat(90))).toBe('X'.repeat(1) + 'x'.repeat(47) + '…');
   });
 });
 

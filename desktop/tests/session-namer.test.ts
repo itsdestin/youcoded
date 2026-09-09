@@ -121,11 +121,12 @@ describe('Basic', () => {
     h.namer.noteEvent(turnComplete());
     await settle();
     expect(h.generated).toEqual([]);
-    expect(h.published).toEqual(['help me fix the chat scroll']);
+    // "help me" is how the request was opened, not what it is about.
+    expect(h.published).toEqual(['Fix the chat scroll']);
 
     // Later replies do not rewrite it — Basic keeps the name it derived.
     for (let i = 0; i < 5; i++) { h.namer.noteEvent(turnComplete()); await settle(); }
-    expect(h.published).toEqual(['help me fix the chat scroll']);
+    expect(h.published).toEqual(['Fix the chat scroll']);
   });
 
   it('leaves a conversation that already had a name alone', async () => {
@@ -146,7 +147,7 @@ describe('Basic', () => {
     h.namer.noteEvent(userMessage('now I say something'));
     h.namer.noteEvent(turnComplete());
     await settle();
-    expect(h.published).toEqual(['now I say something']);
+    expect(h.published).toEqual(['I say something']);
   });
 });
 
