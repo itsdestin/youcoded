@@ -10,6 +10,20 @@ export interface CompactionConfig {
 }
 const PRUNE_TRAILER = (n: number) => `\n\n[pruned — ${n} chars of tool output elided to fit context; re-run the tool if you need it again]`;
 
+// WHY: the durable continuation manifest REFERENCES transcript text instead of
+// copying it, so it has to recompute a pruned tool result byte-for-byte from the
+// untouched event text. These two helpers are the single definition of that
+// transform — pruneToolOutputs below calls them, and accepted-history-store.ts
+// calls them to recognise and rebuild a pruned part. If prune ever diverged from
+// the recomputation, a resumed session would silently disagree with the live one.
+export function prunedToolResultText(value: string, keepChars: number): string {
+  return value.slice(0, keepChars) + PRUNE_TRAILER(value.length - keepChars);
+}
+export function imageCollapsedToolResultText(text: string, toolName: string | undefined): string {
+  const note = `[image pruned — re-run ${toolName ?? 'the tool'} if you need to see it again]`;
+  return text ? `${text}\n${note}` : note;
+}
+
 export function estimateTokens(messages: ModelMessage[]): number {
   return messagesTokens(messages);   // binary-aware (#290 follow-up fix 1)
 }
@@ -63,12 +77,11 @@ export function pruneToolOutputs(messages: ModelMessage[], cfg: CompactionConfig
         // Fix 3 (2026-08-11 review): join with '\n' only when there's text to
         // join onto, so a text-less image output doesn't collapse to a bare
         // leading newline.
-        const note = `[image pruned — re-run ${part.toolName ?? 'the tool'} if you need to see it again]`;
-        return { ...part, output: { type: 'text', value: text ? `${text}\n${note}` : note } };
+        return { ...part, output: { type: 'text', value: imageCollapsedToolResultText(text, part.toolName) } };
       }
       const value = output?.value;
       if (typeof value !== 'string' || value.length <= cfg.pruneToChars) return part;
-      return { ...part, output: { ...output, value: value.slice(0, cfg.pruneToChars) + PRUNE_TRAILER(value.length - cfg.pruneToChars) } };
+      return { ...part, output: { ...output, value: prunedToolResultText(value, cfg.pruneToChars) } };
     });
     return { ...(m as any), content };
   });

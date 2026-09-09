@@ -3,31 +3,63 @@ import * as path from 'path';
 import { createHash } from 'crypto';
 import type { ModelMessage } from 'ai';
 import type { TranscriptEvent } from '../../shared/types';
+import type { PersistedEventReference } from './session-store';
+import { imageCollapsedToolResultText, prunedToolResultText } from './compaction';
 import { restoreContinuationSizing, durableContinuationSizing } from './openai-continuation';
 
 const VERSION = 1;
 export const ACCEPTED_HISTORY_MAX_BYTES = 16 * 1024 * 1024;
+/** Rules, steers and status snapshots are app-authored strings with no transcript
+ *  anchor, so they are the ONLY content the manifest copies. The cap keeps a
+ *  runaway injection from turning the private sidecar into a second transcript. */
+const LITERAL_MAX_BYTES = 64 * 1024;
+const SUMMARY_PREFIX = '[Earlier conversation summary]\n';
 const DIRECTORY_MODE = 0o700;
 const FILE_MODE = 0o600;
 
 type FailureReason = 'ineligible' | 'malformed' | 'oversized' | 'missing-transcript'
   | 'transcript-advanced' | 'binding-mismatch' | 'assembly-mismatch' | 'image-mismatch';
 
-type ContentDescriptor =
-  | { kind: 'literal'; value: unknown }
-  | { kind: 'event'; uuid: string; field: 'user-text' | 'assistant-text' | 'reasoning-text' | 'tool-call' | 'tool-result'; metadata?: unknown }
-  | { kind: 'parts'; parts: PartDescriptor[] };
+/** Which persisted event type owns each referenceable field, and how its text is
+ *  derived. One table so publish and restore can never disagree about an anchor. */
+const FIELD_EVENT_TYPE = {
+  'user-text': 'user-message',
+  'skill-text': 'skill-invoked',
+  'summary-text': 'compact-summary',
+  'assistant-text': 'assistant-text',
+  'reasoning-text': 'assistant-thinking',
+  'tool-call': 'tool-use',
+  'tool-result': 'tool-result',
+} as const;
+
+type Field = keyof typeof FIELD_EVENT_TYPE;
+type TextField = 'user-text' | 'skill-text' | 'summary-text' | 'assistant-text' | 'reasoning-text';
+
+/** Delta types SessionStore coalesces into one persisted part; their references
+ *  carry a partId and must tile the whole persisted text. */
+const COALESCED_TYPES = new Set(['assistant-text', 'assistant-thinking']);
+
+type PrunedDescriptor = { keepChars: number } | { imageCollapsed: true };
+interface ImageDescriptor { path: string; mediaType: string; digest: string; filename?: string }
 
 type PartDescriptor =
-  | { kind: 'event'; uuid: string; field: 'user-text' | 'assistant-text' | 'reasoning-text' | 'tool-call' | 'tool-result'; metadata?: unknown }
-  | { kind: 'image'; path: string; mediaType: string; digest: string; filename?: string; wrapped?: boolean }
-  | { kind: 'literal'; value: unknown };
+  | { kind: 'event'; uuid: string; field: Field; providerOptions?: unknown; images?: ImageDescriptor[]; pruned?: PrunedDescriptor }
+  | { kind: 'concat'; uuids: string[]; field: 'assistant-text' | 'reasoning-text'; providerOptions?: unknown }
+  | { kind: 'image'; path: string; mediaType: string; digest: string };
+
+type ContentDescriptor =
+  | { kind: 'literal'; value: string }
+  | { kind: 'event'; uuid: string; field: TextField }
+  | { kind: 'concat'; uuids: string[]; field: 'assistant-text' }
+  | { kind: 'parts'; parts: PartDescriptor[] };
 
 interface MessageDescriptor {
   role: ModelMessage['role'];
   content: ContentDescriptor;
   sizing?: { reasoningTokens?: number; reasoningEstimateIncomplete: boolean };
 }
+
+type Transformation = { kind: 'pruned' } | { kind: 'summary'; summaryEventUuid: string };
 
 interface Manifest {
   v: 1;
@@ -37,9 +69,9 @@ interface Manifest {
   binding: string;
   assemblyDigest: string;
   revision: number;
-  acceptedEventUuids: string[];
+  eventUuids: string[];
   messages: MessageDescriptor[];
-  transformation?: AcceptedHistoryProposal['transformation'];
+  transformation?: Transformation;
 }
 
 interface Eligibility { v: 1; sessionId: string; revision: number; eligible: boolean; reason: string }
@@ -50,14 +82,10 @@ export interface AcceptedHistoryProposal {
   binding: string;
   assemblyDigest: string;
   revision: number;
-  acceptedEventUuids: string[];
+  /** Delta-level references in emit order, straight from SessionStore.flushReferences. */
+  references: PersistedEventReference[];
   messages: ModelMessage[];
-  transformation?: {
-    kind: 'append-only' | 'pruned' | 'summary';
-    prunedToolResultUuids?: string[];
-    summaryEventUuid?: string;
-    retainedEventUuids?: string[];
-  };
+  transformation?: Transformation;
 }
 
 export interface AcceptedHistoryStoreHooks {
@@ -65,12 +93,36 @@ export interface AcceptedHistoryStoreHooks {
   unlink?: (file: string) => void | Promise<void>;
 }
 
+export type AcceptedHistoryRestore =
+  | { ok: true; messages: ModelMessage[]; eventUuids: string[]; revision: number; transformation?: Transformation }
+  | { ok: false; reason: FailureReason };
+
 function digest(data: Buffer | string): string {
   return createHash('sha256').update(data).digest('hex');
 }
 
 function record(value: unknown): Record<string, any> | null {
   return value != null && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, any> : null;
+}
+
+/** Key-order-independent value equality, used only for tool-call input, which
+ *  crosses a JSON round-trip on its way to the transcript. */
+function canonical(value: unknown): string {
+  if (value === undefined) return 'undefined';
+  if (value === null || typeof value !== 'object') return JSON.stringify(value) ?? 'undefined';
+  if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>).filter(([, v]) => v !== undefined).sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([k, v]) => `${JSON.stringify(k)}:${canonical(v)}`).join(',')}}`;
+}
+
+/** True when `part` carries no key outside `allowed`. A part we cannot fully
+ *  describe must fail the publish rather than restore as an approximation. */
+function onlyKeys(part: Record<string, any>, allowed: string[]): boolean {
+  return Object.keys(part).every(key => allowed.includes(key));
+}
+
+function readDigest(file: string): string | null {
+  try { return digest(fs.readFileSync(file)); } catch { return null; }
 }
 
 function rawTranscript(file: string): { bytes: number; digest: string; events: Map<string, TranscriptEvent> } | null {
@@ -91,21 +143,123 @@ function rawTranscript(file: string): { bytes: number; digest: string; events: M
   return { bytes: data.length, digest: digest(data), events };
 }
 
-function eventValue(event: TranscriptEvent, field: PartDescriptor extends infer _ ? string : never): unknown {
+/** The exact model-facing text an accepted event contributes for `field`, or null
+ *  when the event is not the type that field names. */
+function eventText(event: TranscriptEvent, field: TextField): string | null {
+  if (event.type !== FIELD_EVENT_TYPE[field]) return null;
   switch (field) {
-    case 'user-text': return String(event.data?.text ?? '');
-    case 'assistant-text':
-    case 'reasoning-text': return String(event.data?.text ?? '');
-    case 'tool-call': return { type: 'tool-call', toolCallId: String(event.data?.toolUseId ?? ''), toolName: String(event.data?.toolName ?? ''), input: event.data?.toolInput ?? {} };
-    case 'tool-result': return { type: 'tool-result', toolCallId: String(event.data?.toolUseId ?? ''), toolName: String(event.data?.toolName ?? ''), output: { type: 'text', value: String(event.data?.toolResult ?? '') } };
-    default: return undefined;
+    case 'skill-text': {
+      // Mirrors history-rebuild: a body-less skill event never entered history.
+      const body = event.data?.body;
+      if (!body) return null;
+      return event.data?.args ? `${String(body)}\n\n${String(event.data.args)}` : String(body);
+    }
+    case 'summary-text': return `${SUMMARY_PREFIX}${String(event.data?.summary ?? '')}`;
+    default: return String(event.data?.text ?? '');
   }
 }
 
-function metadataWithoutContent(part: any): unknown {
-  if (!record(part)) return undefined;
-  const { text: _text, data: _data, ...metadata } = part;
-  return Object.keys(metadata).length ? metadata : undefined;
+/**
+ * The accepted anchor set, in first-appearance order, with per-field cursors so a
+ * message can only claim anchors forward of the ones already spent. Skipping
+ * ahead is allowed (a summary or a context clear drops older accepted anchors
+ * from history while they stay in the accepted set); going backwards is not.
+ */
+class AnchorSet {
+  readonly uuids: string[] = [];
+  private byField = new Map<Field, Array<{ uuid: string; event: TranscriptEvent }>>();
+  private cursor = new Map<Field, number>();
+
+  constructor(uuids: string[], private events: Map<string, TranscriptEvent>) {
+    for (const uuid of uuids) {
+      const event = events.get(uuid);
+      if (!event) continue;
+      this.uuids.push(uuid);
+      for (const field of Object.keys(FIELD_EVENT_TYPE) as Field[]) {
+        if (FIELD_EVENT_TYPE[field] !== event.type) continue;
+        const list = this.byField.get(field) ?? [];
+        list.push({ uuid, event });
+        this.byField.set(field, list);
+      }
+    }
+  }
+
+  /** N ≥ 1 consecutive unspent anchors of `field` whose texts concatenate to `target`. */
+  matchText(field: TextField, target: string): string[] | null {
+    const list = this.byField.get(field) ?? [];
+    for (let start = this.cursor.get(field) ?? 0; start < list.length; start++) {
+      let accumulated = '';
+      const uuids: string[] = [];
+      for (let end = start; end < list.length; end++) {
+        const text = eventText(list[end].event, field);
+        if (text === null) break;
+        accumulated += text;
+        uuids.push(list[end].uuid);
+        if (accumulated === target) { this.cursor.set(field, end + 1); return uuids; }
+        if (accumulated.length >= target.length) break;
+      }
+    }
+    return null;
+  }
+
+  /** The next unspent anchor of `field` satisfying `predicate`. */
+  matchEvent(field: Field, predicate: (event: TranscriptEvent) => boolean): { uuid: string; event: TranscriptEvent } | null {
+    const list = this.byField.get(field) ?? [];
+    for (let i = this.cursor.get(field) ?? 0; i < list.length; i++) {
+      if (!predicate(list[i].event)) continue;
+      this.cursor.set(field, i + 1);
+      return list[i];
+    }
+    return null;
+  }
+
+  /** An accepted user-message whose attachments include a file with these bytes.
+   *  Attachments are not claimed: the message's text part already claimed the event. */
+  findAttachment(wanted: string): string | null {
+    for (const uuid of this.uuids) {
+      const event = this.events.get(uuid);
+      if (event?.type !== 'user-message' || !Array.isArray(event.data?.attachments)) continue;
+      for (const candidate of event.data.attachments as string[]) {
+        if (readDigest(candidate) === wanted) return candidate;
+      }
+    }
+    return null;
+  }
+}
+
+/**
+ * Collapse delta-level references onto persisted anchors. A coalesced part must be
+ * tiled by its references — contiguous, gapless, ending exactly at the persisted
+ * text length — or some of the part's text was never accepted and the whole
+ * proposal is unreferenceable. Every other event carries exactly one reference.
+ */
+function acceptedAnchors(references: PersistedEventReference[], events: Map<string, TranscriptEvent>): string[] | null {
+  const order: string[] = [];
+  const groups = new Map<string, PersistedEventReference[]>();
+  for (const reference of references) {
+    if (!reference || typeof reference.anchorUuid !== 'string') return null;
+    const event = events.get(reference.anchorUuid);
+    if (!event || event.type !== reference.type) return null;
+    const group = groups.get(reference.anchorUuid);
+    if (group) group.push(reference);
+    else { groups.set(reference.anchorUuid, [reference]); order.push(reference.anchorUuid); }
+  }
+  for (const uuid of order) {
+    const group = groups.get(uuid)!;
+    const event = events.get(uuid)!;
+    const coalesced = group.length > 1 || (COALESCED_TYPES.has(event.type) && group[0].partId !== undefined);
+    if (!coalesced) { if (group.length !== 1) return null; continue; }
+    if (!COALESCED_TYPES.has(event.type)) return null;
+    const length = String(event.data?.text ?? '').length;
+    const sorted = [...group].sort((a, b) => a.start - b.start);
+    let at = 0;
+    for (const reference of sorted) {
+      if (reference.start !== at || reference.end < reference.start) return null;
+      at = reference.end;
+    }
+    if (at !== length) return null;
+  }
+  return order;
 }
 
 export class AcceptedHistoryStore {
@@ -149,14 +303,15 @@ export class AcceptedHistoryStore {
       if (this.disabled.has(proposal.sessionId) || proposal.revision !== this.currentRevision(proposal.sessionId)) return { ok: false, reason: 'stale-generation' } as const;
       const raw = rawTranscript(proposal.transcriptPath);
       if (!raw) return { ok: false, reason: 'unreferenced-history' } as const;
-      const accepted = new Set(proposal.acceptedEventUuids);
-      const messages = this.describeMessages(proposal.messages, raw.events, accepted);
+      const eventUuids = acceptedAnchors(proposal.references, raw.events);
+      if (!eventUuids) return { ok: false, reason: 'unreferenced-history' } as const;
+      const messages = describeMessages(proposal.messages, new AnchorSet(eventUuids, raw.events));
       if (!messages) return { ok: false, reason: 'unreferenced-history' } as const;
       const manifest: Manifest = {
         v: VERSION, sessionId: proposal.sessionId, transcriptPath: proposal.transcriptPath,
         transcript: { bytes: raw.bytes, digest: raw.digest }, binding: proposal.binding,
         assemblyDigest: proposal.assemblyDigest, revision: proposal.revision,
-        acceptedEventUuids: [...proposal.acceptedEventUuids], messages,
+        eventUuids, messages,
         ...(proposal.transformation ? { transformation: proposal.transformation } : {}),
       };
       const json = JSON.stringify(manifest);
@@ -173,7 +328,7 @@ export class AcceptedHistoryStore {
     });
   }
 
-  restore(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): { ok: true; messages: ModelMessage[] } | { ok: false; reason: FailureReason } {
+  restore(input: { sessionId: string; transcriptPath: string; binding: string; assemblyDigest: string }): AcceptedHistoryRestore {
     const eligibility = this.readBoundedJson(this.eligibilityPath(input.sessionId)) as Eligibility | null;
     if (!eligibility || eligibility.v !== VERSION || eligibility.sessionId !== input.sessionId || !eligibility.eligible) return { ok: false, reason: 'ineligible' };
     const file = this.manifestPathForTest(input.sessionId);
@@ -181,23 +336,27 @@ export class AcceptedHistoryStore {
     try { stat = fs.statSync(file); } catch { return { ok: false, reason: 'ineligible' }; }
     if (stat.size > ACCEPTED_HISTORY_MAX_BYTES) return { ok: false, reason: 'oversized' };
     const manifest = this.readBoundedJson(file) as Manifest | null;
-    if (!manifest || manifest.v !== VERSION || manifest.sessionId !== input.sessionId || manifest.revision !== eligibility.revision || !Array.isArray(manifest.messages)) return { ok: false, reason: 'malformed' };
+    if (!manifest || manifest.v !== VERSION || manifest.sessionId !== input.sessionId || manifest.revision !== eligibility.revision
+      || !Array.isArray(manifest.messages) || !Array.isArray(manifest.eventUuids)) return { ok: false, reason: 'malformed' };
     if (manifest.binding !== input.binding) return { ok: false, reason: 'binding-mismatch' };
     if (manifest.assemblyDigest !== input.assemblyDigest) return { ok: false, reason: 'assembly-mismatch' };
     if (path.resolve(manifest.transcriptPath) !== path.resolve(input.transcriptPath)) return { ok: false, reason: 'missing-transcript' };
     const raw = rawTranscript(input.transcriptPath);
     if (!raw) { void this.remove(input.sessionId); return { ok: false, reason: 'missing-transcript' }; }
     if (raw.bytes !== manifest.transcript.bytes || raw.digest !== manifest.transcript.digest) return { ok: false, reason: 'transcript-advanced' };
-    const accepted = new Set(manifest.acceptedEventUuids);
+    const accepted = new Set(manifest.eventUuids);
     const messages: ModelMessage[] = [];
     for (const descriptor of manifest.messages) {
-      const content = this.restoreContent(descriptor.content, raw.events, accepted);
-      if (content === undefined) return { ok: false, reason: 'image-mismatch' };
-      const message = { role: descriptor.role, content } as ModelMessage;
+      const content = restoreContent(descriptor?.content, raw.events, accepted);
+      if ('reason' in content) return { ok: false, reason: content.reason };
+      const message = { role: descriptor.role, content: content.value } as ModelMessage;
       if (descriptor.sizing) restoreContinuationSizing(message, descriptor.sizing);
       messages.push(message);
     }
-    return { ok: true, messages };
+    return {
+      ok: true, messages, eventUuids: [...manifest.eventUuids], revision: manifest.revision,
+      ...(manifest.transformation ? { transformation: manifest.transformation } : {}),
+    };
   }
 
   async remove(sessionId: string): Promise<{ ok: true } | { ok: false; reason: 'unlink-failed' }> {
@@ -222,82 +381,6 @@ export class AcceptedHistoryStore {
         await this.remove(decodeURIComponent(encoded));
       }
     }
-  }
-
-  private describeMessages(messages: ModelMessage[], events: Map<string, TranscriptEvent>, accepted: Set<string>): MessageDescriptor[] | null {
-    const unused = [...accepted].map(uuid => events.get(uuid)).filter((e): e is TranscriptEvent => !!e);
-    const claim = (predicate: (event: TranscriptEvent) => boolean): TranscriptEvent | undefined => {
-      const index = unused.findIndex(predicate);
-      return index < 0 ? undefined : unused.splice(index, 1)[0];
-    };
-    const out: MessageDescriptor[] = [];
-    for (const message of messages) {
-      const sizing = durableContinuationSizing(message);
-      if (typeof message.content === 'string') {
-        const event = claim(e => (e.type === 'user-message' || e.type === 'skill-invoked' || e.type === 'compact-summary') && String(e.data?.text ?? e.data?.body ?? e.data?.summary ?? '') === message.content);
-        if (event) out.push({ role: message.role, content: { kind: 'event', uuid: event.uuid!, field: 'user-text' }, ...(sizing ? { sizing } : {}) });
-        else if (message.role === 'user') out.push({ role: message.role, content: { kind: 'literal', value: message.content }, ...(sizing ? { sizing } : {}) });
-        else return null;
-        continue;
-      }
-      if (!Array.isArray(message.content)) return null;
-      const parts: PartDescriptor[] = [];
-      for (const part of message.content as any[]) {
-        if (part?.type === 'file' && Buffer.isBuffer(part.data)) {
-          // WHY: one user event owns both its text and every attachment. Text may
-          // already have claimed that UUID, so images search all accepted anchors.
-          const event = [...events.values()].find(e => accepted.has(e.uuid!) && Array.isArray(e.data?.attachments) && (e.data.attachments as string[]).some(p => {
-            try { return fs.readFileSync(p).equals(part.data); } catch { return false; }
-          }));
-          const imagePath = event && (event.data!.attachments as string[]).find(p => { try { return fs.readFileSync(p).equals(part.data); } catch { return false; } });
-          if (!imagePath) return null;
-          parts.push({ kind: 'image', path: imagePath, mediaType: part.mediaType, digest: digest(part.data) });
-          continue;
-        }
-        const field = part?.type === 'text'
-          ? (message.role === 'user' ? 'user-text' : 'assistant-text')
-          : part?.type === 'reasoning' ? 'reasoning-text' : part?.type === 'tool-call' ? 'tool-call' : part?.type === 'tool-result' ? 'tool-result' : null;
-        if (!field) { parts.push({ kind: 'literal', value: part }); continue; }
-        const event = claim(e => accepted.has(e.uuid!) && ((field === 'user-text' && e.type === 'user-message' && e.data?.text === part.text)
-          || (field === 'assistant-text' && e.type === 'assistant-text' && e.data?.text === part.text)
-          || (field === 'reasoning-text' && e.type === 'assistant-thinking' && e.data?.text === part.text)
-          || (field === 'tool-call' && e.type === 'tool-use' && e.data?.toolUseId === part.toolCallId)
-          || (field === 'tool-result' && e.type === 'tool-result' && e.data?.toolUseId === part.toolCallId)));
-        if (!event) return null;
-        parts.push({ kind: 'event', uuid: event.uuid!, field, metadata: metadataWithoutContent(part) });
-      }
-      out.push({ role: message.role, content: { kind: 'parts', parts }, ...(sizing ? { sizing } : {}) });
-    }
-    return out;
-  }
-
-  private restoreContent(descriptor: ContentDescriptor, events: Map<string, TranscriptEvent>, accepted: Set<string>): any | undefined {
-    if (descriptor.kind === 'literal') return descriptor.value;
-    if (descriptor.kind === 'event') {
-      const event = accepted.has(descriptor.uuid) ? events.get(descriptor.uuid) : undefined;
-      if (!event) return undefined;
-      return eventValue(event, descriptor.field);
-    }
-    const parts: any[] = [];
-    for (const part of descriptor.parts) {
-      if (part.kind === 'literal') { parts.push(part.value); continue; }
-      if (part.kind === 'image') {
-        let data: Buffer;
-        try { data = fs.readFileSync(part.path); } catch { return undefined; }
-        if (digest(data) !== part.digest) return undefined;
-        parts.push({ type: 'file', mediaType: part.mediaType, data, ...(part.filename ? { filename: part.filename } : {}) });
-        continue;
-      }
-      const event = accepted.has(part.uuid) ? events.get(part.uuid) : undefined;
-      if (!event) return undefined;
-      const value = eventValue(event, part.field) as any;
-      if (part.field === 'user-text' || part.field === 'assistant-text' || part.field === 'reasoning-text') {
-        parts.push({ ...(record(part.metadata) ?? {}), text: value });
-      } else {
-        parts.push({ ...value, ...(record(part.metadata) ?? {}) });
-      }
-    }
-    return parts;
   }
 
   private readBoundedJson(file: string): unknown | null {
@@ -330,4 +413,268 @@ export class AcceptedHistoryStore {
     await fs.promises.rename(temp, file);
     await fs.promises.chmod(file, FILE_MODE);
   }
+}
+
+// ---------------------------------------------------------------------------
+// Publish side: ModelMessage[] -> descriptors that cite accepted anchors only.
+// ---------------------------------------------------------------------------
+
+/** `event` for a single anchor, `concat` for a run of them. */
+function textDescriptor(uuids: string[], field: 'assistant-text' | 'reasoning-text', providerOptions: unknown): PartDescriptor {
+  return uuids.length === 1
+    ? { kind: 'event', uuid: uuids[0], field, ...(providerOptions !== undefined ? { providerOptions } : {}) }
+    : { kind: 'concat', uuids, field, ...(providerOptions !== undefined ? { providerOptions } : {}) };
+}
+
+/** How a live tool-result part relates to its persisted event text: unchanged,
+ *  pruned, image-collapsed, or image-bearing. Null when it is none of those, in
+ *  which case the part cannot be rebuilt exactly and the publish must fail. */
+function describeToolResult(part: Record<string, any>, event: TranscriptEvent): { images?: ImageDescriptor[]; pruned?: PrunedDescriptor } | null {
+  const text = String(event.data?.toolResult ?? '');
+  const paths = Array.isArray(event.data?.images) ? (event.data.images as string[]) : [];
+  const output = record(part.output);
+  if (!output) return null;
+
+  if (output.type === 'text' && typeof output.value === 'string' && onlyKeys(output, ['type', 'value'])) {
+    if (output.value === text) return {};
+    const keepChars = prunedKeepChars(text, output.value);
+    if (keepChars !== null) return { pruned: { keepChars } };
+    if (output.value === imageCollapsedToolResultText(text, part.toolName)) return { pruned: { imageCollapsed: true } };
+    return null;
+  }
+
+  if (output.type !== 'content' || !Array.isArray(output.value) || !onlyKeys(output, ['type', 'value'])) return null;
+  const [first, ...files] = output.value as any[];
+  if (!record(first) || first.type !== 'text' || first.text !== text || !onlyKeys(first, ['type', 'text'])) return null;
+  const images: ImageDescriptor[] = [];
+  let scan = 0;
+  for (const file of files) {
+    if (!record(file) || file.type !== 'file' || typeof file.mediaType !== 'string'
+      || !onlyKeys(file, ['type', 'mediaType', 'data', 'filename'])) return null;
+    const payload = record(file.data);
+    if (!payload || payload.type !== 'data' || !Buffer.isBuffer(payload.data) || !onlyKeys(payload, ['type', 'data'])) return null;
+    // WHY: the manifest stores the digest of the bytes the model actually saw, so a
+    // file edited between publish and restore is refused rather than smuggled in.
+    const wanted = digest(payload.data);
+    let found: string | null = null;
+    while (scan < paths.length) {
+      const candidate = paths[scan++];
+      if (readDigest(candidate) === wanted) { found = candidate; break; }
+    }
+    if (!found) return null;
+    images.push({ path: found, mediaType: file.mediaType, digest: wanted, ...(file.filename !== undefined ? { filename: String(file.filename) } : {}) });
+  }
+  return images.length ? { images } : null;
+}
+
+/** Recover the prune keep-length from a trailer'd value, verified by recomputation.
+ *  The trailer's own length depends on the digit count of the elided char count, so
+ *  each plausible digit count is tried rather than parsing the sentence. */
+function prunedKeepChars(text: string, value: string): number | null {
+  const trailerBase = prunedToolResultText('', 0).length - 1;   // trailer length minus the '0'
+  for (let digits = 1; digits <= 12; digits++) {
+    const keepChars = value.length - (trailerBase + digits);
+    if (keepChars < 0 || keepChars > text.length) continue;
+    if (String(text.length - keepChars).length !== digits) continue;
+    if (prunedToolResultText(text, keepChars) === value) return keepChars;
+  }
+  return null;
+}
+
+function describeParts(message: ModelMessage, anchors: AnchorSet): PartDescriptor[] | null {
+  const parts: PartDescriptor[] = [];
+  for (const raw of message.content as any[]) {
+    const part = record(raw);
+    if (!part) return null;
+
+    if (part.type === 'text' || part.type === 'reasoning') {
+      if (typeof part.text !== 'string' || !onlyKeys(part, ['type', 'text', 'providerOptions'])) return null;
+      const field: TextField = part.type === 'reasoning' ? 'reasoning-text' : message.role === 'user' ? 'user-text' : 'assistant-text';
+      const uuids = anchors.matchText(field, part.text);
+      if (!uuids) return null;
+      if (field === 'user-text') {
+        if (uuids.length !== 1) return null;
+        parts.push({ kind: 'event', uuid: uuids[0], field, ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}) });
+      } else {
+        parts.push(textDescriptor(uuids, field, part.providerOptions));
+      }
+      continue;
+    }
+
+    if (part.type === 'tool-call') {
+      if (!onlyKeys(part, ['type', 'toolCallId', 'toolName', 'input', 'providerOptions'])) return null;
+      const match = anchors.matchEvent('tool-call', event => String(event.data?.toolUseId ?? '') === part.toolCallId
+        && String(event.data?.toolName ?? '') === part.toolName
+        && canonical(event.data?.toolInput ?? {}) === canonical(part.input ?? {}));
+      if (!match) return null;
+      parts.push({ kind: 'event', uuid: match.uuid, field: 'tool-call', ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}) });
+      continue;
+    }
+
+    if (part.type === 'tool-result') {
+      if (typeof part.toolName !== 'string' || !onlyKeys(part, ['type', 'toolCallId', 'toolName', 'output', 'providerOptions'])) return null;
+      let described: { images?: ImageDescriptor[]; pruned?: PrunedDescriptor } | null = null;
+      const match = anchors.matchEvent('tool-result', event => {
+        // WHY: the shape check IS the match test — a tool-result whose output no
+        // longer relates to its event text must not claim that anchor. The result
+        // is kept rather than recomputed so images are digested once.
+        described = null;
+        if (String(event.data?.toolUseId ?? '') !== part.toolCallId || String(event.data?.toolName ?? '') !== part.toolName) return false;
+        described = describeToolResult(part, event);
+        return described !== null;
+      });
+      if (!match || !described) return null;
+      parts.push({
+        kind: 'event', uuid: match.uuid, field: 'tool-result',
+        ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}),
+        ...(described as { images?: ImageDescriptor[]; pruned?: PrunedDescriptor }),
+      });
+      continue;
+    }
+
+    // User attachment: bytes live on disk under a path an accepted user-message named.
+    if (part.type === 'file' && Buffer.isBuffer(part.data) && typeof part.mediaType === 'string'
+      && onlyKeys(part, ['type', 'mediaType', 'data'])) {
+      const wanted = digest(part.data);
+      const found = anchors.findAttachment(wanted);
+      if (!found) return null;
+      parts.push({ kind: 'image', path: found, mediaType: part.mediaType, digest: wanted });
+      continue;
+    }
+    return null;
+  }
+  return parts;
+}
+
+function describeMessages(messages: ModelMessage[], anchors: AnchorSet): MessageDescriptor[] | null {
+  const out: MessageDescriptor[] = [];
+  for (const message of messages) {
+    const sizing = durableContinuationSizing(message);
+    const tail = sizing ? { sizing } : {};
+
+    if (typeof message.content === 'string') {
+      const content = describeString(message, anchors);
+      if (!content) return null;
+      out.push({ role: message.role, content, ...tail });
+      continue;
+    }
+    if (!Array.isArray(message.content)) return null;
+    const parts = describeParts(message, anchors);
+    if (!parts) return null;
+    out.push({ role: message.role, content: { kind: 'parts', parts }, ...tail });
+  }
+  return out;
+}
+
+function describeString(message: ModelMessage, anchors: AnchorSet): ContentDescriptor | null {
+  const text = message.content as string;
+  if (message.role === 'assistant') {
+    // An interrupted partial. Never a literal: assistant text always has anchors.
+    const uuids = anchors.matchText('assistant-text', text);
+    if (!uuids) return null;
+    return uuids.length === 1 ? { kind: 'event', uuid: uuids[0], field: 'assistant-text' } : { kind: 'concat', uuids, field: 'assistant-text' };
+  }
+  if (message.role !== 'user') return null;
+  for (const field of ['user-text', 'skill-text', 'summary-text'] as const) {
+    const uuids = anchors.matchText(field, text);
+    if (uuids?.length === 1) return { kind: 'event', uuid: uuids[0], field };
+  }
+  // WHY: rules, steers and status snapshots are injected by the app and have no
+  // transcript anchor to point at, so they are copied — bounded, and user-role only.
+  if (Buffer.byteLength(text) > LITERAL_MAX_BYTES) return null;
+  return { kind: 'literal', value: text };
+}
+
+// ---------------------------------------------------------------------------
+// Restore side: descriptors -> the exact ModelMessage content published.
+// ---------------------------------------------------------------------------
+
+type Resolved = { value: any } | { reason: FailureReason };
+
+function acceptedEvent(uuid: unknown, events: Map<string, TranscriptEvent>, accepted: Set<string>): TranscriptEvent | null {
+  return typeof uuid === 'string' && accepted.has(uuid) ? events.get(uuid) ?? null : null;
+}
+
+function concatText(uuids: unknown, field: TextField, events: Map<string, TranscriptEvent>, accepted: Set<string>): string | null {
+  if (!Array.isArray(uuids) || uuids.length === 0) return null;
+  let text = '';
+  for (const uuid of uuids) {
+    const event = acceptedEvent(uuid, events, accepted);
+    const value = event && eventText(event, field);
+    if (value === null || value === undefined) return null;
+    text += value;
+  }
+  return text;
+}
+
+function restoreImage(image: ImageDescriptor): Buffer | null {
+  let data: Buffer;
+  try { data = fs.readFileSync(image.path); } catch { return null; }
+  return digest(data) === image.digest ? data : null;
+}
+
+function restorePart(raw: PartDescriptor, events: Map<string, TranscriptEvent>, accepted: Set<string>): Resolved {
+  if (!record(raw)) return { reason: 'malformed' };
+  const part = raw as PartDescriptor;
+  if (part.kind === 'image') {
+    const data = restoreImage(part);
+    return data ? { value: { type: 'file', mediaType: part.mediaType, data } } : { reason: 'image-mismatch' };
+  }
+  if (part.kind === 'concat') {
+    const text = concatText(part.uuids, part.field, events, accepted);
+    if (text === null) return { reason: 'malformed' };
+    return { value: { type: part.field === 'reasoning-text' ? 'reasoning' : 'text', text, ...(part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {}) } };
+  }
+  if (part.kind !== 'event') return { reason: 'malformed' };
+  const event = acceptedEvent(part.uuid, events, accepted);
+  if (!event || event.type !== FIELD_EVENT_TYPE[part.field]) return { reason: 'malformed' };
+  const providerOptions = part.providerOptions !== undefined ? { providerOptions: part.providerOptions } : {};
+
+  if (part.field === 'tool-call') {
+    return { value: { type: 'tool-call', toolCallId: String(event.data?.toolUseId ?? ''), toolName: String(event.data?.toolName ?? ''), input: event.data?.toolInput ?? {}, ...providerOptions } };
+  }
+  if (part.field === 'tool-result') {
+    const toolName = String(event.data?.toolName ?? '');
+    const text = String(event.data?.toolResult ?? '');
+    let output: any;
+    if (part.pruned && 'keepChars' in part.pruned) output = { type: 'text', value: prunedToolResultText(text, part.pruned.keepChars) };
+    else if (part.pruned) output = { type: 'text', value: imageCollapsedToolResultText(text, toolName) };
+    else if (part.images?.length) {
+      const files: any[] = [];
+      for (const image of part.images) {
+        const data = restoreImage(image);
+        if (!data) return { reason: 'image-mismatch' };
+        files.push({ type: 'file', mediaType: image.mediaType, data: { type: 'data', data }, ...(image.filename !== undefined ? { filename: image.filename } : {}) });
+      }
+      output = { type: 'content', value: [{ type: 'text', text }, ...files] };
+    } else output = { type: 'text', value: text };
+    return { value: { type: 'tool-result', toolCallId: String(event.data?.toolUseId ?? ''), toolName, output, ...providerOptions } };
+  }
+
+  const text = eventText(event, part.field);
+  if (text === null) return { reason: 'malformed' };
+  return { value: { type: part.field === 'reasoning-text' ? 'reasoning' : 'text', text, ...providerOptions } };
+}
+
+function restoreContent(raw: ContentDescriptor | undefined, events: Map<string, TranscriptEvent>, accepted: Set<string>): Resolved {
+  if (!record(raw)) return { reason: 'malformed' };
+  const descriptor = raw as ContentDescriptor;
+  if (descriptor.kind === 'literal') return typeof descriptor.value === 'string' ? { value: descriptor.value } : { reason: 'malformed' };
+  if (descriptor.kind === 'concat') {
+    const text = concatText(descriptor.uuids, descriptor.field, events, accepted);
+    return text === null ? { reason: 'malformed' } : { value: text };
+  }
+  if (descriptor.kind === 'event') {
+    const event = acceptedEvent(descriptor.uuid, events, accepted);
+    const text = event && eventText(event, descriptor.field);
+    return text === null || text === undefined ? { reason: 'malformed' } : { value: text };
+  }
+  if (descriptor.kind !== 'parts' || !Array.isArray(descriptor.parts)) return { reason: 'malformed' };
+  const parts: any[] = [];
+  for (const part of descriptor.parts) {
+    const resolved = restorePart(part, events, accepted);
+    if ('reason' in resolved) return resolved;
+    parts.push(resolved.value);
+  }
+  return { value: parts };
 }
