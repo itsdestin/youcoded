@@ -117,6 +117,12 @@ const IPC = {
   // Session tags + note (custom user tags, freeform note)
   SESSION_SET_TAG: 'session:set-tag',
   SESSION_SET_NOTE: 'session:set-note',
+  // Session naming (2026-09-09). get/set are the Assistant-settings preference;
+  // title/rename are per-conversation name ownership.
+  SESSION_NAMING_GET: 'session-naming:get',       // () -> { mode, model }
+  SESSION_NAMING_SET: 'session-naming:set',       // ({ mode, model })
+  SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
+  SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta',
   // Tag registry CRUD + change push
   TAGS_LIST: 'tags:list',
@@ -442,6 +448,14 @@ function unwrapInvokeError<T>(p: Promise<T>): Promise<T> {
   });
 }
 
+// Turn a main-process {ok:false,error} answer into a rejection. Main never
+// throws across IPC (house rule); the naming UI needs a rejection so its
+// ErrorState + Retry can show what actually went wrong.
+async function unwrap(p: Promise<any>): Promise<void> {
+  const r = await p;
+  if (!r || r.ok !== true) throw new Error(r?.error || 'That could not be saved.');
+}
+
 contextBridge.exposeInMainWorld('claude', {
   // Dev-instance descriptor from `run-dev.sh --label` (YOUCODED_DEV_LABEL). The
   // StatusBar version pill shows it so concurrent dev instances are tellable
@@ -449,7 +463,26 @@ contextBridge.exposeInMainWorld('claude', {
   // taskbars group by app id and render the app name, not the per-window caption,
   // so the title alone isn't reliably visible. null in the built app (env unset).
   // Same sandboxed process.env read the `native.supported` kill switch uses.
+
   devLabel: process.env.YOUCODED_DEV_LABEL?.trim() || null,
+
+  // Session naming. Its own top-level namespace because the renderer decides
+  // whether the whole feature exists by asking whether this own-property is
+  // present (components/assistant-settings/naming-api.ts) — a nested member
+  // behind the bridge's callable catch-all would answer "yes" everywhere.
+  //
+  // The writes REJECT on refusal instead of resolving {ok:false}: the
+  // settings card and the rename dialog show <ErrorState> from a caught error
+  // and keep the previously saved value, which a resolved failure would paint
+  // over as success.
+  sessionNaming: {
+    get: () => ipcRenderer.invoke(IPC.SESSION_NAMING_GET),
+    set: (value: unknown) => unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_SET, value)),
+    title: (sessionId: string, fallback: string) =>
+      ipcRenderer.invoke(IPC.SESSION_NAMING_TITLE, sessionId, fallback),
+    rename: (sessionId: string, title: string) =>
+      unwrap(ipcRenderer.invoke(IPC.SESSION_NAMING_RENAME, sessionId, title)),
+  },
   session: {
     create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; resumeSessionId?: string; provider?: 'claude' | 'native'; model?: string }) =>
       ipcRenderer.invoke(IPC.SESSION_CREATE, opts),

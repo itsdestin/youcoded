@@ -1597,6 +1597,17 @@ export const IPC = {
   // Custom session tags (registry CRUD + application) and per-session notes.
   SESSION_SET_TAG: 'session:set-tag',   // (sessionId, tagId, value)
   SESSION_SET_NOTE: 'session:set-note', // (sessionId, note)
+  // Session naming (2026-09-09). get/set are the Assistant-settings preference;
+  // title/rename are per-conversation name ownership. `rename` accepts EITHER a
+  // live desktop session id or a saved conversation id — the handler resolves
+  // both through sessionIdMap. There is deliberately NO return-to-automatic
+  // channel: review 3 removed that action from the dialog (contract R11), and an
+  // unreachable write endpoint on the remote WebSocket is worse than a missing
+  // feature.
+  SESSION_NAMING_GET: 'session-naming:get',       // () -> { mode, model }
+  SESSION_NAMING_SET: 'session-naming:set',       // ({ mode, model })
+  SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
+  SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta', // (sessionId) → { tags, note, supported }
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',           // (label, color)
