@@ -104,5 +104,8 @@ export function planCompaction(messages: ModelMessage[], cfg: CompactionConfig, 
   return before - after >= cfg.minPruneSavings ? { action: 'prune' } : { action: 'summarize' };
 }
 export function summarizePrompt(): string {
-  return 'Summarize the conversation so far into a compact briefing that preserves: the user\'s goal, key decisions and constraints, files/commands touched and their outcomes, and any open questions. Write it as notes for yourself to continue. Do not include verbatim tool output.';
+  // 2026-09-09: "still running" was added when the per-turn specialist status
+  // block was retired — the ledger still delivers a late report, but the
+  // model's own memory of WHY it hired a helper now has to survive the summary.
+  return 'Summarize the conversation so far into a compact briefing that preserves: the user\'s goal, key decisions and constraints, files/commands touched and their outcomes, any specialists or background commands still running (their task_id or shell id, and what you are waiting on from each), and any open questions. Write it as notes for yourself to continue. Do not include verbatim tool output.';
 }

@@ -1610,6 +1610,100 @@ describe('NativeSessionHost', () => {
       expect(survivorMsgIdx).toBeGreaterThan(interruptIdx); // the queue only drains AFTER the interrupt settles turn 1
     });
 
+    // 2026-09-09 — Stop means quiet. Before this, a background report that
+    // landed after Stop started a fresh model turn on its own (isIdle() was
+    // true the moment the turn ended, and the delivery pass runs at every
+    // turn's tail). Pinned here as the composition the two older pins never
+    // covered together: "the queue survives Stop" + "delivery is idle-boundary".
+    describe('Stop holds background deliveries until the next user message', () => {
+      const shellNotice = (n: string) => ({
+        text: `[Background command ${n} finished · exit 0 · 1s]\n$ echo ${n}\n${n}\nFull log: /tmp/${n}.txt`,
+        meta: { kind: 'shell' as const, runs: [] },
+      });
+      const settle = () => new Promise((r) => setTimeout(r, 80));
+
+      it('a notice that arrives AFTER Stop is not delivered as a turn — it is spliced in before the next user message', async () => {
+        const events: any[] = [];
+        host.on('transcript-event', (e) => events.push(e));
+        host.send(id, 'long');
+        await new Promise((r) => setImmediate(r));
+        host.interrupt(id);
+        await (host as any).live.get(id).running;
+        expect(events.map((e) => e.type)).toContain('user-interrupt');
+        // The helper finishes while the user is (deliberately) silent.
+        const n = shellNotice('sh-after');
+        (host as any).queueHostNotice(id, n.text, n.meta);
+        await settle();
+        expect(host.isIdle(id)).toBe(true);                                         // nothing woke the session
+        expect(events.filter((e) => e.data?.injected)).toEqual([]);                  // nothing was delivered
+        expect(events.filter((e) => e.type === 'turn-complete')).toEqual([]);       // and no turn ran
+
+        host.send(id, 'next');
+        await waitForTurnComplete(host, 1);
+        const types = events.map((e) => e.type);
+        const injectedIdx = events.findIndex((e) => e.data?.injected === 'shell-complete');
+        const nextIdx = events.findIndex((e) => e.type === 'user-message' && e.data.text === 'next');
+        expect(injectedIdx).toBeGreaterThan(types.indexOf('user-interrupt'));
+        expect(injectedIdx).toBeLessThan(nextIdx);                                   // context for the message, not a turn of its own
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(1);   // exactly ONE model turn: the user's
+        expect(events[injectedIdx].data.text).toContain('sh-after');
+        // The model's own history has the report right before the user's words.
+        const history = (host as any).live.get(id).session.history as Array<{ role: string; content: unknown }>;
+        const hi = history.findIndex((m) => typeof m.content === 'string' && m.content.includes('sh-after'));
+        const hn = history.findIndex((m) => m.content === 'next');
+        expect(hi).toBeGreaterThanOrEqual(0);
+        expect(hi).toBeLessThan(hn);
+      });
+
+      it('a notice queued DURING the turn that was stopped is held too — the interrupted turn\'s tail delivers nothing', async () => {
+        const events: any[] = [];
+        host.on('transcript-event', (e) => events.push(e));
+        host.send(id, 'long');
+        await new Promise((r) => setImmediate(r));
+        const n = shellNotice('sh-during');
+        (host as any).queueHostNotice(id, n.text, n.meta);   // parent busy: only parked
+        host.interrupt(id);
+        await (host as any).live.get(id).running;
+        await settle();
+        expect(events.filter((e) => e.data?.injected)).toEqual([]);
+        expect(events.filter((e) => e.type === 'turn-complete')).toEqual([]);
+        expect(host.isIdle(id)).toBe(true);
+        host.send(id, 'next');
+        await waitForTurnComplete(host, 1);
+        const injectedIdx = events.findIndex((e) => e.data?.injected === 'shell-complete');
+        const nextIdx = events.findIndex((e) => e.type === 'user-message' && e.data.text === 'next');
+        expect(injectedIdx).toBeGreaterThanOrEqual(0);
+        expect(injectedIdx).toBeLessThan(nextIdx);
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(1);
+      });
+
+      it('a message the user queued before pressing Stop still runs, with the held notice spliced in ahead of it', async () => {
+        const events: any[] = [];
+        host.on('transcript-event', (e) => events.push(e));
+        host.send(id, 'long');
+        host.send(id, 'queued-survivor');
+        await new Promise((r) => setImmediate(r));
+        const n = shellNotice('sh-queued');
+        (host as any).queueHostNotice(id, n.text, n.meta);
+        host.interrupt(id);
+        await waitForTurnComplete(host, 1);     // the survivor's turn
+        const types = events.map((e) => e.type);
+        const injectedIdx = events.findIndex((e) => e.data?.injected === 'shell-complete');
+        const survivorIdx = events.findIndex((e) => e.type === 'user-message' && e.data.text === 'queued-survivor');
+        expect(injectedIdx).toBeGreaterThan(types.indexOf('user-interrupt'));
+        expect(injectedIdx).toBeLessThan(survivorIdx);
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(1);
+        // And the hold is spent: a later notice, with nothing stopped since, is a turn of its own again.
+        // (Wait for the pass itself to settle first — a notice that lands in the sliver between the
+        // tail's drain and inFlight clearing is parked until the next boundary, as it always was.)
+        await (host as any).live.get(id).running;
+        const later = shellNotice('sh-later');
+        (host as any).queueHostNotice(id, later.text, later.meta);
+        await waitForTurnComplete(host, 1);     // counts from here: the notice's own turn
+        expect(events.filter((e) => e.type === 'turn-complete')).toHaveLength(2);
+      });
+    });
+
     it('a failed turn (factory throw) does not strand the queue', async () => {
       const errHost = new NativeSessionHost(new SessionStore(new NativeHome(root)), throwOnceFactory(), NO_CONTEXT, async () => null, async () => null);
       await errHost.create({ sessionId: 'e-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
@@ -4014,7 +4108,7 @@ describe('NativeSessionHost', () => {
   // callback reports given a stamped ledger, reaching the private ledger
   // directly (same pattern the Task 2 tests above use) rather than driving a
   // real specialist run end-to-end.
-  describe('specialist status block (Task 5, plan 1b)', () => {
+  describe('specialist status text (Task 5, plan 1b — on demand since 2026-09-09)', () => {
     it('the host status block lists running and undelivered-finished specialists and omits delivered ones', async () => {
       const store = new SessionStore(new NativeHome(root));
       const h = new NativeSessionHost(
@@ -4039,8 +4133,7 @@ describe('NativeSessionHost', () => {
         status: 'completed', startedAt: Date.now(), endedAt: Date.now(), delivered: true, owner: OWNER, missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toBeTruthy();
       expect(status).toContain('Nadia');
@@ -4061,8 +4154,7 @@ describe('NativeSessionHost', () => {
       );
       await h.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      expect(rootSession.opts.specialistStatus?.()).toBeNull();
+      expect((h as any).buildSpecialistStatus('root-1', root)).toBeNull();
 
       await h.destroyAll();
     });
@@ -4087,8 +4179,7 @@ describe('NativeSessionHost', () => {
         status: 'running', startedAt: Date.now(), delivered: false, owner: OWNER, missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toBeTruthy();
       expect(status).not.toContain('step 0');
@@ -4116,8 +4207,7 @@ describe('NativeSessionHost', () => {
         status: 'running', startedAt: Date.now(), delivered: false, owner: OWNER, missedSteers: [], stale: true,
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
 
       expect(status).toContain('no activity for at least 2m');
 
@@ -4161,8 +4251,7 @@ describe('NativeSessionHost', () => {
         missedSteers: [],
       });
 
-      const rootSession = (h as any).live.get('root-1').session;
-      const status: string | null = rootSession.opts.specialistStatus?.();
+      const status: string | null = (h as any).buildSpecialistStatus('root-1', root);
       const lines = (status ?? '').split('\n');
 
       const failedLine = lines.find((l) => l.startsWith('Fiona'));
@@ -5154,6 +5243,22 @@ describe('G-1 background Bash — registry lifetime and finished notices', () =>
     await host.create({ sessionId: 'p1', cwd: root, binding });
   });
   afterEach(async () => { await host.destroyAll(); rmHostRoot(root); });
+
+  // 2026-09-09: the on-demand list (Task list: true) covers background
+  // commands as well as specialists — one answer to "what am I waiting on?".
+  it.skipIf(!posix)('listStatus names background commands alongside specialists, and is null when nothing is running', async () => {
+    const listStatus = (host as any).live.get('p1').session.opts.toolServices.specialists.listStatus as (id: string) => string | null;
+    expect(listStatus('p1')).toBeNull();
+    const run = startIn('p1', 'sleep 5', 'tl');
+    const text = listStatus('p1');
+    expect(text).toContain('Background commands:');
+    expect(text).toContain(`${run.shellId} · running`);
+    expect(text).toContain('sleep 5');
+    expect(text).not.toContain('Specialists:');   // none delegated in this conversation
+    await reg('p1').kill(run.shellId, 'assistant');
+    expect(listStatus('p1')).toContain('stopped');   // finished runs still list, with their state, as BashOutput does
+    expect(listStatus('nope')).toBeNull();
+  });
 
   it('every live session has a registry, reachable by the tool as ctx.shells', () => {
     expect(reg('p1')).toBeTruthy();

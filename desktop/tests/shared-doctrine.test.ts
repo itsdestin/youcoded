@@ -12,7 +12,7 @@ describe('sharedDoctrine — composition', () => {
     expect(d).toContain('Prefer dedicated tools over shell');
     expect(d).toContain('<untrusted-content>');
     expect(d).toContain('<steer>');
-    expect(d).toContain('<specialists-status>');
+    expect(d).not.toContain('<specialists-status>');   // retired 2026-09-09: status is on demand (Task list: true)
   });
 
   it('batching is sent ONLY when the flag says the runtime runs calls in parallel', () => {

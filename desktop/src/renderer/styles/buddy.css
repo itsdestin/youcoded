@@ -423,8 +423,8 @@ body[data-mode="buddy-overlay"] .mascot-breathing {
   50% { translate: 0 -2.5px; }
 }
 
-/* Attention bounce — retriggered via a React key swap each time attention
-   flips on, so repeat alerts bounce again. */
+/* Attention bounce — removing/reapplying the class on attention changes
+   retriggers it without remounting the animated rig. */
 body[data-mode="buddy-mascot"] .mascot-bounce,
 body[data-mode="buddy-overlay"] .mascot-bounce {
   animation: buddy-bounce 500ms cubic-bezier(0.28, 0.84, 0.42, 1);

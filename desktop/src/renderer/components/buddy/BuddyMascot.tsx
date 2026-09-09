@@ -161,10 +161,6 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
     if (swingTimerRef.current) clearTimeout(swingTimerRef.current);
   }, []);
 
-  // Attention bounce: retrigger the CSS animation each time attention flips on.
-  const [bounceKey, setBounceKey] = useState(0);
-  useEffect(() => { if (attention) setBounceKey((k) => k + 1); }, [attention]);
-
   const [grabbed, setGrabbed] = useState(false);
 
   // A hop temporarily renders him as if he were docked: sink released, peek
@@ -400,7 +396,9 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
             would swing the already-translated body around the stale center
             and out of the window (prototype splits the layers the same way). */}
         <div className="mascot-lean" style={{ width: '100%', height: '100%' }}>
-          <div key={bounceKey} className={attention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
+          {/* WHY: toggling the class restarts the attention bounce without a key
+              remount throwing away the rig's springs and the host PeekHands observes. */}
+          <div className={attention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
             {useRig ? (
               <div ref={rigHostRef} style={{ width: '100%', height: '100%' }}>
                 <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} />
