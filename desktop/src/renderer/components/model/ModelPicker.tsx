@@ -184,8 +184,14 @@ export default function ModelPicker({
   defaultOpen = false,
   layout = 'floating',
   pinSelectedToTop = false,
+  emptyLabel = 'Choose a model…',
 }: {
   value: ModelChoice | null;
+  /** What the CLOSED button reads when nothing is picked. Defaults to the
+   *  create-time wording. A host where "nothing picked" is itself a meaningful
+   *  setting — session naming, where it means the conversation's own model —
+   *  says so here rather than printing a prompt for a choice already made. */
+  emptyLabel?: string;
   /** The second argument is the label this picker DISPLAYED for the choice —
    *  provider and model as the user just read them. Optional, and every caller
    *  that does not need it simply ignores it. Design review 2 (R2-3): the
@@ -520,13 +526,13 @@ export default function ModelPicker({
   const activeFilters = (sources.size ? 1 : 0) + (localOnly ? 1 : 0);
 
   const currentLabel = useMemo(() => {
-    if (!value) return 'Choose a model…';
+    if (!value) return emptyLabel;
     const hit = entries.find((e) => e.key === choiceKey(value));
     if (hit) return `${hit.label} · ${hit.sourceLabel}`;
     // A binding whose catalog row hasn't loaded (or a typed freeform id) still
     // needs a truthful label rather than falling back to "Choose a model…".
     return value.runtime === 'claude' ? value.alias : value.modelId;
-  }, [value, entries]);
+  }, [value, entries, emptyLabel]);
 
   const pick = (c: ModelChoice, label?: { provider: string; model: string }) => { onSelect(c, label); setOpen(false); setFilterOpen(false); };
 
