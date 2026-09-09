@@ -14,9 +14,11 @@
 /** Identifies one stream attempt. Opaque to callers; only this module mints them. */
 export type AttemptId = number;
 
-/** What the last history-wide rewrite did, when there was one. Latest wins:
- *  the store needs to know how to reconstruct the CURRENT history, not its
- *  whole editing history. */
+/** What the last history-wide rewrite did, when there was one. The store needs
+ *  to know how to reconstruct the CURRENT history, not its whole editing
+ *  history, so a later rewrite replaces an earlier one — with ONE exception: a
+ *  prune never displaces a summary, whose uuid cannot be recovered any other
+ *  way (see markPruned). */
 export type AcceptedHistoryTransformation =
   | { kind: 'pruned' }
   | { kind: 'summary'; summaryEventUuid: string };
@@ -119,8 +121,16 @@ export class AcceptedHistoryCapture {
     this._revision++;
   }
 
+  /** Called only when a prune actually CHANGED a message (the driver diffs the
+   *  array per message before calling).
+   *
+   *  WHY it never overwrites a summary (fix pass, review finding 2): the summary
+   *  uuid is the only way the store can REFERENCE the summary message instead of
+   *  copying its text, and a later prune does not undo the summary — that
+   *  message is still the head of history. Pruned parts are recognised per PART
+   *  by the store, so this tag is informational; losing the uuid is not. */
   markPruned(): void {
-    this.transformation = { kind: 'pruned' };
+    if (this.transformation?.kind !== 'summary') this.transformation = { kind: 'pruned' };
     this._revision++;
   }
 

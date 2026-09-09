@@ -109,6 +109,26 @@ describe('AcceptedHistoryCapture', () => {
     expect(capture.revision).toBe(beforePrune + 2);
   });
 
+  it('a later prune keeps an existing summary transformation, and is still a durable change', () => {
+    // WHY (fix pass, review finding 2): the summary uuid is the ONLY way the
+    // store can reference the summary message instead of copying its text, and
+    // a prune after a summary does not undo the summary — the summary message is
+    // still the head of history. Pruned parts are recognised per PART by the
+    // store, so the tag is informational and must not overwrite the one piece of
+    // information that cannot be recovered any other way.
+    const capture = new AcceptedHistoryCapture();
+    capture.markSummary('summary-1');
+    const afterSummary = capture.revision;
+
+    capture.markPruned();
+    expect(capture.snapshot().transformation).toEqual({ kind: 'summary', summaryEventUuid: 'summary-1' });
+    expect(capture.revision).toBe(afterSummary + 1);   // history DID move — the fence must too
+
+    // The other direction is unchanged: a summary after a prune replaces the tag.
+    capture.markSummary('summary-2');
+    expect(capture.snapshot().transformation).toEqual({ kind: 'summary', summaryEventUuid: 'summary-2' });
+  });
+
   it('reset clears or seeds, and every snapshot hands back a fresh array', () => {
     const capture = new AcceptedHistoryCapture();
     capture.recordEvent('u1');

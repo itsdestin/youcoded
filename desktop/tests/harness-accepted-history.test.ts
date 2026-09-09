@@ -14,7 +14,8 @@ import type { TranscriptEvent } from '../src/shared/types';
 import type { TriggerIndex } from '../src/main/harness/injection/path-triggers';
 import { bindOpenAIContinuationModel } from '../src/main/harness/openai-continuation';
 import { drainTurn, fakeTool, makeOpts, makeSession, scriptModel } from './helpers/harness-fakes';
-import { finishChunk, reasoningChunks, stream, textChunks } from './helpers/scripted-model';
+import { finishChunk, reasoningChunks, scriptedModel, stream, textChunks, toolCallChunk } from './helpers/scripted-model';
+import type { AskDecision } from '../src/main/harness/permission-broker';
 
 // Watchdog budget for the two tests that need a REAL stall (see
 // harness-stall-watchdog.test.ts's STALL_MS note: generous on purpose — nothing
@@ -173,15 +174,20 @@ describe('HarnessSession accepted history', () => {
   });
 
   it('a prune records a pruned transformation; a summary records the compact-summary uuid', async () => {
-    const pruned = makeSession({
-      contextLength: 8192,
-      model: scriptModel([
-        { toolCalls: [{ name: 'Read', input: { file_path: 'big.txt' } }], usage: { inputTokens: 7000 } },
-        { text: 'done' },
-      ]),
-    });
-    await drainTurn(pruned, 'read the big file');
+    // A tool result big enough to be worth pruning (20k chars = 5k tokens),
+    // followed by enough newer text to push it OUT of the protected recent
+    // window — without both, pruneToolOutputs hands the history straight back
+    // and there is no transformation to record (see the no-op test below).
+    const pruned = makeSession({ contextLength: 8192, model: scriptModel([{ text: 'done' }]) });
+    pruned.seedHistory([
+      { role: 'user', content: 'read the big file' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c0', toolName: 'Read', input: { file_path: 'big.txt' } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c0', toolName: 'Read', output: { type: 'text', value: 'y'.repeat(20_000) } }] },
+      { role: 'user', content: `recap ${'x'.repeat(16_000)}` },
+    ] as any);
+    await drainTurn(pruned, 'continue');
     expect(pruned.acceptedHistory().transformation).toEqual({ kind: 'pruned' });
+    expect(JSON.stringify(pruned.acceptedHistory().messages)).toContain('pruned —');
 
     const events: TranscriptEvent[] = [];
     const summarized = makeSession({
@@ -263,5 +269,208 @@ describe('HarnessSession accepted history', () => {
       systemPrompt: 'you are an agent',
       tools: [fakeTool('Read'), fakeTool('Glob', { schema: z.object({ pattern: z.string() }) }), fakeTool('Write')],
     }).assemblyDigest()).not.toBe(base);
+  });
+  it('a compaction that prunes nothing records no transformation and does not move the fence', async () => {
+    // WHY (fix pass, review finding 2): this history is over the compaction
+    // trigger, so prune RUNS — but its only tool output is eight characters
+    // long, so pruneToolOutputs hands every message back untouched. Tagging that
+    // as a transformation would bump the revision and invalidate a published
+    // checkpoint for a history that is byte-for-byte what it was.
+    const session = makeSession({
+      contextLength: 8192,
+      model: scriptModel([
+        { toolCalls: [{ name: 'Read', input: { file_path: 'big.txt' } }], usage: { inputTokens: 7000 } },
+        { text: 'done' },
+      ]),
+    });
+    const events: TranscriptEvent[] = collect(session);
+    await drainTurn(session, 'read the big file');
+
+    const accepted = session.acceptedHistory();
+    expect(accepted.transformation).toBeUndefined();
+    // The fence moved only for the things that really changed history: the user
+    // message, the two accepted steps, and the two tool events between them.
+    const contentEvents = events.filter((e) =>
+      e.type === 'user-message' || e.type === 'assistant-text' || e.type === 'tool-use' || e.type === 'tool-result');
+    expect(accepted.revision).toBe(contentEvents.length + 1);   // +1: the second (textless) step's own accept
+  });
+
+  it('a model swap after a resume stops reporting the seeded continuation binding', () => {
+    // WHY (fix pass, review finding 1): the seeded binding is the identity the
+    // RESTORED ciphertext was accepted under. A swap strips that ciphertext and
+    // moves the assembly digest to the new model, so continuing to report the
+    // old identity would label the checkpoint with an identity its content no
+    // longer descends from — and the store would happily replay it there.
+    const session = makeSession({});
+    session.seedHistory([{ role: 'user', content: 'earlier' }] as any, {
+      eventUuids: ['u1'], revision: 4,
+      continuationBinding: 'chatgpt\u0000gpt-test\u0000hashed-account\u0000epoch-1',
+    });
+    expect(session.acceptedHistory().binding).toBe('chatgpt\u0000gpt-test\u0000hashed-account\u0000epoch-1');
+
+    session.setBinding({ providerId: 'openrouter', modelId: 'other-model' });
+    expect(session.acceptedHistory().binding).toBe('openrouter\u0000other-model');
+  });
+
+  it('a continuation strip moves the fence only when it actually removed something', () => {
+    // WHY (fix pass, review finding 3): the strip runs on EVERY identity change,
+    // including the first dispatch of a session that never carried a private
+    // part. It always allocates a new array, so only a part or a message
+    // actually disappearing is a real change.
+    const plain = makeSession({});
+    plain.seedHistory([
+      { role: 'user', content: 'earlier' },
+      { role: 'assistant', content: [{ type: 'text', text: 'visible' }] },
+    ] as any, { eventUuids: ['u1', 'a1'], revision: 5 });
+    plain.setBinding({ providerId: 'openrouter', modelId: 'other-model' });
+    expect(plain.acceptedHistory().revision).toBe(5);
+
+    // Control: the same swap over a history that DOES carry ciphertext is a real
+    // rewrite, and must move the fence.
+    const withCiphertext = makeSession({});
+    withCiphertext.seedHistory([
+      { role: 'user', content: 'earlier' },
+      {
+        role: 'assistant',
+        content: [
+          { type: 'reasoning', text: 'private', providerOptions: { openai: { itemId: 'rs-1', reasoningEncryptedContent: 'CIPHERTEXT' } } },
+          { type: 'text', text: 'visible', providerOptions: { openai: { itemId: 'msg-1' } } },
+        ],
+      },
+    ] as any, { eventUuids: ['u1', 'a1'], revision: 5 });
+    withCiphertext.setBinding({ providerId: 'openrouter', modelId: 'other-model' });
+    expect(withCiphertext.acceptedHistory().revision).toBe(6);
+    expect(JSON.stringify(withCiphertext.acceptedHistory().messages)).not.toContain('CIPHERTEXT');
+  });
+
+  it('a throw before the next step never re-pushes the previous step\'s partial', async () => {
+    // WHY this stubs a private method (fix pass, review finding 4): maybeCompact
+    // is the only awaited work between accepting step N and starting step N+1,
+    // and what is under test is the LOOP's ordering — that the in-flight partial
+    // is cleared before anything that can throw runs — not which internal call
+    // happens to throw. (In production the reachable throw is a transcript-event
+    // listener, i.e. the host's own persistence wire, raising while
+    // compact-summary is emitted.)
+    const read = fakeTool('Read');
+    const events: TranscriptEvent[] = [];
+    const session = makeSession({
+      onEvent: (e) => events.push(e),
+      tools: [read],
+      model: scriptModel([
+        { text: 'first answer', toolCalls: [{ name: 'Read', input: { file_path: 'a.txt' } }] },
+        { text: 'unreached' },
+      ]),
+    });
+    let compactCalls = 0;
+    const realCompact = (session as any).maybeCompact.bind(session);
+    (session as any).maybeCompact = async (...args: any[]) => {
+      compactCalls++;
+      if (compactCalls === 2) throw new Error('compaction exploded');
+      return realCompact(...args);
+    };
+
+    await session.send('go');
+
+    const history = (session as any).history as any[];
+    // The step's own assistant message is the ONLY place that text may appear.
+    // Pushed twice, the model would read its own answer back as a second turn.
+    expect(JSON.stringify(history).match(/first answer/g) ?? []).toHaveLength(1);
+    const accepted = session.acceptedHistory();
+    expect(accepted.eventUuids.filter((u) => u === uuidOfText(events, 'first answer'))).toHaveLength(1);
+    expect(accepted.messages).toEqual(history);
+  });
+
+  it('an interrupt during a permission ask records every canceled tool-result uuid', async () => {
+    const events: TranscriptEvent[] = [];
+    const session = makeSession({
+      onEvent: (e) => events.push(e),
+      tools: [fakeTool('Write'), fakeTool('Read')],
+      decide: async () => ({ action: 'ask', denyListed: false }),
+      askUser: async (): Promise<AskDecision> => ({ behavior: 'canceled' }),
+      model: scriptModel([{
+        text: 'working',
+        toolCalls: [
+          { name: 'Write', input: { file_path: 'x.ts' } },
+          { name: 'Read', input: { file_path: 'y.ts' } },
+        ],
+      }]),
+    });
+    await session.send('go');
+
+    // Both calls get a back-filled canceled result (the pairing invariant), and
+    // the accepted list must name every one of them — the tool message in
+    // history is built from exactly these events.
+    expect(events.filter((e) => e.type === 'tool-result')).toHaveLength(2);
+    const contentEvents = events.filter((e) =>
+      e.type === 'user-message' || e.type === 'assistant-text' || e.type === 'tool-use' || e.type === 'tool-result');
+    expect(session.acceptedHistory().eventUuids).toEqual(contentEvents.map((e) => e.uuid));
+  });
+
+  it('a dismissed question records both the real result and the not-run sibling', async () => {
+    const events: TranscriptEvent[] = [];
+    const ask = fakeTool('AskUserQuestion', { interactive: true, schema: z.object({ prompt: z.string() }) });
+    const session = makeSession({
+      onEvent: (e) => events.push(e),
+      tools: [ask, fakeTool('Read')],
+      askUser: async (): Promise<AskDecision> => ({ behavior: 'deny', dismissed: true }),
+      model: scriptModel([{
+        toolCalls: [
+          { name: 'AskUserQuestion', input: { prompt: 'which one?' } },
+          { name: 'Read', input: { file_path: 'y.ts' } },
+        ],
+      }, { text: 'never reached' }]),
+    });
+    await session.send('go');
+
+    const results = events.filter((e) => e.type === 'tool-result');
+    expect(results).toHaveLength(2);                       // the dismissal + the not-run sibling
+    const contentEvents = events.filter((e) =>
+      e.type === 'user-message' || e.type === 'assistant-text' || e.type === 'tool-use' || e.type === 'tool-result');
+    expect(session.acceptedHistory().eventUuids).toEqual(contentEvents.map((e) => e.uuid));
+  });
+
+  it('a step that throws mid-text accepts its partial exactly once', async () => {
+    const events: TranscriptEvent[] = [];
+    // A non-retryable error (no status code) mid-stream: withRetry rethrows
+    // immediately, so send()'s catch is what pushes the partial.
+    const model = new MockLanguageModelV4({
+      doStream: async () => ({
+        stream: simulateReadableStream({
+          chunks: stream(...textChunks('a', 'half an answer'), { type: 'error', error: new Error('provider exploded') }),
+        }),
+      }),
+    });
+    const session = makeSession({ onEvent: (e) => events.push(e), model });
+    await session.send('go');
+
+    const accepted = session.acceptedHistory();
+    expect(events.some((e) => e.type === 'session-error')).toBe(true);
+    expect(accepted.messages.at(-1)).toEqual({ role: 'assistant', content: 'half an answer' });
+    const contentEvents = events.filter((e) => e.type === 'user-message' || e.type === 'assistant-text');
+    expect(accepted.eventUuids).toEqual(contentEvents.map((e) => e.uuid));
+  });
+
+  it('an empty step abandons its attempt — only the silent re-run is accepted', async () => {
+    const read = fakeTool('Read');
+    const model = scriptedModel([
+      stream(...textChunks('a', 'reading'), toolCallChunk('c1', 'Read', { file_path: 'x.ts' }), finishChunk('tool-calls')),
+      stream(...reasoningChunks('r', 'thinking but silent'), finishChunk('stop')),   // degenerate empty step
+      stream(...textChunks('b', 'recovered'), finishChunk('stop')),                  // the silent re-run
+    ]);
+    const session = new HarnessSession(
+      makeOpts({ tools: [read], decide: async () => ({ action: 'allow', denyListed: false }) }),
+      async () => model as any,
+    );
+    const events = collect(session);
+    await session.send('go');
+
+    const accepted = session.acceptedHistory();
+    // The empty step pushed NOTHING, so its reasoning event backs no message.
+    const silent = events.find((e) => e.type === 'assistant-thinking' && e.data.text === 'thinking but silent')!;
+    expect(accepted.eventUuids).not.toContain(silent.uuid);
+    const contentEvents = events.filter((e) =>
+      e.type === 'user-message' || e.type === 'assistant-text' || e.type === 'tool-use' || e.type === 'tool-result');
+    expect(contentEvents.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'tool-use', 'tool-result', 'assistant-text']);
+    expect(accepted.eventUuids).toEqual(contentEvents.map((e) => e.uuid));
   });
 });

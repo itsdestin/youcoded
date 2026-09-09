@@ -952,6 +952,12 @@ export class HarnessSession extends EventEmitter {
     // local call/results while preventing incompatible private parts reaching wire.
     if (changed) this.stripOpenAIContinuation();
     this.continuationBinding = undefined;
+    // WHY both (fix pass, review finding 1): a swap makes the OLD identity
+    // unquotable. Left in place, the seeded one would keep acceptedHistory()
+    // reporting the resumed session's ORIGINAL binding after its ciphertext was
+    // just stripped and the assembly digest moved to the new model — a
+    // checkpoint labelled with an identity its content no longer descends from.
+    this.seededContinuationBinding = undefined;
     if (contextLength !== undefined) this.opts.contextLength = contextLength;
     if (profile) this.profile = profile;
     // Same applied-only-when-provided shape as contextLength: a swap to a
@@ -962,20 +968,34 @@ export class HarnessSession extends EventEmitter {
   }
 
   private stripOpenAIContinuation(): void {
+    // WHY the flag (fix pass, review finding 3): this runs on EVERY identity
+    // change, including the very first dispatch of a session that carries no
+    // provider-private parts at all. The rewrite below always allocates a new
+    // array, so array identity proves nothing — only a part or a message
+    // actually disappearing is a real history change. Bumping the revision for
+    // a no-op strip would invalidate a published checkpoint (and force a
+    // republish) for a history that is byte-for-byte what it was.
+    let changed = false;
     this.history = this.history.flatMap(message => {
       if (message.role !== 'assistant' || !Array.isArray(message.content)) return [message];
-      const content = (message.content as any[]).filter(part => part?.type !== 'reasoning')
+      const content = (message.content as any[]).filter(part => {
+        if (part?.type !== 'reasoning') return true;
+        changed = true;
+        return false;
+      })
         .map(part => {
           if (!part?.providerOptions?.openai) return part;
+          changed = true;
           const { providerOptions: _providerOptions, ...plain } = part;
           return plain;
         });
-      return content.length > 0 ? [{ ...message, content } as ModelMessage] : [];
+      if (content.length === 0) { changed = true; return []; }
+      return [{ ...message, content } as ModelMessage];
     });
     // A strip rewrites history in place: the messages that survive no longer
     // descend byte-for-byte from the events they were accepted from, so any
     // checkpoint taken before this one is stale.
-    this.capture.mutated();
+    if (changed) this.capture.mutated();
   }
 
   /** What this session's CURRENT model costs to run, as resolved when the
@@ -1506,8 +1526,17 @@ export class HarnessSession extends EventEmitter {
     // the call to catch it regardless of what decision.action turns out to be
     // below, including the plain 'prune' early-return two lines down.
     const imagesBeforePrune = countImageOutputs(this.history);
+    const beforePrune = this.history;
     this.history = pruneToolOutputs(this.history, cfg);   // always prune first
-    this.capture.markPruned();   // tool outputs no longer equal their events' text
+    // WHY the per-message identity check (fix pass, review finding 2):
+    // pruneToolOutputs always returns a NEW array but hands back every message
+    // it did not touch unchanged, so array identity says nothing. Most
+    // compactions above the trigger prune NOTHING (short tool outputs, or all of
+    // them inside the protected window); tagging those as a transformation would
+    // bump the revision and invalidate a published checkpoint for a history that
+    // never moved. Only a changed message means "tool output no longer equals
+    // its event's text".
+    if (this.history.some((m, i) => m !== beforePrune[i])) this.capture.markPruned();
     if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
     // G-11: prune may have sliced an old Read result down to 2,000 chars (and
     // summarize below discards it outright) — forget what was served so Read
@@ -1660,8 +1689,10 @@ export class HarnessSession extends EventEmitter {
       // diff as maybeCompact's prune call — see its comment for why this is
       // keyed on an actual count decrease, not on whether summarize runs next.
       const imagesBeforePrune = countImageOutputs(this.history);
+      const beforePrune = this.history;
       this.history = pruneToolOutputs(this.history, cfg);
-      this.capture.markPruned();   // same reasoning as maybeCompact's prune
+      // Same per-message identity check as maybeCompact's prune — see its WHY.
+      if (this.history.some((m, i) => m !== beforePrune[i])) this.capture.markPruned();
       if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
       this.servedReads.clear(); // G-11: same reasoning as maybeCompact — prune may have cut a served Read
       const cut = this.summarizeCutIndex();
@@ -2095,6 +2126,20 @@ export class HarnessSession extends EventEmitter {
       // roughly 5x the real occupancy (Destin, 2026-07-28).
       let lastOutputTokens = 0;
       turnLoop: while (true) {
+        // Reset per STEP (not per retry attempt inside withRetry): the required
+        // immediate-error retry never needs this reset itself, since it emits
+        // nothing before it throws. A manual Retry is the opposite case — it CAN
+        // emit before parking — so that branch clears this on its own
+        // (reportPartial('') in runStreamOnce's 'retry' case) rather than relying
+        // on this per-step reset to have caught it.
+        //
+        // WHY at the very TOP, ahead of the steer drain and maybeCompact (fix
+        // pass, review finding 4): both of those run before the next step, and a
+        // throw out of either lands in send()'s catch — which pushes whatever
+        // partial is still held. Reset any later and the PREVIOUS step's text,
+        // already pushed and already accepted, would be pushed a SECOND time as
+        // a fresh assistant message (and re-accepted against a consumed attempt).
+        partialAssistantText = '';
         // WHY: steering (spec §3) applies at the child's next iteration boundary — a
         // tool call is never cut. History-only, like injectPathTriggers: not a
         // transcript event, so it costs nothing on the frozen emit surface.
@@ -2108,13 +2153,6 @@ export class HarnessSession extends EventEmitter {
         // pruning can't get under budget. Inert (returns immediately) below the
         // trigger, so the existing loop behavior is unchanged for normal turns.
         await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0));
-        // Reset per STEP (not per retry attempt inside withRetry): the required
-        // immediate-error retry never needs this reset itself, since it emits
-        // nothing before it throws. A manual Retry is the opposite case — it CAN
-        // emit before parking — so that branch clears this on its own
-        // (reportPartial('') in runStreamOnce's 'retry' case) rather than relying
-        // on this per-step reset to have caught it.
-        partialAssistantText = '';
         // One step = one streamText consumption. withRetry wraps the whole
         // CONSUMPTION (not just the streamText call): the SDK surfaces provider
         // errors as {type:'error'} fullStream parts AND rejected promises, so
