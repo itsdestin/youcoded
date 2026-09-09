@@ -19,7 +19,7 @@ import {
   classifyErrorBody, limitError, expiredError, blockedError,
   type ParsedUsage,
 } from '../src/main/providers/chatgpt-oauth';
-import { chatGptLimitMessage, isChatGptLimitMessage } from '../src/shared/chatgpt-types';
+import { chatGptLimitMessage, isChatGptLimitMessage, CHATGPT_UPGRADE_URL } from '../src/shared/chatgpt-types';
 import { formatDayLong } from '../src/shared/time-format';
 import { describeProviderError } from '../src/main/harness/harness-session';
 
@@ -289,6 +289,14 @@ describe('chatgpt-oauth: the limit sentence (words deck W-1, answer a)', () => {
     // exact list broke the moment the plan-window work widened it.
     expect(bar).toMatch(/import \{[^}]*\bformatTime12\b[^}]*\} from '\.\.\/\.\.\/shared\/time-format'/);
     expect(bar).not.toMatch(/function formatTime12/);
+  });
+
+  // The Upgrade plan button deep-links to OpenAI's own upgrade page — the URL
+  // the Codex CLI's limit error names ("Upgrade to Pro
+  // (https://chatgpt.com/explore/pro)"). Pinned so the button and the fix it
+  // offers can never drift onto a guessed destination.
+  it('the plan-limit card upgrade URL is OpenAI\'s explore/pro page', () => {
+    expect(CHATGPT_UPGRADE_URL).toBe('https://chatgpt.com/explore/pro');
   });
 
   // The day is spelled out in full so the card and the 7-day chip beside it read

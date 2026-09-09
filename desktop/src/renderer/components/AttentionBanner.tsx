@@ -32,6 +32,10 @@ interface Props {
   /** Plan-limit card (Sign in with ChatGPT; review round 2, P-9): the Switch
    *  Providers button opens the model picker for THIS conversation. */
   onSwitchProviders?: () => void;
+  /** Plan-limit card: opens OpenAI's upgrade page (chatgpt.com/explore/pro) so
+   *  the user can raise the exhausted window, side by side with switching
+   *  providers. Shown only for a plan-limit error, like Switch Providers. */
+  onUpgradePlan?: () => void;
 }
 
 // Provider-CONFIGURATION errors (missing API key, disabled provider, no endpoint)
@@ -74,7 +78,7 @@ function elapsedLabel(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-export default function AttentionBanner({ state, anthropicRequestId, errorMessage, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders }: Props) {
+export default function AttentionBanner({ state, anthropicRequestId, errorMessage, onRetry, onOpenProviderSettings, stalledSince, onStop, onSwitchProviders, onUpgradePlan }: Props) {
   // Ticks once a second while parked. `stalledSince` IS serialized to the host
   // (chat-types.ts) so a reconnecting phone can still see the card — see that
   // field's own comment for why the elapsed number is only approximate there.
@@ -126,6 +130,7 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
   // action is offered instead: carry on with another connected provider.
   const planLimit = state === 'error' && isChatGptLimitMessage(errorMessage);
   const showSwitch = planLimit && !!onSwitchProviders;
+  const showUpgrade = planLimit && !!onUpgradePlan;
 
   return (
     // in-view: opts the bubble into wallpaper-driven bubble glassmorphism
@@ -163,11 +168,20 @@ export default function AttentionBanner({ state, anthropicRequestId, errorMessag
             Stop
           </Button>
         )}
+        {showUpgrade && (
+          // Upgrade path for the exhausted plan: OpenAI's own upgrade page
+          // (the URL the Codex CLI's limit error names). Destin's requested
+          // label AND style: transparent (secondary), left of Switch Providers.
+          <Button size="sm" variant="secondary" onClick={onUpgradePlan} className="ml-auto shrink-0">
+            Upgrade plan
+          </Button>
+        )}
         {showSwitch && (
           // P-9 (round 3): the message in Destin's words and one button that
           // opens the model picker — the picker is where every provider and
           // its models already are, so the choice is the user's, not a guess.
-          <Button size="sm" onClick={onSwitchProviders} className="ml-auto shrink-0">
+          // Stays the green (primary) action, right of Upgrade plan.
+          <Button size="sm" onClick={onSwitchProviders} className="shrink-0">
             Switch Providers
           </Button>
         )}
