@@ -35,6 +35,7 @@ import type { EngineManager } from './engine/engine-manager';
 import { enginePrereqs } from './engine/rocm-prereqs';
 import type { ModelManager } from './models/model-manager';
 import type { PermissionStore } from './harness/permission-store';
+import type { StepGuardSettings } from './harness/step-guard-settings';
 import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
@@ -150,7 +151,7 @@ export class RemoteServer {
   // field (Plan 2b) — both were added independently on master and this branch.
   // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
   // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null } | null = null;
+  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null } | null = null;
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -189,7 +190,7 @@ export class RemoteServer {
   /** Injected by ipc-handlers after it constructs the native stack, so remote
    *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
    *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null }): void {
+  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null }): void {
     this.nativeRuntime = rt;
   }
 
@@ -1019,6 +1020,24 @@ export class RemoteServer {
         // (mirrors NativeSessionHost.getPermissionMode's default).
         const mode = this.nativeRuntime ? this.nativeRuntime.nativeHost.getPermissionMode(payload.sessionId) : 'ask';
         this.respond(client.ws, type, id, mode);
+        break;
+      }
+      case 'native:get-step-guard': {
+        try {
+          const value = this.nativeRuntime ? this.nativeRuntime.stepGuardSettings.read() : null;
+          this.respond(client.ws, type, id, value);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      case 'native:set-step-guard': {
+        try {
+          const value = this.nativeRuntime ? await this.nativeRuntime.stepGuardSettings.update(payload.value) : null;
+          this.respond(client.ws, type, id, value);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
         break;
       }
       case 'native:send': {

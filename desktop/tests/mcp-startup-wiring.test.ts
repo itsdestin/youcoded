@@ -164,7 +164,7 @@ describe('McpManager startup wiring (Task 7b)', () => {
     createConnectionMock.mockClear();
   });
 
-  it('threads a REAL, config-driven McpManager into NativeSessionHost as the 10th positional arg (of 11)', async () => {
+  it('threads a REAL, config-driven McpManager into NativeSessionHost', async () => {
     fs.mkdirSync(path.join(testHome, '.youcoded'), { recursive: true });
     fs.writeFileSync(
       path.join(testHome, '.youcoded', 'mcp.json'),
@@ -184,23 +184,10 @@ describe('McpManager startup wiring (Task 7b)', () => {
     );
 
     expect(capturedCtorArgs).toBeDefined();
-    // Positional shape pinned by the brief: 13 args (Task 6c added
-    // visionSupportFor as the 5th positional parameter — the 3rd injected
-    // closure, after contextLengthFor and providerTypeFor — shifting
-    // everything after providerTypeFor down by one; the Task 13 fix pass then
-    // added a 4th closure, slotCountFor, right after visionSupportFor — fix
-    // pass 2 folded that BACK into contextLengthFor as one combined
-    // contextAndSlotsFor closure, since the two were only ever split apart by
-    // a shared-state race, so that pair nets out to zero; plan 1b Task 2 added
-    // nativeHome as an 11th, trailing param for the DelegationLedger the host
-    // constructs internally; plan 1b Task 8 added specialistAskHoldMs as a
-    // trailing param and plan 1c Task 4 added the real SpecialistCatalog after
-    // it; the status-bar work then added pricingFor as the 6th positional
-    // parameter — the 4th injected closure, right after visionSupportFor,
-    // because all four are resolved together for every create/resume/swap —
-    // shifting everything after it down by one), skillCatalog (index 9)
-    // explicitly undefined so mcpManager (index 10) lands in the right slot.
-    expect(capturedCtorArgs!.length).toBe(14);
+    // WHY avoid pinning total constructor arity: trailing host dependencies may
+    // grow independently of MCP. The semantic contract is that the MCP slot is
+    // populated by a working manager, while the preceding optional skill slot
+    // remains intentionally empty at this wiring site.
     expect(capturedCtorArgs![9]).toBeUndefined();
 
     const mcpManager = capturedCtorArgs![10] as {

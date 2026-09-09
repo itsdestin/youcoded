@@ -9,7 +9,6 @@ import { runCase, STEP_GATE_ALLOWANCE, BATTERY_MAX_OUTPUT_TOKENS, BATTERY_STEP_B
 import { collectRunFacts, claimedTools, renderRunFacts, MIN_TOOL_CALLS } from '../src/main/harness/eval/run-facts';
 import { scriptModel, type ScriptStep } from './helpers/harness-fakes';
 import { textChunks, toolCallChunk, finishChunk, stream } from './helpers/scripted-model';
-import { FRONTIER_STEP_BUDGET } from '../src/main/harness/model-step-budget';
 
 // runCase's OWN wall-clock deadline, for the tests where the deadline is not the
 // subject — which is all of them but one (the `timeoutMs: 200` case below, whose
@@ -107,17 +106,9 @@ describe('runCase output ceiling (2026-08-10 incident)', () => {
 });
 
 describe('battery step budget', () => {
-  it('sets its own maxSteps instead of inheriting the app chat-tier budget', () => {
-    expect(BATTERY_HARNESS.limits?.maxSteps).toBe(BATTERY_STEP_BUDGET);
-  });
-
-  it('is uniform — a frontier model gets the same budget as any other', () => {
-    // WHY assert this rather than just reading the constant: harness-session.ts:1008
-    // is `harness.limits?.maxSteps ?? stepBudgetFor(modelId)`. As long as maxSteps
-    // is set, stepBudgetFor never runs, so the 25/50 tier split cannot leak in.
-    // If someone later deletes the maxSteps line, this is the test that notices.
-    expect(BATTERY_STEP_BUDGET).not.toBe(FRONTIER_STEP_BUDGET);
-    expect(BATTERY_HARNESS.limits?.maxSteps).toBe(BATTERY_STEP_BUDGET);
+  it('keeps an explicit evaluator maxSteps of 100', () => {
+    expect(BATTERY_STEP_BUDGET).toBe(100);
+    expect(BATTERY_HARNESS.limits?.maxSteps).toBe(100);
   });
 
   it('allows exactly one budget continuation before the gate means something', () => {
@@ -647,8 +638,7 @@ describe('runCase', () => {
   // non-'allow' answer to that specific ask into stopReason='max_steps' and
   // ENDS THE TURN — unlike doom_loop, which only fails the one repeated call.
   // A real full-roster run needed 37-80 tool calls per model; 'fake/model'
-  // (no frontier-regex match, model-step-budget.ts) gets the 25-step default
-  // budget, so driving the gate for real means scripting more than 25
+  // The evaluator manifest has an explicit 100-step budget, so driving the gate means scripting more than 100
   // consecutive tool-call steps — done here with a generated script rather
   // than typed out by hand. Prefers the real path (per the task brief) over
   // faking the askUser decision directly, since it also proves toolCalls/
@@ -713,7 +703,7 @@ describe('runCase', () => {
 // budget in vitest.config.ts does not fit them.
 // A full run is (STEP_GATE_ALLOWANCE + 1) * BATTERY_STEP_BUDGET = 200 tool calls
 // through a real HarnessSession against a real seeded fixture. BATTERY_STEP_BUDGET
-// went from the app's 25/50 chat tiers to a uniform 100 in this same workstream,
+// uses a uniform explicit 100-step evaluator cap,
 // which doubled that work and pushed these tests over the old 5,000ms default —
 // they went red on Windows CI (the slowest runner) from that commit onward and
 // intermittently on Ubuntu, always at exactly 5,000ms, which is the tell. The

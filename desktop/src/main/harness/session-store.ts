@@ -24,6 +24,8 @@ export interface NativeSessionHeader {
   cwd: string;
   createdAt: number;
   title?: string;
+  /** Optional creation-time snapshot for ordinary root sessions. */
+  stepGuard?: number;
   // Specialists (spec 2026-08-11 §1): children are ordinary sessions marked
   // by parentage; additive so v1 files need no migration.
   parentSessionId?: string;
@@ -292,6 +294,12 @@ export class SessionStore {
     if (!line || typeof line !== 'object') return null;
     const h = line as NativeSessionHeader;
     if (h.v !== 1 || h.sessionId !== sessionId) return null;
+    // WHY normalize additive fields at the persistence boundary: a malformed
+    // hand-edited header must resume as the legacy no-guard behavior.
+    if (h.stepGuard !== undefined && !(Number.isSafeInteger(h.stepGuard) && h.stepGuard > 0)) {
+      const { stepGuard: _invalid, ...safe } = h;
+      return safe;
+    }
     return h;
   }
 }

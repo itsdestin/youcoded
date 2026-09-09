@@ -180,6 +180,33 @@ describe('AssistantTurnBubble — Skill extraction', () => {
   });
 });
 
+describe('CollapsedToolGroup — stopped specialists', () => {
+  beforeEach(() => cleanup());
+
+  it('shows a stopped icon rather than a spinner after a specialist stops', () => {
+    const turn = makeTurn({ groupIds: ['g1'] });
+    const toolGroups = new Map<string, ToolGroupState>([
+      ['g1', { id: 'g1', toolIds: ['task-1', 'bash-1'] }],
+    ]);
+    const toolCalls = new Map<string, ToolCallState>([
+      ['task-1', {
+        toolUseId: 'task-1', toolName: 'Task', input: { description: 'inspect the issue' }, status: 'running',
+        specialistRun: {
+          childId: 'child-1', parentToolCallId: 'task-1', agentType: 'explorer', title: 'Quinn',
+          background: true, status: 'interrupted', startedAt: 1000, endedAt: 2000,
+        },
+      }],
+      ['bash-1', bashTool('bash-1', 'git status')],
+    ]);
+
+    const { container } = renderTurn({ turn, toolGroups, toolCalls });
+    // The group needs to settle even before the interrupted Task result arrives.
+    expect(container.querySelector('[data-spinner]')).not.toBeInTheDocument();
+    expect(container.querySelector('[data-testid="tool-group-stopped"]')).toBeInTheDocument();
+    expect(container.textContent).toContain('1 stopped');
+  });
+});
+
 describe('AssistantTurnBubble — memo comparator (streaming perf)', () => {
   beforeEach(() => {
     cleanup();

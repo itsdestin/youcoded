@@ -159,4 +159,4 @@ The desktop app uses a layered keyboard system. The text input auto-focuses when
 
 ## Specs
 
-See `desktop/docs/` for older design documents (theme-spec, transcript-watcher-spec) and `docs/superpowers/` (workspace root in `youcoded-dev`) for current design specs and implementation plans. The cross-cutting `docs/PITFALLS.md` and rule files in `.claude/rules/` also live in the workspace scaffold.
+See `desktop/docs/` for living subsystem reference and the workspace's `docs/active/` and `docs/archive/` trees for design, plan, handoff, and investigation records. The cross-cutting `docs/PITFALLS.md` and rule files in `.claude/rules/` also live in the workspace scaffold.

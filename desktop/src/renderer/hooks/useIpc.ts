@@ -314,6 +314,8 @@ declare global {
         // Per-session native permission mode (StatusBar chip, Task 13). Returns
         // the APPLIED mode — authoritative; the chip renders the return value.
         setPermissionMode: (sessionId: string, mode: 'ask' | 'auto-edit' | 'full-auto') => Promise<'ask' | 'auto-edit' | 'full-auto'>;
+        getStepGuard: () => Promise<number | null>;
+        setStepGuard: (value: number | null) => Promise<number | null>;
         sessionsList: () => Promise<any[]>;
         killShell: (sessionId: string, shellId: string) => Promise<{ ok: true } | { ok: false; reason: string }>;   // G-1
         // Per-session bound-model residency push (2026-07-14): { sessionId,

@@ -1276,8 +1276,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     }),
   };
 
+  let stepGuard: number | null = null;
   const native: Ns<'native'> = {
     supported: true,
+    getStepGuard: async () => stepGuard,
+    setStepGuard: async (value: number | null) => {
+      if (store.refuseWrites) throw new Error('The workbench is refusing writes.');
+      stepGuard = value;
+      return stepGuard;
+    },
     // Native sessions (no PTY) send through THIS channel, not
     // `session.sendInput` — see native-send.ts / pty-input-gate.ts's
     // `canPtySend`, which refuses provider:'native' outright. The `site`

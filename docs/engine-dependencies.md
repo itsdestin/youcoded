@@ -2,8 +2,8 @@
 
 Tracks every YouCoded touchpoint to the bundled llama.cpp engine
 (`llama-server`), mirroring the `cc-dependencies.md` discipline. Populated
-starting Phase 1 of the platform roadmap (see youcoded-dev
-`docs/superpowers/specs/2026-07-09-platform-vision-roadmap.md` and ADR 007).
+starting Phase 1 of the platform roadmap (see the workspace archive's
+`docs/archive/specs/2026-07-09-platform-vision-roadmap.md` and ADR 007).
 
 ## Pinned version
 

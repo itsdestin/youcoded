@@ -1,7 +1,7 @@
 {
   "name": "youcoded",
   "version": "1.2.4",
-  "description": "Desktop GUI for Claude Code with the YouCoded toolkit",
+  "description": "Open-source, multi-model AI assistant for your files, projects, and everyday work",
   "homepage": "https://github.com/itsdestin/youcoded",
   "main": "dist/main/main.js",
   "scripts": {

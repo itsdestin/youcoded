@@ -1197,9 +1197,12 @@ function registerDetachIpc() {
   // receives the same prefs via appearance:sync. ThemeProvider applies
   // locally without re-broadcasting (guarded by a ref) so there's no loop.
   ipcMain.on(IPC.APPEARANCE_BROADCAST, (evt, prefs) => {
-    for (const wid of windowRegistry.getWindowIds()) {
-      if (wid === evt.sender.id) continue;
-      windowFromWcId(wid)?.webContents.send(IPC.APPEARANCE_SYNC, prefs);
+    // WHY BrowserWindow is the delivery authority here: Buddy floaters do not
+    // own sessions, so filtering through session-peer registry entries can
+    // leave their independent ThemeProvider permanently on its launch theme.
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed() || win.webContents.id === evt.sender.id) continue;
+      win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
     }
   });
 

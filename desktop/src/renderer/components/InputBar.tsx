@@ -210,13 +210,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     if (!el) return;
     const at = el.selectionStart ?? el.value.length;
     const to = el.selectionEnd ?? at;
-    const next = `${el.value.slice(0, at)} ${el.value.slice(to)}`;
-    setText(next);
-    // Keep the caret after the space, or it jumps to the end of the draft.
-    requestAnimationFrame(() => {
-      const again = inputRef.current;
-      if (again) again.setSelectionRange(at + 1, at + 1);
-    });
+    // WHY: insert the space and place the caret before the browser inserts
+    // the next character; a deferred frame can overwrite newer input's caret.
+    el.setRangeText(' ', at, to, 'end');
+    setText(el.value);
   }, []);
   /** Call off the countdown; answers whether one was actually running. */
   const cancelSpaceHold = useCallback(() => {

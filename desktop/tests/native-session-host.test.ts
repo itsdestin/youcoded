@@ -228,6 +228,50 @@ describe('NativeSessionHost', () => {
     expect(history![1].data.text).toBe('Hi there');   // coalesced on disk
   });
 
+  it('fresh roots persist and use one exact step-guard snapshot', async () => {
+    const readGuard = vi.fn(() => 12);
+    const guarded = new NativeSessionHost(
+      new SessionStore(new NativeHome(root)), factory, NO_CONTEXT, async () => null, async () => null,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      new SpecialistCatalog({ claudeUserDir: null }), readGuard,
+    );
+    await guarded.create({ sessionId: 'guarded', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    expect(readGuard).toHaveBeenCalledTimes(1);
+    expect(new SessionStore(new NativeHome(root)).readHeader('guarded', root)?.stepGuard).toBe(12);
+    expect((guarded as any).live.get('guarded').session.opts.harness.limits.maxSteps).toBe(12);
+    await guarded.destroyAll();
+  });
+
+  it('resume uses the stored snapshot despite preference changes, while old and malformed headers use no guard', async () => {
+    const store = new SessionStore(new NativeHome(root));
+    let preference = 14;
+    const guarded = new NativeSessionHost(
+      store, factory, NO_CONTEXT, async () => null, async () => null,
+      undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+      new SpecialistCatalog({ claudeUserDir: null }), () => preference,
+    );
+    await guarded.create({ sessionId: 'stored', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    await guarded.destroyAll();
+    preference = 99;
+    await guarded.resume('stored', root);
+    expect((guarded as any).live.get('stored').session.opts.harness.limits.maxSteps).toBe(14);
+    await guarded.destroyAll();
+
+    const headerBase = { v: 1, harnessId: 'assistant', binding: { providerId: 'openrouter', modelId: 'm' }, cwd: root, createdAt: Date.now() };
+    await store.create({ ...headerBase, sessionId: 'old' });
+    await new NativeHome(root).appendSessionLine(nativeStoreSlug(root), 'bad', { ...headerBase, sessionId: 'bad', stepGuard: 'oops' });
+    for (const id of ['old', 'bad']) {
+      const resumed = new NativeSessionHost(
+        store, factory, NO_CONTEXT, async () => null, async () => null,
+        undefined, undefined, undefined, undefined, undefined, undefined, undefined, undefined,
+        new SpecialistCatalog({ claudeUserDir: null }), () => 77,
+      );
+      expect(await resumed.resume(id, root)).toBe(true);
+      expect((resumed as any).live.get(id).session.opts.harness.limits.maxSteps).toBeUndefined();
+      await resumed.destroyAll();
+    }
+  });
+
   it('resume rebuilds a live session whose history includes the stored exchange', async () => {
     await host.create({ sessionId: 's-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
     host.send('s-1', 'hello');       // M1: dispatch-only — wait for the turn separately
@@ -1719,9 +1763,6 @@ describe('NativeSessionHost', () => {
       expect(header?.title).toMatch(/^\w+ the \w+ (Explorer|Researcher|Reviewer|Worker)$/);
       // Exactly the definition's allowlist — no Write/Edit/Bash/TodoWrite/AskUserQuestion.
       expect(toolNames(h, childId).sort()).toEqual([...EXPLORER.allowedTools].sort());
-      // WHY: specialist children are lifecycle-bounded by their parent rather than
-      // an arbitrary child action count; their selected preset stays unmodified.
-      expect((childSession(h, childId) as any).opts.harness.limits?.maxSteps).toBeUndefined();
       await h.destroyAll();
     });
 
@@ -2360,8 +2401,8 @@ describe('NativeSessionHost', () => {
     });
 
     it("an external-directory Write is declined instantly, factually, by the wired ask router — not the config-error stub (mutation-proof pin for createChild's askUser wiring)", async () => {
-      // Important review fix: the earlier max_steps pin exercised askUser only
-      // through the removed child budget gate, which short-circuited identically
+      // Important review fix: the Task 5.5 Step 4 pin (stepCap, below) exercises
+      // askUser only through the max_steps gate, which short-circuits identically
       // whether `askUser: childAskRouter(...)` is wired or deleted from createChild
       // — so that pin alone cannot catch the wiring being dropped. This drives a
       // DIFFERENT askUser call site: the external-directory forced ask

@@ -22,7 +22,6 @@ import type { HarnessManifest } from '../../shared/harness-manifest';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
 import { bashGrantOptions, type GrantScope } from '../../shared/bash-grant-shapes';
 import type { NativeTool, ServedRead, ToolContext, ToolResultPayload, ToolServices } from './tools/types';
-import { stepBudgetFor } from './model-step-budget';
 import { checkPathGuard, workspaceMatchFor } from './tools/guards';
 import { readImageFromDisk, MAX_IMAGES_PER_TURN, MAX_IMAGE_BYTES_PER_TURN, deliverableImageMediaType, MAX_ATTACHMENT_BYTES } from './image-support';
 
@@ -1874,12 +1873,12 @@ export class HarnessSession extends EventEmitter {
     let generationMs = 0;
     const recentCalls: string[] = [];           // doom-loop window (turn-level)
     const imageBudget = { count: 0, bytes: 0 };  // per-turn image delivery budget (spec "Budgets")
-    // WHY: specialist work is bounded by its narrow tool set, parent-managed
+// WHY: specialist work is bounded by its narrow tool set, parent-managed
     // lifecycle controls, and the delegation spawn backstop—not an arbitrary
-    // per-child action count. Root sessions retain their own max_steps gate.
+    // per-child action count. Root sessions preserve any explicit step limit.
     const maxSteps = this.opts.isSpecialistChild
       ? undefined
-      : (this.opts.harness.limits?.maxSteps ?? stepBudgetFor(this.binding.modelId));
+      : this.opts.harness.limits?.maxSteps;
     let stepsSinceApproval = 0;
     // Consecutive contentless steps (empty-step recovery, spec 2026-08-21).
     // The single silent retry is allowed only at count 1; any real step resets

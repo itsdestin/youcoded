@@ -1,6 +1,6 @@
 # YouCoded
 
-**Claude Code on every device.** A cross-platform app for Windows, macOS, Linux, and Android — with remote access from any web browser.
+**Your AI assistant, on your terms.** An open-source, cross-platform agent for Windows, macOS, Linux, and Android — with remote access from any web browser.
 
 > Built entirely without coding experience, using Claude Code itself.
 
@@ -8,11 +8,11 @@
 
 ## What is YouCoded?
 
-YouCoded is an open-source app that puts [Claude Code](https://docs.anthropic.com/en/docs/claude-code) — Anthropic's agentic coding and AI assistant tool — into a real app with a chat interface, themes, a skill marketplace, and multiplayer games. Sign in with your Claude Pro or Max plan and start using it.
+YouCoded is an open-source, multi-model AI assistant that helps you work with files, projects, research, and everyday tasks. Its own permission-based agent can use tools, skills, and specialists; you choose the AI behind it: a local model on your computer, a cloud provider or API key, a ChatGPT plan, or [Claude Code](https://docs.anthropic.com/en/docs/claude-code) as a first-class integration.
 
 It's designed for students, professionals, and anyone who uses AI regularly — not just developers.
 
-**Disclaimer:** YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic.
+**Disclaimer:** YouCoded is an independent, community-built project. It is not affiliated with, endorsed by, or officially supported by Anthropic, OpenAI, or OpenRouter.
 
 ## Features
 
@@ -20,17 +20,17 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 - Chat interface with structured message rendering, tool cards, and markdown
 - Full terminal emulator for direct shell access
 - Multiple concurrent sessions with color-coded status
-- Model selector — cycle between Claude models with persistence
+- Model selector — choose Claude Code, ChatGPT, OpenRouter and compatible cloud providers, or local models
 - Folder switcher — quick-access saved directories for session creation
 - Permission mode cycling (Normal, Auto-Accept, Plan Mode)
 
 **Social AI**
 - Create custom skills and share them with friends, classmates, or coworkers
-- Play multiplayer games (Connect Four) while waiting for Claude to finish working
+- Play multiplayer games (Connect Four and chess) while your assistant works
 - Build and share custom theme packs with the community
 
 **Skill Marketplace**
-- Browse and install skills from 150+ available options
+- Browse and install community skills and tools from the marketplace
 - Create your own prompt skills and share them via deep links
 - Quick-launch chips for your most-used skills
 - Theme Builder and Marketplace Publisher ship pre-installed (auto-installed on every launch and not removable) so `/theme-builder` and plugin-publishing flows work out of the box
@@ -74,9 +74,14 @@ It's designed for students, professionals, and anyone who uses AI regularly — 
 
 ## Requirements
 
-- A [Claude Pro or Max plan](https://claude.ai/) (sign in with your Claude account)
-- Android: Android 9+ (arm64)
-- Desktop: Windows 10+, macOS 11+, or Linux (x64)
+Choose a model path that works for you:
+
+- A local model you download and run on your computer
+- An [OpenRouter](https://openrouter.ai/) account or a supported provider API key
+- A ChatGPT plan
+- A [Claude Pro or Max plan](https://claude.ai/) for Claude Code
+
+The app itself is free and open source. Android requires Android 9+ (arm64); desktop requires Windows 10+, macOS 11+, or Linux (x64).
 
 ## Building from Source
 
@@ -126,6 +131,12 @@ Commits need a sign-off line (`git commit -s`) — see [CONTRIBUTING.md](./CONTR
 - [YouCoded Core](https://github.com/itsdestin/youcoded-core) — Legacy bundled plugin (safety hooks + setup skills), currently being phased out
 - [YouCoded Themes](https://github.com/itsdestin/wecoded-themes) — Community theme registry
 - [YouCoded Marketplace](https://github.com/itsdestin/wecoded-marketplace) — Skill marketplace registry
+
+## Policies
+
+- [Privacy Policy](./PRIVACY.md)
+- [Terms of Service](./TERMS.md)
+- [Security Policy](./SECURITY.md)
 
 ## License
 

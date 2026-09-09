@@ -57,6 +57,8 @@ describe('the shim rejects a failure instead of resolving it', () => {
       'models:add-vision',
       'models:set-settings',
       'models:settings',
+      'native:get-step-guard',
+      'native:set-step-guard',
     ]);
   });
 

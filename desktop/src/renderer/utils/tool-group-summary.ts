@@ -147,10 +147,14 @@ export function toolActionLabel(toolName: string, active: boolean): string {
  *  its own tool result (the launch ack) already landed — mirrors
  *  CollapsedToolGroup's stillWorking check so the two never disagree. */
 function isRunning(t: ToolCallState): boolean {
-  return t.status === 'running' || t.specialistRun?.status === 'running';
+  // WHY a Task card may remain `running` while its stopped helper's final tool
+  // result is still unwinding. The ledger's terminal run status is authoritative
+  // for that card, so it must clear the group spinner immediately.
+  if (t.specialistRun) return t.specialistRun.status === 'running';
+  return t.status === 'running';
 }
 function isDone(t: ToolCallState): boolean {
-  return t.status === 'complete' && !isRunning(t);
+  return !isRunning(t) && (t.status === 'complete' || t.specialistRun?.status === 'completed');
 }
 
 /**

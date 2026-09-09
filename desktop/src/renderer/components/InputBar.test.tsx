@@ -454,10 +454,10 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
 //    button, and the "Send anyway" button after a blocked send, still send.
 //    That difference is the whole reason the guard sits on the two keyboard
 //    handlers rather than inside send() itself.
-//  - Holding the space bar in an empty box is walkie-talkie: a quarter second
-//    starts it, letting go stops it, a quick tap does nothing, and with any text
-//    in the box the space bar is just a space. Losing the box — at ANY point in
-//    the hold, including the quarter second before it arms — closes the mic,
+//  - Holding the space bar in the box is walkie-talkie: 350 ms starts it,
+//    letting go stops it, and a quick tap inserts one space. Existing text is
+//    preserved. Losing the box — at ANY point in the hold, including the
+//    countdown before it arms — closes the mic,
 //    because that is where a microphone gets left open with nobody watching.
 describe('InputBar — voice prompting (T9)', () => {
   let emit: (e: VoiceEvent) => void;
@@ -720,8 +720,9 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     vi.restoreAllMocks();
   });
 
+  let rerenderComposer: () => void;
   async function renderComposer() {
-    render(
+    const { rerender } = render(
       <ChatProvider>
         <SkillProvider>
           <InputBar sessionId="sess-1" provider="native" />
@@ -730,6 +731,13 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     );
     const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
     await waitFor(() => screen.getByRole('button', { name: 'Speak your message' }));
+    rerenderComposer = () => rerender(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" compact />
+        </SkillProvider>
+      </ChatProvider>,
+    );
     vi.useFakeTimers();
     return textarea;
   }
@@ -764,7 +772,7 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
   });
 
-  it('a quick tap does nothing at all', async () => {
+  it('a quick tap does not start or stop the mic', async () => {
     const textarea = await renderComposer();
     fireEvent.keyDown(textarea, { key: ' ' });
     await hold(100);
@@ -835,6 +843,64 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     expect(textarea.value).toBe('already typing ');
   });
 
+  // WHY: jsdom keydown has no browser-default text insertion. Model it from
+  // the LIVE value/selection, then run the queued frame only after typing.
+  function typeLetter(textarea: HTMLTextAreaElement, key: string) {
+    expect(fireEvent.keyDown(textarea, { key })).toBe(true);
+    const { value, selectionStart: at, selectionEnd: to } = textarea;
+    fireEvent.change(textarea, {
+      target: { value: value.slice(0, at) + key + value.slice(to), selectionStart: at + 1, selectionEnd: at + 1 },
+    });
+    fireEvent.keyUp(textarea, { key });
+  }
+
+  describe.each(['release first', 'letter first'] as const)('pending space caret — %s', (order) => {
+    it.each([
+      { draft: 'hello', at: 5, to: 5, expected: 'hello world' },
+      { draft: 'hello!', at: 5, to: 5, expected: 'hello world!' },
+      { draft: 'helloOLD!', at: 5, to: 8, expected: 'hello world!' },
+    ])('types at the selection in "$draft" and survives a rerender', async ({ draft, at, to, expected }) => {
+      const textarea = await renderComposer();
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => frames.push(cb));
+      fireEvent.change(textarea, { target: { value: draft } });
+      textarea.setSelectionRange(at, to);
+      expect(fireEvent.keyDown(textarea, { key: ' ' })).toBe(false);
+      if (order === 'release first') fireEvent.keyUp(textarea, { key: ' ' });
+      typeLetter(textarea, 'w');
+      if (order === 'letter first') fireEvent.keyUp(textarea, { key: ' ' });
+      act(() => { frames.splice(0).forEach((cb) => cb(0)); });
+      for (const letter of 'orld') typeLetter(textarea, letter);
+      expect(textarea.value).toBe(expected);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([11, 11]);
+      rerenderComposer();
+      expect(textarea.value).toBe(expected);
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([11, 11]);
+      expect(voiceBridge.start).not.toHaveBeenCalled();
+    });
+
+    it('does not overwrite a later cursor move, and keeps the space through a rerender', async () => {
+      const textarea = await renderComposer();
+      const frames: FrameRequestCallback[] = [];
+      vi.spyOn(window, 'requestAnimationFrame').mockImplementation((cb) => frames.push(cb));
+      fireEvent.change(textarea, { target: { value: 'hello!' } });
+      textarea.setSelectionRange(5, 5);
+      fireEvent.keyDown(textarea, { key: ' ' });
+      if (order === 'release first') fireEvent.keyUp(textarea, { key: ' ' });
+      else fireEvent.keyDown(textarea, { key: 'ArrowLeft' });
+      expect(textarea.value).toBe('hello !');
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([6, 6]);
+      // Model a subsequent mouse selection before any frame is painted.
+      textarea.setSelectionRange(1, 3);
+      if (order === 'letter first') fireEvent.keyUp(textarea, { key: ' ' });
+      rerenderComposer();
+      act(() => { frames.splice(0).forEach((cb) => cb(0)); });
+      expect(textarea.value).toBe('hello !');
+      expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 3]);
+      expect(voiceBridge.start).not.toHaveBeenCalled();
+    });
+  });
+
   it('typing straight through a space puts it in ahead of the next letter', async () => {
     // "hello world" at speed: the w goes down before the space comes up. The
     // space must land BEFORE the w, or the box reads "hellow orld".
@@ -862,7 +928,7 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     expect(textarea.value).toBe('Tell Sam about it');
   });
 
-  it('an empty box types no space either way', async () => {
+  it('an empty box types no space when the hold matures', async () => {
     const textarea = await renderComposer();
     const cancelled = fireEvent.keyDown(textarea, { key: ' ' });
     expect(cancelled).toBe(false);
@@ -891,8 +957,8 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     expect(voiceBridge.stop).toHaveBeenCalledTimes(1);
   });
 
-  it('focus leaving BEFORE the quarter second is up leaves the mic closed', async () => {
-    // The leak this exists to stop: for the first 250 ms nothing is listening
+  it('focus leaving BEFORE the 350 ms hold is up leaves the mic closed', async () => {
+    // The leak this exists to stop: for the first 350 ms nothing is listening
     // yet, only a countdown is running. Without cancelling that countdown the
     // mic opens in a window the user has already left, no key-up ever comes,
     // and it stays open until the silence stop drops the room into the box.

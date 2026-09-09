@@ -37,6 +37,13 @@ describe('SessionStore', () => {
     expect(store.readHeader('s-1', HEADER.cwd)).toEqual(HEADER);
   });
 
+  it('normalizes malformed stepGuard on every header read path', async () => {
+    await store.create({ ...HEADER, stepGuard: 'bad' as any });
+    expect(store.readHeader('s-1', HEADER.cwd)).toEqual(HEADER);
+    expect(store.list()).toEqual([expect.objectContaining({ sessionId: 's-1' })]);
+    expect(store.list()[0]).not.toHaveProperty('stepGuard');
+  });
+
   it('coalesces same-partId text deltas into ONE persisted event with concatenated text', async () => {
     await store.create(HEADER);
     await store.append(HEADER.cwd, ev('user-message', { text: 'hi' }, 'u1') as any);

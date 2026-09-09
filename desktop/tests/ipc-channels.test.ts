@@ -874,7 +874,7 @@ describe('native:*/provider:* channel parity', () => {
   const NEW_TYPES = [
     'native:send', 'native:interrupt', 'native:set-binding', 'native:set-permission-mode',
     // Task 14 — read-side mode fetch that seeds the chip on create/resume.
-    'native:get-permission-mode', 'native:sessions-list',
+    'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list',
     // Task 11 — cancel/edit a queued-but-not-yet-sent message.
     'native:queue-remove',
     // M3 item 2 — user-initiated /compact for a native session.
@@ -885,6 +885,8 @@ describe('native:*/provider:* channel parity', () => {
     'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
     'native:set-binding': 'IPC.NATIVE_SET_BINDING', 'native:set-permission-mode': 'IPC.NATIVE_SET_PERMISSION_MODE',
     'native:get-permission-mode': 'IPC.NATIVE_GET_PERMISSION_MODE',
+    'native:get-step-guard': 'IPC.NATIVE_GET_STEP_GUARD',
+    'native:set-step-guard': 'IPC.NATIVE_SET_STEP_GUARD',
     'native:sessions-list': 'IPC.NATIVE_SESSIONS_LIST',
     'native:queue-remove': 'IPC.NATIVE_QUEUE_REMOVE',
     'native:compact': 'IPC.NATIVE_COMPACT',
@@ -915,6 +917,11 @@ describe('native:*/provider:* channel parity', () => {
   it('native:get-permission-mode handled by remote-server.ts (WS case)', () => {
     const src = read('src', 'main', 'remote-server.ts');
     expect(src, "native:get-permission-mode missing from remote-server.ts").toContain(`'native:get-permission-mode'`);
+  });
+  it.each(['native:get-step-guard', 'native:set-step-guard'])('%s is answered by remote-server', (channel) => {
+    const src = read('src', 'main', 'remote-server.ts');
+    const caseBlock = src.slice(src.indexOf(`case '${channel}'`));
+    expect(caseBlock.slice(0, 500), `${channel} must send a response`).toContain('this.respond(');
   });
   it('native:send is answered by remote-server (request/response, not fire-and-forget)', () => {
     const src = read('src', 'main', 'remote-server.ts');

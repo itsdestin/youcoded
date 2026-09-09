@@ -186,6 +186,27 @@ describe('SPECIALIST_RUN_CHANGED — note rows from run.notes', () => {
   });
 });
 
+describe('tool-group status — stopped specialist', () => {
+  it('keeps its Task card complete after the specialist is stopped', () => {
+    let state = seedTaskCard(initState());
+    state = dispatch(state, {
+      type: 'TRANSCRIPT_TOOL_RESULT', sessionId: SESSION, uuid: 'task-launch-ack',
+      toolUseId: TASK_ID, result: 'The specialist is working in the background.',
+      isError: false,
+    });
+    state = dispatch(state, {
+      type: 'SPECIALIST_RUN_CHANGED', sessionId: SESSION,
+      run: baseRun({ status: 'interrupted', endedAt: 2000 }),
+    });
+
+    const card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
+    // The Task result acknowledges its launch; only a live run can keep the
+    // group active after that run has reached a terminal status.
+    expect(card.status).toBe('complete');
+    expect(card.specialistRun?.status).toBe('interrupted');
+  });
+});
+
 describe('SPECIALIST_RUN_CHANGED — stale pushes cannot rewind a card (ROADMAP L259)', () => {
   let state: ChatState;
 

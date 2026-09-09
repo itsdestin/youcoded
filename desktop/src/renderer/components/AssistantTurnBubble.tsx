@@ -9,7 +9,7 @@ import { SessionRefsEnabled } from './session-refs-context';
 import ToolCard, { StackedSkillsCard } from './ToolCard';
 import { DeliverablesCard, isSentFilesTool, isSentLinksTool, SENT_FILES_TOOL } from './DeliverablesCard';
 import { isSendUserLinkToolName } from '../../shared/send-user-link';
-import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon } from './Icons';
+import { CheckIcon, FailIcon, ChevronIcon, QuestionIcon, StoppedIcon } from './Icons';
 import BrailleSpinner from './BrailleSpinner';
 import { formatBubbleTime } from '../utils/format-time';
 import { useTheme } from '../state/theme-context';
@@ -160,8 +160,17 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
   // otherwise a group of background hires read "all complete" while one of
   // them was mid-job. A helper waiting on the user is called out too.
   const stillWorking = (t: ToolCallState) => t.specialistRun?.status === 'running';
-  const runningCount = tools.filter((t) => t.status === 'running' || stillWorking(t)).length;
+  // WHY a stopped Task can retain `status: 'running'` until its interrupted
+  // tool result arrives. Its specialist run is the authoritative lifecycle,
+  // so a terminal run must immediately settle this group's spinner.
+  const groupRunning = (t: ToolCallState) => t.specialistRun ? stillWorking(t) : t.status === 'running';
+  const runningCount = tools.filter(groupRunning).length;
   const failedCount = tools.filter((t) => t.status === 'failed').length;
+  // WHY the group icon reflects only the latest call: an earlier failure is
+  // already preserved in the group's detail text, while the top-level status
+  // should describe the most recent result.
+  const latestToolFailed = tools.at(-1)?.status === 'failed';
+  const stoppedCount = tools.filter((t) => t.specialistRun?.status === 'interrupted').length;
   const askingCount = tools.filter(hasNestedAsk).length;
   // Plain-language "Created a file and ran a command" in place of the raw
   // "N tools (Bash, Write)" — Q1-Q5, 2026-09-06 tool-group-readability deck.
@@ -177,8 +186,10 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
           <QuestionIcon className="w-3.5 h-3.5 shrink-0 text-amber-500" />
         ) : runningCount > 0 ? (
           <BrailleSpinner size="sm" />
-        ) : failedCount > 0 ? (
+        ) : latestToolFailed ? (
           <FailIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+        ) : stoppedCount > 0 ? (
+          <span data-testid="tool-group-stopped"><StoppedIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" /></span>
         ) : (
           <CheckIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
         )}
@@ -189,6 +200,7 @@ export function CollapsedToolGroup({ tools, sessionId }: { tools: ToolCallState[
               something else is still running ("+2 completed, 1 failed") — this
               suffix only fires once the group has fully settled (Q3a). */}
           {runningCount === 0 && failedCount > 0 && ` — ${failedCount} failed`}
+          {runningCount === 0 && stoppedCount > 0 && ` — ${stoppedCount} stopped`}
           {askingCount > 0 && <span className="text-amber-500">{` — ${askingCount} waiting on you`}</span>}
         </span>
         <ChevronIcon className="w-3.5 h-3.5 shrink-0 text-fg-muted" expanded={expanded} />

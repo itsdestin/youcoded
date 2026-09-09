@@ -101,9 +101,11 @@ Notices sent to the email address above reach the designated agent.
 
 ## 7. Third-party content and services
 
-The Services interoperate with third-party software and services — Anthropic's Claude and Claude Code, GitHub, Cloudflare, Termux, Google Drive, and others. **We are not responsible** for those services. Their availability, behavior, and terms are governed by them, not by us. Disruptions in third-party services may affect the Services, and your use of those services is governed by the corresponding third party's terms and privacy policy.
+The Services interoperate with third-party software and services — including Anthropic's Claude and Claude Code, OpenAI and ChatGPT, OpenRouter and its model providers, GitHub, Cloudflare, Termux, Google Drive, and user-configured providers, tools, and integrations. **We are not responsible** for those services. Their availability, behavior, data handling, retention, and terms are governed by them, not by us. Disruptions in third-party services may affect the Services, and your use of those services is governed by the corresponding third party's terms and privacy policy.
 
-References to third-party trademarks (Anthropic, Claude, Claude Code, GitHub, Termux, etc.) appear only to identify those products. Such references do not imply affiliation, endorsement, or sponsorship.
+When you choose a cloud model or connected service, you authorize YouCoded to send the content needed for that request to that service. The service may retain or otherwise handle that content under its own policies; YouCoded cannot control or delete records held by it. Local-model inference does not send an inference request to a cloud model provider. See [PRIVACY.md](./PRIVACY.md) for the data-flow details and the limits of that statement.
+
+References to third-party trademarks (Anthropic, Claude, Claude Code, OpenAI, ChatGPT, OpenRouter, GitHub, Termux, etc.) appear only to identify those products. Such references do not imply affiliation, endorsement, or sponsorship.
 
 ---
 

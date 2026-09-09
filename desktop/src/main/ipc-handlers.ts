@@ -53,6 +53,7 @@ import { NativeSessionHost } from './harness/native-session-host';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
 import { PermissionStore } from './harness/permission-store';
+import { StepGuardSettings } from './harness/step-guard-settings';
 // Type-only: the payload the permissions:remove handler forwards to the host.
 import type { PermissionRule } from '../shared/permission-types';
 // Task 7b: the MCP registry (WHICH servers ~/.youcoded/mcp.json configures)
@@ -2487,6 +2488,7 @@ export function registerIpcHandlers(
   // work (they share one file under NativeHome's lock) but would make the
   // "one store" invariant a coincidence rather than a fact.
   const permissionStore = new PermissionStore(nativeHome);
+  const stepGuardSettings = new StepGuardSettings(nativeHome);
   const secretsStore = new SecretsStore(app.getPath('userData'));
   // Plan B: the local engine. EngineManager owns acquisition + supervision; its
   // hook makes the 'local' provider real and its listModels feeds the model
@@ -2700,6 +2702,7 @@ export function registerIpcHandlers(
     // specialistCatalog (13th param, Task 4 plan 1c): the real catalog built
     // above, sharing nativeHome with every other ~/.youcoded/ writer here.
     specialistCatalog,
+    () => stepGuardSettings.read(),
   );
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref
@@ -2862,7 +2865,7 @@ export function registerIpcHandlers(
   // stale data relative to whichever surface wrote last.
   // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
   // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, specialistCatalog, chatgptAuth: chatgptForUi });
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, specialistCatalog, chatgptAuth: chatgptForUi });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
@@ -3112,6 +3115,8 @@ export function registerIpcHandlers(
   // (getPermissionMode falls back to 'ask' for an unknown/non-live id).
   ipcMain.handle(IPC.NATIVE_GET_PERMISSION_MODE, async (_e, sessionId: string) =>
     nativeHost.getPermissionMode(sessionId));
+  ipcMain.handle(IPC.NATIVE_GET_STEP_GUARD, () => stepGuardSettings.read());
+  ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, value: number | null) => stepGuardSettings.update(value));
   ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.list());
   // G-1: the Bash card's Stop button, on every surface.
   ipcMain.handle(IPC.NATIVE_KILL_SHELL, (_e, { sessionId, shellId }: { sessionId: string; shellId: string }) => nativeHost.killShell(sessionId, shellId));

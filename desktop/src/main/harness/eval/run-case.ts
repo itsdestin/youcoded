@@ -96,20 +96,18 @@ export interface CaseRun {
 // Root-cause fix (2026-08-09): the first full-roster live run denied EVERY
 // max_steps gate outright, on the reasoning (stated in a prior version of
 // this file, and in the plan brief that requested that denial) that the
-// ~40-item battery would stay "well under 25 steps." That prediction was
-// empirically wrong. Real full-roster numbers: Kimi K3 56 tool calls,
+// ~40-item battery would stay well under the then-current guard. That
+// prediction was empirically wrong. Real full-roster numbers: Kimi K3 56 tool calls,
 // Deepseek v4 flash 0731 47, Grok 4.5 37, GPT 5.6 Luna 47 — all finished
-// fine — and Claude Opus 5 80 tool calls, which hit its 50-step frontier
-// budget (model-step-budget.ts), got denied at the FIRST gate, and lost its
+// fine — while long evaluator runs still need their own explicit cap and allowance; denial at the gate lost the
 // entire review after a paid run produced nothing (harness-session.ts:1100-
 // 1102: a non-'allow' answer sets stopReason='max_steps' and breaks the turn
 // loop outright — unlike doom_loop, which only fails the one repeated call
 // and lets the run continue). Opus was simply the most thorough model, not a
 // runaway one.
 //
-// WHY 1, not 4: the allowance used to compensate for a budget (25/50, chosen by
-// model tier) that was far too small for a battery, so gates fired as a matter
-// of routine and the allowance was really just a multiplier. BATTERY_STEP_BUDGET
+// WHY 1, not 4: the evaluator now owns a 100-step budget, above every healthy
+// run measured, so reaching the gate is signal rather than routine. BATTERY_STEP_BUDGET
 // below sets 100 directly, above every healthy run ever measured (round 4: Kimi
 // K3 56 tool calls, Deepseek 47, Grok 37, GPT 47, Opus 80), so reaching the gate
 // at all is now real signal. One continuation is grace for an unusually thorough
@@ -286,18 +284,10 @@ export function assertHistoryBudget(contextLength: number): void {
   }
 }
 
-// The battery's own step ceiling, replacing the per-model tier split in
-// model-step-budget.ts (25 default / 50 frontier). WHY uniform: that split is
-// tuned for interactive chat, where a long tool chain usually means the model
-// is lost. The battery is the same size of job — walk ten tools through seven
-// areas — whichever model runs it, so tiering it just means the cheap models
-// get cut off mid-review. 100 is above every healthy run measured to date.
-//
-// WHY it works: harness-session.ts:1008 resolves the budget as
-// `this.opts.harness.limits?.maxSteps ?? stepBudgetFor(this.binding.modelId)`,
-// so setting maxSteps on BATTERY_HARNESS below is sufficient — stepBudgetFor
-// is never consulted. Same layering already used for BATTERY_MAX_OUTPUT_TOKENS,
-// and equally confined to the runner's own copy of ASSISTANT_PRESET.
+// WHY explicit: evaluator runs need a deterministic budget independent of app
+// preferences. The battery is the same job whichever model runs it, and 100 is
+// above every healthy run measured to date. HarnessSession gates only explicit
+// maxSteps, so this runner-owned manifest is the complete evaluator policy.
 export const BATTERY_STEP_BUDGET = 100;
 
 // A battery-only harness: same shape as ASSISTANT_PRESET (tools, permission

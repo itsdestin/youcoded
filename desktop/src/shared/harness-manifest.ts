@@ -83,9 +83,7 @@ export const ASSISTANT_PRESET: HarnessManifest = {
   systemPrompt: 'You are a helpful, careful assistant inside YouCoded.',
   tools: [...NATIVE_TOOL_NAMES],
   permissionPolicy: 'ask',
-  // No maxSteps override → the step budget is chosen by MODEL tier at runtime
-  // (harness-session.ts → stepBudgetFor): frontier models get a higher ceiling,
-  // others keep the conservative default.
+  // Ordinary roots add maxSteps only from their persisted creation snapshot.
   limits: { maxTokens: DEFAULT_MAX_OUTPUT_TOKENS },
 };
 
@@ -97,7 +95,7 @@ export const CODER_PRESET: HarnessManifest = {
   systemPrompt: 'You are a capable coding agent inside YouCoded.',
   tools: [...NATIVE_TOOL_NAMES],
   permissionPolicy: 'auto-edit',
-  // Step budget chosen by model tier at runtime (see ASSISTANT_PRESET note).
+  // Ordinary roots add maxSteps only from their persisted creation snapshot.
   limits: { maxTokens: DEFAULT_MAX_OUTPUT_TOKENS },
 };
 

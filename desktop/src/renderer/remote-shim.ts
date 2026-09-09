@@ -218,6 +218,7 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   // refused save — a context length under the floor, an engine option the
   // binary does not know — has to reach the dialog's error line.
   'models:settings', 'models:set-settings', 'models:add-vision',
+  'native:get-step-guard', 'native:set-step-guard',
 ]);
 
 /** What a `<channel>:response` payload MEANS, as one pure decision.
@@ -1838,6 +1839,8 @@ export function installShim(): void {
       setBinding: (sessionId: string, binding: unknown) => invoke('native:set-binding', { sessionId, binding }),
       setPermissionMode: (sessionId: string, mode: string) => invoke('native:set-permission-mode', { sessionId, mode }),
       getPermissionMode: (sessionId: string) => invoke('native:get-permission-mode', { sessionId }),
+      getStepGuard: () => invoke('native:get-step-guard'),
+      setStepGuard: (value: number | null) => invoke('native:set-step-guard', { value }),
       sessionsList: () => invoke('native:sessions-list'),
       // G-1: NOT gated on `supported` — a phone must be able to Stop a command
       // running on the DESKTOP, whose runtime is the one that owns it.

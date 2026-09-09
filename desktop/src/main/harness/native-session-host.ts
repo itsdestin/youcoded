@@ -2169,6 +2169,9 @@ export class NativeSessionHost extends EventEmitter {
     // no re-read" fingerprint check work across turns and across sessions
     // sharing one project folder.
     private specialistCatalog: SpecialistCatalog = new SpecialistCatalog({ claudeUserDir: null }),
+    // WHY inject once at the host boundary: create snapshots this preference,
+    // while resume uses only its header, so call sites cannot make them diverge.
+    private readStepGuard: () => number | null = () => null,
   ) {
     super();
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
@@ -2792,6 +2795,10 @@ export class NativeSessionHost extends EventEmitter {
       await this.destroy(opts.sessionId);
     }
     const preset = resolvePreset(opts.presetId);
+    const stepGuard = this.readStepGuard();
+    const harness = stepGuard === null
+      ? preset.manifest
+      : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: stepGuard } };
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(opts.binding);
     await this.store.create({
       v: 1,
@@ -2800,6 +2807,7 @@ export class NativeSessionHost extends EventEmitter {
       binding: opts.binding,
       cwd: opts.cwd,
       createdAt: Date.now(),
+      ...(stepGuard === null ? {} : { stepGuard }),
     });
     // The preset seeds the STARTING mode; an explicit setPermissionMode always
     // wins — modeFor is never overwritten here (plan decision 3).
@@ -2826,7 +2834,7 @@ export class NativeSessionHost extends EventEmitter {
       // app's lifetime. Release the hold and rethrow the ORIGINAL error
       // unchanged (never guess/replace a cause — error-message-standards.md).
       session = new HarnessSession(
-        { sessionId: opts.sessionId, cwd: opts.cwd, harness: preset.manifest, binding: opts.binding, contextLength, profile, pricing, free,
+        { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
           ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile) },
         this.modelFactory,
@@ -2964,9 +2972,9 @@ export class NativeSessionHost extends EventEmitter {
     return new HarnessSession(
       {
         sessionId: childId, cwd: workDir, binding, contextLength, profile, pricing, free,
-        // WHY: specialist work is bounded by its narrow tool set, parent-managed
+// WHY: specialist work is bounded by its narrow tool set, parent-managed
         // lifecycle controls, and the delegation spawn backstop—not an arbitrary
-        // per-child action count. Root sessions retain their own max_steps gate.
+        // per-child action count, so root limits never flow into a child.
         harness: preset.manifest,
         // TOOLS: the definition's allowlist, filtered out of the same CORE_TOOLS
         // set every session is built from. The Task tool is structurally absent
@@ -3281,6 +3289,9 @@ export class NativeSessionHost extends EventEmitter {
     // McpLease in mcp-manager.ts.
     const mcpLease = await this.acquireMcp(sessionId);
     const mcpServers = mcpLease?.servers;
+    const harness = header.stepGuard === undefined
+      ? preset.manifest
+      : { ...preset.manifest, limits: { ...preset.manifest.limits, maxSteps: header.stepGuard } };
     let session: HarnessSession;
     try {
       // Fix pass 1 / Finding 3 — same leak as create(): everything in this
@@ -3292,7 +3303,7 @@ export class NativeSessionHost extends EventEmitter {
       // error unchanged (error-message-standards.md).
       session = new HarnessSession(
         // `binding` (not header.binding) — same override reason as above.
-        { sessionId, cwd, harness: preset.manifest, binding, contextLength, profile, pricing, free,
+        { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
           ...this.toolWiring(sessionId, cwd, preset, profile) },
         this.modelFactory,

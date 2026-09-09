@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { CLOSE_PROMPT_SUPPRESS_KEY } from '../CloseSessionPrompt';
 import ModelPicker, { type ModelChoice } from '../model/ModelPicker';
 import { unavailableReason, useAvailabilityData } from '../model/availability';
@@ -12,7 +12,7 @@ import {
 } from '../ModelProvidersPopup';
 import SkipPermissionsSection, { type PermissionOverrides } from './SkipPermissionsSection';
 import FolderSwitcher from '../FolderSwitcher';
-import { FieldError, SettingRow, Toggle } from '../ui';
+import { Button, FieldError, SettingRow, Toggle, TypeableSelect } from '../ui';
 
 // The pages of Assistant settings. Five, in one flat list (review round 1,
 // 2026-09-05 — P-5 note: one "Cloud providers" page for the three sign-in /
@@ -146,6 +146,96 @@ function ProjectFolderRow({ defaults, onDefaultsChange }: PageContext) {
   );
 }
 
+const STEP_GUARD_OPTIONS = [
+  { value: '', label: 'None' },
+  ...Array.from({ length: 10 }, (_, index) => ({ value: String((index + 1) * 10), label: `${(index + 1) * 10} steps` })),
+];
+
+function parseStepGuard(raw: string): number | null {
+  if (!/^\d+$/.test(raw.trim())) return null;
+  const value = Number(raw.trim());
+  return Number.isSafeInteger(value) && value > 0 ? value : null;
+}
+
+export function StepGuardRow() {
+  const api = window.claude.native;
+  const [saved, setSaved] = useState<number | null>(null);
+  const savedRef = useRef<number | null>(null);
+  const pendingRef = useRef<number | null | undefined>(undefined);
+  const writingRef = useRef(false);
+  const mountedRef = useRef(true);
+  const [loading, setLoading] = useState(true);
+  const [loaded, setLoaded] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [ioError, setIoError] = useState<string | null>(null);
+  const [validationError, setValidationError] = useState<string | null>(null);
+  const [retryValue, setRetryValue] = useState<number | null | undefined>();
+  useEffect(() => () => { mountedRef.current = false; }, []);
+  const load = useCallback(async () => {
+    setLoading(true); setIoError(null);
+    try {
+      const value = await api.getStepGuard();
+      if (!mountedRef.current) return;
+      savedRef.current = value; setSaved(value); setLoaded(true);
+    } catch {
+      if (!mountedRef.current) return;
+      setLoaded(false); setIoError("The step guard couldn't be loaded.");
+    } finally { if (mountedRef.current) setLoading(false); }
+  }, [api]);
+  useEffect(() => { void load(); }, [load]);
+
+  const drainWrites = useCallback(async () => {
+    if (writingRef.current) return;
+    writingRef.current = true; setSaving(true);
+    // WHY serialize at the bridge boundary: quick commits may be delivered while
+    // React still renders the enabled control; latest intent must win in order.
+    while (pendingRef.current !== undefined) {
+      const value = pendingRef.current;
+      pendingRef.current = undefined;
+      const previous = savedRef.current;
+      setSaved(value); setIoError(null); setValidationError(null); setRetryValue(undefined);
+      try {
+        const persisted = await api.setStepGuard(value);
+        if (!mountedRef.current) return;
+        savedRef.current = persisted; setSaved(persisted);
+      } catch {
+        if (!mountedRef.current) return;
+        // WHY a superseding commit wins over the failed request: clearing the
+        // queue here would silently discard the user's newer rapid intent.
+        if (pendingRef.current !== undefined) {
+          setSaved(previous);
+          continue;
+        }
+        setSaved(previous); setRetryValue(value);
+        setIoError("The step guard couldn't be saved. Your previous setting is kept.");
+        break;
+      }
+    }
+    writingRef.current = false;
+    if (mountedRef.current) setSaving(false);
+  }, [api]);
+  const save = useCallback((value: number | null) => {
+    pendingRef.current = value;
+    void drainWrites();
+  }, [drainWrites]);
+  const commit = (raw: string): boolean => {
+    if (raw === '') { save(null); return true; }
+    const value = parseStepGuard(raw);
+    if (value === null) {
+      setValidationError('Enter a positive whole number, or choose None.');
+      return false;
+    }
+    save(value);
+    return true;
+  };
+  return <FieldRow title="Step guard" hint="Pause after this many tool-loop steps (rounds), not each parallel tool call. Other safety checks still apply. Choose None to run without this guard.">
+    <TypeableSelect aria-label="Step guard" options={STEP_GUARD_OPTIONS} value={saved === null ? '' : String(saved)} onCommit={commit} disabled={loading || saving || !loaded} />
+    {loading && <p className="text-3xs text-fg-muted">Loading…</p>}
+    {validationError && <FieldError as="p">{validationError}</FieldError>}
+    {ioError && <FieldError as="div">{ioError} <Button size="sm" variant="ghost" onClick={() => { if (retryValue !== undefined) save(retryValue); else void load(); }}>Retry</Button></FieldError>}
+  </FieldRow>;
+}
+
 function GeneralPage(ctx: PageContext) {
   const { defaults, onDefaultsChange } = ctx;
   // WHY the panel judges the saved default (Destin, deck 2026-09-07).
@@ -194,6 +284,7 @@ function GeneralPage(ctx: PageContext) {
           )}
         </FieldRow>
         <ProjectFolderRow {...ctx} />
+        {window.claude.native.supported === true && <StepGuardRow />}
         <SettingRow
           variant="item"
           title="Close-session prompt"

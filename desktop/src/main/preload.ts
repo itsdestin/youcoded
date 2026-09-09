@@ -356,6 +356,8 @@ const IPC = {
   NATIVE_SET_BINDING: 'native:set-binding',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   NATIVE_GET_PERMISSION_MODE: 'native:get-permission-mode',
+  NATIVE_GET_STEP_GUARD: 'native:get-step-guard',
+  NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',
   PROVIDER_LIST: 'provider:list',
@@ -1362,6 +1364,8 @@ contextBridge.exposeInMainWorld('claude', {
     setPermissionMode: (sessionId: string, mode: string) => ipcRenderer.invoke(IPC.NATIVE_SET_PERMISSION_MODE, sessionId, mode),
     // Read the session's current permission mode — seeds the chip on create/resume.
     getPermissionMode: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_GET_PERMISSION_MODE, sessionId),
+    getStepGuard: () => ipcRenderer.invoke(IPC.NATIVE_GET_STEP_GUARD),
+    setStepGuard: (value: number | null) => ipcRenderer.invoke(IPC.NATIVE_SET_STEP_GUARD, value),
     sessionsList: () => ipcRenderer.invoke(IPC.NATIVE_SESSIONS_LIST),
     // G-1: the Bash card's Stop button. Request-response — the card needs
     // {ok, reason} to stop showing "Stopping…" when nothing was stopped.
