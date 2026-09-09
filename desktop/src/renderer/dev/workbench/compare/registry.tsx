@@ -29,8 +29,7 @@ import {
   SegmentedTabs,
   SettingRow,
   Toggle,
-  fieldClasses,
-} from '../../../components/ui';
+  fieldClasses, CloseButton } from '../../../components/ui';
 import { TagChip } from '../../../components/tags/TagChip';
 import { TagPicker } from '../../../components/tags/TagPicker';
 import { NoteEditor } from '../../../components/tags/NoteEditor';
@@ -5714,6 +5713,33 @@ const ALL_SURFACES: CompareSurface[] = [
           },
         ],
       },
+      {
+        // Round 4 (2026-09-09): "still aesthetically troubled and doesn't match styling used
+        // in other popup modals and app surfaces." R3's words kept; the look rebuilt from the
+        // real dialogs' vocabulary (SfxTabbedStyled's header comment lists each source).
+        n: 4,
+        basis: 'R3 words approved ("content is fine"). Same words, restyled to match the app’s dialogs: Dialog header, eyebrow sections, SettingRow stacks, well code blocks, no pill, no footer.',
+        candidates: [
+          {
+            id: 'r3-trimmed',
+            label: 'Before — R3, small model',
+            note: 'The R3 panel: hand-drawn header, model line with a pill, cards with their own headings, a footer button.',
+            render: () => <SfxTabbedClear ctx={SFX_CTX} trimmed />,
+          },
+          {
+            id: 'styled-trimmed',
+            label: 'After — small model, trimmed',
+            note: 'Built like Preferences or Permissions: the dialog header, a warning callout, tabs, then eyebrow sections of SettingRow cards. Assistant settings is a navigating row, not a footer.',
+            render: () => <SfxTabbedStyled ctx={SFX_CTX} trimmed />,
+          },
+          {
+            id: 'styled-full',
+            label: 'After — cloud model, everything fit',
+            note: 'The green state: a dot-and-sentence card instead of the callout, then the same This chat rows.',
+            render: () => <SfxTabbedStyled ctx={SFX_CTX_FULL} trimmed={false} />,
+          },
+        ],
+      },
     ],
   },
 ];
@@ -6188,6 +6214,231 @@ function SfxTabbedClear({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed
       <div className="mt-auto border-t border-edge px-4 pt-4 pb-4">
         <Button variant="secondary" size="md" className="w-full">Manage Assistant Settings</Button>
         <p className="text-2xs text-fg-muted mt-1.5 leading-snug">Coming soon: change the model, or what the assistant is given.</p>
+      </div>
+    </div>
+  );
+}
+
+
+// ── Session context — Round 4: built from the dialog vocabulary ──────────────
+// Destin, 2026-09-09, on R3: "content is fine, but this is still aesthetically
+// troubled and doesn't match styling used in other popup modals and app surfaces."
+// R3's words stay; every visual decision now comes from what the real dialogs do:
+//  · header = Dialog.tsx's own geometry (px-4 py-3, hairline, text-sm font-bold
+//    title, text-3xs subtitle, CloseButton) — not a hand-drawn band;
+//  · body = Dialog's scroll track (px-4 py-4 space-y-5) with eyebrow sections
+//    (G-7: the h3 recipe PreferencesPopup / SettingsExplainer use) — not cards
+//    with their own headings;
+//  · rows = SettingRow as PreferencesPopup stacks them (space-y-1.5, each its own
+//    rounded bg-inset/50 card) — not a bordered divide-y group;
+//  · the model / window / given facts are rows under "This chat", the same shape
+//    every settings dialog uses for facts with a value;
+//  · no pill: status is the Callout (warning) or the dot + fg-2 line the app uses
+//    for "signed in" — G-14 says badges are dot + neutral text anyway;
+//  · code blocks sit in `well` (the deepest surface, §2.1) at text-2xs (G-5 floor);
+//  · no footer: settings-style dialogs have none (§4.3); "Assistant settings" is a
+//    navigating SettingRow with the chevron every drawer row has;
+//  · the cut toggle is the SegmentedTabs primitive (bare), not hand-rolled buttons.
+
+const SFX_EYEBROW = 'block text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2';
+const SFX_CODE = 'max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-2xs leading-relaxed text-fg-2 bg-well rounded-lg p-3 border border-edge-dim';
+
+function SfxDot({ ok }: { ok: boolean }) {
+  return <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${ok ? 'bg-green-500' : 'bg-amber-500'}`} aria-hidden />;
+}
+
+/** Trimmed text with the got/cut switch — the SegmentedTabs primitive, bare. */
+function SfxCutBlock({ fullText, supplied, what }: { fullText?: string | null; supplied: string; what: string }) {
+  const [view, setView] = React.useState<'got' | 'cut'>('got');
+  const diffable = !!fullText && fullText !== supplied;
+  if (!diffable) return <pre className={SFX_CODE}>{supplied}</pre>;
+  return (
+    <div className="space-y-2">
+      <SegmentedTabs
+        variant="bare"
+        aria-label={`${what}: what the assistant got, or what was cut`}
+        tabs={[{ id: 'got', label: 'What it got' }, { id: 'cut', label: 'What was cut' }]}
+        value={view}
+        onChange={(v) => setView(v as 'got' | 'cut')}
+      />
+      {view === 'cut' ? <UnifiedDiff oldStr={fullText} newStr={supplied} /> : <pre className={SFX_CODE}>{supplied}</pre>}
+      {view === 'cut' && (
+        <p className="text-2xs text-fg-muted leading-snug">
+          Red lines were cut to fit this model’s context window — the assistant never saw them. Green lines are the shorter version it got instead.
+        </p>
+      )}
+    </div>
+  );
+}
+
+function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boolean }) {
+  const [tab, setTab] = React.useState('overview');
+  const c = ctx;
+  const cutSkills = c.skills.filter((s) => s.truncated);
+  const dropped = c.droppedMcpServers;
+  const skillsWord = `${c.skills.length} skill${c.skills.length === 1 ? '' : 's'}`;
+  const toolsWord = `${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}`;
+  const cuts: string[] = [];
+  if (c.projectInstructions.truncated) cuts.push('this project’s rules were shortened to headings');
+  if (cutSkills.length) cuts.push(`${cutSkills.length} skill${cutSkills.length === 1 ? ' was' : 's were'} cut short`);
+  if (dropped.length) cuts.push(`${dropped.length} add-on${dropped.length === 1 ? ' was' : 's were'} left out`);
+  const cutSentence = cuts.length <= 1 ? (cuts[0] ?? '') : `${cuts.slice(0, -1).join(', ')} and ${cuts[cuts.length - 1]}`;
+  const basename = (p: string) => p.split('/').slice(-1)[0];
+
+  return (
+    <div className="flex flex-col">
+      {/* Dialog.tsx header geometry — see the round comment. */}
+      <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold text-fg truncate">What the assistant was given</h2>
+          <p className="text-3xs text-fg-muted mt-0.5">Its instructions, skills and tools for this chat.</p>
+        </div>
+        <CloseButton onClick={() => {}} label="Close What the assistant was given" />
+      </div>
+
+      {/* Dialog.tsx scroll track */}
+      <div className="px-4 py-4 space-y-5">
+        {trimmed ? (
+          <Callout tone="warning" title="Not everything fit">
+            This model’s context window is small ({sfxWindowLabel(c.contextWindowTokens)}), so {cutSentence}.
+            It may miss rules or skip steps it would normally follow.
+          </Callout>
+        ) : (
+          <div className="rounded-lg bg-inset/50 px-3 py-2.5 flex items-start gap-2">
+            <span className="mt-1.5"><SfxDot ok /></span>
+            <p className="text-2xs text-fg-2 leading-relaxed">
+              <span className="font-medium text-fg">Everything fit.</span> The assistant has this project’s full rules, all {skillsWord} and all {toolsWord}.
+            </p>
+          </div>
+        )}
+
+        <SegmentedTabs
+          variant="contained"
+          aria-label="What the assistant was given"
+          tabs={[
+            { id: 'overview', label: 'Overview' },
+            { id: 'builtin', label: 'YouCoded' },
+            { id: 'project', label: 'Project' },
+            { id: 'skills', label: 'Skills' },
+            { id: 'tools', label: 'Tools' },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+
+        {tab === 'overview' && (
+          <>
+            {trimmed && (
+              <section>
+                <h3 className={SFX_EYEBROW}>What was left out</h3>
+                <div className="space-y-1.5">
+                  {c.projectInstructions.truncated && (
+                    <SettingRow variant="item" icon={<SfxDot ok={false} />} title="This project’s rules" description="Shortened to headings only" onClick={() => setTab('project')} />
+                  )}
+                  {cutSkills.map((sk) => (
+                    <SettingRow key={sk.id} variant="item" icon={<SfxDot ok={false} />} title={`${sk.label} skill`} description="Cut short" onClick={() => setTab('skills')} />
+                  ))}
+                  {dropped.map((d) => (
+                    <SettingRow key={d} variant="item" icon={<SfxDot ok={false} />} title={`${d} add-on`} description="Not attached — its tools can’t be used in this chat" onClick={() => setTab('tools')} />
+                  ))}
+                </div>
+              </section>
+            )}
+            <section>
+              <h3 className={SFX_EYEBROW}>This chat</h3>
+              <div className="space-y-1.5">
+                <SettingRow variant="item" title="Model" value={c.modelLabel} />
+                <SettingRow
+                  variant="item"
+                  title="Context window"
+                  description={trimmed ? 'How much it can hold at once — small' : 'How much it can hold at once'}
+                  value={`${sfxWindowLabel(c.contextWindowTokens)} tokens`}
+                />
+                <SettingRow variant="item" title="Given" value={`rules · ${skillsWord} · ${toolsWord}`} />
+              </div>
+            </section>
+            <section>
+              <h3 className={SFX_EYEBROW}>More</h3>
+              <SettingRow
+                variant="item"
+                title="Assistant settings"
+                description="Change the model, or what the assistant is given"
+                onClick={() => {}}
+              />
+            </section>
+          </>
+        )}
+
+        {tab === 'builtin' && (
+          <section>
+            <h3 className={SFX_EYEBROW}>Built-in instructions</h3>
+            <p className="text-2xs text-fg-muted leading-snug mb-2">YouCoded’s standing instructions. The same in every chat, whatever the project.</p>
+            <pre className={SFX_CODE}>{c.systemPrompt}</pre>
+          </section>
+        )}
+
+        {tab === 'project' && (
+          <section>
+            <h3 className={SFX_EYEBROW}>This project’s rules</h3>
+            <p className="text-2xs text-fg-muted leading-snug mb-2">Written for this project and read once when the chat started.</p>
+            <div className="space-y-1.5 mb-2">
+              <SettingRow
+                variant="item"
+                icon={<SfxDot ok={!c.projectInstructions.truncated} />}
+                title={basename(c.projectInstructions.path)}
+                description={c.projectInstructions.truncated ? 'Shortened to headings only' : 'Read in full'}
+                accessory={<Button variant="secondary" size="sm">Open</Button>}
+              />
+            </div>
+            {c.projectInstructions.truncated
+              ? <SfxCutBlock fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" />
+              : <pre className={SFX_CODE}>{c.projectInstructions.text}</pre>}
+          </section>
+        )}
+
+        {tab === 'skills' && (
+          <section>
+            <h3 className={SFX_EYEBROW}>Skills</h3>
+            <p className="text-2xs text-fg-muted leading-snug mb-2">Step-by-step guides the assistant follows when a task matches one.</p>
+            <div className="space-y-1.5">
+              {c.skills.map((sk) => (
+                <div key={sk.id} className="space-y-2">
+                  <SettingRow
+                    variant="item"
+                    icon={<SfxDot ok={!sk.truncated} />}
+                    title={sk.label}
+                    description={sk.truncated ? 'Cut short' : 'Loaded in full'}
+                    accessory={<Button variant="secondary" size="sm">Open</Button>}
+                  />
+                  {sk.truncated && (
+                    <SfxCutBlock
+                      fullText={sk.fullText}
+                      supplied={sk.fullText ? sk.fullText.split('\n').slice(0, 5).join('\n') + '\n… (cut here)' : '… (cut short)'}
+                      what={`${sk.label} skill`}
+                    />
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {tab === 'tools' && (
+          <section className="space-y-3">
+            <div>
+              <h3 className={SFX_EYEBROW}>Tools</h3>
+              <p className="text-2xs text-fg-muted leading-snug mb-2">Actions the assistant can take in this chat, like reading a file or running a command.</p>
+              <div className="flex flex-wrap gap-1.5">
+                {c.tools.map((t) => <ToolChip key={t} label={t} />)}
+              </div>
+            </div>
+            {dropped.length > 0 && (
+              <Callout tone="warning" title="Not attached">
+                {dropped.join(', ')} — there was no room for {dropped.length === 1 ? 'its' : 'their'} tools, so the assistant can’t use them in this chat.
+              </Callout>
+            )}
+          </section>
+        )}
       </div>
     </div>
   );
