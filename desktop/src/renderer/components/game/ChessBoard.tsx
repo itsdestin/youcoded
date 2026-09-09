@@ -208,7 +208,7 @@ export default function ChessBoard({ connection, treatment = 'outline' }: Props)
   const files = myColor === 'w' ? FILES : [...FILES].reverse().join('');
 
   return (
-    <div className="p-3 flex flex-col gap-2 shrink-0">
+    <div className="p-3 flex flex-col gap-2 flex-1 min-h-0">
       {/* Same primitive Connect 4 uses for the same situation — "what is this
           doing right now, plus the one action that resolves it". */}
       {state.opponentDisconnected && (
@@ -231,11 +231,15 @@ export default function ChessBoard({ connection, treatment = 'outline' }: Props)
 
       <StatusLine play={play} canMove={canMove} isPlaying={isPlaying} opponent={state.opponent} />
 
-      <div className="relative">
-        {/* aspect-square + w-full: the board takes the pane's width and stays
-            square at ANY pane width, which is what makes §4.3's per-game
-            default a real lever rather than a number in a config. */}
-        <div className="w-full aspect-square grid grid-cols-8 grid-rows-8 rounded-md overflow-hidden border border-edge">
+      {/* WHY a size container (2026-09-09): the board was `w-full aspect-square`, so in a
+          pane that is wider than it is tall — the app zoomed to 135 % on a laptop, or any
+          short window — it grew taller than the room and the top ranks were clipped by
+          the shell's overflow-hidden (the promo footage lost ranks 8–5). Now the board is
+          the LARGER square that fits: `min(100cqw, 100cqh)` of this wrapper, which takes
+          whatever height the column has left (flex-1 min-h-0). The 220 px floor keeps a
+          board on screen wherever the wrapper has no definite height to query. */}
+      <div className="relative flex-1 min-h-0" style={{ containerType: 'size' }}>
+        <div className="aspect-square mx-auto grid grid-cols-8 grid-rows-8 rounded-md overflow-hidden border border-edge" style={{ width: 'min(100cqw, max(100cqh, 220px))' }}>
           {[...ranks].map((rank, r) =>
             [...files].map((file, c) => {
               const name = `${file}${rank}`;
