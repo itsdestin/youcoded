@@ -176,13 +176,6 @@ import { createSkillTool } from './tools/skill';
 import { createTaskTool } from './tools/task';
 import { ModelSearchTool } from './tools/model-search';
 import { BUILTIN_ROSTER, type SpecialistRoster } from './specialists/registry';
-import {
-  normalizeSpecialistStatusSnapshot,
-  recoverSpecialistStatusSnapshot,
-  specialistStatusUpdate,
-  type SpecialistStatusSnapshot,
-  type SpecialistStatusSnapshotRecord,
-} from './specialists/status-snapshot';
 import type { ShellRegistry } from './shell-registry';
 import { createSkillCatalog, type SkillCatalog } from './skills/skill-catalog';
 import { fitInjection } from './injection/injection-budget';
@@ -260,9 +253,6 @@ export interface HarnessSessionOpts {
    *  either check alone still cannot let a specialist spawn its own
    *  specialists. Absent/false for every ordinary (non-child) session. */
   isSpecialistChild?: boolean;
-  /** Per-turn structured specialist state. The harness compares facts before
-   *  formatting so elapsed time alone cannot churn the request prefix. */
-  specialistStatus?: () => SpecialistStatusSnapshotRecord[];
   /** Task 10 (plan 1b): directories checkPathGuard treats as internal to THIS
    *  session — readable without an external_directory ask, the same way
    *  Bash's own spillRoot() is (tools/guards.ts). Wired by NativeSessionHost
@@ -651,7 +641,6 @@ export interface AcceptedHistorySnapshot {
 // surfaces loudly instead of silently scrambling history.
 export class HarnessSession extends EventEmitter {
   private history: ModelMessage[] = [];
-  private specialistSnapshot: SpecialistStatusSnapshot | null = null;
   private abort: AbortController | null = null;
   private interrupted = false;
   // Task 3 — queued mid-run course corrections (postSteer), drained as
@@ -883,9 +872,6 @@ export class HarnessSession extends EventEmitter {
     // published checkpoint must keep naming it until a live factory replaces it.
     this.seededContinuationBinding = seed?.continuationBinding;
     this.continuationBinding = seed?.continuationBinding;
-    // WHY: a retained append-only snapshot remains authoritative after resume;
-    // legacy or compacted-away blocks are unknown and current state is reintroduced.
-    this.specialistSnapshot = recoverSpecialistStatusSnapshot(messages);
     // Reset-on-resume (spec §2.5 — Task 10 relies on this): a resumed session
     // has NO live read-before-edit state and NO todo list. Those are process/
     // session runtime, never persisted to the transcript. Clearing here prevents
@@ -1034,35 +1020,6 @@ export class HarnessSession extends EventEmitter {
     agentId: string;
   }): void {
     this.emitEvent('subagent-usage', data);
-  }
-
-  /** Task 5 (MOIM pattern): NativeSessionHost.wire() calls this on every ROOT
-   *  session right after construction — opts is already built by then, so this
-   *  is the same late-bind-onto-opts shape setBinding uses above, not a new
-   *  pattern. Never called for a specialist child (wire() isn't). */
-  setSpecialistStatus(fn: () => SpecialistStatusSnapshotRecord[]): void {
-    this.opts.specialistStatus = fn;
-  }
-
-  /** Re-establish status immediately after an explicit history rewrite. A read
-   *  failure remains unknown and therefore appends neither status nor clear. */
-  private restoreSpecialistStatusAfterRewrite(): void {
-    const retained = recoverSpecialistStatusSnapshot(this.history);
-    this.specialistSnapshot = retained;
-    if (retained || !this.opts.specialistStatus) return;
-    try {
-      const current = normalizeSpecialistStatusSnapshot(this.opts.specialistStatus());
-      // WHY: after compaction removed the authoritative snapshot, the very next
-      // model step must receive current known state, including a known clearing.
-      const update = specialistStatusUpdate(null, current, Date.now(), 2, true);
-      if (update) {
-        this.history.push({ role: 'user', content: update.message });
-        this.capture.mutated();   // a driver-authored message, backed by no event
-        this.specialistSnapshot = update.snapshot;
-      }
-    } catch (err) {
-      log('ERROR', 'HarnessSession', 'specialist status callback threw after history rewrite — no status inferred', { error: String(err) });
-    }
   }
 
   /** Effective system prompt: the assembled one (Task 11) or the harness's own. */
@@ -1595,7 +1552,6 @@ export class HarnessSession extends EventEmitter {
     // covers "user-message, skill-invoked, tool-use, tool-result, compact-summary").
     this.capture.recordEvent(summaryUuid);
     this.capture.markSummary(summaryUuid);
-    this.restoreSpecialistStatusAfterRewrite();
   }
 
   // Live prefill progress from llama.cpp, forwarded onto the SAME
@@ -1738,8 +1694,6 @@ export class HarnessSession extends EventEmitter {
       this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
       this.capture.recordEvent(summaryUuid);   // same reasoning as maybeCompact's
       this.capture.markSummary(summaryUuid);
-      // WHY: manual compaction has the same immediate-authority requirement.
-      this.restoreSpecialistStatusAfterRewrite();
       return { ok: true };
     } finally {
       this.abort = null;
@@ -1765,8 +1719,6 @@ export class HarnessSession extends EventEmitter {
     // No seed: the accepted list empties AND takes the next revision, so a
     // checkpoint published before the clear can never be restored over it.
     this.capture.reset();
-    // WHY: /clear is also the explicit specialist-status generation barrier.
-    this.specialistSnapshot = null;
     // Fix 1 (CRITICAL, 2026-08-11): the dedupe cache must not outlive the
     // history it was vouching for. Left alive, a model that re-Reads an
     // unchanged file after /clear gets "already visible earlier in this
@@ -1793,18 +1745,14 @@ export class HarnessSession extends EventEmitter {
    *  pushes them as `<project-rule source="...">...`, and that's the only
    *  thing this method has to go on — synthetic wire messages never enter
    *  history at all, so they were already immune by construction.
-   *
-   *  Task 5's `<specialists-status>` block gets the SAME exclusion for the
-   *  same reason: it is also role:'user', also synthetic, and — unlike the
-   *  one-shot rule injections above — it rides EVERY turn while a specialist
-   *  is live, so miscounting it would shrink the protected window on every
-   *  single turn of a long delegated run, not just an occasional one. */
+   *  (The per-turn `<specialists-status>` block that once shared this
+   *  exclusion was retired 2026-09-09; Task `list: true` replaced it.) */
   private summarizeCutIndex(): number {
     const userIdx: number[] = [];
     this.history.forEach((m, i) => {
       const c = (m as any).content;
       const isSyntheticInjection = typeof c === 'string'
-        && (c.startsWith('<project-rule ') || c.startsWith('<specialists-status>'));
+        && c.startsWith('<project-rule ');
       if ((m as any).role === 'user' && !isSyntheticInjection) userIdx.push(i);
     });
     return userIdx.length < 2 ? 0 : userIdx[userIdx.length - 2];
@@ -1933,6 +1881,24 @@ export class HarnessSession extends EventEmitter {
     }));
   }
 
+  /** The quiet twin of runNotice: the same text and the same `user-message`
+   *  transcript event, but NO model turn — the report goes into history and
+   *  the model reads it at the start of the next turn the user begins.
+   *  Used only after a Stop (NativeSessionHost.holdDeliveries): the user asked
+   *  for silence, so a finished helper must not be the thing that breaks it.
+   *  Consecutive user-role history entries are a shape every provider we ship
+   *  already accepts: the retired per-turn `<specialists-status>` block ran it
+   *  in production for weeks, and `<project-rule>` injections still do.
+   *  Same idle-only precondition as runNotice: never mid-turn. */
+  async spliceNotice(text: string, meta?: InjectedMeta): Promise<void> {
+    if (this.abort) {
+      throw new Error('HarnessSession: spliceNotice called while a turn is in flight — callers must only splice at an idle boundary.');
+    }
+    const injected = meta?.kind === 'shell' ? 'shell-complete' : 'specialist-report';
+    this.emitEvent('user-message', { text, injected, ...(meta ? { injectedMeta: meta } : {}) });
+    this.history.push({ role: 'user', content: text });
+  }
+
   /** Image parts for a user message, or [] when the model cannot see images / none
    *  were attached. Unreadable or oversized files are SKIPPED rather than thrown:
    *  a turn must not die because one attachment went missing between the composer
@@ -2033,22 +1999,6 @@ export class HarnessSession extends EventEmitter {
     // The uuid of the user-message / skill-invoked event this turn entered on —
     // recorded at the history push below, which is the mutation it accounts for.
     const enteringEventUuid = emit();
-    // WHY (cache-efficiency design §2): ordinary turns must preserve every prior
-    // message byte-for-byte. Compare normalized ledger facts and append only a
-    // changed authoritative snapshot; callback failure is unknown, never a clear.
-    if (this.opts.specialistStatus) {
-      try {
-        const current = normalizeSpecialistStatusSnapshot(this.opts.specialistStatus());
-        const update = specialistStatusUpdate(this.specialistSnapshot, current);
-        if (update) {
-          this.history.push({ role: 'user', content: update.message });
-          this.capture.mutated();   // a driver-authored message, backed by no event
-          this.specialistSnapshot = update.snapshot;
-        }
-      } catch (err) {
-        log('ERROR', 'HarnessSession', 'specialist status callback threw — turn continues with prior status memory', { error: String(err) });
-      }
-    }
     // A plain string when there are no image parts — that is the byte-identical
     // shape every existing test and rebuildHistory() already assert on, so the
     // no-attachment path must not become a one-element parts array.

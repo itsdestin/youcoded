@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { sanitizeRigSvg } from './sanitize-rig-svg';
 import { DEFAULT_BUDDY_RIG } from './default-buddy-rig';
 import {
@@ -61,6 +61,10 @@ export function MascotRig({
 }: MascotRigProps) {
   const hostRef = useRef<HTMLDivElement>(null);
   const [svgHtml, setSvgHtml] = useState<string | null>(null);
+  // WHY: React reassigns innerHTML when this object changes identity. Recreating
+  // it on every blink/pose render destroys the animated SVG and restarts its CSS
+  // motion; only a newly loaded rig should replace the spring-owned DOM.
+  const svgMarkup = useMemo(() => svgHtml ? { __html: svgHtml } : undefined, [svgHtml]);
   const partsRef = useRef<Parts | null>(null);
   const springsRef = useRef<Map<SpringId, SpringState>>(new Map());
   // `<partId>:tx` / `<partId>:ty` — see the translation springs in the loop below.
@@ -437,7 +441,7 @@ export function MascotRig({
       ref={hostRef}
       style={{ width: '100%', height: '100%', pointerEvents: 'none' }}
       // Sanitized upstream — sanitizeRigSvg is the security boundary.
-      dangerouslySetInnerHTML={svgHtml ? { __html: svgHtml } : undefined}
+      dangerouslySetInnerHTML={svgMarkup}
     />
   );
 }

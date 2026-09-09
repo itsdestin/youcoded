@@ -162,37 +162,6 @@ describe('driver compaction', () => {
     expect(result).toEqual({ ok: false, reason: 'nothing-to-compact' });
   });
 
-  // Fix pass, Finding 5: the cited suites (this file, native-compact.test.ts,
-  // compaction.test.ts) never seed a <specialists-status> message at all, so
-  // they only prove "no regression elsewhere" — not that the exclusion this
-  // block actually needs is wired up. This test seeds one directly, same
-  // shape as the <project-rule> test above, and fails without the
-  // summarizeCutIndex exclusion for <specialists-status>.
-  it('injected <specialists-status> messages do not count as user turns for the protected window', async () => {
-    // history: user A (real) -> assistant -> tool -> injected status -> user B (real).
-    // Only 2 REAL user turns exist, so the fix must protect BOTH — the cut
-    // lands at user A (index 0), leaving nothing before it condensable.
-    // Under the bug (status block counted as a turn) this instead sees 3
-    // "turns" and cuts at the last-2 of those — landing at the injected
-    // status block and pushing user A's whole turn (plus the tool result
-    // answering it) into the discarded/summarized span.
-    const session = makeSession({ contextLength: 4096, model: scriptModel([{ text: 'SUMMARY' }]) });
-    session.seedHistory([
-      { role: 'user', content: 'USER-A: fix the login bug' } as any,
-      { role: 'assistant', content: 'looking into it' } as any,
-      {
-        role: 'tool',
-        content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'Read', output: { type: 'text', value: 'file contents' } }],
-      } as any,
-      { role: 'user', content: '<specialists-status>\nNadia (researcher): running — 12s\n</specialists-status>' } as any,
-      { role: 'user', content: 'USER-B: also check the signup flow' } as any,
-    ]);
-    const result = await session.compactNow();
-    // Both real turns land inside the protected window -> nothing left to
-    // summarize.
-    expect(result).toEqual({ ok: false, reason: 'nothing-to-compact' });
-  });
-
   it('Fix 4 (2026-08-11 review): with THREE real user turns among injected rules, the cut lands on the second real turn', async () => {
     // { ok: false, reason: 'nothing-to-compact' } is also what an OVER-aggressive
     // detector produces if it wrongly excludes real user messages too (not just
