@@ -1035,7 +1035,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // a held key repeats, and every repeat resets that timer.)
             onBlur={releaseSpaceHold}
             onPaste={handlePaste}
-            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : 'Message Claude...'}
+            // Native-provider sessions may run a local/non-Claude model, so the
+            // placeholder can't claim it's Claude; PTY (provider 'claude') sessions
+            // really are talking to Claude Code, so they keep the specific name.
+            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : provider === 'native' ? 'Message your assistant...' : 'Message Claude...'}
             disabled={disabled}
             // Text color is transparent so the mirror div behind it shows
             // through (with animated keyword spans). caret-color keeps the
