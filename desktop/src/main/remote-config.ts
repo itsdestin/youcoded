@@ -5,11 +5,11 @@ import bcrypt from 'bcryptjs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { REMOTE_SERVER_DEFAULT_PORT } from '../shared/ports';
+import { remoteConfigPath } from './remote-paths';
 
 const execFileAsync = promisify(execFile);
 
 const BCRYPT_ROUNDS = 10;
-const PROFILE = process.env.YOUCODED_PROFILE ?? '';
 
 // Fix: dev instances get their OWN remote config file. Previously every profile
 // read and wrote ~/.claude/youcoded-remote.json — the built app's file — so
@@ -18,16 +18,13 @@ const PROFILE = process.env.YOUCODED_PROFILE ?? '';
 // from a dev instance at all, making remote features untestable outside a
 // production install. A per-profile file removes the sharing, so dev can
 // configure and persist its own remote server safely.
-const CONFIG_PATH = () => path.join(
-  os.homedir(),
-  '.claude',
-  PROFILE ? `youcoded-remote.${PROFILE}.json` : 'youcoded-remote.json',
-);
-// Any non-empty YOUCODED_PROFILE marks this as a dev instance. Treating every
-// non-empty value as dev (not just the literal 'dev') means concurrent dev
-// instances with distinct profiles (e.g. 'dev2') each get their own config
-// file and their own port, rather than fighting over the built app's 9900.
-// The port offset itself is applied upstream in shared/ports.ts.
+//
+// The path itself now comes from remote-paths.ts, shared with the device store,
+// which used to be scoped differently and so leaked pairings across profiles.
+const CONFIG_PATH = () => remoteConfigPath();
+// Any non-empty YOUCODED_PROFILE is a dev instance: concurrent dev instances with
+// distinct profiles (e.g. 'dev2') each get their own file and port rather than
+// fighting over the built app's 9900. The port offset is applied in shared/ports.ts.
 
 interface ConfigData {
   enabled: boolean;
