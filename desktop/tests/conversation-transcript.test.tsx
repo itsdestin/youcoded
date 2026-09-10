@@ -67,4 +67,39 @@ describe('ConversationTranscript', () => {
     expect(screen.getByText(new RegExp(COPY.toolsNotShown(3)))).toBeTruthy();
     expect(screen.getByText(new RegExp(COPY.toolsNotShown(1)))).toBeTruthy();
   });
+
+  // Destin, 2026-09-10: "put the '3 tools not shown' warning in the bottom of
+  // the assistant message it attaches to, like our real tool/message grouping
+  // logic does". `droppedToolCalls` counts the tools that ran BEFORE the message
+  // carrying it (transcript-reader.ts), and the real chat attaches a tool group
+  // BELOW the sentence it followed (AssistantTurnBubble.tsx, splitIntoBubbles) —
+  // so the card belongs after the PREVIOUS message, not above its own. Drawn the
+  // old way it sat between the tools and the sentence that preceded them.
+  it('hangs a tool gap under the message it followed, not above the next one', () => {
+    const { container } = render(<ConversationTranscript messages={[
+      { role: 'user', content: 'question', timestamp: 1, seq: 0 },
+      { role: 'assistant', content: 'answer', timestamp: 2, seq: 1 },
+      { role: 'user', content: 'follow up', timestamp: 3, seq: 2, droppedToolCalls: 3 },
+    ]} />);
+    const rows = [...container.querySelectorAll('.timeline-entry')];
+    expect(rows).toHaveLength(3);
+    // The gap recorded on "follow up" renders inside the ANSWER's row.
+    expect(rows[1].textContent).toContain('answer');
+    expect(rows[1].textContent).toContain(COPY.toolsNotShown(3));
+    expect(rows[2].textContent).not.toContain(COPY.toolsNotShown(3));
+  });
+
+  // The exception, and the reason the map cannot simply look one row back: a gap
+  // on the FIRST message shown has no earlier bubble in the DOM — whatever it
+  // followed is off the top of what was read — so it stays above as a lead-in.
+  it('keeps a gap on the first message above it, where there is nothing to hang under', () => {
+    const { container } = render(<ConversationTranscript messages={[
+      { role: 'assistant', content: 'first', timestamp: 1, seq: 5, droppedToolCalls: 2 },
+    ]} />);
+    const gap = screen.getByText(new RegExp(COPY.toolsNotShown(2)));
+    const row = container.querySelector('.timeline-entry');
+    expect(row).toBeTruthy();
+    expect(row!.contains(gap)).toBe(false);
+    expect(row!.compareDocumentPosition(gap) & Node.DOCUMENT_POSITION_PRECEDING).toBeTruthy();
+  });
 });

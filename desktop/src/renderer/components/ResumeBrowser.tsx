@@ -355,6 +355,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // hook there is the "rendered more hooks than during the previous render"
   // crash — which is exactly what it did on the first try.
   const arriving = useOneShotWindow(previewId);
+
   const narrowViewport = useNarrowViewport();
   // The panel is single-column on a phone: a 390px screen cannot hold a list
   // AND a transcript, and the narrow-viewport rule forbids inventing a second
@@ -512,6 +513,29 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     };
     return applyFilters(sessions, state);
   }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
+
+  // MOCKUP ONLY — the previewed row, resolved once for every shell below.
+  const previewSession = previewOn && previewId
+    ? filtered.find((r) => r.sessionId === previewId) ?? null
+    : null;
+
+  // PERF: the transcript pane is memoised on the three values that actually
+  // address it. Without this, EVERY state change in this component — a
+  // keystroke in the search box, a filter pill, a hover — re-rendered the pane
+  // and with it one MarkdownContent per message. MarkdownContent is React.memo'd
+  // on its own content, so each one bailed out, but React still walked the whole
+  // subtree on every keypress. Nothing below the memo depends on this
+  // component's state, so there is no correctness cost.
+  const previewPane = useMemo(
+    () => (previewSession ? (
+      <SessionPreviewPane
+        provider={(previewSession.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
+        id={previewSession.sessionId}
+        title={previewSession.name}
+      />
+    ) : null),
+    [previewSession?.provider, previewSession?.sessionId, previewSession?.name],
+  );
 
   // Group by project path ONLY when the user has narrowed via the Projects
   // pill — the default view is pure chronological (each row carries its own
@@ -1304,10 +1328,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     </div>
   );
 
-  // MOCKUP ONLY — the previewed row, resolved once for every shell below.
-  const previewSession = previewOn && previewId
-    ? filtered.find((r) => r.sessionId === previewId) ?? null
-    : null;
 
   // MOCKUP ONLY — the action card at the FOOT of the sheet, in the place a real
   // conversation puts its message box: this is where you act on what you just
@@ -1356,7 +1376,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           : 'contents'}>
           <div className={previewOn ? 'w-[420px] flex flex-col h-full min-h-0' : 'contents'}>
           {/* Header */}
-          <div className="px-4 pt-4 pb-3 border-b border-edge shrink-0">
+          {/* MOCKUP — no `border-b`: Destin, 2026-09-10, "there should be gaps
+              on the left/right side of the divider line where it doesn't
+              connect to the outer container but tapers off". A border cannot
+              fade, so the rule is a 1px gradient row instead — the same idiom
+              SessionStrip already uses for the divider between Resume and
+              + New Session. */}
+          <div className="px-4 pt-4 pb-3 shrink-0 relative">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-fg">Resume Session</h2>
               {/* Show Complete — same toggle pattern as Skip Permissions
@@ -1512,6 +1538,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 {sortDir === 'desc' ? 'Most recent ↓' : 'Oldest first ↑'}
               </FilterPill>
             </div>
+            {/* Inset both ends so the line stops short of the panel edge and
+                fades out rather than butting into it. */}
+            <div
+              aria-hidden
+              className="absolute inset-x-0 bottom-0 h-px"
+              style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
+            />
           </div>
 
           {/* Session list */}
@@ -1597,17 +1630,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     pointer-events-none on the strip, auto on the card, so the
                     gutter beside it does not swallow scroll wheels. */}
                 <div className="absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none">
-                  <div className="pointer-events-auto drop-shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
+                  {/* PERF: box-shadow, not `drop-shadow-[…]`. drop-shadow is a CSS
+                      FILTER — it traces the alpha of the whole subtree and
+                      re-runs on every paint, and this card floats over a
+                      scrolling transcript, so it repaints constantly. A
+                      box-shadow on the rounded card is one cheap primitive and
+                      looks the same here. */}
+                  <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
                     {renderSessionRow(s, true, true)}
                   </div>
                 </div>
-                <div className="flex-1 min-h-0 flex flex-col">
-                  <SessionPreviewPane
-                    provider={(s.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
-                    id={s.sessionId}
-                    title={s.name}
-                  />
-                </div>
+                <div className="flex-1 min-h-0 flex flex-col">{previewPane}</div>
                 {renderActionCard(s)}
               </div>
             </div>
