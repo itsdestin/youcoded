@@ -42,6 +42,15 @@ describe('turn-complete usage.expectedRebuild', () => {
     expect(turnUsage(events).map((u) => u.expectedRebuild)).toEqual([false, true, false]);
   });
 
+  it('is true on the first turn after /clear — the most common deliberate prefix move a user makes', async () => {
+    const events: any[] = [];
+    const session = makeSession({ onEvent: (e) => events.push(e), model: scriptModel([{ text: 'a' }, { text: 'b' }]) });
+    await drainTurn(session, 'one');
+    expect(session.clearHistory()).toEqual({ ok: true });
+    await drainTurn(session, 'two');
+    expect(turnUsage(events).map((u) => u.expectedRebuild)).toEqual([false, true]);
+  });
+
   it('a same-model setBinding (a pricing or context refresh) is NOT a rebuild', async () => {
     const events: any[] = [];
     const session = makeSession({ onEvent: (e) => events.push(e), model: scriptModel([{ text: 'a' }, { text: 'b' }]) });

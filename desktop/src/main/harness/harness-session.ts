@@ -1477,7 +1477,10 @@ export class HarnessSession extends EventEmitter {
    *  harness knows every time it moves the prefix, so anything with low cache
    *  reads and no flag is a regression in one of the cache fixes. Appends
    *  (rules, notices, new turns) never set it — they extend the prefix, they
-   *  do not move it. */
+   *  do not move it. /clear sets it (a full miss by definition). A RESUME
+   *  (seedHistory) deliberately does not: the provider's entry may still be
+   *  warm across a reopen (1h Anthropic TTL, the OpenRouter pin), so a resumed
+   *  session's first reading is genuinely ambiguous rather than expected. */
   private prefixMoved = false;
 
   /** Compaction thresholds scaled to the model window. Big models protect ~40k
@@ -1524,22 +1527,28 @@ export class HarnessSession extends EventEmitter {
     if (decision.action === 'none') return;
     if (decision.action === 'prune') { this.commitPrune(pruneToolOutputs(this.history, cfg)); return; }
     // Summarize. Decide whether a summary will actually run BEFORE touching
-    // anything: the cut and the thrash guard depend only on message count and
-    // size, which pruning does not change.
+    // anything. The cut depends only on message roles; the thrash guard is
+    // measured on the span AS THE MODEL WILL READ IT — the unpruned front of the
+    // history (below) — so a span large only because of prunable tool output
+    // now proceeds to a summary where it used to bail on the pruned measure.
     const cut = this.summarizeCutIndex();
     if (cut <= 0) return;                                  // nothing safely condensable → history stands
+    const span = this.history.slice(0, cut);
     // I3 thrash guard: if the last-2-turns `keep` span ALONE exceeds the trigger
     // (e.g. a fresh 6k-token tool result in an 8k window), the condensable `span`
     // is tiny yet planCompaction keeps saying 'summarize' every step. Re-summarizing
     // a near-empty span burns a model call + emits a dead compact-summary each step
     // (~25/turn). Bail when the span is trivial — history stands and fitToContext
     // remains the floor.
-    if (cut <= 1 || estimateTokens(this.history.slice(0, cut)) < HarnessSession.MIN_SUMMARIZE_SPAN_TOKENS) return;
-    // Prune on a COPY so the summary model reads a smaller span; committed only
-    // together with the summary below.
+    if (span.length <= 1 || estimateTokens(span) < HarnessSession.MIN_SUMMARIZE_SPAN_TOKENS) return;
+    // WHY the summary reads the UNPRUNED span (review finding, 2026-09-10): the
+    // provider cached the bytes the chat request sent, and that was the unpruned
+    // history. A pruned copy diverges at the first pruned message and everything
+    // after it is billed cold — the exact cost generateSummary's warm prefix
+    // exists to avoid. Pruning still happens, on a copy, and is committed only
+    // together with the summary: the kept tail goes forward pruned.
     const pruned = pruneToolOutputs(this.history, cfg);
     const keep = pruned.slice(cut);
-    const span = pruned.slice(0, cut);
     let generated: { text: string; usage?: StepUsage } = { text: '' };
     try { generated = await this.generateSummary(model, span, aiTools); } catch { generated = { text: '' }; }
     const summary = generated.text;
@@ -1771,6 +1780,7 @@ export class HarnessSession extends EventEmitter {
   clearHistory(): { ok: true } | { ok: false; reason: 'turn-in-flight' } {
     if (this.abort) return { ok: false, reason: 'turn-in-flight' };
     this.history = [];
+    this.prefixMoved = true;   // the next request shares nothing with the last one — a known full miss
     // No seed: the accepted list empties AND takes the next revision, so a
     // checkpoint published before the clear can never be restored over it.
     this.capture.reset();
@@ -1835,7 +1845,10 @@ export class HarnessSession extends EventEmitter {
     // most spans, defeating the prefix match on every summary.
     const systemTokens = Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN);
     const instructionTokens = Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN);
-    const spanBudget = this.budget().trimBudget - systemTokens - instructionTokens;
+    // Floored at a quarter of the window: on a tiny window a large system prompt
+    // can eat the whole trim budget, and a budget ≤ 0 would collapse the span to
+    // one message and "summarize" a single turn (review finding 7).
+    const spanBudget = Math.max(this.budget().trimBudget - systemTokens - instructionTokens, Math.floor((this.opts.contextLength ?? 32_768) / 4));
     let bounded = span;
     while (estimateTokens(bounded) > spanBudget && bounded.length > 1) bounded = bounded.slice(1);
     // WHY the request is shaped like the CONVERSATION's own request (cache
@@ -1866,10 +1879,11 @@ export class HarnessSession extends EventEmitter {
     // neither on its own.
     const iterator = (result.textStream as AsyncIterable<string>)[Symbol.asyncIterator]();
     const abortSignal = this.abort!.signal;
+    let stopTimer: ReturnType<typeof setTimeout> | undefined;
     const stopPromise = new Promise<'stop'>((resolve) => {
       if (abortSignal.aborted) { resolve('stop'); return; }
-      const timer = setTimeout(() => resolve('stop'), 30_000);
-      abortSignal.addEventListener('abort', () => { clearTimeout(timer); resolve('stop'); }, { once: true });
+      stopTimer = setTimeout(() => resolve('stop'), 30_000);
+      abortSignal.addEventListener('abort', () => { clearTimeout(stopTimer); resolve('stop'); }, { once: true });
     });
 
     let text = '';
@@ -1893,12 +1907,21 @@ export class HarnessSession extends EventEmitter {
     // (cache follow-ups item 4) instead of being folded into turnUsage, which
     // sums the CONVERSATION's requests — a summary is a different request whose
     // cost used to vanish entirely.
+    // Bookkeeping must never cost the payload: a rejected usage or metadata
+    // promise (a provider error surfaced after the text, a malformed usage
+    // frame) reads as "no reading", and the summary text is still returned
+    // (review finding 2). Metadata rides along so a local summary's cache_n and
+    // an OpenRouter summary's cache writes are counted like a step's are.
     let usage: StepUsage | undefined;
-    const settled = await Promise.race([result.usage.then((u) => ({ u })), stopPromise]);
+    const settled = await Promise.race([
+      Promise.all([result.usage, result.providerMetadata]).then(([u, meta]) => ({ u, meta }), () => 'stop' as const),
+      stopPromise,
+    ]);
     if (settled !== 'stop') {
-      const u = settled.u;
-      usage = { inputTokens: u?.inputTokens ?? 0, outputTokens: u?.outputTokens ?? 0, ...cacheTokensForStep(u, undefined) };
+      const { u, meta } = settled;
+      usage = { inputTokens: u?.inputTokens ?? 0, outputTokens: u?.outputTokens ?? 0, ...cacheTokensForStep(u, meta) };
     }
+    clearTimeout(stopTimer);   // the clean path used to leave the 30s handle alive (review finding 8)
     return { text: text.trim(), usage };
   }
 

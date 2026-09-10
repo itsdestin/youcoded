@@ -16,7 +16,7 @@
 // The summary's cost also stops vanishing: it rides the compact-summary event.
 import { describe, it, expect } from 'vitest';
 import { MockLanguageModelV4 } from 'ai/test';
-import { makeSession, scriptModel, drainTurn, type ScriptStep } from './helpers/harness-fakes';
+import { makeSession, scriptModel, drainTurn, HARNESS, type ScriptStep } from './helpers/harness-fakes';
 
 /** A scripted model that records every call's full options. */
 function optionsCapturingModel(steps: ScriptStep[], calls: any[]) {
@@ -56,6 +56,38 @@ describe('compaction summary request', () => {
     expect(text(body[0])).toMatch(/^bulk 0 /);
     expect(text(body[10])).toMatch(/^bulk 10 /);
     expect(text(body[11])).toMatch(/^Summarize the conversation so far/);
+  });
+
+  it('reads the span exactly as the previous request sent it — a prunable tool result is NOT pruned for the summary', async () => {
+    // Review finding (2026-09-10): the summary was handed a pruned COPY of the
+    // span, but the provider cached the UNPRUNED bytes the chat request sent —
+    // so on any conversation with a moderate tool result the summary's prefix
+    // diverged at that message and everything after it was billed cold.
+    const calls: any[] = []; const events: any[] = [];
+    const session = makeSession({
+      contextLength: 16_384, harness: { ...HARNESS, limits: { maxTokens: 16_000 } }, onEvent: (e) => events.push(e),
+      model: optionsCapturingModel([
+        { text: 'a', usage: { inputTokens: 13_000 } },   // turn 1 (cut is 0, no summary)
+        { text: 'SUMMARY.' },                             // turn 2's summary call
+        { text: 'b' },                                    // turn 2's reply
+      ], calls),
+    });
+    // One 6,000-char Read result pushed outside the protected tail by ~7,000
+    // tokens of later text: prunable (to 2,000 chars), but savings < minPruneSavings.
+    session.seedHistory([
+      { role: 'user', content: 'read the file' },
+      { role: 'assistant', content: [{ type: 'tool-call', toolCallId: 'c1', toolName: 'Read', input: { file_path: 'big.txt' } }] },
+      { role: 'tool', content: [{ type: 'tool-result', toolCallId: 'c1', toolName: 'Read', output: { type: 'text', value: 'r'.repeat(6000) } }] },
+      { role: 'assistant', content: 'here is a long answer ' + 'w'.repeat(28_000) },
+    ] as any);
+    await drainTurn(session, 'thanks');
+    await drainTurn(session, 'and then?');
+    expect(events.filter((e) => e.type === 'compact-summary')).toHaveLength(1);
+    const [turn1, summaryCall] = calls;
+    // The span is the first four messages of turn 1's request, byte for byte.
+    const strip = (p: any[]) => JSON.stringify(p.filter((m) => m.role !== 'system').slice(0, 4));
+    expect(strip(summaryCall.prompt)).toBe(strip(turn1.prompt));
+    expect(summaryCall.prompt.find((m: any) => m.role === 'tool').content[0].output.value).toHaveLength(6000);
   });
 
   it('reports the summary call\'s own token usage on the compact-summary event', async () => {

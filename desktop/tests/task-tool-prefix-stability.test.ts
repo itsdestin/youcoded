@@ -5,9 +5,11 @@
 // disk whenever Settings opens or a hire card mounts. Today that is safe only
 // because the roster is read sorted and rendered deterministically — a
 // de-facto property, not a guarded one (cache follow-ups item 7). This test
-// makes it a guarded one: a reload with NO roster change must leave the
-// serialized tool byte-identical, and a REAL change must not (or the first
-// assertion would prove nothing).
+// guards exactly that property — the roster RENDERS deterministically across a
+// reload: a reload with NO roster change leaves the tool's description, short
+// description and schema byte-identical, and a REAL change does not (or the
+// first assertion would prove nothing). It does not cover the ORDER of the
+// whole tool set, which the harness keeps by Map insertion order.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'fs';
 import * as path from 'path';
@@ -23,7 +25,7 @@ function personalFile(id: string): string {
 
 /** Everything about the tool a provider serializes into the request. */
 function wireBytes(catalog: SpecialistCatalog, cwd: string): string {
-  const tool = createTaskTool(catalog.roster(cwd));
+  const tool = createTaskTool(catalog.roster(cwd), cwd);   // both args, as syncTaskTool passes them
   return JSON.stringify({
     description: tool.description,
     shortDescription: tool.shortDescription,

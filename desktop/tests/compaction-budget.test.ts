@@ -31,10 +31,11 @@ describe('contextBudget', () => {
   it('200k window: the cloud trigger is unchanged from today (0.75 × ctx) and the reserve stays the manifest value', () => {
     expect(contextBudget({ contextLength: 200_000, maxTokens: 16_000 })).toEqual({ replyReserve: 16_000, trimBudget: 182_976, triggerTokens: 150_000 });
   });
-  it('unknown window: assumed 32k for the budget math, but the output cap is left to the manifest', () => {
-    const b = contextBudget({ contextLength: null, maxTokens: 16_000 });
-    expect(b.replyReserve).toBe(16_000);
-    expect(b.triggerTokens).toBeLessThan(b.trimBudget);
+  it('unknown window: assumed 32k for the budget math, the output cap left to the manifest — so compaction fires at 14,169, not 24,576', () => {
+    // A cloud model the catalog could not size used to trim its request from
+    // 15,744 tokens while waiting for 24,576 to compact. Pinned exactly so the
+    // change is a stated fact, not a side effect (review finding 5).
+    expect(contextBudget({ contextLength: null, maxTokens: 16_000 })).toEqual({ replyReserve: 16_000, trimBudget: 15_744, triggerTokens: 14_169 });
   });
 });
 
