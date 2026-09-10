@@ -2,7 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { hasFeatureName, remoteUnsupportedMessage } from '../src/renderer/remote-unsupported';
 
-const read = (rel: string) => readFileSync(new URL(rel, import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+import { readStripped, assertPatternMatches } from './helpers/guard-scope';
+
+// Comments stripped: a WHY note that QUOTES the old code will otherwise satisfy an
+// assertion about the new code. See .claude/rules/test-suite-hygiene.md.
+const read = (rel: string) => readStripped(new URL(rel, import.meta.url).pathname);
 const server = read('../src/main/remote-server.ts');
 const shim = read('../src/renderer/remote-shim.ts');
 const classifier = read('../src/renderer/hooks/useAttentionClassifier.ts');
@@ -35,7 +39,11 @@ describe('a phone is never shown a channel id', () => {
     // remote browser takes attention from status:data's attentionMap and must not run its
     // own classifier. It was running, once a second, for the life of every connection.
     expect(classifier).toContain("import { isRemoteMode } from '../platform';");
-    expect(classifier).toMatch(/const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && !isRemoteMode\(\);/);
+    // assertPatternMatches proves the regex can match SOMETHING before it is trusted to
+    // prove the source does — a pattern matching nothing passes a `not`, and reads green.
+    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && !isRemoteMode\(\);/;
+    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && !isRemoteMode();", 'classifier remote gate');
+    expect(classifier).toMatch(shape);
   });
 });
 
@@ -96,11 +104,7 @@ describe('a computer with no password says so before asking for one', () => {
 });
 
 describe('a load that failed is not a list that is empty', () => {
-  // Comments stripped first: the WHY note in this file QUOTES the old line, and a bare
-  // `not.toContain` matched the explanation instead of the code — a test failing on prose
-  // teaches you to weaken it, which is how a guard stops guarding.
-  const resume = read('../src/renderer/components/ResumeBrowser.tsx')
-    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+  const resume = read('../src/renderer/components/ResumeBrowser.tsx');
 
   it('never reports someone\u2019s own history as absent because a request failed', () => {
     // "oh wait it worked the second try for resume. idk why nothing appeared the first
