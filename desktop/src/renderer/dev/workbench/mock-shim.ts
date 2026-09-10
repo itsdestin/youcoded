@@ -1301,12 +1301,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       summary: input?.description ?? '',
       flagged_strings: [] as string[],
     }),
-    submitIssue: async () =>
-      activeScenario === 'refused'
+    submitIssue: async (a?: { browserOnly?: boolean }) => {
+      // The attachment route finishes in the browser whatever the scenario — that is
+      // the point of it, not a degraded outcome.
+      if (a?.browserOnly) {
+        return { ok: false as const, needsBrowser: true as const, truncated: false,
+          fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new?title=Settings+text+is+cut+off' };
+      }
+      return activeScenario === 'refused'
         // A failure the user can act on, and one this flow can actually produce:
         // GitHub refusing the credential. Never a guessed cause.
-        ? { ok: false as const, error: 'GitHub rejected the request: your sign-in has expired.' }
-        : { ok: true as const, url: 'https://github.com/itsdestin/youcoded/issues/471', number: 471 },
+        ? { ok: false as const, error: 'GitHub did not create the ticket (401): Bad credentials.',
+            fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new' }
+        : { ok: true as const, url: 'https://github.com/itsdestin/youcoded/issues/471' };
+    },
 
     // NO real backend — registered in mock-only.ts. This is the managed-project
     // setup that replaces the legacy fixed-folder installer; it must never reach

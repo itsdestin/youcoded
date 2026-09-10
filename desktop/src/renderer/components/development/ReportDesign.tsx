@@ -23,24 +23,37 @@ export function ReportDesign({ open, onClose }: { open: boolean; onClose: () => 
   const [aiInfo, setAiInfo] = useState(false);
   const [error, setError] = useState('');
   const [url, setUrl] = useState('');
+  const [truncated, setTruncated] = useState(false);
   const review = phase === 'review';
 
   const send = async () => {
     setError('');
-    // The attachment route deliberately does not submit here: GitHub uploads a
-    // file the moment it is attached, so the ticket is finished in the browser.
-    if (attachments) { setPhase('opened'); return; }
+    setTruncated(false);
     setPhase('sending');
     try {
       const r = await window.claude.dev.submitIssue({
         kind, title, description,
         log: kind === 'bug' && logs ? logText : undefined,
         label: kind === 'bug' ? 'bug' : 'enhancement',
+        // GitHub uploads a file the moment it is attached, so an attachment ticket
+        // is finished in the browser and must not be created here first (R13/R14).
+        browserOnly: attachments,
       });
-      if (r.ok) { setUrl(r.url); setPhase('sent'); }
+      if (r.ok) { setUrl(r.url); setPhase('sent'); return; }
+      if ('needsBrowser' in r) {
+        // Not a failure: nobody is signed in, or this is the attachment route.
+        setTruncated(r.truncated);
+        // WHY openExternal and not window.open: React runs under file:// on Android
+        // and through the shim on remote, where window.open silently does nothing —
+        // the repo already documents that trap in tests/ipc-channels.test.ts.
+        void window.claude.shell.openExternal(r.fallbackUrl);
+        setPhase('opened');
+        return;
+      }
       // WHY: back to the review step, not to a dead end — every field the user
       // typed is still in state, so retrying costs nothing (audit E-02).
-      else { setError(r.error); setPhase('review'); }
+      setError(r.error);
+      setPhase('review');
     } catch (e: any) {
       setError(String(e?.message || e));
       setPhase('review');
@@ -65,6 +78,10 @@ export function ReportDesign({ open, onClose }: { open: boolean; onClose: () => 
             here, because GitHub uploads a file the moment it is attached. Saying so
             is the difference between a hand-off and a silent failure. */}
         <p className="text-xs text-fg-2">Your ticket is open in your browser with everything you wrote. Attach your screenshots or files there, then submit it.</p>
+        {/* WHY this line exists (audit E-07): the prefilled link has a length limit, and
+            the old code shortened the body to fit without telling anyone — evidence went
+            missing between here and GitHub with nothing said. */}
+        {truncated && <p className="text-xs text-fg-2">It was too long for a browser link, so part of the details was left out. Paste anything missing from your draft before you submit.</p>}
         <Button className="w-full py-2.5" onClick={onClose}>Done</Button>
       </>}
 

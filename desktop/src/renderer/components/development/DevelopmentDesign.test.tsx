@@ -179,6 +179,58 @@ describe('development design safety', () => {
       .toBe('Opening the menu closes the window.');
   });
 
+  it('finishes an attachment ticket in the browser without filing it first', async () => {
+    // Design review F4: the old flow mapped attachments onto the no-credential
+    // fallback, so a SIGNED-IN user had the issue created immediately and never
+    // reached GitHub to attach anything. browserOnly says "prefill, create nothing".
+    const submitIssue = vi.fn().mockResolvedValue({
+      ok: false, needsBrowser: true, truncated: false, fallbackUrl: 'https://github.com/x/y/issues/new',
+    });
+    const openExternal = vi.fn();
+    Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Finish with attachments in GitHub' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Continue in GitHub' }));
+    await screen.findByText(/Finish your ticket in GitHub/);
+    expect(submitIssue).toHaveBeenCalledWith(expect.objectContaining({ browserOnly: true }));
+    // WHY openExternal and not window.open: window.open is a dead call on Android
+    // and remote, so the hand-off would silently do nothing there.
+    expect(openExternal).toHaveBeenCalledWith('https://github.com/x/y/issues/new');
+  });
+
+  it('says so when the browser link had to drop part of the ticket', async () => {
+    // Audit E-07: the prefill shortens the body to fit a URL cap. It used to do that
+    // silently, so evidence vanished between here and GitHub with nothing said.
+    const submitIssue = vi.fn().mockResolvedValue({
+      ok: false, needsBrowser: true, truncated: true, fallbackUrl: 'https://github.com/x/y/issues/new',
+    });
+    Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await screen.findByText(/part of the details was left out/);
+  });
+
+  it('does not treat "not signed in" as a failure', async () => {
+    // It is an ordinary branch, not an error: the ticket is finished in the browser.
+    const submitIssue = vi.fn().mockResolvedValue({
+      ok: false, needsBrowser: true, truncated: false, fallbackUrl: 'https://github.com/x/y/issues/new',
+    });
+    Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await screen.findByText(/Finish your ticket in GitHub/);
+    expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
+  });
+
   it('sends a ticket with no AI call at all', async () => {
     // Contract R12. Asking an assistant is a separate choice, so submitting must
     // never reach a provider.

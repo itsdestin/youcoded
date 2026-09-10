@@ -267,9 +267,10 @@ declare global {
         // The result is a DISCRIMINATED union for the same reason R23 exists — the old
         // `{ ok: boolean; url?: string }` could not carry a reason, so a failed submit had
         // nothing to say and the caller silently opened a browser tab instead.
-        submitIssue: (args: { kind: string; title: string; summary?: string; description: string; log?: string; label: string }) => Promise<
-          | { ok: true; url: string; number?: number }
-          | { ok: false; error: string; fallbackUrl?: string }>;
+        submitIssue: (args: { kind: string; title: string; summary?: string; description: string; log?: string; label: string; browserOnly?: boolean }) => Promise<
+          | { ok: true; url: string }
+          | { ok: false; needsBrowser: true; fallbackUrl: string; truncated: boolean }
+          | { ok: false; error: string; fallbackUrl: string }>;
         installWorkspace: () => Promise<{ path: string; alreadyInstalled: boolean } | { error: string }>;
         onInstallProgress: (handler: (line: string) => void) => () => void;
         openSessionIn: (args: { cwd: string; initialInput?: string }) => Promise<{ id: string }>;

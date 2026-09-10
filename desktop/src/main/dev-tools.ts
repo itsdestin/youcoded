@@ -487,15 +487,40 @@ function fallbackSummary(description: string): SummaryResult {
 export interface SubmitArgs {
   kind: 'bug' | 'feature';
   title: string;
-  summary: string;
+  /** Optional: AI help is a separate choice, so a ticket can be sent without one (R12). */
+  summary?: string;
   description: string;
   log?: string;   // optional; bug-only
   label: 'bug' | 'enhancement';
+  /**
+   * The attachment route (R13/R14). GitHub uploads a file the moment it is attached,
+   * so that ticket has to be finished in the browser — creating it here first would
+   * file it before the user attached anything. Signed in or not, this returns the
+   * prefilled URL and creates nothing.
+   */
+  browserOnly?: boolean;
 }
 
+/**
+ * WHY three outcomes and not two (audit E-02/E-07, contract R23): every failure
+ * used to return the same `{ ok:false, fallbackUrl }`, and the catch swallowed the
+ * reason entirely. So "you are not signed in to GitHub" — an ordinary, expected
+ * branch — was indistinguishable from "GitHub refused this" and from "the network
+ * is down", and the screen answered all three by opening a browser tab and saying
+ * "Opening GitHub in your browser…". A failure dressed as a normal outcome.
+ *
+ *  - sent            the issue exists; the url is the user's copy of it
+ *  - needs-browser   NOT an error: no credential, so the ticket is finished in the
+ *                    browser. `truncated` says whether the prefilled URL had to drop
+ *                    part of the body to fit GitHub's cap, so the screen can disclose
+ *                    it rather than silently lose the evidence.
+ *  - failed          a real failure, with the reason the operation gave. The draft is
+ *                    kept and the user can retry.
+ */
 export type SubmitResult =
   | { ok: true; url: string }
-  | { ok: false; fallbackUrl: string };
+  | { ok: false; needsBrowser: true; fallbackUrl: string; truncated: boolean }
+  | { ok: false; error: string; fallbackUrl: string };
 
 /**
  * Submit a GitHub issue via the shared github-client (REST — app token or gh
@@ -513,7 +538,8 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
   // Build body in the main process where app.getVersion() and os info are available.
   const body = buildIssueBody({
     kind: args.kind,
-    summary: args.summary,
+    // No AI summary is the normal case now (R12), not a missing field.
+    summary: args.summary ?? '',
     description: args.description,
     log: args.log ?? '',
     version: app.getVersion(),
@@ -521,13 +547,26 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
     os: `${os.platform()} ${os.release()}`,
   });
   const fallbackUrl = buildPrefillUrl({ title: args.title, body, label: args.label });
+  // The prefill drops body when the URL would exceed GitHub's cap; buildPrefillUrl
+  // marks what it cut. Report it so the screen can say so (E-07) — the full draft
+  // is still in the renderer either way.
+  const truncated = fallbackUrl.includes('%5Btruncated%5D') || fallbackUrl.includes('[truncated]');
+
+  if (args.browserOnly) return { ok: false, needsBrowser: true, fallbackUrl, truncated };
+
+  let client: Awaited<ReturnType<typeof import('./github-client')['getGithubClient']>> | null = null;
+  try {
+    const mod = await import('./github-client');
+    client = mod.getGithubClient();
+  } catch (e: any) {
+    return { ok: false, error: `Could not load the GitHub connection: ${String(e?.message || e)}`, fallbackUrl };
+  }
+
+  const token = client ? await client.getToken().catch(() => null) : null;
+  // Not an error: nobody is signed in, so the ticket is finished in the browser.
+  if (!client || !token) return { ok: false, needsBrowser: true, fallbackUrl, truncated };
 
   try {
-    const { getGithubClient } = await import('./github-client');
-    const client = getGithubClient();
-    const token = client ? await client.getToken().catch(() => null) : null;
-    if (!client || !token) return { ok: false, fallbackUrl };
-
     // Labels must exist on itsdestin/youcoded (ipc-bridge rule) — the REST
     // create applies them in the same call the old `gh issue create` did.
     const res = await client.api('POST', '/repos/itsdestin/youcoded/issues', {
@@ -538,11 +577,18 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
     if (res.status === 201 && res.json?.html_url) {
       return { ok: true, url: String(res.json.html_url) };
     }
-    return { ok: false, fallbackUrl };
-  } catch {
-    // Any failure (expired token, offline, rate limit) degrades to the
-    // browser prefill — issue reporting must never dead-end.
-    return { ok: false, fallbackUrl };
+    // A real refusal. Say what GitHub said; never guess why
+    // (docs/error-message-standards.md).
+    const detail = String(res.json?.message || '').trim();
+    return {
+      ok: false,
+      error: detail
+        ? `GitHub did not create the ticket (${res.status}): ${detail}`
+        : `GitHub did not create the ticket (${res.status}).`,
+      fallbackUrl,
+    };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e), fallbackUrl };
   }
 }
 
