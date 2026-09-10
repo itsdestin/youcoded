@@ -3,7 +3,8 @@ import { Dialog, SettingRow, SegmentedTabs, Callout, Button } from './ui';
 import { UnifiedDiff } from './diff/UnifiedDiff';
 import MarkdownContent from './MarkdownContent';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
-import type { SessionContext } from '../state/chat-types';
+import type { SessionContext, SessionContextSkill } from '../state/chat-types';
+import { wasTrimmed, useSessionContextText } from './session-context-facts';
 
 // SessionContextPopup — "What the assistant was given": what this chat started
 // with, and what did not fit.
@@ -170,6 +171,86 @@ function CutBlock({ fullText, supplied, what }: { fullText?: string | null; supp
   );
 }
 
+/** A file's text, read when this block is on screen.
+ *
+ *  The text does not ride with the rest of the context — see
+ *  session-context-facts.ts for the measurement behind that. Local disk, so the
+ *  wait is about a millisecond; the placeholder exists for a phone reading over
+ *  the network, not for the usual case.
+ *
+ *  A failure says only that the file could not be read: the reasons are several
+ *  (deleted since the chat started, permissions, an unreadable encoding) and
+ *  naming the wrong one is worse than naming none — error-message-standards.md. */
+function FileText({ sessionId, kind, id, what }: { sessionId?: string; kind: 'project' | 'skill'; id?: string; what: string }) {
+  const fetched = useSessionContextText(sessionId, kind, id, true);
+  if (!fetched || fetched.state === 'loading') return <p className="p-3 text-2xs text-fg-muted">Reading…</p>;
+  if (fetched.state === 'error') return <p className="p-3 text-2xs text-fg-muted">This file couldn’t be read.</p>;
+  const { text, full, truncated } = fetched.value;
+  return truncated
+    ? <CutBlock fullText={full} supplied={text} what={what} />
+    : <Md text={text} flush />;
+}
+
+/** One skill, its text behind its own row.
+ *
+ *  WHY the text is not open by default, unlike the project rules card: there is
+ *  exactly one rules file, and 47 installed skills on this machine. Forty-seven
+ *  cards of open markdown is a page nobody can use, and it would read every one
+ *  of those files to build. The card still owns its text (contract R19); it just
+ *  waits to be asked.
+ *
+ *  Whether a skill would be shortened is only knowable by reading it, so the row
+ *  says what the skill DOES until it is opened — which is the more useful line
+ *  anyway. */
+function SkillCard({ skill, sessionId, openFile }: { skill: SessionContextSkill; sessionId?: string; openFile: (p: string) => void | Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const fetched = useSessionContextText(sessionId, 'skill', skill.id, open);
+  const path = fetched?.state === 'ready' ? fetched.value.path : null;
+  return (
+    <DetailCardCollapsible
+      open={open}
+      header={(
+        <SettingRow
+          variant="item"
+          className="rounded-none bg-transparent"
+          title={skill.label}
+          description={skill.description}
+          expanded={open}
+          onClick={() => setOpen((o) => !o)}
+        />
+      )}
+    >
+      {!fetched || fetched.state === 'loading' ? <p className="p-3 text-2xs text-fg-muted">Reading…</p>
+        : fetched.state === 'error' ? <p className="p-3 text-2xs text-fg-muted">This skill couldn’t be read.</p>
+          : (
+            <>
+              <div className="flex items-center gap-2 px-3 pt-2.5">
+                <Dot ok={!fetched.value.truncated} />
+                <span className="flex-1 min-w-0 text-2xs text-fg-muted truncate">
+                  {fetched.value.truncated ? 'Would be shortened when used' : 'Fits in full'}
+                </span>
+                {path && <Button variant="secondary" size="sm" onClick={() => { void openFile(path); }}>Open</Button>}
+              </div>
+              {fetched.value.truncated
+                ? <CutBlock fullText={fetched.value.full} supplied={fetched.value.text} what={`${skill.label} skill`} />
+                : <Md text={fetched.value.text} flush />}
+            </>
+          )}
+    </DetailCardCollapsible>
+  );
+}
+
+/** DetailCard whose body is hidden until its header is pressed. Same container,
+ *  same hairline — the divider goes with the body so a closed card is one row. */
+function DetailCardCollapsible({ open, header, children }: { open: boolean; header: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-edge-dim bg-inset/50 overflow-hidden">
+      {header}
+      {open && <div className="border-t border-edge-dim">{children}</div>}
+    </div>
+  );
+}
+
 /** Collapsed it is four words; opened it is the sentence approved in round 3,
  *  ending in Destin's "(see details below)" — true again now the card sits
  *  directly above the list it names (changes 21-23). An explanatory clause on the
@@ -219,8 +300,10 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
   const skills = context.skills ?? [];
   const tools = context.tools ?? [];
   const dropped = context.droppedMcpServers ?? [];
-  const cutSkills = skills.filter((s) => s.truncated);
-  const trimmed = !!(rules?.truncated || cutSkills.length > 0 || dropped.length > 0);
+  // Shared with the strip, so an amber line can never open a panel saying
+  // everything fit — see session-context-facts.ts for what counts.
+  const trimmed = wasTrimmed(context);
+  const skillsHidden = context.skillsOffered === false && skills.length > 0;
   const skillsWord = `${skills.length} skill${skills.length === 1 ? '' : 's'}`;
   const toolsWord = `${tools.length} tool${tools.length === 1 ? '' : 's'}`;
 
@@ -288,9 +371,18 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                       onClick={() => setTab('project')}
                     />
                   )}
-                  {cutSkills.map((sk) => (
-                    <SettingRow key={sk.id} variant="item" icon={<Dot ok={false} />} title={`${sk.label} skill`} description="Cut short" onClick={() => setTab('skills')} />
-                  ))}
+                  {/* The big one on a small model, and the thing nothing on
+                      screen used to say: below the catalog threshold the
+                      assistant is never told a single skill exists. */}
+                  {skillsHidden && (
+                    <SettingRow
+                      variant="item"
+                      icon={<Dot ok={false} />}
+                      title="Your skills"
+                      description={`The assistant wasn’t told about ${skillsWord} — you can still start one by typing /`}
+                      onClick={() => setTab('skills')}
+                    />
+                  )}
                   {dropped.map((d) => (
                     <SettingRow key={d} variant="item" icon={<Dot ok={false} />} title={`${d} add-on`} description="Not attached — its tools can’t be used in this chat" onClick={() => setTab('tools')} />
                   ))}
@@ -364,9 +456,7 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                   />
                 )}
               >
-                {rules.truncated
-                  ? <CutBlock fullText={rules.fullText} supplied={rules.text} what="Project rules" />
-                  : <Md text={rules.text} flush />}
+                <FileText sessionId={sessionId} kind="project" what="Project rules" />
               </DetailCard>
             )}
           </section>
@@ -376,30 +466,18 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
           <section>
             <h3 className={EYEBROW}>Skills</h3>
             <p className="text-2xs text-fg-muted leading-snug mb-2">Step-by-step guides the assistant follows when a task matches one.</p>
+            {skillsHidden && (
+              <Callout tone="warning" title="The assistant wasn’t told about these">
+                This model’s window is too small to carry the list, so it won’t reach for one
+                on its own. Typing / and picking one still works.
+              </Callout>
+            )}
             {skills.length === 0 ? (
-              <p className="text-2xs text-fg-muted">No skills were loaded for this chat.</p>
+              <p className="text-2xs text-fg-muted">No skills are installed.</p>
             ) : (
-              <div className="space-y-2">
+              <div className="space-y-2 mt-2">
                 {skills.map((sk) => (
-                  <DetailCard
-                    key={sk.id}
-                    header={(
-                      <SettingRow
-                        variant="item"
-                        className="rounded-none bg-transparent"
-                        icon={<Dot ok={!sk.truncated} />}
-                        title={sk.label}
-                        description={sk.truncated ? 'Cut short' : 'Loaded in full'}
-                        accessory={sk.path
-                          ? <Button variant="secondary" size="sm" onClick={() => { void openFile(sk.path as string); }}>Open</Button>
-                          : undefined}
-                      />
-                    )}
-                  >
-                    {sk.truncated
-                      ? <CutBlock fullText={sk.fullText} supplied={sk.fullText ? `${sk.fullText.split('\n').slice(0, 5).join('\n')}\n… (cut here)` : '… (cut short)'} what={`${sk.label} skill`} />
-                      : (sk.fullText ? <Md text={sk.fullText} flush /> : <p className="p-3 text-2xs text-fg-muted">Its text was not reported for this chat.</p>)}
-                  </DetailCard>
+                  <SkillCard key={sk.id} skill={sk} sessionId={sessionId} openFile={openFile} />
                 ))}
               </div>
             )}

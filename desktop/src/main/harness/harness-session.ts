@@ -207,6 +207,12 @@ export interface HarnessSessionOpts {
   /** System prompt assembled ONCE at init (Task 11); falls back to the
    *  harness's own systemPrompt for the Chat preset. */
   systemPrompt?: string;
+  /** The labelled pieces `systemPrompt` was joined from, for the "What the
+   *  assistant was given" panel. Carried rather than re-derived because
+   *  re-assembling would shell out to git again and could report a different
+   *  date or branch than the prompt the model actually received. Absent for a
+   *  caller that assembled its own prompt (specialist children, tests). */
+  promptParts?: Array<{ id: string; label: string; text: string }>;
   /** Runtime services threaded into every tool's ToolContext (spec §3.2).
    *  Injected by NativeSessionHost (e.g. { search } → WebSearch). */
   toolServices?: ToolServices;
@@ -983,20 +989,68 @@ export class HarnessSession extends EventEmitter {
    *  directions idempotent, so the filesystem scan happens once per attachment,
    *  not once per turn.
    */
-  private syncSkillTool(): void {
-    const wanted = this.profile.exposeSkillCatalog;
-    if (!wanted) { this.toolByName.delete('Skill'); return; }
-    if (this.toolByName.has('Skill')) return;
-
+  /** The skills this session may be told about: the catalog, narrowed by the
+   *  preset's own allowlist.
+   *
+   *  Split out of syncSkillTool (2026-09-10) so the session-context panel lists
+   *  the SAME set the model is offered. Deriving it a second time in the host
+   *  would drift the moment a preset changed its allowlist, and the panel exists
+   *  precisely to be trusted about what the assistant was given. */
+  private scopedSkillCatalog(): SkillCatalog {
     const catalog = this.opts.skillCatalog ?? createSkillCatalog();
     const allow = this.opts.harness.skills;
     // Per-preset allowlist (the manifest's `skills` field, dead until now):
     // Assistant may offer fewer skills than Coder. load() stays unscoped — an
     // allowlist decides what the model is TOLD about, and a request for anything
     // outside it can't arrive because it was never advertised.
-    const scoped: SkillCatalog = allow
+    return allow
       ? { list: () => catalog.list().filter((s) => allow.includes(s.id)), load: (id) => catalog.load(id) }
       : catalog;
+  }
+
+  /** What this session actually has, for the "What the assistant was given"
+   *  panel. Bodies are deliberately NOT included: 47 skills are 619 KB on this
+   *  machine (measured 2026-09-10), which is not something to push into every
+   *  session's state and down a phone's WebSocket. The panel fetches one file's
+   *  text when the user opens that row.
+   *
+   *  Calls buildAiTools() for its SIDE EFFECTS — it is the one method that syncs
+   *  the conditional tools (Skill, Task, MCP) and recomputes droppedMcpServers,
+   *  and reading either without it would report the pre-sync state on a session
+   *  that has not taken a turn yet. It is the same call every turn makes, and the
+   *  syncs are idempotent. */
+  contextInventory(): { toolNames: string[]; droppedMcpServers: string[]; skills: Array<{ id: string; description: string }>; skillsOffered: boolean; promptParts: Array<{ id: string; label: string; text: string }>; systemPrompt: string; presetName: string; injectionBudgetTokens: number } {
+    this.buildAiTools();
+    return {
+      promptParts: this.opts.promptParts ?? [],
+      systemPrompt: this.systemText,
+      presetName: this.opts.harness.name,
+      injectionBudgetTokens: this.profile.injectionBudgetTokens,
+      toolNames: [...this.toolByName.keys()],
+      droppedMcpServers: [...this._droppedMcpServers],
+      skills: this.scopedSkillCatalog().list(),
+      // The whole point of the panel on a small model: below the catalog
+      // threshold the Skill tool is never attached, so the model is never told a
+      // single skill exists. The user can still run one with /name — which is
+      // why this is reported rather than the list simply being emptied.
+      skillsOffered: this.profile.exposeSkillCatalog && this.profile.supportsTools,
+    };
+  }
+
+  /** Load one skill's full text — the panel's on-demand fetch (2026-09-10).
+   *  Scoped exactly like the model's own access, so the panel can never show a
+   *  skill this session was not offered. */
+  loadSkillBody(id: string): { text: string; file: string } {
+    const loaded = this.scopedSkillCatalog().load(id);
+    return { text: loaded.body, file: loaded.file };
+  }
+
+  private syncSkillTool(): void {
+    const wanted = this.profile.exposeSkillCatalog;
+    if (!wanted) { this.toolByName.delete('Skill'); return; }
+    if (this.toolByName.has('Skill')) return;
+
+    const scoped = this.scopedSkillCatalog();
 
     // No offerable skills → no tool. A catalog that lists nothing still reads as
     // "you may load a skill", which invites the model to invent an id and burn a

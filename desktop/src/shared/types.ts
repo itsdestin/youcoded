@@ -777,6 +777,82 @@ export interface ToolCallState {
   shellRun?: ShellRunView;
 }
 
+// ── What the assistant was given ────────────────────────────────────────────
+//
+// The session-start accounting behind the line above every conversation and the
+// "What the assistant was given" panel. Lives in shared/types.ts (rather than the
+// renderer's chat-types.ts, where it was designed) because main BUILDS it —
+// see NativeSessionHost.buildSessionContext.
+//
+// Every "was something left out" question is answered by a sub-field: a record
+// with no truncation and nothing dropped is a session that started with
+// everything it was offered.
+//
+// NO FILE BODIES RIDE HERE. 47 installed skills are 619 KB of SKILL.md on this
+// machine (measured 2026-09-10) and this record is pushed for every session,
+// held in renderer state, and re-sent over a phone's WebSocket. The panel asks
+// for one file's text when the user opens that row instead.
+
+/** One skill this session may reach.
+ *
+ *  Deliberately thin: this is what `SkillCatalog.list()` already knows, which is
+ *  what rides in the model's own tool schema. A skill's path, size and whether it
+ *  would be shortened all require READING it, so they arrive with the text when
+ *  the user opens that row — session start reads no skill files at all. */
+export interface SessionContextSkill {
+  id: string;
+  /** The name a person recognises — the last segment of the id. */
+  label: string;
+  /** The one-liner the model itself is given. */
+  description?: string;
+}
+
+export interface SessionContext {
+  /** The model this session is bound to, e.g. "qwen2.5-coder:14b". */
+  modelLabel?: string | null;
+  /** The model's context window in tokens, when known. */
+  contextWindowTokens?: number | null;
+  /** Summary line for the top of the panel. */
+  summary?: string | null;
+  /** The system prompt split into the parts the host assembled it from. WHY split
+   *  (Destin, review-5 G-2): "i want to be fully transparent about what models
+   *  load in with." One wall of text answers "how much" but not "what". */
+  systemPromptSections?: Array<{ id: string; label: string; text: string }> | null;
+  /** The whole assembled prompt. Kept as the fallback the panel shows when a host
+   *  cannot split it — showing it whole beats showing nothing. */
+  systemPrompt?: string | null;
+  /** The root instruction file (CLAUDE.md / AGENTS.md) baked into the system
+   *  prompt. This is the ONE thing genuinely cut at session start. Its text is
+   *  fetched on demand. */
+  projectInstructions?: {
+    path: string;
+    /** True when the file was outlined to fit the window. */
+    truncated: boolean;
+    /** Human line when truncated — "3 of 12 sections shown as headings". */
+    note?: string | null;
+  } | null;
+  skills?: SessionContextSkill[] | null;
+  /** Whether the model was TOLD its skills exist. False below the catalog
+   *  threshold, where the Skill tool is never attached — the user can still start
+   *  one by typing /name, but the assistant cannot reach for one itself, and
+   *  before this field nothing anywhere said so. */
+  skillsOffered?: boolean;
+  /** Tools available to the assistant this session. */
+  tools?: string[] | null;
+  /** MCP servers dropped at session start to fit the tools budget. */
+  droppedMcpServers?: string[] | null;
+}
+
+/** One file's text, fetched when the user opens its row in the panel.
+ *  `text` is what the model receives; `full` is the file on disk. Equal when
+ *  nothing was cut. */
+export interface SessionContextText {
+  path: string;
+  text: string;
+  full: string;
+  truncated: boolean;
+}
+
 /** Why a background command is no longer running — the card names it. */
 export type ShellStopReason = 'user' | 'assistant' | 'conversation-closed' | 'app-quit';
 
@@ -1868,6 +1944,11 @@ export const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',   // G-1: the Bash card's Stop button
+  // "What the assistant was given" (2026-09-10): the session-start push carrying
+  // the inventory, and the on-demand read of ONE file's text. Two channels
+  // because file bodies do not belong in a push — see SessionContext above.
+  NATIVE_SESSION_CONTEXT: 'native:session-context',
+  NATIVE_SESSION_CONTEXT_TEXT: 'native:session-context-text',
   PROVIDER_LIST: 'provider:list',
   PROVIDER_UPSERT: 'provider:upsert',
   PROVIDER_REMOVE: 'provider:remove',

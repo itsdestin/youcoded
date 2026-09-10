@@ -4236,6 +4236,13 @@ class SessionService : Service() {
             // native harness, so this is the honest refusal; the phone stops a
             // DESKTOP command through the remote WebSocket path instead.
             "native:kill-shell",
+            // "What the assistant was given" (2026-09-10). The context record
+            // itself is PUSHED, and reaches a phone inside chat:hydrate over the
+            // remote WebSocket — there is nothing to answer here. This is the
+            // on-demand read of one file's text, which lives on the desktop
+            // beside the session that was given it; a phone paired to a desktop
+            // gets it over that same WebSocket instead.
+            "native:session-context-text",
             "provider:list",
             "provider:upsert",
             "provider:remove",

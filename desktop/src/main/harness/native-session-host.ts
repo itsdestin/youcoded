@@ -16,7 +16,7 @@
 import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
-import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta } from '../../shared/types';
+import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
 import { ShellRegistry, formatFinishedNotice, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
 import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts } from './harness-session';
@@ -28,7 +28,7 @@ import { PermissionBroker, type AskDecision, type LateResponseEntry } from './pe
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
-import { assembleSystemPrompt } from './prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from './prompt-assembly';
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
@@ -47,7 +47,7 @@ import type { NativeHome } from '../native-home';
 import { computeReportBudget } from './specialists/report-budget';
 import { truncateOutput, composeNotice } from './tools/truncate';
 import { APPROX_CHARS_PER_TOKEN } from './message-size';
-import { fitInjection } from './injection/injection-budget';
+import { fitInjection, fitProjectInstructions } from './injection/injection-budget';
 import { frameSkillInvocation } from './skills/skill-invocation';
 import { buildTriggerIndex } from './injection/path-triggers';
 import { costForUsage, isFreePricing, type ModelPricing } from './pricing';
@@ -286,6 +286,22 @@ interface LiveEntry {
   // back-pointer that lets destroy() de-register this child from its parent's
   // childrenOf set without re-reading the header off disk (see childrenOf).
   parentSessionId?: string;
+}
+
+/** The bracketed sentence a fitter appends to say what it cut. Read back rather
+ *  than re-described here: a second wording would eventually disagree with the
+ *  one the model was actually given, and this panel exists to be trusted.
+ *  Null when the text carries no such notice. */
+function truncationNote(fittedText: string): string | null {
+  const at = fittedText.lastIndexOf('\n\n[');
+  if (at === -1 || !fittedText.trimEnd().endsWith(']')) return null;
+  return fittedText.slice(at + 3).trimEnd().slice(0, -1);
+}
+
+/** The name a person recognises out of a skill id. Ids are `plugin:skill` or a
+ *  bare name; the part after the colon is what the user typed to install it. */
+function skillLabel(id: string): string {
+  return id.includes(':') ? id.slice(id.lastIndexOf(':') + 1) : id;
 }
 
 export class NativeSessionHost extends EventEmitter {
@@ -2438,7 +2454,7 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2542,7 +2558,14 @@ export class NativeSessionHost extends EventEmitter {
       // reassembled, not even by setBinding's mid-session model swap (that is what
       // keeps the KV-cache prefix stable). Sizing therefore follows the model the
       // session STARTED on. Deliberate; revisit only if prompt reassembly ever is.
-      systemPrompt: assembleSystemPrompt({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user' }),
+      // Assembled as PARTS and joined here, not assembled twice: the session-context
+      // panel shows these parts, and a second call would re-shell git (two 3s
+      // timeouts) and could land on a different date or branch than the prompt the
+      // model actually got. presetName is label-only and reaches no model.
+      ...(() => {
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name });
+        return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
+      })(),
     };
   }
 
@@ -2757,6 +2780,20 @@ export class NativeSessionHost extends EventEmitter {
           });
         });
     });
+    // What this session was given (contract R23: EVERY chat carries the line, so
+    // this is emitted for a session that started with everything intact too).
+    // AFTER the listeners above and BEFORE the held-message drain, so the line is
+    // on screen before the first turn's output starts arriving.
+    //
+    // Never fatal: this reads the instruction file and syncs the tool set, and a
+    // session must still open if either fails. A missing line is a missing
+    // explanation; a thrown one is a chat that never starts.
+    try {
+      this.emit('session-context', { sessionId, context: this.buildSessionContext(cwd, session) });
+    } catch (err) {
+      log('ERROR', 'NativeSessionHost', 'could not describe the session context', { sessionId, error: String(err) });
+    }
+
     // Anything the user typed while this session was still being built goes now,
     // in the order they typed it. The FIRST one is dispatched through the normal
     // send() path (which sets inFlight and, when that turn ends, drains the rest);
@@ -2767,6 +2804,77 @@ export class NativeSessionHost extends EventEmitter {
       const [first, ...rest] = held;
       entry.queue.push(...rest);
       this.send(sessionId, first.text, first.attachments);
+    }
+  }
+
+  // The fitters END their output with the bracketed sentence explaining what they
+  // did ("3 of 12 sections above are shown as heading + first line(s)…"). Reading
+  // it back is deliberate: the alternative is a second description of the cut,
+  // written here, that can disagree with the one the model was actually given.
+  // Null when nothing was cut, so an untruncated file carries no note at all.
+
+  /** What this session was given, for the line above the conversation and the
+   *  "What the assistant was given" panel.
+   *
+   *  Built ONCE per session, at wire() — root sessions only, so a specialist
+   *  child (which is never wired) never grows a line of its own.
+   *
+   *  NO FILE BODIES. The only text here is the system prompt, which is already
+   *  assembled and in memory; every file the panel can show is fetched by
+   *  sessionContextText() when its row is opened. See the backend design doc for
+   *  the measurement behind that (47 skills = 619 KB).
+   *
+   *  WHY the summary is not "trimmed to fit": what was ACTUALLY left out at
+   *  session start is the instruction file, dropped add-ons, and — the big one on
+   *  a small model — the skill catalog itself, which the model is simply never
+   *  told about. A skill being too long to fit is a thing that has not happened
+   *  yet, so it is reported on the skill's own row and never in this summary. */
+  private buildSessionContext(cwd: string, session: HarnessSession): SessionContext {
+    const inv = session.contextInventory();
+    const found = findProjectInstructions(cwd);
+    const fitted = found ? fitProjectInstructions(found.text, inv.injectionBudgetTokens, found.name) : null;
+    return {
+      modelLabel: session.binding.modelId,
+      contextWindowTokens: session.contextWindowTokens,
+      summary: null,
+      systemPrompt: inv.systemPrompt,
+      // The project-instructions part is filtered out: it has its own tab, and
+      // showing it under System too would say the same thing twice.
+      systemPromptSections: inv.promptParts.filter((p) => p.id !== 'project'),
+      projectInstructions: found && fitted
+        ? { path: found.path, truncated: fitted.truncated, note: truncationNote(fitted.text) }
+        : null,
+      skills: inv.skills.map((s) => ({ id: s.id, label: skillLabel(s.id), description: s.description })),
+      skillsOffered: inv.skillsOffered,
+      tools: inv.toolNames,
+      droppedMcpServers: inv.droppedMcpServers,
+    };
+  }
+
+  /** One file's text for the panel, fetched when the user opens its row.
+   *
+   *  Runs the SAME fitter the real path runs, with the SAME budget this session
+   *  was sized with, so what the panel shows is what the model would receive —
+   *  never a second implementation's idea of it. */
+  sessionContextText(sessionId: string, kind: 'project' | 'skill', id?: string): SessionContextText | { error: string } {
+    const entry = this.live.get(sessionId);
+    if (!entry) return { error: 'not-live' };
+    const budget = entry.session.profileSnapshot.injectionBudgetTokens;
+    if (kind === 'project') {
+      const found = findProjectInstructions(entry.cwd);
+      if (!found) return { error: 'not-found' };
+      const fitted = fitProjectInstructions(found.text, budget, found.name);
+      return { path: found.path, text: fitted.text, full: found.text, truncated: fitted.truncated };
+    }
+    if (!id) return { error: 'not-found' };
+    try {
+      const loaded = entry.session.loadSkillBody(id);
+      const fitted = fitInjection(loaded.text, budget, loaded.file);
+      return { path: loaded.file, text: fitted.text, full: loaded.text, truncated: fitted.truncated };
+    } catch {
+      // A skill that vanished or became unreadable since the session opened. The
+      // panel says the text could not be read rather than inventing a cause.
+      return { error: 'unreadable' };
     }
   }
 

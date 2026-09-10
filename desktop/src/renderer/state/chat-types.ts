@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -176,58 +176,11 @@ export interface UsageSnapshot {
 // only say "something was cut". The panel can account for everything, and
 // truncation falls out naturally as the difference between the raw file and the
 // truncated copy shown.
-export interface SessionContext {
-  /** The model this session is bound to, e.g. "qwen2.5-coder:14b". */
-  modelLabel?: string | null;
-  /** The model's context window in tokens, when known. */
-  contextWindowTokens?: number | null;
-  /** Summary line for the top of the panel — "Started with the full project
-   *  context" or "Context was trimmed to fit {model}". */
-  summary?: string | null;
-  /** The system prompt the assistant began with (host-assembled). */
-  systemPrompt?: string | null;
-  /** The same prompt split into the parts the host assembled it from — identity,
-   *  the chosen preset, the environment snapshot, the shared doctrine, and the
-   *  steering overlay a small model gets. WHY split: Destin, review-5 G-2 — "we
-   *  should make this tab include both preset instructions and general system
-   *  instructions. i want to be fully transparent about what models load in
-   *  with." One wall of text answers "how much" but not "what".
-   *  Optional: a host that cannot split them still sends `systemPrompt`, and the
-   *  panel shows it whole rather than showing nothing. */
-  systemPromptSections?: Array<{ id: string; label: string; text: string }> | null;
-  /** Project instructions (CLAUDE.md / AGENTS.md): the OUTLINE received by the
-   *  model, as-truncated. When untruncated this is the full file. */
-  projectInstructions?: {
-    /** Path to the root instruction file (CLAUDE.md), even when truncated. */
-    path: string;
-    /** The text the model actually received. */
-    text: string;
-    /** The FULL original text, for the truncation diff. Present when the host
-     *  can supply it (the file is on disk); the diff view falls back to the
-     *  outlink when absent. */
-    fullText?: string | null;
-    /** True when the file was outlined/truncated to fit the window. */
-    truncated: boolean;
-    /** Human line when truncated — "3 of 12 sections kept (headings only)". */
-    note?: string | null;
-  } | null;
-  /** Skills loaded at session start, and whether each was truncated. */
-  skills?: Array<{
-    id: string;
-    label: string;
-    /** Path to the skill's SKILL.md — the outlink target. */
-    path?: string | null;
-    /** True when the skill body was truncated to fit the window. */
-    truncated?: boolean;
-    /** The FULL original skill body, for the truncation diff. */
-    fullText?: string | null;
-    note?: string | null;
-  }> | null;
-  /** Tools available to the assistant this session. */
-  tools?: string[] | null;
-  /** MCP servers dropped at session start to fit the tools budget. */
-  droppedMcpServers?: string[] | null;
-}
+// MOVED to shared/types.ts on 2026-09-10, when main started building it: the
+// harness is the only thing that knows what a session was given, and a renderer
+// type main has to import is the wrong way round. Re-exported here so the
+// components that already import it from chat-types keep working.
+export type { SessionContext, SessionContextSkill, SessionContextText };
 
 // Thin divider entry — shown when a slash command produced a side-effect
 // worth marking in the conversation history (e.g. /clear, /compact).

@@ -2837,6 +2837,21 @@ export function registerIpcHandlers(
     }
   });
 
+  // What this session was given, pushed once when it opens (contract R23: every
+  // chat carries the line). Push-only, like specialists:event and shell-event
+  // below — there is no request handler, because nothing asks: the strip is part
+  // of the session's own opening.
+  //
+  // NOT buffered for a reconnecting phone the way the two below are: a remote
+  // client that connects later hydrates the whole chat state over chat:hydrate,
+  // and this record travels inside it. Buffering it as well would deliver it twice.
+  nativeHost.on('session-context', (event: { sessionId: string; context: unknown }) => {
+    sendForSession(event.sessionId, IPC.NATIVE_SESSION_CONTEXT, event);
+    if (remoteServer) {
+      remoteServer.broadcast({ type: 'native:session-context', payload: event });
+    }
+  });
+
   // G-1: one background command's run record changed. Same four-surface push
   // shape as specialists:event — window + remote broadcast, buffered for a
   // reconnecting phone. Push-only; there is no request handler.
@@ -3120,6 +3135,12 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.list());
   // G-1: the Bash card's Stop button, on every surface.
   ipcMain.handle(IPC.NATIVE_KILL_SHELL, (_e, { sessionId, shellId }: { sessionId: string; shellId: string }) => nativeHost.killShell(sessionId, shellId));
+  // "What the assistant was given" — one file's text, read when the user opens
+  // that row. Synchronous disk read of a file the session already depends on;
+  // the host answers { error } rather than throwing, so a deleted skill shows a
+  // line in the panel instead of an unhandled rejection in the renderer.
+  ipcMain.handle(IPC.NATIVE_SESSION_CONTEXT_TEXT, (_e, { sessionId, kind, id }: { sessionId: string; kind: 'project' | 'skill'; id?: string }) =>
+    nativeHost.sessionContextText(sessionId, kind, id));
   // Provider management (Settings → Providers).
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
   ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));

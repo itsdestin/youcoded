@@ -1,5 +1,6 @@
 import { Button } from './ui';
 import type { SessionContext } from '../state/chat-types';
+import { wasTrimmed } from './session-context-facts';
 
 // SessionContextBanner — the always-visible strip at the top of a session's
 // timeline that summarizes its STARTING context (Step 3, 2026-08-17, broadened
@@ -36,14 +37,6 @@ function fullSummary(ctx: SessionContext): string {
   if (parts.length === 0) return 'Started with no extra instructions';
   const last = parts.pop();
   return parts.length ? `Started with ${parts.join(', ')} and ${last}` : `Started with ${last}`;
-}
-
-function wasTrimmed(ctx: SessionContext): boolean {
-  return !!(
-    ctx.projectInstructions?.truncated
-    || ctx.skills?.some((s) => s.truncated)
-    || (ctx.droppedMcpServers && ctx.droppedMcpServers.length > 0)
-  );
 }
 
 export function SessionContextBanner({ context, onOpen }: Props) {

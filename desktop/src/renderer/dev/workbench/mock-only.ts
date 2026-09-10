@@ -74,16 +74,15 @@
 // rule, same reason as the rows above: the fake in mock-shim.ts stays so the
 // workbench can still pin signed-out / waiting / signed-in / blocked without a
 // browser round-trip — only the "no real backend" claim goes.
+// `native.onSessionContext` came off on 2026-09-10 when the real backend landed:
+// NativeSessionHost.buildSessionContext, emitted from wire(), forwarded by
+// ipc-handlers as `native:session-context`, with `native:session-context-text`
+// answering the panel's on-demand read of one file. Same lifecycle as every row
+// above — the panel was designed and reviewed against a fake, the fake told us
+// what to build, and the fakes in mock-shim.ts STAY so the workbench can still
+// show the trimmed and everything-fit states without a local model. Only the
+// "no real backend" claim goes.
 //
 // Add a row the moment you design a channel ahead of its backend; delete the row, never the
 // guard, when it ships. An empty list is the healthy state.
-export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
-  // Step 3 (2026-08-17, broadened): the session-start context panel. The real
-  // backend (a session-start push carrying the full starting context — system
-  // prompt, fitProjectInstructions / fitInjection results, droppedMcpServers)
-  // does not exist yet — the panel is designed against claim-data seeded
-  // through the SESSION_CONTEXT reducer action (fixture-loader.ts). This names
-  // the channel the backend will provide so the design UI can never quietly
-  // ship as real.
-  { channel: 'native.onSessionContext', feature: 'session context panel (Step 3)' },
-];
+export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [];
