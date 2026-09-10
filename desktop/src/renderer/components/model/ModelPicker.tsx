@@ -33,7 +33,7 @@ import { CLAUDE_ALIASES, type ClaudeAlias } from '../../../shared/model-ids';
 import { matchesQuery } from '../../../shared/text-match';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
-import { unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
+import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
 
 export type ModelChoice =
   | { runtime: 'claude'; alias: string }
@@ -74,6 +74,9 @@ interface Entry {
    *  (Q-E a): a model this install cannot run is still worth SEEING, so the
    *  list stops pretending the rest of the app does not exist. */
   unavailable?: string;
+  /** `unavailable` is specifically "Add an API key" — clicking it should open
+   *  Settings' Cloud providers page instead of sitting there as inert text. */
+  needsApiKey?: boolean;
 }
 
 /** Which company mark + colour a row carries.
@@ -453,6 +456,7 @@ export default function ModelPicker({
           sourceId: p.id, sourceLabel: p.label, local: p.type === 'local-engine',
           providerType: p.type,
           unavailable: unavailableReason(choice, data) ?? undefined,
+          needsApiKey: nativeChoiceNeedsApiKey(choice, data),
         });
       }
     }
@@ -610,11 +614,31 @@ export default function ModelPicker({
                   or 400. */}
               <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
             </span>
-            {/* The one thing that would unlock this row, in its own words. */}
-            {e.unavailable && (
-              <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
-            )}
           </button>
+          {/* The one thing that would unlock this row, in its own words. Lives
+              OUTSIDE the row's own (disabled) button — a button can't nest
+              inside another button — so the one reason with a one-click fix
+              ("Add an API key") can be its own live control instead of inert
+              text next to a dead one. coarse-hit: the label text is well under
+              the touch target guideline. */}
+          {e.unavailable && (
+            e.needsApiKey ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  if (onManageModels) onManageModels();
+                  else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                }}
+                aria-label={`Add an API key for ${e.sourceLabel}`}
+                className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
+              >
+                {e.unavailable}
+              </button>
+            ) : (
+              <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
+            )
+          )}
           {/* touch-reveal + coarse-hit: hover-only affordances never resolve on
               the Android WebView (narrow-viewport rule). Selected uses the same
               on-accent colour as the mark/name above, for the same reason:

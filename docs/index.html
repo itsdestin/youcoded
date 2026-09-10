@@ -313,6 +313,15 @@ footer{padding:0 0 46px}
   background:rgba(127,127,127,.18);border:1px solid var(--m-line)}
 .install-modal-note{margin-top:14px;padding:12px 14px;border-radius:10px;font-size:.87rem;
   color:var(--m-dim);border:1px solid var(--m-line);background:rgba(127,127,127,.10)}
+/* Platform status banner, first thing under the title. Android carries one
+   while the app is being rebuilt (Destin 2026-09-10: the phone app is behind
+   desktop and may have bugs and poor UX; say so before the download). Accent
+   stripe + accent-tinted fill so it reads as a notice in every theme without
+   inventing a warning colour the page doesn't have. */
+.install-modal-banner{margin-top:16px;padding:12px 14px 12px 16px;border-radius:10px;font-size:.9rem;
+  line-height:1.5;color:var(--m-fg);border:1px solid var(--m-line);border-left:4px solid var(--accent);
+  background:rgba(var(--fg-rgb),.07)}
+.install-modal-banner strong{font-weight:700}
 .install-modal-details{margin-top:20px;border-top:1px solid var(--m-line);padding-top:14px}
 .install-modal-details summary{cursor:pointer;list-style:none;font-weight:700;font-size:.95rem;
   display:flex;align-items:center;gap:9px}
@@ -3398,6 +3407,8 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
           platformLabel: 'iOS',
           title: 'YouCoded on iPhone',
           noDownload: true,
+          // Destin 2026-09-10: say we are looking at iOS, above the browser route.
+          banner: '<strong>We\'re exploring options to bring YouCoded to iOS.</strong> No date yet &mdash; the browser route below works today.',
           intro: 'iOS isn\'t natively supported yet &mdash; but you don\'t need a download to use YouCoded from an iPhone.',
           steps: [
             'Install YouCoded on any other platform &mdash; Windows, Mac, Linux, or Android.',
@@ -3552,6 +3563,10 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         },
         'dl-android': {
           platformLabel: 'Android',
+          // Shown above everything else in the modal. Remove when the rebuilt
+          // Android app ships (parity audit: youcoded-dev
+          // docs/active/investigations/2026-09-10-android-parity-audit.md).
+          banner: '<strong>Heads up: the Android app is under major revision.</strong> This version is behind the desktop app &mdash; expect bugs, missing features and rough spots. A rebuilt version is on the way, and we\'re aiming to publish it on Google Play &mdash; no more sideloading.',
           intro: 'YouCoded isn\'t on the Google Play Store yet, so you\'ll install it directly from the APK you just downloaded. Android asks for permission the first time you do this.',
           steps: [
             'When the download finishes, tap the notification (or open <strong>Files → Downloads</strong> and tap the YouCoded APK).',
@@ -3675,7 +3690,9 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         var noteHtml = content.note ? '<p class="install-modal-note">' + content.note + '</p>' : '';
         var pickerHtml = active ? renderVariantPicker(p, active) : '';
         var afterInstallHtml = AFTER_INSTALL + (platformKey === 'dl-android' ? ANDROID_AFTER_EXTRA : '');
+        var bannerHtml = p.banner ? '<p class="install-modal-banner" role="note">' + p.banner + '</p>' : '';
         return '' +
+          bannerHtml +
           '<p class="install-modal-intro">' + p.intro + '</p>' +
           pickerHtml +
           '<div class="install-modal-section">' +

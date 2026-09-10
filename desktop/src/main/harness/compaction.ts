@@ -6,7 +6,38 @@ import type { ModelMessage } from 'ai';
 import { messageTokens, messagesTokens } from './message-size';
 
 export interface CompactionConfig {
-  contextLength: number; triggerRatio: number; protectedTokens: number; minPruneSavings: number; pruneToChars: number;
+  contextLength: number; triggerTokens: number; protectedTokens: number; minPruneSavings: number; pruneToChars: number;
+}
+
+/** The ONE budget every window-sized number derives from (cache follow-ups
+ *  item 2, 2026-09-10): the reply reserve, the request trimmer's budget and the
+ *  compaction trigger.
+ *
+ *  WHY one function: these used to be computed in two places with two
+ *  different reserves — the trimmer used the manifest's flat 16,000 output
+ *  reserve while compaction triggered at a flat 0.75 × window. On a 32k local
+ *  window that trimmed the outgoing request from 15,744 tokens while
+ *  compaction waited for 24,576, so every step in between was re-trimmed from
+ *  a moving front edge and llama.cpp re-read the whole conversation each step;
+ *  under ~17k of window the trim budget went negative and the request
+ *  collapsed to the newest message alone.
+ *
+ *  - replyReserve: min(maxTokens, window / 4). A quarter of the window is the
+ *    most any reply may take before fitting history (Unsloth Studio's rule);
+ *    the manifest's value still caps it on big windows. Left at the manifest
+ *    value when the window is UNKNOWN, so a cloud model whose window the
+ *    catalog could not name keeps its full output allowance.
+ *  - trimBudget: window − reserve − 1,024 margin. The emergency floor.
+ *  - triggerTokens: min(0.75 × window, 0.9 × trimBudget). Compaction must win
+ *    the race with the trimmer on every window; the 0.75 cap keeps cloud
+ *    behaviour exactly what it was on windows where it already did.
+ *  An unknown window is assumed 32k for the budget math, as it always was. */
+export function contextBudget(o: { contextLength: number | null; maxTokens: number }): { replyReserve: number; trimBudget: number; triggerTokens: number } {
+  const ctx = o.contextLength ?? 32_768;
+  const replyReserve = o.contextLength == null ? o.maxTokens : Math.min(o.maxTokens, Math.floor(ctx / 4));
+  const trimBudget = ctx - replyReserve - 1024;
+  const triggerTokens = Math.min(Math.floor(ctx * 0.75), Math.floor(trimBudget * 0.9));
+  return { replyReserve, trimBudget, triggerTokens };
 }
 const PRUNE_TRAILER = (n: number) => `\n\n[pruned — ${n} chars of tool output elided to fit context; re-run the tool if you need it again]`;
 
@@ -128,7 +159,7 @@ export function countImageOutputs(messages: ModelMessage[]): number {
 export type CompactionAction = 'none' | 'prune' | 'summarize';
 export function planCompaction(messages: ModelMessage[], cfg: CompactionConfig, lastInputTokens: number): { action: CompactionAction } {
   const used = lastInputTokens > 0 ? lastInputTokens : estimateTokens(messages);
-  if (used <= cfg.contextLength * cfg.triggerRatio) return { action: 'none' };
+  if (used <= cfg.triggerTokens) return { action: 'none' };
   const before = estimateTokens(messages);
   const after = estimateTokens(pruneToolOutputs(messages, cfg));
   return before - after >= cfg.minPruneSavings ? { action: 'prune' } : { action: 'summarize' };

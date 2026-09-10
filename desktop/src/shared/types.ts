@@ -277,7 +277,9 @@ export interface TranscriptEvent {
     // Task 1.1: widened turn-complete payload so the reducer can attach the
     // per-turn model, token/cache usage, and the Anthropic requestId to the
     // completing AssistantTurn for UI surfacing. All optional — the field is
-    // shared across event types, and turn-complete is the only current writer.
+    // shared across event types. Writers: turn-complete (the turn's requests)
+    // and, since 2026-09-10, a native compact-summary (the summary call's OWN
+    // bill, which is a separate request and used to vanish from every total).
     /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
     model?: string;
     /** Anthropic API request id from the JSONL line's top-level `requestId`. */
@@ -298,6 +300,13 @@ export interface TranscriptEvent {
        *  last step's prompt plus its output. Distinct from inputTokens, which
        *  sums every step and therefore re-counts the history once per step. */
       contextUsedTokens?: number;
+      /** Native runtime only (cache follow-ups item 8, 2026-09-10): true when a
+       *  request in this turn followed something the harness itself did to the
+       *  prompt prefix — a prune commit, a summary compaction, a model swap — so
+       *  a low cache-read figure on this turn is the known price of that event,
+       *  not a regression. Low reads WITHOUT this flag are the thing to
+       *  investigate. */
+      expectedRebuild?: boolean;
       /** Native runtime only: USD for THIS turn, priced at the model that ran
        *  it. `null` means the model has no published price — distinct from
        *  absent, which means no pricing information at all (a Claude Code turn).
