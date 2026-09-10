@@ -8,6 +8,7 @@ import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { isAndroid } from '../platform';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import SessionPreviewPane from './SessionPreviewPane';
 import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
@@ -63,25 +64,9 @@ function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
 
-// ── MOCKUP ONLY (2026-09-10) ────────────────────────────────────────────────
-// Candidate SHELLS for a two-pane Resume browser, switched by
-// `?rbpreview=<name>` so one workbench boot can show all of them. WHY a switch
-// rather than four copies of the component: the pieces inside (the list, the
-// transcript pane, the resume controls) are identical in every candidate — only
-// the chrome around them is under review, and four copies would have drifted.
-//
-// ROUND 3 (2026-09-10). Round two's answers narrowed this hard, and the shells
-// below all obey those answers — they are variations WITHIN the direction he
-// picked, not a fresh spread:
-//   · "i really dislike all of a-c" — the Session Files top bar, the full-screen
-//     page and the full-width search header are gone, and with them the flat
-//     list: every shell here keeps today's CARDS.
-//   · D-1 "never" — the list never collapses. There is no ≡ button anywhere.
-//   · D-2 "blank" — the right half stays one line of text until he clicks; it
-//     never opens the most recent conversation by itself.
-// MOCKUP (2026-09-10) — the conversation preview panel, now a SINGLE design.
-// Five rounds of decks narrowed it; every choice below is Destin's answer, not
-// a default, and none of them are still open:
+// ── The conversation preview panel (2026-09-10) ─────────────────────────────
+// Every decision below is an answered review-deck step, not a default. Five
+// rounds, in docs/active/design/2026-09-10-resume-preview-panel/:
 //   R2  the list keeps its cards; it never collapses and never hides itself;
 //       the right half stays one line of text until a row is clicked.
 //   R3  the sheet: heading, conversation and actions on one inset surface with
@@ -90,18 +75,8 @@ function formatModelId(id: string): string {
 //       sheet; the action card sits at its foot, vertically stacked, and its
 //       switches are the existing resume block rather than a restyled copy.
 //   R5  the whole sheet arrives on a jump (not just the card); the action card
-//       stays open while you read; the folder chip is gone from it — the header
-//       card already says which folder this is.
-// `?rbpreview=on` is all that is left of the switch, so the unchanged browser
-// stays photographable beside it until this ships. Delete PREVIEW_VARIANT and
-// `previewOn` when it does; everything else is the design.
-type PreviewVariant = 'off' | 'on';
-const PREVIEW_VARIANT: PreviewVariant = (() => {
-  try {
-    return new URLSearchParams(location.search).get('rbpreview') === 'on' ? 'on' : 'off';
-  } catch { return 'off'; }
-})();
-
+//       stays open while you read; no folder chip on it — the header card
+//       already says which folder this is.
 // Shared trigger-button shape for the filter row beneath the search bar.
 // Inactive pills look like the search input frame; active pills tint with the
 // accent so the user can see at a glance which pills have departed from
@@ -142,7 +117,7 @@ function FilterPill({
       aria-pressed={active}
       aria-haspopup={hasPopup ? 'listbox' : undefined}
       aria-expanded={hasPopup ? !!expanded : undefined}
-      // MOCKUP ONLY (shrink-0 whitespace-nowrap): in a 340px list column a
+      // shrink-0 whitespace-nowrap: in a narrow list column a
       // fourth pill made every pill shrink and wrap its own label onto two
       // lines, so the row grew to 50px of stacked word-halves. Pills keep their
       // width and the ROW wraps instead.
@@ -342,13 +317,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const projectsDropdownRef = useRef<HTMLDivElement | null>(null);
   const tagsDropdownRef = useRef<HTMLDivElement | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  // MOCKUP ONLY — the row whose transcript the right panel is showing. Distinct
+  // The row whose transcript the right panel is showing. Distinct
   // from expandedId because in variants b/c nothing expands in the list at all.
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
-  // MOCKUP ONLY — the header clone's own tags/note sheet (see renderSessionRow).
+  // The header clone's own tags/note sheet (see renderSessionRow).
   const [cloneOrganizeId, setCloneOrganizeId] = useState<string | null>(null);
-  // MOCKUP ONLY — one animation window per change of previewed conversation.
+  // One animation window per change of previewed conversation.
   // Same hook ChatView uses for the identical event (see its `arriving`). It
   // lives up here with the other hooks, NOT beside the render helpers that use
   // it: everything below `if (!open) return null` runs conditionally, and a
@@ -357,10 +332,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const arriving = useOneShotWindow(previewId);
 
   const narrowViewport = useNarrowViewport();
-  // The panel is single-column on a phone: a 390px screen cannot hold a list
-  // AND a transcript, and the narrow-viewport rule forbids inventing a second
-  // breakpoint for it.
-  const previewOn = PREVIEW_VARIANT !== 'off' && !narrowViewport;
+  // Two reasons the browser stays single-column, and they are different:
+  //  · narrow — a 390px screen cannot hold a list AND a transcript. 640px is
+  //    the app's one breakpoint (.claude/rules/narrow-viewport.md); do not
+  //    invent a second.
+  //  · Android — `chatsearch:read` answers not-implemented-on-mobile there
+  //    (SessionService.kt), so the panel could only ever show an error. Phones
+  //    are already excluded by the width test; this is for a tablet wide enough
+  //    to pass it. The list is fully usable without the panel, which is what
+  //    makes hiding it legitimate rather than a narrow "fix" that removes the
+  //    only route to something.
+  const previewOn = !narrowViewport && !isAndroid();
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
   // Task 6 — native resume ALWAYS offers the provider-scoped model selector
@@ -514,7 +496,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     return applyFilters(sessions, state);
   }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
 
-  // MOCKUP ONLY — the previewed row, resolved once for every shell below.
+  // The previewed row, resolved once.
   const previewSession = previewOn && previewId
     ? filtered.find((r) => r.sessionId === previewId) ?? null
     : null;
@@ -789,7 +771,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // starts on the model THIS conversation last ran on, which only the row
   // knows. See claudeModelForRow.
   const handleSelectSession = (s: PastSession) => {
-    // MOCKUP ONLY — in every preview shell, clicking a row PREVIEWS it (and
+    // With the panel open, clicking a row PREVIEWS it (and
     // re-clicking the same row does nothing, because collapsing the panel would
     // leave the right half empty for no reason the user asked for). The resume
     // controls live in the transcript pane, so the card itself never expands.
@@ -915,7 +897,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // action at the bottom.
   const renderExpandedOptions = (s: PastSession, opts?: { flush?: boolean }) => {
   return (
-    // MOCKUP ONLY (`flush`): the action card at the foot of the preview draws
+    // `flush`: the action card at the foot of the preview draws
     // its own border, and this block's top hairline would double up against it.
     <div className={opts?.flush ? '' : 'border-t border-edge-dim'}>
       <div className="p-3 flex flex-col gap-2">
@@ -1008,7 +990,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   );
   };
 
-  // MOCKUP ONLY (`clone`): the preview's header is this same card drawn a
+  // `clone`: the preview's header is this same card drawn a
   // second time. Both copies are on screen at once, so the tag/note sheet needs
   // its own open-id per copy — sharing one made pressing Tag in the header also
   // expand the card in the list and shove the rest of the list down.
@@ -1016,13 +998,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     const orgId = clone ? cloneOrganizeId : organizeId;
     const setOrg = clone ? setCloneOrganizeId : setOrganizeId;
     const isExpanded = expandedId === s.sessionId;
-    // MOCKUP ONLY — with the resume controls out of the card, the accent border
+    // With the resume controls out of the card, the accent border
     // is the ONLY thing left saying which row the right panel is showing, so
     // the previewed row has to claim it whether or not anything expanded.
     const isSelected = isExpanded || (previewOn && previewId === s.sessionId);
     // Unresumable rows are inert: no card hover, no expand. See the note on the
     // click handler below for the two reasons a row lands here.
-    const inert = !!(s.missingProject || s.notSyncedYet);
+    // Resume needs the project folder AND the transcript; a PREVIEW needs only
+    // the transcript. So `missingProject` (synced in from another device, folder
+    // not here) is readable and is no longer inert once the panel is open —
+    // reading a conversation you cannot resume on this machine is most of why
+    // the panel exists. `notSyncedYet` stays inert either way: the transcript
+    // itself has not arrived, so there is nothing to show.
+    const canResume = !s.missingProject && !s.notSyncedYet;
+    const inert = previewOn ? !!s.notSyncedYet : !canResume;
     // px-4 matches the search bar and the project group headers above, so the
     // card's outer edge lines up with the rest of the panel.
     return (
@@ -1308,9 +1297,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     );
   };
 
-  // MOCKUP ONLY — pulled out of the header block so the `searchbar` shell can
-  // put it across the top of the whole window instead. Identical markup either
-  // way; only its parent changes.
+  // Pulled out of the header block during the design rounds, when one
+  // candidate put it across the top of the window; kept as a value because it
+  // reads better than 20 lines of markup inside an already long header.
   const searchBox = (
     <div className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
       <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -1329,7 +1318,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   );
 
 
-  // MOCKUP ONLY — the action card at the FOOT of the sheet, in the place a real
+  // The action card at the FOOT of the sheet, in the place a real
   // conversation puts its message box: this is where you act on what you just
   // read. Its contents are `renderExpandedOptions` verbatim — the same block the
   // expanded card in the list and ResumeOptionsPopover already draw — because
@@ -1340,10 +1329,19 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const renderActionCard = (s: PastSession) => (
     <div className="shrink-0 p-3 pt-0">
       <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
+        {/* Readable but not resumable here. The row's own card carries the same
+            sentence; repeating it at the foot is the answer to "so why is there
+            no Resume button?", asked at the moment it is asked. */}
+        {s.missingProject ? (
+          <div className="px-3 py-2.5 text-2xs text-fg-muted">
+            Project folder not on this device — you can read this conversation, but it has to be resumed where its folder lives.
+          </div>
+        ) : (<>
         {/* No folder chip here. It was above the model picker until Destin
             pointed out the header card at the top of the sheet already says
             which folder this is — the same fact twice, 300px apart. */}
         {renderExpandedOptions(s, { flush: true })}
+        </>)}
       </div>
     </div>
   );
@@ -1356,7 +1354,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
-          // MOCKUP ONLY — preview mode swaps max-h for a DEFINITE height. The
+          // Preview mode swaps max-h for a DEFINITE height. The
           // note on the list below explains why: with only a max-height, a
           // flex-1 child does not grow in Chromium, and the transcript column
           // needs a real height to scroll inside.
@@ -1366,17 +1364,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
-        {/* MOCKUP ONLY — the body row. `contents` when there is no preview so the
-            header and list stay DIRECT flex children of the panel and the
-            unchanged browser renders byte-for-byte as it does on master. */}
+        {/* The body row. `contents` when there is no preview so the header and
+            list stay DIRECT flex children of the panel, and the single-column
+            browser (narrow, or Android) renders exactly as it always has. */}
         <div className={previewOn ? 'flex-1 min-h-0 flex' : 'contents'}>
-        {/* MOCKUP ONLY — list column. */}
+        {/* List column. */}
         <div className={previewOn
           ? 'w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden'
           : 'contents'}>
           <div className={previewOn ? 'w-[420px] flex flex-col h-full min-h-0' : 'contents'}>
           {/* Header */}
-          {/* MOCKUP — no `border-b`: Destin, 2026-09-10, "there should be gaps
+          {/* No `border-b`: Destin, 2026-09-10, "there should be gaps
               on the left/right side of the divider line where it doesn't
               connect to the outer container but tapers off". A border cannot
               fade, so the rule is a 1px gradient row instead — the same idiom
@@ -1595,7 +1593,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           </div>
           </div>
         </div>
-        {/* MOCKUP ONLY — the transcript column. */}
+        {/* The transcript column. */}
         {previewOn && (() => {
           const s = previewSession;
           if (!s) {

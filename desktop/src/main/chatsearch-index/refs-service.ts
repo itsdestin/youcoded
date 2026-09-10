@@ -32,6 +32,29 @@ function localTranscriptPath(provider: ChatsearchProvider, localPath: string, id
     : path.join(CLAUDE_PROJECTS(), ccProjectSlug(localPath), `${id}.jsonl`);
 }
 
+// An index miss is not "no such conversation". The chatsearch index is built by
+// the bundled search plugin; the Resume browser's list is built from a scan of
+// ~/.claude/projects plus the Conversation Store, so it routinely shows
+// conversations the index has not reached yet — a fresh install has no index at
+// all. Previewing one of those used to answer errNotIndexed, which reads to the
+// user as "this conversation is broken" when the transcript is sitting right
+// there on disk.
+//
+// So on a miss, look for the file itself. Both roots are <root>/<project
+// slug>/<id>.jsonl, and `id` has already been checked against SESSION_UUID_RE by
+// the time this runs (transcript-reader.ts), so it cannot escape the root. The
+// scan is one existsSync per project folder and only ever runs on a miss.
+function findLocalTranscript(provider: ChatsearchProvider, id: string): string | null {
+  const root = provider === 'native' ? NATIVE_SESSIONS() : CLAUDE_PROJECTS();
+  let slugs: string[];
+  try { slugs = fs.readdirSync(root); } catch { return null; }
+  for (const slug of slugs) {
+    const p = path.join(root, slug, `${id}.jsonl`);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+
 export function resolveConversations(shortIds: unknown): { ok: true; results: ResolvedConversation[] } | { ok: false; error: string } {
   // A card resolves the ids from one search. A hundred is far past anything the
   // CLI prints, so a larger list is a caller bug, not a big search.
@@ -74,7 +97,12 @@ export async function readConversation(req: ChatsearchReadRequest): Promise<Chat
     {
       entryFor: (p, id) => {
         const e = entryOf(p, id);
-        return e ? { transcriptPath: e.transcriptPath, tombstone: !!e.tombstone } : null;
+        if (e) return { transcriptPath: e.transcriptPath, tombstone: !!e.tombstone };
+        // Not indexed — see findLocalTranscript. No tombstone: a tombstone is a
+        // fact the index records, and its absence here means nobody said so,
+        // not that the conversation was checked and found alive.
+        const local = findLocalTranscript(p, id);
+        return local ? { transcriptPath: local, tombstone: false } : null;
       },
       localPathFor: (p, id) => {
         const e = entryOf(p, id);
