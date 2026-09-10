@@ -275,10 +275,17 @@ export default function ModelPicker({
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const width = Math.max(r.width, 320);
-    const centred = r.left + r.width / 2 - width / 2;
     const gap = 4;
     const edge = 8;
+    // WHY the Math.min (2026-09-10): the 320 floor is a readability minimum, but
+    // it was applied unconditionally, so in a viewport NARROWER than 320+gutters
+    // the panel was wider than the window and clipped on the right — with no
+    // scrollbar and no visual tell. That is exactly the buddy floater's chat
+    // window, which is 320px wide, so the model list arrived there missing its
+    // right edge. A panel must never exceed the viewport it is clamped into.
+    // No-op in the main window and on Android, where innerWidth far exceeds 336.
+    const width = Math.min(Math.max(r.width, 320), window.innerWidth - edge * 2);
+    const centred = r.left + r.width / 2 - width / 2;
     const spaceBelow = window.innerHeight - r.bottom - edge;
     const spaceAbove = r.top - edge;
     const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;

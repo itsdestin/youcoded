@@ -19,6 +19,9 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy } from './components/takeover-dialog-copy';
+import { runLeaseTakeoverGate } from './state/resume-lease-gate';
+import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
+import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore } from './state/chat-context';
@@ -2544,23 +2547,19 @@ function AppInner() {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
-    const info = await (window.claude.session.create as any)({
+    // The four native/claude conditionals this payload needs (drop the alias,
+    // force skipPermissions false, carry binding, carry preset) live in ONE
+    // place now — shared/session-create-args.ts. They were hand-written at each
+    // call site, and the buddy floater's copy remembered none of them.
+    const info = await (window.claude.session.create as any)(buildSessionCreateArgs({
       name: 'New Session',
       cwd,
+      runtime: provider === 'native' ? 'native' : 'claude',
+      model: m,
       skipPermissions: dangerous,
-      // A Claude alias is meaningless for a native session (the harness uses
-      // binding.modelId; SessionManager's native branch ignores `model`), so
-      // omit it to keep the payload honest.
-      model: provider === 'native' ? undefined : m,
-      provider: provider || 'claude',
-      // Native runtime only — the provider/model binding for the harness. The
-      // main handler requires it for a fresh native session (session-manager
-      // throws otherwise); undefined for claude sessions.
-      binding: provider === 'native' ? binding : undefined,
-      // Native runtime only — the harness preset (Assistant | Coder) the fresh
-      // session is stamped with. Ignored for claude sessions.
-      preset: provider === 'native' ? preset : undefined,
-    });
+      binding,
+      preset,
+    }));
     // I1 fix: deliver the RESOLVED harnessId to the live session pill. The
     // session:created event that seeds the sessions entry is emitted+sent
     // (process.nextTick) BEFORE the main handler finishes create/resume, so on a
@@ -2617,37 +2616,15 @@ function AppInner() {
     // the dialog on "held AND not self" so a lease left over from OUR OWN install
     // (e.g. after an unclean shutdown) resumes straight through instead of popping
     // a confusing "active on <your-own-hostname>" takeover dialog.
-    try {
-      const q = await window.claude.syncSpaces?.leaseQuery?.(claudeSessionId);
-      if (q?.held && !q.self) {
-        const device = q.device || 'another device';
-        const confirmed = await askTakeover(device, 'confirm');
-        if (!confirmed) return false; // "Never mind" — abort the resume
-        const r = await window.claude.syncSpaces?.leaseTakeover?.(claudeSessionId);
-        // 'timeout' (asked, no answer) and 'undeliverable' (never asked — hub had
-        // no delivery path) both offer the SAME force path, just with different
-        // dialog copy — see takeoverDialogCopy. Never collapse them into one
-        // phase: that's exactly the dishonest "isn't responding" framing this
-        // 3-state redesign replaced.
-        if (r?.outcome === 'timeout' || r?.outcome === 'undeliverable') {
-          const forced = await askTakeover(device, r.outcome === 'undeliverable' ? 'undeliverable' : 'force');
-          if (!forced) return false; // "Never mind" — abort
-          const fr = await window.claude.syncSpaces?.leaseForce?.(claudeSessionId);
-          // A failed force means the lease was never overwritten — the other device
-          // may STILL be live and holding it. Never-block (proceed with the resume),
-          // but say so: the user is about to have two writers on one transcript and
-          // recent turns may be missing. Silent here was the 2026-07-18 bug's mask.
-          if (fr && fr.ok === false) {
-            setToast({ message: `Couldn't confirm the handoff from ${device} — it may still be editing this conversation, and recent turns may be missing.`, durationMs: 8000 });
-          }
-        } else if (r?.outcome === 'error') {
-          // The takeover request itself failed (hub error / exception). Same deal:
-          // proceed (never-block) but warn that the other device may still be live.
-          setToast({ message: `Couldn't reach ${device} to hand off this conversation — it may still be editing, and recent turns may be missing.`, durationMs: 8000 });
-        }
-        // 'acquired' -> clean handoff, fall through and resume.
-      }
-    } catch { /* never-block: a lease query/takeover failure must not stop the resume */ }
+    // The gate itself now lives in state/resume-lease-gate.ts — the buddy
+    // floater's own resume list runs the SAME never-block / three-honest-states
+    // logic instead of re-deriving it slightly differently.
+    const proceed = await runLeaseTakeoverGate({
+      claudeSessionId,
+      askTakeover,
+      onWarn: (message) => setToast({ message, durationMs: 8000 }),
+    });
+    if (!proceed) return false; // "Never mind" — abort the resume
 
     // Native-harness resume. Task 6 / Destin's ruling: NEVER auto-launch a
     // binding — the resume-time model selector is ALWAYS the source of the
@@ -2660,17 +2637,16 @@ function AppInner() {
       return false; // deferred to the pre-resume picker — not launched yet
     }
     if (provider === 'native') {
-      const nativeSession = await (window.claude.session.create as any)({
+      const nativeSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
         // WHY the constant: main's title feeder must be able to RECOGNIZE this
         // as a placeholder (shared/session-title.ts). A bare literal here is
         // what let it pass as a real title and block auto-titling on resume.
         name: RESUMING_NATIVE,
         cwd,
-        skipPermissions: false, // native sessions have no PTY permission flow
-        provider: 'native',
+        runtime: 'native',
         resumeSessionId: claudeSessionId,
         binding: nativeBinding, // the selector's pick — becomes the live binding (native-session-host.ts resume() override)
-      });
+      }));
       if (!nativeSession?.id) {
         // The create never acked (Task 6 review — was a silent return). Main also
         // emits a session-error for the split not-synced / folder-missing / data-
@@ -2700,13 +2676,14 @@ function AppInner() {
     const m = resumeModel || realModelAlias(currentModel);
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
-    const newSession = await (window.claude.session.create as any)({
+    const newSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
       name: RESUMING_CLAUDE, // see RESUMING_NATIVE above — different spelling, same contract
       cwd,
-      skipPermissions: resumeDangerous || false,
+      runtime: 'claude',
+      skipPermissions: resumeDangerous,
       resumeSessionId: claudeSessionId,
       model: m,
-    });
+    }));
     if (!newSession?.id) {
       // Honest failure instead of a silent return (Task 6 review — the CC ack-gap).
       setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
@@ -3534,7 +3511,7 @@ function AppInner() {
                           others). Change 17 puts it on the destructive token so it
                           tracks the toggle above it under a community theme. */}
                       {welcomeDangerous && (
-                        <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+                        <SkipPermissionsCaption />
                       )}
                     </>
                   )}

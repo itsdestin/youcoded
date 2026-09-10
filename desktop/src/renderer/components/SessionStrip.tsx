@@ -32,6 +32,7 @@ import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import type { MenuEntry } from './context-menu/build-menu';
+import { SkipPermissionsCaption } from './SkipPermissionsCaption';
 
 // Stable empty map for the non-dragging render, so a new Map is not allocated
 // on every frame the strip re-renders.
@@ -2635,7 +2636,7 @@ export default function SessionStrip({
                       the same token as the toggle beside it, so a community theme
                       restyling its red doesn't leave the two out of sync. */}
                   {dangerous && (
-                    <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+                    <SkipPermissionsCaption />
                   )}
                 </>
               )}
