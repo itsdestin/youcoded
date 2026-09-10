@@ -8,7 +8,21 @@ import { useEscClose } from '../../hooks/use-esc-close';
 // sending, sent and opened-in-GitHub had no surface at all. A failure is NOT a
 // phase — it renders on the review step with the draft intact, which is what
 // "your details stay in the draft and you can retry" actually requires.
-type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened';
+type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened' | 'handing-over' | 'handed-over';
+
+// Carried over from the screen this replaces. The old flow's second action was
+// "Let Claude Try to Fix It": set the workspace up, open a session, hand it the
+// description. The approved design has no such action, so removing it would have
+// deleted a working feature no deck asked to remove — it is kept, in the app's own
+// words, and goes to Destin on the acceptance deck to keep, cut or redesign.
+const HANDOVER_PROMPT = (kind: string, description: string) =>
+  kind === 'bug'
+    ? `I just filed (or am about to file) a bug against YouCoded. Here's what I described: «${description}». `
+      + `Investigate the codebase in this workspace and propose a fix. Read \`docs/PITFALLS.md\` first, `
+      + `and check both desktop and Android touchpoints if the bug could affect either.`
+    : `I want to add a new feature to YouCoded. Here's what I'm asking for: «${description}». `
+      + `Read \`docs/PITFALLS.md\`, then use the brainstorming skill to design it before writing code. `
+      + `Both desktop and Android share the React UI — keep that in mind.`;
 
 /**
  * What opened this report, when something failed (audit E-01). The old popup took
@@ -89,6 +103,26 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
     }
   };
 
+  const handOver = async () => {
+    setError('');
+    setPhase('handing-over');
+    try {
+      // The MANAGED setup, not the legacy fixed-folder installer the old screen
+      // used: that one pulled into ~/youcoded-dev if it recognised it, which R9
+      // forbids. Already set up? Reuse it rather than cloning a second copy.
+      const status = await window.claude.dev.setupStatus();
+      const ready = status.state === 'ready' && status.path
+        ? { ok: true as const, path: status.path }
+        : await window.claude.dev.setupWorkspace();
+      if (!ready.ok) { setError(ready.error); setPhase('review'); return; }
+      await window.claude.dev.openSessionIn({ cwd: ready.path, initialInput: HANDOVER_PROMPT(kind, description) });
+      setPhase('handed-over');
+    } catch (e: unknown) {
+      setError(plainMessage(e, 'A working copy could not be opened, so nothing was started.'));
+      setPhase('review');
+    }
+  };
+
   const send = async () => {
     setError('');
     setTruncated(false);
@@ -143,6 +177,17 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
     <div className="p-4 space-y-4">
 
       {phase === 'sending' && <LoadingState verb="Sending" what="your ticket" />}
+
+      {phase === 'handing-over' && <>
+        <LoadingState verb="Setting up" what="a working copy to try this in" />
+        <p className="text-xs text-fg-2 text-center">This can take a few minutes the first time. Your ticket is not sent — this is a separate attempt to fix it.</p>
+      </>}
+
+      {phase === 'handed-over' && <>
+        <p className="text-sm text-fg">Your assistant is on it, in a new session.</p>
+        <p className="text-xs text-fg-2">Nothing was sent to GitHub. If the fix works, you can propose it from that session; if it doesn’t, come back and submit the ticket instead.</p>
+        <Button className="w-full py-2.5" onClick={onClose}>Done</Button>
+      </>}
 
       {phase === 'sent' && <>
         <p className="text-sm text-fg">Your ticket is submitted.</p>
@@ -204,7 +249,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
               ticket" to "Continue in GitHub" — a tester could not tell what had
               happened or why. Files cannot be attached here at all: GitHub uploads a
               file the moment it is attached, so that step is theirs. */}
-          <SettingRow title="Screenshots or files" description="Finish this ticket in your browser, where you can attach them" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">You attach files in GitHub, not here — GitHub uploads a file as soon as you attach it, so it has to happen where you can see it.</AnchorTip>} />
+          <SettingRow title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Ticking this finishes your ticket in your browser, where you attach the files yourself. They cannot be attached here: GitHub uploads a file the moment it is attached, so it has to happen where you can see it.</AnchorTip>} />
         </section> : <section className="space-y-3">
           {kind === 'bug' && includeContext && <div className="space-y-1">
             <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Error details and version</h3>
@@ -250,6 +295,13 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
               retry; the footer keeps only the way back to editing. */}
           <div className="flex flex-col gap-2">
             {!error && <Button className="w-full py-2.5" onClick={send}>{attachments ? 'Continue in GitHub' : 'Submit public ticket'}</Button>}
+            {/* Secondary, and second, for the same reason the old screen gave it that
+                weight: it spends a lot of the user's model usage. The warning under it
+                is the old screen's, minus the vendor name. */}
+            <Button variant="secondary" className="w-full py-2.5" disabled={!description.trim()} onClick={handOver}>
+              {kind === 'bug' ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'}
+            </Button>
+            <p className="text-3xs text-fg-muted text-center">Uses a lot of your model allowance — not recommended on smaller plans.</p>
             <Button variant="secondary" className="w-full py-2.5" onClick={() => { setError(''); setPhase('draft'); }}>Back to draft</Button>
           </div>
         </> : <>

@@ -60,66 +60,68 @@ describe('BugReportPopup', () => {
     };
   });
 
-  // P-15: titleless before, so no ✕. The title follows the Bug/Feature switch.
-  it('titles itself after the selected report kind and offers a ✕', () => {
+  // Rewritten 2026-09-10, when the gate came off and the legacy screen was deleted.
+  // The promises below are real and kept; only the screen carrying them changed.
+  // The one that did NOT survive is "the title follows the Bug/Feature switch" —
+  // R2-10 replaced it with a single "Submit a ticket" heading for both tabs, which
+  // Destin approved, so asserting the old behaviour would pin a reverted decision.
+  it('keeps one heading for both kinds, and offers a ✕', () => {
     const onClose = vi.fn();
     render(<BugReportPopup open={true} onClose={onClose} />);
-    expect(screen.getByRole('heading', { name: 'Report a bug' })).toBeInTheDocument();
-    fireEvent.click(screen.getByText(/^Feature$/));
-    expect(screen.getByRole('heading', { name: 'Request a feature' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close Request a feature' }));
+    expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Feature' }));
+    expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close/ }));
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('disables Continue until description is at least 10 chars', () => {
+  it('will not move on until there is something to send', () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    const cont = screen.getByText(/^Continue$/) as HTMLButtonElement;
-    expect(cont).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'short' } });
-    expect(cont).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'this is long enough' } });
-    expect(cont).not.toBeDisabled();
+    const review = screen.getByRole('button', { name: 'Review ticket' }) as HTMLButtonElement;
+    expect(review).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    expect(review).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    expect(review).not.toBeDisabled();
   });
 
-  it('passes the bug label when submitting from Bug toggle', async () => {
+  const fill = (kind?: 'Feature') => {
+    if (kind) fireEvent.click(screen.getByRole('tab', { name: kind }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+  };
+
+  it('passes the bug label when submitting from the Bug tab', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'a real bug description' } });
-    fireEvent.click(screen.getByText(/^Continue$/));
-    // Wait for summarize to resolve and Submit button to render.
-    await screen.findByText(/Submit as GitHub Issue/i);
-    fireEvent.click(screen.getByText(/Submit as GitHub Issue/i));
-    await screen.findByText(/Issue created/i);
+    fill();
+    await screen.findByText(/Your ticket is submitted/i);
     expect((window as any).claude.dev.submitIssue).toHaveBeenCalledWith(
       expect.objectContaining({ label: 'bug' }),
     );
   });
 
-  it('passes the enhancement label when Feature toggle is selected', async () => {
+  it('passes the enhancement label when the Feature tab is selected', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    fireEvent.click(screen.getByText(/^Feature$/));
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'a real feature description' } });
-    fireEvent.click(screen.getByText(/^Continue$/));
-    await screen.findByText(/Submit as GitHub Issue/i);
-    fireEvent.click(screen.getByText(/Submit as GitHub Issue/i));
-    await screen.findByText(/Issue created/i);
+    fill('Feature');
+    await screen.findByText(/Your ticket is submitted/i);
     expect((window as any).claude.dev.submitIssue).toHaveBeenCalledWith(
       expect.objectContaining({ label: 'enhancement' }),
     );
   });
 
-  it('passes raw fields (kind, summary, description) instead of a pre-built body', async () => {
+  it('passes raw fields instead of a pre-built body', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'a real bug description' } });
-    fireEvent.click(screen.getByText(/^Continue$/));
-    await screen.findByText(/Submit as GitHub Issue/i);
-    fireEvent.click(screen.getByText(/Submit as GitHub Issue/i));
-    await screen.findByText(/Issue created/i);
+    fill();
+    await screen.findByText(/Your ticket is submitted/i);
     const callArgs = (window as any).claude.dev.submitIssue.mock.calls[0][0];
-    // New contract: renderer passes raw fields, not a pre-assembled body string.
+    // The body is assembled in main, where the real app version and OS live.
     expect(callArgs).toHaveProperty('kind', 'bug');
-    expect(callArgs).toHaveProperty('summary');
     expect(callArgs).toHaveProperty('description');
     expect(callArgs).not.toHaveProperty('body');
+    // And no AI summary was produced, because none was asked for (R12).
+    expect((window as any).claude.dev.summarizeIssue).not.toHaveBeenCalled();
   });
 });
 

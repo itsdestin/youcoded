@@ -67,18 +67,18 @@ describe('development design safety', () => {
       .toBe('Opening the menu closes the window.');
   });
 
-  it('shows the legacy ticket screen when the workbench flag is absent', () => {
-    // WHY this exists (code review C15): every other test in this file runs inside
-    // `?mode=workbench`, so nothing here exercised what a user actually gets — and
-    // the gate could have been deleted, or left up by accident, with the suite green
-    // either way. This pins the gate as a DECISION. It is deliberately still up
-    // because the legacy screen carries "Let Claude Try to Fix It" and no deck asked
-    // to remove it; when Destin answers that at acceptance, this test changes with it.
+  it('shows the approved ticket screen to a user with no workbench flag', () => {
+    // WHY this exists (code review C15, then the grader): every other test in this
+    // file runs inside `?mode=workbench`, so for a while the whole suite was green on
+    // a screen no user could open — `main.ts` never puts a mode on a packaged window.
+    // Thirteen signed contract rows were unmet for that one reason. This pins which
+    // screen a real user gets, so the answer can never again be "not the one we
+    // tested".
     window.history.replaceState({}, '', '/');
     Object.assign(window, { claude: { dev: { logTail: vi.fn(), diagnostics: vi.fn(), summarizeIssue: vi.fn() } } });
     render(<BugReportPopup open onClose={() => {}} />);
-    expect(screen.getByRole('heading', { name: 'Report a bug' })).toBeTruthy();
-    expect(screen.queryByRole('heading', { name: 'Submit a ticket' })).toBeNull();
+    expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Report a bug' })).toBeNull();
   });
   it('reviews selected logs before AI and keeps fields through back without demo controls', () => {
     render(<BugReportPopup open onClose={() => {}} />);

@@ -545,8 +545,9 @@ describe('the engine card', () => {
     await waitFor(() => expect(screen.getByText('Diagnose with the assistant')).toBeTruthy());
     await act(async () => { fireEvent.click(screen.getByText('Diagnose with the assistant')); });
     // The app's one bug-report surface opens — its own dialog title, which
-    // nothing else on this card renders.
-    await waitFor(() => expect(screen.getByText('Report a bug')).toBeTruthy());
+    // nothing else on this card renders. Renamed 2026-09-10 when the approved
+    // screen replaced the legacy one for every user: one heading, both kinds.
+    await waitFor(() => expect(screen.getByText('Submit a ticket')).toBeTruthy());
   });
 
   it('T7: the message is NOT hidden behind the expanded details panel', async () => {
