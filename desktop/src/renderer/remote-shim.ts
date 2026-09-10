@@ -31,7 +31,15 @@ interface PendingRequest {
   outcomeUnknown?: boolean;
 }
 
-/** Ids whose fate the host could not tell us. The UI reads this to say so plainly. */
+/**
+ * Ids whose fate the host could not tell us, announced as a window event.
+ *
+ * NOTHING LISTENS TO THIS YET. The sentence here used to read "The UI reads this to say so
+ * plainly", which was not true: the reconciliation runs and the event fires, and the person
+ * is told nothing either way. Sending is still safe — a request is never re-run — but the
+ * "we don't know whether that happened" state has no screen. Filed as an open item in
+ * docs/roadmap/remote-access.md rather than invented at review time.
+ */
 export const OUTCOME_UNKNOWN_EVENT = 'youcoded:outcome-unknown';
 
 export type RemoteConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
