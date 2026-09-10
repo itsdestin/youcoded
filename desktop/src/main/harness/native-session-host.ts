@@ -3877,7 +3877,10 @@ export class NativeSessionHost extends EventEmitter {
       return { ok: false, reason, detail: err?.message ?? String(err) };
     }
 
-    const fitted = fitInjection(loaded.body, entry.session.profileSnapshot.injectionBudgetTokens);
+    // loaded.file so a cut skill names the file holding the rest — on a small model
+    // this is the ONLY route into a skill (the Skill tool is not attached), so
+    // without it a cut skill is lost rather than deferred.
+    const fitted = fitInjection(loaded.body, entry.session.profileSnapshot.injectionBudgetTokens, loaded.file);
     // runSkill, NOT send: the model needs the instructions but the TIMELINE needs
     // to show what the user did. Sending the body through send() rendered a 26k
     // character SKILL.md as a chat bubble (Destin, 2026-07-28).

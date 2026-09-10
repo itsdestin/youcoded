@@ -958,7 +958,9 @@ export class HarnessSession extends EventEmitter {
       for (const t of index.match(subject)) {
         if (this.injectedTriggerIds.has(t.id)) continue;
         this.injectedTriggerIds.add(t.id);
-        const fitted = fitInjection(t.body, this.profile.injectionBudgetTokens);
+        // t.source is the rule's path relative to cwd — inside the project, so the
+        // model can actually read it when the notice tells it to.
+        const fitted = fitInjection(t.body, this.profile.injectionBudgetTokens, t.source);
         this.history.push({
           role: 'user',
           content: `<project-rule source="${t.source}">\n${fitted.text}\n</project-rule>`,
@@ -1000,7 +1002,8 @@ export class HarnessSession extends EventEmitter {
     // "you may load a skill", which invites the model to invent an id and burn a
     // step discovering it doesn't exist.
     if (scoped.list().length === 0) return;
-    this.toolByName.set('Skill', createSkillTool(scoped));
+    // Same budget the /name route uses, so one skill is one size however it was reached.
+    this.toolByName.set('Skill', createSkillTool(scoped, this.profile.injectionBudgetTokens * 4));
   }
 
   /** Add or remove the Task tool — and, since Task 14, ModelSearch alongside
