@@ -514,8 +514,16 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
 
         {tab === 'project' && (
           <section>
-            <h3 className={EYEBROW}>This project’s rules</h3>
-            <p className="text-2xs text-fg-muted leading-snug mb-2">Written for this project and read once when the chat started.</p>
+            {/* Named for what the tab HOLDS, not for one of its cards: a Claude
+                Code chat shows your own rules here too, and "This project's
+                rules" over a card labelled "You, in every project" is a heading
+                that contradicts the thing underneath it. */}
+            <h3 className={EYEBROW}>Rules it was given</h3>
+            <p className="text-2xs text-fg-muted leading-snug mb-2">
+              {userRules
+                ? 'Written by you, and read when the chat started.'
+                : 'Written for this project, and read when the chat started.'}
+            </p>
             {!rules && !userRules ? (
               <p className="text-2xs text-fg-muted">There is no rules file for this project, and none of your own.</p>
             ) : (

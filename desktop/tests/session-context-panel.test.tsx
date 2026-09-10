@@ -39,6 +39,33 @@ describe('the context window is shown as its nameplate', () => {
   });
 });
 
+describe('the Project tab is named for what it holds', () => {
+  // A Claude Code chat shows YOUR rules here as well as the project's, so a
+  // heading naming only one of them contradicts the card underneath it.
+  const withUser: Partial<SessionContext> = {
+    assembledBy: 'claude-code', skills: [], tools: null, contextWindowTokens: null,
+    projectInstructions: { path: '/w/CLAUDE.md', truncated: false },
+    userInstructions: { path: '/home/me/.claude/CLAUDE.md', truncated: false },
+  };
+
+  it('shows both files, and neither card claims to be the other', () => {
+    show(withUser);
+    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
+    expect(screen.getByText(/This project ·/)).toBeInTheDocument();
+    expect(screen.getByText(/You, in every project ·/)).toBeInTheDocument();
+    expect(screen.queryByText('This project’s rules')).toBeNull();
+  });
+
+  it('does not claim we read your file in full — only that we did not shorten it', () => {
+    // For a Claude Code chat "Read in full" would be a claim about someone
+    // else's work: the CLI manages its own window and we cannot see what it did.
+    show(withUser);
+    fireEvent.click(screen.getByRole('tab', { name: 'Project' }));
+    expect(screen.queryByText(/Read in full/)).toBeNull();
+    expect(screen.getAllByText(/didn’t shorten it/).length).toBe(2);
+  });
+});
+
 describe('a Claude Code chat never claims what it cannot know', () => {
   const cc: Partial<SessionContext> = {
     assembledBy: 'claude-code', contextWindowTokens: null,
