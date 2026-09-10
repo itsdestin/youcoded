@@ -48,7 +48,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
 
   it('renders the Settings gear and the Projects button', () => {
     renderBare();
-    expect(screen.getByTitle('Settings')).toBeTruthy();
+    expect(screen.getByLabelText('Settings')).toBeTruthy();
     expect(screen.getByLabelText('Open Projects')).toBeTruthy();
   });
 
@@ -57,10 +57,10 @@ describe('BareHeaderBar (welcome screen frame)', () => {
     expect(container.querySelector('.session-strip')).toBeNull();
     expect(screen.queryByLabelText('Chat')).toBeNull();
     expect(screen.queryByLabelText('Terminal')).toBeNull();
-    expect(screen.queryByTitle('Session Files')).toBeNull();
+    expect(screen.queryByLabelText('Session Files')).toBeNull();
     // Renamed from 'Connect 4' with the arcade (§4.1) — the button now opens a
     // four-game pane, so it names the pane.
-    expect(screen.queryByTitle('Games')).toBeNull();
+    expect(screen.queryByLabelText('Games')).toBeNull();
     expect(screen.queryByLabelText('Open menu')).toBeNull();
   });
 
@@ -77,7 +77,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
   it('wires the gear to onToggleSettings and Projects to PROJECT_VIEW_OPENED', () => {
     const onToggleSettings = vi.fn();
     const { dispatch } = renderBare({ onToggleSettings });
-    fireEvent.click(screen.getByTitle('Settings'));
+    fireEvent.click(screen.getByLabelText('Settings'));
     expect(onToggleSettings).toHaveBeenCalledTimes(1);
     fireEvent.click(screen.getByLabelText('Open Projects'));
     expect(dispatch).toHaveBeenCalledWith({ type: 'PROJECT_VIEW_OPENED' });
@@ -99,7 +99,7 @@ describe('BareHeaderBar (welcome screen frame)', () => {
   it('on a narrow viewport still shows gear + Projects directly (no session-scoped ||| menu)', () => {
     stubViewport(true);
     renderBare();
-    expect(screen.getByTitle('Settings')).toBeTruthy();
+    expect(screen.getByLabelText('Settings')).toBeTruthy();
     expect(screen.getByLabelText('Open Projects')).toBeTruthy();
     expect(screen.queryByLabelText('Open menu')).toBeNull();
   });
@@ -111,9 +111,9 @@ describe('BareHeaderBar (welcome screen frame)', () => {
     const win = { minimize: vi.fn(), maximize: vi.fn(), close: vi.fn() };
     (window as any).claude = { window: win };
     renderBare();
-    fireEvent.click(screen.getByTitle('Minimize'));
-    fireEvent.click(screen.getByTitle('Maximize'));
-    fireEvent.click(screen.getByTitle('Close'));
+    fireEvent.click(screen.getByLabelText('Minimize'));
+    fireEvent.click(screen.getByLabelText('Maximize'));
+    fireEvent.click(screen.getByLabelText('Close'));
     expect(win.minimize).toHaveBeenCalledTimes(1);
     expect(win.maximize).toHaveBeenCalledTimes(1);
     expect(win.close).toHaveBeenCalledTimes(1);
@@ -128,8 +128,8 @@ describe('BareHeaderBar (welcome screen frame)', () => {
     (window as any).claude = { window: { minimize: vi.fn(), maximize: vi.fn(), close: vi.fn() } };
     try {
       renderBare();
-      expect(screen.queryByTitle('Minimize')).toBeNull();
-      expect(screen.queryByTitle('Close')).toBeNull();
+      expect(screen.queryByLabelText('Minimize')).toBeNull();
+      expect(screen.queryByLabelText('Close')).toBeNull();
     } finally { delete (window as any).__PLATFORM__; }
   });
 });
@@ -159,7 +159,7 @@ describe('welcome screen wiring (source)', () => {
   });
 
   it('the Settings gear is defined exactly once in HeaderBar.tsx (shared by both headers)', () => {
-    expect(header.match(/title="Settings"/g)?.length).toBe(1);
+    expect(header.match(/<Tooltip text="Settings"/g)?.length).toBe(1);
     expect(header.match(/<SettingsGearButton\b/g)?.length).toBe(2);
   });
 });
