@@ -1117,8 +1117,12 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch)');
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, repo, quant)');
   });
-  // Android answers these six — and ONLY these six — with `unsupported`, not the
-  // plain not-implemented error every other desktop-only channel sends.
+  // Android NAMES these six — and only these six — as `unsupported` inside the
+  // not-implemented list; every other desktop-only channel listed there sends the
+  // plain not-implemented error. (Since 2026-09-10 the dispatcher's final `else`
+  // ALSO answers `unsupported`, for channels it has no branch for at all — that is
+  // the catch-all, not a seventh label, and it is pinned in
+  // android-honest-build.test.ts.)
   //
   // WHY the set has to be checked for EQUALITY and not just for presence: a
   // Kotlin `when` branch runs from its FIRST comma-separated value down to the
