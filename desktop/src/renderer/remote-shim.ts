@@ -759,6 +759,25 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           console.log('[remote-shim] auth:ok from', getWsUrl());
           setConnectionState('connected');
           markConnectedForNotices();
+          // WHY remote mode is declared HERE and not only in connectToHost: that function is
+          // the ANDROID pairing path, and it was the only thing that ever set 'remote'. A
+          // plain phone BROWSER opening the host's address goes through connect() instead,
+          // so isRemoteMode() stayed false on the one surface the flag exists to describe.
+          //
+          // Everything keyed on it was therefore inert there: the attention classifier kept
+          // polling the host for terminal text (which is what still put a channel id on
+          // Destin's screen after I had "fixed" it), the theme kept trying to load a
+          // wallpaper that only exists on the host, and Unpair stayed enabled on a phone.
+          //
+          // The test is the local bridge, not the platform string: an Android WebView on
+          // file:// talks to a runtime on the same device and is genuinely local, while the
+          // server tells every client `platform: 'desktop'`, so getPlatform() cannot answer
+          // this. connectToHost still declares it explicitly for the Android-paired case,
+          // which IS file:// and IS remote.
+          if (!isAndroidLocal()) {
+            void import('./platform').then(({ setConnectionMode }) => setConnectionMode('remote'));
+          }
+
           // Fix: drain any messages queued during the cold-start window
           // (mount-time fetches that fired before auth completed). Must be
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.

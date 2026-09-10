@@ -58,6 +58,25 @@ describe('connecting a phone does not open with a list of what is broken', () =>
   });
 });
 
+describe('a phone browser knows it is remote', () => {
+  it('declares remote mode on auth, not only on the Android pairing path', () => {
+    // The flag that names this whole situation was set in exactly one place: connectToHost,
+    // which is how an ANDROID app pairs to a desktop. A plain phone browser opening the
+    // host's address goes through connect(), so isRemoteMode() was false there — on the one
+    // surface the flag exists for. Everything keyed on it was inert: the terminal poll, the
+    // wallpaper, the disabled Unpair button.
+    expect(shim).toContain('if (!isAndroidLocal()) {');
+    expect(shim).toMatch(/markConnectedForNotices\(\);[\s\S]{0,1400}setConnectionMode\('remote'\)/);
+  });
+
+  it('leaves an Android WebView on its own device local', () => {
+    // file:// with no target is a WebView talking to a runtime on the same phone. It has a
+    // real terminal buffer and real theme files, so it is not remote and must not be told
+    // it is. The platform string cannot make this call: the host labels everyone 'desktop'.
+    expect(shim).toContain("return location.protocol === 'file:' && !targetUrl;");
+  });
+});
+
 describe('a computer with no password says so before asking for one', () => {
   it('the host answers what it needs, without authentication and without saying more', () => {
     expect(server).toContain("=== '/remote-state'");
