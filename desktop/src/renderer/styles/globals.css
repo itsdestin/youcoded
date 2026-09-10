@@ -1409,6 +1409,24 @@ pre.yc-code code {
   color: inherit;
 }
 
+/* Let the browser skip layout and paint for code blocks that are scrolled out
+   of sight.
+   WHY: syntax highlighting wraps every keyword, string and comment in its own
+   <span>. Measured 2026-09-10 on the perf rig's 394 KB fixture: 7,056 elements
+   without highlighting, 108,576 with — and laying all of them out was the
+   single largest share of a 1,487 ms open. The DOM is left completely intact,
+   so find-in-page, the Copy button and filepath chips are unaffected; only the
+   work for blocks nobody is looking at is deferred.
+   `auto` in contain-intrinsic-size means "remember the real height once you
+   have measured it", which keeps the scrollbar honest after the first pass;
+   the 8rem is only the guess for a block never yet rendered.
+   Scoped to the block wrapper MarkdownContent puts around every <pre> — keep
+   .yc-code-block there or this stops matching. */
+.yc-code-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 8rem;
+}
+
 /* Command-drawer tiles opt OUT of glassmorphism.
    theme-engine.ts injects `[data-wallpaper] .layer-surface { backdrop-filter:
    blur(<panels-blur>px) ... }`, and change 22 moved every drawer tile (skill
