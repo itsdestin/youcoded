@@ -6,6 +6,7 @@ import hljsLightCss from 'highlight.js/styles/github.css?inline';
 
 import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
+import { isRemoteMode } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
 import { buildDefaultIconSvg, rasterizeSvgToPngDataUrl } from '../themes/theme-default-icon';
@@ -545,7 +546,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Apply theme to DOM whenever active theme or reduced-effects changes
   useEffect(() => {
-    applyThemeToDom(activeTheme, reducedEffects);
+    // WHY a remote client gets the COLOURS and not the background: a theme's wallpaper and
+    // pattern are files on the computer that owns the theme, so their paths mean nothing in
+    // a phone browser — it would ask its own origin for them and get nothing. Dropping
+    // `background` also turns the glass knobs off (blur defaults to 0, opacity to 1), which
+    // is what Destin asked for: "not full backgrounds or glass effects yet, but basic
+    // theme/color tokens" (2026-09-10). Tokens and shape still apply, so a phone paired to
+    // this computer looks like this computer.
+    applyThemeToDom(
+      isRemoteMode() ? { ...activeTheme, background: undefined } : activeTheme,
+      reducedEffects,
+    );
     applyHighlightTheme(activeTheme.dark);
 
     // Hot-swap the Electron window + dock icon. Guarded via optional chaining —

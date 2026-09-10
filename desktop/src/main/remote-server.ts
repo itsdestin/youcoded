@@ -363,6 +363,19 @@ export class RemoteServer {
     const hasStaticBuild = fs.existsSync(path.join(staticDir, 'index.html'));
 
     this.httpServer = http.createServer((req, res) => {
+      // WHY this endpoint exists: without it the sign-in screen has no way to know the host
+      // has no password set, so it shows a password box, waits for you to type something,
+      // and only then says "Remote access is not configured". It asked for a secret that
+      // could not have existed. Now the screen knows before it draws.
+      //
+      // It discloses nothing new: anyone who can open this port learns the same thing by
+      // connecting, because the refusal names its own reason. It is deliberately the ONLY
+      // thing served without authentication, and it says nothing about devices or sessions.
+      if ((req.url || '').split('?')[0] === '/remote-state') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ needsSetup: !this.config.passwordHash }));
+        return;
+      }
       if (hasStaticBuild) {
         this.handleHttpRequest(req, res, staticDir);
       } else {
@@ -2067,6 +2080,37 @@ export class RemoteServer {
           this.respond(client.ws, type, id, true);
         } catch {
           this.respond(client.ws, type, id, false);
+        }
+        break;
+      }
+      // WHY reading a theme file is bridged and nothing else under `theme:` is: the phone
+      // ALREADY learns which theme the host is on — `appearance:get` above hands it the
+      // slug — and then could not find out what that slug means, because loading the
+      // definition went unanswered. So a community theme fell back to a built-in and the
+      // phone looked like a different app. Destin's own theme is one (2026-09-10).
+      //
+      // Read-only, and the same two guards the desktop handler uses: a slug that is not a
+      // plain slug is refused, and the resolved path must still be inside the themes
+      // directory, so `../` cannot walk out of it. Writing a theme stays desktop-only,
+      // like every other change to the host.
+      case 'theme:read-file': {
+        const slug = String(payload?.slug ?? '');
+        if (!/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/.test(slug)) {
+          this.respond(client.ws, type, id, { ok: false, error: 'Invalid theme slug' });
+          break;
+        }
+        const { userThemeManifest, THEMES_DIR } = require('./theme-watcher');
+        const manifestPath = path.resolve(userThemeManifest(slug));
+        if (!manifestPath.startsWith(THEMES_DIR + path.sep)) {
+          this.respond(client.ws, type, id, { ok: false, error: 'Invalid theme slug' });
+          break;
+        }
+        try {
+          this.respond(client.ws, type, id, await fs.promises.readFile(manifestPath, 'utf-8'));
+        } catch {
+          // Not installed on this computer. The client keeps the theme it has rather than
+          // being handed a fallback it did not choose.
+          this.respond(client.ws, type, id, { ok: false, error: 'Theme not found' });
         }
         break;
       }

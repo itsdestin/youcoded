@@ -8,7 +8,7 @@ import type { VoiceReadiness } from '../shared/voice-types';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
-import { REMOTE_UNSUPPORTED_EVENT, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import type { FirstRunState } from '../shared/first-run-types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
@@ -392,6 +392,14 @@ export function responseOutcome(channel: string, payload: unknown): 'unsupported
 }
 
 function noteUnsupported(channel: string): void {
+  // WHY an unnamed channel says nothing at all: the fallback name IS the channel id, and a
+  // toast reading "terminal:get-screen-text isn't available via remote access yet." tells a
+  // non-developer nothing they can act on — it only says something is broken. The console
+  // warning below still names it for whoever is fixing it.
+  if (!hasFeatureName(channel)) {
+    console.warn(`[remote-shim] not available over remote access (unnamed): ${channel}`);
+    return;
+  }
   const feature = remoteFeatureName(channel);
   if (announced.has(feature)) return;
   announced.add(feature);

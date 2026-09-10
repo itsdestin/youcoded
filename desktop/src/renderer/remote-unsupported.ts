@@ -38,6 +38,11 @@ const FEATURE_NAMES: Array<[string, string]> = [
   // here is a toast reading a raw channel id at somebody.
   ['provider:', 'The model providers list'],
   ['native:', 'The built-in assistant'],
+  // Reading the terminal's own screen. The classifier that polled this no longer runs on a
+  // remote browser, so this should be unreachable — it stays as the name of last resort,
+  // because the alternative is what Destin actually saw: "terminal:get-screen-text isn't
+  // available via remote access yet.", a channel id shown to someone who does not write code.
+  ['terminal:', 'The terminal'],
 ];
 
 /** Plain-language name for the feature a channel belongs to. Falls back to the
@@ -51,4 +56,9 @@ export function remoteFeatureName(channel: string): string {
 
 export function remoteUnsupportedMessage(channel: string): string {
   return `${remoteFeatureName(channel)} isn't available via remote access yet.`;
+}
+
+/** Whether this channel has a plain-language name, or would show its own id to the user. */
+export function hasFeatureName(channel: string): boolean {
+  return FEATURE_NAMES.some(([prefix]) => channel.startsWith(prefix));
 }
