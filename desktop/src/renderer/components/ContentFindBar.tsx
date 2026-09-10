@@ -7,7 +7,7 @@
 // overlay) — otherwise its own text (the match counter) would be walked and
 // matched by the search.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { TextInput, Tooltip } from './ui';
+import { ChevronDown, TextInput, Tooltip } from './ui';
 
 function highlightsSupported(): boolean {
   return typeof CSS !== 'undefined' && 'highlights' in CSS && typeof (window as any).Highlight === 'function';
@@ -157,10 +157,7 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
       </Tooltip>
       <Tooltip text="Next (Enter)"><button type="button" onClick={() => go(1)}
         className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-dim hover:text-fg hover:bg-well">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-          <path d="m6 9 6 6 6-6" />
-        </svg>
+        <ChevronDown className="w-[13px] h-[13px]" />
       </button>
       </Tooltip>
       <Tooltip text="Close (Esc)"><button type="button" onClick={onClose}

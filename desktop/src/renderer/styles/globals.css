@@ -1116,6 +1116,44 @@ body[data-mode="buddy-chat"] #theme-bg {
 .scroll-fade[data-fade-top="true"]::before { opacity: 1; }
 .scroll-fade[data-fade-bottom="true"]::after { opacity: 1; }
 
+/* Sideways twin of .scroll-fade for a single row of chips (design guide §4.8:
+   a chip row that does not fit scrolls sideways behind an edge fade). Same hook
+   (useScrollFade sets data-fade-left / data-fade-right), same sticky-pseudo
+   trick turned 90°. First home: the Resume browser's filter chips, where at
+   390px the third chip was simply cut off with nothing saying the row moved. */
+.scroll-fade-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  position: relative;
+}
+.scroll-fade-x::-webkit-scrollbar { display: none; }
+.scroll-fade-x::before,
+.scroll-fade-x::after {
+  content: '';
+  display: block;
+  position: sticky;
+  align-self: stretch;
+  flex: 0 0 24px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.scroll-fade-x::before {
+  left: 0;
+  margin-right: -24px;
+  background: linear-gradient(to right, var(--panel) 0%, transparent 100%);
+}
+.scroll-fade-x::after {
+  right: 0;
+  margin-left: -24px;
+  background: linear-gradient(to left, var(--panel) 0%, transparent 100%);
+}
+.scroll-fade-x[data-fade-left="true"]::before { opacity: 1; }
+.scroll-fade-x[data-fade-right="true"]::after { opacity: 1; }
+
 /* Floating overlays (portaled menus/popups). Solid themes: opaque.
    Wallpaper themes: translucent + blur (injected by theme-engine). */
 .glass-overlay {

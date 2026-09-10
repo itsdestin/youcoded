@@ -1,18 +1,21 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { ResumeFilterPopover } from './ResumeFilterPopover';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 import {
   applyFilters,
   sortSessions,
   groupSessions,
   getAvailableProjects,
+  pickLabel,
   type FilterState,
   type FlagName,
 } from './resume-browser-filters';
@@ -59,55 +62,51 @@ function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
 
-// Shared trigger-button shape for the filter row beneath the search bar.
-// Inactive pills look like the search input frame; active pills tint with the
-// accent so the user can see at a glance which pills have departed from
-// default state — narrowing filters (Projects, Tags) AND a non-default sort
-// direction (Sort). Don't "tighten" the predicate to only narrowing — Sort
-// would lose its visual cue.
-function FilterPill({
-  active,
-  onClick,
-  children,
-  hasPopup,
-  expanded,
-  buttonRef,
-}: {
-  active: boolean;
-  // Receives the MouseEvent so dropdown-owning callers can stopPropagation()
-  // — the Projects + Tags pills (Tasks 4 + 5) rely on this to keep their
-  // outside-click handler from immediately re-closing the dropdown.
-  onClick: (e: React.MouseEvent) => void;
-  children: React.ReactNode;
-  // Optional: when the pill opens a dropdown, callers pass these so screen
-  // readers announce both "active filter" (aria-pressed) AND dropdown state.
-  // expanded is only read when hasPopup is true; React strips both attrs
-  // entirely when hasPopup is falsy (Sort pill).
-  hasPopup?: boolean;
-  expanded?: boolean;
-  // Optional: dropdown-owning callers pass a ref so they can measure the
-  // trigger's bounding rect for portal positioning. Sort doesn't need it.
-  buttonRef?: React.Ref<HTMLButtonElement>;
-}) {
+// Filter menu rows and footer (design guide G-21: 28px rows of mark · label ·
+// right-aligned count at text-xs; actions in a footer under a hairline, where
+// FolderSwitcher and ModelPicker put theirs). One recipe shared by the Projects
+// and Tags menus so the two cannot drift into two looks again (2026-09-10).
+const MENU_ROW = 'w-full h-7 px-3 text-xs flex items-center gap-2 text-left text-fg-2 hover:bg-inset transition-colors';
+const MENU_FOOTER = 'border-t border-edge flex divide-x divide-edge';
+const MENU_FOOTER_ACTION = 'flex-1 px-2.5 py-2 text-xs whitespace-nowrap text-fg-dim hover:bg-inset hover:text-fg transition-colors disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-fg-dim';
+
+// Renders pickLabel()'s answer: the text, and a muted numeral when there is one.
+function PickLabel({ text, count }: { text: string; count?: number }) {
+  return count ? <>{text} <span className="opacity-70 tabular-nums">{count}</span></> : <>{text}</>;
+}
+
+// The sort chip's glyph: three bars with a down arrow, running wide-to-narrow
+// for newest first and narrow-to-wide for oldest first. Destin picked it on the
+// round-2 deck (C-1 "bars") over two-way arrows and words only, after rejecting
+// round 1's single arrow that turned over ("still don't like the arrow").
+function SortArrow({ muted, up }: { muted: boolean; up: boolean }) {
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      onClick={onClick}
-      // aria-pressed conveys the toggle state to assistive tech. Mirrors the
-      // Show Complete toggle's pattern further down in this file.
-      aria-pressed={active}
-      aria-haspopup={hasPopup ? 'listbox' : undefined}
-      aria-expanded={hasPopup ? !!expanded : undefined}
-      className={`px-2.5 py-1 rounded-full text-2xs flex items-center gap-1.5 transition-colors duration-75 ${
-        active
-          ? 'bg-accent/10 border border-accent/40 text-fg'
-          : 'bg-inset border border-edge-dim text-fg-muted hover:text-fg'
-      }`}
+    <svg
+      className={`w-3.5 h-3.5 shrink-0 ${muted ? 'text-fg-muted' : ''}`.trim()}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
     >
-      {children}
-    </button>
+      <path
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d={up ? 'm3 16 4 4 4-4M7 20V4M11 4h4M11 8h7M11 12h10' : 'm3 16 4 4 4-4M7 20V4M11 4h10M11 8h7M11 12h4'}
+      />
+    </svg>
   );
+}
+
+// State updater that returns the PREVIOUS position object when the new one has
+// the same numbers, so React bails out instead of re-rendering — required by the
+// layout effect below, which depends on one of these positions.
+function samePos<T extends Record<string, number>>(next: T | null): (prev: T | null) => T | null {
+  return (prev) => {
+    if (!next || !prev) return next;
+    for (const k of Object.keys(next)) if (next[k] !== prev[k]) return next;
+    return prev;
+  };
 }
 
 // Compute fixed-position coords for a portaled dropdown anchored just below a
@@ -118,13 +117,18 @@ function FilterPill({
 function measureDropdown(
   triggerRef: React.RefObject<HTMLButtonElement | null>,
   dropdownWidthPx: number,
+  boundsRef?: React.RefObject<HTMLElement | null>,
 ): { top: number; left: number } | null {
   const el = triggerRef.current;
   if (!el) return null;
   const rect = el.getBoundingClientRect();
-  // Clamp so the dropdown's right edge stays at least 8px inside the viewport.
+  // Clamp so the dropdown's right edge stays inside the row it hangs from (so
+  // it never pokes past the panel — UX review U15 saw the Tags menu reach to
+  // within 9px of a phone's screen edge) and at least 8px inside the viewport.
   // If the trigger sits too far right, the dropdown shifts left.
-  const maxLeft = Math.max(8, window.innerWidth - dropdownWidthPx - 8);
+  const bounds = boundsRef?.current?.getBoundingClientRect();
+  const rightLimit = Math.min(window.innerWidth - 8, bounds ? bounds.right : Infinity);
+  const maxLeft = Math.max(8, rightLimit - dropdownWidthPx);
   return {
     top: rect.bottom + 4,
     left: Math.min(rect.left, maxLeft),
@@ -140,11 +144,12 @@ function useDropdownReposition(
   triggerRef: React.RefObject<HTMLButtonElement | null>,
   dropdownWidthPx: number,
   setPosition: React.Dispatch<React.SetStateAction<{ top: number; left: number } | null>>,
+  boundsRef?: React.RefObject<HTMLElement | null>,
 ): void {
   useEffect(() => {
     if (!isOpen) return;
     const remeasure = () => {
-      const next = measureDropdown(triggerRef, dropdownWidthPx);
+      const next = measureDropdown(triggerRef, dropdownWidthPx, boundsRef);
       if (next) setPosition(next);
     };
     window.addEventListener('resize', remeasure);
@@ -155,7 +160,7 @@ function useDropdownReposition(
       window.removeEventListener('resize', remeasure);
       window.removeEventListener('scroll', remeasure, true);
     };
-  }, [isOpen, triggerRef, dropdownWidthPx, setPosition]);
+  }, [isOpen, triggerRef, dropdownWidthPx, setPosition, boundsRef]);
 }
 
 // Right padding reserved on a card's upper rows for the absolutely-positioned
@@ -283,10 +288,14 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [renameSession, setRenameSession] = useState<PastSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const searchRef = useRef<HTMLInputElement>(null);
+  // The shared search pill forwards its wrapper, not the input, so autofocus
+  // reaches the field through it (see the open-effect below).
+  const searchRef = useRef<HTMLDivElement>(null);
   const listRef = useScrollFade<HTMLDivElement>();
   // Wraps the filter pill row so outside-click can close the active dropdown.
   const filterRowRef = useRef<HTMLDivElement>(null);
+  // The chips row scrolls sideways at phone width; the fade says so (design guide §4.8).
+  useScrollFade(filterRowRef);
   // Trigger refs for portal positioning + dropdown refs so the outside-click
   // handler can recognize clicks inside the portaled dropdown body (which is
   // no longer a child of filterRowRef).
@@ -333,6 +342,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Tracks which filter pill's dropdown is currently open. null = both closed.
   // Single state instead of two booleans so the dropdowns are mutually exclusive.
   const [openPill, setOpenPill] = useState<'projects' | 'tags' | null>(null);
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  // Below 640px the chips give way to the filter button docked in the search
+  // pill (deck round 1, S-7): one popover holds all three controls.
+  const narrow = useNarrowViewport();
+  useEffect(() => { if (!narrow) setFiltersOpen(false); }, [narrow]);
+  const filtersPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [filtersPos, setFiltersPos] = useState<{ top: number; right: number } | null>(null);
+  const measureFilters = () => {
+    const r = searchRef.current?.getBoundingClientRect();
+    return r ? { top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) } : null;
+  };
 
   // Which card's Organize popover is open (session id), plus its anchor position.
   //
@@ -347,8 +367,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const organizeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const organizePopRef = useRef<HTMLDivElement>(null);
   // The tag registry editor (rename/recolor/archive/delete). Opened from the
-  // "Manage tags…" footer in either the Organize popover's TagPicker or the
-  // Tags filter dropdown, so there is ONE destination for tag management.
+  // "Manage tags…" footer of the Organize popover's TagPicker; the Tags filter
+  // menu's second route was removed at Destin's request (deck round 1, S-4), so
+  // there is ONE destination for tag management.
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
 
   // Fetch sessions when opened
@@ -375,7 +396,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         .then((list: PastSession[]) => setSessions(list))
         .catch(() => setSessions([]))
         .finally(() => setLoading(false));
-      const t = setTimeout(() => searchRef.current?.focus(), 50);
+      const t = setTimeout(() => searchRef.current?.querySelector('input')?.focus(), 50);
       return () => clearTimeout(t);
     }
   }, [open]);
@@ -395,6 +416,21 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Close the active filter dropdown on outside click. Recognizes clicks
   // inside the trigger row AND the portaled dropdowns (which live in
   // document.body, outside filterRowRef).
+  // A tap that only meant "close this menu" must not travel on to the scrim
+  // and close the whole browser with the filters in it (UX review 2, U2): the
+  // mousedown that closes a menu arms a one-shot capture listener that swallows
+  // the click that follows it.
+  const swallowNextClick = useRef(false);
+  useEffect(() => {
+    const swallow = (e: MouseEvent) => {
+      if (!swallowNextClick.current) return;
+      swallowNextClick.current = false;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    document.addEventListener('click', swallow, true);
+    return () => document.removeEventListener('click', swallow, true);
+  }, []);
   useEffect(() => {
     if (!openPill) return;
     const handler = (e: Event) => {
@@ -402,6 +438,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       if (filterRowRef.current?.contains(target)) return;
       if (projectsDropdownRef.current?.contains(target)) return;
       if (tagsDropdownRef.current?.contains(target)) return;
+      // Inside the phone panel the panel itself stays; the click is still spent.
+      swallowNextClick.current = true;
       setOpenPill(null);
     };
     document.addEventListener('mousedown', handler);
@@ -411,6 +449,27 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       document.removeEventListener('touchstart', handler);
     };
   }, [openPill]);
+  // The phone popover closes on a tap outside it, its pill, and the menus that
+  // open from the chips inside it (those are portaled, so not its descendants).
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const handler = (e: Event) => {
+      const target = e.target as Node;
+      if (searchRef.current?.contains(target)) return;
+      if (filtersPopoverRef.current?.contains(target)) return;
+      if (projectsDropdownRef.current?.contains(target)) return;
+      if (tagsDropdownRef.current?.contains(target)) return;
+      swallowNextClick.current = true;
+      setFiltersOpen(false);
+      setOpenPill(null);
+    };
+    document.addEventListener('mousedown', handler);
+    document.addEventListener('touchstart', handler);
+    return () => {
+      document.removeEventListener('mousedown', handler);
+      document.removeEventListener('touchstart', handler);
+    };
+  }, [filtersOpen]);
 
   // Same outside-click close for the Organize popover. It is portaled to
   // document.body, so the card's own subtree can't see it — the popover ref is
@@ -453,8 +512,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // project label instead). Within-group sort is priority-pinned + lastModified
   // by sortDir; between-group order also follows sortDir. Search always stays
   // flat so results read as one ranked list.
+  const filtersActive = selectedProjects.size > 0 || selectedTagIds.size > 0;
+  // The way out of an empty list names what emptied it (design guide G-18).
+  const emptyAction = search.trim() && filtersActive
+    ? { label: 'Clear search and filters', onClick: () => { setSearch(''); setSelectedProjects(new Set()); setSelectedTagIds(new Set()); } }
+    : search.trim() ? { label: 'Clear search', onClick: () => setSearch('') }
+    : filtersActive ? { label: 'Clear filters', onClick: () => { setSelectedProjects(new Set()); setSelectedTagIds(new Set()); } }
+    : undefined;
+  // One project picked needs no group header — it would repeat the chip's own
+  // label above the only group (UX review U17).
   const grouped = useMemo(() => {
-    if (search.trim() || selectedProjects.size === 0) return null;
+    if (search.trim() || selectedProjects.size <= 1) return null;
     return groupSessions(filtered, sortDir);
   }, [filtered, search, selectedProjects, sortDir]);
 
@@ -551,17 +619,35 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Distinct projects with counts — what the Projects pill dropdown displays.
   // Derived from the unfiltered session list so the dropdown always shows
   // every known project, even when the user has narrowed the visible list.
-  const availableProjects = useMemo(() => getAvailableProjects(sessions), [sessions]);
+  // Counts and rows reflect what the list can actually show: with Show Complete
+  // off, a finished conversation is not counted and a project with only finished
+  // conversations is not offered (UX review U6: "youcoded 2" then showed one row).
+  const countable = useMemo(
+    () => (showComplete ? sessions : sessions.filter((s) => !s.flags?.complete || stickyComplete.has(s.sessionId))),
+    [sessions, showComplete, stickyComplete],
+  );
+  const availableProjects = useMemo(() => getAvailableProjects(countable), [countable]);
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of countable) for (const id of s.tags ?? []) m.set(id, (m.get(id) ?? 0) + 1);
+    return m;
+  }, [countable]);
 
-  // Trigger label for the Projects pill: 0 selected → "Projects",
-  // 1 → label, 2-3 → comma-joined labels, 4+ → "Projects (N)".
-  const projectsLabel = useMemo(() => {
-    if (selectedProjects.size === 0) return 'Projects';
-    const selectedList = availableProjects.filter((p) => selectedProjects.has(p.path));
-    if (selectedList.length === 1) return selectedList[0].label;
-    if (selectedList.length <= 3) return selectedList.map((p) => p.label).join(', ');
-    return `Projects (${selectedList.length})`;
+  // Chip labels: nothing picked → the category; one picked → its name; more →
+  // the category and a count (design guide G-19: label, space, numeral — never
+  // parentheses). The old 2–3 → comma-joined names made one chip as wide as the
+  // whole row on a phone.
+  // A picked project that the menu no longer offers (all its conversations are
+  // finished and Show Complete is off) still names itself from its path.
+  const projectsLabel = useMemo((): React.ReactNode => {
+    const picked = [...selectedProjects].map((path) => availableProjects.find((p) => p.path === path)?.label ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path);
+    return <PickLabel {...pickLabel('Projects', picked)} />;
   }, [selectedProjects, availableProjects]);
+  const liveTags = useMemo(() => registry.tags.filter((t) => !t.archived), [registry.tags]);
+  const tagsLabel = useMemo((): React.ReactNode => {
+    const picked = [...selectedTagIds].map((id) => liveTags.find((t) => t.id === id)?.label ?? id);
+    return <PickLabel {...pickLabel('Tags', picked)} />;
+  }, [selectedTagIds, liveTags]);
 
   // Portal-anchored dropdown positions. Dropdown widths match the className
   // (Projects: w-64 = 256px, Tags: w-52 = 208px). Keep these in sync if the
@@ -574,8 +660,27 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [tagsDropdownPos, setTagsDropdownPos] = useState<{ top: number; left: number } | null>(null);
   // Reposition while open (resize / scroll updates only — not the initial
   // measurement, which is sync in the click handler).
-  useDropdownReposition(openPill === 'projects', projectsTriggerRef, 256, setProjectsDropdownPos);
-  useDropdownReposition(openPill === 'tags', tagsTriggerRef, 208, setTagsDropdownPos);
+  useDropdownReposition(openPill === 'projects', projectsTriggerRef, 256, setProjectsDropdownPos, filterRowRef);
+  useDropdownReposition(openPill === 'tags', tagsTriggerRef, 208, setTagsDropdownPos, filterRowRef);
+  // The panel re-centres when a pick shrinks or grows the list, which moves the
+  // chips without any scroll or resize event. A menu left at its old spot then
+  // covers the row, and the next click ticks a row nobody chose (UX review U1/U3).
+  // Every setter below keeps the previous object when nothing moved: this
+  // effect lists filtersPos as a dependency (at phone width the chips live
+  // inside the panel, so their menus can only be placed once the panel has
+  // landed — UX review 2, U3), and a fresh object on every run re-fired it
+  // forever ("Maximum update depth exceeded", caught by the grader on R12).
+  useLayoutEffect(() => {
+    if (openPill === 'projects') setProjectsDropdownPos(samePos(measureDropdown(projectsTriggerRef, 256, filterRowRef)));
+    if (openPill === 'tags') setTagsDropdownPos(samePos(measureDropdown(tagsTriggerRef, 208, filterRowRef)));
+    if (filtersOpen) setFiltersPos(samePos(measureFilters()));
+  }, [openPill, filtersOpen, filtered.length, filtersPos]);
+  useEffect(() => {
+    if (!filtersOpen) return;
+    const remeasure = () => setFiltersPos(measureFilters());
+    window.addEventListener('resize', remeasure);
+    return () => window.removeEventListener('resize', remeasure);
+  }, [filtersOpen]);
 
   // Clear stale position state when the dropdown closes via outside-click or
   // ESC (the click handlers do this themselves, but those external paths
@@ -1192,6 +1297,173 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     );
   };
 
+  // The filter row: three chips. Rendered under the search box at desktop width
+  // and INSIDE the phone popover below 640px (deck round 1 S-7, round 2 S-9 —
+  // "project/tags should be dropdowns"), so both widths share one set of controls.
+  const chipsRow = (
+        <div ref={filterRowRef} className={narrow ? 'flex flex-wrap items-center gap-2' : 'flex items-center gap-2 mt-2 scroll-fade-x'}>
+          {/* Projects: pick-any menu over the distinct project paths in the loaded
+              sessions. The menu is portaled to document.body so it escapes the
+              OverlayPanel's overflow:hidden clipping (lets it overlap the panel edge). */}
+          <FilterMenuChip
+            buttonRef={projectsTriggerRef}
+            active={selectedProjects.size > 0}
+            open={openPill === 'projects'}
+            className="shrink-0 max-w-[7rem]"
+            onClick={(e) => {
+              e.stopPropagation();
+              // Measure synchronously so the dropdown renders with its final
+              // position in the same commit as openPill flipping. Avoids the
+              // two-render lag the prior useLayoutEffect approach had.
+              if (openPill === 'projects') {
+                setOpenPill(null);
+                setProjectsDropdownPos(null);
+              } else {
+                setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256, filterRowRef));
+                setOpenPill('projects');
+              }
+            }}
+          >
+            {projectsLabel}
+          </FilterMenuChip>
+          {openPill === 'projects' && projectsDropdownPos && createPortal(
+            <div
+              ref={projectsDropdownRef}
+              className="layer-surface w-64 max-w-[calc(100vw-1rem)] overflow-hidden"
+              style={{ position: 'fixed', top: projectsDropdownPos.top, left: projectsDropdownPos.left, zIndex: 60 }}
+            >
+              {/* The list scrolls; the footer stays put, so Clear never leaves
+                  the screen behind a long list of projects. */}
+              <div role="listbox" aria-multiselectable aria-label="Filter by project" className="max-h-56 overflow-y-auto py-1">
+                {availableProjects.map((p) => {
+                  const checked = selectedProjects.has(p.path);
+                  return (
+                    <button
+                      key={p.path}
+                      type="button"
+                      role="option"
+                      aria-selected={checked}
+                      onClick={() => {
+                        setSelectedProjects((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(p.path)) next.delete(p.path);
+                          else next.add(p.path);
+                          return next;
+                        });
+                      }}
+                      className={MENU_ROW}
+                    >
+                      <CheckboxMark checked={checked} />
+                      <span className="flex-1 truncate" title={p.path}>{p.label}</span>
+                      <span className="text-2xs text-fg-muted shrink-0 tabular-nums">{p.count}</span>
+                    </button>
+                  );
+                })}
+              </div>
+              {/* Clear empties the selection, which the data model treats as
+                  "filter inactive". Dimmed rather than hidden when there is
+                  nothing to clear, so the menu's height never jumps. */}
+              <div className={MENU_FOOTER}>
+                <button
+                  type="button"
+                  disabled={selectedProjects.size === 0}
+                  onClick={() => { setSelectedProjects(new Set()); setOpenPill(null); setProjectsDropdownPos(null); }}
+                  className={MENU_FOOTER_ACTION}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )}
+
+          {/* Tags: pick-any menu over the user's tags. Portaled for the same reason. */}
+          <FilterMenuChip
+            buttonRef={tagsTriggerRef}
+            active={selectedTagIds.size > 0}
+            open={openPill === 'tags'}
+            className="shrink-0 max-w-[7rem]"
+            onClick={(e) => {
+              e.stopPropagation();
+              if (openPill === 'tags') { setOpenPill(null); setTagsDropdownPos(null); }
+              else { setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208, filterRowRef)); setOpenPill('tags'); }
+            }}
+          >
+            {tagsLabel}
+          </FilterMenuChip>
+          {openPill === 'tags' && tagsDropdownPos && createPortal(
+            <div
+              ref={tagsDropdownRef}
+              className="layer-surface w-52 max-w-[calc(100vw-1rem)] overflow-hidden"
+              style={{ position: 'fixed', top: tagsDropdownPos.top, left: tagsDropdownPos.left, zIndex: 60 }}
+            >
+              {liveTags.length === 0 ? (
+                <div className="px-3 py-3">
+                  <EmptyState variant="inline" message="No tags yet" />
+                </div>
+              ) : (
+                <div role="listbox" aria-multiselectable aria-label="Filter by tag" className="max-h-64 overflow-y-auto py-1">
+                  {liveTags.map((t) => {
+                    const checked = selectedTagIds.has(t.id);
+                    return (
+                      <button
+                        key={t.id}
+                        type="button"
+                        role="option"
+                        aria-selected={checked}
+                        onClick={() => setSelectedTagIds((prev) => {
+                          const next = new Set(prev);
+                          if (next.has(t.id)) next.delete(t.id); else next.add(t.id);
+                          return next;
+                        })}
+                        className={MENU_ROW}
+                      >
+                        <CheckboxMark checked={checked} />
+                        <TagChip tag={t} />
+                        <span className="ml-auto text-2xs text-fg-muted shrink-0 tabular-nums">{tagCounts.get(t.id) ?? 0}</span>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+              {/* Footer: Clear only. The route to the tag manager used to sit
+                  here too; Destin removed it (deck round 1, S-4) — a
+                  conversation's Organize popover keeps its "Manage tags…". */}
+              <div className={MENU_FOOTER}>
+                <button
+                  type="button"
+                  disabled={selectedTagIds.size === 0}
+                  onClick={() => { setSelectedTagIds(new Set()); setOpenPill(null); setTagsDropdownPos(null); }}
+                  className={MENU_FOOTER_ACTION}
+                >
+                  Clear
+                </button>
+              </div>
+            </div>,
+            document.body,
+          )}
+
+          {/* Sort — one tap flips the order and the arrow turns with it. Lit,
+              like a narrowing filter, only when the order is not the default,
+              so the row says at a glance that the list is not newest-first.
+              Priority-pin still wins over the sort. */}
+          <FilterChip
+            kind="toggle"
+            active={sortDir !== 'desc'}
+            onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
+            className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+          >
+            <span className="grid">
+              <span className="col-start-1 row-start-1">{sortDir === 'desc' ? 'Most recent' : 'Oldest first'}</span>
+              {/* The other label, invisible, so the chip keeps one width when it
+                  flips and the row stops nudging (UX review U19). */}
+              <span className="col-start-1 row-start-1 invisible" aria-hidden="true">{sortDir === 'desc' ? 'Oldest first' : 'Most recent'}</span>
+            </span>
+            <SortArrow muted={sortDir === 'desc'} up={sortDir === 'asc'} />
+          </FilterChip>
+        </div>
+  );
+
   return (
     <>
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
@@ -1222,158 +1494,54 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
-              <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
-              </svg>
-              <input
+            {/* Phones get the shared search pill with its docked filter button, which
+                opens the filter panel (deck round 1, S-7). Desktop keeps the box
+                Destin chose over the pill (S-2), with the chips on the next row. */}
+            {narrow ? (
+              <SearchFilterPill
                 ref={searchRef}
-                type="text"
                 value={search}
-                onChange={(e) => setSearch(e.target.value)}
+                onChange={setSearch}
                 placeholder="Search sessions..."
-                className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
+                inputAriaLabel="Search sessions"
+                activeFilters={selectedProjects.size + selectedTagIds.size}
+                filterOpen={filtersOpen}
+                onToggleFilter={() => {
+                  if (filtersOpen) { setFiltersOpen(false); setOpenPill(null); setFiltersPos(null); }
+                  else { setFiltersPos(measureFilters()); setFiltersOpen(true); }
+                }}
+                filterLabel="Filters"
               />
-            </div>
-            <div ref={filterRowRef} className="flex items-center gap-1.5 mt-2 relative">
-              {/* Projects: multi-select dropdown over distinct projectPaths in the loaded sessions.
-                  Dropdown is portaled to document.body so it escapes the OverlayPanel's
-                  overflow:hidden clipping (lets it overlap the panel edge). */}
-              <FilterPill
-                buttonRef={projectsTriggerRef}
-                active={selectedProjects.size > 0}
-                hasPopup
-                expanded={openPill === 'projects'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  // Measure synchronously so the dropdown renders with its final
-                  // position in the same commit as openPill flipping. Avoids the
-                  // two-render lag the prior useLayoutEffect approach had.
-                  if (openPill === 'projects') {
-                    setOpenPill(null);
-                    setProjectsDropdownPos(null);
-                  } else {
-                    setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256));
-                    setOpenPill('projects');
-                  }
-                }}
+            ) : (
+              // Destin kept this box over the shared search pill (deck round 1, S-2).
+              <div ref={searchRef} className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
+                <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
+                </svg>
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search sessions..."
+                  aria-label="Search sessions"
+                  className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
+                />
+              </div>
+            )}
+            {narrow && filtersOpen && filtersPos && createPortal(
+              <ResumeFilterPopover
+                ref={filtersPopoverRef}
+                anchor={filtersPos}
+                filtersActive={filtersActive}
+                onClear={() => { setSelectedProjects(new Set()); setSelectedTagIds(new Set()); }}
+                onClose={() => { setFiltersOpen(false); setOpenPill(null); setFiltersPos(null); }}
               >
-                <span>{projectsLabel}</span>
-                <span className="text-fg-faint text-4xs">▾</span>
-              </FilterPill>
-              {openPill === 'projects' && projectsDropdownPos && createPortal(
-                <div
-                  ref={projectsDropdownRef}
-                  className="layer-surface w-64 max-w-[calc(100vw-1rem)] overflow-hidden"
-                  style={{
-                    position: 'fixed',
-                    top: projectsDropdownPos.top,
-                    left: projectsDropdownPos.left,
-                    zIndex: 60,
-                  }}
-                >
-                  {/* "Clear" — text-only affordance that empties selectedProjects (which the data
-                      model treats as "filter inactive"). No checkbox visual so it doesn't read as
-                      a master "select every project" toggle. Muted small-caps style separates it
-                      from the checkbox rows below. Always visible; clicks no-op when already cleared. */}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedProjects(new Set())}
-                    className="w-full text-left px-2.5 py-1.5 text-2xs text-fg-muted tracking-wider uppercase hover:text-fg hover:bg-inset transition-colors"
-                  >
-                    Clear
-                  </button>
-                  <div className="max-h-56 overflow-y-auto border-t border-edge-dim">
-                    {availableProjects.map((p) => {
-                      const checked = selectedProjects.has(p.path);
-                      return (
-                        <button
-                          key={p.path}
-                          type="button"
-                          onClick={() => {
-                            setSelectedProjects((prev) => {
-                              const next = new Set(prev);
-                              if (next.has(p.path)) next.delete(p.path);
-                              else next.add(p.path);
-                              return next;
-                            });
-                          }}
-                          className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
-                        >
-                          <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
-                          <span className="flex-1 truncate" title={p.path}>{p.label}</span>
-                          <span className="text-3xs text-fg-muted shrink-0">{p.count}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>,
-                document.body,
-              )}
-
-              {/* Tags: multi-select dropdown over the user's custom tags. Portaled
-                  to escape the OverlayPanel's overflow:hidden clipping. */}
-              <FilterPill
-                buttonRef={tagsTriggerRef}
-                active={selectedTagIds.size > 0}
-                hasPopup
-                expanded={openPill === 'tags'}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  if (openPill === 'tags') { setOpenPill(null); setTagsDropdownPos(null); }
-                  else { setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208)); setOpenPill('tags'); }
-                }}
-              >
-                <span>{selectedTagIds.size === 0 ? 'Tags' : `${selectedTagIds.size} tag${selectedTagIds.size > 1 ? 's' : ''}`}</span>
-                <span className="text-fg-faint text-4xs">▾</span>
-              </FilterPill>
-              {openPill === 'tags' && tagsDropdownPos && createPortal(
-                <div
-                  ref={tagsDropdownRef}
-                  className="layer-surface w-52 max-w-[calc(100vw-1rem)] max-h-64 overflow-y-auto"
-                  style={{ position: 'fixed', top: tagsDropdownPos.top, left: tagsDropdownPos.left, zIndex: 60 }}
-                >
-                  {registry.tags.filter((t) => !t.archived).length === 0 && (
-                    <div className="px-2.5 py-1.5 text-xs text-fg-muted">No tags yet.</div>
-                  )}
-                  {/* Second route to the tag manager, so "where do I rename a
-                      tag?" is answerable from the filter too — not only from a
-                      conversation's Organize popover. */}
-                  <button
-                    type="button"
-                    onClick={() => { setOpenPill(null); setTagManagerOpen(true); }}
-                    className="w-full text-left px-2.5 py-1.5 text-2xs text-fg-muted tracking-wider uppercase hover:text-fg hover:bg-inset transition-colors border-b border-edge-dim"
-                  >
-                    Manage tags…
-                  </button>
-                  {registry.tags.filter((t) => !t.archived).map((t) => {
-                    const checked = selectedTagIds.has(t.id);
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setSelectedTagIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(t.id)) next.delete(t.id); else next.add(t.id);
-                          return next;
-                        })}
-                        className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
-                      >
-                        <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
-                        <TagChip tag={t} />
-                      </button>
-                    );
-                  })}
-                </div>,
-                document.body,
-              )}
-
-              {/* Sort toggle — flips lastModified direction. Priority-pin still wins. */}
-              <FilterPill active={sortDir !== 'desc'} onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}>
-                {sortDir === 'desc' ? 'Most recent ↓' : 'Oldest first ↑'}
-              </FilterPill>
-            </div>
+                {chipsRow}
+              </ResumeFilterPopover>,
+              document.body,
+            )}
+            {!narrow && chipsRow}
           </div>
 
           {/* Session list */}
@@ -1391,8 +1559,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 <LoadingState what="sessions" />
               ) : filtered.length === 0 ? (
                 <EmptyState
-                  message={search.trim() ? 'No matching sessions' : 'No previous sessions found'}
-                  action={search.trim() ? { label: 'Clear search', onClick: () => setSearch('') } : undefined}
+                  message={search.trim() || filtersActive ? 'No matching sessions' : 'No previous sessions found'}
+                  action={emptyAction}
                 />
               ) : (
                 // ONE list for both modes — grouped (project header + its rows,
