@@ -75,7 +75,7 @@ describe('ConversationTranscript', () => {
   // BELOW the sentence it followed (AssistantTurnBubble.tsx, splitIntoBubbles) —
   // so the card belongs after the PREVIOUS message, not above its own. Drawn the
   // old way it sat between the tools and the sentence that preceded them.
-  it('hangs a tool gap under the message it followed, not above the next one', () => {
+  it('puts a tool gap INSIDE the assistant bubble it followed, under the text', () => {
     const { container } = render(<ConversationTranscript messages={[
       { role: 'user', content: 'question', timestamp: 1, seq: 0 },
       { role: 'assistant', content: 'answer', timestamp: 2, seq: 1 },
@@ -83,10 +83,25 @@ describe('ConversationTranscript', () => {
     ]} />);
     const rows = [...container.querySelectorAll('.timeline-entry')];
     expect(rows).toHaveLength(3);
-    // The gap recorded on "follow up" renders inside the ANSWER's row.
-    expect(rows[1].textContent).toContain('answer');
-    expect(rows[1].textContent).toContain(COPY.toolsNotShown(3));
+    // Between two bubbles the card is indistinguishable from drawing it above
+    // the NEXT one — which is what it used to do. Inside the bubble is the
+    // whole point, so that is what this asserts.
+    const bubble = rows[1].querySelector('.assistant-bubble');
+    expect(bubble?.textContent).toContain('answer');
+    expect(bubble?.textContent).toContain(COPY.toolsNotShown(3));
     expect(rows[2].textContent).not.toContain(COPY.toolsNotShown(3));
+  });
+
+  // A tool card inside the accent-filled user bubble would read as something
+  // the user did, so a gap that followed a user message stays on its own row.
+  it('keeps a gap that followed a USER message outside the bubble', () => {
+    const { container } = render(<ConversationTranscript messages={[
+      { role: 'user', content: 'question', timestamp: 1, seq: 0 },
+      { role: 'assistant', content: 'answer', timestamp: 2, seq: 1, droppedToolCalls: 4 },
+    ]} />);
+    const rows = [...container.querySelectorAll('.timeline-entry')];
+    expect(rows[0].querySelector('.user-bubble')?.textContent).not.toContain(COPY.toolsNotShown(4));
+    expect(rows[0].textContent).toContain(COPY.toolsNotShown(4));
   });
 
   // The exception, and the reason the map cannot simply look one row back: a gap

@@ -1647,17 +1647,29 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // the one id wired to fail, so the "transcript unreadable" card state has
   // something to point at.
   // [user, assistant] pairs the fake transcript above cycles through.
-  const CHAT_TURNS: [string, string][] = [
+  // [user, assistant] — and an optional THIRD entry, the sentence the assistant
+  // said BEFORE it went off and ran tools. A turn that has one is emitted as
+  // three messages (user, lead-in, answer) with the tool gap recorded on the
+  // answer, which is the shape a real transcript actually has: the reader
+  // counts an assistant's tool calls toward the gap before its NEXT message
+  // (transcript-reader.ts), so a gap almost always sits between two things the
+  // assistant said. Without a lead-in every gap here followed a USER message,
+  // where the card cannot nest into a bubble — which made a fixed tool-gap
+  // render look identical to the broken one (2026-09-10).
+  const CHAT_TURNS: [string, string, string?][] = [
     ['the chat jumps to the bottom while I am reading older messages',
-     'Reproduced. The scroll container re-pins to the end on every transcript event, not just on a new turn.\n\n```ts\nif (atBottomRef.current) scrollToEnd();\n```\n\nThe flag is read before the new rows are measured, so a tall row lands after the check and the view snaps.'],
+     'Reproduced. The scroll container re-pins to the end on every transcript event, not just on a new turn.\n\n```ts\nif (atBottomRef.current) scrollToEnd();\n```\n\nThe flag is read before the new rows are measured, so a tall row lands after the check and the view snaps.',
+     'Let me reproduce that before I guess at it.'],
     ['so the fix is to measure after paint?',
      'Yes — move the read into a layout effect that runs after the rows exist, and only re-pin when the user was genuinely within a few pixels of the end.'],
     ['does that break the "new message" jump when I AM at the bottom?',
-     'No. That path still fires; it just fires with a correct measurement. I added a test that scrolls up 400px, appends a tall message and asserts the offset did not move.'],
+     'No. That path still fires; it just fires with a correct measurement. I added a test that scrolls up 400px, appends a tall message and asserts the offset did not move.',
+     'Checking the other direction now.'],
     ['what about the terminal view, same container?',
      'Different one, and it already measures after paint. I checked the other three scrolling surfaces too — the drawer list and the file view use the shared hook, so they inherit the fix.'],
     ['ok. anything else you noticed while you were in there',
-     'One thing worth knowing: the fade at the top and bottom of the list is painted by the scroll container itself, so any surface that adds its own padding loses it. Nothing is broken today; it is just a trap for the next change.'],
+     'One thing worth knowing: the fade at the top and bottom of the list is painted by the scroll container itself, so any surface that adds its own padding loses it. Nothing is broken today; it is just a trap for the next change.',
+     'Nothing that changes the fix. One thing worth writing down, though.'],
     ['fine, leave it. run the tests',
      'All 41 in that file pass, plus the new one. Types and lint are clean.'],
   ];
@@ -1675,21 +1687,24 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // that judgement impossible — "does reading this tell me which
       // conversation it is?" is the entire question the panel exists to answer.
       // The words are still invented; nothing here is read off disk.
-      const total = 60;
+      const all: { role: string; content: string; timestamp: number; seq: number; droppedToolCalls: number }[] = [];
+      const push = (role: string, content: string, droppedToolCalls = 0) =>
+        all.push({ role, content, timestamp: 0, seq: all.length, droppedToolCalls });
+      while (all.length < 60) {
+        const turn = CHAT_TURNS[Math.floor(all.length / 2.5) % CHAT_TURNS.length];
+        push('user', turn[0]);
+        if (turn[2]) {
+          push('assistant', turn[2]);
+          push('assistant', turn[1], 3);   // the gap those three tools left
+        } else {
+          push('assistant', turn[1]);
+        }
+      }
+      const total = all.length;
+      for (const m of all) m.timestamp = Date.now() - (total - m.seq) * 60_000;
       const end = Math.min(req.before ?? total, total);
       const start = Math.max(0, end - Math.min(req.tail, 200));
-      const messages = [];
-      for (let seq = start; seq < end; seq++) {
-        const assistant = seq % 2 === 1;
-        const turn = CHAT_TURNS[Math.floor(seq / 2) % CHAT_TURNS.length];
-        messages.push({
-          role: assistant ? 'assistant' : 'user',
-          content: assistant ? turn[1] : turn[0],
-          timestamp: Date.now() - (total - seq) * 60_000,
-          seq,
-          droppedToolCalls: assistant && seq % 4 === 3 ? 3 : 0,
-        });
-      }
+      const messages = all.slice(start, end);
       return { ok: true as const, messages, hasMore: start > 0 };
     },
   };

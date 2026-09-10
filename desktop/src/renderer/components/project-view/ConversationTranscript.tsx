@@ -16,21 +16,26 @@ export type TranscriptRow = HistoryMessage & { seq?: number; droppedToolCalls?: 
 // draw it as a tool card, not a centred dash line — same border/padding/`|`
 // separator as the real group header in AssistantTurnBubble.tsx, so a gap in a
 // past conversation looks like what it is. No chevron and no button: there is
-// nothing behind it to open. It sizes to its own text rather than filling the
-// row — a full-width card with an empty right end read as a stretched pill. The
-// glyph is the terminal mark, NOT the check the real header shows on success:
-// the reader dropped these tools without reading their results, so claiming they
-// all completed would be asserting something nobody checked.
-function toolGap(n: number) {
+// nothing behind it to open. The glyph is the terminal mark, NOT the check the
+// real header shows on success: the reader dropped these tools without reading
+// their results, so claiming they all completed would be asserting something
+// nobody checked.
+function toolGapCard(n: number) {
   return (
-    <div className="mb-3 flex justify-start">
-      <div className="w-fit max-w-[85%] border border-edge rounded-lg px-3 py-1.5 flex items-center gap-1.5">
-        <TerminalIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
-        <span className="text-fg-faint text-xs select-none">|</span>
-        <span className="text-xs text-fg-dim">{COPY.toolsNotShown(n)}</span>
-      </div>
+    <div className="w-fit max-w-full border border-edge rounded-lg px-3 py-1.5 flex items-center gap-1.5">
+      <TerminalIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+      <span className="text-fg-faint text-xs select-none">|</span>
+      <span className="text-xs text-fg-dim">{COPY.toolsNotShown(n)}</span>
     </div>
   );
+}
+
+// The card on its own row, for the two places it cannot live inside a bubble:
+// a gap before the first message shown, and a gap that followed a USER message
+// (the assistant ran tools and never spoke). A tool card inside the accent-
+// filled user bubble would read as something the user did.
+function toolGapRow(n: number) {
+  return <div className="mb-3 flex justify-start">{toolGapCard(n)}</div>;
 }
 
 export default function ConversationTranscript({ messages, olderHint, scrollToEndKey, conversationId, conversationTitle }: {
@@ -64,7 +69,7 @@ export default function ConversationTranscript({ messages, olderHint, scrollToEn
       {/* A gap recorded on the FIRST message shown has no earlier bubble to
           hang under — the message it followed is off the top of what was read.
           It stays above, as a lead-in. */}
-      {!!messages[0]?.droppedToolCalls && toolGap(messages[0].droppedToolCalls!)}
+      {!!messages[0]?.droppedToolCalls && toolGapRow(messages[0].droppedToolCalls!)}
       {messages.map((m, i) => {
         // WHY the NEXT message's count and not this one's: `droppedToolCalls`
         // records the tools that ran BEFORE the message carrying it
@@ -79,6 +84,13 @@ export default function ConversationTranscript({ messages, olderHint, scrollToEn
         // not shown' warning in the bottom of the assistant message it attaches
         // to, like our real tool/message grouping logic does".
         const gapAfter = messages[i + 1]?.droppedToolCalls ?? 0;
+        // INSIDE the bubble, under the text — the real chat's fixed order is
+        // "the reasoning section, the message, the tool group" (Destin,
+        // 2026-09-02), all three within one assistant-bubble shell, and the
+        // shell trades its even padding for `pt-4 pb-3` when it carries tools.
+        // Between two bubbles the card looked identical to how it looked
+        // before this changed at all, which is what Destin spotted.
+        const gapInBubble = gapAfter > 0 && m.role === 'assistant';
         return (
           // `timeline-entry` is the chat timeline's own containment (layout +
           // style, NOT content-visibility — its implicit contain:paint clips
@@ -86,7 +98,7 @@ export default function ConversationTranscript({ messages, olderHint, scrollToEn
           // hold a couple of hundred markdown bubbles; this keeps an off-screen
           // one out of layout without changing how it paints.
           <div key={m.seq ?? i} className="timeline-entry">
-            <div className={`${gapAfter ? 'mb-1.5' : 'mb-3'} flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            <div className={`${gapAfter && !gapInBubble ? 'mb-1.5' : 'mb-3'} flex ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
               {/* user-bubble / assistant-bubble: the SAME hook classes the real
                   chat's UserMessage.tsx / AssistantTurnBubble.tsx carry. Theme
                   packs' custom_css targets these names directly (they're on
@@ -96,11 +108,14 @@ export default function ConversationTranscript({ messages, olderHint, scrollToEn
                   looks like two different apps depending which surface it's
                   viewed from. This does not change layout/geometry, only which
                   selectors can reach these nodes. */}
-              <div className={`min-w-0 break-words rounded-2xl px-5 py-3 text-sm ${m.role === 'user' ? 'user-bubble max-w-[80%] rounded-br-sm bg-accent text-on-accent' : 'assistant-bubble max-w-[85%] rounded-bl-sm bg-inset text-fg'}`}>
+              <div className={`min-w-0 break-words rounded-2xl px-5 text-sm ${m.role === 'user' ? 'user-bubble max-w-[80%] rounded-br-sm bg-accent text-on-accent py-3' : `assistant-bubble max-w-[85%] rounded-bl-sm bg-inset text-fg ${gapInBubble ? 'pt-4 pb-3' : 'py-3'}`}`}>
                 <MarkdownContent content={m.content} />
+                {/* mt-1.5: ToolGroupInline's own `afterText` spacing — "a group
+                    right after the spoken text gets a little more room above it". */}
+                {gapInBubble && <div className="mt-1.5">{toolGapCard(gapAfter)}</div>}
               </div>
             </div>
-            {!!gapAfter && toolGap(gapAfter)}
+            {!!gapAfter && !gapInBubble && toolGapRow(gapAfter)}
           </div>
         );
       })}
