@@ -26,15 +26,15 @@ function walk(dir: string, out: string[] = []): string[] {
  * A new one needs a reason here, not just a name.
  */
 const EXEMPT: Record<string, { count: number; why: string }> = {
-  // Four copies of one static caption under the skip-permissions toggle. Not a
-  // failure report — it is always-on warning copy, and FieldError carries
-  // role="alert", which would make a screen reader interrupt with it every time
-  // the toggle flips. Their real problem is that there are four of them; the fix
-  // is a shared warning component, not this primitive.
-  'App.tsx': { count: 1, why: 'skip-permissions caption, not a field error' },
-  'SessionStrip.tsx': { count: 1, why: 'skip-permissions caption, not a field error' },
-  'ResumeBrowser.tsx': { count: 1, why: 'skip-permissions caption, not a field error' },
-  'ResumeOptionsPopover.tsx': { count: 1, why: 'skip-permissions caption, not a field error' },
+  // The four skip-permissions captions that used to be exempted here are GONE
+  // (2026-09-10). This comment used to say "their real problem is that there are
+  // four of them; the fix is a shared warning component, not this primitive" —
+  // and then the buddy floater's rebuilt form was about to make it five. So the
+  // shared component was written: components/SkipPermissionsCaption.tsx, now the
+  // single source for all five sites. It is still deliberately not <FieldError>
+  // (role="alert" would interrupt a screen reader on every toggle flip); the
+  // difference is that the reason now lives in one file instead of four
+  // exemptions here.
   // NOT here: SettingsPanel's confirm-dialog prose. It is dimmed to
   // `text-destructive-fg/80`, and the pattern below excludes the opacity
   // variants on purpose — an opacity modifier is prose styling, not this
@@ -60,6 +60,9 @@ describe('FieldError adoption', () => {
     const offenders: string[] = [];
     for (const file of walk(RENDERER)) {
       if (file.endsWith(join('ui', 'states.tsx'))) continue; // the primitive itself
+      // Likewise the skip-permissions caption's own definition — it is now the
+      // ONE place that markup is written, which is the whole point of it.
+      if (file.endsWith(join('components', 'SkipPermissionsCaption.tsx'))) continue;
       const base = file.split(/[\\/]/).pop()!;
       if (base in EXEMPT) continue;
       if (handRolledCount(readFileSync(file, 'utf8')) > 0) offenders.push(base);

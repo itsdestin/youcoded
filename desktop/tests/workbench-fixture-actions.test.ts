@@ -30,6 +30,10 @@ const KNOWN_KINDS = new Set([
   // (fixture-loader.ts dispatches it as SHELL_RUN_CHANGED). Landed with the
   // card mockup in 69d066a3; this allowlist was missed, leaving the branch red.
   'shell_run',
+  // 'session_context' (Step 3, 2026-08-17, broadened): seeds the session's
+  // STARTING context (SESSION_CONTEXT → SessionContextBanner + SessionContextPopup).
+  // No backend yet — MOCK_ONLY — but the line kind IS handled by the loader.
+  'session_context',
 ]);
 
 function fixtureFiles(dir: string): Array<{ name: string; raw: string }> {

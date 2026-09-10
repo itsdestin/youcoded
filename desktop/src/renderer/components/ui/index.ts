@@ -51,6 +51,9 @@ export type { LoadingStateProps, EmptyStateProps, ErrorStateProps, FieldErrorPro
 export { AnchorTip } from './AnchorTip';
 export type { AnchorTipProps, AnchorTipTrigger, AnchorTipPlacement } from './AnchorTip';
 
+export { Tooltip } from './Tooltip';
+export type { TooltipProps } from './Tooltip';
+
 export { Toast } from './Toast';
 export type { ToastProps, ToastTone } from './Toast';
 

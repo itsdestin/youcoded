@@ -377,6 +377,12 @@ const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',
+  // "What the assistant was given" (2026-09-10): the session-start push carrying
+  // the inventory, and the on-demand read of ONE file's text. Two channels
+  // because file bodies do not belong in a push — see shared/types.ts's
+  // SessionContext header for the measurement.
+  NATIVE_SESSION_CONTEXT: 'native:session-context',
+  NATIVE_SESSION_CONTEXT_TEXT: 'native:session-context-text',
   PROVIDER_LIST: 'provider:list',
   PROVIDER_UPSERT: 'provider:upsert',
   PROVIDER_REMOVE: 'provider:remove',
@@ -1416,6 +1422,18 @@ contextBridge.exposeInMainWorld('claude', {
     // G-1: the Bash card's Stop button. Request-response — the card needs
     // {ok, reason} to stop showing "Stopping…" when nothing was stopped.
     killShell: (sessionId: string, shellId: string) => ipcRenderer.invoke(IPC.NATIVE_KILL_SHELL, { sessionId, shellId }),
+    // One file's text for the "What the assistant was given" panel, read when the
+    // user opens that row. Runs the session's OWN fitter and budget in main, so
+    // what the panel shows is what the model would receive.
+    sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) =>
+      ipcRenderer.invoke(IPC.NATIVE_SESSION_CONTEXT_TEXT, { sessionId, kind, id }),
+    // Pushed once per session from nativeHost's 'session-context' listener in
+    // ipc-handlers.ts. Returns the unsubscribe fn, same as shellEvent above.
+    onSessionContext: (cb: (e: { sessionId: string; context: unknown }) => void) => {
+      const handler = (_e: IpcRendererEvent, event: { sessionId: string; context: unknown }) => cb(event);
+      ipcRenderer.on(IPC.NATIVE_SESSION_CONTEXT, handler);
+      return () => ipcRenderer.removeListener(IPC.NATIVE_SESSION_CONTEXT, handler);
+    },
     // Per-session bound-model residency push (unloaded/loading/loaded/sleeping)
     // → ChatView's model-unloaded banner + loading indicator (2026-07-14).
     onModelState: (cb: (s: unknown) => void) => {

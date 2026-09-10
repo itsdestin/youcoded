@@ -79,7 +79,7 @@ describe('DeliverablesCard with SendUserLink', () => {
     expect(screen.getByText('localhost:5173')).toBeInTheDocument();
     expect(screen.queryByText('http://localhost:5173')).toBeNull();
     // The full URL still rides the tooltip, so nothing is actually hidden.
-    expect(screen.getByTestId('sent-link-tile')).toHaveAttribute('title', 'Open http://localhost:5173');
+    expect(screen.getByTestId('sent-link-tile')).toHaveAttribute('data-hint', 'Open http://localhost:5173');
   });
 
   it('a Claude Code MCP link call draws the same tile and opens the same way', () => {

@@ -19,6 +19,7 @@ import { SkipPermissionsInfoTooltip } from '../SkipPermissionsInfoTooltip';
 import { requestResume } from './SessionRefActions';
 import type { ResolvedConversation } from '../../../shared/chatsearch-refs';
 import type { ModelBinding } from '../../../shared/provider-types';
+import { SkipPermissionsCaption } from '../SkipPermissionsCaption';
 
 type Ok = Extract<ResolvedConversation, { status: 'ok' }>;
 
@@ -87,7 +88,7 @@ export default function ResumeOptionsPopover({
             <Toggle checked={dangerous} onChange={setDangerous} tone="danger" aria-label="Skip Permissions" />
           </div>
           {dangerous && (
-            <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+            <SkipPermissionsCaption />
           )}
         </>
       )}

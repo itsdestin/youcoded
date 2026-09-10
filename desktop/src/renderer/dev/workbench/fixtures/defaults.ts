@@ -14,7 +14,12 @@ export interface MockDefaults {
 export function defaults(): MockDefaults {
   return {
     skipPermissions: false,
-    model: 'claude-sonnet-4-6',
+    // An ALIAS, which is the only thing this field ever holds: main seeds it
+    // 'sonnet' (ipc-handlers DEFAULTS_INITIAL) and Assistant settings writes
+    // `choice.alias` into it. It said 'claude-sonnet-4-6' — a raw model id —
+    // which contradicted this fixture's own comment below and made every
+    // surface reading it render an id where a user would read "Sonnet".
+    model: 'sonnet',
     projectFolder: '/home/you/code/youcoded',
   };
 }

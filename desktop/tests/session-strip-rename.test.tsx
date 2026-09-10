@@ -70,7 +70,7 @@ function mount() {
     { container: root },
   );
   // Open the "Sessions in this window" list.
-  fireEvent.click(view.container.querySelector('[title="All Sessions"]')!);
+  fireEvent.click(view.container.querySelector('[data-hint="All Sessions"]')!);
   // `data-session-id` is on the pill in the strip AND on the dropdown row.
   // Only the dropdown one is the subject here.
   const row = (id: string) => {

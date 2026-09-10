@@ -19,6 +19,8 @@ import AttentionBanner from './AttentionBanner';
 import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
+import { SessionContextBanner } from './SessionContextBanner';
+import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
 import { useOneShotWindow } from '../hooks/use-one-shot-window';
@@ -30,6 +32,7 @@ import { ContentFindBar } from './ContentFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
+import { Tooltip } from './ui';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -165,6 +168,16 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // Ctrl+F find-over-chat-history. Searches the message timeline (contentRef)
   // via the same CSS-Highlight ContentFindBar the artifact viewer uses.
   const [findOpen, setFindOpen] = useState(false);
+
+  // "What the assistant was given" — opened ONLY from the strip above the
+  // conversation. It used to open itself once per session; Destin chose "never"
+  // on review-5 Q-1, with the note that the strip carries the warning state
+  // instead. WHY that is the safer default even though the panel matters most on
+  // a small model: a panel nobody asked for lands exactly when they were about to
+  // type, and an interruption you did not ask for is the fastest way to teach
+  // someone to dismiss a warning unread. The strip is amber when something was
+  // cut, which is the signal that has to earn the click.
+  const [contextPopupOpen, setContextPopupOpen] = useState(false);
 
   // Single pass — compute all tool status flags, memoized to avoid re-iterating
   // the Map on every render (toolCalls is a new ref on every reducer dispatch)
@@ -1014,6 +1027,16 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}
            <div ref={contentRef} className={arriving ? 'switch-arrival' : undefined}>
+        {/* Step 3 (2026-08-17, broadened): the session's starting-context strip
+            — every session shows one, and clicking it opens the full accounting
+            (SessionContextPopup). Mounted above the first message so it also
+            shows on a fresh session before any timeline exists. in-view opts it
+            into the same wallpaper glassmorphism as the timeline bubbles. */}
+        {state.sessionContext && (
+          <div className="px-4 pt-3 in-view">
+            <SessionContextBanner context={state.sessionContext} onOpen={() => setContextPopupOpen(true)} />
+          </div>
+        )}
         {/* Paged history: crossing this loads the previous ~30 turns. Rendered
             only while there IS older history, so reaching the beginning of the
             conversation stops the fetching for good. */}
@@ -1151,20 +1174,20 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               const folded = folding.isFolded(key!);
               const foldHeight = folded ? folding.heightOf(key!) : undefined;
               return (
+                <Tooltip key={key!} text={isPreCompaction
+                    ? (archiveKind === 'clear'
+                      ? 'Cleared — still here to read, but not in Claude\'s context'
+                      : 'Archived by compaction — not in Claude\'s active context')
+                    : ''}>
                 <div
-                  key={key!}
                   ref={attachEntry}
                   data-entry-key={key!}
                   className={`timeline-entry in-view${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
                   style={folded && foldHeight ? { height: foldHeight } : undefined}
-                  title={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : undefined}
                 >
                   {folded && foldHeight ? null : content}
                 </div>
+                </Tooltip>
               );
               });
             })()}
@@ -1346,6 +1369,16 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
           Jump to bottom
         </button>
       )}
+
+      {/* Step 3 (2026-08-17, broadened): the session-start context panel —
+          "what the assistant began with". Auto-opens once per session (see the
+          effect above); the strip stays clickable afterwards. */}
+      <SessionContextPopup
+        open={contextPopupOpen}
+        onClose={() => setContextPopupOpen(false)}
+        context={state.sessionContext}
+        sessionId={sessionId}
+      />
     </div>
   );
 }

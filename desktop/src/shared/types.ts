@@ -277,7 +277,9 @@ export interface TranscriptEvent {
     // Task 1.1: widened turn-complete payload so the reducer can attach the
     // per-turn model, token/cache usage, and the Anthropic requestId to the
     // completing AssistantTurn for UI surfacing. All optional — the field is
-    // shared across event types, and turn-complete is the only current writer.
+    // shared across event types. Writers: turn-complete (the turn's requests)
+    // and, since 2026-09-10, a native compact-summary (the summary call's OWN
+    // bill, which is a separate request and used to vanish from every total).
     /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
     model?: string;
     /** Anthropic API request id from the JSONL line's top-level `requestId`. */
@@ -298,6 +300,13 @@ export interface TranscriptEvent {
        *  last step's prompt plus its output. Distinct from inputTokens, which
        *  sums every step and therefore re-counts the history once per step. */
       contextUsedTokens?: number;
+      /** Native runtime only (cache follow-ups item 8, 2026-09-10): true when a
+       *  request in this turn followed something the harness itself did to the
+       *  prompt prefix — a prune commit, a summary compaction, a model swap — so
+       *  a low cache-read figure on this turn is the known price of that event,
+       *  not a regression. Low reads WITHOUT this flag are the thing to
+       *  investigate. */
+      expectedRebuild?: boolean;
       /** Native runtime only: USD for THIS turn, priced at the model that ran
        *  it. `null` means the model has no published price — distinct from
        *  absent, which means no pricing information at all (a Claude Code turn).
@@ -775,6 +784,106 @@ export interface ToolCallState {
    * Bash calls and on CC cards.
    */
   shellRun?: ShellRunView;
+}
+
+// ── What the assistant was given ────────────────────────────────────────────
+//
+// The session-start accounting behind the line above every conversation and the
+// "What the assistant was given" panel. Lives in shared/types.ts (rather than the
+// renderer's chat-types.ts, where it was designed) because main BUILDS it —
+// see NativeSessionHost.buildSessionContext.
+//
+// Every "was something left out" question is answered by a sub-field: a record
+// with no truncation and nothing dropped is a session that started with
+// everything it was offered.
+//
+// NO FILE BODIES RIDE HERE. 47 installed skills are 619 KB of SKILL.md on this
+// machine (measured 2026-09-10) and this record is pushed for every session,
+// held in renderer state, and re-sent over a phone's WebSocket. The panel asks
+// for one file's text when the user opens that row instead.
+
+/** One skill this session may reach.
+ *
+ *  Deliberately thin: this is what `SkillCatalog.list()` already knows, which is
+ *  what rides in the model's own tool schema. A skill's path, size and whether it
+ *  would be shortened all require READING it, so they arrive with the text when
+ *  the user opens that row — session start reads no skill files at all. */
+export interface SessionContextSkill {
+  id: string;
+  /** The name a person recognises — the last segment of the id. */
+  label: string;
+  /** The one-liner the model itself is given. */
+  description?: string;
+}
+
+export interface SessionContext {
+  /** Who assembled this session's instructions.
+   *
+   *  'youcoded' — the native harness built the prompt, read the files and did any
+   *  shortening, so every field here is a record of what it did.
+   *
+   *  'claude-code' — the Claude Code CLI runs the session and assembles its own
+   *  instructions. YouCoded can still name, accurately, the files Claude Code
+   *  reads and the skills it can reach, because both live on this machine and the
+   *  app manages them. It CANNOT report Claude Code's system prompt, its tool set,
+   *  or whether Claude Code shortened anything — so those are absent rather than
+   *  guessed, and the panel says which is which. Never present one as the other.
+   *
+   *  Absent on a record written before this field existed; the panel treats that
+   *  as 'youcoded', which is what every such record was. */
+  assembledBy?: 'youcoded' | 'claude-code';
+  /** The model this session is bound to, e.g. "qwen2.5-coder:14b". */
+  modelLabel?: string | null;
+  /** The model's context window in tokens, when known. */
+  contextWindowTokens?: number | null;
+  /** Summary line for the top of the panel. */
+  summary?: string | null;
+  /** The system prompt split into the parts the host assembled it from. WHY split
+   *  (Destin, review-5 G-2): "i want to be fully transparent about what models
+   *  load in with." One wall of text answers "how much" but not "what". */
+  systemPromptSections?: Array<{ id: string; label: string; text: string }> | null;
+  /** The whole assembled prompt. Kept as the fallback the panel shows when a host
+   *  cannot split it — showing it whole beats showing nothing. */
+  systemPrompt?: string | null;
+  /** The root instruction file (CLAUDE.md / AGENTS.md) baked into the system
+   *  prompt. This is the ONE thing genuinely cut at session start. Its text is
+   *  fetched on demand. */
+  projectInstructions?: {
+    path: string;
+    /** True when the file was outlined to fit the window. */
+    truncated: boolean;
+    /** Human line when truncated — "3 of 12 sections shown as headings". */
+    note?: string | null;
+  } | null;
+  /** Your own instructions, the ones that apply in every project
+   *  (`~/.claude/CLAUDE.md`). Claude Code reads this file; the native harness
+   *  does NOT — it only walks up from the working folder — which is a real
+   *  difference between the two, and worth showing rather than hiding. */
+  userInstructions?: {
+    path: string;
+    truncated: boolean;
+    note?: string | null;
+  } | null;
+  skills?: SessionContextSkill[] | null;
+  /** Whether the model was TOLD its skills exist. False below the catalog
+   *  threshold, where the Skill tool is never attached — the user can still start
+   *  one by typing /name, but the assistant cannot reach for one itself, and
+   *  before this field nothing anywhere said so. */
+  skillsOffered?: boolean;
+  /** Tools available to the assistant this session. */
+  tools?: string[] | null;
+  /** MCP servers dropped at session start to fit the tools budget. */
+  droppedMcpServers?: string[] | null;
+}
+
+/** One file's text, fetched when the user opens its row in the panel.
+ *  `text` is what the model receives; `full` is the file on disk. Equal when
+ *  nothing was cut. */
+export interface SessionContextText {
+  path: string;
+  text: string;
+  full: string;
+  truncated: boolean;
 }
 
 /** Why a background command is no longer running — the card names it. */
@@ -1879,6 +1988,11 @@ export const IPC = {
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
   NATIVE_KILL_SHELL: 'native:kill-shell',   // G-1: the Bash card's Stop button
+  // "What the assistant was given" (2026-09-10): the session-start push carrying
+  // the inventory, and the on-demand read of ONE file's text. Two channels
+  // because file bodies do not belong in a push — see SessionContext above.
+  NATIVE_SESSION_CONTEXT: 'native:session-context',
+  NATIVE_SESSION_CONTEXT_TEXT: 'native:session-context-text',
   PROVIDER_LIST: 'provider:list',
   PROVIDER_UPSERT: 'provider:upsert',
   PROVIDER_REMOVE: 'provider:remove',

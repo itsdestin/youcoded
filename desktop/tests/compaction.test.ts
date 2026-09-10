@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { planCompaction, pruneToolOutputs, estimateTokens, type CompactionConfig } from '../src/main/harness/compaction';
 import type { ModelMessage } from 'ai';
 
-const cfg: CompactionConfig = { contextLength: 8192, triggerRatio: 0.75, protectedTokens: 4000, minPruneSavings: 1000, pruneToChars: 2000 };
+const cfg: CompactionConfig = { contextLength: 8192, triggerTokens: 6144, protectedTokens: 4000, minPruneSavings: 1000, pruneToChars: 2000 };
 const toolMsg = (id: string, chars: number): ModelMessage => ({ role: 'tool', content: [{ type: 'tool-result', toolCallId: id, toolName: 'Read', output: { type: 'text', value: 'x'.repeat(chars) } }] } as any);
 const userMsg = (t: string): ModelMessage => ({ role: 'user', content: t } as any);
 
@@ -33,7 +33,7 @@ describe('pruneToolOutputs', () => {
   it('prunes an image content-output outside the protected window down to its text + a named note', () => {
     const imageMsg = { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'Read', output: { type: 'content', value: [{ type: 'text', text: 'Read image shot.png' }, { type: 'file', mediaType: 'image/png', data: { type: 'data', data: Buffer.alloc(500_000) } }] } }] } as any;
     const filler = { role: 'user', content: 'x'.repeat(8_000) } as any;   // pushes imageMsg outside protectedTokens
-    const out = pruneToolOutputs([imageMsg, filler], { contextLength: 32_768, triggerRatio: 0.8, protectedTokens: 1_000, minPruneSavings: 100, pruneToChars: 4_000 });
+    const out = pruneToolOutputs([imageMsg, filler], { contextLength: 32_768, triggerTokens: 26_214, protectedTokens: 1_000, minPruneSavings: 100, pruneToChars: 4_000 });
     const output = (out[0] as any).content[0].output;
     expect(output.type).toBe('text');
     expect(output.value).toContain('Read image shot.png');
@@ -65,7 +65,7 @@ describe('pruneToolOutputs', () => {
     // Same shape as the prune case above, but nothing pushes it out of the
     // protected window — the image must survive byte-for-byte.
     const imageMsg = { role: 'tool', content: [{ type: 'tool-result', toolCallId: 't1', toolName: 'Read', output: { type: 'content', value: [{ type: 'text', text: 'Read image shot.png' }, { type: 'file', mediaType: 'image/png', data: { type: 'data', data: Buffer.alloc(500) } }] } }] } as any;
-    const out = pruneToolOutputs([imageMsg], { contextLength: 32_768, triggerRatio: 0.8, protectedTokens: 100_000, minPruneSavings: 100, pruneToChars: 4_000 });
+    const out = pruneToolOutputs([imageMsg], { contextLength: 32_768, triggerTokens: 26_214, protectedTokens: 100_000, minPruneSavings: 100, pruneToChars: 4_000 });
     expect((out[0] as any).content[0].output.type).toBe('content');
   });
 });
