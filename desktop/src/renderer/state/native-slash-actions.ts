@@ -21,7 +21,7 @@ import type { NativeSlashAction, DispatcherResult } from './slash-command-dispat
  *  and HarnessSession.compactNow. */
 const COMPACT_REFUSAL: Record<string, string> = {
   'turn-in-flight':
-    "Can't compact while Claude is still working. Stop the current turn (or wait for it to finish) and try again.",
+    "Can't compact while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
   'nothing-to-compact':
     'Nothing to compact yet — there needs to be at least a couple of exchanges before there’s anything to summarize.',
   // Deliberately NOT phrased as a total failure: compactNow prunes BEFORE it
@@ -92,7 +92,7 @@ export async function runNativeSlashAction(
 /** Copy for a refused /clear. Same discipline as COMPACT_REFUSAL above. */
 const CLEAR_REFUSAL: Record<string, string> = {
   'turn-in-flight':
-    "Can't clear while Claude is still working. Stop the current turn (or wait for it to finish) and try again.",
+    "Can't clear while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
   'not-live': "This session isn't running, so there's nothing to clear.",
 };
 
@@ -147,7 +147,7 @@ const SKILL_REFUSAL: Record<string, string> = {
   // needs in order to pick.
   'ambiguous': '',
   'turn-in-flight':
-    "Can't start a skill while Claude is still working. Stop the current turn (or wait for it to finish) and try again.",
+    "Can't start a skill while your assistant is still working. Stop the current turn (or wait for it to finish) and try again.",
   'not-live': "This session isn't running, so there's nothing to run the skill in.",
 };
 
