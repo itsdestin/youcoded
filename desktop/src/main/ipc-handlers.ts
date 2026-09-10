@@ -101,7 +101,7 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
-import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn } from './dev-tools';
+import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
 import type { UpdateProgressEvent } from '../shared/update-install-types';
 import { getChangelog } from './changelog-service';
@@ -4081,6 +4081,29 @@ export function registerIpcHandlers(
       return { error: String(e?.message || e) };
     }
   });
+
+  // Managed development workspace (contract R9/R10). Setup lives in the main
+  // process on purpose: the screen tells the user "you can close this — setup
+  // keeps going", which is only true if closing the dialog cannot cancel it.
+  ipcMain.handle(IPC.DEV_SETUP_WORKSPACE, async () =>
+    setupManagedWorkspace((absPath) => {
+      // Register it the same way the legacy install does — as a saved project
+      // folder, NOT a sync space. A space under ~/YouCoded/Projects would push
+      // this ~1GB tree to the user's backup with `git add -A`, unannounced.
+      try {
+        const normalized = path.resolve(absPath);
+        const folders = readFolders();
+        if (!folders.some((f) => path.resolve(f.path) === normalized)) {
+          folders.unshift({ path: normalized, nickname: path.basename(normalized), addedAt: Date.now() } as SavedFolder);
+          writeFolders(folders);
+        }
+      } catch (e) {
+        log('WARN', 'dev', 'folders.add post-setup failed', { error: String(e) });
+      }
+    }),
+  );
+
+  ipcMain.handle(IPC.DEV_SETUP_STATUS, async () => workspaceSetupStatus());
 
   ipcMain.handle(IPC.DEV_OPEN_SESSION_IN, async (_event, args: { cwd: string; initialInput?: string }) => {
     // Delegate to the exported helper so the logic is independently testable.

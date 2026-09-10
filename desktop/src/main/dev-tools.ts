@@ -712,3 +712,76 @@ export function openDevSessionIn(
     initialInput: args.initialInput,
   });
 }
+
+// --- Managed development workspace (contract R9/R10) -------------------------
+//
+// Deliberately NOT installWorkspace() above. That one clones into a fixed
+// ~/youcoded-dev, PULLS into it when it recognises the remote, and throws when it
+// does not — all three ruled out by R9 ("an existing development folder is left
+// untouched and the screen explains the new project is separate").
+//
+// WHERE it goes, and why not under Projects/: `sync-spaces/managed-roots.ts`
+// turns EVERY directory under ~/YouCoded/Projects into a synced space, and the
+// transport stages with `git add -A` (git-transport.ts). This workspace is ~1GB
+// with five nested .git directories, so putting it there would silently push a
+// gigabyte of source to the user's backup — while the approved screen says nothing
+// about backup at all. ~/YouCoded/Development is inside the app's own folder (so it
+// reads as app-managed) and outside both sync roots, so nothing is uploaded.
+//
+// State lives HERE, in main, not in the dialog: the screen tells the user "you can
+// close this — setup keeps going". That is only true if closing the dialog cannot
+// cancel it and reopening can ask where it got to.
+
+export type WorkspaceSetupStatus = {
+  state: 'idle' | 'running' | 'ready' | 'failed';
+  path?: string;
+  error?: string;
+};
+
+let setupStatusState: WorkspaceSetupStatus = { state: 'idle' };
+let setupInFlight: Promise<{ ok: true; path: string } | { ok: false; error: string }> | null = null;
+
+export function workspaceSetupStatus(): WorkspaceSetupStatus {
+  return setupStatusState;
+}
+
+/** A folder under ~/YouCoded/Development that does not exist yet. Never reuses one. */
+function freeWorkspacePath(): string {
+  const root = path.join(os.homedir(), 'YouCoded', 'Development');
+  const base = 'youcoded-workspace';
+  for (let n = 0; n < 100; n++) {
+    const candidate = path.join(root, n === 0 ? base : `${base}-${n + 1}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error('Too many development workspaces already exist in YouCoded/Development.');
+}
+
+export function setupManagedWorkspace(
+  registerFolder: (absPath: string) => void,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  // A second press joins the first run rather than starting a rival clone or
+  // failing with "already exists" (design review F16).
+  if (setupInFlight) return setupInFlight;
+  setupInFlight = (async () => {
+    setupStatusState = { state: 'running' };
+    try {
+      const target = freeWorkspacePath();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      const noop = () => {};
+      await runStreamed('git', ['clone', '--depth', '50', WORKSPACE_REPO, target], noop);
+      await runStreamed('bash', ['setup.sh'], noop, { cwd: target });
+      registerFolder(target);
+      setupStatusState = { state: 'ready', path: target };
+      return { ok: true as const, path: target };
+    } catch (e: any) {
+      // The reason is the one the failing step gave. Never a guessed cause
+      // (docs/error-message-standards.md).
+      const error = String(e?.message || e);
+      setupStatusState = { state: 'failed', error };
+      return { ok: false as const, error };
+    } finally {
+      setupInFlight = null;
+    }
+  })();
+  return setupInFlight;
+}

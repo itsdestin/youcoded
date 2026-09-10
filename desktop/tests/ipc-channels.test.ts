@@ -133,15 +133,39 @@ describe('IPC channel consistency', () => {
 // Settings → Development feature. All three platforms must carry identical
 // type strings.
 describe('dev:* channel parity', () => {
-  const NEW_TYPES = [
-    'dev:log-tail',
-    'dev:diagnostics',
-    'dev:summarize-issue',
-    'dev:submit-issue',
-    'dev:install-workspace',
-    'dev:install-progress',
-    'dev:open-session-in',
-  ];
+  // WHY derived, not hand-listed (2026-09-10): this was a fixed array, so the two
+  // channels added for managed workspace setup escaped every assertion below
+  // silently — the suite stayed green while the new channels were on no platform
+  // but desktop. The list now comes from shared/types.ts, so a dev:* channel
+  // cannot be added without this test having an opinion about it.
+  const ALL_DEV_TYPES = [...ipcConstants(
+    readSource('src', 'shared', 'types.ts'),
+    /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/,
+  ).values()].filter(v => v.startsWith('dev:'));
+
+  // Desktop-only by decision, not by omission: setting up a development workspace
+  // needs git and a shell on the machine the app runs on. Remote already answers
+  // "Developer tools isn't available via remote access yet"
+  // (renderer/remote-unsupported.ts maps the whole 'dev:' namespace), and Android
+  // has no shell to clone into. Adding one here is a deliberate act.
+  const DESKTOP_ONLY = new Set(['dev:setup-workspace', 'dev:setup-status']);
+  const NEW_TYPES = ALL_DEV_TYPES.filter(t => !DESKTOP_ONLY.has(t));
+
+  it('every dev:* channel is either cross-platform or explicitly desktop-only', () => {
+    // Fails on a channel that is neither — i.e. one nobody decided about.
+    for (const t of ALL_DEV_TYPES) {
+      expect(NEW_TYPES.includes(t) || DESKTOP_ONLY.has(t)).toBe(true);
+    }
+    expect(ALL_DEV_TYPES.length).toBeGreaterThan(NEW_TYPES.length);
+  });
+
+  it('the desktop-only ones are still on desktop, and refused elsewhere', () => {
+    const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
+    for (const t of DESKTOP_ONLY) expect(preload).toContain(`'${t}'`);
+    // The refusal is namespace-wide, so it already covers these.
+    const unsupported = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-unsupported.ts'), 'utf8');
+    expect(unsupported).toContain("'dev:'");
+  });
 
   it('all dev:* types are declared in preload.ts', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');

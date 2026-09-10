@@ -75,15 +75,17 @@
 // workbench can still pin signed-out / waiting / signed-in / blocked without a
 // browser round-trip — only the "no real backend" claim goes.
 //
-// 2026-09-10 — the contribution workspace as a managed project
-// (docs/active/design/2026-09-08-error-states-development, contract rows R9/R10).
-// `dev:setup-workspace` deliberately does NOT reuse the legacy `dev:install-workspace`:
-// that one clones into a fixed ~/youcoded-dev, pulls into it if it recognises it, and
-// throws if it does not — all three ruled out by R9 ("an existing folder is left
-// untouched"). Reaching it from the new screen is a red test by design
-// (DevelopmentDesign.test.tsx). So the channel is designed here first, and this row is
-// the backend to-do it leaves behind.
-export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
-  { channel: 'dev.setupWorkspace', feature: 'contribution workspace as a managed project' },
-  { channel: 'dev.setupStatus', feature: 'contribution workspace as a managed project' },
-];
+// The two contribution-workspace rows (`dev.setupWorkspace`, `dev.setupStatus`) were
+// listed here on 2026-09-10 while the Contribute screen was designed ahead of its
+// backend, and came off the same day when it landed: dev-tools.ts's
+// setupManagedWorkspace/workspaceSetupStatus, the two handlers in ipc-handlers.ts, and
+// the constants in shared/types.ts + preload.ts. Exactly the lifecycle this registry is
+// for — the UI was built against a fake, and the fake said what to build. The fakes in
+// mock-shim.ts STAY: the workbench has no git, no network and no ~/YouCoded, so it still
+// needs a setup that "runs" for 2.5s and a status it can answer. Only the "no real
+// backend" claim goes.
+//
+// They are deliberately desktop-only, unlike the older dev:* channels — cloning a
+// workspace needs git and a shell on the machine the app runs on. That decision is
+// enforced by ipc-channels.test.ts's DESKTOP_ONLY set rather than left implicit.
+export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [];
