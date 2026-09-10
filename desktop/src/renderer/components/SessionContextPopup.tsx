@@ -50,8 +50,20 @@ function Dot({ ok }: { ok: boolean }) {
   return <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${ok ? 'bg-green-500' : 'bg-amber-500'}`} aria-hidden />;
 }
 
+/** A context window as its NAMEPLATE — "1M", "200k", "16k".
+ *
+ *  Same thresholds as StatusBar's formatTokens, deliberately, so one window is
+ *  one number wherever it appears. Two differences, both because this is a size
+ *  rather than a measurement: thousands round to whole (a window is advertised as
+ *  "200k", never "200.0k"), and a millions value drops a trailing ".0".
+ *
+ *  WHY the millions branch exists at all (Destin, 2026-09-10, on seeing
+ *  "1049k tokens"): without it a million-token window renders as a four-digit
+ *  count of thousands, which nobody reads as a million — the largest window the
+ *  app supports came out looking like a glitch. */
 function windowLabel(tokens?: number | null): string {
   if (!tokens) return 'unknown';
+  if (tokens >= 1_000_000) return `${(tokens / 1_000_000).toFixed(1).replace(/\.0$/, '')}M`;
   return tokens >= 1000 ? `${Math.round(tokens / 1000)}k` : String(tokens);
 }
 
