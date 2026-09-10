@@ -62,7 +62,7 @@ export const ResumeFilterPopover = React.forwardRef<HTMLDivElement, {
       ref={ref}
       role="dialog"
       aria-label="Filters"
-      className="layer-surface w-[min(264px,calc(100vw-1rem))] p-3 flex flex-col gap-3"
+      className="layer-surface w-[min(320px,calc(100vw-1rem))] p-3 flex flex-col gap-3"
       style={{ position: 'fixed', top: anchor.top, right: anchor.right, zIndex: 60 }}
     >
       <div className="flex items-center justify-between">
