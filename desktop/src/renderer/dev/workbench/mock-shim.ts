@@ -1276,6 +1276,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   //
   // The `refused` scenario drives the FAILURE side of each flow, so the deck can
   // capture it from the toolbar rather than from a bespoke query parameter.
+  // Long enough that the setting-up state is a state you can look at, short
+  // enough not to stall a capture run.
+  const SETUP_MS = 2500;
   const devMock = {
     // Real channels (dev:log-tail, dev:diagnostics, dev:summarize-issue,
     // dev:submit-issue in preload.ts) — faked so the workbench has evidence text
@@ -1303,10 +1306,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // NO real backend — registered in mock-only.ts. This is the managed-project
     // setup that replaces the legacy fixed-folder installer; it must never reach
     // installWorkspace(), which is pinned by DevelopmentDesign.test.tsx.
-    setupWorkspace: async () =>
+    // WHY the fixed wait, rather than the latency knob: this clones five
+    // repositories and installs their dependencies. It takes MINUTES in reality,
+    // and a mock that resolves in 150ms means the setting-up state — progress
+    // lines and all — flashes past and is never actually reviewed. That is the
+    // exact failure the latency knob exists to prevent, one size too small.
+    setupWorkspace: () => new Promise(resolve => setTimeout(() => resolve(
       activeScenario === 'refused'
         ? { ok: false as const, error: 'Could not reach github.com to download the project.' }
         : { ok: true as const, path: '/home/destin/YouCoded/Projects/youcoded-workspace' },
+    ), SETUP_MS)),
     onSetupProgress: (cb: (line: string) => void) => {
       // A REAL registrar, not a no-op: the setting-up screen has nothing to show
       // until lines arrive, so a stubbed subscription would leave the workbench
@@ -1321,7 +1330,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const timer = setInterval(() => {
         if (i >= lines.length) { clearInterval(timer); return; }
         cb(lines[i++]);
-      }, Math.max(latencyMs, 400));
+      }, SETUP_MS / (lines.length + 1));
       return () => clearInterval(timer);
     },
   };

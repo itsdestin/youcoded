@@ -120,9 +120,13 @@ export function ReportDesign({ open, onClose }: { open: boolean; onClose: () => 
           {/* WHY: the app's dialogs stack full-width actions (see the legacy ContributePopup and
               BugReportPopup) — primary on top, secondary under it. Chip-sized right-aligned
               buttons were this mockup's own invention and read as a different app. */}
+          {/* WHY the submit button goes away while an error is showing: Retry inside
+              the error and "Submit public ticket" below it are the same action written
+              twice, which reads as two different things to try. The error owns the
+              retry; the footer keeps only the way back to editing. */}
           <div className="flex flex-col gap-2">
-            <Button className="w-full py-2.5" onClick={send}>{attachments ? 'Continue in GitHub' : 'Submit public ticket'}</Button>
-            <Button variant="secondary" className="w-full py-2.5" onClick={() => setPhase('draft')}>Back to draft</Button>
+            {!error && <Button className="w-full py-2.5" onClick={send}>{attachments ? 'Continue in GitHub' : 'Submit public ticket'}</Button>}
+            <Button variant="secondary" className="w-full py-2.5" onClick={() => { setError(''); setPhase('draft'); }}>Back to draft</Button>
           </div>
         </> : <Button className="w-full py-2.5" disabled={!title.trim() || !description.trim()} onClick={() => setPhase('review')}>Review ticket</Button>}
       </>}

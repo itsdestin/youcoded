@@ -136,7 +136,7 @@ describe('development design safety', () => {
     Object.assign(window, { claude: { dev: { setupWorkspace, onSetupProgress: vi.fn(() => () => {}) } } });
     render(<ContributePopup open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
-    await screen.findByText('Could not reach github.com.');
+    await screen.findByText(/Could not reach github\.com\./);
     expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
   });
 

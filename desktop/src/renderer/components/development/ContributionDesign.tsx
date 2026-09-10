@@ -74,14 +74,17 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
         {/* WHY: the legacy screen offered only Done on failure, which throws away
             what already succeeded and gives no way forward (audit E-08). Retry
             resumes; what was downloaded is kept. */}
+        {/* WHY one block and no separate Close: the first cut had Retry and Report
+            bug at row size inside the error, then a full-width Close under it —
+            three actions at two sizes, which is the "weirdly sized buttons, poor
+            visual hierarchy" Destin rejected on this very screen (S-6). The error
+            owns its actions; the dialog's ✕ is how you leave. */}
         <ErrorState
           title="Setup didn’t finish"
-          explainer={error}
+          explainer={`${error} Anything already downloaded is kept, so trying again picks up where it stopped.`}
           onRetry={setup}
           onReportBug={onClose}
         />
-        <p className="text-xs text-fg-2">Anything already downloaded is kept, so trying again picks up where it stopped.</p>
-        <Button variant="secondary" className="w-full py-2.5" onClick={onClose}>Close</Button>
       </>}
 
     </div>
