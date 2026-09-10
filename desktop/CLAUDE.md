@@ -138,7 +138,7 @@ The app uses a semantic CSS token system for theming. All colors are CSS custom 
 
 ## Keyboard Shortcuts
 
-The desktop app uses a layered keyboard system. The text input auto-focuses when any printable character is typed, and auto-unfocuses after 0.5s of idle so global shortcuts become available. (Auto-unfocus is skipped on Android because blur dismisses the soft keyboard; the relevant Shift-hold global shortcuts don't exist on touch devices anyway.)
+The desktop app uses a layered keyboard system. The text input auto-focuses when any printable character is typed, and auto-unfocuses after 0.75s of idle so global shortcuts become available. (Auto-unfocus is skipped wherever an on-screen keyboard may be up, because blur dismisses it: on Android and coarse-primary-pointer devices entirely, and on touchscreen laptops whenever the box was last reached by a finger or pen tap. A touchpad/mouse click or typing on a physical keyboard turns it back on.)
 
 | Shortcut | Context | Action |
 |----------|---------|--------|
