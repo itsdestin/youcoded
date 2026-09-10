@@ -33,7 +33,7 @@ import { fileTypeGroup } from '../../shared/artifacts/categorization';
 import type { FileTypeGroup } from '../../shared/artifacts/categorization';
 import { getPlatform } from '../platform';
 import { formatRelativeTime } from '../utils/format-time';
-import { Button, CloseButton, EmptyState, FieldError, SearchFilterPill } from './ui';
+import { Button, CloseButton, EmptyState, FieldError, SearchFilterPill, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
 import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -131,9 +131,9 @@ function RevealFolderIc({ size = 15 }: { size?: number }) {
 
 function IconBtn({ name, title, onClick, active, glyph }: { name?: string; title: string; onClick: () => void; active?: boolean; glyph?: React.ReactNode }) {
   return (
+    <Tooltip text={title}>
     <button
       type="button"
-      title={title}
       onClick={onClick}
       className={`w-7 h-7 rounded-md inline-flex items-center justify-center shrink-0 border transition-colors ${
         active ? 'text-fg bg-well border-edge' : 'text-fg-dim border-transparent hover:text-fg hover:bg-well hover:border-edge'
@@ -141,6 +141,7 @@ function IconBtn({ name, title, onClick, active, glyph }: { name?: string; title
     >
       {glyph ?? <Ic name={name!} />}
     </button>
+    </Tooltip>
   );
 }
 
@@ -606,11 +607,12 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
             either is showing, the top bar's own Close icon covers this, and
             showing both would be a redundant second close button. */}
         {!active && !activePreview && (
-          <CloseButton
-            onClick={() => guardUnsaved(() => dispatch({ type: 'DRAWER_CLOSED', sessionId }))}
-            title="Close drawer"
-            label="Close drawer"
-          />
+          <Tooltip text="Close drawer">
+            <CloseButton
+              onClick={() => guardUnsaved(() => dispatch({ type: 'DRAWER_CLOSED', sessionId }))}
+              label="Close drawer"
+            />
+          </Tooltip>
         )}
       </div>
       {/* Search + filter. Uses the SHARED SearchFilterPill so this row and the
@@ -770,15 +772,16 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
   // 6px hit area hugging the drawer's left edge; the visible affordance is the
   // hover/drag accent tint. No new backdrop-filter (react-renderer rule).
   const resizeHandle = expanded ? null : (
+    <Tooltip text="Drag to resize · double-click to reset">
     <div
       className={`absolute left-0 inset-y-0 w-1.5 cursor-col-resize z-10 transition-colors ${dragging ? 'bg-accent/50' : 'hover:bg-accent/30'}`}
-      title="Drag to resize · double-click to reset"
       onPointerDown={onHandlePointerDown}
       onPointerMove={onHandlePointerMove}
       onPointerUp={onHandlePointerUp}
       onPointerCancel={onHandlePointerUp}
       onDoubleClick={resetDrawerWidth}
     />
+    </Tooltip>
   );
 
   // Expanded just fills the framed-shell content region (ChatView hides the chat
@@ -864,10 +867,10 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
             )}
           </div>
         ) : (
+          <Tooltip text="Click to rename">
           <button
             type="button"
             onClick={startRename}
-            title="Click to rename"
             className="group flex items-center gap-1.5 min-w-0 px-2 py-1 rounded-md cursor-text hover:bg-well transition-colors"
           >
             <span className="text-sm-tight font-semibold text-fg truncate decoration-dotted underline-offset-[3px] group-hover:underline group-hover:decoration-fg-muted">
@@ -875,6 +878,7 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
             </span>
             <span className="text-fg-muted opacity-0 group-hover:opacity-100 shrink-0"><Ic name="pencil" size={12} /></span>
           </button>
+          </Tooltip>
         )) : activePreview ? (
           // Same slot the filename occupies above, plain (not a button) — a
           // past conversation can't be renamed, so this carries none of the
@@ -946,11 +950,11 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
             confirm live. */}
         {activePreview && (
           <div ref={resumeSheetWrapRef} className="relative">
+            <Tooltip text={previewResumeTitle}>
             <Button
               variant="primary"
               size="sm"
               disabled={previewResumeDisabled}
-              title={previewResumeTitle}
               // Narrow (<640px, checked at 390px): the label collapses to a
               // chat bubble with a play triangle — Destin (M-narrow) on the
               // plain forward arrow that used to sit here. Icon-only means the
@@ -962,6 +966,7 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
             >
               {narrowViewport ? <ChatResumeIcon className="w-3.5 h-3.5" /> : previewResumeLabel}
             </Button>
+            </Tooltip>
             {resumeSheetOpen && previewOk && (
               <ResumeOptionsPopover
                 conversation={previewOk}
@@ -1143,9 +1148,11 @@ export function GitFooterEntry({
   return (
     <>
       {conflicted && (
-        <span className="font-medium text-amber-400" title="This file has merge conflicts">
+        <Tooltip text="This file has merge conflicts">
+        <span className="font-medium text-amber-400">
           Conflict
         </span>
+        </Tooltip>
       )}
       {counts && (
         <>
@@ -1153,14 +1160,15 @@ export function GitFooterEntry({
           <span className="font-mono text-red-400">−{counts.removed}</span>
         </>
       )}
+      <Tooltip text="Review this file's changes">
       <button
         type="button"
         onClick={onOpenReview}
-        title="Review this file's changes"
         className="flex items-center gap-1 px-2 py-0.5 rounded-md text-2xs text-fg-dim hover:text-fg hover:bg-inset transition-colors"
       >
         Review Changes <Ic name="forward" size={11} />
       </button>
+      </Tooltip>
     </>
   );
 }
@@ -1191,12 +1199,12 @@ function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, 
     // group/relative wrapper hosts the hover-revealed remove × (a button can't
     // nest inside the select button) — same pattern as ProjectSwitcher rows.
     <div className="group relative">
+      <Tooltip text={isDeleted ? 'Deleted (file is no longer on disk)' : ''}>
       <button
         className={`w-full text-left px-2 py-2 ${onRemove ? 'pr-8' : ''} hover:bg-inset border-b border-edge-dim transition-colors ${
           isActive ? 'bg-inset' : ''
         } ${isDeleted ? 'opacity-50' : ''}`}
         onClick={onSelect}
-        title={isDeleted ? 'Deleted (file is no longer on disk)' : undefined}
       >
         <div className="flex items-center gap-1 min-w-0">
           <span className={`font-mono text-xs truncate flex-1 ${isDeleted ? 'line-through' : ''}`}>{fileName}</span>
@@ -1204,15 +1212,17 @@ function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, 
         {/* WHY: status shown as a word, not a ●◐○ glyph (user-disliked — see dislikes-status-glyphs memory). */}
         <div className="text-3xs text-fg-muted ml-0.5">{statusWord} · {relTime}</div>
       </button>
+      </Tooltip>
       {onRemove && (
-        <CloseButton
-          // w-6 h-6 survives as a className override: hover-revealed row affordance,
-          // sized to the row rather than the standard 28px panel-header closer.
-          className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity w-6 h-6 rounded-md"
-          title={`Remove ${fileName} from this list (the file itself is not deleted)`}
-          label={`Remove ${fileName} from this list`}
-          onClick={(e) => { e.stopPropagation(); onRemove(); }}
-        />
+        <Tooltip text={`Remove ${fileName} from this list (the file itself is not deleted)`}>
+          <CloseButton
+            // w-6 h-6 survives as a className override: hover-revealed row affordance,
+            // sized to the row rather than the standard 28px panel-header closer.
+            className="absolute right-1 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity w-6 h-6 rounded-md"
+            label={`Remove ${fileName} from this list`}
+            onClick={(e) => { e.stopPropagation(); onRemove(); }}
+          />
+        </Tooltip>
       )}
     </div>
   );

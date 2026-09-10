@@ -35,6 +35,25 @@ vi.mock('../src/renderer/state/theme-context', () => ({
 
 import { SessionDrawer } from '../src/renderer/components/SessionDrawer';
 
+/**
+ * Find a control by the words of its hover hint.
+ *
+ * These were `getByTitle` / `findByTitle`. The hints are the app's own
+ * <Tooltip> now rather than the browser's `title=` bubble, so the words sit on
+ * the control as `data-hint`. What each test asserts is unchanged.
+ */
+const hintSel = (t: string) => `[data-hint="${t.replace(/"/g, '\\"')}"]`;
+const allByHint = (t: string) => Array.from(document.querySelectorAll(hintSel(t))) as HTMLElement[];
+const getByHint = (t: string): HTMLElement => {
+  const found = allByHint(t);
+  if (found.length !== 1) throw new Error(`expected one control hinted ${JSON.stringify(t)}, found ${found.length}`);
+  return found[0];
+};
+const findByHint = async (t: string): Promise<HTMLElement> => {
+  await waitFor(() => expect(allByHint(t).length).toBe(1));
+  return getByHint(t);
+};
+
 // jsdom does not implement scrollIntoView; ConversationTranscript (rendered
 // inside SessionPreviewPane) calls it to jump to the newest message.
 // jsdom also has no matchMedia — the preview header's narrow-viewport
@@ -111,7 +130,7 @@ describe('SessionDrawer: one header for a previewed conversation', () => {
     // Exactly one close control on the whole pane — the drawer's, not a
     // second one from the pane. (Before the fix there were two: the drawer's
     // title-less bar plus the pane's own ✕.)
-    expect(screen.getAllByTitle('Close')).toHaveLength(1);
+    expect(allByHint('Close')).toHaveLength(1);
 
     // The read-only/lane line the old pane header carried is still shown
     // somewhere (now a quiet caption inside the scroll area), just not as a
@@ -134,7 +153,7 @@ describe('SessionDrawer: one header for a previewed conversation', () => {
     const list = container.querySelector('.drawer-list') as HTMLElement;
     expect(list.className).toContain('w-0'); // collapsed by default, same as a freshly-opened file
 
-    fireEvent.click(screen.getByTitle('Show list'));
+    fireEvent.click(getByHint('Show list'));
     expect(list.className).toContain('w-[210px]');
   });
 
@@ -148,7 +167,7 @@ describe('SessionDrawer: one header for a previewed conversation', () => {
     );
     await screen.findByText(PREVIEW.title);
 
-    fireEvent.click(screen.getByTitle('Close'));
+    fireEvent.click(getByHint('Close'));
     expect(dispatch).toHaveBeenCalledWith({ type: 'DRAWER_CLOSED', sessionId: SESSION });
   });
 
@@ -232,7 +251,7 @@ describe('Resume button (spec A2)', () => {
   it('is enabled with the continue-in-a-tab hint when the conversation resolves resumable', async () => {
     mockWindowClaudeFor(okRow());
     renderDrawerWithPreview();
-    const btn = await screen.findByTitle(COPY.resumeHint);
+    const btn = await findByHint(COPY.resumeHint);
     expect(btn).not.toBeDisabled();
     expect(btn).toHaveTextContent(COPY.resume);
   });
@@ -240,21 +259,21 @@ describe('Resume button (spec A2)', () => {
   it('is disabled with the missing-project reason when the project folder is absent', async () => {
     mockWindowClaudeFor(okRow({ missingProject: true, projectSlug: '', projectPath: '' }));
     renderDrawerWithPreview();
-    const btn = await screen.findByTitle(COPY.resumeMissingProject);
+    const btn = await findByHint(COPY.resumeMissingProject);
     expect(btn).toBeDisabled();
   });
 
   it('is disabled with the not-synced reason when the transcript has not synced to this device', async () => {
     mockWindowClaudeFor(okRow({ notSyncedYet: true }));
     renderDrawerWithPreview();
-    const btn = await screen.findByTitle(COPY.resumeNotSynced);
+    const btn = await findByHint(COPY.resumeNotSynced);
     expect(btn).toBeDisabled();
   });
 
   it('labels the assistant lane "Resume…" — that lane opens a model picker before it launches', async () => {
     mockWindowClaudeFor(okRow({ provider: 'native' }));
     renderDrawerWithPreview({ ...PREVIEW, provider: 'native' });
-    const btn = await screen.findByTitle(COPY.resumeNativeHint);
+    const btn = await findByHint(COPY.resumeNativeHint);
     expect(btn).toHaveTextContent(COPY.resumeNative);
     expect(btn).not.toBeDisabled();
   });
@@ -266,7 +285,7 @@ describe('Resume button (spec A2)', () => {
   it('clicking an enabled Resume opens the options popover instead of resuming', async () => {
     mockWindowClaudeFor(okRow({ projectSlug: 'my-slug', projectPath: '/my/path' }));
     renderDrawerWithPreview();
-    const btn = await screen.findByTitle(COPY.resumeHint);
+    const btn = await findByHint(COPY.resumeHint);
 
     const heard = vi.fn();
     window.addEventListener('youcoded:resume-session', (e: any) => heard(e.detail));
@@ -279,7 +298,7 @@ describe('Resume button (spec A2)', () => {
   it('the popover\'s confirm dispatches youcoded:resume-session with the conversation and the picked options', async () => {
     mockWindowClaudeFor(okRow({ projectSlug: 'my-slug', projectPath: '/my/path' }));
     renderDrawerWithPreview();
-    fireEvent.click(await screen.findByTitle(COPY.resumeHint));
+    fireEvent.click(await findByHint(COPY.resumeHint));
     await screen.findByRole('dialog', { name: 'Resume options' });
 
     const heard = vi.fn();
@@ -303,7 +322,7 @@ describe('Resume button (spec A2)', () => {
   it('a disabled Resume (missing project) never dispatches the event — positive control above', async () => {
     mockWindowClaudeFor(okRow({ missingProject: true, projectSlug: '', projectPath: '' }));
     renderDrawerWithPreview();
-    const btn = await screen.findByTitle(COPY.resumeMissingProject);
+    const btn = await findByHint(COPY.resumeMissingProject);
 
     const heard = vi.fn();
     window.addEventListener('youcoded:resume-session', (e: any) => heard(e.detail));

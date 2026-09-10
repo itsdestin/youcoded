@@ -193,15 +193,23 @@ describe('the swap cannot move anything on screen', () => {
     expect(row.firstElementChild!.className).toBe('gear');
   });
 
-  it('wraps only a DISABLED control, which fires no pointer events of its own', () => {
+  it('adds none around a DISABLED control either', () => {
+    // Chromium suppresses `click` on a disabled control, which looks like it
+    // would need a wrapper to listen on. Measured with real CDP mouse input on
+    // 2026-09-10: pointerover / pointerenter / pointermove all fire there, so
+    // the clone is enough. A wrapper here would have collapsed StatusBar's
+    // `w-full` theme-cycle row — the one disabled control that has a hint.
     const { container } = render(
       <div>
         <Tooltip text="At least one theme must stay in the cycle">
-          <button disabled>x</button>
+          <button disabled className="w-full">x</button>
         </Tooltip>
       </div>,
     );
-    expect(container.firstElementChild!.firstElementChild!.tagName).toBe('SPAN');
+    const row = container.firstElementChild!;
+    expect(row.childElementCount).toBe(1);
+    expect(row.firstElementChild!.tagName).toBe('BUTTON');
+    expect(row.firstElementChild!.className).toBe('w-full');
   });
 });
 

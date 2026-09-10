@@ -117,7 +117,9 @@ describe('ResumeBrowser — organizing a conversation', () => {
     // WHY: the viewer is the requested visual authority, not invented sizes or
     // adjacent organize icons. Read its local implementation without changing it.
     const viewer = readFileSync(resolve('src/renderer/components/SessionDrawer.tsx'), 'utf8');
-    const trigger = viewer.match(/title="Click to rename"\s+className="([^"]+)"/)!;
+    // The hint moved from a `title` attribute to the app's own <Tooltip>, so the
+    // trigger is now the button INSIDE that wrapper. Same control, same check.
+    const trigger = viewer.match(/<Tooltip text="Click to rename">\s*<button[\s\S]{0,120}?className="([^"]+)"/)!;
     const label = viewer.match(/<span className="([^"]+)">\s*\{fileName\}/)!;
     const icon = viewer.match(/<span className="([^"]+)"><Ic name="pencil" size=\{(\d+)\}/)!;
     const path = viewer.match(/pencil: '([^']+)'/)!;

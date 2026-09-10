@@ -125,7 +125,7 @@ function openMenu(sessions = [sess('a', 'alpha'), sess('b', 'beta'), sess('c', '
       />
     </ArtifactProvider>,
   );
-  fireEvent.click(view.getByTitle('All Sessions'));
+  fireEvent.click(view.getByLabelText('All Sessions'));
   const portal = document.getElementById('root') as HTMLElement;
   const list = portal.querySelector('.scroll-fade') as HTMLElement;
   const rows = Array.from(list.querySelectorAll('[data-session-id]')) as HTMLElement[];

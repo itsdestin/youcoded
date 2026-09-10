@@ -16,10 +16,18 @@ import { placeBubble } from './anchor-position';
  * assumed each swap would turn an attribute into a wrapper element, and priced
  * the work on perturbing flex/grid in dense rows — the status bar especially.
  * A clone injects the handlers and a ref straight onto the control that is
- * already there, so the DOM is byte-identical to before and no row can shift.
- * The one exception is a DISABLED control, which fires no pointer events of its
- * own in Chromium; that case gets an `inline-flex` wrapper, and it is the only
- * case that can move anything.
+ * already there, so the DOM is byte-identical to before and nothing can shift —
+ * with no exceptions, including disabled controls.
+ *
+ * A disabled control looked like it would need a wrapper, because Chromium
+ * suppresses `click` on one. MEASURED instead of assumed (2026-09-10, real CDP
+ * mouse input over a disabled <button>, not a synthetic dispatch — which proves
+ * nothing, since it skips hit-testing): a real mouse produces `pointerover`,
+ * `pointerenter` and `pointermove` there. So the clone works, and the wrapper
+ * this file used to add was not merely unnecessary — it was a latent layout bug.
+ * An `inline-flex` span around StatusBar's `w-full` theme-cycle row would have
+ * collapsed that row to its content width on the one theme where the hint
+ * appears at all.
  *
  * NOT this component: rich or click-open explanations, which are `AnchorTip`.
  * Paragraph-length copy belongs there rather than here — a sentence hidden
@@ -100,7 +108,6 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
 
   const child = React.Children.only(children) as React.ReactElement<Record<string, unknown>>;
   const childProps = child.props as Record<string, unknown> & { children?: React.ReactNode };
-  const disabled = childProps.disabled === true;
   // Empty text is a real state, not a mistake: several hints exist only in one
   // branch ("at least one theme must stay in the cycle" appears only on the last
   // remaining theme). An empty string must render nothing rather than an empty
@@ -279,18 +286,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
 
   return (
     <>
-      {disabled ? (
-        // A disabled control dispatches no pointer events of its own in
-        // Chromium, so the one case that cannot be a clone gets a box to listen
-        // on. `inline-flex` keeps it out of the way of the row's own alignment.
-        // The control itself still carries the naming, so a disabled button
-        // reads the same to a screen reader as an enabled one.
-        <span ref={setRef as React.Ref<HTMLSpanElement>} className="inline-flex" {...handlers}>
-          {React.cloneElement(child, aria)}
-        </span>
-      ) : (
-        React.cloneElement(child, { ...aria, ...handlers, ref: setRef })
-      )}
+      {React.cloneElement(child, { ...aria, ...handlers, ref: setRef })}
 
       {open && armed &&
         createPortal(

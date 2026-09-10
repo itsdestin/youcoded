@@ -1,7 +1,7 @@
 import React, { useState, useRef, useCallback, useEffect, useLayoutEffect, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { SessionStatusColor, STATUS_LABEL } from './StatusDot';
-import { Button, Toggle } from './ui';
+import { Button, Toggle, Tooltip } from './ui';
 import { isAndroid, isRemoteMode } from '../platform';
 import FolderSwitcher from './FolderSwitcher';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
@@ -275,14 +275,18 @@ function SessionTagMarks({ sessionId, byId }: { sessionId: string; byId: Map<str
         <TagChip key={i} tag={{ label: m.label, color: m.color as TagRecord['color'] }} />
       ))}
       {rest.length > 0 && (
-        <span className="text-3xs text-fg-muted" title={rest.map((m) => m.label).join(', ')}>
+        <Tooltip text={rest.map((m) => m.label).join(', ')}>
+        <span className="text-3xs text-fg-muted">
           +{rest.length}
         </span>
+        </Tooltip>
       )}
       {meta.note && (
-        <span title="This session has a note" className="flex items-center">
+        <Tooltip text="This session has a note">
+        <span className="flex items-center">
           <NotePageGlyph className="w-3 h-3 text-fg-faint" />
         </span>
+        </Tooltip>
       )}
     </span>
   );
@@ -312,9 +316,11 @@ function DragGrip() {
 // second line under the name, so the name gets the row's full width.
 function SessionName({ name }: { name: string }) {
   return (
-    <span className="block truncate leading-snug text-sm-tight" title={name}>
+    <Tooltip text={name}>
+    <span className="block truncate leading-snug text-sm-tight">
       {name}
     </span>
+    </Tooltip>
   );
 }
 
@@ -1951,6 +1957,7 @@ export default function SessionStrip({
 
           return (
             <React.Fragment key={s.id}>
+              <Tooltip text={s.name}>
               <button
                 data-session-idx={idx}
                 data-session-id={s.id}
@@ -2032,10 +2039,10 @@ export default function SessionStrip({
                   cursor: 'default',
                 }}
                 onTransitionEnd={settle?.heldId === s.id ? () => setSettle(null) : undefined}
-                title={s.name}
               >
                 {pillBody}
               </button>
+              </Tooltip>
               {isBeingDragged && dragLeft !== null && (
                 // The twin: the pill in hand, drawn at the cursor. NO transition
                 // on its position — a 150ms ease there made the pill trail the
@@ -2098,28 +2105,30 @@ export default function SessionStrip({
         {/* Overflow count: sessions open in this window that the strip couldn't fit.
             Purely an indicator — clicking the trigger (or this badge) opens the full list. */}
         {sessions.length - visibleSessions.length > 0 && (
+          <Tooltip text={`${sessions.length - visibleSessions.length} more session${sessions.length - visibleSessions.length === 1 ? '' : 's'}`}>
           <button
             onClick={handleMenuToggle}
             className="inline-flex items-center justify-center min-w-[18px] h-[16px] px-1 ml-1 rounded-full bg-inset text-fg-2 text-3xs font-semibold leading-none hover:bg-well transition-colors"
-            title={`${sessions.length - visibleSessions.length} more session${sessions.length - visibleSessions.length === 1 ? '' : 's'}`}
             aria-label={`${sessions.length - visibleSessions.length} more sessions`}
           >
             +{sessions.length - visibleSessions.length}
           </button>
+          </Tooltip>
         )}
 
         {/* ── Dropdown trigger ───────────────────────────── */}
         <div ref={menuRef}>
+          <Tooltip text="All Sessions">
           <button
             ref={triggerBtnRef}
             onClick={handleMenuToggle}
             className="flex items-center justify-center w-5 h-5 ml-1 rounded-sm hover:bg-inset transition-colors text-fg-muted hover:text-fg-2"
-            title="All Sessions"
           >
             <svg className={`w-3 h-3 transition-transform ${menuOpen ? 'rotate-180' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
               <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
             </svg>
           </button>
+          </Tooltip>
         </div>
       </div>
 
@@ -2396,9 +2405,9 @@ export default function SessionStrip({
                           {(() => {
                             const rt = sessionRuntimeLabel(s);
                             return (
+                              <Tooltip text={rt.text}>
                               <span
                                 className="shrink-0 min-w-0 max-w-[55%] flex items-center gap-1 text-3xs text-fg-muted"
-                                title={rt.text}
                               >
                                 {rt.icon && (
                                   <span className="shrink-0 flex items-center" style={{ color: rt.color }}>
@@ -2407,24 +2416,26 @@ export default function SessionStrip({
                                 )}
                                 <span className="truncate">{rt.text}</span>
                               </span>
+                              </Tooltip>
                             );
                           })()}
                           <SessionTagMarks sessionId={s.id} byId={tagsById} />
                         </span>
                       </span>
                     </div>
+                    <Tooltip text="Close Session">
                     <button
                       // Close the dropdown so the CloseSessionPrompt (L2 popup)
                       // isn't competing with the still-open session menu above it.
                       onClick={(e) => { e.stopPropagation(); if (!suppressClick.current) { setMenuOpen(false); onCloseSession(s.id, s.name); } }}
                       onPointerDown={(e) => e.stopPropagation()}
                       className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-[#DD4444] hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
-                      title="Close Session"
                     >
                       <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                         <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                       </svg>
                     </button>
+                    </Tooltip>
                   </div>
                 );
               })}
@@ -2522,9 +2533,9 @@ export default function SessionStrip({
                                 {(() => {
                                   const rt = sessionRuntimeLabel(s);
                                   return (
+                                    <Tooltip text={rt.text}>
                                     <span
                                       className="shrink-0 min-w-0 max-w-[35%] flex items-center gap-1 text-3xs text-fg-muted"
-                                      title={rt.text}
                                     >
                                       {rt.icon && (
                                         <span className="shrink-0 flex items-center" style={{ color: rt.color }}>
@@ -2533,6 +2544,7 @@ export default function SessionStrip({
                                       )}
                                       <span className="truncate">{rt.text}</span>
                                     </span>
+                                    </Tooltip>
                                   );
                                 })()}
                                 <SessionTagMarks sessionId={s.id} byId={tagsById} />
@@ -2543,6 +2555,7 @@ export default function SessionStrip({
                               </span>
                             </span>
                           </button>
+                          <Tooltip text="Close Session">
                           <button
                             onClick={(e) => {
                               e.stopPropagation();
@@ -2550,12 +2563,12 @@ export default function SessionStrip({
                               onCloseSession(s.id, s.name);
                             }}
                             className="shrink-0 w-5 h-5 flex items-center justify-center rounded-sm text-fg-faint hover:text-[#DD4444] hover:bg-inset opacity-0 group-hover/row:opacity-100 transition-opacity"
-                            title="Close Session"
                           >
                             <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
                               <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
                             </svg>
                           </button>
+                          </Tooltip>
                         </div>
                       );
                     }),
