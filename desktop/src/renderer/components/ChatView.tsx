@@ -30,6 +30,7 @@ import { ContentFindBar } from './ContentFindBar';
 import { isTypingTarget } from '../utils/is-typing-target';
 import { useStickToBottom } from '../hooks/use-stick-to-bottom';
 import { useSessionPreviewListener } from '../hooks/useSessionPreviewListener';
+import { Tooltip } from './ui';
 
 /** How long the prepend anchor keeps correcting for late-laying-out content
  *  (code blocks, images) before it lets go. Long enough for markdown to settle,
@@ -1151,20 +1152,20 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               const folded = folding.isFolded(key!);
               const foldHeight = folded ? folding.heightOf(key!) : undefined;
               return (
+                <Tooltip key={key!} text={isPreCompaction
+                    ? (archiveKind === 'clear'
+                      ? 'Cleared — still here to read, but not in Claude\'s context'
+                      : 'Archived by compaction — not in Claude\'s active context')
+                    : ''}>
                 <div
-                  key={key!}
                   ref={attachEntry}
                   data-entry-key={key!}
                   className={`timeline-entry in-view${isPreCompaction ? ' opacity-60 transition-opacity' : ''}`}
                   style={folded && foldHeight ? { height: foldHeight } : undefined}
-                  title={isPreCompaction
-                    ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
-                    : undefined}
                 >
                   {folded && foldHeight ? null : content}
                 </div>
+                </Tooltip>
               );
               });
             })()}

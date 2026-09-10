@@ -263,6 +263,24 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
    * something (its own `aria-label`, or visible words inside it) gets the hint
    * as a DESCRIPTION; one that reads as nothing gets it as its NAME.
    */
+  /**
+   * The child's OWN handlers still run.
+   *
+   * WHY this is not a spread: cloning with `{...handlers}` REPLACES any handler
+   * of the same name the control already had, silently. QuickChips' rows carry
+   * `onPointerDown` / `onPointerMove` / `onPointerUp` for drag-to-reorder, so
+   * wrapping one in a hint would have deleted reordering — and nothing would
+   * have failed, typechecked or otherwise. The control's handler runs first
+   * (it owns the interaction), then the hint's.
+   */
+  const composed: Record<string, unknown> = {};
+  for (const [key, mine] of Object.entries(handlers)) {
+    const theirs = childProps[key];
+    composed[key] = typeof theirs === 'function'
+      ? (e: React.SyntheticEvent) => { (theirs as (ev: React.SyntheticEvent) => void)(e); (mine as (ev: never) => void)(e as never); }
+      : mine;
+  }
+
   const named = childProps['aria-label'] != null || childProps['aria-labelledby'] != null;
   const describes = named || hasTextContent(childProps.children);
 
@@ -286,7 +304,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
 
   return (
     <>
-      {React.cloneElement(child, { ...aria, ...handlers, ref: setRef })}
+      {React.cloneElement(child, { ...aria, ...composed, ref: setRef })}
 
       {open && armed &&
         createPortal(

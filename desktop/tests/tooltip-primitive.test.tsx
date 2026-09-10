@@ -213,6 +213,44 @@ describe('the swap cannot move anything on screen', () => {
   });
 });
 
+describe("the control's own handlers survive", () => {
+  it('runs a drag handler the control already had, as well as the hint', () => {
+    useTimers();
+    const dragged: string[] = [];
+    render(
+      <Tooltip text="Edit chip">
+        <div
+          role="button"
+          onPointerDown={() => dragged.push('down')}
+          onPointerMove={() => dragged.push('move')}
+          onPointerUp={() => dragged.push('up')}
+        >
+          chip
+        </div>
+      </Tooltip>,
+    );
+    const row = screen.getByRole('button');
+    fireEvent.pointerDown(row, { ...finger, clientX: 0, clientY: 0 });
+    fireEvent.pointerMove(row, { ...finger, clientX: 0, clientY: 30 });
+    fireEvent.pointerUp(row, finger);
+    // Cloning with a plain spread would have REPLACED these and deleted
+    // drag-to-reorder, with nothing failing to say so.
+    expect(dragged).toEqual(['down', 'move', 'up']);
+  });
+
+  it('still shows its own hint on a control that has handlers', () => {
+    useTimers();
+    render(
+      <Tooltip text="Edit chip">
+        <div role="button" onPointerDown={() => {}}>chip</div>
+      </Tooltip>,
+    );
+    fireEvent.pointerEnter(screen.getByRole('button'), mouse);
+    act(() => { vi.advanceTimersByTime(800); });
+    expect(shown('Edit chip')).toBe(true);
+  });
+});
+
 describe('the hint still reaches a screen reader', () => {
   it('names a control that has no words of its own', () => {
     render(<Tooltip text="Minimize"><button><svg /></button></Tooltip>);

@@ -15,7 +15,7 @@ import OpenTasksChip from './OpenTasksChip';
 import { isAndroid } from '../platform';
 import { SessionTagsChip } from './tags/SessionTagsChip';
 import SpecialistsChip from './SpecialistsChip';
-import { AnchorTip, Dialog, Tooltip } from './ui';
+import { Dialog, Tooltip } from './ui';
 import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
@@ -1274,6 +1274,7 @@ export default function StatusBar({
           //     chip (checkpoint #2); silence stays the answer there.
           if (ccCost == null && nativeTotals?.anyUnpriced) {
             return (
+              <Tooltip text={"This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."}>
               <span
                 className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
                 // "available", not "published" (Task 22): the price lookup
@@ -1287,10 +1288,8 @@ export default function StatusBar({
                 {/* Muted, not accent-coloured: this is an ABSENCE of a figure,
                     not an alert. Same treatment as the Reuse chip's "New". */}
                 <span className="text-fg-muted">not listed</span>
-                <AnchorTip label="Why there is no cost figure" placement="top">
-                  <p>{"This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."}</p>
-                </AnchorTip>
               </span>
+              </Tooltip>
             );
           }
           return null;
@@ -1331,6 +1330,7 @@ export default function StatusBar({
               : '')
             + ' Not exact — a few models charge more above very large prompts.';
         return (
+          <Tooltip text={title}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
@@ -1339,10 +1339,8 @@ export default function StatusBar({
             {/* Shown only when the session actually delegated: most never do,
                 and this bar is already crowded. */}
             {specialistCost > 0 && <span className="text-fg-muted">· specialists</span>}
-            <AnchorTip label="What the cost figure includes" placement="top">
-              <p>{title}</p>
-            </AnchorTip>
           </span>
+          </Tooltip>
         );
       })()}
 
@@ -1379,15 +1377,14 @@ export default function StatusBar({
           measurement of 0 input tokens must still render, and a truthy check
           would wrongly swallow it too. */}
       {show('tokens-in') && inTokens != null && (
+        <Tooltip text={`Input tokens: ${inTokens.toLocaleString()}. ${SCOPE_NOTE} ${INPUT_NOTE}`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
         >
           <span className="text-fg-muted">In:</span>
           <span className="text-fg-2">{formatTokens(inTokens)}</span>
-          <AnchorTip label="What the In figure counts" placement="top">
-            <p>{`Input tokens: ${inTokens.toLocaleString()}. ${SCOPE_NOTE} ${INPUT_NOTE}`}</p>
-          </AnchorTip>
         </span>
+        </Tooltip>
       )}
 
       {/* Output tokens. Rule 1 (spec §3): no value, no chip. Session total for
@@ -1397,15 +1394,14 @@ export default function StatusBar({
           "no turn counted yet" into null, so a 0 reaching here is a real
           measurement (a turn that produced no output) and must render. */}
       {show('tokens-out') && outTokens != null && (
+        <Tooltip text={`Output tokens: ${outTokens.toLocaleString()}. ${SCOPE_NOTE}`}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
         >
           <span className="text-fg-muted">Out:</span>
           <span className="text-fg-2">{formatTokens(outTokens)}</span>
-          <AnchorTip label="What the Out figure counts" placement="top">
-            <p>{`Output tokens: ${outTokens.toLocaleString()}. ${SCOPE_NOTE}`}</p>
-          </AnchorTip>
         </span>
+        </Tooltip>
       )}
 
       {/* Cache efficiency. WHY the ?? nativeTotals fallback: sessionStats is written
@@ -1428,15 +1424,14 @@ export default function StatusBar({
         if (cr == null) return null;
         const cc = cacheCreationTotal;
         return (
+          <Tooltip text={`Cache read: ${cr.toLocaleString()} | Cache created: ${(cc ?? 0).toLocaleString()}. ${SCOPE_NOTE}`}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
             <span className="text-fg-muted">Cached:</span>
             <span className="text-[#4CAF50]">{formatTokens(cr)}</span>
-            <AnchorTip label="What the Cached figure counts" placement="top">
-              <p>{`Cache read: ${cr.toLocaleString()} | Cache created: ${(cc ?? 0).toLocaleString()}. ${SCOPE_NOTE}`}</p>
-            </AnchorTip>
           </span>
+          </Tooltip>
         );
       })()}
 
@@ -1475,6 +1470,7 @@ export default function StatusBar({
             ? `None of this turn's prompt came from cache; all ${prompt} tokens were read fresh. Caches expire after a few minutes idle, and reset when the model or tool list changes.`
             : `Reused ${(reuse.readTokens ?? 0).toLocaleString()} of this turn's ${prompt} prompt tokens from cache — that part was cheaper and faster than re-reading it.`;
         return (
+          <Tooltip text={title}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
@@ -1485,10 +1481,8 @@ export default function StatusBar({
                 {display.pct}%
               </span>
             )}
-            <AnchorTip label="What the Reuse figure means" placement="top">
-              <p>{title}</p>
-            </AnchorTip>
           </span>
+          </Tooltip>
         );
       })()}
 
@@ -1515,6 +1509,7 @@ export default function StatusBar({
           nativeChips and this chip renders with the generic string below — do
           not "simplify" this back to one branch. */}
       {show('output-speed') && speedTokPerSec != null && (
+        <Tooltip text={speedIsSessionAverage ? `${outTokens!.toLocaleString()} output tokens in ${formatDuration(ss!.apiDuration!)} of model time — this session's average, not its current speed.` : 'Output tokens per second on the last turn'}>
         <span
           className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
         >
@@ -1522,10 +1517,8 @@ export default function StatusBar({
           <span className="text-fg-2">
             {speedTokPerSec} tok/s
           </span>
-          <AnchorTip label="What the Speed figure measures" placement="top">
-            <p>{speedIsSessionAverage ? `${outTokens!.toLocaleString()} output tokens in ${formatDuration(ss!.apiDuration!)} of model time — this session's average, not its current speed.` : 'Output tokens per second on the last turn'}</p>
-          </AnchorTip>
         </span>
+        </Tooltip>
       )}
 
       {/* Code changes — lines added/removed.
@@ -1544,16 +1537,15 @@ export default function StatusBar({
           ? `Lines added: ${added ?? 0} | Lines removed: ${removed ?? 0}`
           : `${SCOPE_NOTE} Counts edits made through the model's editing tools; edits made by shell commands are not counted.`;
         return (
+          <Tooltip text={title}>
           <span
             className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim"
           >
             <span className="text-[#4CAF50]">+{added ?? 0}</span>
             <span className="text-[#DD4444]">-{removed ?? 0}</span>
             <span className="text-fg-muted hidden sm:inline">lines</span>
-            <AnchorTip label="What the line counts include" placement="top">
-              <p>{title}</p>
-            </AnchorTip>
           </span>
+          </Tooltip>
         );
       })()}
 
