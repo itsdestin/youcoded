@@ -10,6 +10,7 @@ import {
   SETTING_ROW_BASE,
 } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import {
   describeRule,
   broadNote,
@@ -338,7 +339,7 @@ export default function PermissionsSection() {
   // bug-report surface, exactly as Remote Access does: "Report bug" files it and
   // "Diagnose with Claude" is the same popup's summarize path. One destination,
   // no invented flow. It portals, so nesting it here is safe.
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -490,8 +491,8 @@ export default function PermissionsSection() {
                 mode="general"
                 title="Unable to show what you've approved."
                 explainer="Nothing was changed. Diagnosing will collect the app's logs so Claude can look at what happened."
-                onReportBug={() => setShowBugReport(true)}
-                onDiagnose={() => setShowBugReport(true)}
+                onReportBug={() => setReportContext({ surface: 'Settings → Permissions' })}
+                onDiagnose={() => setReportContext({ surface: 'Settings → Permissions', diagnose: true })}
               />
             ) : withRules.length === 0 ? (
               <EmptyState
@@ -526,7 +527,7 @@ export default function PermissionsSection() {
           "Approvals you gave Claude Code", so the body was printing a second
           copy of explainer content. */}
 
-      <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </section>
   );
 }

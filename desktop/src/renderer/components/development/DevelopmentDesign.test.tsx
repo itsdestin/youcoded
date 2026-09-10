@@ -231,6 +231,30 @@ describe('development design safety', () => {
     expect(screen.queryByRole('button', { name: 'Retry' })).toBeNull();
   });
 
+  it('starts a report from an error with the failure already in it', async () => {
+    // Audit E-01: the popup took only open/close, so the failure you were reporting
+    // was gone the moment you clicked Report and you described it from memory.
+    Object.assign(window, { claude: { dev: { submitIssue: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Settings → Permissions', error: 'EACCES: permission denied' }} />);
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value)
+      .toContain('Settings → Permissions');
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'Permissions will not load' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    // Shown for review BEFORE anything is sent — never attached unseen (R11).
+    expect(screen.getByText('EACCES: permission denied')).toBeTruthy();
+  });
+
+  it('keeps Diagnose with Claude an AI action, not a blank form', async () => {
+    // Design review F11: five general errors across the app route "Diagnose with
+    // Claude" into this screen. Moving the AI call behind a disclosure would have
+    // quietly turned all five into a button that opens an empty ticket.
+    Object.assign(window, { claude: { dev: { submitIssue: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} context={{ surface: 'Local model settings', diagnose: true }} />);
+    expect(screen.getByRole('heading', { name: 'Review your ticket' })).toBeTruthy();
+    expect(screen.getByText(/Only this draft and selected details go to your chosen assistant/)).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Improve wording with AI' })).toBeTruthy();
+  });
+
   it('sends a ticket with no AI call at all', async () => {
     // Contract R12. Asking an assistant is a separate choice, so submitting must
     // never reach a provider.

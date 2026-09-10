@@ -6,13 +6,18 @@
 // Uses the shared <Dialog> shell — no hardcoded colors, blur, or z-indexes
 // (PITFALLS overlay invariant).
 import { useEffect, useState } from 'react';
-import { ReportDesign } from './ReportDesign';
+import { ReportDesign, type ReportContext } from './ReportDesign';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { Button, Dialog, SegmentedTabs, Textarea } from '../ui';
 
 interface Props {
   open: boolean;
   onClose: () => void;
+  /**
+   * What failed, when the report was opened from an error (audit E-01). Optional:
+   * Settings -> Development opens the same screen with nothing to carry.
+   */
+  context?: ReportContext;
 }
 
 type Kind = 'bug' | 'feature';
@@ -34,6 +39,9 @@ export function BugReportPopup(props: Props) {
     ? <ReportDesign {...props} /> : <LegacyBugReportPopup {...props} />;
 }
 
+// The legacy flow ignores `context` — it has nowhere to put it, which is the
+// defect the new screen exists to fix. It is destructured off so the prop can be
+// passed uniformly from every mount point.
 export function LegacyBugReportPopup({ open, onClose }: Props) {
   useEscClose(open, onClose);
   const [screen, setScreen] = useState<Screen>('describe');

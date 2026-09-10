@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { versionLine } from '../../app-version';
 import { AnchorTip, Button, Callout, Checkbox, Dialog, ErrorState, LoadingState, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 
@@ -8,19 +9,37 @@ import { useEscClose } from '../../hooks/use-esc-close';
 // "your details stay in the draft and you can retry" actually requires.
 type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened';
 
-export function ReportDesign({ open, onClose }: { open: boolean; onClose: () => void }) {
+/**
+ * What opened this report, when something failed (audit E-01). The old popup took
+ * only open/close, so the failure being reported was gone the moment the user
+ * clicked Report and they had to describe it from memory.
+ *
+ * `diagnose` is the "Diagnose with Claude" entry: same screen, but it opens on the
+ * review step with the AI disclosure already expanded, because that action promises
+ * to hand the error to Claude. Without it, moving the AI call behind a disclosure
+ * would have quietly turned Diagnose into a button that opens a blank form
+ * (design review F11).
+ */
+export type ReportContext = { error?: string; surface?: string; diagnose?: boolean };
+
+export function ReportDesign({ open, onClose, context }: { open: boolean; onClose: () => void; context?: ReportContext }) {
   useEscClose(open, onClose);
   // WHY: closing or going back must not discard a draft. Persistence beyond this mounted
   // component and real originating context remain unbuilt.
   const [kind, setKind] = useState('bug');
-  const [phase, setPhase] = useState<Phase>('draft');
+  const [phase, setPhase] = useState<Phase>(context?.diagnose ? 'review' : 'draft');
   const [title, setTitle] = useState('');
-  const [description, setDescription] = useState('');
-  const [context, setContext] = useState(true);
+  const [description, setDescription] = useState(
+    // Seeded, not locked: it is the user's ticket, so the surface is a starting
+    // point they can rewrite. The error itself is shown separately, under Error
+    // details, where they can review it before it is sent (R11).
+    context?.surface ? `This happened in ${context.surface}.\n\n` : '',
+  );
+  const [includeContext, setIncludeContext] = useState(true);
   const [logs, setLogs] = useState(false);
   const [logText, setLogText] = useState('');
   const [attachments, setAttachments] = useState(false);
-  const [aiInfo, setAiInfo] = useState(false);
+  const [aiInfo, setAiInfo] = useState(!!context?.diagnose);
   const [error, setError] = useState('');
   const [url, setUrl] = useState('');
   const [truncated, setTruncated] = useState(false);
@@ -31,8 +50,14 @@ export function ReportDesign({ open, onClose }: { open: boolean; onClose: () => 
     setTruncated(false);
     setPhase('sending');
     try {
+      // WHY assembled here rather than typed into the box: the user's draft stays
+      // their words, and what is attached is exactly what they reviewed under Error
+      // details — nothing more, and nothing if they unticked it (R11).
+      const evidence = kind === 'bug' && includeContext
+        ? `${description}\n\n---\n${versionLine()}${context?.error ? `\n${context.error}` : ''}`
+        : description;
       const r = await window.claude.dev.submitIssue({
-        kind, title, description,
+        kind, title, description: evidence,
         log: kind === 'bug' && logs ? logText : undefined,
         label: kind === 'bug' ? 'bug' : 'enhancement',
         // GitHub uploads a file the moment it is attached, so an attachment ticket
@@ -110,14 +135,19 @@ export function ReportDesign({ open, onClose }: { open: boolean; onClose: () => 
         {!review ? <section className="space-y-2">
           <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Include with ticket</h3>
           {kind === 'bug' && <>
-            <SettingRow title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={context} onChange={setContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
+            <SettingRow title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={includeContext} onChange={setIncludeContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
             <SettingRow title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={setLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
           </>}
           <SettingRow title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Attach reviewed files yourself in GitHub.</AnchorTip>} />
         </section> : <section className="space-y-3">
-          {kind === 'bug' && context && <div className="space-y-1">
+          {kind === 'bug' && includeContext && <div className="space-y-1">
             <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Error details and version</h3>
-            <p className="text-xs text-fg-2 font-mono">YouCoded 1.2.4 · Linux x64 · Electron 41.10.3</p>
+            {/* WHY the real version (R22): this was a hardcoded string, so the one
+                thing the ticket promised to carry accurately was made up. */}
+            <p className="text-xs text-fg-2 font-mono">{versionLine()}</p>
+            {/* The originating error, shown before anything is sent — never attached
+                to a ticket the user has not seen (R11). */}
+            {context?.error && <p className="text-xs text-fg-2 font-mono break-all">{context.error}</p>}
           </div>}
           {/* WHY: both evidence blocks read as one pattern — section label, one line of
               explanation, then the content. A bare inline label made them look unrelated. */}

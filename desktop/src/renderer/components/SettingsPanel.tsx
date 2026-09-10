@@ -17,6 +17,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import AboutPopup from './AboutPopup';
 import { DevelopmentPopup } from './development/DevelopmentPopup';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import { ContributePopup } from './development/ContributePopup';
 import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
@@ -1227,7 +1228,7 @@ interface RemoteButtonProps {
    * same popup's summarize path, which collects the logs. One destination, no
    * invented flow.
    */
-  onReportIssue: () => void;
+  onReportIssue: (context?: ReportContext) => void;
 }
 
 function RemoteButton({
@@ -1402,8 +1403,8 @@ function RemoteButton({
                               mode="general"
                               title="Unable to set up remote access."
                               explainer="The Tailscale installer didn't report a reason. Diagnosing will collect the setup log so Claude can look at what happened."
-                              onReportBug={onReportIssue}
-                              onDiagnose={onReportIssue}
+                              onReportBug={() => onReportIssue({ surface: 'Settings' })}
+                              onDiagnose={() => onReportIssue({ surface: 'Settings', diagnose: true })}
                             />
                           )
                         ) : tailscale?.installed && !tailscale.connected ? (
@@ -2058,7 +2059,9 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showDevMenu, setShowDevMenu] = useState(false);
-  const [showBugReport, setShowBugReport] = useState(false);
+  // WHY the context object doubles as the open flag: two states that must agree
+  // (is it open / what is it about) drift; one cannot.
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
 
   const claude = (window as any).claude;
@@ -2162,10 +2165,10 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
         <DevelopmentPopup
           open={showDevMenu}
           onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
           onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
         />
-        <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
         {/* Keyboard shortcuts intentionally omitted on Android — no physical keyboard. */}
@@ -2250,7 +2253,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDevMenu, setShowDevMenu] = useState(false);
-  const [showBugReport, setShowBugReport] = useState(false);
+  // WHY the context object doubles as the open flag: two states that must agree
+  // (is it open / what is it about) drift; one cannot.
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
 
   useEffect(() => {
@@ -2439,7 +2444,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onCopyLink={handleCopyLink}
           onSetShowSetupQR={setShowSetupQR}
           onSetShowAddDevice={setShowAddDevice}
-          onReportIssue={() => setShowBugReport(true)}
+          onReportIssue={(c) => setReportContext(c ?? {})}
         />
 
 
@@ -2463,10 +2468,10 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
         <DevelopmentPopup
           open={showDevMenu}
           onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
           onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
         />
-        <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
         {/* Keyboard Shortcuts */}

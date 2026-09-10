@@ -18,6 +18,7 @@
 import { useEffect, useState } from 'react';
 import { AnchorTip, Button, Callout, ErrorState, FieldError, SettingRow, TextInput, Toggle } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import type { BackendOption, EnginePrereqs, EngineSpeedSettings } from '../../shared/engine-types';
 // WHY imported rather than defined here: this card is no longer the only place a
 // rejected bridge call reaches the user — the model settings dialog and “Add
@@ -123,7 +124,9 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
   const [terminalError, setTerminalError] = useState<string | null>(null);
   // Opened by both actions of the no-cause error shape below — the same wiring
   // every other <ErrorState mode="general"> in the app uses.
-  const [showBugReport, setShowBugReport] = useState(false);
+  // WHY the context object doubles as the open flag: two pieces of state that must
+  // agree (is it open / what is it about) drift; one cannot.
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 
   // Shared runner for install/restart/setContext/setBackend: sets busy,
   // surfaces any thrown error, and clears the transient progress line when the
@@ -499,12 +502,12 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
               className="mt-2"
               title="Each model&rsquo;s own settings are off right now"
               explainer="Every model is running on the engine&rsquo;s own settings, and the engine gave no reason we can show you. It tries again the next time the engine starts. Diagnosing will collect the app&rsquo;s logs so Claude can look at what happened."
-              onReportBug={() => setShowBugReport(true)}
-              onDiagnose={() => setShowBugReport(true)}
+              onReportBug={() => setReportContext({ surface: 'Local model settings' })}
+              onDiagnose={() => setReportContext({ surface: 'Local model settings', diagnose: true })}
             />
           )
       )}
-      <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
 
       {/* Extra controls for the Local Models panel (Plan C). Only shown once the
           engine is installed — nothing to configure before that. */}

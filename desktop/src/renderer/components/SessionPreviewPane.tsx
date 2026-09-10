@@ -6,6 +6,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import ConversationTranscript from './project-view/ConversationTranscript';
 import { ErrorState } from './ui/states';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import { COPY, READ_TAIL_DEFAULT, type TranscriptMessage, type ChatsearchProvider } from '../../shared/chatsearch-refs';
 
 // Fix (2026-08-27): the conversation title for the right-click scaffold (A3)
@@ -52,7 +53,7 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
   // Tailscale setup error and PermissionsSection's load failure: both
   // "Report bug" and "Diagnose with Claude" land on this popup, which already
   // wraps dev:summarize-issue + dev:submit-issue.
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 
   const load = useCallback(async (before?: number) => {
     const req = before === undefined ? { provider, id, tail: READ_TAIL_DEFAULT } : { provider, id, tail: READ_TAIL_DEFAULT, before };
@@ -152,8 +153,8 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
                 mode="general"
                 title={COPY.errReadUnknownTitle}
                 explainer={COPY.errReadUnknownExplainer}
-                onReportBug={() => setShowBugReport(true)}
-                onDiagnose={() => setShowBugReport(true)}
+                onReportBug={() => setReportContext({ surface: 'Reading a past conversation' })}
+                onDiagnose={() => setReportContext({ surface: 'Reading a past conversation', diagnose: true })}
               />
             )
         )}
@@ -171,8 +172,8 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
                           mode="general"
                           title={COPY.errReadUnknownTitle}
                           explainer={COPY.errReadUnknownExplainer}
-                          onReportBug={() => setShowBugReport(true)}
-                          onDiagnose={() => setShowBugReport(true)}
+                          onReportBug={() => setReportContext({ surface: 'Loading older messages' })}
+                          onDiagnose={() => setReportContext({ surface: 'Loading older messages', diagnose: true })}
                         />
                       )
                   ) : (
@@ -183,7 +184,7 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
               : <div className="py-2 text-center text-[11.5px] text-fg-muted">— {COPY.startOfConversation} —</div>} />
         )}
       </div>
-      <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </div>
   );
 }
