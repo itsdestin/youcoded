@@ -48,6 +48,12 @@ import com.youcoded.app.social.PresenceClient
 // WHY: Moved to its own domain so Cloudflare's cache and rate limiter apply; the old workers.dev address still answers for older app versions.
 private const val ANALYTICS_API_BASE = "https://api.youcoded.ai"
 
+// Ceiling on the `claude auth status` probe behind claude-code:status. Matches
+// the desktop's CLAUDE_STATUS_TIMEOUT_MS (8s) rather than DevTools' 5s probe
+// budget: this one blocks a Settings card and a model menu, and on a phone the
+// Node startup is slower than the 0.13s measured on desktop.
+private const val CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS = 8L
+
 class SessionService : Service() {
     private val binder = LocalBinder()
     val sessionRegistry = SessionRegistry()
@@ -3254,6 +3260,40 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, text) }
             }
 
+            // Claude Code's own sign-in, read LIVE (2026-09-09). Unlike chatgpt:*
+            // below, this one is REAL on Android: Bootstrap installs Claude Code
+            // into the Termux prefix, so the phone has its own login to report.
+            // The shared model menu greys out Claude models on a definite
+            // "signed-out"/"not-installed" and on nothing else — so every failure
+            // path here answers {"state":"unknown"}, which keeps them available.
+            // Desktop mirror: desktop/src/main/providers/claude-account.ts.
+            "claude-code:status" -> {
+                val json = withContext(Dispatchers.IO) {
+                    val bs = bootstrap
+                    if (bs == null) {
+                        // Runtime not bootstrapped yet — we do not know, and must
+                        // not say "signed out".
+                        """{"state":"unknown"}"""
+                    } else {
+                        // claude is a Node.js program — runs via LD_PRELOAD, no
+                        // linker64 prefix (same as dev:summarize-issue below).
+                        val (exit, out) = DevTools.runStreamed(
+                            bs.buildRuntimeEnv(),
+                            listOf("claude", "auth", "status"),
+                            bs.homeDir,
+                            onLine = {},
+                            timeoutSeconds = CLAUDE_AUTH_STATUS_TIMEOUT_SECONDS,
+                        )
+                        // `claude auth status` EXITS 0 EVEN WHEN LOGGED OUT, so the
+                        // exit code only tells us whether it RAN. Parsing is the
+                        // desktop's statusFromOutput(), kept in step by hand.
+                        if (exit != 0) """{"state":"unknown"}"""
+                        else DevTools.claudeAuthStatusJson(out)
+                    }
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject(json)) }
+            }
+
             "dev:summarize-issue" -> {
                 val kind = msg.payload.optString("kind", "bug")
                 val description = msg.payload.optString("description", "")
@@ -4283,6 +4323,21 @@ class SessionService : Service() {
             // state instead of timing out. specialists:event (the ledger push) is
             // OUTBOUND-only — same as native:model-state above — so it needs no
             // entry here at all.
+            // Session naming (2026-09-09). The ownership store, the naming
+            // preference and the provider-registry call that generates a name
+            // all live in the desktop main process; Android has none of them.
+            // Answering not-implemented is what keeps the shared React UI
+            // HONEST here: the remote shim's capability probe leaves
+            // window.claude.sessionNaming.available false, so the naming card,
+            // the Rename item and the saved-session pencil render nothing at
+            // all rather than appearing and then failing. Android conversations
+            // keep being named by the bundled Auto-Title hook, which falls back
+            // to its own timer when no mode file is present.
+            "session-naming:get",
+            "session-naming:set",
+            "session-naming:title",
+            "session-naming:rename",
+            "session-naming:automatic",
             "specialists:list",
             "specialists:delegated-get",
             "specialists:delegated-set",

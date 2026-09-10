@@ -1883,6 +1883,84 @@ describe('chatgpt:* channel parity', () => {
   });
 });
 
+// Five-surface parity for Claude Code's LIVE sign-in (2026-09-09). Shaped like
+// the chatgpt block above with ONE deliberate difference: Android gets a REAL
+// arm, not a not-implemented stub, because Bootstrap installs Claude Code into
+// the Termux prefix — the phone has its own login to report, and a stub would
+// leave a signed-in phone showing the same wrong "Sign in to use" this whole
+// channel was added to remove.
+describe('claude-code:status channel parity', () => {
+  const T = 'claude-code:status';
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('exposed in preload.ts, through the constant (not just the constants table)', () => {
+    const src = read('src', 'main', 'preload.ts');
+    expect(src, `${T} missing from preload.ts`).toContain(`'${T}'`);
+    expect(src, 'preload never invokes CLAUDE_CODE_STATUS — the namespace would be a dead object')
+      .toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS');
+  });
+
+  it('exposed in remote-shim.ts', () => {
+    expect(read('src', 'renderer', 'remote-shim.ts'), `${T} missing from remote-shim.ts`).toContain(`'${T}'`);
+  });
+
+  it('registered in ipc-handlers.ts (through the IPC constant)', () => {
+    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_STATUS: '${T}'`);
+    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_STATUS');
+  });
+
+  it('handled by remote-server.ts (WS case)', () => {
+    expect(read('src', 'main', 'remote-server.ts'), `${T} missing from remote-server.ts`).toContain(`case '${T}'`);
+  });
+
+  it('has a REAL Android arm — the phone runs Claude Code too', () => {
+    const kt = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin',
+        'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
+      'utf8',
+    );
+    expect(kt, `${T} has no arm in SessionService.kt`).toContain(`"${T}" ->`);
+  });
+
+  it('the workbench mock answers it, so no review shot greys out its own models', () => {
+    expect(read('src', 'renderer', 'dev', 'workbench', 'mock-shim.ts'))
+      .toMatch(/const claudeCode = \{ status:/);
+  });
+
+  it('neither the model menu nor the Claude Code card reads the setup wizard again', () => {
+    // The original bug: both asked `firstRun.getState()` — a record of what
+    // happened during SETUP — and main answers that with a bare
+    // `{currentStep:'COMPLETE'}` on every launch after the first, carrying no
+    // auth fields at all. That bare answer is correct FOR THE WIZARD (it means
+    // "do not show me"), so main.ts is deliberately left alone; what must not
+    // come back is a sign-in reader pointed at it.
+    for (const f of [
+      ['src', 'renderer', 'components', 'model', 'availability.ts'],
+      ['src', 'renderer', 'components', 'ModelProvidersPopup.tsx'],
+    ]) {
+      // The bridge ACCESS, not the word — both files name the old signal in
+      // their comments so the next reader knows why it went.
+      expect(read(...f), `${f.join('/')} reaches window.claude.firstRun for a sign-in answer again`)
+        .not.toMatch(/\.firstRun[?.[]/);
+      expect(read(...f), `${f.join('/')} reads authComplete again`)
+        .not.toMatch(/authComplete\s*[=?.]/);
+    }
+  });
+
+  it('every surface that cannot answer degrades to "unknown", never to signed-out', () => {
+    // This is the invariant the whole change turns on. A surface answering
+    // {ok:false}, undefined, or a shape from a future version must NOT be read
+    // as "not signed in" — that greys out every Claude model on a working
+    // install, which is the bug being fixed.
+    const avail = read('src', 'renderer', 'components', 'model', 'availability.ts');
+    expect(avail, 'availability.ts must normalize an unrecognized status to unknown')
+      .toMatch(/return \{ state: 'unknown' \};/);
+    const server = read('src', 'main', 'remote-server.ts');
+    expect(server, 'remote-server must answer unknown when the runtime is not wired')
+      .toMatch(/claude-code:status[\s\S]{0,400}state: 'unknown'/);
+  });
+});
+
 // The kill switch and the lock-out guard are wiring, not channels: nothing else
 // in the suite reads main.ts, and both are one line whose deletion is silent.
 // Reviews T4 F1/F3 and T5 F1/F2 measured that each could be dropped with the

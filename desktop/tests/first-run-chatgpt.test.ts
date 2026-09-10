@@ -583,15 +583,23 @@ describe('FirstRunView — a ChatGPT sign-in still in progress seeds nothing', (
 });
 
 // ---------------------------------------------------------------------------
-// Settings → Model Providers: the Claude Code row after a ChatGPT-only setup
+// Settings → Cloud providers: the Claude Code card reads the LIVE sign-in
 // ---------------------------------------------------------------------------
+//
+// This block used to drive the card through `firstRun.getState()` — the setup
+// wizard's saved notes. That was the bug found on 2026-09-09: on every launch
+// after the first, main answers that call with a bare `{currentStep:'COMPLETE'}`
+// carrying no auth fields at all, so a signed-in install read as signed-out and
+// the card said "Not set up yet" while every Claude model in the picker was
+// greyed out with "Sign in to use". The card now asks Claude Code itself
+// (`claude-code:status`), so these tests drive that channel instead.
 
-describe('ModelProvidersPopup — the Claude Code row after a ChatGPT-only first run', () => {
+describe('ModelProvidersPopup — the Claude Code card reads the live sign-in', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
 
-  /** Just enough window.claude for the popup to mount. `firstRun.getState`
-   *  is the only input the Claude Code row's status line reads. */
-  function stubSettings(firstRunState: Partial<FirstRunState>) {
+  /** Just enough window.claude for the card to mount. `claudeCode.status` is
+   *  the only input its status line reads now. */
+  function stubSettings(status: unknown) {
     (window as any).claude = {
       native: { supported: true },
       chatgpt: { supported: false }, // keeps the ChatGPT card (and its IPC) out of this test
@@ -600,36 +608,56 @@ describe('ModelProvidersPopup — the Claude Code row after a ChatGPT-only first
       engine: { status: async () => null, onInstallProgress: () => () => {}, onStatusChanged: () => () => {} },
       on: { statusData: () => () => {} },
       off: () => {},
-      firstRun: { getState: async () => ({
-        currentStep: 'COMPLETE',
-        prerequisites: INITIAL_PREREQUISITES.map((p) => ({ ...p, status: 'installed' as const })),
-        overallProgress: 100, statusMessage: '', authMode: 'none', authComplete: false, needsDevMode: false,
-        ...firstRunState,
-      }) },
+      claudeCode: { status: async () => status },
       search: { list: async () => [] },
       shell: { openExternal: () => {} },
     };
   }
 
-  it('does not claim a Claude account when setup finished through ChatGPT', async () => {
-    stubSettings({ authMode: 'chatgpt', authComplete: true });
+  it('names the account and its plan, the way the ChatGPT card does', async () => {
+    stubSettings({ state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false });
     render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
-
-    // The row is there, and it tells the truth: Claude Code is installed but
-    // this user never signed in to it.
-    expect(await screen.findByText('Installed — not signed in yet')).toBeTruthy();
-    expect(screen.queryByText('Signed in with your Claude account')).toBeNull();
+    expect(await screen.findByText('Signed in as destin@example.com')).toBeTruthy();
+    expect(screen.getByText('Max plan')).toBeTruthy();
   });
 
-  it('still says signed in for a Claude first run', async () => {
-    stubSettings({ authMode: 'oauth', authComplete: true });
+  it('does not claim a Claude account when Claude Code is signed out', async () => {
+    // The case the old ChatGPT-only test covered, asked of the right source:
+    // finishing setup through ChatGPT leaves Claude Code itself signed out.
+    stubSettings({ state: 'signed-out' });
     render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
-    expect(await screen.findByText('Signed in with your Claude account')).toBeTruthy();
+    expect(await screen.findByText('Not signed in')).toBeTruthy();
+    expect(screen.queryByText(/Signed in as/)).toBeNull();
   });
 
-  it('still says connected for an Anthropic API key', async () => {
-    stubSettings({ authMode: 'apikey', authComplete: true });
+  it('says connected, and promises no plan limits, for an Anthropic API key', async () => {
+    stubSettings({ state: 'signed-in', apiKey: true });
     render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
     expect(await screen.findByText('Connected with an Anthropic API key')).toBeTruthy();
+    expect(screen.getByText('Billed per token — no plan limits.')).toBeTruthy();
+  });
+
+  it('reports a missing binary as missing, never as signed out', async () => {
+    // Signing in is not the fix for this one, so the words must not suggest it.
+    stubSettings({ state: 'not-installed' });
+    render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
+    expect(await screen.findByText('Claude Code is not installed')).toBeTruthy();
+    expect(screen.queryByText('Not signed in')).toBeNull();
+  });
+
+  it('admits it could not read the state rather than inventing one', async () => {
+    stubSettings({ state: 'unknown' });
+    render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
+    expect(await screen.findByText("Signed-in state couldn't be read")).toBeTruthy();
+    expect(screen.queryByText('Not signed in')).toBeNull();
+  });
+
+  it('treats a surface that cannot answer the channel as unknown, not signed out', async () => {
+    // Android before its arm existed, or a remote server with no runtime wired,
+    // answers {ok:false}. Reading that as "signed out" would grey out every
+    // Claude model on a working install.
+    stubSettings({ ok: false });
+    render(React.createElement(ClaudeCodeBlock, { onCloseParent: vi.fn() }));
+    expect(await screen.findByText("Signed-in state couldn't be read")).toBeTruthy();
   });
 });

@@ -2631,6 +2631,31 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    // Same divider shape as CLEAR_TIMELINE, just for a typed `/model <alias>`
+    // command — see slash-command-dispatcher.ts for why this never touches
+    // isThinking (the command is Claude-Code-local and never produces a turn
+    // to end one with).
+    case 'MODEL_SWITCH_MARKER': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      next.set(action.sessionId, {
+        ...session,
+        timeline: [
+          ...session.timeline,
+          {
+            kind: 'system-marker',
+            marker: {
+              id: action.markerId,
+              timestamp: action.timestamp,
+              label: action.label,
+              variant: 'model',
+            },
+          },
+        ],
+      });
+      return next;
+    }
+
     default:
       return state;
   }

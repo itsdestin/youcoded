@@ -277,7 +277,9 @@ export interface TranscriptEvent {
     // Task 1.1: widened turn-complete payload so the reducer can attach the
     // per-turn model, token/cache usage, and the Anthropic requestId to the
     // completing AssistantTurn for UI surfacing. All optional — the field is
-    // shared across event types, and turn-complete is the only current writer.
+    // shared across event types. Writers: turn-complete (the turn's requests)
+    // and, since 2026-09-10, a native compact-summary (the summary call's OWN
+    // bill, which is a separate request and used to vanish from every total).
     /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
     model?: string;
     /** Anthropic API request id from the JSONL line's top-level `requestId`. */
@@ -298,6 +300,13 @@ export interface TranscriptEvent {
        *  last step's prompt plus its output. Distinct from inputTokens, which
        *  sums every step and therefore re-counts the history once per step. */
       contextUsedTokens?: number;
+      /** Native runtime only (cache follow-ups item 8, 2026-09-10): true when a
+       *  request in this turn followed something the harness itself did to the
+       *  prompt prefix — a prune commit, a summary compaction, a model swap — so
+       *  a low cache-read figure on this turn is the known price of that event,
+       *  not a regression. Low reads WITHOUT this flag are the thing to
+       *  investigate. */
+      expectedRebuild?: boolean;
       /** Native runtime only: USD for THIS turn, priced at the model that ran
        *  it. `null` means the model has no published price — distinct from
        *  absent, which means no pricing information at all (a Claude Code turn).
@@ -1697,6 +1706,17 @@ export const IPC = {
   // Custom session tags (registry CRUD + application) and per-session notes.
   SESSION_SET_TAG: 'session:set-tag',   // (sessionId, tagId, value)
   SESSION_SET_NOTE: 'session:set-note', // (sessionId, note)
+  // Session naming (2026-09-09). get/set are the Assistant-settings preference;
+  // title/rename are per-conversation name ownership. `rename` accepts EITHER a
+  // live desktop session id or a saved conversation id — the handler resolves
+  // both through sessionIdMap. There is deliberately NO return-to-automatic
+  // channel: review 3 removed that action from the dialog (contract R11), and an
+  // unreachable write endpoint on the remote WebSocket is worse than a missing
+  // feature.
+  SESSION_NAMING_GET: 'session-naming:get',       // () -> { mode, model }
+  SESSION_NAMING_SET: 'session-naming:set',       // ({ mode, model })
+  SESSION_NAMING_TITLE: 'session-naming:title',   // (sessionId, fallback) -> { title, manual }
+  SESSION_NAMING_RENAME: 'session-naming:rename', // (sessionId, title)
   SESSION_GET_META: 'session:get-meta', // (sessionId) → { tags, note, supported }
   TAGS_LIST: 'tags:list',
   TAGS_CREATE: 'tags:create',           // (label, color)
@@ -1988,6 +2008,12 @@ export const IPC = {
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // ---- Claude Code's own sign-in, read LIVE (2026-09-09) ----
+  // → ClaudeAccountStatus (shared/claude-account-types.ts). Payload
+  // `{refresh?: true}` drops the cache first. There is no sign-in/sign-out verb
+  // here on purpose: Claude Code owns its login, and the app has never had a
+  // way to clear it (the card says to use /logout in a terminal).
+  CLAUDE_CODE_STATUS: 'claude-code:status',
   // ---- WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades ----
   // list = the fixed upgradeable-backend rows (hasKey flags); set/remove-key
   // manage the encrypted key; test = never-throws connectivity check.

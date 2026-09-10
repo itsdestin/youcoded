@@ -124,6 +124,12 @@ export interface ToolServices {
      *  into the refusal copy so the number the model sees always matches the
      *  number that was checked, never a hardcoded constant that could read
      *  differently from what a local session's engine-measured cap allows. */
+    /** 2026-09-09: the on-demand replacement for the retired per-turn
+     *  `<specialists-status>` block (Destin: "better match what the others
+     *  do"). Codex and Hermes give the model a list tool and no per-turn
+     *  reminder; ours reads the delegation ledger AND the session's background
+     *  commands. null when this parent has nothing running or awaiting delivery. */
+    listStatus(parentId: string): string | null;
     reserve(parentId: string, opts: { writer: boolean }):
       { ok: true; token: SpecialistReservation }
       | { ok: false; reason: 'at-capacity'; max: number }

@@ -19,6 +19,9 @@ import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy } from './components/takeover-dialog-copy';
+import { runLeaseTakeoverGate } from './state/resume-lease-gate';
+import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
+import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore } from './state/chat-context';
@@ -2219,33 +2222,50 @@ function AppInner() {
     setDrawerFilter(undefined);
   }, []);
 
-  // Shift+Space cycles model in chat view
-  const cycleModelRef = useRef<(() => void) | null>(null);
-  const cycleModel = useCallback(() => {
-    if (!sessionId) return;
-    // Native sessions can't cycle CC aliases — see supportsAliasCycling for the
-    // failure this prevents (a chip relabeled to a model the session isn't
-    // running, plus a stray write to the global model preference).
-    if (!supportsAliasCycling(sessions.find((s) => s.id === sessionId))) return;
-    // currentModel may be 'unknown' — indexOf then legitimately returns -1,
-    // which wraps to index 0 below, so cycling from an unknown state starts fresh.
-    const idx = MODELS.indexOf(currentModel as ModelAlias);
-    const next = MODELS[(idx + 1) % MODELS.length];
+  // Shared core for any "switch THIS session to model X" flow — Shift+Space
+  // cycling and the typed `/model <alias>` chat command both route through
+  // this so the guarded PTY send, the optimistic pill update, and the
+  // drift-verification handshake below stay in exactly ONE place.
+  const switchSessionModel = useCallback((sid: string, target: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
+    // Native/shell sessions can't cycle CC aliases — see supportsAliasCycling
+    // for the failure this prevents (a chip relabeled to a model the session
+    // isn't running, plus a stray write to the global model preference).
+    if (!supportsAliasCycling(sessions.find((s) => s.id === sid))) return 'ineligible';
     // Send first, guarded: while a prompt is pending, "/model …\r" would land
     // on CC's live Ink menu and answer it. Refusing BEFORE the optimistic
     // state writes also keeps the model pill truthful when nothing was sent.
-    if (!guardedPtySend(sessionId, `/model ${next}\r`)) return;
-    setSessionModels((prev) => new Map(prev).set(sessionId, next));
-    setPendingModel(next);
+    if (!guardedPtySend(sid, `/model ${target}\r`)) return 'blocked';
+    setSessionModels((prev) => new Map(prev).set(sid, target));
+    setPendingModel(target);
     // Fix: don't verify against in-flight events from the current turn —
     // wait until a new user turn starts so we know Claude is using the new model.
     postSwitchTurnReady.current = false;
     // Persist preference optimistically — the /model command is reliable,
     // verification is just a safety net. If verification later shows a
     // mismatch, the failure handler overwrites with the actual model.
-    (window.claude as any).model?.setPreference(next);
-  }, [currentModel, sessionId, guardedPtySend, sessions]);
+    (window.claude as any).model?.setPreference(target);
+    return 'sent';
+  }, [guardedPtySend, sessions]);
+
+  // Shift+Space cycles model in chat view
+  const cycleModelRef = useRef<(() => void) | null>(null);
+  const cycleModel = useCallback(() => {
+    if (!sessionId) return;
+    // currentModel may be 'unknown' — indexOf then legitimately returns -1,
+    // which wraps to index 0 below, so cycling from an unknown state starts fresh.
+    const idx = MODELS.indexOf(currentModel as ModelAlias);
+    const next = MODELS[(idx + 1) % MODELS.length];
+    switchSessionModel(sessionId, next);
+  }, [currentModel, sessionId, switchSessionModel]);
   cycleModelRef.current = cycleModel;
+
+  // Typed `/model <alias>` in chat — see slash-command-dispatcher.ts for why
+  // this must never fall through to a normal chat-message send (the command
+  // is Claude-Code-local and produces no turn to end the "thinking" spinner).
+  const handleModelSwitchCommand = useCallback((alias: ModelAlias): 'sent' | 'blocked' | 'ineligible' => {
+    if (!sessionId) return 'ineligible';
+    return switchSessionModel(sessionId, alias);
+  }, [sessionId, switchSessionModel]);
 
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
@@ -2440,7 +2460,7 @@ function AppInner() {
           // onToast: master's change 44 moved the dismiss timer INTO <Toast>, so
           // the hand-rolled setTimeout this branch carried would now be a second,
           // competing timer. Take master's plain form.
-          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true), onModelSwitchCommand: handleModelSwitchCommand },
           // Native /clear is durable-first — see deferUiEffectsToRuntime.
           deferUiEffectsToRuntime: sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'native',
         });
@@ -2470,7 +2490,7 @@ function AppInner() {
         timestamp: Date.now(),
       });
     },
-    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend],
+    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend, handleModelSwitchCommand],
   );
 
   const handleSelectSkill = useCallback(
@@ -2500,7 +2520,7 @@ function AppInner() {
           // onToast: master's change 44 moved the dismiss timer INTO <Toast>, so
           // the hand-rolled setTimeout this branch carried would now be a second,
           // competing timer. Take master's plain form.
-          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+          callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true), onModelSwitchCommand: handleModelSwitchCommand },
           // Native /clear is durable-first — see deferUiEffectsToRuntime.
           deferUiEffectsToRuntime: sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'native',
         });
@@ -2533,30 +2553,26 @@ function AppInner() {
         timestamp: Date.now(),
       });
     },
-    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend],
+    [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend, handleModelSwitchCommand],
   );
 
   const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
-    const info = await (window.claude.session.create as any)({
+    // The four native/claude conditionals this payload needs (drop the alias,
+    // force skipPermissions false, carry binding, carry preset) live in ONE
+    // place now — shared/session-create-args.ts. They were hand-written at each
+    // call site, and the buddy floater's copy remembered none of them.
+    const info = await (window.claude.session.create as any)(buildSessionCreateArgs({
       name: 'New Session',
       cwd,
+      runtime: provider === 'native' ? 'native' : 'claude',
+      model: m,
       skipPermissions: dangerous,
-      // A Claude alias is meaningless for a native session (the harness uses
-      // binding.modelId; SessionManager's native branch ignores `model`), so
-      // omit it to keep the payload honest.
-      model: provider === 'native' ? undefined : m,
-      provider: provider || 'claude',
-      // Native runtime only — the provider/model binding for the harness. The
-      // main handler requires it for a fresh native session (session-manager
-      // throws otherwise); undefined for claude sessions.
-      binding: provider === 'native' ? binding : undefined,
-      // Native runtime only — the harness preset (Assistant | Coder) the fresh
-      // session is stamped with. Ignored for claude sessions.
-      preset: provider === 'native' ? preset : undefined,
-    });
+      binding,
+      preset,
+    }));
     // I1 fix: deliver the RESOLVED harnessId to the live session pill. The
     // session:created event that seeds the sessions entry is emitted+sent
     // (process.nextTick) BEFORE the main handler finishes create/resume, so on a
@@ -2613,37 +2629,15 @@ function AppInner() {
     // the dialog on "held AND not self" so a lease left over from OUR OWN install
     // (e.g. after an unclean shutdown) resumes straight through instead of popping
     // a confusing "active on <your-own-hostname>" takeover dialog.
-    try {
-      const q = await window.claude.syncSpaces?.leaseQuery?.(claudeSessionId);
-      if (q?.held && !q.self) {
-        const device = q.device || 'another device';
-        const confirmed = await askTakeover(device, 'confirm');
-        if (!confirmed) return false; // "Never mind" — abort the resume
-        const r = await window.claude.syncSpaces?.leaseTakeover?.(claudeSessionId);
-        // 'timeout' (asked, no answer) and 'undeliverable' (never asked — hub had
-        // no delivery path) both offer the SAME force path, just with different
-        // dialog copy — see takeoverDialogCopy. Never collapse them into one
-        // phase: that's exactly the dishonest "isn't responding" framing this
-        // 3-state redesign replaced.
-        if (r?.outcome === 'timeout' || r?.outcome === 'undeliverable') {
-          const forced = await askTakeover(device, r.outcome === 'undeliverable' ? 'undeliverable' : 'force');
-          if (!forced) return false; // "Never mind" — abort
-          const fr = await window.claude.syncSpaces?.leaseForce?.(claudeSessionId);
-          // A failed force means the lease was never overwritten — the other device
-          // may STILL be live and holding it. Never-block (proceed with the resume),
-          // but say so: the user is about to have two writers on one transcript and
-          // recent turns may be missing. Silent here was the 2026-07-18 bug's mask.
-          if (fr && fr.ok === false) {
-            setToast({ message: `Couldn't confirm the handoff from ${device} — it may still be editing this conversation, and recent turns may be missing.`, durationMs: 8000 });
-          }
-        } else if (r?.outcome === 'error') {
-          // The takeover request itself failed (hub error / exception). Same deal:
-          // proceed (never-block) but warn that the other device may still be live.
-          setToast({ message: `Couldn't reach ${device} to hand off this conversation — it may still be editing, and recent turns may be missing.`, durationMs: 8000 });
-        }
-        // 'acquired' -> clean handoff, fall through and resume.
-      }
-    } catch { /* never-block: a lease query/takeover failure must not stop the resume */ }
+    // The gate itself now lives in state/resume-lease-gate.ts — the buddy
+    // floater's own resume list runs the SAME never-block / three-honest-states
+    // logic instead of re-deriving it slightly differently.
+    const proceed = await runLeaseTakeoverGate({
+      claudeSessionId,
+      askTakeover,
+      onWarn: (message) => setToast({ message, durationMs: 8000 }),
+    });
+    if (!proceed) return false; // "Never mind" — abort the resume
 
     // Native-harness resume. Task 6 / Destin's ruling: NEVER auto-launch a
     // binding — the resume-time model selector is ALWAYS the source of the
@@ -2656,17 +2650,16 @@ function AppInner() {
       return false; // deferred to the pre-resume picker — not launched yet
     }
     if (provider === 'native') {
-      const nativeSession = await (window.claude.session.create as any)({
+      const nativeSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
         // WHY the constant: main's title feeder must be able to RECOGNIZE this
         // as a placeholder (shared/session-title.ts). A bare literal here is
         // what let it pass as a real title and block auto-titling on resume.
         name: RESUMING_NATIVE,
         cwd,
-        skipPermissions: false, // native sessions have no PTY permission flow
-        provider: 'native',
+        runtime: 'native',
         resumeSessionId: claudeSessionId,
         binding: nativeBinding, // the selector's pick — becomes the live binding (native-session-host.ts resume() override)
-      });
+      }));
       if (!nativeSession?.id) {
         // The create never acked (Task 6 review — was a silent return). Main also
         // emits a session-error for the split not-synced / folder-missing / data-
@@ -2696,13 +2689,14 @@ function AppInner() {
     const m = resumeModel || realModelAlias(currentModel);
 
     // Pass --resume flag so Claude Code boots directly into the resumed session
-    const newSession = await (window.claude.session.create as any)({
+    const newSession = await (window.claude.session.create as any)(buildSessionCreateArgs({
       name: RESUMING_CLAUDE, // see RESUMING_NATIVE above — different spelling, same contract
       cwd,
-      skipPermissions: resumeDangerous || false,
+      runtime: 'claude',
+      skipPermissions: resumeDangerous,
       resumeSessionId: claudeSessionId,
       model: m,
-    });
+    }));
     if (!newSession?.id) {
       // Honest failure instead of a silent return (Task 6 review — the CC ack-gap).
       setToast({ message: "Couldn't resume this conversation.", durationMs: 6000 });
@@ -3359,7 +3353,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Claude is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Claude is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={{
                     usage: onChatGptPlan ? statusData.chatgptUsage : statusData.usage,
@@ -3411,6 +3405,7 @@ function AppInner() {
                         onToast: (msg: string) => setToast(msg),
                         getSessionState: (sid: string) => chatStateMapRef.current.get(sid),
                         onOpenModelPicker: () => setModelPickerOpen(true),
+                        onModelSwitchCommand: handleModelSwitchCommand,
                       },
                       deferUiEffectsToRuntime: currentSession?.provider === 'native',
                     });
@@ -3529,7 +3524,7 @@ function AppInner() {
                           others). Change 17 puts it on the destructive token so it
                           tracks the toggle above it under a community theme. */}
                       {welcomeDangerous && (
-                        <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+                        <SkipPermissionsCaption />
                       )}
                     </>
                   )}
@@ -3662,7 +3657,7 @@ function AppInner() {
             files: [],
             dispatch,
             timeline: [],
-            callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true) },
+            callbacks: { onResumeCommand: () => setResumeRequested(true), getUsageSnapshot, onOpenPreferences: () => setPreferencesOpen(true), onToast: (msg: string) => setToast(msg), getSessionState: (sid: string) => chatStateMapRef.current.get(sid), onOpenModelPicker: () => setModelPickerOpen(true), onModelSwitchCommand: handleModelSwitchCommand },
             deferUiEffectsToRuntime: sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'native',
           });
           if (runSlashResult(sessionId, result)) return;
@@ -4015,9 +4010,9 @@ function AppInner() {
 // getUsageSnapshot lets /cost and /usage snapshot live stats from App state.
 import type { UsageSnapshot } from './state/chat-types';
 import type { SessionChatState } from './state/chat-types';
-const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; initialInput?: string; provider?: 'claude' | 'native' }>(
-  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, initialInput, provider }, ref) {
-    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} initialInput={initialInput} provider={provider} />;
+const ChatInputBar = React.forwardRef<InputBarHandle, { sessionId: string; view?: ViewMode; onOpenDrawer: (searchMode: boolean) => void; onCloseDrawer?: () => void; onDrawerSearch?: (query: string) => void; disabled?: boolean; minimal?: boolean; onResumeCommand?: () => void; getUsageSnapshot?: (sessionId: string) => UsageSnapshot | null; onOpenPreferences?: () => void; onToast?: (msg: string) => void; onSendBlocked?: (retry: () => void) => void; getSessionState?: (sessionId: string) => SessionChatState | undefined; onOpenModelPicker?: () => void; onModelSwitchCommand?: (alias: ModelAlias) => 'sent' | 'blocked' | 'ineligible'; initialInput?: string; provider?: 'claude' | 'native' }>(
+  function ChatInputBar({ sessionId, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, disabled, minimal, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
+    return <InputBar ref={ref} sessionId={sessionId} view={view} onOpenDrawer={onOpenDrawer} onCloseDrawer={onCloseDrawer} onDrawerSearch={onDrawerSearch} disabled={disabled} minimal={minimal} onResumeCommand={onResumeCommand} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={onOpenPreferences} onToast={onToast} onSendBlocked={onSendBlocked} getSessionState={getSessionState} onOpenModelPicker={onOpenModelPicker} onModelSwitchCommand={onModelSwitchCommand} initialInput={initialInput} provider={provider} />;
   },
 );
 

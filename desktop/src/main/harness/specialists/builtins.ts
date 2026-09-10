@@ -118,7 +118,7 @@ ${SHARED_SUFFIX}`;
 const EXPLORER: SpecialistDefinition = {
   id: 'explorer',
   displayName: 'Explorer',
-  description: 'Fast, read-only codebase search — locates files, symbols, and patterns.',
+  description: 'Use when the answer needs a sweep of many files and you only want the conclusion — never for one symbol or file you already know.',
   systemPrompt: EXPLORER_PROMPT,
   allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
   charter: 'read-only',
@@ -130,7 +130,7 @@ const EXPLORER: SpecialistDefinition = {
 const RESEARCHER: SpecialistDefinition = {
   id: 'researcher',
   displayName: 'Researcher',
-  description: 'Web research with sourced, cited findings.',
+  description: 'Use for outside facts that need sources and citations — not for something one WebSearch would answer.',
   systemPrompt: RESEARCHER_PROMPT,
   allowedTools: ['Read', 'Glob', 'Grep', 'WebFetch', 'WebSearch'],
   charter: 'read-only',
@@ -142,7 +142,7 @@ const RESEARCHER: SpecialistDefinition = {
 const REVIEWER: SpecialistDefinition = {
   id: 'reviewer',
   displayName: 'Reviewer',
-  description: 'Read-only code review — findings reported as file:line.',
+  description: 'Use for a fresh-eyes check of a change before you call it done; findings come back as file:line. It cannot run tests.',
   systemPrompt: REVIEWER_PROMPT,
   allowedTools: ['Read', 'Glob', 'Grep'],
   charter: 'read-only',
@@ -154,7 +154,7 @@ const REVIEWER: SpecialistDefinition = {
 const WORKER: SpecialistDefinition = {
   id: 'worker',
   displayName: 'Worker',
-  description: 'Focused implementation — edits code and runs the relevant tests.',
+  description: 'Use for one bounded change you have already scoped and are not blocked on; it edits code and runs the relevant tests. You stay responsible for checking its report.',
   systemPrompt: WORKER_PROMPT,
   allowedTools: ['Read', 'Write', 'Edit', 'Bash', 'Glob', 'Grep'],
   charter: 'read-write',

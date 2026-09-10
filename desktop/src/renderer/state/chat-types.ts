@@ -189,7 +189,7 @@ export interface SystemMarker {
   id: string;
   timestamp: number;
   label: string;                                // e.g. "Conversation cleared"
-  variant?: 'clear' | 'compact' | 'info'; // For styling hooks
+  variant?: 'clear' | 'compact' | 'info' | 'model'; // For styling hooks
   // Optional long-form text the marker can reveal on click. Currently only
   // set on compact markers — the actual conversation summary CC produced.
   summary?: string;
@@ -821,6 +821,17 @@ export type ChatAction =
       sessionId: string;
       markerId: string;       // Stable id so the divider survives re-renders
       timestamp: number;
+    }
+  // Typed `/model <alias>` in chat: replaces the raw "/model opus" bubble with
+  // a thin divider, same shape as /clear's. Dispatched only after the PTY send
+  // actually went through (slash-command-dispatcher.ts) — never optimistic
+  // about a switch that may have been refused.
+  | {
+      type: 'MODEL_SWITCH_MARKER';
+      sessionId: string;
+      markerId: string;
+      timestamp: number;
+      label: string;           // e.g. "Model switched to Opus"
     }
   // Spinner card shown during /compact. Sets compactionPending flag + inserts
   // a 'compacting' timeline entry so users see *something* is happening.

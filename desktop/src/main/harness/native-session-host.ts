@@ -17,9 +17,10 @@ import { EventEmitter } from 'events';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import type { TranscriptEvent, NativeSendResult, SpecialistsEvent, HookEvent, DelegatedModelsView, SpecialistRunView, ShellEvent, ShellRunView, InjectedMeta, SessionContext, SessionContextText } from '../../shared/types';
-import { ShellRegistry, formatFinishedNotice, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
+import { ShellRegistry, formatFinishedNotice, stateText, NOTICE_TAIL_LINES, type ShellRun } from './shell-registry';
 import type { ModelBinding } from '../../shared/provider-types';
-import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts } from './harness-session';
+import { HarnessSession, rememberedRuleFor, type ModelFactory, type HarnessSessionOpts, type AcceptedHistorySnapshot } from './harness-session';
+import type { AcceptedHistoryStore } from './accepted-history-store';
 import { rebuildHistory } from './history-rebuild';
 import { PAGE_TURNS } from '../transcript-page';
 import { readImageFromDisk } from './image-support';
@@ -286,7 +287,40 @@ interface LiveEntry {
   // back-pointer that lets destroy() de-register this child from its parent's
   // childrenOf set without re-reading the header off disk (see childrenOf).
   parentSessionId?: string;
+  // WHY (2026-09-09, Destin: "when I interrupt that should pause or end the
+  // turn without a new message immediately starting the turn back up again"):
+  // Stop used to be the exact moment a parked background report was delivered.
+  // isIdle() is "no turn in flight", the Stop button ends the turn, and
+  // drainDeliveries runs at the tail of every turn regardless of how it ended
+  // — so pressing Stop CAUSED a fresh model turn on whatever had finished in
+  // the background (transcript audit: 10 of 15 stops were followed within a
+  // minute by an auto-started turn). This flag is set by interrupt() and
+  // cleared by the next USER-started turn; while it is set, nothing is
+  // delivered as a turn. The held reports are then spliced into history
+  // silently, right before that next user message, so the model still sees
+  // them — as context for what the user asked, not as a reason to speak.
+  holdDeliveries?: boolean;
 }
+
+/** The transcript events that END a turn — the moments a session's model
+ *  history is settled and worth a durable checkpoint (cache Stage 4). All three
+ *  also flush SessionStore's open streaming part, so the referenced text is on
+ *  disk by the time the publication runs behind them on the append chain. */
+const CONTINUATION_BOUNDARY = new Set<TranscriptEvent['type']>(['turn-complete', 'user-interrupt', 'session-error']);
+
+/** Every persisted event uuid after the last context-clear barrier: exactly the
+ *  events a rebuilt history is made of (rebuildHistory empties itself at that
+ *  marker), so a fallback resume can still name its own accepted set. */
+function persistedUuidsAfterLastClear(events: TranscriptEvent[]): string[] {
+  let start = 0;
+  events.forEach((event, index) => { if (event.type === 'context-clear') start = index + 1; });
+  return events.slice(start).map((event) => event.uuid).filter((uuid): uuid is string => typeof uuid === 'string' && uuid.length > 0);
+}
+
+// The no-op opener kickIdleDeliveryPass dispatches purely to reach runTurns'
+// delivery tail. A named constant so runTurns can tell "a user started this
+// pass" (a typed message, a queued message, a skill) from "the host did".
+const IDLE_PASS = async (): Promise<void> => {};
 
 /** The bracketed sentence a fitter appends to say what it cut. Read back rather
  *  than re-described here: a second wording would eventually disagree with the
@@ -887,7 +921,7 @@ export class NativeSessionHost extends EventEmitter {
     // readRegistry + todos too (the same reset-on-resume contract root
     // sessions get in resume() above); readImageFromDisk re-reads any
     // persisted attachment paths so images survive the resume.
-    session.seedHistory(rebuildHistory(this.store.readEvents(opts.childId, workDir), readImageFromDisk));
+    this.seedResumedHistory(opts.childId, workDir, session);
     this.bindReservation(opts.reservation, opts.childId);
     this.wireChildLive(parentId, opts.childId, workDir, session, binding, opts.parentToolCallId);
 
@@ -1496,9 +1530,12 @@ export class NativeSessionHost extends EventEmitter {
   private kickIdleDeliveryPass(parentId: string): void {
     const entry = this.live.get(parentId);
     if (!entry || !this.isIdle(parentId)) return;
+    // Held after Stop (see LiveEntry.holdDeliveries): the report stays queued
+    // and rides in with the user's next message instead of waking the model.
+    if (entry.holdDeliveries) return;
     entry.inFlight = true;
     entry.running = new Promise<void>((resolve) => {
-      setImmediate(() => { void this.runTurns(parentId, entry, async () => {}).then(resolve, resolve); });
+      setImmediate(() => { void this.runTurns(parentId, entry, IDLE_PASS).then(resolve, resolve); });
     });
   }
 
@@ -2188,6 +2225,17 @@ export class NativeSessionHost extends EventEmitter {
     // WHY inject once at the host boundary: create snapshots this preference,
     // while resume uses only its header, so call sites cannot make them diverge.
     private readStepGuard: () => number | null = () => null,
+    // Durable accepted-history continuation (cache Stage 4). ONE optional
+    // options object, LAST, so every existing construction is untouched: with
+    // it absent the host behaves exactly as it did before — a resume is a plain
+    // rebuild and nothing is ever published. ipc-handlers passes the profile-
+    // private AcceptedHistoryStore (Electron userData, never NativeHome) and
+    // the registry's single continuation-identity method, which THROWS when
+    // ChatGPT is signed out; the host treats that throw as one more fallback.
+    private continuation: {
+      acceptedHistory?: AcceptedHistoryStore;
+      continuationIdentityFor?: (binding: ModelBinding) => string;
+    } = {},
   ) {
     super();
     // Re-emit broker asks/expirations so ipc-handlers can forward them to the
@@ -2520,6 +2568,25 @@ export class NativeSessionHost extends EventEmitter {
           spawnBackground: (parentId: string, spawnOpts: Parameters<NativeSessionHost['spawnSpecialistBackground']>[1]) =>
             this.spawnSpecialistBackground(parentId, spawnOpts),
           // Task 6 — the task_id management surface: steer/interrupt/resume.
+          // 2026-09-09 — replaces the per-turn status block: the model asks
+          // once (Task list: true) instead of being reminded every turn.
+          listStatus: (parentId: string) => {
+            const e = this.live.get(parentId);
+            if (!e) return null;
+            const specialists = this.buildSpecialistStatus(parentId, e.cwd);
+            // Background commands too (Destin, 2026-09-09): one list for
+            // everything the model may be waiting on, same line shape as
+            // BashOutput's own listing so the two never disagree.
+            const shells = (this.shellRegistries.get(parentId)?.list() ?? []).map((r) => {
+              const cmd = r.command.length > 60 ? `${r.command.slice(0, 55)}…` : r.command;
+              return `${r.shellId} · ${stateText(r)} · ${cmd}`;
+            });
+            if (!specialists && shells.length === 0) return null;
+            return [
+              specialists ? `Specialists:\n${specialists}` : null,
+              shells.length ? `Background commands:\n${shells.join('\n')}` : null,
+            ].filter(Boolean).join('\n\n');
+          },
           steerSpecialist: (parentId: string, childId: string, text: string) => this.steerSpecialist(parentId, childId, text),
           interruptSpecialist: (parentId: string, childId: string) => this.interruptSpecialist(parentId, childId),
           resumeSpecialist: (parentId: string, resumeOpts: Parameters<NativeSessionHost['resumeSpecialist']>[1]) =>
@@ -2649,6 +2716,11 @@ export class NativeSessionHost extends EventEmitter {
    *  DelegationRecord status as "interrupted" instead of failing to compile;
    *  the `never` assignment in `default` turns that into a typecheck error
    *  the day the status union grows. */
+  // 2026-09-09: no longer injected every turn (that block kept helpers
+  // top-of-mind and invited the "report now" steers the transcript audit
+  // measured, and re-inserting it each turn threw away cached prompt prefix).
+  // Now the text behind Task's `list: true` — read on demand, like Codex's
+  // list_agents and Hermes's delegate_task(action='list').
   private buildSpecialistStatus(sessionId: string, cwd: string): string | null {
     if (!this.ledger) return null;
     const lines = this.ledger.listFor(cwd, sessionId)
@@ -2749,16 +2821,117 @@ export class NativeSessionHost extends EventEmitter {
     return held;
   }
 
+  /** The private continuation store, but ONLY when an identity resolver came
+   *  with it: without one nothing could ever be restored, so publishing would
+   *  write checkpoints no resume can read. Absent → today's exact behaviour. */
+  private continuationStore(): AcceptedHistoryStore | undefined {
+    return this.continuation.continuationIdentityFor ? this.continuation.acceptedHistory : undefined;
+  }
+
+  /** One line, one fixed reason code, no content — continuation never explains
+   *  itself with a raw error, and a failed checkpoint is not a user-visible
+   *  failure (the conversation and its transcript are untouched). */
+  private logContinuation(sessionId: string, reason: string, phase: 'publish' | 'restore' = 'publish'): void {
+    // WHY: publish failures and restore fallbacks shared one line, so an ordinary
+    // rebuild on reopen (no sidecar yet, another device, a changed model) read in the
+    // log as a failed checkpoint WRITE. The phase says which half spoke.
+    log('INFO', 'NativeSessionHost',
+      phase === 'publish' ? 'accepted-history checkpoint not published' : 'accepted-history checkpoint not restored',
+      { sessionId, reason, phase });
+  }
+
+  /**
+   * Publish one immutable accepted-history proposal (cache Stage 4).
+   *
+   * Three steps, in this order, and the order is the whole design:
+   *  1. SNAPSHOT SYNCHRONOUSLY at the mutation boundary — the proposal must
+   *     describe the history as it is HERE, never as a later turn leaves it.
+   *  2. FENCE SYNCHRONOUSLY — invalidate() bumps its in-memory revision before
+   *     its own first await, so any publication still in flight (or parked
+   *     inside flushReferences) loses immediately. Deferring this into the
+   *     append chain would queue a /clear BEHIND the very publication it is
+   *     meant to cancel, and the stale one would win.
+   *  3. PUBLISH ON THE APPEND CHAIN — the referenced events must be on disk
+   *     before they are cited, and publication must never overtake an append.
+   *
+   * Never rejects and never throws into a turn: every failure is one log line
+   * with a fixed reason code, and the checkpoint simply stays ineligible.
+   */
+  private publishAcceptedHistory(sessionId: string, entry: LiveEntry, reason: string): void {
+    const store = this.continuationStore();
+    if (!store) return;
+    const snapshot: AcceptedHistorySnapshot = entry.session.acceptedHistory();
+    const fence = store.invalidate(sessionId, reason);
+    const transcriptPath = this.store.transcriptPath(sessionId, entry.cwd);
+    entry.appendChain = entry.appendChain.then(async () => {
+      try {
+        const revision = await fence;
+        const references = await this.store.flushReferences(sessionId, snapshot.eventUuids);
+        if (!references.ok) { this.logContinuation(sessionId, references.reason); return; }
+        const published = await store.publish({
+          sessionId, transcriptPath, binding: snapshot.binding, assemblyDigest: snapshot.assemblyDigest,
+          revision, references: references.references, messages: snapshot.messages,
+          ...(snapshot.transformation ? { transformation: snapshot.transformation } : {}),
+        });
+        if (!published.ok) this.logContinuation(sessionId, published.reason);
+      } catch {
+        // A store that REJECTS is one more failure mode, not an exception the
+        // append chain (or the turn that scheduled this) may ever see.
+        this.logContinuation(sessionId, 'publish-failed');
+      }
+    });
+  }
+
+  /**
+   * Seed a resumed session's model history — the durable private checkpoint
+   * when one is eligible for this exact transcript, identity and assembled
+   * prompt, otherwise the ordinary rebuild.
+   *
+   * Called AFTER the session object exists (its assemblyDigest is what the
+   * checkpoint was published against) and instead of the bare seedHistory the
+   * two resume paths used to do. Never throws: a signed-out ChatGPT makes
+   * continuationIdentityFor throw, which is just another fallback.
+   */
+  private seedResumedHistory(sessionId: string, cwd: string, session: HarnessSession): void {
+    const store = this.continuationStore();
+    const persisted = this.store.readEvents(sessionId, cwd);
+    if (store) {
+      // WHY hydrate: `references` is in-memory, so every accepted uuid from a
+      // previous process is unknown to this one. Without this the session's
+      // NEXT publication fails 'unknown-reference' and a reopened conversation
+      // could never become durable again.
+      this.store.hydrateReferences(sessionId, persisted);
+      let identity: string | undefined;
+      try { identity = this.continuation.continuationIdentityFor!(session.binding); }
+      catch { this.logContinuation(sessionId, 'identity-unavailable', 'restore'); }
+      if (identity !== undefined) {
+        const restored = store.restore({
+          sessionId, transcriptPath: this.store.transcriptPath(sessionId, cwd),
+          binding: identity, assemblyDigest: session.assemblyDigest(),
+        });
+        if (restored.ok) {
+          session.seedHistory(restored.messages, {
+            eventUuids: restored.eventUuids, revision: restored.revision,
+            transformation: restored.transformation, continuationBinding: identity,
+          });
+          return;
+        }
+        this.logContinuation(sessionId, restored.reason, 'restore');
+      }
+    }
+    // Ordinary reconstruction (spec §2.5), seeded with every persisted uuid
+    // after the last context-clear barrier so a session that has no checkpoint
+    // — a cross-device transcript, a fallback, an app that predates this —
+    // still becomes durable at its very next publication.
+    session.seedHistory(rebuildHistory(persisted, readImageFromDisk), { eventUuids: persistedUuidsAfterLastClear(persisted) });
+  }
+
   /** Subscribe a freshly-built HarnessSession: forward its events to the
    *  renderer immediately, and enqueue each on the session's append chain. */
   private wire(sessionId: string, cwd: string, session: HarnessSession, mcpLease?: McpLease): void {
     const entry: LiveEntry = { session, cwd, appendChain: Promise.resolve(), queue: [], inFlight: false, mcpLease };
     this.live.set(sessionId, entry);
     this.retainModel(sessionId, session.binding.modelId); // ref-count this model
-    // Task 5 (plan 1b): wired for ROOT sessions only — wire() is never called
-    // for a specialist child (createChild has its own inline live.set, see its
-    // "NOT wire()" comment), so a child never grows its own status block.
-    session.setSpecialistStatus(() => this.buildSpecialistStatus(sessionId, cwd));
     // Persist "Always allow" decisions for THIS session's project. The session
     // emits 'remember-rule' {tool, pattern?, action} — a plain EventEmitter
     // event, NOT a transcript event (the frozen transcript surface is untouched)
@@ -2779,6 +2952,9 @@ export class NativeSessionHost extends EventEmitter {
             sessionId, type: event.type, error: String(err),
           });
         });
+      // (3) Cache Stage 4: a turn boundary settles the model history — snapshot
+      // it NOW (synchronously, at the emit) and publish behind the append above.
+      if (CONTINUATION_BOUNDARY.has(event.type)) this.publishAcceptedHistory(sessionId, entry, 'turn-boundary');
     });
     // What this session was given (contract R23: EVERY chat carries the line, so
     // this is emitted for a session that started with everything intact too).
@@ -3217,6 +3393,10 @@ export class NativeSessionHost extends EventEmitter {
             sessionId: childId, type: event.type, error: String(err),
           });
         });
+      // Cache Stage 4: a child's own accepted history is published on the
+      // child's own chain, against the child's own transcript — same contract
+      // as wire()'s, so a resumed specialist continues its own conversation.
+      if (CONTINUATION_BOUNDARY.has(event.type)) this.publishAcceptedHistory(childId, entry, 'turn-boundary');
       // (2) DISPLAY (Task 7) — a stamped COPY, for what the renderer's
       // subagent card consumes and NOTHING else (see isSubagentDisplayEvent /
       // SUBAGENT_DISPLAY_TYPES for what a stamped turn-complete would break,
@@ -3422,7 +3602,7 @@ export class NativeSessionHost extends EventEmitter {
       // already clears readRegistry + todos (the reset-on-resume ruling) — those
       // are runtime state, never persisted. readImageFromDisk re-reads any
       // persisted attachment paths so images survive resume (#290 follow-up fix 2).
-      session.seedHistory(rebuildHistory(this.store.readEvents(sessionId, cwd), readImageFromDisk));
+      this.seedResumedHistory(sessionId, cwd, session);
     } catch (err) {
       await mcpLease?.release();
       throw err;
@@ -3589,6 +3769,16 @@ export class NativeSessionHost extends EventEmitter {
       if (!entry.parentSessionId) await this.specialistCatalog.ensureFresh(entry.cwd);
       let next: SendUnit | (() => Promise<void>) | undefined = first;
       while (next !== undefined) {
+        // A user-started turn lifts the post-Stop hold: everything parked since
+        // the Stop is spliced into history NOW, silently, so the model reads it
+        // as context for this message rather than getting a turn of its own.
+        // Checked per turn, not once per pass, because a message queued before
+        // the Stop still runs after it (pinned: "the queue still drains").
+        if (entry.holdDeliveries && next !== IDLE_PASS) {
+          entry.holdDeliveries = false;
+          await this.drainDeliveries(sessionId, entry, 'splice');
+          if (this.live.get(sessionId) !== entry) return;
+        }
         try {
           if (typeof next === 'function') await next();
           else await entry.session.send(next.text, next.attachments);
@@ -3601,7 +3791,9 @@ export class NativeSessionHost extends EventEmitter {
         // removeQueued(); shift() here is what makes a removed entry unreachable.
         next = entry.queue.shift();
       }
-      await this.drainDeliveries(sessionId, entry);
+      // Stop pressed during this pass: leave everything parked (holdDeliveries'
+      // own WHY). The next user message drains it via the splice above.
+      if (!entry.holdDeliveries) await this.drainDeliveries(sessionId, entry, 'turn');
     } finally {
       entry.inFlight = false;
     }
@@ -3617,7 +3809,15 @@ export class NativeSessionHost extends EventEmitter {
    *  still fall through to the fallback lane in the SAME pass (see below);
    *  the outer finally is what protects against a throw from anywhere this
    *  function didn't anticipate. */
-  private async drainDeliveries(sessionId: string, entry: LiveEntry): Promise<void> {
+  /** `mode` — 'turn': each notice is a real model turn (runNotice); 'splice':
+   *  each notice is written into history and the transcript with NO model
+   *  call (spliceNotice) — the post-Stop path, run right before the user's
+   *  next message so the model reads the reports as that message's context. */
+  private deliverNotice(entry: LiveEntry, mode: 'turn' | 'splice', text: string, meta?: InjectedMeta): Promise<void> {
+    return mode === 'splice' ? entry.session.spliceNotice(text, meta) : entry.session.runNotice(text, meta);
+  }
+
+  private async drainDeliveries(sessionId: string, entry: LiveEntry, mode: 'turn' | 'splice'): Promise<void> {
     // Plan 1b Task 8: plain-text host notices drain FIRST, unconditionally —
     // no `this.ledger` gate, since this lane exists whether or not a
     // NativeHome/ledger was ever wired (see pendingHostNotices' own WHY).
@@ -3641,7 +3841,7 @@ export class NativeSessionHost extends EventEmitter {
           ? { kind: 'shell', runs: batch.flatMap((n) => (n.meta?.kind === 'shell' ? n.meta.runs : [])) }
           : head.meta;
         try {
-          await entry.session.runNotice(text, meta);
+          await this.deliverNotice(entry, mode, text, meta);
         } catch (err) {
           log('WARN', 'NativeSessionHost', 'host notice delivery failed — will retry at the next idle boundary', { sessionId, error: String((err as any)?.message ?? err) });
           break;
@@ -3782,7 +3982,7 @@ export class NativeSessionHost extends EventEmitter {
                 log('WARN', 'NativeSessionHost', 'failed to record a truncation-time spill path in the ledger', { childId: rec.childId, parentId: sessionId, error: String((err as any)?.message ?? err) });
               }
             }
-            await entry.session.runNotice(delivery.text, {
+            await this.deliverNotice(entry, mode, delivery.text, {
               // Header data for the renderer's compact SpecialistReportCard —
               // from the ledger record, the same source formatDelivery's prose
               // is written from, so header and body can never disagree.
@@ -3860,7 +4060,7 @@ export class NativeSessionHost extends EventEmitter {
           // has no live ledger row in a deliverable state to attach it to (see
           // this lane's own WHY, right above); the correct path is still what
           // lands in THIS injection's footer either way.
-          await entry.session.runNotice(this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text);
+          await this.deliverNotice(entry, mode, this.formatDelivery(sessionId, entry.cwd, fallback.rec, concurrentReporters).text);
           if (this.live.get(sessionId) !== entry) {
             // destroy() landed mid-notice: runNotice on a torn-down session
             // resolves normally without showing the report to anyone (same
@@ -3938,7 +4138,14 @@ export class NativeSessionHost extends EventEmitter {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
     if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
-    return entry.session.compactNow();
+    const result = await entry.session.compactNow();
+    // Cache Stage 4: compaction is a history-only mutation — no new turn will
+    // arrive to publish it, so the checkpoint is refreshed here or never.
+    // UNCONDITIONAL, including on a not-ok return: compactNow prunes BEFORE it
+    // can fail on 'nothing-to-compact' / 'summary-failed', so a refusal still
+    // leaves a rewritten history that the old checkpoint no longer describes.
+    this.publishAcceptedHistory(sessionId, entry, 'compaction');
+    return result;
   }
 
   /** User-initiated /clear for a native session (M3 item 2) — a context BARRIER,
@@ -3948,7 +4155,13 @@ export class NativeSessionHost extends EventEmitter {
     const entry = this.live.get(sessionId);
     if (!entry) return { ok: false, reason: 'not-live' };
     if (entry.inFlight || entry.queue.length > 0) return { ok: false, reason: 'turn-in-flight' };
-    return entry.session.clearHistory();
+    const result = entry.session.clearHistory();
+    // Cache Stage 4: /clear is the sharpest history-only mutation there is —
+    // the synchronous fence inside publishAcceptedHistory is what stops a
+    // publication from the turn BEFORE the clear landing after it. Same
+    // unconditional reasoning as compact() above.
+    this.publishAcceptedHistory(sessionId, entry, 'clear');
+    return result;
   }
 
   /** User-initiated /skill-name for a native session (M3 item 1).
@@ -4051,6 +4264,9 @@ export class NativeSessionHost extends EventEmitter {
     // it (spec pending-ask ruling). Also expires the renderer's approval cards.
     this.broker.cancelSession(sessionId);
     entry?.session.interrupt();
+    // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
+    // Root sessions only: a child's own deliveries go to its parent, not to it.
+    if (entry && !entry.parentSessionId) entry.holdDeliveries = true;
     return !!entry;
   }
 
@@ -4117,6 +4333,10 @@ export class NativeSessionHost extends EventEmitter {
     // new doom-loop window / tool posture on the next turn.
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     entry.session.setBinding(binding, contextLength, profile, pricing, free);
+    // Cache Stage 4: a model swap changes the assembled prefix (and, for a
+    // ChatGPT account swap, the identity the ciphertext was accepted under),
+    // so the old checkpoint must be fenced now rather than left eligible.
+    this.publishAcceptedHistory(sessionId, entry, 'rebinding');
     if (oldModelId !== binding.modelId) {
       // Swap the ref-count: releasing the old model may unload it if this was
       // its last session (#1); retain the new one so it isn't unloaded.
