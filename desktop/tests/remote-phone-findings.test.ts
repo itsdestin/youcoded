@@ -95,6 +95,32 @@ describe('a computer with no password says so before asking for one', () => {
   });
 });
 
+describe('a load that failed is not a list that is empty', () => {
+  // Comments stripped first: the WHY note in this file QUOTES the old line, and a bare
+  // `not.toContain` matched the explanation instead of the code — a test failing on prose
+  // teaches you to weaken it, which is how a guard stops guarding.
+  const resume = read('../src/renderer/components/ResumeBrowser.tsx')
+    .split('\n').filter(l => !l.trim().startsWith('//')).join('\n');
+
+  it('never reports someone\u2019s own history as absent because a request failed', () => {
+    // "oh wait it worked the second try for resume. idk why nothing appeared the first
+    // time." — Destin, 2026-09-10, over remote access. The first attempt failed and the
+    // screen said "No previous sessions found", which is a confident claim about his own
+    // history. He had 946 conversations at that moment; the host function was fine.
+    expect(resume).not.toContain('.catch(() => setSessions([]))');
+    expect(resume).toContain('setLoadError(err?.message ? String(err.message) : \'\');');
+    // A failure is a failure on screen, and it offers the one thing that fixes a
+    // transient one: asking again.
+    expect(resume).toMatch(/loadError !== null \?/);
+    expect(resume).toMatch(/ErrorState[\s\S]{0,200}onRetry=\{loadSessions\}/);
+  });
+
+  it('says the reason when there is one and does not invent one when there is not', () => {
+    expect(resume).toMatch(/Couldn.{1,8}t load your conversations: \$\{loadError\}/);
+    expect(resume).toMatch(/message="Couldn.{1,8}t load your conversations\."/);
+  });
+});
+
 describe('a phone paired to this computer looks like this computer', () => {
   it('the host will hand over a theme definition, read-only and path-guarded', () => {
     // The phone already learned WHICH theme (appearance:get was bridged); it could not
