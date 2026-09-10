@@ -1,5 +1,6 @@
 import { useArtifactOptional } from '../state/ArtifactContext';
 import { useOpenFilepath } from '../hooks/useOpenFilepath';
+import { Tooltip } from './ui';
 
 interface Props {
   path: string;
@@ -73,21 +74,23 @@ export function FilepathToken({ path, sessionId, variant = 'pill', label }: Prop
 
   if (variant === 'inline') {
     return (
+      <Tooltip text={path}>
       <button
         type="button"
         // Dotted underline rather than a solid link: it reads as "there is more
         // behind this word" without turning the label into prose-styled link text.
         className="underline decoration-dotted underline-offset-2 decoration-fg-muted hover:decoration-fg transition-colors"
         onClick={onClick}
-        title={path}
         data-file-path={menuPath || undefined}
       >
         {label ?? name}
       </button>
+      </Tooltip>
     );
   }
 
   return (
+    <Tooltip text={path}>
     <button
       type="button"
       // B4 recessed pill: sits on --well with a hairline --edge border so it
@@ -96,7 +99,6 @@ export function FilepathToken({ path, sessionId, variant = 'pill', label }: Prop
       // clickable file.) Monospace basename keeps the "this is a file" signal.
       className="group inline-flex items-center gap-1.5 align-middle px-2 py-0.5 rounded-md bg-well border border-edge hover:border-fg-muted transition-colors"
       onClick={onClick}
-      title={path}
       // Right-click menu recovers the path here (left-click still opens the drawer).
       data-file-path={menuPath || undefined}
     >
@@ -105,5 +107,6 @@ export function FilepathToken({ path, sessionId, variant = 'pill', label }: Prop
         {name}
       </span>
     </button>
+    </Tooltip>
   );
 }

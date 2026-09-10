@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, fieldClasses } from '../ui';
+import { Button, fieldClasses, Tooltip } from '../ui';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -570,6 +570,7 @@ export default function ModelPicker({
       // favourite star's column too instead of stopping at the name button.
       <div key={e.key} className="group/model flex items-center px-2">
         <div className={`flex-1 min-w-0 flex items-center gap-1 rounded ${selected ? 'bg-accent' : ''}`}>
+          <Tooltip text={e.unavailable ? `${e.label} · ${e.sourceLabel} — ${e.unavailable}` : ''}>
           <button
             type="button"
             // A row this install cannot run is inert, not hidden: nothing is
@@ -578,7 +579,6 @@ export default function ModelPicker({
             disabled={!!e.unavailable}
             onClick={() => pick(e.choice, { provider: e.sourceLabel, model: e.label })}
             aria-pressed={selected}
-            title={e.unavailable ? `${e.label} · ${e.sourceLabel} — ${e.unavailable}` : undefined}
             className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${
               e.unavailable
                 ? 'text-fg-faint cursor-default'
@@ -608,6 +608,7 @@ export default function ModelPicker({
               <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
             )}
           </button>
+          </Tooltip>
           {/* touch-reveal + coarse-hit: hover-only affordances never resolve on
               the Android WebView (narrow-viewport rule). Selected uses the same
               on-accent colour as the mark/name above, for the same reason:
@@ -615,12 +616,12 @@ export default function ModelPicker({
               one place it can fail contrast, since the accent is theme-authored
               and unknown to us. mr-1 keeps it off the fill's rounded corner,
               mirroring the name button's own left inset (px-2) on the other end. */}
+          <Tooltip text={fav ? 'Remove from favourites' : 'Add to favourites'}>
           <button
             type="button"
             onClick={() => toggleFavorite(e.key)}
             aria-pressed={fav}
             aria-label={fav ? `Unfavourite ${e.label}` : `Favourite ${e.label}`}
-            title={fav ? 'Remove from favourites' : 'Add to favourites'}
             className={`shrink-0 w-6 h-6 mr-1 rounded inline-flex items-center justify-center transition-opacity coarse-hit touch-reveal ${
               selected
                 ? 'text-on-accent opacity-100'
@@ -631,6 +632,7 @@ export default function ModelPicker({
           >
             <StarGlyph filled={fav} />
           </button>
+          </Tooltip>
         </div>
       </div>
     );
