@@ -88,6 +88,7 @@ import { SessionStripMotionDemo } from '../mockups/SessionStripMotion';
 // two thirds of it is motion.
 import { BuddySleepDemo } from '../mockups/BuddySleep';
 import { FriendlyMascots } from '../mockups/FriendlyMascots';
+import { RemoteSetupDemo } from '../mockups/RemoteSetup';
 // The REAL derivation the shipping card will use — a candidate that hardcoded
 // its options would be comparing wording against something that cannot happen.
 import { bashGrantOptions } from '../../../../shared/bash-grant-shapes';
@@ -7011,6 +7012,14 @@ export const COMPARE_SURFACES: CompareSurface[] = [
         ],
       },
     ],
+  },
+  {
+    id: 'remote-secure-setup', label: 'Secure remote setup',
+    question: 'Can you follow setup and understand what is shared?',
+    frame: 'panel', paneWidth: 420,
+    rounds: [{ n: 1, candidates: [
+      { id: 'guided', label: 'Guided setup', render: () => <RemoteSetupDemo /> },
+    ] }],
   },
   {
     id: 'friendly-mascots', label: 'Default buddy palette',

@@ -33,7 +33,7 @@ Full context on architectural invariants lives in `docs/PITFALLS.md` in the `you
 See `docs/build-and-release.md` in the workspace scaffold. Shortest path:
 - **Desktop iteration:** `bash scripts/run-dev.sh` from the workspace root.
 - **Android iteration:** `./gradlew assembleDebug` from this repo. The `bundleWebUi` Gradle task runs `scripts/build-web-ui.sh` automatically when `desktop/src/` changes; subsequent Kotlin-only iterations skip it as UP-TO-DATE.
-- **Release:** Bump `app/build.gradle.kts` (`versionCode` + `versionName`) and tag `vX.Y.Z`. One tag triggers both platform workflows.
+- **Release:** tag `vX.Y.Z`. One tag triggers both platform workflows; `android-release.yml` stamps `versionName` from the tag and `versionCode` from its run number (since 2026-09-10), so the hand-set values in `app/build.gradle.kts` only matter for local builds.
 
 ## Workspace scaffold
 

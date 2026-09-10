@@ -62,6 +62,38 @@ describe('remote-shim send queue', () => {
     await expect(invokePromise).resolves.toEqual([]);
   });
 
+  it('drops a queued message whose caller was already told it failed', async () => {
+    // The queue exists so a FIRST connect works: mount-time reads fire before auth and
+    // would otherwise be lost. But it was replaying EVERYTHING, including requests that
+    // had timed out thirty seconds earlier and told the user they failed — so an action
+    // you were told did not happen could happen minutes later, once the phone reconnected.
+    // Only the CLOCK is faked, not timers: the shim's own connect timeout is a real
+    // setTimeout, and fast-forwarding it would close the socket before the flush.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      shim.installShim();
+
+      // One request queued while the socket is still connecting...
+      (window as any).claude.skills.list().catch(() => {});
+      // ...then more than the 30s request timeout passes, so its caller has already been
+      // told it failed and nobody is waiting for it any more.
+      vi.setSystemTime(Date.now() + 31_000);
+      (window as any).claude.commands.list().catch(() => {});
+
+      ws.open();
+      ws.receive({ type: 'auth:ok', token: 'tok', platform: 'browser' });
+      await Promise.resolve();
+
+      const flushed = ws.sent.slice(1).map(s => JSON.parse(s).type);
+      expect(flushed).toContain('commands:list');
+      expect(flushed).not.toContain('skills:list');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('auth message bypasses the queue (sent directly during ws.onopen)', async () => {
     shim.connect('pw', false);
     const ws = FakeWebSocket.instances[0];
@@ -134,9 +166,11 @@ describe('remote-shim send queue', () => {
     shim.connect('pw', false);
     const ws = FakeWebSocket.instances[0];
     shim.installShim();
-    // Each invoke() call assigns a sequential id (msg-1..msg-300). After
-    // overflow, the surviving 256 must be the LAST 256 enqueued — i.e.
-    // msg-45..msg-300 (the first 44 dropped, oldest-first FIFO).
+    // Each invoke() call assigns a sequential id. The counter is now prefixed with the
+    // device and the connection generation, because `msg-N` alone came from a per-page-load
+    // counter: two devices, or one device after a reload, produced the same ids and the
+    // host could answer "did this run?" about somebody else's request. The FIFO behaviour
+    // under test is unchanged — the surviving 256 are the LAST 256 enqueued.
     for (let i = 0; i < 300; i++) (window as any).claude.skills.list();
     expect(ws.sent).toEqual([]);
     ws.open();
@@ -147,7 +181,7 @@ describe('remote-shim send queue', () => {
     expect(flushedMsgs).toHaveLength(256);
     // FIFO drop-oldest assertion: surviving ids are the LAST 256, in order.
     const flushedIds = flushedMsgs.map(m => m.id);
-    const expectedIds = Array.from({ length: 256 }, (_, i) => `msg-${45 + i}`);
+    const expectedIds = Array.from({ length: 256 }, (_, i) => `anon:1:${45 + i}`);
     expect(flushedIds).toEqual(expectedIds);
     expect(warn).toHaveBeenCalled();
   });

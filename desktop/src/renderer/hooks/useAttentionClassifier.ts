@@ -6,6 +6,7 @@ import {
   ClassifierContext,
 } from '../state/attention-classifier';
 import type { AttentionState } from '../state/chat-types';
+import { isRemoteMode } from '../platform';
 
 // How often the classifier re-reads the buffer while active.
 const TICK_MS = 1000;
@@ -79,7 +80,17 @@ export function useAttentionClassifier(sessionId: string, args: HookArgs): void 
   // Classifier reads the xterm PTY buffer — only PTY sessions have one. This
   // is also the OWNERSHIP test: no buffer means this hook is not the author of
   // the session's attention state and must neither set nor clear it.
-  const hasBuffer = provider === undefined || provider === 'claude';
+  //
+  // ...and a remote browser has no buffer of its OWN. The PTY lives on the desktop it is
+  // paired to, and `.claude/rules/react-renderer.md` says so outright: a remote browser
+  // takes attention from `status:data`'s attentionMap and must not run this classifier.
+  // It was running anyway, so every phone asked the host for terminal text once a second
+  // over the WebSocket, for a channel the host does not bridge — which is what put
+  // "terminal:get-screen-text isn't available via remote access yet." on Destin's phone
+  // (2026-09-10). Android-local is NOT this case: that WebView talks to a runtime on the
+  // same device, which does have the buffer, so the test is isRemoteMode() and not the
+  // platform string.
+  const hasBuffer = (provider === undefined || provider === 'claude') && !isRemoteMode();
   const active = hasBuffer && isThinking && !hasRunningTools && !hasAwaitingApproval && visible;
 
   useEffect(() => {

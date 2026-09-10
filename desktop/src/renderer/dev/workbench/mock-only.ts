@@ -85,4 +85,8 @@
 //
 // Add a row the moment you design a channel ahead of its backend; delete the row, never the
 // guard, when it ships. An empty list is the healthy state.
-export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [];
+export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
+  // Browser encryption is an approved design with no backend: the Advanced section and its
+  // screen render only under the workbench preview. Delete this row when it ships.
+  { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+];

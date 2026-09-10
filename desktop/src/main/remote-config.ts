@@ -5,11 +5,11 @@ import bcrypt from 'bcryptjs';
 import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { REMOTE_SERVER_DEFAULT_PORT } from '../shared/ports';
+import { remoteConfigPath } from './remote-paths';
 
 const execFileAsync = promisify(execFile);
 
 const BCRYPT_ROUNDS = 10;
-const PROFILE = process.env.YOUCODED_PROFILE ?? '';
 
 // Fix: dev instances get their OWN remote config file. Previously every profile
 // read and wrote ~/.claude/youcoded-remote.json — the built app's file — so
@@ -18,22 +18,43 @@ const PROFILE = process.env.YOUCODED_PROFILE ?? '';
 // from a dev instance at all, making remote features untestable outside a
 // production install. A per-profile file removes the sharing, so dev can
 // configure and persist its own remote server safely.
-const CONFIG_PATH = () => path.join(
-  os.homedir(),
-  '.claude',
-  PROFILE ? `youcoded-remote.${PROFILE}.json` : 'youcoded-remote.json',
-);
-// Any non-empty YOUCODED_PROFILE marks this as a dev instance. Treating every
-// non-empty value as dev (not just the literal 'dev') means concurrent dev
-// instances with distinct profiles (e.g. 'dev2') each get their own config
-// file and their own port, rather than fighting over the built app's 9900.
-// The port offset itself is applied upstream in shared/ports.ts.
+//
+// The path itself now comes from remote-paths.ts, shared with the device store,
+// which used to be scoped differently and so leaked pairings across profiles.
+const CONFIG_PATH = () => remoteConfigPath();
+// Any non-empty YOUCODED_PROFILE is a dev instance: concurrent dev instances with
+// distinct profiles (e.g. 'dev2') each get their own file and port rather than
+// fighting over the built app's 9900. The port offset is applied in shared/ports.ts.
+
+/**
+ * What Tailscale is doing on this computer. `installed`/`connected` are the two flags the
+ * panel has always had; `state` is the one that says WHICH problem it is, so the setup
+ * banner can offer the matching next step rather than one generic "not connected".
+ */
+export interface TailscaleDetection {
+  installed: boolean;
+  connected: boolean;
+  state: 'not-installed' | 'signed-out' | 'stopped' | 'running' | 'unknown';
+  ip: string | null;
+  hostname: string | null;
+  url: string | null;
+}
+
+/** Tailscale's own BackendState values, mapped to the three states a user can act on. */
+const TAILSCALE_BACKEND_STATE: Record<string, TailscaleDetection['state']> = {
+  Running: 'running',
+  NeedsLogin: 'signed-out',
+  NeedsMachineAuth: 'signed-out',
+  Stopped: 'stopped',
+  // Starting/NoState are deliberately absent: they are transitional, and calling a
+  // starting daemon "switched off" would send the user to fix something that is
+  // already fixing itself. They fall through to 'unknown'.
+};
 
 interface ConfigData {
   enabled: boolean;
   port: number;
   passwordHash: string | null;
-  trustTailscale: boolean;
   keepAwakeHours: number; // 0 = off
   everPaired: boolean;
 }
@@ -42,7 +63,6 @@ export class RemoteConfig {
   enabled: boolean;
   port: number;
   passwordHash: string | null;
-  trustTailscale: boolean;
   keepAwakeHours: number;
   everPaired: boolean;
 
@@ -53,7 +73,6 @@ export class RemoteConfig {
       // don't fight over the same port when both have remote access enabled.
       port: REMOTE_SERVER_DEFAULT_PORT,
       passwordHash: null,
-      trustTailscale: false,
       keepAwakeHours: 0,
       everPaired: false,
     };
@@ -72,7 +91,6 @@ export class RemoteConfig {
         // Note: a `passwordPlain` field used to exist on disk (never read, only
         // written). save() no longer serializes it, so it'll disappear on the
         // next save. We intentionally don't load it into memory here.
-        this.trustTailscale = data.trustTailscale ?? defaults.trustTailscale;
         this.keepAwakeHours = data.keepAwakeHours ?? defaults.keepAwakeHours;
         this.everPaired = data.everPaired ?? defaults.everPaired;
         return;
@@ -84,7 +102,6 @@ export class RemoteConfig {
     this.enabled = defaults.enabled;
     this.port = defaults.port;
     this.passwordHash = defaults.passwordHash;
-    this.trustTailscale = defaults.trustTailscale;
     this.keepAwakeHours = defaults.keepAwakeHours;
     this.everPaired = defaults.everPaired;
   }
@@ -99,18 +116,6 @@ export class RemoteConfig {
     return bcrypt.compare(plaintext, this.passwordHash);
   }
 
-  /** Check if an IP is in the Tailscale CGNAT range (100.64.0.0/10). */
-  isTailscaleIp(ip: string): boolean {
-    // Strip IPv6-mapped IPv4 prefix
-    const normalized = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
-    const parts = normalized.split('.');
-    if (parts.length !== 4) return false;
-    const first = parseInt(parts[0], 10);
-    const second = parseInt(parts[1], 10);
-    // 100.64.0.0/10 = 100.64.0.0 – 100.127.255.255
-    return first === 100 && second >= 64 && second <= 127;
-  }
-
   save(): void {
     // The dev-profile no-op that used to live here is gone: CONFIG_PATH() is
     // per-profile, so a dev save can no longer reach the built app's file.
@@ -122,20 +127,18 @@ export class RemoteConfig {
       enabled: this.enabled,
       port: this.port,
       passwordHash: this.passwordHash,
-      trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,
     }, null, 2), { mode: 0o600 });
   }
 
   /** Return config data safe for the renderer (no password hash, no plaintext password). */
-  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: null; trustTailscale: boolean; keepAwakeHours: number; everPaired: boolean } {
+  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: null; keepAwakeHours: number; everPaired: boolean } {
     return {
       enabled: this.enabled,
       port: this.port,
       hasPassword: !!this.passwordHash,
       password: null, // Security: never expose plaintext password over IPC or WebSocket
-      trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,
     };
@@ -178,8 +181,8 @@ export class RemoteConfig {
    * verifying the binary on disk (or via `tailscale version`, which doesn't need
    * the local API) — and only then probe connection state.
    */
-  static async detectTailscale(port: number): Promise<{ installed: boolean; connected: boolean; ip: string | null; hostname: string | null; url: string | null }> {
-    const notInstalled = { installed: false, connected: false, ip: null, hostname: null, url: null };
+  static async detectTailscale(port: number): Promise<TailscaleDetection> {
+    const notInstalled = { installed: false, connected: false, state: 'not-installed' as const, ip: null, hostname: null, url: null };
 
     const tsPath = RemoteConfig.resolveTailscalePath();
 
@@ -201,11 +204,18 @@ export class RemoteConfig {
     let connected = false;
     let hostname: string | null = null;
     let tailscaleIp: string | null = null;
+    // WHY the state is read out of BackendState rather than inferred from `connected`:
+    // "installed but signed out" and "installed but switched off" need different next
+    // steps, and one flat not-connected flag cannot tell them apart. Guessing between
+    // them is exactly the invented cause docs/error-message-standards.md forbids, so an
+    // unrecognised backend state stays 'unknown' instead of picking the likelier one.
+    let state: TailscaleDetection['state'] = 'unknown';
     try {
       const { stdout: statusJson } = await execFileAsync(tsPath, ['status', '--json']);
       const status = JSON.parse(statusJson);
       hostname = status.Self?.HostName || null;
       connected = status.BackendState === 'Running';
+      state = TAILSCALE_BACKEND_STATE[status.BackendState] ?? 'unknown';
       if (connected) {
         // Prefer the IP from status JSON (one fewer subprocess). Fall back to
         // `tailscale ip -4` only if status JSON didn't include one.
@@ -223,6 +233,7 @@ export class RemoteConfig {
     return {
       installed: true,
       connected,
+      state,
       ip: tailscaleIp,
       hostname,
       url: tailscaleIp ? `http://${tailscaleIp}:${port}` : null,
