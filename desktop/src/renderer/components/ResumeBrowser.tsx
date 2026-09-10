@@ -7,6 +7,8 @@ import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { ResumeFilterPopover } from './ResumeFilterPopover';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 import {
   applyFilters,
@@ -66,21 +68,21 @@ const MENU_ROW = 'w-full h-7 px-3 text-xs flex items-center gap-2 text-left text
 const MENU_FOOTER = 'border-t border-edge flex divide-x divide-edge';
 const MENU_FOOTER_ACTION = 'flex-1 px-2.5 py-2 text-xs whitespace-nowrap text-fg-dim hover:bg-inset hover:text-fg transition-colors disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-fg-dim';
 
-// The sort chip's arrow: a stroked glyph like every other icon in the app,
-// replacing the "↓"/"↑" characters that used to sit inside the label text and
-// rendered as whatever the theme's font drew for them. Points down for
-// newest-first and turns to point up for oldest-first.
-function SortArrow({ up, muted }: { up: boolean; muted: boolean }) {
+// The sort chip's glyph. Round 1's single arrow that turned over was rejected
+// ("still don't like the arrow", deck S-6); round 2 offers alternatives, and this
+// is candidate A — the app's two-way sort arrows, which stay put while the
+// label says which way the list runs.
+function SortArrow({ muted }: { muted: boolean }) {
   return (
     <svg
-      className={`w-3 h-3 shrink-0 transition-transform duration-150 ${up ? 'rotate-180' : ''} ${muted ? 'text-fg-muted' : ''}`.trim()}
+      className={`w-3.5 h-3.5 shrink-0 ${muted ? 'text-fg-muted' : ''}`.trim()}
       fill="none"
       viewBox="0 0 24 24"
       stroke="currentColor"
       strokeWidth={2}
       aria-hidden="true"
     >
-      <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M19 12l-7 7-7-7" />
+      <path strokeLinecap="round" strokeLinejoin="round" d="m21 16-4 4-4-4M17 20V4M3 8l4-4 4 4M7 4v16" />
     </svg>
   );
 }
@@ -317,7 +319,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   // Tracks which filter pill's dropdown is currently open. null = both closed.
   // Single state instead of two booleans so the dropdowns are mutually exclusive.
-  const [openPill, setOpenPill] = useState<'projects' | 'tags' | null>(null);
+  const [openPill, setOpenPill] = useState<'projects' | 'tags' | 'filters' | null>(null);
+  // Below 640px the chips give way to the filter button docked in the search
+  // pill (deck round 1, S-7): one popover holds all three controls.
+  const narrow = useNarrowViewport();
+  const filtersPopoverRef = useRef<HTMLDivElement | null>(null);
+  const [filtersPos, setFiltersPos] = useState<{ top: number; right: number } | null>(null);
+  const measureFilters = () => {
+    const r = searchRef.current?.getBoundingClientRect();
+    return r ? { top: r.bottom + 8, right: Math.max(8, window.innerWidth - r.right) } : null;
+  };
 
   // Which card's Organize popover is open (session id), plus its anchor position.
   //
@@ -387,6 +398,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       if (filterRowRef.current?.contains(target)) return;
       if (projectsDropdownRef.current?.contains(target)) return;
       if (tagsDropdownRef.current?.contains(target)) return;
+      if (filtersPopoverRef.current?.contains(target)) return;
+      if (narrow && searchRef.current?.contains(target)) return;
       setOpenPill(null);
     };
     document.addEventListener('mousedown', handler);
@@ -395,7 +408,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       document.removeEventListener('mousedown', handler);
       document.removeEventListener('touchstart', handler);
     };
-  }, [openPill]);
+  }, [openPill, narrow]);
 
   // Same outside-click close for the Organize popover. It is portaled to
   // document.body, so the card's own subtree can't see it — the popover ref is
@@ -598,7 +611,14 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   useLayoutEffect(() => {
     if (openPill === 'projects') setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256, filterRowRef));
     if (openPill === 'tags') setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208, filterRowRef));
+    if (openPill === 'filters') setFiltersPos(measureFilters());
   }, [openPill, filtered.length]);
+  useEffect(() => {
+    if (openPill !== 'filters') return;
+    const remeasure = () => setFiltersPos(measureFilters());
+    window.addEventListener('resize', remeasure);
+    return () => window.removeEventListener('resize', remeasure);
+  }, [openPill]);
 
   // Clear stale position state when the dropdown closes via outside-click or
   // ESC (the click handlers do this themselves, but those external paths
@@ -1248,13 +1268,56 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             {/* The shared search pill (design guide §3 lists Resume among its homes).
                 Its filters are the chips on the next row, so no docked trigger —
                 the same call the Marketplace bar makes. */}
-            <SearchFilterPill
-              ref={searchRef}
-              value={search}
-              onChange={setSearch}
-              placeholder="Search sessions..."
-              inputAriaLabel="Search sessions"
-            />
+            {narrow ? (
+              <SearchFilterPill
+                ref={searchRef}
+                value={search}
+                onChange={setSearch}
+                placeholder="Search sessions..."
+                inputAriaLabel="Search sessions"
+                activeFilters={selectedProjects.size + selectedTagIds.size}
+                filterOpen={openPill === 'filters'}
+                onToggleFilter={() => {
+                  if (openPill === 'filters') { setOpenPill(null); setFiltersPos(null); }
+                  else { setFiltersPos(measureFilters()); setOpenPill('filters'); }
+                }}
+                filterLabel="Filters"
+              />
+            ) : (
+              // Destin kept this box over the shared search pill (deck round 1, S-2).
+              <div ref={searchRef} className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
+                <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <circle cx="11" cy="11" r="7" />
+                  <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
+                </svg>
+                <input
+                  type="text"
+                  value={search}
+                  onChange={(e) => setSearch(e.target.value)}
+                  placeholder="Search sessions..."
+                  aria-label="Search sessions"
+                  className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
+                />
+              </div>
+            )}
+            {openPill === 'filters' && filtersPos && createPortal(
+              <ResumeFilterPopover
+                ref={filtersPopoverRef}
+                anchor={filtersPos}
+                projects={availableProjects}
+                selectedProjects={selectedProjects}
+                onProjects={setSelectedProjects}
+                tags={liveTags}
+                tagCounts={tagCounts}
+                selectedTagIds={selectedTagIds}
+                onTags={setSelectedTagIds}
+                sortDir={sortDir}
+                onSortDir={setSortDir}
+                onClose={() => { setOpenPill(null); setFiltersPos(null); }}
+              />,
+              document.body,
+            )}
+            {!narrow && (
             <div ref={filterRowRef} className="flex items-center gap-2 mt-2 scroll-fade-x">
               {/* Projects: pick-any menu over the distinct project paths in the loaded
                   sessions. The menu is portaled to document.body so it escapes the
@@ -1380,11 +1443,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                       })}
                     </div>
                   )}
-                  {/* Footer: Clear, and the second route to the tag manager so
-                      "where do I rename a tag?" is answerable from the filter too —
-                      not only from a conversation's Organize popover. A footer,
-                      not a header row, because that is where FolderSwitcher,
-                      ModelPicker and TagPicker keep their "Manage…" entry. */}
+                  {/* Footer: Clear only. The route to the tag manager used to sit
+                      here too; Destin removed it (deck round 1, S-4) — a
+                      conversation's Organize popover keeps its "Manage tags…". */}
                   <div className={MENU_FOOTER}>
                     <button
                       type="button"
@@ -1393,13 +1454,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                       className={MENU_FOOTER_ACTION}
                     >
                       Clear
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => { setOpenPill(null); setTagManagerOpen(true); }}
-                      className={MENU_FOOTER_ACTION}
-                    >
-                      Manage tags…
                     </button>
                   </div>
                 </div>,
@@ -1422,9 +1476,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                       flips and the row stops nudging (UX review U19). */}
                   <span className="col-start-1 row-start-1 invisible" aria-hidden="true">{sortDir === 'desc' ? 'Oldest first' : 'Most recent'}</span>
                 </span>
-                <SortArrow up={sortDir === 'asc'} muted={sortDir === 'desc'} />
+                <SortArrow muted={sortDir === 'desc'} />
               </FilterChip>
             </div>
+            )}
           </div>
 
           {/* Session list */}
