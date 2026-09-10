@@ -119,7 +119,11 @@ declare global {
         detectTailscale: () => Promise<any>;
         getClientCount: () => Promise<number>;
         getClientList: () => Promise<any[]>;
-        disconnectClient: (id: string) => Promise<void>;
+        devices: {
+          list: () => Promise<any[]>;
+          rename: (deviceId: string, name: string) => Promise<boolean>;
+          unpair: (deviceId: string) => Promise<boolean>;
+        };
         broadcastAction: (action: any) => void;
       };
       off: (channel: string, handler: (...args: any[]) => void) => void;

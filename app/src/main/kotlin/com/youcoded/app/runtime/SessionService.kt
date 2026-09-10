@@ -1544,14 +1544,25 @@ class SessionService : Service() {
             "remote:get-client-list" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
             }
-            "remote:set-password" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            // Host administration does not travel over the remote socket on either platform.
+            // Answering `true` here told the caller a change had happened when none had.
+            "remote:set-password", "remote:set-config",
+            "remote:devices:rename", "remote:devices:unpair" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("ok", false)
+                        put("error", "Change this on the computer itself.")
+                    })
+                }
             }
-            "remote:set-config" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
-            }
-            "remote:disconnect-client" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            // This phone hosts no paired devices of its own, so the list is empty rather
+            // than absent — an absent channel would read as "not supported yet".
+            "remote:devices:list" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("devices", org.json.JSONArray())
+                    })
+                }
             }
             "transcript:read-meta" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }

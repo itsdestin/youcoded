@@ -21,7 +21,9 @@ describe('host administration does not travel over the remote socket', () => {
   it('the refusal reaches the caller as a failure, not as a success', () => {
     // Without this the phone showed the password field's success tick for a change the
     // host refused — a false success on the surface where it matters most.
-    for (const channel of ADMIN) {
+    // disconnect-client is absent on purpose: the shim no longer invokes it at all, and a
+    // reject entry for a channel nobody calls is dead weight pretending to protect something.
+    for (const channel of ['remote:set-password', 'remote:set-config']) {
       expect(REJECT_ON_NOT_OK.has(channel)).toBe(true);
       expect(responseOutcome(channel, { ok: false, error: 'x' })).toBe('failure');
     }

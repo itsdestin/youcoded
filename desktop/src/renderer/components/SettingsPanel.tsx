@@ -97,10 +97,18 @@ interface TailscaleInfo {
   url: string | null;
 }
 
-interface ClientInfo {
+/**
+ * A row in the device list. Contract R7/R11: a device that has paired stays here, named,
+ * marked Online or Offline, until it is unpaired. The old shape was a live CONNECTION —
+ * an address and how long ago it connected — so a device that closed its browser vanished
+ * and could never be unpaired.
+ */
+interface RemoteDeviceRow {
   id: string;
-  ip: string;
-  connectedAt: number;
+  name: string;
+  online: boolean;
+  createdAt: number;
+  lastSeenAt: number;
 }
 
 interface Props {
@@ -1275,7 +1283,7 @@ interface RemoteButtonProps {
   mockAction?: (action: RemoteAccessAction) => void;
   config: RemoteConfig | null;
   tailscale: TailscaleInfo | null;
-  clients: ClientInfo[];
+  clients: RemoteDeviceRow[];
   loading: boolean;
   hasActiveSession: boolean;
   newPassword: string;
@@ -1294,7 +1302,7 @@ interface RemoteButtonProps {
   onCancelSetup: () => void;
   setupStatus: 'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error';
   setupError: string;
-  onDisconnectClient: (id: string) => void;
+  onUnpairDevice: (deviceId: string) => void;
   onCopyLink: () => void;
   onSetShowSetupQR: (v: boolean) => void;
   onSetShowAddDevice: (v: boolean) => void;
@@ -1328,7 +1336,7 @@ function RemoteButton(props: RemoteButtonProps) {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
   onSetNewPassword, onSetPassword, onToggleEnabled, enableError,
-  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onDisconnectClient, onCopyLink,
+  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onUnpairDevice, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
   } = props;
   const [open, setOpen] = useState(!!props.mockView);
@@ -1371,7 +1379,6 @@ function RemoteButton(props: RemoteButtonProps) {
     loading = false;
     config = { enabled: previewView.stage !== 'disabled', hasPassword: true, port: 9900, keepAwakeHours: mockAwake, clientCount: previewView.devices.length };
     tailscale = { installed: previewView.prerequisite !== 'not-installed', connected: previewView.prerequisite === 'ready' || !previewView.prerequisite, ip: '100.82.14.7', hostname: 'home-laptop', url: previewView.stage === 'ready' ? previewView.address : null };
-    clients = previewView.devices.map(d => ({ id: d.id, ip: d.name, connectedAt: 0 }));
     newPassword = mockPassword; passwordStatus = mockSaved ? 'saved' : 'idle';
     onSetNewPassword = value => { setMockPassword(value); setMockSaved(false); };
     onSetPassword = () => { if (mockPassword.trim()) { setMockSaved(true); setMockPassword(''); } };
@@ -1382,7 +1389,14 @@ function RemoteButton(props: RemoteButtonProps) {
     onCopyLink = () => { void navigator.clipboard.writeText(previewView.address); };
     enableError = '';
   }
-  const hasClients = clients.length > 0;
+  const deviceRows: RemoteDeviceRow[] = previewView
+    ? previewView.devices.map(d => ({ id: d.id, name: d.name, online: d.online, createdAt: 0, lastSeenAt: 0 }))
+    : clients;
+  const unpair = (deviceId: string) => {
+    if (previewView && preview) preview.act({ type: 'revoke', deviceId });
+    else onUnpairDevice(deviceId);
+  };
+  const hasClients = deviceRows.length > 0;
   // Green: enabled + Tailscale installed + VPN active. Gray otherwise (disabled, or VPN not connected).
   const isFullyConnected = previewView ? previewView.stage === 'ready' : config?.enabled && tailscale?.installed && tailscale?.connected;
   const statusText = loading
@@ -1653,27 +1667,27 @@ function RemoteButton(props: RemoteButtonProps) {
                     {/* Remote Clients section */}
                     {hasClients && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">{previewView ? 'Devices' : 'Connected Devices'}</h3>
+                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Devices</h3>
 
                         <div className="space-y-1">
-                          {clients.map(client => (
-                            // K6: an item list is a K2 row with a status dot in
-                            // the icon slot. The action was a bare ✕ with no
-                            // accessible name and no focus ring — change 41
-                            // banned those app-wide and this one survived the
-                            // sweep, announcing itself to a screen reader as
-                            // the literal character.
+                          {deviceRows.map(row => (
+                            // K6: an item list is a K2 row with a status dot in the icon
+                            // slot. One shape for the mockup and the real panel — a preview
+                            // that renders differently is not evidence about the app.
                             <SettingRow
-                              key={client.id}
+                              key={row.id}
                               variant="item"
-                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${previewView && !previewView.devices.find(d => d.id === client.id)?.online ? 'bg-fg-faint' : 'bg-green-500'}`} />}
-                              title={client.ip}
-                              description={previewView ? (revoking === client.id ? 'Unpair this device? It must pair again to reconnect.' : previewView.devices.find(d => d.id === client.id)?.online ? 'Online' : 'Offline') : timeAgo(client.connectedAt)}
-                              control={previewView && preview ? revoking === client.id ? <div className="flex gap-1"><Button variant="ghost" size="sm" onClick={() => setRevoking(null)}>Cancel</Button><Button variant="danger-outline" size="sm" onClick={() => { preview.act({ type: 'revoke', deviceId: client.id }); setRevoking(null); }}>Confirm unpair</Button></div> : <Button variant="ghost" size="sm" aria-label={`Unpair ${client.ip}`} onClick={() => setRevoking(client.id)}>Unpair</Button> :
-                                <Button variant="ghost" size="sm" onClick={() => onDisconnectClient(client.id)}>
-                                  Disconnect
-                                </Button>
-                              }
+                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-500' : 'bg-fg-faint'}`} />}
+                              title={row.name}
+                              description={revoking === row.id
+                                ? 'Unpair this device? It must pair again to reconnect.'
+                                : row.online ? 'Online' : 'Offline'}
+                              control={revoking === row.id
+                                ? <div className="flex gap-1">
+                                    <Button variant="ghost" size="sm" onClick={() => setRevoking(null)}>Cancel</Button>
+                                    <Button variant="danger-outline" size="sm" onClick={() => { unpair(row.id); setRevoking(null); }}>Confirm unpair</Button>
+                                  </div>
+                                : <Button variant="ghost" size="sm" aria-label={`Unpair ${row.name}`} onClick={() => setRevoking(row.id)}>Unpair</Button>}
                             />
                           ))}
                         </div>
@@ -1767,7 +1781,7 @@ function RemoteButton(props: RemoteButtonProps) {
 /** Same dialog and body as Settings; the candidate provides no real settings callbacks. */
 export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessView; onAction: (action: RemoteAccessAction) => void }) {
   const noop = () => {};
-  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onDisconnectClient={noop} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
+  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onUnpairDevice={noop} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
 }
 
 // Mirrors PackageTier.kt — descriptions list the actual packages each tier
@@ -2367,7 +2381,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 }) {
   const [config, setConfig] = useState<RemoteConfig | null>(null);
   const [tailscale, setTailscale] = useState<TailscaleInfo | null>(null);
-  const [clients, setClients] = useState<ClientInfo[]>([]);
+  const [clients, setClients] = useState<RemoteDeviceRow[]>([]);
   const [newPassword, setNewPassword] = useState('');
   const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [loading, setLoading] = useState(true);
@@ -2399,9 +2413,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     Promise.all([
       claude.remote.getConfig(),
       claude.remote.detectTailscale(),
-      claude.remote.getClientList(),
+      claude.remote.devices?.list?.() ?? [],
       claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
-    ]).then(([cfg, ts, cls, defs]: [RemoteConfig, TailscaleInfo, ClientInfo[], any]) => {
+    ]).then(([cfg, ts, cls, defs]: [RemoteConfig, TailscaleInfo, RemoteDeviceRow[], any]) => {
       setConfig(cfg);
       setTailscale(ts);
       setClients(cls);
@@ -2484,9 +2498,12 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     }
   }, []);
 
-  const handleDisconnectClient = useCallback(async (clientId: string) => {
-    await (window as any).claude.remote.disconnectClient(clientId);
-    setClients(prev => prev.filter(c => c.id !== clientId));
+  const handleUnpairDevice = useCallback(async (deviceId: string) => {
+    // WHY the row goes even when the device is offline: unpairing is a change to the
+    // record, not to a connection. Disconnect used to be the only option and left the
+    // credential valid, so the device came straight back.
+    await (window as any).claude.remote.devices.unpair(deviceId);
+    setClients(prev => prev.filter(c => c.id !== deviceId));
     setConfig(prev => prev ? { ...prev, clientCount: Math.max(0, prev.clientCount - 1) } : prev);
   }, []);
 
@@ -2561,7 +2578,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onCancelSetup={handleCancelSetup}
           setupStatus={setupStatus}
           setupError={setupError}
-          onDisconnectClient={handleDisconnectClient}
+          onUnpairDevice={handleUnpairDevice}
           onCopyLink={handleCopyLink}
           onSetShowSetupQR={setShowSetupQR}
           onSetShowAddDevice={setShowAddDevice}

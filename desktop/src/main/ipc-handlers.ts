@@ -1803,8 +1803,18 @@ export function registerIpcHandlers(
       return remoteServer?.getClientList() ?? [];
     });
 
-    ipcMain.handle(IPC.REMOTE_DISCONNECT_CLIENT, async (_event, clientId: string) => {
-      return remoteServer?.disconnectClient(clientId) ?? false;
+    // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
+    // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
+    ipcMain.handle(IPC.REMOTE_DEVICES_LIST, async () => {
+      return remoteServer?.getDeviceList() ?? [];
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_RENAME, async (_event, deviceId: string, name: string) => {
+      return remoteServer?.renameDevice(deviceId, name) ?? false;
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_UNPAIR, async (_event, deviceId: string) => {
+      return remoteServer?.unpairDevice(deviceId) ?? false;
     });
 
     ipcMain.handle(IPC.REMOTE_INSTALL_TAILSCALE, async () => {

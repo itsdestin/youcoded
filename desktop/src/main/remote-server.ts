@@ -22,7 +22,7 @@ import type { SessionManager } from './session-manager';
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
-import { RemoteDeviceStore } from './remote-devices';
+import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import type { SerializedChatState } from '../renderer/state/chat-types';
 import { VITE_DEV_PORT } from '../shared/ports';
@@ -443,16 +443,32 @@ export class RemoteServer {
     }));
   }
 
-  /** Disconnect a specific client by ID. */
-  disconnectClient(clientId: string): boolean {
+  /** Contract R11: every device that has paired, until it is unpaired. */
+  getDeviceList(): RemoteDeviceView[] {
+    const online = new Set<string>();
+    for (const c of this.clients) online.add(c.deviceId);
+    return this.devices.list(online);
+  }
+
+  renameDevice(deviceId: string, name: string): boolean {
+    return this.devices.rename(deviceId, name);
+  }
+
+  /**
+   * Contract R7/R8. Unpair, then hang up: the record is what keeps the device out, so a
+   * device whose socket is already gone is still unpaired — which is the whole point of a
+   * list that keeps offline devices.
+   */
+  unpairDevice(deviceId: string): boolean {
+    const revoked = this.devices.revoke(deviceId);
+    if (!revoked) return false;
     for (const client of this.clients) {
-      if (client.id === clientId) {
-        client.ws.close(4002, 'Disconnected by admin');
+      if (client.deviceId === deviceId) {
+        client.ws.close(4003, 'Device unpaired');
         this.clients.delete(client);
-        return true;
       }
     }
-    return false;
+    return true;
   }
 
   // --- Event handlers for buffering ---
@@ -2291,6 +2307,20 @@ export class RemoteServer {
       }
       case 'remote:get-client-list': {
         this.respond(client.ws, type, id, this.getClientList());
+        break;
+      }
+      case 'remote:devices:list': {
+        this.respond(client.ws, type, id, { devices: this.getDeviceList() });
+        break;
+      }
+      // Renaming and unpairing are host administration: they decide who may reach this
+      // computer, so they stay on desktop IPC like the password does. See HOST_ADMIN_REFUSAL.
+      case 'remote:devices:rename': {
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
+        break;
+      }
+      case 'remote:devices:unpair': {
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
         break;
       }
       // --- Sync management ---

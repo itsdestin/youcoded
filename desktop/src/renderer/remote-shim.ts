@@ -222,12 +222,11 @@ const announced = new Set<string>();
  *  its answer straight to an array and filters it. That predates this list. */
 export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   // Host administration is refused over the remote socket (desktop IPC only). Without
-  // these three the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
+  // these the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
   // tried to change the host password saw the field's success tick for a change that never
   // happened — a false success on the one surface where it matters most.
   'remote:set-password',
   'remote:set-config',
-  'remote:disconnect-client',
   // Success is `{ sessionId }`.
   'engine:run-in-terminal',
   // Success is the engine STATUS object. Without this a failed speed-switch
@@ -1286,7 +1285,12 @@ export function installShim(): void {
       detectTailscale: () => invoke('remote:detect-tailscale'),
       getClientCount: () => invoke('remote:get-client-count'),
       getClientList: () => invoke('remote:get-client-list'),
-      disconnectClient: (clientId: string) => invoke('remote:disconnect-client', clientId),
+      // Renaming and unpairing are refused over this socket by design; list is read-only.
+      devices: {
+        list: () => invoke('remote:devices:list').then((r: { devices?: unknown[] }) => r?.devices ?? []),
+        rename: (deviceId: string, name: string) => invoke('remote:devices:rename', { deviceId, name }),
+        unpair: (deviceId: string) => invoke('remote:devices:unpair', { deviceId }),
+      },
       broadcastAction: (action: any) => fire('ui:action', action),
     },
     model: {
