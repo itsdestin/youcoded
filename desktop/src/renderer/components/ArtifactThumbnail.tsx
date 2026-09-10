@@ -161,7 +161,17 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
     if (kind !== 'html') return;
     const node = containerRef.current;
     if (!node) return;
-    const measure = () => setBoxSize({ w: node.clientWidth, h: node.clientHeight });
+    // WHY the zero guard: a hidden ancestor (Project View's Files tab while
+    // another tab is showing) measures 0x0, which would drop htmlScale to its
+    // 0.16 fallback and re-scale every HTML thumbnail visibly when the tab comes
+    // back. A real box is never 0x0 here, so keeping the last measurement is
+    // always the better answer.
+    const measure = () => {
+      const w = node.clientWidth;
+      const h = node.clientHeight;
+      if (w === 0 && h === 0) return;
+      setBoxSize({ w, h });
+    };
     measure();
     const ro = new ResizeObserver(measure);
     ro.observe(node);
