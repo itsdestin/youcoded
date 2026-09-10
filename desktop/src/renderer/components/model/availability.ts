@@ -51,6 +51,16 @@ export function providerReason(p: ProviderRow): string {
   return 'Add an API key';
 }
 
+/** True only for the specific reason "Add an API key" — the one unavailable
+ *  case with a fix that's a single click away (open Settings' Cloud providers
+ *  page). Derives from `providerReason` instead of matching its return string,
+ *  so the two can never drift apart. */
+export function nativeChoiceNeedsApiKey(choice: ModelChoice | null | undefined, d: AvailabilityData): boolean {
+  if (!choice || choice.runtime !== 'native') return false;
+  const p = d.providers.find((x) => x.id === choice.providerId);
+  return !!p && !p.ready && providerReason(p) === 'Add an API key';
+}
+
 /** A provider with no catalog of its own (Ollama, LM Studio, a custom endpoint):
  *  any model id the user types is legitimate, so a missing catalog row is not a
  *  missing model. */
