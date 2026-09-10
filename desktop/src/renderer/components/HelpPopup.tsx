@@ -107,7 +107,7 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, version, b
         <SettingRow
           icon={<ClipboardListIcon />}
           title="Known issues and planned features"
-          description="See what is known and what is coming"
+          description="What is known, what is coming"
           onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
         />
         {/* The version, so a bug report or a Reddit post can quote it without
