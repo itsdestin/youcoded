@@ -3286,7 +3286,9 @@ function AppInner() {
               {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
                   <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  <p className="text-sm text-fg-dim font-medium">Initializing session...</p>
+                  {/* select-none: a status line, not content. Ctrl+A must not
+                      paint it (Destin, 2026-09-10). */}
+                  <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
                   {initSlowWarning && (
                     <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
                       <p>Something may be wrong. The terminal may show what it is waiting on.</p>
@@ -3470,7 +3472,10 @@ function AppInner() {
             // still centres in the open middle instead of drifting downward.
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
-            <p className="text-xl text-fg-muted">No Active Session</p>
+            {/* select-none: a screen title, not content. Ctrl+A must not paint
+                it (Destin, 2026-09-10); the buttons below are covered by
+                globals.css. */}
+            <p className="text-xl text-fg-muted select-none">No Active Session</p>
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping. */}
             <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
