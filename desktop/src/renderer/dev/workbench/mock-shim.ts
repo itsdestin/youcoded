@@ -759,6 +759,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // Claude/PTY sessions only (native sessions use `native.send` below).
     // Control bytes are ignored inside playReply so the PTY-shaped calls App
     // makes for Claude Code sessions ('\r', '\x1b') never start a script.
+    canSend: () => true,
     sendInput: (sessionId: string, text: string) => startReply(sessionId, text),
     // Real signature is Promise<boolean> (useIpc.ts/preload.ts), not {ok} —
     // resolvePermission already returns a boolean (false = stale/unknown id).

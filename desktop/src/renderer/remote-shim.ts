@@ -26,12 +26,29 @@ interface PendingRequest {
   resolve: (value: any) => void;
   reject: (reason: any) => void;
   timeout: ReturnType<typeof setTimeout>;
+  type: string;
+  /** Sent, no reply, timed out: it MAY have run. Asked about on reconnect, never retried. */
+  outcomeUnknown?: boolean;
 }
+
+/** Ids whose fate the host could not tell us. The UI reads this to say so plainly. */
+export const OUTCOME_UNKNOWN_EVENT = 'youcoded:outcome-unknown';
 
 export type RemoteConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
 let ws: WebSocket | null = null;
 let messageId = 0;
+/**
+ * Bumped on every socket. Request ids were `msg-N` from a per-page-load counter, so two
+ * devices — or the same device after a reload — produced the same ids, and a host answering
+ * "did this run?" could answer about somebody else's request.
+ */
+let connectionGeneration = 0;
+/** Rehydration is for coming BACK: on a first connect the caller's own queued mount-time
+ *  fetches already flush, and re-asking would double every connection's traffic. */
+let hasConnectedBefore = false;
+/** Set from auth:ok, so an id names the device it came from. */
+let myDeviceId = '';
 const pending = new Map<string, PendingRequest>();
 const listeners = new Map<string, Set<Callback>>();
 let connectionState: RemoteConnectionState = 'disconnected';
@@ -112,21 +129,63 @@ function getWsUrl(): string {
   return `${proto}//${location.host}/ws`;
 }
 
-function send(msg: any): void {
+/**
+ * What each outbound channel is, and therefore what happens to it while the socket is down.
+ *
+ * Contract row R2: a message typed while the connection is down waits as a draft until you
+ * press Send yourself; nothing runs again on its own. The old behaviour was the opposite —
+ * everything queued and the queue was flushed on the next auth:ok, so a request that had
+ * already timed out and told the user it failed could execute minutes later.
+ *
+ *   'user-action' — something the person did. Refused while disconnected; the composer keeps
+ *                   the text. NEVER queued, because queueing is what makes it run twice.
+ *   'read'        — safe to ask again, because asking changes nothing.
+ *   'transport'   — the connection talking about itself.
+ *
+ * An unclassified channel fails remote-message-kinds.test.ts. That is deliberate: the way
+ * this goes wrong again is a new channel quietly defaulting to the queue.
+ */
+export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
+  'session:input': 'user-action',
+  'session:resize': 'read',
+  'session:terminal-ready': 'transport',
+  'native:interrupt': 'user-action',
+  'native:retry': 'user-action',
+  'ui:action': 'user-action',
+  'system:notify-stack-state': 'transport',
+};
+
+/**
+ * Re-issued once on reconnect. WHY this exists at all: deleting the flush queue would
+ * otherwise bring back the cold-start bug where installed plugins never appeared in the
+ * command drawer — the mount-time fetches fired before auth and were lost. Reads only, and
+ * a test asserts that.
+ */
+export const REHYDRATE_ON_RECONNECT: readonly string[] = [
+  'skills:list',
+  'commands:list',
+  'remote:get-config',
+  'remote:status',
+];
+
+function send(msg: any): boolean {
   const data = JSON.stringify(msg);
   // Only send directly when both the socket is OPEN AND auth has completed.
   // If OPEN but still 'authenticating', the auth message has been sent but
-  // 'auth:ok' hasn't arrived — the bridge rejects application messages here,
-  // so we still queue.
+  // 'auth:ok' hasn't arrived — the bridge rejects application messages here.
   if (ws?.readyState === WebSocket.OPEN && connectionState === 'connected') {
     ws.send(data);
-    return;
+    return true;
   }
+  // A person's action is never held for later: the composer keeps the text and they send it
+  // when they choose. Everything else waits for auth, which lands within the connect.
+  if (MESSAGE_KIND[msg?.type] === 'user-action') return false;
   if (pendingSendQueue.length >= MAX_QUEUE) {
     console.warn('[remote-shim] send queue overflow — dropping oldest');
     pendingSendQueue.shift();
   }
   pendingSendQueue.push(data);
+  return true;
 }
 
 /**
@@ -147,6 +206,37 @@ function describeThisDevice(): string {
   const os = /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iPhone' : /Mac/i.test(ua) ? 'Mac' : /Windows/i.test(ua) ? 'Windows' : /Linux/i.test(ua) ? 'Linux' : '';
   const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
   return os ? `${browser} on ${os}` : browser;
+}
+
+/**
+ * Ask the host whether the requests we lost the answers to actually ran.
+ *
+ * WHY it can answer "unknown" and that is not a bug: the host keeps a short ring of
+ * completed ids, so anything older — or anything at all after the host restarted — is
+ * genuinely not knowable. Saying so is the honest option; guessing "done" or silently
+ * retrying are both worse.
+ */
+function reconcileUnknownOutcomes(): void {
+  const ids = [...pending.entries()].filter(([, e]) => e.outcomeUnknown).map(([id]) => id);
+  if (ids.length === 0) return;
+  invoke('remote:request-outcome', { ids }).then((res: { outcomes?: Record<string, string> }) => {
+    const outcomes = res?.outcomes ?? {};
+    for (const id of ids) {
+      const entry = pending.get(id);
+      if (!entry) continue;
+      pending.delete(id);
+      window.dispatchEvent(new CustomEvent(OUTCOME_UNKNOWN_EVENT, {
+        detail: { id, type: entry.type, outcome: outcomes[id] === 'completed' ? 'completed' : 'unknown' },
+      }));
+    }
+  }).catch(() => { /* still unknown; the entries stay marked */ });
+}
+
+/** Ask again for the state a fresh mount would have fetched. Reads only. */
+function rehydrate(): void {
+  for (const channel of REHYDRATE_ON_RECONNECT) {
+    invoke(channel).catch(() => { /* a reconnect is not the place to surface a read failure */ });
+  }
 }
 
 // Flush queued application messages once auth:ok has resolved.
@@ -170,14 +260,17 @@ function flushSendQueue(): void {
 function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Promise<any> {
   const timeoutMs = opts?.timeoutMs ?? 30_000;
   return new Promise((resolve, reject) => {
-    const id = `msg-${++messageId}`;
+    const id = `${myDeviceId || 'anon'}:${connectionGeneration}:${++messageId}`;
     const timeout = setTimeout(() => {
-      if (pending.has(id)) {
-        pending.delete(id);
-        reject(new Error(`Request ${type} timed out`));
-      }
+      const entry = pending.get(id);
+      if (!entry) return;
+      // WHY the entry stays: the request was SENT, so it may have run. Dropping it here is
+      // what let the app tell you an action failed when it had actually succeeded and only
+      // the reply was lost. It is now marked, asked about on reconnect, and never retried.
+      entry.outcomeUnknown = true;
+      reject(new Error(`Request ${type} timed out`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timeout });
+    pending.set(id, { resolve, reject, timeout, type });
     send({ type, id, payload });
   });
 }
@@ -305,8 +398,10 @@ export function applyResponse(
   }
 }
 
-function fire(type: string, payload: any): void {
-  send({ type, payload });
+/** Returns false when the action was refused because the connection is down, so the caller
+ *  can keep what the person typed instead of clearing it. */
+function fire(type: string, payload: any): boolean {
+  return send({ type, payload });
 }
 
 function addListener(channel: string, cb: Callback): Callback {
@@ -543,6 +638,7 @@ function handleMessage(data: string): void {
 
 export function connect(passwordOrToken: string, isToken = false): Promise<string> {
   return new Promise((resolve, reject) => {
+    const generation = ++connectionGeneration;
     setConnectionState('connecting');
     ws = new WebSocket(getWsUrl());
 
@@ -589,6 +685,10 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         try { msg = JSON.parse(event.data); } catch { return; }
 
         if (msg.type === 'auth:ok') {
+          // WHY the guard: without it a late auth:ok from a socket we already replaced
+          // rebinds the CURRENT connection's handlers to the dead one.
+          if (generation !== connectionGeneration) return;
+          myDeviceId = msg.deviceId ?? myDeviceId;
           authResolved = true;
           reconnectDelay = 1000; // Reset backoff on success
           reconnectAttempts = 0;
@@ -598,6 +698,9 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // (mount-time fetches that fired before auth completed). Must be
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.
           flushSendQueue();
+          if (hasConnectedBefore) rehydrate();
+          hasConnectedBefore = true;
+          reconcileUnknownOutcomes();
           // The secret comes back exactly once, at pairing; later connections answer with
           // the device id alone, so keep what is already stored.
           const token = msg.secret
@@ -658,6 +761,11 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       const isLocalBridge = location.protocol === 'file:' && !targetUrl;
       if (isLocalBridge) {
         retryLocalBridge();
+      } else if (isTerminalClose(event.code)) {
+        // Unpaired or retired: the credential can never work again. Forget it so the next
+        // attempt asks for the password once, rather than retrying forever.
+        localStorage.removeItem('youcoded-remote-token');
+        console.warn('[remote-shim] host refused this device permanently:', event.code, event.reason);
       } else {
         const storedToken = localStorage.getItem('youcoded-remote-token');
         if (storedToken) {
@@ -672,9 +780,27 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
   });
 }
 
+/**
+ * A close code the host uses to say "do not come back with this credential": unpaired,
+ * retired, or a version it cannot serve. Retrying any of these is guaranteed to fail, and
+ * on upgrade day every device retrying at once is what would trip the host's own limiter.
+ */
+function isTerminalClose(code: number): boolean {
+  return code === 4003 || code === 4004 || code === 4005;
+}
+
 function scheduleReconnect(token: string): void {
-  // After too many failures, give up and fall back to local mode
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+  // WHY only a real local bridge falls back: this path deleted the saved address and
+  // credential and connected to 'android-local', which does not exist in a browser. A phone
+  // that lost signal in a lift came back unpaired.
+  const hasLocalBridge = location.protocol === 'file:';
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && !hasLocalBridge) {
+    // Keep retrying, slowly, and keep the pairing. Disconnected is a state to show, not a
+    // reason to forget who you are.
+    reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
+    reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+  }
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && hasLocalBridge) {
     // Reconnect-fallback: switching to local bridge means any messages
     // queued for the prior remote host are wrong-destination. Drop them
     // here — disconnect() isn't on this path (ws.onclose only schedules
@@ -977,6 +1103,7 @@ export function installShim(): void {
         invoke('session:set-note', { sessionId, note }),
       // Read a session's applied tag ids + note (used by the in-session Tag chip).
       getMeta: (sessionId: string) => invoke('session:get-meta', { sessionId }),
+      canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),

@@ -90,6 +90,12 @@ const AUTH_ATTEMPTS_PER_SOCKET = 5;
 // out is the owner far more often than the attacker.
 const HOST_FAILURES_BEFORE_SLOWDOWN = 25;
 const HOST_SLOWDOWN_MS = 2_000;
+// Enough to cover a reconnect, not a session. Older than this answers "unknown".
+const COMPLETED_RING_PER_DEVICE = 200;
+const COMPLETED_RING_MS = 10 * 60_000;
+// A half-open socket is invisible without this: the host keeps buffering for a client that
+// is gone, and the client waits the full request timeout to learn anything is wrong.
+const PING_INTERVAL_MS = 20_000;
 
 interface AuthenticatedClient {
   id: string;
@@ -97,6 +103,7 @@ interface AuthenticatedClient {
   deviceId: string;
   ip: string;
   connectedAt: number;
+  awaitingPong?: boolean;
 }
 
 export interface ClientInfo {
@@ -124,6 +131,7 @@ export class RemoteServer {
   // Held so stop() can clear it. Previously this interval was created by start()
   // and never cancelled, so it survived stop() and a restart stacked another.
   private uploadCleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
   private clients = new Set<AuthenticatedClient>();
   private lastClientActivityMs = 0; // see getLastClientActivityMs()
   private devices: RemoteDeviceStore;
@@ -152,6 +160,12 @@ export class RemoteServer {
   // Host-wide failure count, for the slowdown. Per-socket attempts live on the socket.
   private hostFailures = { count: 0, resetAt: 0 };
   private statusListeners = new Set<(status: RemoteStatus) => void>();
+  /**
+   * Ids of requests this host finished, per device, so a client that lost the reply can ask
+   * whether its action ran. Bounded and in memory only: after a restart the honest answer
+   * is "unknown", and the milestone names host restart as a case the UI must handle.
+   */
+  private completedRequests = new Map<string, { id: string; at: number }[]>();
   /** The OS reason the last start() failed, so the panel can say it rather than guess. */
   private lastStartError: string | null = null;
   // Last-known topic names, fed by ipc-handlers.ts via setLastTopic()
@@ -418,6 +432,7 @@ export class RemoteServer {
         server.removeListener('error', onError);
         this.running = true;
         this.lastStartError = null;
+        this.startLiveness();
         console.log(`[RemoteServer] Listening on port ${this.config.port}`);
         this.emitStatus();
         resolve();
@@ -442,6 +457,10 @@ export class RemoteServer {
     if (this.uploadCleanupTimer) {
       clearInterval(this.uploadCleanupTimer);
       this.uploadCleanupTimer = null;
+    }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
     this.lastTopics.clear();
     this.lastStatusData = null;
@@ -882,13 +901,31 @@ export class RemoteServer {
     ws.on('message', authHandler);
   }
 
+  /** Close sockets that stopped answering. Without this a half-open connection is invisible
+   *  and the client waits the full 30s request timeout to learn anything is wrong. */
+  private startLiveness(): void {
+    if (this.pingTimer) return;
+    this.pingTimer = setInterval(() => {
+      for (const client of this.clients) {
+        if (client.awaitingPong) {
+          client.ws.close(4008, 'No response');
+          this.clients.delete(client);
+          continue;
+        }
+        client.awaitingPong = true;
+        try { client.ws.ping(); } catch { /* closing anyway */ }
+      }
+    }, PING_INTERVAL_MS);
+  }
+
   private addClient(ws: WebSocket, deviceId: string, ip: string): void {
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
     const client: AuthenticatedClient = { id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now() };
     this.clients.add(client);
 
-    ws.on('message', (raw) => this.handleMessage(client, raw as Buffer | string));
+    ws.on('pong', () => { client.awaitingPong = false; });
+    ws.on('message', (raw) => { client.awaitingPong = false; void this.handleMessage(client, raw as Buffer | string); });
     ws.on('close', () => this.clients.delete(client));
     ws.on('error', () => this.clients.delete(client));
   }
@@ -2363,6 +2400,13 @@ export class RemoteServer {
         this.respond(client.ws, type, id, this.getClientList());
         break;
       }
+      case 'remote:request-outcome': {
+        const ids: string[] = Array.isArray(payload?.ids) ? payload.ids : [];
+        const outcomes: Record<string, 'completed' | 'unknown'> = {};
+        for (const requestId of ids.slice(0, 200)) outcomes[requestId] = this.outcomeOf(requestId);
+        this.respond(client.ws, type, id, { outcomes });
+        break;
+      }
       case 'remote:devices:list': {
         this.respond(client.ws, type, id, { devices: this.getDeviceList() });
         break;
@@ -2804,9 +2848,32 @@ export class RemoteServer {
   // --- Helpers ---
 
   private respond(ws: WebSocket, type: string, id: string, payload: any): void {
+    this.noteCompleted(id);
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: `${type}:response`, id, payload }));
     }
+  }
+
+  /** Request ids are `<deviceId>:<generation>:<n>`, so the device is the ring's key. */
+  private noteCompleted(id: string): void {
+    const deviceId = id.split(':')[0];
+    if (!deviceId) return;
+    const now = Date.now();
+    const ring = this.completedRequests.get(deviceId) ?? [];
+    ring.push({ id, at: now });
+    const cutoff = now - COMPLETED_RING_MS;
+    let trimmed = ring.filter(e => e.at >= cutoff);
+    if (trimmed.length > COMPLETED_RING_PER_DEVICE) trimmed = trimmed.slice(-COMPLETED_RING_PER_DEVICE);
+    this.completedRequests.set(deviceId, trimmed);
+  }
+
+  /** 'completed' only when we can still see it. Anything else is 'unknown', deliberately. */
+  private outcomeOf(id: string): 'completed' | 'unknown' {
+    const deviceId = id.split(':')[0];
+    const ring = this.completedRequests.get(deviceId);
+    if (!ring) return 'unknown';
+    const cutoff = Date.now() - COMPLETED_RING_MS;
+    return ring.some(e => e.id === id && e.at >= cutoff) ? 'completed' : 'unknown';
   }
 
   broadcast(msg: { type: string; payload: any }): void {

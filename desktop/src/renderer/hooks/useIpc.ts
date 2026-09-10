@@ -24,6 +24,7 @@ declare global {
         create: (opts: { name: string; cwd: string; skipPermissions: boolean; cols?: number; rows?: number; model?: string; provider?: 'claude' | 'native'; resumeSessionId?: string; binding?: { providerId: string; modelId: string } }) => Promise<any>;
         destroy: (sessionId: string) => Promise<boolean>;
         list: () => Promise<any[]>;
+        canSend?: () => boolean;
         sendInput: (sessionId: string, text: string) => void;
         resize: (sessionId: string, cols: number, rows: number) => void;
         signalReady: (sessionId: string) => void;

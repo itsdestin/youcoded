@@ -459,6 +459,9 @@ contextBridge.exposeInMainWorld('claude', {
     destroy: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_DESTROY, sessionId),
     list: () => ipcRenderer.invoke(IPC.SESSION_LIST),
+    // The desktop talks over IPC, so there is no connection to be down. Present on both
+    // bridges so the composer can ask without knowing which one it has.
+    canSend: () => true,
     sendInput: (sessionId: string, text: string) =>
       ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
     resize: (sessionId: string, cols: number, rows: number) =>

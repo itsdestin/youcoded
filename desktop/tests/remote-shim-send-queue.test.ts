@@ -134,9 +134,11 @@ describe('remote-shim send queue', () => {
     shim.connect('pw', false);
     const ws = FakeWebSocket.instances[0];
     shim.installShim();
-    // Each invoke() call assigns a sequential id (msg-1..msg-300). After
-    // overflow, the surviving 256 must be the LAST 256 enqueued — i.e.
-    // msg-45..msg-300 (the first 44 dropped, oldest-first FIFO).
+    // Each invoke() call assigns a sequential id. The counter is now prefixed with the
+    // device and the connection generation, because `msg-N` alone came from a per-page-load
+    // counter: two devices, or one device after a reload, produced the same ids and the
+    // host could answer "did this run?" about somebody else's request. The FIFO behaviour
+    // under test is unchanged — the surviving 256 are the LAST 256 enqueued.
     for (let i = 0; i < 300; i++) (window as any).claude.skills.list();
     expect(ws.sent).toEqual([]);
     ws.open();
@@ -147,7 +149,7 @@ describe('remote-shim send queue', () => {
     expect(flushedMsgs).toHaveLength(256);
     // FIFO drop-oldest assertion: surviving ids are the LAST 256, in order.
     const flushedIds = flushedMsgs.map(m => m.id);
-    const expectedIds = Array.from({ length: 256 }, (_, i) => `msg-${45 + i}`);
+    const expectedIds = Array.from({ length: 256 }, (_, i) => `anon:1:${45 + i}`);
     expect(flushedIds).toEqual(expectedIds);
     expect(warn).toHaveBeenCalled();
   });

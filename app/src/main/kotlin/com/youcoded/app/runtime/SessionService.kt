@@ -1558,6 +1558,16 @@ class SessionService : Service() {
             // This phone hosts no paired devices of its own, so the list is empty rather
             // than absent — an absent channel would read as "not supported yet".
             // The phone is not a host: it is neither listening nor failed.
+            // The phone keeps no ring of completed requests, so it answers unknown for
+            // every id. Stated rather than hidden: pretending otherwise would be inventing
+            // a cause, which docs/error-message-standards.md forbids.
+            "remote:request-outcome" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("outcomes", JSONObject())
+                    })
+                }
+            }
             "remote:status" -> {
                 msg.id?.let {
                     bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
