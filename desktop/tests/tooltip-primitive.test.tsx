@@ -8,9 +8,11 @@
 //   Q-3 long-press   a hint must be reachable with no pointer at all, because
 //                    the Android app runs this same renderer and Destin drives
 //                    this machine by touchscreen.
-//   Q-4 match-today  the delay stays at the ~1 s the OS bubble used. The
-//                    recommendation on the deck was under half a second and he
-//                    chose against it — do not "improve" it back.
+//   Q-4 match-today  the deck kept the OS's full second over the under-half-
+//                    second I recommended; trying it live, Destin corrected his
+//                    own answer to "a smidge faster" (800 ms) and asked for a
+//                    short wait plus a fade between neighbours instead of the
+//                    instant hand-off. Do not shorten either further.
 //
 // The no-extra-DOM guard is not from the deck: it is what makes Q-2's cost
 // estimate hold. The 2026-09-01 investigation priced this work on every swap
@@ -57,12 +59,12 @@ const mouse = { pointerType: 'mouse' } as const;
 const finger = { pointerType: 'touch' } as const;
 
 describe('Q-4 — the hint waits as long as the OS bubble did', () => {
-  it('shows nothing until a full second of resting has passed', () => {
+  it('shows nothing until the pointer has rested the full wait', () => {
     useTimers();
     render(<Tooltip text="Settings"><button>x</button></Tooltip>);
     fireEvent.pointerEnter(screen.getByRole('button'), mouse);
 
-    act(() => { vi.advanceTimersByTime(999); });
+    act(() => { vi.advanceTimersByTime(799); });
     expect(shown('Settings')).toBe(false);
 
     act(() => { vi.advanceTimersByTime(1); });
@@ -80,7 +82,7 @@ describe('Q-4 — the hint waits as long as the OS bubble did', () => {
     expect(shown('Settings')).toBe(false);
   });
 
-  it('a neighbour opens with no wait once one hint has been seen', () => {
+  it('a neighbour opens on a short wait, not instantly, once the row is warm', () => {
     useTimers();
     render(
       <>
@@ -96,8 +98,10 @@ describe('Q-4 — the hint waits as long as the OS bubble did', () => {
 
     fireEvent.pointerLeave(a, mouse);
     fireEvent.pointerEnter(b, mouse);
-    // No timer advance at all: sweeping along a row answers immediately, which
-    // is the only reason a full second is livable.
+    // Not instant — an instant hand-off teleports the bubble along the row, one
+    // hard cut per chip, which is what Destin rejected on the live deck.
+    expect(shown('Maximize')).toBe(false);
+    act(() => { vi.advanceTimersByTime(130); });
     expect(shown('Maximize')).toBe(true);
   });
 
@@ -118,6 +122,7 @@ describe('Q-4 — the hint waits as long as the OS bubble did', () => {
     act(() => { vi.advanceTimersByTime(200); });
     fireEvent.pointerLeave(a, mouse);
     fireEvent.pointerEnter(b, mouse);
+    act(() => { vi.advanceTimersByTime(130); });
     expect(shown('Maximize')).toBe(false);
   });
 
@@ -137,8 +142,9 @@ describe('Q-4 — the hint waits as long as the OS bubble did', () => {
     // Long enough after the row was last touched that this is a fresh ask.
     act(() => { vi.advanceTimersByTime(1000); });
     fireEvent.pointerEnter(b, mouse);
-    expect(shown('Maximize')).toBe(false);
-    act(() => { vi.advanceTimersByTime(1000); });
+    act(() => { vi.advanceTimersByTime(130); });
+    expect(shown('Maximize'), 'warmth expired, so the short neighbour wait must not apply').toBe(false);
+    act(() => { vi.advanceTimersByTime(800); });
     expect(shown('Maximize')).toBe(true);
   });
 });

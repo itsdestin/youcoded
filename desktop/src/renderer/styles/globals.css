@@ -1685,6 +1685,29 @@ pre.yc-code code {
   to   { opacity: 1; transform: none; }
 }
 
+/* Hover hint entrance.
+   WHY it exists (Destin, live deck L-3, 2026-09-10): sweeping the pointer along
+   a row of chips made hints pop in and out instantly, because a neighbour opens
+   with no wait once the row is warm. He asked for "slightly more of a delay/fade
+   in when moving across buttons next to each other" — the short warm delay is in
+   Tooltip.tsx, and this is the fade half. No transform: the bubble is a
+   .layer-surface, which can carry a backdrop-filter, and animating transform on
+   one forces a compositing layer per hint. */
+@keyframes tooltip-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.tooltip-in { animation: tooltip-in 110ms ease-out both; }
+
+/* Both gates, per the design guide: the app's own Reduce Visual Effects toggle
+   AND the OS preference. */
+[data-reduced-effects] .tooltip-in { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-in { animation: none; }
+}
+
 @keyframes challenge-pulse {
   0%, 100% { opacity: 0.4; }
   50% { opacity: 1; }

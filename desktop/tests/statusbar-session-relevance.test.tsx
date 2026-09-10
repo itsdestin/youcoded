@@ -21,23 +21,57 @@ import { emptyTotals, addTurnUsage, addSubagentUsage } from '../src/renderer/sta
  * The assertions are unchanged in substance — still about the WORDS the chip
  * offers, not about how it draws them.
  */
+/**
+ * Open every info button on screen, so the copy behind them is readable.
+ *
+ * The chips whose explanation is a whole SENTENCE no longer hover at all — that
+ * copy moved to the app's click-open info bubble (`AnchorTip`), which is what
+ * Destin chose on the questions deck (Q-5) and confirmed on the live deck. Its
+ * words are in the DOM only while it is open, so these assertions open them all
+ * first and then read the page. That is closer to what a person does than
+ * reading an attribute ever was.
+ */
 const hintNodes = () => Array.from(document.querySelectorAll('[data-hint]'));
-const matchHint = (re: RegExp | string) =>
-  hintNodes().filter((el) => {
-    const h = el.getAttribute('data-hint') ?? '';
-    return typeof re === 'string' ? h === re : re.test(h);
+
+/**
+ * The words behind every info button, read ONE AT A TIME.
+ *
+ * Only one of these bubbles can be open at once — opening the next dismisses the
+ * last, which is the whole point of a click-open explanation. So this opens each
+ * one, reads it, and closes it again rather than opening them all and reading
+ * the page.
+ */
+function infoBubbleTexts(): string[] {
+  const out: string[] = [];
+  document.querySelectorAll('button[aria-expanded]').forEach((b) => {
+    fireEvent.click(b);
+    document.querySelectorAll('[role="dialog"], [role="tooltip"]').forEach((n) => {
+      if (n.textContent) out.push(n.textContent);
+    });
+    fireEvent.click(b);
   });
-function byHint(re: RegExp | string): HTMLElement {
+  return out;
+}
+const hit = (text: string, re: RegExp | string) =>
+  typeof re === 'string' ? text === re : re.test(text);
+
+/** Every place a hint's words can live: on the control for a hover hint, inside
+ *  the bubble for a click-open explanation. */
+const matchHint = (re: RegExp | string): string[] => [
+  ...hintNodes().map((el) => el.getAttribute('data-hint') ?? '').filter((t) => hit(t, re)),
+  ...infoBubbleTexts().filter((t) => hit(t, re)),
+];
+function byHint(re: RegExp | string): string {
   const found = matchHint(re);
   if (found.length !== 1) {
     throw new Error(
       `expected exactly one hint matching ${re}, found ${found.length}` +
-        (found.length ? '' : `\nhints present: ${hintNodes().map((e) => e.getAttribute('data-hint')).join(' | ')}`),
+        (found.length ? '' : `\nhints present: ${[...hintNodes().map((e) => e.getAttribute('data-hint')), ...infoBubbleTexts()].join(' | ')}`),
     );
   }
-  return found[0] as HTMLElement;
+  return found[0];
 }
-const queryByHint = (re: RegExp | string): HTMLElement | null => (matchHint(re)[0] as HTMLElement) ?? null;
+const queryByHint = (re: RegExp | string): string | null => matchHint(re)[0] ?? null;
 
 // Master added <SpecialistsChip> to the bar (useSpecialistSummary → useChatStore),
 // so StatusBar can no longer mount outside a ChatProvider. Every render here
@@ -168,8 +202,8 @@ describe('StatusBar session totals', () => {
     expect(screen.getByText('12.3k')).toBeInTheDocument();
     expect(screen.getByText('678')).toBeInTheDocument();
     // The exact count is still pinned somewhere: the tooltip.
-    expect(byHint(/Input tokens: 12,345\./)).toBeInTheDocument();
-    expect(byHint(/Output tokens: 678\./)).toBeInTheDocument();
+    expect(byHint(/Input tokens: 12,345\./)).toBeTruthy();
+    expect(byHint(/Output tokens: 678\./)).toBeTruthy();
   });
 
   it('renders a derived Code Changes count in a native session', () => {
@@ -197,7 +231,7 @@ describe('StatusBar session totals', () => {
     withWidgets(['tokens-in']);
     const totals = { ...emptyTotals(), inputTokens: 10, specialistRuns: 2 };
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} sessionId="s1" />);
-    expect(byHint(/including specialists/i)).toBeInTheDocument();
+    expect(byHint(/including specialists/i)).toBeTruthy();
   });
 });
 
@@ -248,7 +282,7 @@ describe('StatusBar — a brand-new native session has measured nothing (Finding
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} turnsWithUsage={2} sessionId="s1" />);
     expect(byHint(
       "None of this session's prompt tokens came from cache; all 1,000 were read fresh. Counts this session so far, including specialists."
-    )).toBeInTheDocument();
+    )).toBeTruthy();
   });
 });
 
@@ -350,7 +384,7 @@ describe('Session Cost chip', () => {
     // (docs/error-message-standards.md). This wording is true either way.
     expect(byHint(
       "This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."
-    )).toBeInTheDocument();
+    )).toBeTruthy();
   });
 
   // Both flags can be true at once: a free local parent that delegated to a
@@ -377,7 +411,7 @@ describe('Session Cost chip', () => {
     expect(screen.getByText('$1.20')).toBeInTheDocument();
     expect(screen.getByText('· specialists')).toBeInTheDocument();
     // One specialist is "1 specialist", not "1 specialists".
-    expect(byHint(/\$0\.30 of this was spent by 1 specialist this session delegated to\./)).toBeInTheDocument();
+    expect(byHint(/\$0\.30 of this was spent by 1 specialist this session delegated to\./)).toBeTruthy();
   });
 
   it('shows no specialist marker when the session delegated nothing', () => {
@@ -400,7 +434,7 @@ describe('Session Cost chip', () => {
     expect(screen.queryByText('$0.00')).toBeNull();
     // The tooltip's split figure gets the same guard — a sub-cent split must
     // not read "$0.00 of this was spent by…".
-    expect(byHint(/<\$0\.01 of this was spent by 1 specialist this session delegated to\./)).toBeInTheDocument();
+    expect(byHint(/<\$0\.01 of this was spent by 1 specialist this session delegated to\./)).toBeTruthy();
   });
 
   // A fraction of a cent is REAL money. toFixed(2) alone rounds it to "$0.00",
@@ -410,8 +444,8 @@ describe('Session Cost chip', () => {
     withWidgets(['session-cost']);
     render(<StatusBar statusData={statusData} provider="native" sessionId="s1"
       nativeTotals={costTotals({ costUsd: 0.0004, anyPriced: true })} />);
-    expect(screen.queryByText('Cost:')).toBeTruthy();
-    expect(screen.queryByText('<$0.01')).toBeTruthy();
+    expect(screen.queryByText('Cost:')).toBeInTheDocument();
+    expect(screen.queryByText('<$0.01')).toBeInTheDocument();
     expect(screen.queryByText('$0.00')).toBeNull();
   });
 
@@ -421,7 +455,7 @@ describe('Session Cost chip', () => {
     withWidgets(['session-cost']);
     const withCost = { ...statusData, sessionStats: { costUsd: 0.003 } };
     render(<StatusBar statusData={withCost} provider="claude" sessionId="s1" />);
-    expect(screen.queryByText('<$0.01')).toBeTruthy();
+    expect(screen.queryByText('<$0.01')).toBeInTheDocument();
     expect(screen.queryByText('$0.00')).toBeNull();
   });
 
@@ -446,7 +480,7 @@ describe('Session Cost chip', () => {
     // (docs/error-message-standards.md).
     expect(
       byHint(/Models with no available price are not included in this total\./),
-    ).toBeInTheDocument();
+    ).toBeTruthy();
   });
 });
 

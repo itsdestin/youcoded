@@ -30,22 +30,34 @@ import { placeBubble } from './anchor-position';
 /**
  * How long the pointer rests before a hint appears.
  *
- * WHY 1000 ms and not something snappier: the recommendation on the deck was
- * under half a second, and Destin chose to keep the delay the OS already used
- * (Q-4, `match-today`). Do not "improve" this to 400 ms — it is a decision, not
- * a default.
+ * The questions deck (Q-4) chose to keep the OS's full second over the under-
+ * half-second I recommended. Destin then tried it on the live deck and asked for
+ * "just a smidge faster" (L-3, 2026-09-10) — so this is 800 ms: his own
+ * correction to his own answer, NOT a quiet slide back toward the 400 ms he
+ * turned down. Do not shorten it further without asking.
  */
-const HOVER_DELAY = 1000;
+const HOVER_DELAY = 800;
 
 /**
- * Once one hint has been shown, its neighbours open with no wait for this long —
- * the behaviour the OS bubble has, and the reason a full second is livable:
- * sweeping along the status bar answers instantly after the first one.
- * Module-level on purpose, because the warmth belongs to the app, not to one
- * tooltip.
+ * Once one hint has been shown, its neighbours open on a much shorter wait for
+ * this long — the behaviour the OS bubble has, and the reason a longer first
+ * wait is livable: sweeping along the status bar answers quickly after the first
+ * one. Module-level on purpose, because the warmth belongs to the app, not to
+ * one tooltip.
  */
 const WARM_MS = 400;
 let warmUntil = 0;
+
+/**
+ * The wait for a neighbour while the row is warm.
+ *
+ * WHY it is not zero: it WAS zero, and Destin's verdict on the live deck was
+ * that crossing adjacent buttons wanted "slightly more of a delay/fade in"
+ * (L-3, 2026-09-10). At zero the bubble teleports along the row, one hard cut
+ * per chip. This plus the 110 ms `.tooltip-in` fade in globals.css is that
+ * correction; they are two halves of one answer, so do not drop one of them.
+ */
+const WARM_DELAY = 130;
 
 /** Press-and-hold on a touchscreen, which is the only way to reach a hint with
  *  no pointer (deck Q-3, `long-press`). */
@@ -192,11 +204,8 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
     onPointerEnter: (e: React.PointerEvent) => {
       if (!armed || e.pointerType !== 'mouse') return;
       cancelTimer();
-      if (Date.now() < warmUntil) {
-        setOpen(true);
-        return;
-      }
-      timer.current = setTimeout(() => setOpen(true), HOVER_DELAY);
+      const wait = Date.now() < warmUntil ? WARM_DELAY : HOVER_DELAY;
+      timer.current = setTimeout(() => setOpen(true), wait);
     },
     onPointerLeave: (e: React.PointerEvent) => {
       if (e.pointerType !== 'mouse') return;
@@ -292,7 +301,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
             id={id}
             // pointer-events-none so a hint can never swallow a click meant for
             // what is underneath it.
-            className="fixed pointer-events-none px-2 py-1 max-w-[min(20rem,calc(100vw-1.5rem))] text-2xs text-fg-2 leading-snug"
+            className="tooltip-in fixed pointer-events-none px-2 py-1 max-w-[min(20rem,calc(100vw-1.5rem))] text-2xs text-fg-2 leading-snug"
             style={{ left: pos.left, top: pos.top }}
           >
             {text}
