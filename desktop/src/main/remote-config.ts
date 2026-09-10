@@ -26,6 +26,31 @@ const CONFIG_PATH = () => remoteConfigPath();
 // distinct profiles (e.g. 'dev2') each get their own file and port rather than
 // fighting over the built app's 9900. The port offset is applied in shared/ports.ts.
 
+/**
+ * What Tailscale is doing on this computer. `installed`/`connected` are the two flags the
+ * panel has always had; `state` is the one that says WHICH problem it is, so the setup
+ * banner can offer the matching next step rather than one generic "not connected".
+ */
+export interface TailscaleDetection {
+  installed: boolean;
+  connected: boolean;
+  state: 'not-installed' | 'signed-out' | 'stopped' | 'running' | 'unknown';
+  ip: string | null;
+  hostname: string | null;
+  url: string | null;
+}
+
+/** Tailscale's own BackendState values, mapped to the three states a user can act on. */
+const TAILSCALE_BACKEND_STATE: Record<string, TailscaleDetection['state']> = {
+  Running: 'running',
+  NeedsLogin: 'signed-out',
+  NeedsMachineAuth: 'signed-out',
+  Stopped: 'stopped',
+  // Starting/NoState are deliberately absent: they are transitional, and calling a
+  // starting daemon "switched off" would send the user to fix something that is
+  // already fixing itself. They fall through to 'unknown'.
+};
+
 interface ConfigData {
   enabled: boolean;
   port: number;
@@ -156,8 +181,8 @@ export class RemoteConfig {
    * verifying the binary on disk (or via `tailscale version`, which doesn't need
    * the local API) — and only then probe connection state.
    */
-  static async detectTailscale(port: number): Promise<{ installed: boolean; connected: boolean; ip: string | null; hostname: string | null; url: string | null }> {
-    const notInstalled = { installed: false, connected: false, ip: null, hostname: null, url: null };
+  static async detectTailscale(port: number): Promise<TailscaleDetection> {
+    const notInstalled = { installed: false, connected: false, state: 'not-installed' as const, ip: null, hostname: null, url: null };
 
     const tsPath = RemoteConfig.resolveTailscalePath();
 
@@ -179,11 +204,18 @@ export class RemoteConfig {
     let connected = false;
     let hostname: string | null = null;
     let tailscaleIp: string | null = null;
+    // WHY the state is read out of BackendState rather than inferred from `connected`:
+    // "installed but signed out" and "installed but switched off" need different next
+    // steps, and one flat not-connected flag cannot tell them apart. Guessing between
+    // them is exactly the invented cause docs/error-message-standards.md forbids, so an
+    // unrecognised backend state stays 'unknown' instead of picking the likelier one.
+    let state: TailscaleDetection['state'] = 'unknown';
     try {
       const { stdout: statusJson } = await execFileAsync(tsPath, ['status', '--json']);
       const status = JSON.parse(statusJson);
       hostname = status.Self?.HostName || null;
       connected = status.BackendState === 'Running';
+      state = TAILSCALE_BACKEND_STATE[status.BackendState] ?? 'unknown';
       if (connected) {
         // Prefer the IP from status JSON (one fewer subprocess). Fall back to
         // `tailscale ip -4` only if status JSON didn't include one.
@@ -201,6 +233,7 @@ export class RemoteConfig {
     return {
       installed: true,
       connected,
+      state,
       ip: tailscaleIp,
       hostname,
       url: tailscaleIp ? `http://${tailscaleIp}:${port}` : null,

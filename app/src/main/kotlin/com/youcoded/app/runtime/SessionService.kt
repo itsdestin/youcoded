@@ -1537,6 +1537,13 @@ class SessionService : Service() {
                     bridgeServer.respond(ws, msg.type, id, JSONObject().apply {
                         put("installed", installed)
                         put("connected", connected)
+                        // Desktop reads Tailscale's own BackendState and can say WHICH
+                        // prerequisite is missing. All this phone can see is an installed
+                        // package and a CGNAT address, so it reports only what it knows:
+                        // running, or not installed. "Signed out" and "switched off" are
+                        // indistinguishable from here, and guessing between them would put
+                        // an invented cause in front of the user.
+                        put("state", if (!installed) "not-installed" else if (connected) "running" else "unknown")
                         if (tsIp != null) put("ip", tsIp)
                     })
                 }

@@ -89,12 +89,31 @@ const KEEP_AWAKE_OPTIONS = [
   { label: '24h', value: 24 },
 ];
 
-interface TailscaleInfo {
+export interface TailscaleInfo {
   installed: boolean;
   connected: boolean;
+  /**
+   * WHICH prerequisite is missing, from Tailscale's own backend state. Optional because
+   * the Android bridge answers this channel too and can only see whether the app is
+   * installed. Absent means "we do not know" — never a reason to guess one.
+   */
+  state?: 'not-installed' | 'signed-out' | 'stopped' | 'running' | 'unknown';
   ip: string | null;
   hostname: string | null;
   url: string | null;
+}
+
+/**
+ * The end-of-setup check (contract row R1). It reports what the host itself says — the
+ * listener's own state — never what the settings were set to. It also cannot say the
+ * other device works, because no other device has been contacted.
+ */
+export interface SetupCheck {
+  listening: boolean;
+  /** The address a device would open, when there is one. */
+  address: string | null;
+  /** Why it is not listening, in the words the server or the OS used. Never invented. */
+  reason: string | null;
 }
 
 /**
@@ -1269,6 +1288,141 @@ function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAc
   );
 }
 
+export type SetupStatus = 'idle' | 'confirm' | 'installing' | 'authenticating' | 'checking' | 'checked' | 'error';
+
+/**
+ * The prerequisite the host can actually observe, one status line and one button each
+ * (contract row R5). WHY it is driven by `tailscale.state` and not by `connected` alone:
+ * "signed out" and "switched off" need different next steps, and the panel used to send
+ * everyone to the same place — or, when the state was simply unknown, tell them to go
+ * open an app that may not be the problem.
+ *
+ * Exported for `remote-setup-flow.test.tsx`: these two are the whole of what the user
+ * reads during setup, and reaching them through the full Settings tree would test the
+ * tree instead of the copy.
+ */
+export function renderPrerequisite(
+  tailscale: TailscaleInfo | null,
+  hasPassword: boolean,
+  onRunSetup: () => void,
+  onConnect: () => void,
+) {
+  const notSetUp = (
+    <StatusStrip tone="idle" action={<Button size="sm" onClick={onRunSetup}>Set up</Button>}>
+      Not set up yet.
+    </StatusStrip>
+  );
+  if (!tailscale?.installed) return notSetUp;
+  if (tailscale.state === 'signed-out') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Sign in</Button>}>
+        Tailscale is installed, but you&apos;re not signed in yet.
+      </StatusStrip>
+    );
+  }
+  if (tailscale.state === 'stopped') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Turn on</Button>}>
+        Tailscale is installed, but it&apos;s switched off.
+      </StatusStrip>
+    );
+  }
+  if (!tailscale.connected) {
+    // The honest fallback: installed, not connected, and Tailscale did not say why.
+    // The old copy asserted the VPN was off and told the user to go turn it on.
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Connect</Button>}>
+        Tailscale is installed, but it isn&apos;t connected.
+      </StatusStrip>
+    );
+  }
+  if (!hasPassword) {
+    // Connected, but nothing can pair without a password — the field is directly below.
+    return <StatusStrip tone="warn">Set a password below to finish enabling remote access.</StatusStrip>;
+  }
+  return notSetUp;
+}
+
+/**
+ * Setup in motion, and the check that ends it. WHY the last step is a check and not a
+ * success message: the old flow said "Tailscale is connected" the moment the auth command
+ * returned, which is a claim about a setting rather than about the server. It now asks the
+ * host what its listener is doing and repeats that answer, and it says plainly that no
+ * other device has been tried — because none has.
+ */
+export function renderSetupProgress(
+  setupStatus: SetupStatus,
+  setupError: string,
+  setupCheck: SetupCheck | null,
+  onRunSetup: () => void,
+  onReportIssue: () => void,
+  onCancelSetup: () => void,
+  onConfirmSetup: () => void,
+) {
+  if (setupStatus === 'confirm') {
+    return (
+      <div className="space-y-2">
+        <p className="text-3xs text-fg-2 text-center">This will download and install Tailscale (~50MB) for secure remote access.</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCancelSetup} className="flex-1">Cancel</Button>
+          <Button onClick={onConfirmSetup} className="flex-1">Install</Button>
+        </div>
+      </div>
+    );
+  }
+  if (setupStatus === 'installing') {
+    // K5. Every branch below was its own shape: centred green text, centred muted
+    // text, a bare button with no message at all. The WORDS were mostly fine —
+    // seven of eleven carry over verbatim. It was eleven shapes.
+    return <StatusStrip tone="busy" detail="This may take a few minutes">Installing Tailscale…</StatusStrip>;
+  }
+  if (setupStatus === 'authenticating') {
+    return <StatusStrip tone="busy" detail="Check your browser to sign in to Tailscale">Waiting for Tailscale sign-in…</StatusStrip>;
+  }
+  if (setupStatus === 'checking') {
+    return <StatusStrip tone="busy" detail="Asking the server whether it is listening">Checking this computer&apos;s connection…</StatusStrip>;
+  }
+  if (setupStatus === 'checked' && setupCheck) {
+    if (setupCheck.listening) {
+      return (
+        <StatusStrip tone="ok" detail="No device has connected yet — pair one below to try it.">
+          {setupCheck.address ? `This computer is listening at ${setupCheck.address}.` : 'This computer is listening.'}
+        </StatusStrip>
+      );
+    }
+    return setupCheck.reason ? (
+      <ErrorState mode="recoverable" message={setupCheck.reason} onRetry={onRunSetup} variant="inline" />
+    ) : (
+      <ErrorState
+        mode="general"
+        title="Remote access isn't listening yet."
+        explainer="The server didn't report a reason. Diagnosing will collect the setup log so Claude can look at what happened."
+        onReportBug={onReportIssue}
+        onDiagnose={onReportIssue}
+      />
+    );
+  }
+  if (setupStatus === 'error') {
+    // `{setupError || 'Setup failed'}` replaced a missing reason with a hardcoded
+    // guess and left the user two words and no next step — the exact pattern
+    // docs/error-message-standards.md forbids. When we HAVE the real reason we show
+    // it with Retry; when we do not, we say so without inventing a cause and hand
+    // over the two actions the standard mandates.
+    return setupError ? (
+      <ErrorState mode="recoverable" message={setupError} onRetry={onRunSetup} variant="inline" />
+    ) : (
+      <ErrorState
+        mode="general"
+        title="Unable to set up remote access."
+        explainer="The Tailscale installer didn't report a reason. Diagnosing will collect the setup log so Claude can look at what happened."
+        onReportBug={onReportIssue}
+        onDiagnose={onReportIssue}
+      />
+    );
+  }
+  return null;
+}
+
 interface RemoteButtonProps {
   mockView?: RemoteAccessView;
   mockAction?: (action: RemoteAccessAction) => void;
@@ -1291,8 +1445,10 @@ interface RemoteButtonProps {
   onRunSetup: () => void;
   onConfirmSetup: () => void;
   onCancelSetup: () => void;
-  setupStatus: 'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error';
+  setupStatus: SetupStatus;
   setupError: string;
+  /** The result of the end-of-setup check, once it has run. */
+  setupCheck: SetupCheck | null;
   onUnpairDevice: (deviceId: string) => void;
   status: RemoteStatus | null;
   onCopyLink: () => void;
@@ -1328,7 +1484,7 @@ function RemoteButton(props: RemoteButtonProps) {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
   onSetNewPassword, onSetPassword, onToggleEnabled, enableError,
-  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onUnpairDevice, status, onCopyLink,
+  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, setupCheck, onUnpairDevice, status, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
   } = props;
   const [open, setOpen] = useState(!!props.mockView);
@@ -1518,7 +1674,12 @@ function RemoteButton(props: RemoteButtonProps) {
                           Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
 
-                        {previewView && preview ? renderPreviewSetup(previewView, preview.act) : tailscale?.installed && tailscale.url && config?.hasPassword ? (
+                        {/* WHY setup-in-motion is tested BEFORE the ready branch: the end-of-setup
+                            check is the last thing the user sees, and the moment Tailscale comes up
+                            the branch below it would take over and hide the answer. */}
+                        {previewView && preview ? renderPreviewSetup(previewView, preview.act)
+                          : setupStatus !== 'idle' ? renderSetupProgress(setupStatus, setupError, setupCheck, onRunSetup, onReportIssue, onCancelSetup, onConfirmSetup)
+                          : tailscale?.installed && tailscale.url && config?.hasPassword ? (
                           showSetupQR ? (
                             <div className="mt-2">
                               {/* Remind users that Tailscale must be installed + running on the receiving device too */}
@@ -1548,77 +1709,7 @@ function RemoteButton(props: RemoteButtonProps) {
                               </Button>
                             </div>
                           )
-                        ) : setupStatus === 'confirm' ? (
-                          <div className="space-y-2">
-                            <p className="text-3xs text-fg-2 text-center">This will download and install Tailscale (~50MB) for secure remote access.</p>
-                            <div className="flex gap-2">
-                              <Button variant="secondary" onClick={onCancelSetup} className="flex-1">Cancel</Button>
-                              <Button onClick={onConfirmSetup} className="flex-1">Install</Button>
-                            </div>
-                          </div>
-                        ) : setupStatus === 'installing' ? (
-                          // K5. Every branch below was its own shape: centred
-                          // green text, centred muted text, a bare button with no
-                          // message at all. The WORDS were mostly fine — seven of
-                          // eleven carry over verbatim. It was eleven shapes.
-                          <StatusStrip tone="busy" detail="This may take a few minutes">
-                            Installing Tailscale…
-                          </StatusStrip>
-                        ) : setupStatus === 'authenticating' ? (
-                          <StatusStrip tone="busy" detail="Check your browser to sign in to Tailscale">
-                            Waiting for Tailscale sign-in…
-                          </StatusStrip>
-                        ) : setupStatus === 'done' ? (
-                          // Was "Tailscale installed and connected!" — the only
-                          // exclamation mark in the settings family. A status
-                          // strip says what you can do next (Destin, 2026-07-28).
-                          <StatusStrip tone="ok">Tailscale is connected. You can pair a device now.</StatusStrip>
-                        ) : setupStatus === 'error' ? (
-                          // `{setupError || 'Setup failed'}` replaced a missing
-                          // reason with a hardcoded guess and left the user two
-                          // words and no next step — the exact pattern
-                          // docs/error-message-standards.md forbids. When we HAVE
-                          // the real reason we show it with Retry; when we do not,
-                          // we say so without inventing a cause and hand over the
-                          // two actions the standard mandates.
-                          setupError ? (
-                            <ErrorState
-                              mode="recoverable"
-                              message={setupError}
-                              onRetry={onRunSetup}
-                              variant="inline"
-                            />
-                          ) : (
-                            <ErrorState
-                              mode="general"
-                              title="Unable to set up remote access."
-                              explainer="The Tailscale installer didn't report a reason. Diagnosing will collect the setup log so Claude can look at what happened."
-                              onReportBug={onReportIssue}
-                              onDiagnose={onReportIssue}
-                            />
-                          )
-                        ) : tailscale?.installed && !tailscale.connected ? (
-                          // Fix: Tailscale is installed but VPN is off — tailscale.url is null in this state,
-                          // so we used to fall through to the install-button branch and pretend it wasn't installed.
-                          <StatusStrip tone="warn">
-                            Tailscale is installed, but the VPN isn&apos;t active. Open the Tailscale app and turn it on, then come back here.
-                          </StatusStrip>
-                        ) : tailscale?.installed && !config?.hasPassword ? (
-                          // Installed + connected but no password yet — guide the user down to the password field
-                          // rather than re-prompting to install.
-                          <StatusStrip tone="warn">
-                            Set a password below to finish enabling remote access.
-                          </StatusStrip>
-                        ) : (
-                          // Was a bare button with no message. A status strip
-                          // says what state you are in, then offers the way out.
-                          <StatusStrip
-                            tone="idle"
-                            action={<Button size="sm" onClick={onRunSetup}>Set up</Button>}
-                          >
-                            Not set up yet.
-                          </StatusStrip>
-                        )}
+                        ) : renderPrerequisite(tailscale, !!config?.hasPassword, onRunSetup, onConfirmSetup)}
                       </div>
                     )}
 
@@ -1857,7 +1948,7 @@ function RemoteButton(props: RemoteButtonProps) {
 /** Same dialog and body as Settings; the candidate provides no real settings callbacks. */
 export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessView; onAction: (action: RemoteAccessAction) => void }) {
   const noop = () => {};
-  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onUnpairDevice={noop} status={null} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
+  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" setupCheck={null} onUnpairDevice={noop} status={null} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
 }
 
 // Mirrors PackageTier.kt — descriptions list the actual packages each tier
@@ -2466,8 +2557,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [showSetupQR, setShowSetupQR] = useState(false);
   const [copied, setCopied] = useState(false);
   const [defaults, setDefaults] = useState<AssistantDefaults>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
-  const [setupStatus, setSetupStatus] = useState<'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error'>('idle');
+  const [setupStatus, setSetupStatus] = useState<SetupStatus>('idle');
   const [setupError, setSetupError] = useState('');
+  const [setupCheck, setSetupCheck] = useState<SetupCheck | null>(null);
   // Populated when IPC.REMOTE_SET_CONFIG reports the server failed to bind.
   const [enableError, setEnableError] = useState('');
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
@@ -2482,6 +2574,12 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     setLoading(true);
     setShowAddDevice(false);
     setShowSetupQR(false);
+    // WHY the setup state resets on open: the check result now stays on screen instead of
+    // clearing itself after three seconds, so the panel must not reopen tomorrow still
+    // showing yesterday's answer.
+    setSetupStatus('idle');
+    setSetupError('');
+    setSetupCheck(null);
     const claude = (window as any).claude;
     if (!claude?.remote) { setLoading(false); return; }
     // Fix: defer IPC calls until after the 300ms slide-in animation. detectTailscale
@@ -2537,11 +2635,40 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const handleRunSetup = useCallback(() => {
     setSetupStatus('confirm');
     setSetupError('');
+    setSetupCheck(null);
   }, []);
 
   const handleCancelSetup = useCallback(() => {
     setSetupStatus('idle');
     setSetupError('');
+    setSetupCheck(null);
+  }, []);
+
+  /**
+   * The end-of-setup check (contract row R1). WHY it exists: setup used to declare
+   * success the moment `tailscale up` returned — a claim about a command, not about the
+   * server. This asks the host what its listener is actually doing and repeats that
+   * answer verbatim, including the reason when the answer is no.
+   *
+   * It stops there deliberately. Nothing here has contacted the user's other device, so
+   * nothing here may imply the other device works; the strip says a device still has to
+   * be paired.
+   */
+  const runSetupCheck = useCallback(async () => {
+    setSetupStatus('checking');
+    const remote = (window as any).claude?.remote;
+    const ts = await remote?.detectTailscale?.().catch(() => null);
+    if (ts) setTailscale(ts);
+    const st: RemoteStatus | null = await remote?.getStatus?.().catch(() => null) ?? null;
+    if (st) setRemoteStatus(st);
+    setSetupCheck({
+      listening: st?.state === 'listening',
+      address: ts?.url ?? null,
+      // The server's own reason when it has one. A missing status is not evidence of a
+      // cause, so it stays null and the panel says so rather than naming a culprit.
+      reason: st?.reason ?? null,
+    });
+    setSetupStatus('checked');
   }, []);
 
   const handleConfirmSetup = useCallback(async () => {
@@ -2549,12 +2676,17 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       // Check if already installed before trying to install
       const check = await (window as any).claude.remote.detectTailscale();
       if (check?.installed) {
-        // Already installed — skip to auth
+        // Already installed — skip to auth. This is also the path the Sign in and Turn
+        // on buttons take, which is why it must not go through the install confirmation.
         setSetupStatus('authenticating');
-        await (window as any).claude.remote.authTailscale();
-        setSetupStatus('done');
         setTailscale(check);
-        setTimeout(() => setSetupStatus('idle'), 3000);
+        const auth = await (window as any).claude.remote.authTailscale();
+        if (auth?.error) {
+          setSetupError(String(auth.error));
+          setSetupStatus('error');
+          return;
+        }
+        await runSetupCheck();
         return;
       }
 
@@ -2562,20 +2694,25 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       const result = await (window as any).claude.remote.installTailscale();
       if (result?.success) {
         setSetupStatus('authenticating');
-        await (window as any).claude.remote.authTailscale();
-        setSetupStatus('done');
-        const ts = await (window as any).claude.remote.detectTailscale();
-        setTailscale(ts);
-        setTimeout(() => setSetupStatus('idle'), 3000);
+        const auth = await (window as any).claude.remote.authTailscale();
+        if (auth?.error) {
+          setSetupError(String(auth.error));
+          setSetupStatus('error');
+          return;
+        }
+        await runSetupCheck();
       } else {
-        setSetupError(result?.error || 'Installation failed');
+        // WHY not `|| 'Installation failed'`: a hardcoded fallback reason is an invented
+        // cause. Empty means the installer said nothing, and the panel then shows the
+        // general error with Report bug / Diagnose instead of naming a culprit.
+        setSetupError(result?.error ? String(result.error) : '');
         setSetupStatus('error');
       }
     } catch (err) {
       setSetupError(String(err));
       setSetupStatus('error');
     }
-  }, []);
+  }, [runSetupCheck]);
 
   useEffect(() => {
     // WHY subscribe as well as fetch: a bind failure happens once, seconds after launch.
@@ -2664,6 +2801,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onCancelSetup={handleCancelSetup}
           setupStatus={setupStatus}
           setupError={setupError}
+          setupCheck={setupCheck}
           onUnpairDevice={handleUnpairDevice}
           status={remoteStatus}
           onCopyLink={handleCopyLink}
