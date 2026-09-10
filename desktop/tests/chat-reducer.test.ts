@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import { chatReducer } from '../src/renderer/state/chat-reducer';
-import { ChatState, ChatAction } from '../src/renderer/state/chat-types';
+import { ChatState, ChatAction, serializeChatState, deserializeChatState } from '../src/renderer/state/chat-types';
 import { hookEventToAction } from '../src/renderer/state/hook-dispatcher';
 import type { HookEvent } from '../src/shared/types';
 
@@ -912,6 +912,59 @@ describe('native runtime reducer paths', () => {
       expect(entry).toMatchObject({ kind: 'user', pending: false });
       if (entry.kind === 'user') expect(entry.message.content).toBe('confirm me');
       expect(state.get(SESSION)!.queuedMessages).toEqual([]);
+    });
+  });
+
+  // Step 3 (2026-08-17, broadened): the session's STARTING context (context
+  // transparency — local or cloud, truncated or not).
+  describe('SESSION_CONTEXT', () => {
+    const record = {
+      modelLabel: 'qwen2.5-coder:14b',
+      contextWindowTokens: 16384,
+      summary: 'Context was trimmed to fit qwen2.5-coder:14b’s window.',
+      systemPrompt: 'You are YouCoded…',
+      projectInstructions: {
+        path: '/repo/CLAUDE.md',
+        text: '# CLAUDE.md\n…',
+        truncated: true,
+        note: '3 of 12 sections kept (headings only)',
+      },
+      skills: [
+        { id: 's1', label: 'theme-builder', path: '/repo/SKILL.md', truncated: true, note: 'body cut' },
+        { id: 's2', label: 'chatsearch', path: '/repo/SKILL.md' },
+      ],
+      tools: ['Read', 'Write', 'Edit'],
+      droppedMcpServers: ['docs-index'],
+    };
+
+    it('stores the starting-context record on session state', () => {
+      state = dispatch(state, { type: 'SESSION_CONTEXT', sessionId: SESSION, context: record });
+      expect(state.get(SESSION)!.sessionContext).toEqual(record);
+    });
+
+    it('accepts a null context (host has not reported yet)', () => {
+      state = dispatch(state, { type: 'SESSION_CONTEXT', sessionId: SESSION, context: null });
+      expect(state.get(SESSION)!.sessionContext).toBeNull();
+    });
+
+    it('is idempotent — re-firing the identical record returns the same reference', () => {
+      state = dispatch(state, { type: 'SESSION_CONTEXT', sessionId: SESSION, context: record });
+      const before = state.get(SESSION)!;
+      state = dispatch(state, { type: 'SESSION_CONTEXT', sessionId: SESSION, context: record });
+      expect(state.get(SESSION)!).toBe(before);
+    });
+
+    it('round-trips through the chat serializers', () => {
+      state = dispatch(state, { type: 'SESSION_CONTEXT', sessionId: SESSION, context: record });
+      const ser = serializeChatState(state);
+      const restored = deserializeChatState(ser);
+      expect(restored.get(SESSION)!.sessionContext).toEqual(record);
+    });
+
+    it('is a no-op for an unknown session id', () => {
+      const before = state;
+      state = dispatch(state, { type: 'SESSION_CONTEXT', sessionId: 'ghost-session', context: record });
+      expect(state).toBe(before);
     });
   });
 });

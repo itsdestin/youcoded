@@ -38,8 +38,9 @@ import {
 const rec = vi.hoisted(() => ({
   // Ordered log of the two events we care about, in the order they really ran.
   order: [] as string[],
-  // Every send that reached a renderer: which window, which channel.
-  sends: [] as Array<{ window: string; channel: string }>,
+  // Every send that reached a renderer: which window, which channel, and what
+  // rode with it (the payload matters for the session-context block below).
+  sends: [] as Array<{ window: string; channel: string; payload?: any }>,
 }));
 
 // Mock electron before importing ipc-handlers, which transitively imports
@@ -66,8 +67,8 @@ vi.mock('electron', () => {
     webContents: {
       fromId: vi.fn((id: number) => ({
         isDestroyed: () => false,
-        send: (channel: string, ..._args: any[]) => {
-          rec.sends.push({ window: `wc:${id}`, channel });
+        send: (channel: string, ...args: any[]) => {
+          rec.sends.push({ window: `wc:${id}`, channel, payload: args[0] });
           if (channel === 'session:created') rec.order.push('SESSION_CREATED send');
         },
       })),
@@ -168,7 +169,10 @@ async function runSessionCreate(opts: any, senderWindowId = 2) {
     cwd: '/tmp',
     // Mirror the caller's provider so the control case really walks the
     // claude-code branch rather than the native one.
-    provider: (opts?.provider ?? 'native') as 'native' | 'claude-code',
+    // 'claude' is the real SessionProvider member — NOT 'claude-code', which is
+    // what this line said until 2026-09-10. Nothing read it, so the typo was
+    // harmless until a test needed the Claude Code branch to actually run.
+    provider: (opts?.provider ?? 'native') as 'native' | 'claude',
     status: 'active' as const,
     createdAt: Date.now(),
     permissionMode: 'normal' as const,
@@ -192,8 +196,8 @@ async function runSessionCreate(opts: any, senderWindowId = 2) {
   const mainWindow: any = {
     isDestroyed: () => false,
     webContents: {
-      send: (channel: string, ..._args: any[]) => {
-        rec.sends.push({ window: 'mainWindow(window 1 fallback)', channel });
+      send: (channel: string, ...args: any[]) => {
+        rec.sends.push({ window: 'mainWindow(window 1 fallback)', channel, payload: args[0] });
         if (channel === IPC.SESSION_CREATED) rec.order.push('SESSION_CREATED send');
       },
     },
@@ -333,5 +337,41 @@ describe('session:create — assignSession must precede the SESSION_CREATED forw
     });
 
     assertAssignBeforeCreated(order, sends, 'claude-code create');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// A CLAUDE CODE chat still gets its "what the assistant was given" record.
+//
+// Contract R23 says EVERY chat carries the line above the conversation. The
+// native runtime pushes its own record from the harness host; a Claude Code
+// chat has no host here, so this branch of session:create is the only thing
+// that sends one. Nothing else in the suite walks it, and its absence is
+// SILENT — the strip simply never appears, which is indistinguishable from
+// "this chat was given nothing".
+// ---------------------------------------------------------------------------
+describe('session:create — a Claude Code chat is described too', () => {
+  it('sends the context record, and it says Claude Code assembled it', async () => {
+    const { sends } = await runSessionCreate({ provider: 'claude', cwd: '/tmp' });
+    const pushed = sends.find((s) => s.channel === 'native:session-context');
+    expect(pushed, `no native:session-context was sent — channels seen: ${JSON.stringify(sends.map((s) => s.channel))}`).toBeTruthy();
+    expect(pushed!.payload.context.assembledBy).toBe('claude-code');
+  });
+
+  it('claims no tool list, rather than an empty one', async () => {
+    // null reads as "Claude Code chooses its own"; [] reads as "this assistant
+    // has no tools", which is false in the more alarming direction.
+    const { sends } = await runSessionCreate({ provider: 'claude', cwd: '/tmp' });
+    const ctx = sends.find((s) => s.channel === 'native:session-context')!.payload.context;
+    expect(ctx.tools).toBeNull();
+    expect(ctx.systemPrompt).toBeNull();
+    expect(ctx.contextWindowTokens).toBeNull();
+  });
+
+  it('does NOT send one for a native chat — the harness host owns that', async () => {
+    // Two records for one chat would race, and the host's is the one that knows
+    // the budget things were sized against.
+    const { sends } = await runSessionCreate({ provider: 'native', cwd: '/tmp' });
+    expect(sends.find((s) => s.channel === 'native:session-context')).toBeUndefined();
   });
 });

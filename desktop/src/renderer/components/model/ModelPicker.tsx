@@ -33,7 +33,7 @@ import { CLAUDE_ALIASES, type ClaudeAlias } from '../../../shared/model-ids';
 import { matchesQuery } from '../../../shared/text-match';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
-import { unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
+import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
 
 export type ModelChoice =
   | { runtime: 'claude'; alias: string }
@@ -74,6 +74,9 @@ interface Entry {
    *  (Q-E a): a model this install cannot run is still worth SEEING, so the
    *  list stops pretending the rest of the app does not exist. */
   unavailable?: string;
+  /** `unavailable` is specifically "Add an API key" — clicking it should open
+   *  Settings' Cloud providers page instead of sitting there as inert text. */
+  needsApiKey?: boolean;
 }
 
 /** Which company mark + colour a row carries.
@@ -275,10 +278,17 @@ export default function ModelPicker({
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const width = Math.max(r.width, 320);
-    const centred = r.left + r.width / 2 - width / 2;
     const gap = 4;
     const edge = 8;
+    // WHY the Math.min (2026-09-10): the 320 floor is a readability minimum, but
+    // it was applied unconditionally, so in a viewport NARROWER than 320+gutters
+    // the panel was wider than the window and clipped on the right — with no
+    // scrollbar and no visual tell. That is exactly the buddy floater's chat
+    // window, which is 320px wide, so the model list arrived there missing its
+    // right edge. A panel must never exceed the viewport it is clamped into.
+    // No-op in the main window and on Android, where innerWidth far exceeds 336.
+    const width = Math.min(Math.max(r.width, 320), window.innerWidth - edge * 2);
+    const centred = r.left + r.width / 2 - width / 2;
     const spaceBelow = window.innerHeight - r.bottom - edge;
     const spaceAbove = r.top - edge;
     const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
@@ -446,6 +456,7 @@ export default function ModelPicker({
           sourceId: p.id, sourceLabel: p.label, local: p.type === 'local-engine',
           providerType: p.type,
           unavailable: unavailableReason(choice, data) ?? undefined,
+          needsApiKey: nativeChoiceNeedsApiKey(choice, data),
         });
       }
     }
@@ -603,12 +614,32 @@ export default function ModelPicker({
                   or 400. */}
               <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
             </span>
-            {/* The one thing that would unlock this row, in its own words. */}
-            {e.unavailable && (
-              <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
-            )}
           </button>
           </Tooltip>
+          {/* The one thing that would unlock this row, in its own words. Lives
+              OUTSIDE the row's own (disabled) button — a button can't nest
+              inside another button — so the one reason with a one-click fix
+              ("Add an API key") can be its own live control instead of inert
+              text next to a dead one. coarse-hit: the label text is well under
+              the touch target guideline. */}
+          {e.unavailable && (
+            e.needsApiKey ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  if (onManageModels) onManageModels();
+                  else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                }}
+                aria-label={`Add an API key for ${e.sourceLabel}`}
+                className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
+              >
+                {e.unavailable}
+              </button>
+            ) : (
+              <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
+            )
+          )}
           {/* touch-reveal + coarse-hit: hover-only affordances never resolve on
               the Android WebView (narrow-viewport rule). Selected uses the same
               on-accent colour as the mark/name above, for the same reason:

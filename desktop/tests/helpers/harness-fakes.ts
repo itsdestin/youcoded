@@ -205,6 +205,11 @@ export interface MakeSessionOver {
   // Shorthand for the one profile field the tool-less-model test needs,
   // without hand-building a whole CapabilityProfile object via `profile`.
   supportsTools?: boolean;
+  // The manifest, for tests whose subject is window arithmetic: HARNESS's
+  // 256-token output reserve makes the compaction trigger and the trim budget
+  // coincide with the pre-2026-09-10 numbers, so a test of "compaction fires
+  // before trimming" needs the production 16,000 reserve to reproduce the bug.
+  harness?: HarnessManifest;
 }
 
 // Construct a real HarnessSession over a scripted model. Defaults: an allow-all
@@ -233,7 +238,7 @@ export function makeSession(over: MakeSessionOver = {}): HarnessSession {
     ...(over.supportsTools !== undefined ? { supportsTools: over.supportsTools } : {}),
   };
   const opts: HarnessSessionOpts = {
-    sessionId: 's-1', cwd: FAKE_SESSION_CWD, harness: HARNESS,
+    sessionId: 's-1', cwd: FAKE_SESSION_CWD, harness: over.harness ?? HARNESS,
     binding: { providerId: 'openrouter', modelId: 'm' },
     retryDelays: [1, 1, 1],
     tools,

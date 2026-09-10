@@ -506,6 +506,12 @@ function handleMessage(data: string): void {
       // forwarder). window.claude.on.shellEvent subscribers get the ShellEvent.
       dispatchEvent('native:shell-event', payload);
       break;
+    case 'native:session-context':
+      // "What the assistant was given" — push-only (ipc-handlers.ts's
+      // nativeHost.on('session-context', …) forwarder). A client that connects
+      // LATER does not need this case: the record travels inside chat:hydrate.
+      dispatchEvent('native:session-context', payload);
+      break;
     case 'voice:event':
       // Voice typing push events from the ANDROID host (readiness / level /
       // partial words / final / heartbeat / error). window.claude.voice.onEvent
@@ -1876,6 +1882,16 @@ export function installShim(): void {
       // G-1: NOT gated on `supported` — a phone must be able to Stop a command
       // running on the DESKTOP, whose runtime is the one that owns it.
       killShell: (sessionId: string, shellId: string) => invoke('native:kill-shell', { sessionId, shellId }),
+      // One file's text for the session-context panel. NOT gated on `supported`,
+      // for the same reason killShell is not: the desktop owns the session and
+      // its files, and a phone looking at that chat must be able to read them.
+      sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) =>
+        invoke('native:session-context-text', { sessionId, kind, id }),
+      onSessionContext: (cb: (e: unknown) => void) => {
+        const handler: Callback = (payload: any) => cb(payload);
+        addListener('native:session-context', handler);
+        return () => removeListener('native:session-context', handler);
+      },
       onModelState: (cb: (s: unknown) => void) => {
         const handler: Callback = (payload: any) => cb(payload);
         addListener('native:model-state', handler);

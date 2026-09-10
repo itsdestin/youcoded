@@ -217,7 +217,7 @@ describe('OpenAI continuation adapter and sizing', () => {
     expect(JSON.stringify(messages)).not.toContain('secretFutureField');
     expect(JSON.stringify(messages).length).toBeGreaterThan(4_000_000);
     expect(planCompaction(messages, {
-      contextLength: 100, triggerRatio: 0.75, protectedTokens: 10,
+      contextLength: 100, triggerTokens: 75, protectedTokens: 10,
       minPruneSavings: 10, pruneToChars: 100,
     }, 0)).toEqual({ action: 'none' });
   });
@@ -231,12 +231,12 @@ describe('OpenAI continuation adapter and sizing', () => {
     // Unknown reasoning must create real conservative pressure rather than only
     // exposing a flag: with no measured occupancy this crosses the threshold.
     expect(planCompaction(messages, {
-      contextLength: 120, triggerRatio: 0.75, protectedTokens: 10,
+      contextLength: 120, triggerTokens: 90, protectedTokens: 10,
       minPruneSavings: 10, pruneToChars: 100,
     }, 0)).toEqual({ action: 'summarize' });
     // A measured provider prompt is preferred when available, even if lower.
     expect(planCompaction(messages, {
-      contextLength: 120, triggerRatio: 0.75, protectedTokens: 10,
+      contextLength: 120, triggerTokens: 90, protectedTokens: 10,
       minPruneSavings: 10, pruneToChars: 100,
     }, 50)).toEqual({ action: 'none' });
   });

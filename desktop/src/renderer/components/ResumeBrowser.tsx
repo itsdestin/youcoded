@@ -28,6 +28,7 @@ import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import { claudeAliasForModelId } from '../../shared/model-ids';
 import type { ModelBinding } from '../../shared/provider-types';
+import { SkipPermissionsCaption } from './SkipPermissionsCaption';
 
 function formatRelativeTime(epochMs: number): string {
   const diff = Date.now() - epochMs;
@@ -854,7 +855,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 the same token as the toggle beside it, so a community theme
                 restyling its red doesn't leave the two out of sync. */}
             {resumeDangerous && (
-              <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+              <SkipPermissionsCaption />
             )}
           </>
         )}
