@@ -63,6 +63,7 @@ describe('chrome areas carry select-none on their own root', () => {
     ['thinking line', ['components', 'ThinkingIndicator.tsx'], /data-testid="thinking-indicator" className="[^"]*\bselect-none\b/, 'data-testid="thinking-indicator" className="flex select-none"'],
     ['empty-chat hint', ['components', 'ChatView.tsx'], /className="[^"]*\bselect-none\b[^"]*"[^>]*>\s*Start a conversation with/, 'className="absolute select-none"\n style={{ top: 1 }}\n >\n Start a conversation with'],
     ['no-session title', ['App.tsx'], /className="[^"]*\bselect-none\b[^"]*">No Active Session</, '<p className="text-xl select-none">No Active Session<'],
+    ['initializing line', ['App.tsx'], /className="[^"]*\bselect-none\b[^"]*">Initializing session\.\.\.</, '<p className="text-sm select-none">Initializing session...<'],
     ['tool card title (both header variants)', ['components', 'ToolCard.tsx'], /const headerClass = isCompactSkill\s*\?\s*'[^']*\bselect-none\b[^']*'\s*:\s*'[^']*\bselect-none\b[^']*'/, "const headerClass = isCompactSkill\n ? 'w-full select-none'\n : 'w-full select-none';"],
   ];
 

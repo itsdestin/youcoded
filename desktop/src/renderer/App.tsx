@@ -3286,7 +3286,9 @@ function AppInner() {
               {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
                   <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  <p className="text-sm text-fg-dim font-medium">Initializing session...</p>
+                  {/* select-none: a status line, not content. Ctrl+A must not
+                      paint it (Destin, 2026-09-10). */}
+                  <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
                   {initSlowWarning && (
                     <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
                       <p>Something may be wrong. The terminal may show what it is waiting on.</p>
