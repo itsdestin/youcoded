@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, CloseButton } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
@@ -63,25 +63,55 @@ function formatModelId(id: string): string {
 }
 
 // ── MOCKUP ONLY (2026-09-10) ────────────────────────────────────────────────
-// Three candidate designs for the preview panel Destin asked to see, switched
-// by `?rbpreview=off|a|b|c` so one workbench boot can show all of them. WHY a
-// switch at all: the three differ in WHERE the resume controls live, which is
-// the only real decision on the table — everything else (the transcript pane,
-// the header, the empty state) is shared, so building three copies of the panel
-// would have made them drift. Delete this block, PREVIEW_VARIANT and every
-// `variant`/`previewOn` branch below when the design is chosen — the shipped
-// panel has exactly one behaviour.
-//   off — today's browser, unchanged (the "before" shot)
-//   a   — preview panel; rows still expand inline for the resume controls
-//   b   — preview panel holds the resume controls; rows no longer expand
-//   c   — preview panel with a Resume button that opens the controls on demand
-type PreviewVariant = 'off' | 'a' | 'b' | 'c';
+// Candidate SHELLS for a two-pane Resume browser, switched by
+// `?rbpreview=<name>` so one workbench boot can show all of them. WHY a switch
+// rather than four copies of the component: the pieces inside (the list, the
+// transcript pane, the resume controls) are identical in every candidate — only
+// the chrome around them is under review, and four copies would have drifted.
+// Delete this block, PREVIEW_VARIANT, SHELL and every branch that reads them
+// once a shell is chosen; the shipped browser has exactly one.
+//
+//   off       today's browser, unchanged — the "before" picture
+//   pane      transcript bolted to the right of today's modal (round 1)
+//   drawer    the Session Files panel's chrome: one top bar across both panes
+//             (list toggle · title · Resume · close), a bg-well list of flat
+//             rows, the transcript on bg-canvas, a metadata strip at the foot
+//   searchbar search + filters span the full width as a page header; each pane
+//             below it is only its content
+//   hero      today's card list, and the transcript pane leads with a header
+//             block carrying the title, project, model, tags and Resume
+//   page      the drawer shell, but filling the window like a screen instead of
+//             floating as a dialog, with the transcript in a reading column
+type PreviewVariant = 'off' | 'pane' | 'drawer' | 'searchbar' | 'hero' | 'page';
+const VARIANTS: PreviewVariant[] = ['off', 'pane', 'drawer', 'searchbar', 'hero', 'page'];
 const PREVIEW_VARIANT: PreviewVariant = (() => {
   try {
-    const v = new URLSearchParams(location.search).get('rbpreview');
-    return v === 'a' || v === 'b' || v === 'c' || v === 'off' ? v : 'off';
+    const v = new URLSearchParams(location.search).get('rbpreview') as PreviewVariant;
+    return VARIANTS.includes(v) ? v : 'off';
   } catch { return 'off'; }
 })();
+
+// What each shell turns on. Reading these by name keeps the JSX below readable —
+// `SHELL.topBar` says what it is, `PREVIEW_VARIANT === 'drawer' || … === 'page'`
+// repeated six times does not.
+const SHELL = {
+  /** List rows lose their card chrome and become drawer-style rows. */
+  flatList: PREVIEW_VARIANT === 'drawer' || PREVIEW_VARIANT === 'searchbar' || PREVIEW_VARIANT === 'page',
+  /** One bar across BOTH panes: list toggle, title, Resume, close. */
+  topBar: PREVIEW_VARIANT === 'drawer' || PREVIEW_VARIANT === 'page',
+  /** Search and filters span the full width above both panes. */
+  topSearch: PREVIEW_VARIANT === 'searchbar',
+  /** The transcript pane opens with a title/tags/Resume block. */
+  hero: PREVIEW_VARIANT === 'hero',
+  /** Fills the window instead of floating as a dialog. */
+  fullPage: PREVIEW_VARIANT === 'page',
+  /** A quiet metadata line along the bottom, as the Session Files panel has. */
+  bottomStrip: PREVIEW_VARIANT === 'drawer' || PREVIEW_VARIANT === 'page',
+  /** The transcript gets a centred reading column instead of full bleed. */
+  readingColumn: PREVIEW_VARIANT === 'page',
+  /** Resume lives in the transcript pane's footer (round 1's design "b"). */
+  footerResume: PREVIEW_VARIANT === 'pane',
+};
 
 // Shared trigger-button shape for the filter row beneath the search bar.
 // Inactive pills look like the search input frame; active pills tint with the
@@ -123,7 +153,11 @@ function FilterPill({
       aria-pressed={active}
       aria-haspopup={hasPopup ? 'listbox' : undefined}
       aria-expanded={hasPopup ? !!expanded : undefined}
-      className={`px-2.5 py-1 rounded-full text-2xs flex items-center gap-1.5 transition-colors duration-75 ${
+      // MOCKUP ONLY (shrink-0 whitespace-nowrap): in a 340px list column a
+      // fourth pill made every pill shrink and wrap its own label onto two
+      // lines, so the row grew to 50px of stacked word-halves. Pills keep their
+      // width and the ROW wraps instead.
+      className={`shrink-0 whitespace-nowrap px-2.5 py-1 rounded-full text-2xs flex items-center gap-1.5 transition-colors duration-75 ${
         active
           ? 'bg-accent/10 border border-accent/40 text-fg'
           : 'bg-inset border border-edge-dim text-fg-muted hover:text-fg'
@@ -322,7 +356,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // MOCKUP ONLY — the row whose transcript the right panel is showing. Distinct
   // from expandedId because in variants b/c nothing expands in the list at all.
   const [previewId, setPreviewId] = useState<string | null>(null);
-  const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // variant c's Resume sheet
+  const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
+  // MOCKUP ONLY — the drawer/page shells can collapse the list away, the same
+  // toggle the Session Files panel puts first in its top bar.
+  const [listOpen, setListOpen] = useState(true);
   const narrowViewport = useNarrowViewport();
   // The panel is single-column on a phone: a 390px screen cannot hold a list
   // AND a transcript, and the narrow-viewport rule forbids inventing a second
@@ -733,11 +770,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // starts on the model THIS conversation last ran on, which only the row
   // knows. See claudeModelForRow.
   const handleSelectSession = (s: PastSession) => {
-    // MOCKUP ONLY — variants b/c: clicking a row PREVIEWS it (and re-clicking
-    // the same row does nothing, because collapsing the panel would leave the
-    // right half empty for no reason the user asked for). The resume controls
-    // live in the panel, so the card itself never expands.
-    if (previewOn && PREVIEW_VARIANT !== 'a') {
+    // MOCKUP ONLY — in every preview shell, clicking a row PREVIEWS it (and
+    // re-clicking the same row does nothing, because collapsing the panel would
+    // leave the right half empty for no reason the user asked for). The resume
+    // controls live in the transcript pane, so the card itself never expands.
+    if (previewOn) {
       setPreviewId(s.sessionId);
       setPreviewSheetOpen(false);
       setOrganizeId(null);
@@ -747,7 +784,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setNativeResumeBinding(null);
       return;
     }
-    if (previewOn) setPreviewId(s.sessionId); // variant a: preview AND expand
     if (expandedId === s.sessionId) {
       setExpandedId(null);
     } else {
@@ -961,8 +997,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     const inert = !!(s.missingProject || s.notSyncedYet);
     // px-4 matches the search bar and the project group headers above, so the
     // card's outer edge lines up with the rest of the panel.
+    // MOCKUP ONLY — the flat shells drop the card entirely: no gap, no radius,
+    // no inset fill, a hairline between rows and an accent bar down the left of
+    // the selected one. WHY the accent bar rather than the Session Files panel's
+    // bare `bg-well`: that panel's selected fill and its hover fill are the SAME
+    // token, which works there because a file row is one line of text and the
+    // colour of that text carries the state. These rows are three lines with
+    // chips in them, so hover and selected have to differ by more than text.
     return (
-    <div key={s.sessionId} className="px-4 pb-2">
+    <div key={s.sessionId} className={SHELL.flatList ? '' : 'px-4 pb-2'}>
       {/* Expandable card. The surface is `bg-inset` + `border-edge-dim`, NOT
           `.layer-surface`.
           `.layer-surface` is the FLOATING surface — panel fill + border +
@@ -1000,9 +1043,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // this card, not the panel. The icon buttons are SIBLINGS of the expand
         // trigger, never nested — a button inside a button is invalid HTML and
         // the inner one would never receive its own click.
-        className={`relative rounded-lg border bg-inset overflow-hidden transition-colors ${
-          isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
-        }`}
+        className={SHELL.flatList
+          ? `relative overflow-hidden transition-colors border-b border-b-edge-dim border-l-2 ${
+              isSelected ? 'bg-well border-l-accent' : inert ? 'border-l-transparent' : 'border-l-transparent hover:bg-well'
+            }`
+          : `relative rounded-lg border bg-inset overflow-hidden transition-colors ${
+              isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
+            }`}
       >
       {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
           the organize icons. Keep the viewer unchanged and retain this dialog's
@@ -1244,30 +1291,158 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     );
   };
 
+  // MOCKUP ONLY — pulled out of the header block so the `searchbar` shell can
+  // put it across the top of the whole window instead. Identical markup either
+  // way; only its parent changes.
+  const searchBox = (
+    <div className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
+      <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <circle cx="11" cy="11" r="7" />
+        <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
+      </svg>
+      <input
+        ref={searchRef}
+        type="text"
+        value={search}
+        onChange={(e) => setSearch(e.target.value)}
+        placeholder="Search sessions..."
+        className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
+      />
+    </div>
+  );
+
+  // MOCKUP ONLY — the previewed row, resolved once for every shell below.
+  const previewSession = previewOn && previewId
+    ? filtered.find((r) => r.sessionId === previewId) ?? null
+    : null;
+
+  // MOCKUP ONLY — the Session Files panel's top-bar button shape, copied from
+  // SessionDrawer's local IconBtn (it is not exported). Same paddings, same
+  // border-on-hover, so the two bars cannot look like different apps.
+  const topBarIcon = (title: string, active: boolean, onClick: () => void, glyph: React.ReactNode) => (
+    <button
+      type="button"
+      title={title}
+      aria-label={title}
+      aria-pressed={active}
+      onClick={onClick}
+      className={`shrink-0 rounded-md border p-1.5 transition-colors ${
+        active ? 'text-fg bg-well border-edge' : 'text-fg-dim border-transparent hover:text-fg hover:bg-well hover:border-edge'
+      }`}
+    >
+      {glyph}
+    </button>
+  );
+
+  // MOCKUP ONLY — the metadata strip along the foot of the drawer/page shells,
+  // matching SessionDrawer's own footer (`text-2xs`, `bg-well`, hairline top).
+  const bottomStrip = SHELL.bottomStrip && previewOn ? (
+    <div className="flex items-center gap-2 px-3.5 py-1 text-2xs text-fg-muted border-t border-edge-dim bg-well shrink-0">
+      {previewSession ? (
+        <>
+          <span className="truncate">{previewSession.projectPath.replace(/\\/g, '/').split('/').pop()}</span>
+          <span aria-hidden>·</span>
+          <span className="shrink-0">{formatRelativeTime(previewSession.lastModified)}</span>
+          <span aria-hidden>·</span>
+          <span className="shrink-0">{formatSize(previewSession.size)}</span>
+          <span className="ml-auto shrink-0">Read-only until you resume</span>
+        </>
+      ) : (
+        <span>{filtered.length} conversation{filtered.length === 1 ? '' : 's'}</span>
+      )}
+    </div>
+  ) : null;
+
   return (
     <>
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
       <Scrim layer={1} onClick={onClose} />
-      <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
+      <div
+        className={`fixed inset-0 flex items-center justify-center pointer-events-none ${SHELL.fullPage && previewOn ? 'p-0' : 'p-4'}`}
+        style={{ zIndex: CONTENT_Z[1] }}
+      >
         <OverlayPanel
           layer={1}
           // MOCKUP ONLY — preview mode swaps max-h for a DEFINITE height. The
           // note on the list below explains why: with only a max-height, a
           // flex-1 child does not grow in Chromium, and the transcript column
           // needs a real height to scroll inside.
-          className={`w-full pointer-events-auto ${previewOn
-            ? 'max-w-[1000px] h-[76vh] flex flex-row'
-            : 'max-w-md max-h-[70vh] flex flex-col'}`}
-          style={{ position: 'relative', zIndex: 'auto' }}
+          className={`w-full pointer-events-auto flex flex-col ${previewOn
+            ? (SHELL.fullPage ? 'max-w-none h-full' : 'max-w-[1000px] h-[76vh]')
+            : 'max-w-md max-h-[70vh]'}`}
+          // A full-window shell has no corners to round and no shadow to cast —
+          // and `.layer-surface` sets both as UNLAYERED css, which a Tailwind
+          // utility (layered) cannot override. It has to be an inline style.
+          style={SHELL.fullPage && previewOn
+            ? { position: 'relative', zIndex: 'auto', borderRadius: 0, border: 'none', boxShadow: 'none' }
+            : { position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
-        {/* MOCKUP ONLY — list column. `contents` when the preview is off so the
+        {/* MOCKUP ONLY — the unified top bar: ONE row across both panes, the way
+            the Session Files panel does it. The conversation's own title takes
+            the slot the file name takes there, and Resume sits between the
+            panel controls and the ✕ — the position Destin fixed for the drawer
+            on 2026-08-27. */}
+        {SHELL.topBar && previewOn && (
+          <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
+            {topBarIcon(listOpen ? 'Hide list' : 'Show list', listOpen, () => setListOpen((v) => !v), (
+              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden>
+                <path d="M4 6h16M4 12h16M4 18h16" />
+              </svg>
+            ))}
+            <div className="min-w-0 px-2 py-1">
+              <span className="block text-sm-tight font-semibold text-fg truncate">
+                {previewSession ? previewSession.name : 'Resume Session'}
+              </span>
+            </div>
+            <div className="ml-auto flex items-center gap-1">
+              {previewSession && (
+                <Button
+                  variant="primary"
+                  size="sm"
+                  aria-haspopup="dialog"
+                  aria-expanded={previewSheetOpen}
+                  onClick={() => setPreviewSheetOpen((v) => !v)}
+                >
+                  Resume
+                </Button>
+              )}
+              <CloseButton size="icon-sm" onClick={onClose} />
+            </div>
+          </div>
+        )}
+        {/* MOCKUP ONLY — the `searchbar` shell's page header: the search field
+            across the full width, above both panes, instead of tucked into the
+            list column. */}
+        {SHELL.topSearch && previewOn && (
+          <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge shrink-0">
+            <div className="flex-1 min-w-0">{searchBox}</div>
+            <CloseButton size="icon-sm" onClick={onClose} />
+          </div>
+        )}
+        {/* MOCKUP ONLY — the body row. `contents` when there is no preview so the
             header and list stay DIRECT flex children of the panel and the
             unchanged browser renders byte-for-byte as it does on master. */}
-        <div className={previewOn ? 'w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge' : 'contents'}>
+        <div className={previewOn ? 'flex-1 min-h-0 flex' : 'contents'}>
+        {/* MOCKUP ONLY — list column. */}
+        <div className={previewOn
+          ? `shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden transition-[width] duration-200 ${
+              SHELL.flatList ? 'bg-well' : ''
+            } ${SHELL.topBar && !listOpen ? 'w-0 border-r-0' : SHELL.flatList ? 'w-[340px]' : 'w-[420px]'}`
+          : 'contents'}>
+          {/* MOCKUP ONLY — inner wrapper at a FIXED width so collapsing the
+              column to w-0 slides it out instead of crushing its contents into
+              a 0px column. Same two-div trick SessionDrawer's list uses. */}
+          <div className={previewOn ? `${SHELL.flatList ? 'w-[340px]' : 'w-[420px]'} flex flex-col h-full min-h-0` : 'contents'}>
           {/* Header */}
           <div className="px-4 pt-4 pb-3 border-b border-edge">
+            {/* MOCKUP ONLY — the whole title row goes when a top bar or a page
+                search header already carries the title: what was left was a lone
+                SHOW COMPLETE toggle floating above the search field with nothing
+                on its left. Show Complete becomes a pill in the filter row
+                below instead, where it reads as the filter it is. */}
+            {!(previewOn && (SHELL.topBar || SHELL.topSearch)) && (
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-fg">Resume Session</h2>
               {/* Show Complete — same toggle pattern as Skip Permissions
@@ -1284,21 +1459,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
-              <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
-              </svg>
-              <input
-                ref={searchRef}
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search sessions..."
-                className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
-              />
-            </div>
-            <div ref={filterRowRef} className="flex items-center gap-1.5 mt-2 relative">
+            )}
+            {/* Hidden in the `searchbar` shell — it renders this same field
+                across the top of the window instead. */}
+            {!(previewOn && SHELL.topSearch) && searchBox}
+            <div ref={filterRowRef} className={`flex flex-wrap items-center gap-1.5 relative ${previewOn && SHELL.topSearch ? 'mt-0' : 'mt-2'}`}>
               {/* Projects: multi-select dropdown over distinct projectPaths in the loaded sessions.
                   Dropdown is portaled to document.body so it escapes the OverlayPanel's
                   overflow:hidden clipping (lets it overlap the panel edge). */}
@@ -1435,6 +1600,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               <FilterPill active={sortDir !== 'desc'} onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}>
                 {sortDir === 'desc' ? 'Most recent ↓' : 'Oldest first ↑'}
               </FilterPill>
+              {/* MOCKUP ONLY — Show Complete as a pill, for the shells whose
+                  title row (and its toggle) has moved into a top bar. */}
+              {previewOn && (SHELL.topBar || SHELL.topSearch) && (
+                <FilterPill active={showComplete} onClick={() => setShowComplete((v) => !v)}>
+                  Show complete
+                </FilterPill>
+              )}
             </div>
           </div>
 
@@ -1448,7 +1620,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               outer edge, and the `overflow: hidden` on .layer-surface clips them to
               the OverlayPanel's rounded corners. */}
           <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
-            <div className="py-2">
+            <div className={SHELL.flatList && previewOn ? '' : 'py-2'}>
               {loading ? (
                 <LoadingState what="sessions" />
               ) : filtered.length === 0 ? (
@@ -1484,10 +1656,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               )}
             </div>
           </div>
+          </div>
         </div>
-        {/* MOCKUP ONLY — the preview column. */}
+        {/* MOCKUP ONLY — the transcript column. */}
         {previewOn && (() => {
-          const s = previewId ? filtered.find((r) => r.sessionId === previewId) ?? null : null;
+          const s = previewSession;
           if (!s) {
             return (
               <div className="flex-1 min-w-0 flex items-center justify-center px-8">
@@ -1497,49 +1670,92 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               </div>
             );
           }
+          const project = s.projectPath.replace(/\\/g, '/').split('/').pop();
+          const tags = (s.tags ?? []).map((id) => registry.tags.find((t) => t.id === id)).filter(Boolean);
           return (
-            <div className="flex-1 min-w-0 flex flex-col min-h-0">
-              <div className="px-4 pt-4 pb-3 border-b border-edge flex items-start gap-2">
-                <div className="min-w-0 flex-1">
-                  <h3 className="text-sm-tight font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
-                  <div className="mt-1 flex items-center gap-1.5 text-3xs text-fg-muted">
-                    <span className="truncate">{s.projectPath.replace(/\\/g, '/').split('/').pop()}</span>
-                    <span aria-hidden>·</span>
-                    <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
-                    <span aria-hidden>·</span>
-                    <span className="shrink-0">{formatSize(s.size)}</span>
+            <div className={`flex-1 min-w-0 flex flex-col min-h-0 ${SHELL.readingColumn ? 'bg-canvas' : ''}`}>
+              {/* The hero shell leads with the conversation itself: title, where
+                  it ran, what it ran on, its tags, and Resume — the same facts
+                  the card in the list carries, at the size of a page heading
+                  rather than a row. */}
+              {SHELL.hero && (
+                <div className="px-5 pt-4 pb-4 border-b border-edge bg-inset">
+                  <div className="flex items-start gap-3">
+                    <div className="min-w-0 flex-1">
+                      <h3 className="text-base font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
+                      <div className="mt-1.5 flex items-center gap-1.5 text-3xs text-fg-muted">
+                        <span className="truncate">{project}</span>
+                        <span aria-hidden>·</span>
+                        <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
+                        <span aria-hidden>·</span>
+                        <span className="shrink-0">{formatSize(s.size)}</span>
+                      </div>
+                      {tags.length > 0 && (
+                        <div className="mt-2 flex flex-wrap items-center gap-1">
+                          {tags.map((t) => <TagChip key={t!.id} tag={t!} />)}
+                        </div>
+                      )}
+                    </div>
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      className="shrink-0"
+                      aria-haspopup="dialog"
+                      aria-expanded={previewSheetOpen}
+                      onClick={() => setPreviewSheetOpen((v) => !v)}
+                    >
+                      Resume
+                    </Button>
                   </div>
                 </div>
-                {PREVIEW_VARIANT === 'c' && (
-                  <Button
-                    variant="primary"
-                    size="sm"
-                    className="shrink-0"
-                    aria-haspopup="dialog"
-                    aria-expanded={previewSheetOpen}
-                    onClick={() => setPreviewSheetOpen((v) => !v)}
-                  >
-                    Resume
-                  </Button>
-                )}
-              </div>
-              {/* Variant c's options drop IN below the header rather than
-                  floating: a floating popover here would be a second
+              )}
+              {/* The shells with no top bar and no hero still need to say WHICH
+                  conversation is on the right. A slim line does it. */}
+              {!SHELL.topBar && !SHELL.hero && (
+                <div className="px-4 pt-4 pb-3 border-b border-edge flex items-start gap-2">
+                  <div className="min-w-0 flex-1">
+                    <h3 className="text-sm-tight font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
+                    <div className="mt-1 flex items-center gap-1.5 text-3xs text-fg-muted">
+                      <span className="truncate">{project}</span>
+                      <span aria-hidden>·</span>
+                      <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
+                      <span aria-hidden>·</span>
+                      <span className="shrink-0">{formatSize(s.size)}</span>
+                    </div>
+                  </div>
+                  {SHELL.topSearch && (
+                    <Button
+                      variant="primary"
+                      size="sm"
+                      className="shrink-0"
+                      aria-haspopup="dialog"
+                      aria-expanded={previewSheetOpen}
+                      onClick={() => setPreviewSheetOpen((v) => !v)}
+                    >
+                      Resume
+                    </Button>
+                  )}
+                </div>
+              )}
+              {/* The options drop IN below whatever header opened them rather
+                  than floating: a floating popover here would be a second
                   `.layer-surface` inside the overlay, which is the stacked-glass
                   bug the card comment above warns about. Same in-flow choice the
                   organize sheet already makes. */}
-              {PREVIEW_VARIANT === 'c' && previewSheetOpen && renderExpandedOptions(s)}
-              <div className="flex-1 min-h-0 flex flex-col">
+              {!SHELL.footerResume && previewSheetOpen && renderExpandedOptions(s)}
+              <div className={`flex-1 min-h-0 flex flex-col ${SHELL.readingColumn ? 'w-full max-w-[760px] mx-auto' : ''}`}>
                 <SessionPreviewPane
                   provider={(s.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
                   id={s.sessionId}
                   title={s.name}
                 />
               </div>
-              {PREVIEW_VARIANT === 'b' && renderExpandedOptions(s)}
+              {SHELL.footerResume && renderExpandedOptions(s)}
             </div>
           );
         })()}
+        </div>
+        {bottomStrip}
         </OverlayPanel>
       </div>
 
