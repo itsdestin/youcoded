@@ -41,19 +41,44 @@ describe('development design safety', () => {
     expect(screen.queryByText(/Private backup saves/)).toBeNull();
     expect(screen.getByText('Choose whether to propose it')).toBeTruthy();
   });
-  it('reviews editable evidence without calling a provider and preserves the draft on close', () => {
-    const dev = { summarizeIssue: vi.fn(), diagnostics: vi.fn(), logTail: vi.fn(), installWorkspace: vi.fn() };
+  it('reviews editable evidence without calling a provider and keeps the draft through review', async () => {
+    // Rewritten after code review C15. Two of its assertions proved nothing:
+    //   - `logTail` was never called by ANY path, so "not called" was true for ever
+    //     rather than "not called until you ask". It now ticks the box and asserts
+    //     the read happens THEN, which is the actual promise.
+    //   - the draft check rerendered with open={false}, which does not unmount, so it
+    //     held for any component keeping state in hooks — including one with no draft
+    //     handling at all. It now goes to review and back, which is the journey a user
+    //     actually makes and the one that could lose their words.
+    const dev = { summarizeIssue: vi.fn(), diagnostics: vi.fn(), logTail: vi.fn().mockResolvedValue('line one'), installWorkspace: vi.fn() };
     Object.assign(window, { claude: { dev } });
-    const view = render(<BugReportPopup open onClose={() => {}} />);
+    render(<BugReportPopup open onClose={() => {}} />);
     fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
     fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    expect(dev.logTail).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Include recent logs' }));
+    await vi.waitFor(() => expect(dev.logTail).toHaveBeenCalledTimes(1));
     fireEvent.click(screen.getByText('Review ticket'));
     expect(screen.getByText('Optional AI help')).toBeTruthy();
     expect(dev.summarizeIssue).not.toHaveBeenCalled();
-    expect(dev.logTail).not.toHaveBeenCalled();
-    view.rerender(<BugReportPopup open={false} onClose={() => {}} />);
-    view.rerender(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Back to draft' }));
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value)
+      .toBe('Opening the menu closes the window.');
+  });
+
+  it('shows the legacy ticket screen when the workbench flag is absent', () => {
+    // WHY this exists (code review C15): every other test in this file runs inside
+    // `?mode=workbench`, so nothing here exercised what a user actually gets — and
+    // the gate could have been deleted, or left up by accident, with the suite green
+    // either way. This pins the gate as a DECISION. It is deliberately still up
+    // because the legacy screen carries "Let Claude Try to Fix It" and no deck asked
+    // to remove it; when Destin answers that at acceptance, this test changes with it.
+    window.history.replaceState({}, '', '/');
+    Object.assign(window, { claude: { dev: { logTail: vi.fn(), diagnostics: vi.fn(), summarizeIssue: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    expect(screen.getByRole('heading', { name: 'Report a bug' })).toBeTruthy();
+    expect(screen.queryByRole('heading', { name: 'Submit a ticket' })).toBeNull();
   });
   it('reviews selected logs before AI and keeps fields through back without demo controls', () => {
     render(<BugReportPopup open onClose={() => {}} />);
@@ -90,7 +115,10 @@ describe('development design safety', () => {
 
   // WHY: Destin, 2026-09-09 — "the workbench shouldn't have code that makes it look different
   // from the real app, that defeats the whole point." No prototype captions on any design screen.
-  const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailable in this/i;
+  // Widened after code review C5: the live screen carried "Sample text only — no logs
+// collected", a mockup caption these tests were supposed to forbid, and the regex
+// walked straight past it.
+const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailable in this|sample text only|no logs collected/i;
 
   it('never captions the contribution screen as a preview or prototype', () => {
     render(<ContributePopup open onClose={() => {}} />);
@@ -141,6 +169,20 @@ describe('development design safety', () => {
     render(<ContributePopup open onClose={() => {}} />);
     await screen.findByText(/Setting up your development workspace/);
     expect(screen.queryByRole('button', { name: 'Set up development workspace' })).toBeNull();
+  });
+
+  it('notices setup finishing while the screen is open', async () => {
+    // WHY (code review C7/C15): the "still running" test never advanced the status,
+    // so it was green with no polling at all — and without polling a reopened dialog
+    // sat on the spinner for ever while setup finished perfectly well behind it.
+    // This one CHANGES the answer and requires the screen to notice.
+    const setupStatus = vi.fn()
+      .mockResolvedValueOnce({ state: 'running' })
+      .mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
+    Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn(), clearSetupStatus: vi.fn() } } });
+    render(<ContributePopup open onClose={() => {}} />);
+    await screen.findByText(/Setting up your development workspace/);
+    await screen.findByText(/Your development workspace is ready/, {}, { timeout: 4000 });
   });
 
   it('shows a setup that finished while you were away', async () => {

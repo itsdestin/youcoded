@@ -1,4 +1,4 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import rehypeHighlight from 'rehype-highlight';
 import remarkGfm from 'remark-gfm';
@@ -161,11 +161,21 @@ const rehypePluginsWithFilepaths: PluggableList = [
 
 function CopyButton({ text }: { text: string }) {
   const [copied, setCopied] = useState(false);
+  // WHY the timer is held and cleared (2026-09-10): the reset was a bare
+  // setTimeout, so a copy followed by the message closing within two seconds
+  // fired setState on an unmounted component. In the app that is a React warning;
+  // under vitest it is `ReferenceError: window is not defined` from react-dom
+  // AFTER jsdom is torn down, which vitest reports as an unhandled error — the run
+  // goes red while every test shows passed, so the failure names nothing.
+  // `.claude/rules/test-suite-hygiene.md` -> "Unmount what you render".
+  const resetTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => { if (resetTimer.current) clearTimeout(resetTimer.current); }, []);
 
   const handleCopy = () => {
     navigator.clipboard.writeText(text);
     setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    if (resetTimer.current) clearTimeout(resetTimer.current);
+    resetTimer.current = setTimeout(() => setCopied(false), 2000);
   };
 
   return (
