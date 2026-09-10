@@ -210,6 +210,18 @@ export function loadFixture(
         const action: ChatAction = { type: 'NATIVE_SESSION_ERROR', sessionId, message: parsed.text };
         state = chatReducer(state, action);
         actions.push(action);
+      } else if (parsed.type === 'session_context') {
+        // Step 3 (2026-08-17, broadened): a session's STARTING context. Replays
+        // the same SESSION_CONTEXT action the host will fire, so the session
+        // context panel + strip render in the workbench through the real
+        // reducer. Works for cloud (full) and local (trimmed) sessions alike.
+        const action: ChatAction = {
+          type: 'SESSION_CONTEXT',
+          sessionId,
+          context: parsed.context ?? null,
+        };
+        state = chatReducer(state, action);
+        actions.push(action);
       } else if (parsed.type === 'tool_use') {
         const action: ChatAction = {
           type: 'TRANSCRIPT_TOOL_USE',

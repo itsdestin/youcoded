@@ -1,3 +1,4 @@
+import { Tooltip } from './ui';
 /**
  * SettingsExplainer.tsx — the explainer payload, and nothing else.
  *
@@ -81,10 +82,10 @@ export default function SettingsExplainer({ intro, sections }: Props) {
  */
 export function InfoIconButton({ onClick }: { onClick: () => void }) {
   return (
+    <Tooltip text="What is this?">
     <button
       onClick={onClick}
       className="text-fg-muted hover:text-fg-2 leading-none w-6 h-6 flex items-center justify-center rounded-sm hover:bg-inset"
-      title="What is this?"
       aria-label="What is this?"
     >
       <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
@@ -93,5 +94,6 @@ export function InfoIconButton({ onClick }: { onClick: () => void }) {
         <circle cx="12" cy="8" r="0.5" fill="currentColor" />
       </svg>
     </button>
+    </Tooltip>
   );
 }

@@ -21,6 +21,7 @@ import { hasPendingInteraction } from '../state/pty-input-gate';
 import { buildOutgoingMessage } from './outgoing-message';
 import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
+import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useStreamingGate } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
@@ -77,6 +78,9 @@ interface Props {
   getSessionState?: (sessionId: string) => import('../state/chat-types').SessionChatState | undefined;
   // Bare /model, /fast, /effort open the unified ModelPickerPopup
   onOpenModelPicker?: () => void;
+  // Typed `/model <alias>` — App.tsx runs the guarded PTY send + optimistic
+  // pill update. See slash-command-dispatcher.ts's DispatcherCallbacks doc.
+  onModelSwitchCommand?: (alias: ClaudeAlias) => 'sent' | 'blocked' | 'ineligible';
   /** Optional text to prefill when this session is first selected.
    *  Consumed exactly once per session ID via a consumed-set ref — safe to
    *  receive as a prop without triggering repeated fills on re-renders. */
@@ -132,7 +136,7 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
   return 'The message could not be sent — no response from the session host.';
 }
 
-const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, initialInput, provider }, ref) {
+const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
   const [text, setText] = useState('');
   const [attachments, setAttachments] = useState<Attachment[]>([]);
 
@@ -549,7 +553,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         files,
         dispatch,
         timeline: [], // Day 1: unused; will wire per-session timeline on Day 2 when commands need it
-        callbacks: { onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker },
+        callbacks: { onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, getSessionState, onOpenModelPicker, onModelSwitchCommand },
         // Native /clear is durable-first — see deferUiEffectsToRuntime.
         deferUiEffectsToRuntime: provider === 'native',
       });
@@ -703,7 +707,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       }, submitStart);
       return true;
     },
-    [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker],
+    [sessionId, disabled, dispatch, view, provider, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand],
   );
 
   // Auto-resize textarea to fit content, up to 3 lines then scroll
@@ -1048,7 +1052,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // a held key repeats, and every repeat resets that timer.)
             onBlur={releaseSpaceHold}
             onPaste={handlePaste}
-            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : 'Message Claude...'}
+            // Native-provider sessions may run a local/non-Claude model, so the
+            // placeholder can't claim it's Claude; PTY (provider 'claude') sessions
+            // really are talking to Claude Code, so they keep the specific name.
+            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : provider === 'native' ? 'Message your assistant...' : 'Message Claude...'}
             disabled={disabled}
             // Text color is transparent so the mirror div behind it shows
             // through (with animated keyword spans). caret-color keeps the

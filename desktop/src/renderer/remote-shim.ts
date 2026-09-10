@@ -284,6 +284,14 @@ function flushSendQueue(): void {
 // operations (rclone copy of 100s of files over cellular, git push of a large
 // repo, etc.) can legitimately take minutes. Callers pass a larger timeoutMs
 // for those — see `sync.force` below.
+// Mirror of preload's `unwrap`: main answers {ok:false,error} and never throws
+// across the bridge, but the naming UI shows its ErrorState from a caught
+// error and keeps the last saved value.
+async function unwrapRemote(p: Promise<any>): Promise<void> {
+  const r = await p;
+  if (!r || r.ok !== true) throw new Error(r?.error || 'That could not be saved.');
+}
+
 function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Promise<any> {
   const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
@@ -683,6 +691,12 @@ function handleMessage(data: string): void {
       // forwarder). window.claude.on.shellEvent subscribers get the ShellEvent.
       dispatchEvent('native:shell-event', payload);
       break;
+    case 'native:session-context':
+      // "What the assistant was given" — push-only (ipc-handlers.ts's
+      // nativeHost.on('session-context', …) forwarder). A client that connects
+      // LATER does not need this case: the record travels inside chat:hydrate.
+      dispatchEvent('native:session-context', payload);
+      break;
     case 'voice:event':
       // Voice typing push events from the ANDROID host (readiness / level /
       // partial words / final / heartbeat / error). window.claude.voice.onEvent
@@ -797,6 +811,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
             const platform = msg.platform || 'browser';
             (window as any).__PLATFORM__ = platform;
           }
+          // Naming capability, straight off the handshake — no extra round
+          // trip, and settled before the first paint that could show a naming
+          // control. Absent on a host that has no naming backend (an Android
+          // phone running Claude Code locally), which leaves every naming
+          // control hidden rather than broken.
+          const naming = (window as any).claude?.sessionNaming;
+          if (naming) naming.available = msg.sessionNaming === true;
           resolve(token);
           // Switch to normal message handling
           ws!.onmessage = (e) => handleMessage(e.data as string);
@@ -1159,6 +1180,22 @@ export function installShim(): void {
     // has no process env, and the label describes the DEV INSTANCE you're sitting
     // in front of, not the host it happens to be talking to.
     devLabel: null,
+    // Session naming. `available` starts FALSE and is set by the one-time probe
+    // below, because a phone running Claude Code locally has no naming backend
+    // at all — no provider registry, no ownership store — and the UI decides
+    // whether the feature exists by asking this object. Painting the settings
+    // card and the rename pencil and only then failing would be worse than not
+    // offering them: naming-api.ts treats available:false exactly like a host
+    // that never heard of naming, which is today's behaviour there.
+    sessionNaming: {
+      available: false,
+      get: () => invoke('session-naming:get'),
+      set: (value: unknown) => unwrapRemote(invoke('session-naming:set', { value })),
+      title: (sessionId: string, fallback: string) =>
+        invoke('session-naming:title', { sessionId, fallback }),
+      rename: (sessionId: string, title: string) =>
+        unwrapRemote(invoke('session-naming:rename', { sessionId, title })),
+    },
     session: {
       create: (opts: any) => invoke('session:create', opts),
       destroy: (sessionId: string) => invoke('session:destroy', { sessionId }),
@@ -2094,6 +2131,16 @@ export function installShim(): void {
       // G-1: NOT gated on `supported` — a phone must be able to Stop a command
       // running on the DESKTOP, whose runtime is the one that owns it.
       killShell: (sessionId: string, shellId: string) => invoke('native:kill-shell', { sessionId, shellId }),
+      // One file's text for the session-context panel. NOT gated on `supported`,
+      // for the same reason killShell is not: the desktop owns the session and
+      // its files, and a phone looking at that chat must be able to read them.
+      sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) =>
+        invoke('native:session-context-text', { sessionId, kind, id }),
+      onSessionContext: (cb: (e: unknown) => void) => {
+        const handler: Callback = (payload: any) => cb(payload);
+        addListener('native:session-context', handler);
+        return () => removeListener('native:session-context', handler);
+      },
       onModelState: (cb: (s: unknown) => void) => {
         const handler: Callback = (payload: any) => cb(payload);
         addListener('native:model-state', handler);
@@ -2125,6 +2172,13 @@ export function installShim(): void {
       signIn: () => invoke('chatgpt:sign-in'),
       cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),
       signOut: () => invoke('chatgpt:sign-out'),
+    },
+    // Claude Code's live sign-in (2026-09-09). Real over the wire: remote-server
+    // answers from the DESKTOP's probe, which is the machine the session
+    // actually runs on. A browser has no `claude` binary of its own, so asking
+    // locally would be meaningless.
+    claudeCode: {
+      status: (opts?: { refresh?: boolean }) => invoke('claude-code:status', opts),
     },
     // WebSearch providers (Phase 2 Plan B) — WS transport. Object payloads match
     // remote-server's WS case reads (payload.backend / payload.key).

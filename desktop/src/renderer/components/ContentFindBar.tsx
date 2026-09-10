@@ -7,7 +7,7 @@
 // overlay) — otherwise its own text (the match counter) would be walked and
 // matched by the search.
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { TextInput } from './ui';
+import { TextInput, Tooltip } from './ui';
 
 function highlightsSupported(): boolean {
   return typeof CSS !== 'undefined' && 'highlights' in CSS && typeof (window as any).Highlight === 'function';
@@ -147,27 +147,30 @@ export function ContentFindBar({ containerRef, onClose, resetKey, highlightName 
       <span className="text-2xs text-fg-muted tabular-nums text-center px-1 min-w-[40px]">{shown}</span>
       {/* Lucide-style SVGs (stroke currentColor) — the app's icon convention;
           these were literal ↑/↓/✕ text characters before. */}
-      <button type="button" title="Previous (Shift+Enter)" onClick={() => go(-1)}
+      <Tooltip text="Previous (Shift+Enter)"><button type="button" onClick={() => go(-1)}
         className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-dim hover:text-fg hover:bg-well">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="m18 15-6-6-6 6" />
         </svg>
       </button>
-      <button type="button" title="Next (Enter)" onClick={() => go(1)}
+      </Tooltip>
+      <Tooltip text="Next (Enter)"><button type="button" onClick={() => go(1)}
         className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-dim hover:text-fg hover:bg-well">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <path d="m6 9 6 6 6-6" />
         </svg>
       </button>
-      <button type="button" title="Close (Esc)" onClick={onClose}
+      </Tooltip>
+      <Tooltip text="Close (Esc)"><button type="button" onClick={onClose}
         className="w-6 h-6 rounded-md inline-flex items-center justify-center text-fg-dim hover:text-fg hover:bg-well">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor"
           strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
           <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
         </svg>
       </button>
+      </Tooltip>
     </>
   );
 

@@ -1,5 +1,6 @@
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
+import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
 import type { TranscriptEvent } from '../../../shared/types';
 import type { MockStore } from './mock-store';
 import type { MarketplaceUser } from '../../../main/marketplace-auth-store';
@@ -74,6 +75,7 @@ const WORKBENCH_TEXT_HEADS: Record<string, string> = {
  *  top-level bridge members (`'getPlatform'`). The contract test
  *  (tests/workbench-mock-contract.test.ts) checks each against preload.ts. */
 export const HAND_WRITTEN: ReadonlyArray<string> = [
+  'sessionNaming.get', 'sessionNaming.set', 'sessionNaming.title', 'sessionNaming.rename',
   'devLabel', 'getPlatform', 'getHomePath', 'getFavorites', 'setFavorites',
   'getIncognito', 'setIncognito', 'onChatExportSnapshot',
   'sendChatSnapshotResponse', 'fireRemoteAttentionChanged',
@@ -119,6 +121,9 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // G-1 — real backend as of 2026-08-28; hand-written so the gallery's Bash
   // cards keep their fixture state instead of talking to a real process.
   'native.killShell', 'on.shellEvent',
+  // "What the assistant was given" — real backend as of 2026-09-10; hand-written
+  // here so the panel has file text to show without a filesystem.
+  'native.sessionContextText', 'native.onSessionContext',
   'fs.readHead',
   // Specialists 1c — real backend as of Task 8 (see the contract test's
   // remote-shim/preload scan); still hand-written here so the workbench has
@@ -208,6 +213,69 @@ const warned = new Set<string>();
 // is invisible in the workbench and obvious in the app, which is the wrong way
 // round. Default 150ms, not 0. Spec §4.
 const DEFAULT_LATENCY_MS = 150;
+
+/** File text for the session-context panel's on-demand read. Small on purpose:
+ *  enough to render the markdown, the got/cut comparison and the line counts,
+ *  without carrying a real CLAUDE.md around in the bundle. One of each is
+ *  deliberately SHORTENED — the comparison is most of what the panel is for, and
+ *  a workbench that only ever shows whole files never renders it. */
+const CONTEXT_TEXT: {
+  user: { path: string; text: string; full: string; truncated: boolean };
+  project: { path: string; text: string; full: string; truncated: boolean };
+  skills: Record<string, { path: string; text: string; full: string; truncated: boolean }>;
+} = (() => {
+  const projectFull = [
+    '# CLAUDE.md', '',
+    '## Theme authoring', '- Tokens are named --bg-*, --fg-*, --border-*',
+    '- Every theme ships a dark variant', '',
+    '## Marketplace', '- Publish through /theme-builder', '- Bump the version on every change', '',
+    '## Building', '- npm run build', '- npm test before opening a pull request', '',
+    '## Review', '- Screenshots for anything that changes on screen',
+  ].join('\n');
+  const projectCut = [
+    '# CLAUDE.md', '',
+    '## Theme authoring', '- Tokens are named --bg-*, --fg-*, --border-*',
+    '- Every theme ships a dark variant', '',
+    '## Marketplace', '\u2026', '',
+    '## Building', '\u2026', '',
+    '## Review', '\u2026', '',
+    "[3 of 4 sections above are shown as heading + first line(s), marked \u2026, to fit this model's context window. Every heading is present \u2014 Read CLAUDE.md for the full text of any section you need.]",
+  ].join('\n');
+  const skillFull = [
+    '# theme-builder', '',
+    'Build, preview and publish a community theme.', '',
+    '## Steps', '1. Pick a base theme to start from.', '2. Change the tokens you care about.',
+    '3. Preview it against a busy conversation.', '4. Publish it to the marketplace.', '',
+    '## Rules', '- Never ship a theme without a dark variant.', '- Contrast is checked in CI and will fail you.',
+  ].join('\n');
+  const whole = (path: string, text: string) => ({ path, text, full: text, truncated: false });
+  return {
+    // Your own rules, read whole — nothing shortens this one, which is the point
+    // of having an untrimmed fixture beside the trimmed project file.
+    user: whole('/home/destin/.claude/CLAUDE.md', [
+      '# My rules', '',
+      '## How to talk to me', '- Plain words, no jargon.', '- Say what I will see change.', '',
+      '## Always', '- Ask before deleting anything.',
+    ].join('\n')),
+    project: { path: '/home/destin/youcoded-dev/wecoded-themes/CLAUDE.md', text: projectCut, full: projectFull, truncated: true },
+    skills: {
+      'wecoded-themes-plugin:theme-builder': {
+        path: '/home/destin/.claude/skills/theme-builder/SKILL.md',
+        text: `${skillFull.slice(0, 150)}\n\n[...truncated to fit this model's context window. Read /home/destin/.claude/skills/theme-builder/SKILL.md for the rest.]`,
+        full: skillFull,
+        truncated: true,
+      },
+      'wecoded-marketplace-publisher:marketplace-publisher': whole(
+        '/home/destin/.claude/skills/marketplace-publisher/SKILL.md',
+        '# marketplace-publisher\n\nPublish a skill to the marketplace.\n\n- Check the manifest first.\n- Bump the version.',
+      ),
+      'youcoded-chatsearch:chatsearch': whole(
+        '/home/destin/.claude/skills/chatsearch/SKILL.md',
+        '# chatsearch\n\nSearch your past conversations.\n\nStart with find, then show one.',
+      ),
+    },
+  };
+})();
 
 function latencyFromQuery(): number {
   // `location` is absent under the node test environment; the tests set the
@@ -359,11 +427,20 @@ const NAMESPACES = [
   'search',
 ];
 
+import { createNamingPreview } from './naming-preview';
+
 export function createMockShim(store: MockStore): Window['claude'] {
   const impls = handWritten(store);
 
   const bridge: Record<string, unknown> = {
-    devLabel: 'Workbench',
+    devLabel: 'Session Naming · Workbench',
+    sessionNaming: createNamingPreview((id, title) => {
+      store.setState((s) => ({ ...s,
+        sessions: s.sessions.map((row) => row.id === id ? { ...row, name: title } : row),
+        past: s.past.map((row) => row.sessionId === id ? { ...row, name: title } : row),
+      }));
+      window.dispatchEvent(new CustomEvent('youcoded:session-renamed', { detail: { id, title } }));
+    }, { wait: () => delay(undefined), refuseWrites: () => store.refuseWrites }),
 
     // Top-level CALLABLE bridge members — NOT namespaces. The catch-all is
     // callable now, so a missing one degrades instead of crashing; these are
@@ -876,6 +953,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // ── Claude Code's own sign-in ──────────────────────────────────────────────
+  // Pinned by `?claudeCode=` (signed-in | signed-out | apikey | not-installed |
+  // unknown). Default signed-in on a Max plan, because that is the ordinary
+  // install every other workbench shot assumes — a default of anything else
+  // would grey out every Claude row in the model picker for a tooling reason,
+  // which is exactly the bug this whole channel exists to fix (2026-09-09).
+  const claudeCodePin = typeof location !== 'undefined'
+    ? new URLSearchParams(location.search).get('claudeCode')
+    : null;
+  const claudeCodeStatus: ClaudeAccountStatus =
+    claudeCodePin === 'signed-out' ? { state: 'signed-out' }
+    : claudeCodePin === 'not-installed' ? { state: 'not-installed' }
+    : claudeCodePin === 'unknown' ? { state: 'unknown' }
+    : claudeCodePin === 'apikey' ? { state: 'signed-in', apiKey: true }
+    : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false };
+  const claudeCode = { status: async () => claudeCodeStatus };
+
   // Web search backends: two rows, neither keyed, as a fresh install has them.
   // `test` accepts any key so the Save path can be walked; `setKey`/`removeKey`
   // flip the row like the real store does.
@@ -1315,6 +1409,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // G-1: the card's Stop just resolves — the gallery fixture stays in its
     // captured state rather than spawning anything real.
     killShell: async (_sessionId: string, _shellId: string) => ({ ok: true }),
+    // "What the assistant was given": one file's text, read on demand. The real
+    // one reads the file and runs the session's own fitter; there is no
+    // filesystem here, so the fixtures below stand in — including a genuinely
+    // shortened one, because the got/cut comparison is most of what this panel
+    // is for and a workbench that only ever shows whole files never renders it.
+    sessionContextText: async (_sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => {
+      const fixture = kind === 'project' ? CONTEXT_TEXT.project
+        : kind === 'user' ? CONTEXT_TEXT.user
+          : CONTEXT_TEXT.skills[id ?? ''];
+      if (!fixture) return { error: 'unreadable' };
+      return fixture;
+    },
+    // The push itself is dispatched straight into the reducer by
+    // fixture-loader.ts (the session_context line of a conversation fixture),
+    // so nothing here ever fires — this exists to keep the shape identical to
+    // preload's, which is what the mock-contract test checks.
+    onSessionContext: (_cb: (e: { sessionId: string; context: any }) => void) => () => {},
   };
 
   // Fix (final review): SpecialistsSection's "Open folder" button reads
@@ -2470,7 +2581,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, search, ...(remote ? { remote } : {}),
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search, ...(remote ? { remote } : {}),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 

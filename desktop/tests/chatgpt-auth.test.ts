@@ -43,6 +43,10 @@ import {
   chatGptModelsUrl,
 } from '../src/main/providers/chatgpt-oauth';
 import { chatGptLimitMessage } from '../src/shared/chatgpt-types';
+import { ChatGptRequestDiagnostics, withChatGptRequest, bindChatGptRequest } from '../src/main/providers/chatgpt-request-diagnostics';
+import { chatGptMiddleware } from '../src/main/providers/chatgpt-model';
+import { createOpenAI } from '@ai-sdk/openai';
+import { wrapLanguageModel, streamText } from 'ai';
 
 // The lock primitive is real everywhere except the one test that pins the
 // retry-then-throw, which makes it report "lock held" five times.
@@ -369,7 +373,13 @@ describe('ChatGptAuth: the sign-in round', () => {
     expect(status.state).toBe('signed-in');
     expect(status).toMatchObject({ email: 'd@example.com' });
     expect(auth.isSignedIn()).toBe(true);
-    expect(auth.signedInAccount()).toEqual({ accountId: 'acct-1', email: 'd@example.com', plan: 'plus' });
+    // credentialEpoch: 16 random bytes as hex, minted by THIS sign-in round —
+    // the durable half of the continuation identity (Task 1; authGeneration
+    // stays in-memory-only and is not what survives a restart).
+    expect(auth.signedInAccount()).toEqual({
+      accountId: 'acct-1', email: 'd@example.com', plan: 'plus', authGeneration: 1,
+      credentialEpoch: expect.stringMatching(/^[0-9a-f]{32}$/),
+    });
 
     // Token hygiene: the account file holds a ref, never the token; the
     // secrets file holds only ciphertext; no log line carries it.
@@ -380,6 +390,37 @@ describe('ChatGptAuth: the sign-in round', () => {
     expect(JSON.stringify(h.logs)).not.toContain(TOKEN_MARKER);
     // The listener is gone.
     expect(await portOpen(h.port)).toBe(false);
+  });
+
+  // Task 1: the credential epoch replaces the in-memory authGeneration counter
+  // as the durable half of continuation identity — it must survive the
+  // process restart authGeneration (0 every launch) never could.
+  it('the credential epoch survives a fresh ChatGptAuth over the same userData dir, changes on a fresh sign-in, and is gone after sign-out', async () => {
+    const auth = h.build();
+    await completeSignIn(auth);
+    const epoch1 = auth.signedInAccount().credentialEpoch;
+    expect(epoch1).toMatch(/^[0-9a-f]{32}$/);
+
+    // A second ChatGptAuth constructed over the SAME userData dir (what a
+    // fresh process does after a restart) reads the identical epoch back
+    // from disk — durability, not memory.
+    const restarted = h.build();
+    expect(restarted.signedInAccount().credentialEpoch).toBe(epoch1);
+
+    // A second, successful sign-in round on the SAME account (re-auth) mints
+    // a NEW epoch — this is what still changes the continuation identity on
+    // reauth now that authGeneration no longer does.
+    await completeSignIn(auth);
+    const epoch2 = auth.signedInAccount().credentialEpoch;
+    expect(epoch2).not.toBe(epoch1);
+    expect(epoch2).toMatch(/^[0-9a-f]{32}$/);
+
+    // Sign-out removes the account file — the epoch goes with it — and a
+    // fresh construct over the same dir reports signed out, not a stale epoch.
+    expect(await auth.signOut()).toBe(true);
+    const afterSignOut = h.build();
+    expect(afterSignOut.status()).toEqual({ state: 'signed-out' });
+    expect(() => afterSignOut.signedInAccount()).toThrow(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
   });
 
   it('after the callback the poll starts, usage and models are kicked, and `plan` follows the poll', async () => {
@@ -707,6 +748,17 @@ describe('ChatGptAuth: the account on disk', () => {
     expect(fs.existsSync(h.file)).toBe(true);
   });
 
+  // Task 1: an account file written before credentialEpoch existed has no
+  // such field on disk; signedInAccount() must not crash on it or read
+  // undefined — it reports the fixed sentinel 'legacy' until the next
+  // sign-in mints a real one.
+  it('a legacy account file with no credentialEpoch reports \'legacy\'', async () => {
+    await h.seedSignedIn();
+    const auth = h.build();
+    expect(JSON.parse(fs.readFileSync(h.file, 'utf8'))).not.toHaveProperty('credentialEpoch');
+    expect(auth.signedInAccount().credentialEpoch).toBe('legacy');
+  });
+
   it('a blocked file reads blocked with the verbatim reason, is not signed in, and starts no poll', async () => {
     await h.seedSignedIn({ blocked: { reason: 'Your workspace admin has disabled Codex.', at: new Date(T0).toISOString() } });
     const auth = h.build();
@@ -880,6 +932,68 @@ describe('ChatGptAuth: fetch()', () => {
     await f(CODEX_RESPONSES_URL, { method: 'POST', headers: { authorization: 'Bearer chatgpt' }, body: '{}' });
     expect(sentHeaders(1).get('authorization')).toBe(`Bearer ${blob.access_token}`);
     expect(sentHeaders(1).get('authorization')).not.toBe(`Bearer ${first}`);
+  });
+
+  it('a fetch bound to an earlier account generation refuses before network', async () => {
+    await h.seedSignedIn();
+    const auth = h.build();
+    h.fetch.routes.push(capture());
+    const live = auth.signedInAccount();
+    const expected = { ...live, accountId: 'account-a', authGeneration: live.authGeneration - 1 };
+    await expect(auth.fetch(expected)(CODEX_RESPONSES_URL, {
+      method: 'POST', headers: { authorization: 'Bearer chatgpt', 'chatgpt-account-id': expected.accountId }, body: '{}',
+    })).rejects.toThrow(/account changed|Sign in with ChatGPT/);
+    expect(h.fetch.calls.filter(call => call.url === CODEX_RESPONSES_URL)).toHaveLength(0);
+  });
+
+  it('diagnoses actual 401 sends under one logical step without touching bytes', async () => {
+    await h.seedSignedIn();
+    const auth = h.build({ pollUsage: false });
+    const rows: any[] = [];
+    const d = new ChatGptRequestDiagnostics({ directory: h.dir, write: async row => { rows.push(row); } });
+    let n = 0;
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => json(++n === 1 ? 401 : 200, {})]);
+    const body = '{"model":"gpt-5","input":[{"content":"PRIVATE_BODY"}]}';
+    await withChatGptRequest('session', 'chat', () => bindChatGptRequest(d, 'session', async context => {
+      await auth.fetch()(CODEX_RESPONSES_URL, { method: 'POST', body });
+      d.finish(context.attemptId, 'success');
+    }));
+    await d.flush();
+    expect(rows).toHaveLength(2);
+    expect(rows[0].outcome).toBe('failed');
+    expect(rows[1]).toMatchObject({ resendParentId: rows[0].attemptId, logicalStepId: rows[0].logicalStepId, change: 'identical', outcome: 'success' });
+    expect(h.fetch.calls.filter(c => c.url === CODEX_RESPONSES_URL).map(c => c.init.body)).toEqual([body, body]);
+    expect(JSON.stringify(rows)).not.toContain('PRIVATE_BODY');
+  });
+
+  it('observes raw missing-vs-zero usage through the actual SDK and auth boundary', async () => {
+    await h.seedSignedIn();
+    const auth = h.build({ pollUsage: false });
+    const rows: any[] = [];
+    const d = new ChatGptRequestDiagnostics({ directory: h.dir, write: async row => { rows.push(row); } });
+    let n = 0;
+    h.fetch.routes.push([CODEX_RESPONSES_URL, () => {
+      const usage = { input_tokens: 100, output_tokens: 1, total_tokens: 101, ...(n++ ? { input_tokens_details: { cached_tokens: 0 } } : {}) };
+      const events = [
+        { type: 'response.created', response: { id: 'r', model: 'gpt-5', created_at: 1 } },
+        { type: 'response.output_item.added', output_index: 0, item: { type: 'message', id: 'm', role: 'assistant', content: [] } },
+        { type: 'response.output_text.delta', item_id: 'm', output_index: 0, content_index: 0, delta: 'ok' },
+        { type: 'response.output_item.done', output_index: 0, item: { type: 'message', id: 'm', role: 'assistant', content: [{ type: 'output_text', text: 'ok', annotations: [] }] } },
+        { type: 'response.completed', response: { id: 'r', status: 'completed', usage } },
+      ];
+      return new Response(events.map(e => `data: ${JSON.stringify(e)}\n\n`).join(''), { headers: { 'content-type': 'text/event-stream' } });
+    }]);
+    const provider = createOpenAI({ apiKey: 'placeholder', baseURL: CHATGPT_CODEX_BASE_URL, fetch: auth.fetch() });
+    const model = wrapLanguageModel({ model: provider.responses('gpt-5'), middleware: chatGptMiddleware('session', d) });
+    for (let i = 0; i < 2; i++) {
+      const result = withChatGptRequest('session', 'chat', () => streamText({ model, prompt: 'PRIVATE_INPUT' }));
+      await result.consumeStream();
+    }
+    await d.flush();
+    expect(rows).toHaveLength(2);
+    expect(rows[0]).toMatchObject({ purpose: 'chat', outcome: 'success', inputTokens: 100, cacheDetailPresent: false, cachedInputTokens: null });
+    expect(rows[1]).toMatchObject({ change: 'identical', cacheDetailPresent: true, cachedInputTokens: 0 });
+    expect(JSON.stringify(rows)).not.toContain('PRIVATE_INPUT');
   });
 
   it('a 401 refreshes once and re-sends the SAME body with the new bearer', async () => {

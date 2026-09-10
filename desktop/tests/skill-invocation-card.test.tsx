@@ -30,7 +30,7 @@ describe('SkillInvocationCard', () => {
 
   it('the link carries the real path for the click handler and tooltip', () => {
     render(<SkillInvocationCard skillId="p:x" displayName="X" sessionId="s" skillPath="/plugins/x/SKILL.md" />);
-    expect(screen.getByTitle('/plugins/x/SKILL.md')).toBeTruthy();
+    expect(document.querySelector('[data-hint="/plugins/x/SKILL.md"]')).toBeTruthy();
   });
 
   it('renders plain text when there is no path to open', () => {

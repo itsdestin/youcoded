@@ -298,7 +298,7 @@ describe('GitReviewView', () => {
     await waitFor(() => screen.getByText('Uncommitted changes'));
     const checkbox = screen.getByText('Include in commit').closest('button')!;
     expect(checkbox).toBeDisabled();
-    expect(checkbox).toHaveAttribute('title', 'Resolve the conflict before committing this file');
+    expect(checkbox).toHaveAttribute('data-hint', 'Resolve the conflict before committing this file');
     fireEvent.click(checkbox);
     expect(git.stage).not.toHaveBeenCalled();
     expect(git.unstage).not.toHaveBeenCalled();
@@ -308,7 +308,7 @@ describe('GitReviewView', () => {
     await waitFor(() => screen.getByText('Include in commit'));
     const enabled = screen.getByText('Include in commit').closest('button')!;
     expect(enabled).toBeEnabled();
-    expect(enabled).not.toHaveAttribute('title');
+    expect(enabled).not.toHaveAttribute('data-hint');
     fireEvent.click(enabled);
     await waitFor(() => expect(git2.stage).toHaveBeenCalledWith('/proj', 'src/f.ts'));
   });

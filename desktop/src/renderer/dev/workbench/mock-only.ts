@@ -74,10 +74,19 @@
 // rule, same reason as the rows above: the fake in mock-shim.ts stays so the
 // workbench can still pin signed-out / waiting / signed-in / blocked without a
 // browser round-trip — only the "no real backend" claim goes.
+// `native.onSessionContext` came off on 2026-09-10 when the real backend landed:
+// NativeSessionHost.buildSessionContext, emitted from wire(), forwarded by
+// ipc-handlers as `native:session-context`, with `native:session-context-text`
+// answering the panel's on-demand read of one file. Same lifecycle as every row
+// above — the panel was designed and reviewed against a fake, the fake told us
+// what to build, and the fakes in mock-shim.ts STAY so the workbench can still
+// show the trimmed and everything-fit states without a local model. Only the
+// "no real backend" claim goes.
 //
-// The list is EMPTY, and that is the healthy state: it means nothing on screen in the
-// workbench is pretending to be a feature that does not exist yet. Add a row the moment you
-// design a channel ahead of its backend; delete the row, never the guard, when it ships.
+// Add a row the moment you design a channel ahead of its backend; delete the row, never the
+// guard, when it ships. An empty list is the healthy state.
 export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
+  // Browser encryption is an approved design with no backend: the Advanced section and its
+  // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
 ];

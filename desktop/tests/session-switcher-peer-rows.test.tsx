@@ -100,7 +100,7 @@ function mount(statuses: Array<[string, SessionStatusColor]> = []) {
   );
   // Open the switcher. The dropdown is portalled out of the strip, so scope
   // queries to document.body rather than the container.
-  fireEvent.click(view.getByTitle('All Sessions'));
+  fireEvent.click(view.getByLabelText('All Sessions'));
   const heading = view.getByText('Sessions in other windows');
   const peerList = heading.nextElementSibling as HTMLElement;
   // Both lists carry `.scroll-fade`; the local one is the one that is not the
@@ -129,13 +129,13 @@ describe('session switcher — sessions in other windows', () => {
     // App looks names up in its OWN session list, which by definition does not
     // contain a peer session — without the name the prompt reads "this session".
     const { peerList, onCloseSession } = mount();
-    fireEvent.click(within(peerList).getByTitle('Close Session'));
+    fireEvent.click(within(peerList).getByLabelText('Close Session'));
     expect(onCloseSession).toHaveBeenCalledWith('theirs', 'their session');
   });
 
   it('is draggable, and dropping it on this window\'s list claims it', () => {
     const { peerList, localList } = mount();
-    const row = within(peerList).getByTitle('Close Session').closest('[draggable]') as HTMLElement;
+    const row = within(peerList).getByLabelText('Close Session').closest('[draggable]') as HTMLElement;
     expect(row.getAttribute('draggable')).toBe('true');
 
     const dt = transfer();

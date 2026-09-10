@@ -5,7 +5,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { formatRelativeTime } from '../../utils/format-time';
-import { Button, Textarea } from '../ui';
+import { Button, Textarea, Tooltip } from '../ui';
 import { GitReviewCard } from './GitReviewCard';
 import type { GitFileReviewResult, GitLogEntry } from '../../../shared/git-types';
 import type { StructuredPatchHunk } from '../../../shared/types';
@@ -155,16 +155,17 @@ export function GitReviewView({
     <div className="flex-1 min-h-0 flex flex-col">
       {/* sub-header BENEATH the standard drawer top bar (ledger 10, locked) */}
       <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-edge-dim bg-well shrink-0">
+        <Tooltip text="Back to file view">
         <button
           type="button"
           onClick={onBack}
-          title="Back to file view"
           className="w-7 h-7 rounded-md inline-flex items-center justify-center shrink-0 border transition-colors text-fg-dim border-transparent hover:text-fg hover:bg-inset hover:border-edge"
         >
           <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round">
             <path d="M19 12H5M11 18l-6-6 6-6" />
           </svg>
         </button>
+        </Tooltip>
         <span className="text-xs font-medium text-fg-2 truncate">Reviewing changes for “{fileName}”</span>
         <div className="flex-1" />
         {review?.branch && (
@@ -194,12 +195,13 @@ export function GitReviewView({
                     = the app-wide warn tone (Callout/ToolBody convention);
                     copy says "Conflict", not git's "unmerged path". */}
                 {uncommitted.conflicted && (
+                  <Tooltip text="This file has merge conflicts. Edit the file to fix the marked sections, then commit.">
                   <span
                     className="text-3xs font-medium text-amber-400 bg-amber-500/10 border border-amber-500/25 rounded px-1 py-px shrink-0"
-                    title="This file has merge conflicts. Edit the file to fix the marked sections, then commit."
                   >
                     Conflict
                   </span>
+                  </Tooltip>
                 )}
                 <span className="flex-1" />
               </>
@@ -237,6 +239,7 @@ export function GitReviewView({
                   backend already handles it — staging an untracked file is a
                   plain `git add`, and the mirror refresh flips the card to
                   staged like any other file. */}
+              <Tooltip text={uncommitted.conflicted ? 'Resolve the conflict before committing this file' : ''}>
               <button
                 type="button"
                 // WHY conflicted disables this (PR #304 review advisory):
@@ -247,7 +250,6 @@ export function GitReviewView({
                 // until the conflict is edited away (the mirror refresh flips
                 // this back automatically once the file is no longer unmerged).
                 disabled={busy || uncommitted.conflicted}
-                title={uncommitted.conflicted ? 'Resolve the conflict before committing this file' : undefined}
                 onClick={() => run(() => (uncommitted.staged
                   ? gitApi().unstage(projectRoot, relPath)
                   : gitApi().stage(projectRoot, relPath)))}
@@ -259,6 +261,7 @@ export function GitReviewView({
                 </svg>
                 Include in commit
               </button>
+              </Tooltip>
               <div className="flex-1" />
               <button
                 type="button"

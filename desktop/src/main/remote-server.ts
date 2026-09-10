@@ -41,6 +41,7 @@ import type { StepGuardSettings } from './harness/step-guard-settings';
 import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
+import type { ClaudeAccount } from './providers/claude-account';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow } from 'electron';
@@ -120,6 +121,13 @@ export interface RemoteStatus {
   port: number;
 }
 
+interface SessionNamingWiring {
+  get: () => Promise<{ mode: string; model: unknown }>;
+  set: (value: unknown) => Promise<{ ok: boolean; error?: string }>;
+  title: (sessionId: string, fallback: string) => Promise<{ title: string; manual: boolean }>;
+  rename: (sessionId: string, title: string) => Promise<{ ok: boolean; error?: string }>;
+}
+
 export class RemoteServer {
   private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -191,7 +199,7 @@ export class RemoteServer {
   // field (Plan 2b) — both were added independently on master and this branch.
   // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
   // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null } | null = null;
+  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null } | null = null;
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -229,7 +237,7 @@ export class RemoteServer {
   /** Injected by ipc-handlers after it constructs the native stack, so remote
    *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
    *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null }): void {
+  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null }): void {
     this.nativeRuntime = rt;
   }
 
@@ -296,6 +304,19 @@ export class RemoteServer {
     resolve: (sessionId: string) => string;
     canWrite: (sessionId: string, resolved: string) => boolean;
   };
+
+  /** Session naming, injected from ipc-handlers so a remote client runs the
+   *  SAME implementation as the local one — ownership checks, model-catalog
+   *  validation and the persist-then-broadcast order included. Absent until
+   *  registerIpcHandlers runs; the dispatch below answers honestly meanwhile. */
+  setSessionNamingWiring(w: SessionNamingWiring): void { this.sessionNamingWiring = w; }
+  private sessionNamingWiring?: SessionNamingWiring;
+
+  // loadTokens/saveTokens are deliberately NOT carried across this merge. They read the flat
+  // `.remote-tokens.json` file of opaque strings that this batch replaced with per-device
+  // records (RemoteDeviceStore): no identity, no dates, and revocation that dropped every
+  // device at once. Restoring them would not compile — the fields are gone — and would undo
+  // contract row R7.
 
   /** True once start() has bound the port; false after stop() or a failed start. */
   isRunning(): boolean {
@@ -868,6 +889,9 @@ export class RemoteServer {
     // Contract R9: a device needs the password even on a private network. The block that
     // stood here auto-paired any peer inside 100.64.0.0/10 with no password exchanged — a
     // carrier-grade NAT range, not one Tailscale owns. Nothing is trusted for its address.
+    // The per-IP rate limiter that stood beside it is gone for the reason in §0: behind a
+    // loopback proxy every device shares one bucket, so five failures locked the household
+    // out. Limits are per socket and per host now.
 
     // Auth timeout
     const timeout = setTimeout(() => {
@@ -904,7 +928,9 @@ export class RemoteServer {
             this.clearFailedAttempts();
             this.config.markPaired();
             this.addClient(ws, result.device.id, ip);
-            ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop' }));
+            // Same capability flag as the pairing path below — master's own note says the
+            // two sites must stay in step, and a returning device paints the same UI.
+            ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop', sessionNaming: true }));
             this.replayBuffers(ws).catch((err) => {
               console.error('[remote-server] replayBuffers failed:', err);
             });
@@ -932,7 +958,9 @@ export class RemoteServer {
           const paired = this.devices.pair(msg.deviceName);
           this.config.markPaired();
           this.addClient(ws, paired.deviceId, ip);
-          ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop' }));
+          // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
+          // master while this branch was open. It rides on every auth:ok this host sends.
+          ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop', sessionNaming: true }));
           this.replayBuffers(ws).catch((err) => {
             console.error('[remote-server] replayBuffers failed:', err);
           });
@@ -1211,6 +1239,17 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
+      case 'native:session-context-text': {
+        // "What the assistant was given" — one file's text, read on the DESKTOP,
+        // where the session and its files live. Without this case the panel opens
+        // on a phone and every row reads "This file couldn't be read": the
+        // default arm answers {unsupported:true}, which is not an answer.
+        const result = this.nativeRuntime
+          ? this.nativeRuntime.nativeHost.sessionContextText(payload.sessionId, payload.kind, payload.id)
+          : { error: 'not-live' };
+        this.respond(client.ws, type, id, result);
+        break;
+      }
       case 'provider:list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.providerRegistry.list() : []);
         break;
@@ -1304,6 +1343,21 @@ export class RemoteServer {
         try {
           const auth = this.nativeRuntime?.chatgptAuth ?? null;
           this.respond(client.ws, type, id, auth ? await auth.signOut() : false);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      // Claude Code's live sign-in (2026-09-09). The DESKTOP's answer, not the
+      // browser's: the phone has no `claude` binary, and the session it is
+      // driving runs here. `unknown` when the runtime is not wired yet, which
+      // every reader treats as available — a remote client must never grey out
+      // a model on the strength of a missing object.
+      case 'claude-code:status': {
+        try {
+          const account = this.nativeRuntime?.claudeAccount ?? null;
+          if (payload?.refresh) account?.invalidate();
+          this.respond(client.ws, type, id, account ? await account.status() : { state: 'unknown' });
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
         }
@@ -1502,6 +1556,37 @@ export class RemoteServer {
         // the payload and refetch meta).
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, flag: tagFlagKey(tagId), value: !!payload?.value } });
         this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      // Session naming. `unavailable` is answered as a refusal, not silence:
+      // the shim's capability probe reads a well-formed preference as "this
+      // host can name sessions", so a half-started host must not look ready.
+      case 'session-naming:get': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.get()
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
+        break;
+      }
+      case 'session-naming:set': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.set(payload?.value)
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
+        break;
+      }
+      case 'session-naming:title': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.title(String(payload?.sessionId ?? ''), String(payload?.fallback ?? ''))
+          : { title: String(payload?.fallback ?? ''), manual: false });
+        break;
+      }
+      case 'session-naming:rename': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.rename(String(payload?.sessionId ?? ''), String(payload?.title ?? ''))
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
         break;
       }
       case 'session:set-note': {

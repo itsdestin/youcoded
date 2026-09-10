@@ -1,3 +1,4 @@
+import { Tooltip } from './ui';
 
 interface Props {
   running: number;   // count of in_progress tasks
@@ -24,6 +25,7 @@ export default function OpenTasksChip({ running, pending, onOpen }: Props) {
   const tooltip = `${parts.join(', ')} — click to view tasks`;
 
   return (
+    <Tooltip text={tooltip}>
     <button
       onClick={onOpen}
       className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
@@ -32,7 +34,6 @@ export default function OpenTasksChip({ running, pending, onOpen }: Props) {
         color: 'var(--fg-muted)',
         borderColor: 'var(--edge-dim)',
       }}
-      title={tooltip}
       aria-label={tooltip}
     >
       <span className="hidden sm:inline">TASKS</span>
@@ -49,5 +50,6 @@ export default function OpenTasksChip({ running, pending, onOpen }: Props) {
         </span>
       )}
     </button>
+    </Tooltip>
   );
 }

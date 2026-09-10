@@ -3,7 +3,11 @@
 //   *.tmp) so the watcher never emits events for files the UI will not list
 // - events carry by:'external' and NEVER 'agent' (a watcher cannot know who wrote)
 // - the app's own writes are suppressed (save→watch→reload loop, §8.4)
-// - refcounting: last unsubscribe (or a dead renderer) closes the watcher
+// - refcounting: last unsubscribe (or a dead renderer) PARKS the watcher, and
+//   it closes only after the grace period — a resubscribe inside the grace must
+//   reuse the same chokidar instance, never start a second walk
+// - nested git repositories are not watched (they are separate projects, their
+//   files are never listed here, and walking them is what made starts expensive)
 // - tracked files resolve to their SIDECAR id, not their path — without this the
 //   renderer's `evt.artifactId === artifact.id` filter never matches and the
 //   conflict banner stays dead for exactly the files that matter
@@ -20,6 +24,8 @@ import {
   dropSubscriber,
   noteOwnWrite,
   __resetProjectWatchersForTest,
+  __setWatchGraceMsForTest,
+  __watchersStartedForTest,
   type ExternalChangeEvent,
 } from '../src/main/artifacts/project-watcher';
 
@@ -68,6 +74,10 @@ describe('project watcher lifecycle', () => {
     root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-watch-'));
     events = [];
     initProjectWatchers((evt) => events.push(evt));
+    // The shipped grace is 60s — far too long to wait for a close. Every case
+    // below either re-subscribes immediately (well inside any grace) or waits
+    // this out, so shortening it changes nothing the tests are asserting.
+    __setWatchGraceMsForTest(100);
   });
   afterEach(async () => {
     __resetProjectWatchersForTest();
@@ -112,7 +122,7 @@ describe('project watcher lifecycle', () => {
     for (const e of events) expect(e.artifactId).toBe('art_123');
   }, 15000);
 
-  it('refcounts: watcher survives one unsubscribe, dies on the last', async () => {
+  it('refcounts: watcher survives one unsubscribe, dies after the last + grace', async () => {
     await watchProject(root, 1);
     await watchProject(root, 2);
     unwatchProject(root, 1);
@@ -121,19 +131,113 @@ describe('project watcher lifecycle', () => {
     expect(events.length).toBeGreaterThan(0);
     events = [];
     unwatchProject(root, 2);
-    await wait(200); // close is async
+    await wait(400); // grace (100ms here) then the async close
     await fs.promises.writeFile(path.join(root, 'd.txt'), 'nobody watching');
     await settle();
     expect(events).toEqual([]);
+  }, 20000);
+
+  it('re-subscribing inside the grace reuses the watcher instead of rebuilding it', async () => {
+    // THE tab-thrash fix: Files → Conversations → Files unsubscribes and
+    // resubscribes, and a rebuild would re-walk the whole project tree on the
+    // main thread. Inverting parkEntry back to an immediate close makes the
+    // count 4 and this test red.
+    __setWatchGraceMsForTest(10_000);
+    const before = __watchersStartedForTest();
+    await watchProject(root, 1);
+    for (let i = 0; i < 3; i++) {
+      unwatchProject(root, 1);
+      await watchProject(root, 1);
+    }
+    expect(__watchersStartedForTest() - before).toBe(1);
+    // Still a LIVE watcher, not a parked husk.
+    await fs.promises.writeFile(path.join(root, 'f.txt'), 'after the round trip');
+    await settle();
+    expect(events.length).toBeGreaterThan(0);
   }, 20000);
 
   it('dropSubscriber releases every ref a dead renderer held', async () => {
     await watchProject(root, 7);
     await watchProject(root, 7); // second host in the same renderer
     dropSubscriber(7);
-    await wait(200);
+    await wait(400); // grace (100ms here) then the async close
     await fs.promises.writeFile(path.join(root, 'e.txt'), 'renderer is gone');
     await settle();
     expect(events).toEqual([]);
   }, 15000);
+
+  it('still watches a project root that is ITSELF a git repo', async () => {
+    // The failure this guards is silent and total: the nested-repo rule applied
+    // to the root would ignore the root, chokidar would watch nothing, and the
+    // only symptom is that the file list quietly stops noticing outside edits.
+    // Most real projects ARE repos, so this is the common case, not an edge one.
+    await fs.promises.mkdir(path.join(root, '.git'), { recursive: true });
+    await fs.promises.mkdir(path.join(root, 'src'), { recursive: true });
+    await watchProject(root, 1);
+    await fs.promises.writeFile(path.join(root, 'src/app.ts'), 'in my own repo');
+    await settle();
+    expect(events.map((e) => e.artifactId)).toContain('src/app.ts');
+  }, 20000);
+
+  it('parks at most MAX_GRACE_ENTRIES watchers, closing the oldest', async () => {
+    // The bound on parked OS watch handles (inotify is capped per user), so a
+    // click through a long project list cannot accumulate them.
+    __setWatchGraceMsForTest(10_000);
+    const roots: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const r = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-cap-'));
+      roots.push(r);
+      await watchProject(r, 1);
+      unwatchProject(r, 1);   // straight into the grace
+    }
+    await wait(200);          // closes are async
+    // The two oldest are gone: a write there emits nothing.
+    events = [];
+    await fs.promises.writeFile(path.join(roots[0], 'a.txt'), 'evicted');
+    await fs.promises.writeFile(path.join(roots[1], 'a.txt'), 'evicted');
+    await settle();
+    expect(events).toEqual([]);
+    // The four most recent are still parked and still live.
+    await fs.promises.writeFile(path.join(roots[5], 'b.txt'), 'still parked');
+    await settle();
+    expect(events.length).toBeGreaterThan(0);
+    for (const r of roots) await fs.promises.rm(r, { recursive: true, force: true });
+  }, 25000);
+
+  it('leaving mid-walk and coming back does not abandon the walk in flight', async () => {
+    // The worst version of the reported symptom: click away DURING the initial
+    // scan and back again. The entry exists but has no watcher yet, and treating
+    // "no watcher" as "nothing to keep" would throw the half-finished walk away
+    // and start a second one — the restart this whole change removes. No timing
+    // here: watchProject registers its entry synchronously, before it awaits.
+    __setWatchGraceMsForTest(10_000);
+    const before = __watchersStartedForTest();
+    const first = watchProject(root, 1);   // deliberately NOT awaited
+    unwatchProject(root, 1);               // refs -> 0 while the walk is running
+    const second = watchProject(root, 1);
+    await Promise.all([first, second]);
+    expect(__watchersStartedForTest() - before).toBe(1);
+    await fs.promises.writeFile(path.join(root, 'midwalk.txt'), 'still watched');
+    await settle();
+    expect(events.map((e) => e.artifactId)).toContain('midwalk.txt');
+  }, 20000);
+
+  it('does not watch inside a NESTED git repo, but does watch its siblings', async () => {
+    // youcoded-dev holds 43 worktrees and several clones: 9,583 directories
+    // within the depth cap, 4 s to chokidar-ready with 300 ms+ event-loop
+    // freezes. Discovery already stops at a nested .git, so those files are
+    // never listed — watching them was pure cost.
+    const nested = path.join(root, 'vendored');
+    await fs.promises.mkdir(path.join(nested, 'src'), { recursive: true });
+    await fs.promises.writeFile(path.join(nested, '.git'), 'gitdir: /elsewhere'); // worktree form
+    const sibling = path.join(root, 'mine');
+    await fs.promises.mkdir(sibling, { recursive: true });
+    await watchProject(root, 1);
+    await fs.promises.writeFile(path.join(nested, 'src/inside.ts'), 'nested repo');
+    await fs.promises.writeFile(path.join(sibling, 'outside.ts'), 'my own tree');
+    await settle();
+    const ids = events.map((e) => e.artifactId);
+    expect(ids).toContain('mine/outside.ts');
+    expect(ids).not.toContain('vendored/src/inside.ts');
+  }, 20000);
 });

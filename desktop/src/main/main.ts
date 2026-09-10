@@ -66,6 +66,7 @@ import { startConversationStore, stopConversationStore, materializeOne, resumeSw
 import { runSlugRepair } from './conversations/slug-repair';
 import { startChatsearchIndex, stopChatsearchIndex } from './chatsearch-index/index-service';
 import { startOutboxDrain, stopOutboxDrain } from './chatsearch-index/outbox-drain';
+import { stopProjectWatchers } from './artifacts/project-watcher';
 // One-time cleanup of the legacy sync-service's slug-symlink aggregation (Plan 2c).
 import { sweepProjectSymlinks } from './conversations/symlink-sweep';
 import { startTagRegistry } from './conversations/tag-registry-service';
@@ -2482,6 +2483,10 @@ async function runShutdown(): Promise<void> {
   try { stopConversationStore(); } catch {}
   try { stopChatsearchIndex(); } catch {}
   try { stopOutboxDrain(); } catch {}
+  // Close the project file-watchers. Needed since they gained a grace period
+  // (project-watcher.ts): a watcher is now deliberately alive after its last
+  // window is gone, and its fs handles are ref'd. Sync fn.
+  try { stopProjectWatchers(); } catch {}
   // Plan 2b Task 8: tear down the lease client so its per-session renew timers
   // don't linger past a hard quit (destroy clears all held timers). Sync fn.
   try { leaseClient?.destroy(); } catch {}

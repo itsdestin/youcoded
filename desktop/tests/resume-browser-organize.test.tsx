@@ -20,6 +20,8 @@ import { describe, it, expect, vi, beforeEach, beforeAll, afterEach } from 'vite
 import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import ResumeBrowser from '../src/renderer/components/ResumeBrowser';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 
 beforeAll(() => {
   if (typeof window.ResizeObserver === 'undefined') {
@@ -73,6 +75,81 @@ describe('ResumeBrowser — organizing a conversation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockWindowClaude();
+  });
+
+  it('opens rename from the full accessible name without expanding or resuming the card', async () => {
+    (window as any).claude.sessionNaming = {
+      title: vi.fn().mockResolvedValue({ title: 'CC Chat', manual: false }),
+    };
+    const onResume = vi.fn();
+    const bubbled = vi.fn();
+    render(<div onClick={bubbled}><ResumeBrowser open onClose={() => {}} onResume={onResume} /></div>);
+    const name = await screen.findByText('CC Chat');
+    const button = screen.getByRole('button', { name: 'Rename CC Chat' });
+    expect(button).toContainElement(name);
+    expect(button).toHaveAttribute('type', 'button');
+    expect(button).toHaveAttribute('aria-haspopup', 'dialog');
+    expect(button).toHaveClass('coarse-hit');
+    button.focus();
+    expect(button).toHaveFocus();
+    fireEvent.click(name);
+    expect(await screen.findByDisplayValue('CC Chat')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
+    expect(onResume).not.toHaveBeenCalled();
+    expect(bubbled).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
+    expect(screen.queryByDisplayValue('CC Chat')).not.toBeInTheDocument();
+    expect(screen.getByText('CC Chat')).toBeInTheDocument();
+  });
+
+  it('opens rename on Enter without relying on a synthesized click', async () => {
+    (window as any).claude.sessionNaming = {
+      title: vi.fn().mockResolvedValue({ title: 'CC Chat', manual: false }),
+    };
+    mount();
+    const name = await screen.findByRole('button', { name: 'Rename CC Chat' });
+    fireEvent.keyDown(name, { key: 'Enter' });
+    expect(await screen.findByDisplayValue('CC Chat')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Resume Session' })).not.toBeInTheDocument();
+  });
+
+  it('matches the file viewer styling with always-visible underline and pencil', async () => {
+    // WHY: the viewer is the requested visual authority, not invented sizes or
+    // adjacent organize icons. Read its local implementation without changing it.
+    const viewer = readFileSync(resolve('src/renderer/components/SessionDrawer.tsx'), 'utf8');
+    // The hint moved from a `title` attribute to the app's own <Tooltip>, so the
+    // trigger is now the button INSIDE that wrapper. Same control, same check.
+    const trigger = viewer.match(/<Tooltip text="Click to rename">\s*<button[\s\S]{0,120}?className="([^"]+)"/)!;
+    const label = viewer.match(/<span className="([^"]+)">\s*\{fileName\}/)!;
+    const icon = viewer.match(/<span className="([^"]+)"><Ic name="pencil" size=\{(\d+)\}/)!;
+    const path = viewer.match(/pencil: '([^']+)'/)!;
+    expect(trigger).not.toBeNull();
+    expect(label).not.toBeNull();
+    expect(icon).not.toBeNull();
+    expect(path).not.toBeNull();
+    (window as any).claude.sessionNaming = {};
+    mount();
+    const button = await screen.findByRole('button', { name: 'Rename CC Chat' });
+    expect(button).toHaveClass(...trigger[1].split(' '));
+    // WHY: R5-1 keeps the viewer's exact style, but makes both cues visible at rest.
+    const name = screen.getByText('CC Chat');
+    expect(name.className).toBe(label[1].replaceAll('group-hover:', ''));
+    expect(name).toHaveClass('underline', 'decoration-dotted', 'decoration-fg-muted');
+    const pencil = button.querySelector('svg')!;
+    expect(pencil.parentElement!.className).toBe(icon[1].split(' ').filter((token) => !token.startsWith('opacity-') && !token.startsWith('group-hover:')).join(' '));
+    for (const cue of [name, pencil.parentElement!]) {
+      expect(cue.className).not.toMatch(/hover:|focus:|opacity-0|invisible|hidden|touch-reveal/);
+    }
+    expect(pencil.getAttribute('width')).toBe(icon[2]);
+    expect(pencil.getAttribute('height')).toBe(icon[2]);
+    expect([...pencil.querySelectorAll('path')].map((p) => p.getAttribute('d')).join('')).toBe(path[1]);
+    const ic = viewer.match(/function Ic\([\s\S]*?<svg ([\s\S]*?)>/)![1];
+    for (const attribute of ['viewBox', 'fill', 'stroke', 'strokeLinecap', 'strokeLinejoin']) {
+      const value = ic.match(new RegExp(`${attribute}="([^"]+)"`))![1];
+      const domAttribute = attribute.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`);
+      expect(pencil.getAttribute(attribute === 'viewBox' ? attribute : domAttribute)).toBe(value);
+    }
+    expect(pencil.getAttribute('stroke-width')).toBe(ic.match(/strokeWidth=\{(\d+)\}/)![1]);
   });
 
   it('marks a session complete from the card, without opening the menu', async () => {
