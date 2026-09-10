@@ -33,7 +33,7 @@ import { CLAUDE_ALIASES, type ClaudeAlias } from '../../../shared/model-ids';
 import { matchesQuery } from '../../../shared/text-match';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
-import { unavailableReason, useClaudeReady, type CatalogRow, type ProviderRow } from './availability';
+import { unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
 
 export type ModelChoice =
   | { runtime: 'claude'; alias: string }
@@ -184,8 +184,14 @@ export default function ModelPicker({
   defaultOpen = false,
   layout = 'floating',
   pinSelectedToTop = false,
+  emptyLabel = 'Choose a model…',
 }: {
   value: ModelChoice | null;
+  /** What the CLOSED button reads when nothing is picked. Defaults to the
+   *  create-time wording. A host where "nothing picked" is itself a meaningful
+   *  setting — session naming, where it means the conversation's own model —
+   *  says so here rather than printing a prompt for a choice already made. */
+  emptyLabel?: string;
   /** The second argument is the label this picker DISPLAYED for the choice —
    *  provider and model as the user just read them. Optional, and every caller
    *  that does not need it simply ignores it. Design review 2 (R2-3): the
@@ -237,9 +243,9 @@ export default function ModelPicker({
 }) {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
-  // Whether Claude Code itself can start a conversation here. Unknown counts as
-  // yes (see useClaudeReady) — the list must never invent a problem.
-  const claudeReady = useClaudeReady();
+  // Claude Code's LIVE sign-in (2026-09-09). Unknown and not-yet-answered both
+  // count as yes (see useClaudeStatus) — the list must never invent a problem.
+  const { status: claudeStatus } = useClaudeStatus();
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(defaultOpen);
   const [search, setSearch] = useState('');
@@ -416,7 +422,7 @@ export default function ModelPicker({
 
   const entries: Entry[] = useMemo(() => {
     const out: Entry[] = [];
-    const data = { providers, catalog, claudeReady };
+    const data = { providers, catalog, claudeStatus };
     if (includeClaude) {
       for (const m of CLAUDE_MODELS) {
         const choice: ModelChoice = { runtime: 'claude', alias: m.alias };
@@ -444,7 +450,7 @@ export default function ModelPicker({
       }
     }
     return out;
-  }, [providers, catalog, includeClaude, includeNative, claudeReady]);
+  }, [providers, catalog, includeClaude, includeNative, claudeStatus]);
 
   /** Nothing on this install can actually start a conversation. Drives the
    *  "You have not set up any model providers." block (P-3). */
@@ -520,13 +526,13 @@ export default function ModelPicker({
   const activeFilters = (sources.size ? 1 : 0) + (localOnly ? 1 : 0);
 
   const currentLabel = useMemo(() => {
-    if (!value) return 'Choose a model…';
+    if (!value) return emptyLabel;
     const hit = entries.find((e) => e.key === choiceKey(value));
     if (hit) return `${hit.label} · ${hit.sourceLabel}`;
     // A binding whose catalog row hasn't loaded (or a typed freeform id) still
     // needs a truthful label rather than falling back to "Choose a model…".
     return value.runtime === 'claude' ? value.alias : value.modelId;
-  }, [value, entries]);
+  }, [value, entries, emptyLabel]);
 
   const pick = (c: ModelChoice, label?: { provider: string; model: string }) => { onSelect(c, label); setOpen(false); setFilterOpen(false); };
 

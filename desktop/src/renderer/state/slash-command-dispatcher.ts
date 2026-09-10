@@ -17,6 +17,7 @@
 // extract-copy-blocks.ts still use the type). Found in the 2026-08-06 sweep.
 import type { ChatAction, TimelineEntry, UsageSnapshot, SessionChatState } from './chat-types';
 import { buildCopyPayload } from '../utils/extract-copy-blocks';
+import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
 
 export type ViewMode = 'chat' | 'terminal';
 
@@ -38,6 +39,16 @@ export interface DispatcherCallbacks {
   getSessionState?: (sessionId: string) => SessionChatState | undefined;
   /** Open the ModelPickerPopup — used by bare /model, /fast, /effort. */
   onOpenModelPicker?: () => void;
+  /**
+   * Typed `/model <alias>` — App.tsx owns the session model state, so this
+   * asks it to run the SAME guarded-PTY-send + optimistic-pill-update flow
+   * Shift+Space and the picker already use, rather than duplicating it here.
+   * Returns 'ineligible' for a session /model can't act on (native/shell —
+   * the dispatcher falls back to today's plain-text passthrough for those,
+   * unchanged), 'blocked' when the send was refused (a prompt is pending —
+   * App.tsx already toasted), or 'sent' once the PTY write actually happened.
+   */
+  onModelSwitchCommand?: (alias: ClaudeAlias) => 'sent' | 'blocked' | 'ineligible';
 }
 
 export interface DispatcherInput {
@@ -190,10 +201,15 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
     case '/fast':
     case '/effort': {
       // Bare commands (no args) open the unified ModelPickerPopup. With args,
-      // pass through to Claude Code's own handler — e.g. `/model sonnet`,
-      // `/fast on`, `/effort high` all still work because Claude Code parses them.
-      // We also opportunistically persist known args for /fast and /effort so
-      // the status bar chips stay in sync.
+      // Claude Code applies these itself — but ALL THREE are commands Claude
+      // Code answers locally, without ever calling the model. Sending them
+      // down the normal chat-message path (like plain text) makes InputBar
+      // dispatch USER_PROMPT, which starts the "thinking" spinner — and since
+      // no assistant turn is ever going to arrive to end it, the spinner spins
+      // forever (youcoded — /model, /fast, /effort typed with an argument).
+      // So every arg branch below sends straight to the PTY via alsoSendToPty
+      // (or the equivalent onModelSwitchCommand flow for /model) instead of
+      // falling through to the plain-text send at the bottom of InputBar.
       if (!args) {
         if (input.callbacks.onOpenModelPicker) {
           input.callbacks.onOpenModelPicker();
@@ -201,6 +217,39 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         }
         return { handled: false };
       }
+
+      if (cmd === '/model') {
+        const alias = claudeAliasForModelId(args.trim());
+        // Only intercept args we can actually name a model for — an
+        // unrecognized argument (a raw dated model id, a typo) falls through
+        // to the passthrough branch below exactly as before, since we have
+        // nothing honest to show as a confirmation.
+        if (alias && input.callbacks.onModelSwitchCommand) {
+          const result = input.callbacks.onModelSwitchCommand(alias);
+          if (result === 'sent') {
+            if (input.sessionId) {
+              input.dispatch({
+                type: 'MODEL_SWITCH_MARKER',
+                sessionId: input.sessionId,
+                markerId: `model-switch-${Date.now()}`,
+                timestamp: Date.now(),
+                label: `Model switched to ${CLAUDE_ALIAS_LABELS[alias]}`,
+              });
+            }
+            return { handled: true };
+          }
+          if (result === 'blocked') {
+            // App.tsx already toasted ("Claude is waiting for your response").
+            // Swallow rather than let "/model opus" leak into Claude Code's
+            // live Ink menu as if it were a menu keystroke.
+            return { handled: true };
+          }
+          // 'ineligible' (native/shell session) — fall through to passthrough,
+          // unchanged from today: a native session has no PTY /model to run,
+          // so the text is just sent as an ordinary chat message.
+        }
+      }
+
       // Persist fast/effort local state (fire-and-forget) so chips update.
       const modesApi = (window as any).claude?.modes;
       if (cmd === '/fast' && modesApi) {
@@ -212,7 +261,12 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
           modesApi.set({ effort: lvl }).catch(() => {});
         }
       }
-      // Let the command pass through to PTY — Claude Code applies it.
+      if (cmd === '/fast' || cmd === '/effort') {
+        // Same local-command freeze as /model above — send straight to the
+        // PTY instead of through a plain-text chat turn.
+        return { handled: true, alsoSendToPty: `${cmd} ${args}\r` };
+      }
+      // Unrecognized /model argument — let Claude Code's own /model handle it.
       return { handled: false };
     }
 
