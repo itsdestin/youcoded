@@ -8,6 +8,7 @@ import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { useOneShotWindow } from '../hooks/use-one-shot-window';
 import SessionPreviewPane from './SessionPreviewPane';
 import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
@@ -80,35 +81,37 @@ function formatModelId(id: string): string {
 //   · D-1 "never" — the list never collapses. There is no ≡ button anywhere.
 //   · D-2 "blank" — the right half stays one line of text until he clicks; it
 //     never opens the most recent conversation by itself.
-// ROUND 4 (2026-09-10). Round three settled the frame and opened one question.
-// His words: "i like the frameing of the preview used in 'sheet'. i want to try
-// to make the header a bit more useful/interesting, with the model
-// select/project/resume dropdown buttons in a new card at the bottom floating
-// under the last message of the preview in the same framed container. want a
-// few different styling for the header of the preview, with different actions
-// like the tag/name/complete stuff".
+// ROUND 5 (2026-09-10). Round four answered with two more directives, and both
+// are now BUILT rather than offered:
+//   · "i want the model/project picker and resume button to be vertically
+//     stacked on top of eachother" and, on the switches, "this should look like
+//     it does in our other existing new/resume surfaces" — so the action card is
+//     literally renderExpandedOptions, the block the expanded card in the list
+//     and ResumeOptionsPopover already use, with the folder above it.
+//   · "i think i want the header to be a clone of the card on the lefthand side
+//     that just pops/animates in when changing sessions and floats at the top of
+//     the window inside the container" — so the header IS renderSessionRow, the
+//     same function that draws the list, floating over the conversation. Rename,
+//     tags and mark-complete come with it for free; the four hand-drawn headers
+//     of round four are deleted.
 //
-// So two things are now FIXED in every variant below and are not up for review:
-//   · the sheet — heading, conversation and action card on one inset surface,
-//     with the window showing all round it;
-//   · the action card — model, project and Resume at the FOOT of that sheet,
-//     below the last message, where the message box sits in a real conversation.
-//     Resume has therefore left the header entirely, which is what frees the
-//     header to carry the organise actions instead.
-// What varies is only the header, and which of tag / rename / mark-complete it
-// puts in reach. Everything earlier — cards in the list, no collapse, the right
-// half blank until a row is clicked — still holds.
+// What is left to choose is the motion, which is why these variants are timing
+// rather than layout. The curve itself is NOT a candidate: `.switch-arrival`
+// (globals.css) is the arrival Destin picked on 2026-09-02 from four, for this
+// exact event — changing which conversation you are looking at — and ChatView
+// already uses it with `useOneShotWindow`. Inventing a second one here would be
+// two answers to one question.
 //
 //   off      today's browser, unchanged — the "before" picture
-//   icons    name and facts, with the card's own tag and complete icons at the
-//            right; the name itself is the rename control
-//   chips    every action is a pill on one wrapping row under the name: the
-//            applied tags, an add-tag pill, Complete, Rename
-//   toolbar  name and facts, then a labelled strip beneath them — Rename · Tag ·
-//            Mark complete — spelled out in words rather than glyphs
-//   menu     name and facts only, with one ⋯ button holding all three
-type PreviewVariant = 'off' | 'icons' | 'chips' | 'toolbar' | 'menu';
-const VARIANTS: PreviewVariant[] = ['off', 'icons', 'chips', 'toolbar', 'menu'];
+//   whole    the sheet's whole content arrives as one, exactly as the chat view
+//            does it: one animated element, whatever the conversation's length
+//   header   only the header card arrives; the conversation underneath it just
+//            fades, so the thing that changed is the thing that moves
+//   stagger  header, then conversation, then action card, 70 ms apart
+//   none     no motion at all — the control, and what someone with reduced
+//            effects turned on already gets
+type PreviewVariant = 'off' | 'whole' | 'header' | 'stagger' | 'none';
+const VARIANTS: PreviewVariant[] = ['off', 'whole', 'header', 'stagger', 'none'];
 const PREVIEW_VARIANT: PreviewVariant = (() => {
   try {
     const v = new URLSearchParams(location.search).get('rbpreview') as PreviewVariant;
@@ -360,8 +363,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // from expandedId because in variants b/c nothing expands in the list at all.
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
-  // MOCKUP ONLY — the tags/note sheet under the preview's header.
-  const [previewOrganize, setPreviewOrganize] = useState(false);
+  // MOCKUP ONLY — the header clone's own tags/note sheet (see renderSessionRow).
+  const [cloneOrganizeId, setCloneOrganizeId] = useState<string | null>(null);
+  // MOCKUP ONLY — one animation window per change of previewed conversation.
+  // Same hook ChatView uses for the identical event (see its `arriving`). It
+  // lives up here with the other hooks, NOT beside the render helpers that use
+  // it: everything below `if (!open) return null` runs conditionally, and a
+  // hook there is the "rendered more hooks than during the previous render"
+  // crash — which is exactly what it did on the first try.
+  const arriving = useOneShotWindow(previewId);
   const narrowViewport = useNarrowViewport();
   // The panel is single-column on a phone: a 390px screen cannot hold a list
   // AND a transcript, and the narrow-viewport rule forbids inventing a second
@@ -779,7 +789,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     if (previewOn) {
       setPreviewId(s.sessionId);
       setPreviewSheetOpen(false);
-      setPreviewOrganize(false);
+      setCloneOrganizeId(null);
       setOrganizeId(null);
       setResumeModel(claudeModelForRow(s));
       setResumeDangerous(defaultSkipPermissions || false);
@@ -869,7 +879,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           appliedIds={new Set(s.tags ?? [])}
           onToggle={(tagId, next) => toggleTag(s.sessionId, tagId, next)}
           registry={registry}
-          onManageTags={() => { setOrganizeId(null); setTagManagerOpen(true); }}
+          onManageTags={() => { setOrganizeId(null); setCloneOrganizeId(null); setTagManagerOpen(true); }}
           fieldClassName="bg-well border-edge"
           builtIns={[{
             tag: PRIORITY_TAG,
@@ -896,9 +906,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // the two launch toggles, Resume. Flags/tags/note used to be stacked in here
   // too, which is what made an open card a seven-field form with its primary
   // action at the bottom.
-  const renderExpandedOptions = (s: PastSession) => {
+  const renderExpandedOptions = (s: PastSession, opts?: { flush?: boolean }) => {
   return (
-    <div className="border-t border-edge-dim">
+    // MOCKUP ONLY (`flush`): the action card at the foot of the preview draws
+    // its own border, and this block's top hairline would double up against it.
+    <div className={opts?.flush ? '' : 'border-t border-edge-dim'}>
       <div className="p-3 flex flex-col gap-2">
         {/* ONE model control for both runtimes. Was two: a Claude alias button
             row here and a separate native picker below, which is the duplication this
@@ -989,7 +1001,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   );
   };
 
-  const renderSessionRow = (s: PastSession, showPath?: boolean) => {
+  // MOCKUP ONLY (`clone`): the preview's header is this same card drawn a
+  // second time. Both copies are on screen at once, so the tag/note sheet needs
+  // its own open-id per copy — sharing one made pressing Tag in the header also
+  // expand the card in the list and shove the rest of the list down.
+  const renderSessionRow = (s: PastSession, showPath?: boolean, clone?: boolean) => {
+    const orgId = clone ? cloneOrganizeId : organizeId;
+    const setOrg = clone ? setCloneOrganizeId : setOrganizeId;
     const isExpanded = expandedId === s.sessionId;
     // MOCKUP ONLY — with the resume controls out of the card, the accent border
     // is the ONLY thing left saying which row the right panel is showing, so
@@ -1212,20 +1230,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          if (organizeId === s.sessionId) { setOrganizeId(null); return; }
+          if (orgId === s.sessionId) { setOrg(null); return; }
           organizeTriggerRef.current = e.currentTarget;
           // The two panes are mutually exclusive: a card shows EITHER how to
           // relaunch it or how to organize it, never both stacked. Without this
           // an open card could grow two panels deep and the Resume button would
           // slide down the screen as you tagged.
           setExpandedId(null);
-          setOrganizeId(s.sessionId);
+          setOrg(s.sessionId);
         }}
         aria-label={`Organize ${s.name}`}
         aria-haspopup="dialog"
-        aria-expanded={organizeId === s.sessionId}
+        aria-expanded={orgId === s.sessionId}
         className={`px-1 py-1.5 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          organizeId === s.sessionId ? 'text-fg' : 'text-fg-faint hover:text-fg-2'
+          orgId === s.sessionId ? 'text-fg' : 'text-fg-faint hover:text-fg-2'
         }`}
       >
         {/* A tag, not a generic dots menu — it names what the sheet holds.
@@ -1272,8 +1290,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           It shares organizePopRef with the floating variants: only one of the
           two is ever mounted, and the outside-click handler checks that ref to
           know "the click landed inside the open organize UI". */}
-      {organizeId === s.sessionId && (
-        <div ref={organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
+      {orgId === s.sessionId && (
+        <div ref={clone ? undefined : organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
           {renderOrganizeControls(s)}
         </div>
       )}
@@ -1308,250 +1326,28 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     ? filtered.find((r) => r.sessionId === previewId) ?? null
     : null;
 
-  // MOCKUP ONLY — the check-in-a-circle the card already uses for Complete,
-  // repeated here rather than shared because the card's copy is welded into
-  // renderSessionRow's absolutely-positioned icon cluster.
-  const CompleteGlyph = ({ done, className = 'w-4 h-4' }: { done: boolean; className?: string }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <circle cx="12" cy="12" r="9" fill={done ? 'currentColor' : 'none'} />
-      <path d="M8 12.5l2.5 2.5L16 9.5" stroke={done ? 'var(--canvas)' : 'currentColor'} />
-    </svg>
-  );
-
-  const PencilGlyph = ({ className = 'w-3.5 h-3.5' }: { className?: string }) => (
-    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
-      <path d="M12 20h9" />
-      <path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4Z" />
-    </svg>
-  );
-
-  // MOCKUP ONLY — the four header treatments under review. Every one of them
-  // shows the same three facts and offers the same three actions; what differs
-  // is how much of that is a word, a glyph, or hidden behind a press.
-  const renderPreviewHeader = (s: PastSession) => {
-    const project = s.projectPath.replace(/\\/g, '/').split('/').pop();
-    const tags = (s.tags ?? []).map((id) => registry.tags.find((t) => t.id === id)).filter(Boolean);
-    const done = !!s.flags?.complete;
-    const rename = () => setRenameSession(s);
-    const organize = () => setPreviewOrganize((v) => !v);
-    const complete = () => toggleFlag(s.sessionId, 'complete', !done);
-    const facts = (
-      <div className="mt-1.5 flex items-center gap-1.5 text-3xs text-fg-muted">
-        <span className="truncate">{project}</span>
-        <span aria-hidden>·</span>
-        <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
-        <span aria-hidden>·</span>
-        <span className="shrink-0">{formatSize(s.size)}</span>
-      </div>
-    );
-    // The name is the rename control in three of the four, exactly as it is on
-    // the card in the list: a dotted underline and a pencil, never a
-    // hover-only cue (there is no hover on a touch screen).
-    const nameButton = (
-      <button
-        type="button"
-        onClick={rename}
-        aria-label={`Rename ${s.name}`}
-        aria-haspopup="dialog"
-        className="group flex items-center gap-1.5 min-w-0 -ml-1 px-1 py-0.5 rounded-md cursor-text hover:bg-well transition-colors"
-      >
-        <span className="text-base font-semibold text-fg truncate decoration-dotted underline-offset-[3px] underline decoration-fg-muted">
-          {s.name}
-        </span>
-        <span className="text-fg-muted shrink-0"><PencilGlyph /></span>
-      </button>
-    );
-
-    if (PREVIEW_VARIANT === 'chips') {
-      return (
-        <div className="px-5 pt-4 pb-3">
-          <h3 className="text-base font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
-          {facts}
-          {/* One wrapping row: what is applied and what you can do, side by
-              side, because "add a tag" and "the tags it has" are the same
-              thought. */}
-          <div className="mt-2.5 flex flex-wrap items-center gap-1">
-            {tags.map((t) => <TagChip key={t!.id} tag={t!} />)}
-            <FilterPill active={previewOrganize} onClick={organize}><TagGlyph className="w-3 h-3" />Tag</FilterPill>
-            <FilterPill active={done} onClick={complete}><CompleteGlyph done={done} className="w-3 h-3" />Complete</FilterPill>
-            <FilterPill active={false} onClick={rename}><PencilGlyph className="w-3 h-3" />Rename</FilterPill>
-          </div>
-        </div>
-      );
-    }
-
-    if (PREVIEW_VARIANT === 'toolbar') {
-      return (
-        <div>
-          <div className="px-5 pt-4 pb-3">
-            {nameButton}
-            {facts}
-            {tags.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-1">
-                {tags.map((t) => <TagChip key={t!.id} tag={t!} />)}
-              </div>
-            )}
-          </div>
-          {/* Words, not glyphs. The cost is a whole strip of height; the gain is
-              that nobody has to guess what a tag-shaped outline does. */}
-          <div className="flex items-center gap-1 px-3 py-1.5 border-t border-edge-dim bg-inset">
-            <Button variant="ghost" size="sm" onClick={rename}>Rename</Button>
-            <Button variant="ghost" size="sm" onClick={organize}>Tags &amp; note</Button>
-            <Button variant="ghost" size="sm" onClick={complete}>{done ? 'Mark not complete' : 'Mark complete'}</Button>
-          </div>
-        </div>
-      );
-    }
-
-    if (PREVIEW_VARIANT === 'menu') {
-      return (
-        <div className="px-5 pt-4 pb-3 flex items-start gap-2">
-          <div className="min-w-0 flex-1">
-            <h3 className="text-base font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
-            {facts}
-            {tags.length > 0 && (
-              <div className="mt-2 flex flex-wrap items-center gap-1">
-                {tags.map((t) => <TagChip key={t!.id} tag={t!} />)}
-              </div>
-            )}
-          </div>
-          <button
-            type="button"
-            onClick={organize}
-            aria-haspopup="menu"
-            aria-expanded={previewOrganize}
-            aria-label="More actions"
-            className={`shrink-0 rounded-md border p-1.5 transition-colors ${
-              previewOrganize ? 'text-fg bg-well border-edge' : 'text-fg-dim border-transparent hover:text-fg hover:bg-well hover:border-edge'
-            }`}
-          >
-            <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-              <circle cx="5" cy="12" r="1.6" /><circle cx="12" cy="12" r="1.6" /><circle cx="19" cy="12" r="1.6" />
-            </svg>
-          </button>
-        </div>
-      );
-    }
-
-    // 'icons' — the card's own two glyphs, at the size of a header.
-    return (
-      <div className="px-5 pt-4 pb-3 flex items-start gap-2">
-        <div className="min-w-0 flex-1">
-          {nameButton}
-          {facts}
-          {tags.length > 0 && (
-            <div className="mt-2 flex flex-wrap items-center gap-1">
-              {tags.map((t) => <TagChip key={t!.id} tag={t!} />)}
-            </div>
-          )}
-        </div>
-        <div className="shrink-0 flex items-center gap-0.5">
-          <button
-            type="button"
-            onClick={organize}
-            aria-label={`Organize ${s.name}`}
-            aria-haspopup="dialog"
-            aria-expanded={previewOrganize}
-            className={`p-1.5 rounded-md transition-colors ${previewOrganize ? 'text-fg bg-well' : 'text-fg-faint hover:text-fg-2 hover:bg-well'}`}
-          >
-            <TagGlyph className="w-4 h-4" />
-          </button>
-          <button
-            type="button"
-            onClick={complete}
-            aria-pressed={done}
-            title={done ? 'Marked complete — click to undo.' : 'Mark this conversation complete?'}
-            aria-label={done ? `Mark ${s.name} not complete` : `Mark ${s.name} complete`}
-            className={`p-1.5 rounded-md transition-colors ${done ? 'text-accent hover:bg-well' : 'text-fg-faint hover:text-fg-2 hover:bg-well'}`}
-          >
-            <CompleteGlyph done={done} />
-          </button>
-        </div>
-      </div>
-    );
-  };
-
   // MOCKUP ONLY — the action card at the FOOT of the sheet, in the place a real
   // conversation puts its message box: this is where you act on what you just
-  // read. Model and project sit beside Resume because both are choices about
-  // the relaunch, and the ▾ holds the two switches that only sometimes apply.
+  // read. Its contents are `renderExpandedOptions` verbatim — the same block the
+  // expanded card in the list and ResumeOptionsPopover already draw — because
+  // Destin's ruling on the switches was "this should look like it does in our
+  // other existing new/resume surfaces", and re-styling them here is exactly how
+  // three surfaces drift apart. `flush` only drops the top hairline, which would
+  // otherwise double up against the card's own border.
   const renderActionCard = (s: PastSession) => {
     const project = s.projectPath.replace(/\\/g, '/').split('/').pop();
-    const dangerous = s.provider !== 'native' && resumeDangerous;
-    const nativeNeedsPick = s.provider === 'native' && !nativeResumeBinding;
-    const busy = resumingId === s.sessionId;
     return (
       <div className="shrink-0 p-3 pt-0">
-        <div className="rounded-lg border border-edge bg-panel p-2 shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
-          <div className="flex items-center gap-2">
-            <div className="min-w-0 flex-1">
-              <ModelPicker
-                value={resumeChoice(s)}
-                onSelect={(c) => applyResumeChoice(s, c)}
-                includeClaude={s.provider !== 'native'}
-                includeNative={s.provider === 'native'}
-                prefill={s.lastUsedModel}
-                onManageModels={() => window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'))}
-              />
-            </div>
-            {/* Read-only: a resume cannot move a conversation to another folder,
-                so this states where it will land rather than offering a pick. */}
-            <span className="shrink-0 flex items-center gap-1 px-2 py-1 rounded-md bg-inset border border-edge-dim text-3xs text-fg-muted max-w-[140px]">
-              <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-              </svg>
-              <span className="truncate" title={s.projectPath}>{project}</span>
-            </span>
-            <div className="shrink-0 flex items-center gap-1">
-              <Button
-                variant={dangerous ? 'danger' : 'primary'}
-                size="sm"
-                disabled={nativeNeedsPick || busy}
-                onClick={() => handleConfirmResume(s)}
-              >
-                {busy ? 'Resuming…' : dangerous ? 'Resume (Dangerous)' : 'Resume'}
-              </Button>
-              <button
-                type="button"
-                onClick={() => setPreviewSheetOpen((v) => !v)}
-                aria-haspopup="dialog"
-                aria-expanded={previewSheetOpen}
-                aria-label="Resume options"
-                className={`rounded-md border p-1.5 transition-colors ${
-                  previewSheetOpen ? 'text-fg bg-well border-edge' : 'text-fg-dim border-transparent hover:text-fg hover:bg-well hover:border-edge'
-                }`}
-              >
-                <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.5} strokeLinecap="round" aria-hidden>
-                  <path d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
-            </div>
+        <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
+          {/* Read-only: a resume cannot move a conversation to another folder,
+              so this states where it will land rather than offering a pick. */}
+          <div className="flex items-center gap-1.5 px-3 pt-2.5 text-3xs text-fg-muted">
+            <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
+            </svg>
+            <span className="truncate" title={s.projectPath}>{project}</span>
           </div>
-          {/* The two switches the ▾ holds. They drop INTO the card rather than
-              floating over the conversation — a floating popover here would be a
-              second `.layer-surface` inside the overlay, the stacked-glass bug
-              the card comment in the list warns about. */}
-          {previewSheetOpen && (
-            <div className="mt-2 pt-2 border-t border-edge-dim flex flex-col gap-2">
-              {s.provider !== 'native' && (
-                <>
-                  <SettingRow
-                    variant="item"
-                    title={<span className="inline-flex items-center">Skip Permissions<SkipPermissionsInfoTooltip /></span>}
-                    control={<Toggle checked={resumeDangerous} onChange={setResumeDangerous} tone="danger" aria-label="Skip Permissions" />}
-                  />
-                  {resumeDangerous && <SkipPermissionsCaption />}
-                </>
-              )}
-              {detachAvailable && (
-                <SettingRow
-                  variant="item"
-                  title="Launch in New Window"
-                  control={<Toggle checked={resumeLaunchInNewWindow} onChange={setResumeLaunchInNewWindow} aria-label="Launch in New Window" />}
-                />
-              )}
-            </div>
-          )}
+          {renderExpandedOptions(s, { flush: true })}
         </div>
       </div>
     );
@@ -1803,34 +1599,64 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               </div>
             );
           }
-          // FIXED for round four: the sheet. Heading, conversation and action
-          // card ride one inset surface with the window showing all round it —
-          // `bg-canvas` + a border, never `.layer-surface`, because a second one
+          // FIXED from here on: the sheet, the header clone, and the action
+          // card. `bg-canvas` + a border, never `.layer-surface` — a second one
           // of those inside the overlay is the stacked-glass bug the card
           // comment in the list warns about.
+          //
+          // MOTION: `arriving` is true for one window after previewId changes
+          // (useOneShotWindow, the same hook ChatView uses), and the variants
+          // differ only in which elements wear `.switch-arrival` and when.
+          // animationFillMode backwards on the delayed ones so a staggered
+          // element does not paint at its final position for 70ms and then jump
+          // back to the start.
+          type Arrival = { className?: string; style?: React.CSSProperties };
+          const arr = (delay?: number): Arrival => {
+            if (!arriving || PREVIEW_VARIANT === 'none') return {};
+            return {
+              className: 'switch-arrival',
+              style: delay ? { animationDelay: `${delay}ms`, animationFillMode: 'backwards' } : undefined,
+            };
+          };
+          const whole: Arrival = PREVIEW_VARIANT === 'whole' ? arr() : {};
+          const headerArr: Arrival = PREVIEW_VARIANT === 'header' || PREVIEW_VARIANT === 'stagger' ? arr() : {};
+          const bodyArr: Arrival = PREVIEW_VARIANT === 'header'
+            ? (arriving ? { className: 'row-fade-in-arrival' } : {})
+            : PREVIEW_VARIANT === 'stagger' ? arr(70) : {};
+          const cardArr: Arrival = PREVIEW_VARIANT === 'stagger' ? arr(140) : {};
           return (
             <div className="flex-1 min-w-0 flex flex-col min-h-0 p-3">
-              <div className="flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas">
-                <div className="shrink-0 border-b border-edge-dim">
-                  {renderPreviewHeader(s)}
-                </div>
-                {/* Tags and note drop IN under the header for every treatment —
-                    the same in-flow sheet the card in the list uses, rather than
-                    a popover that would have to be positioned inside a scrolling
-                    frame. */}
-                {previewOrganize && (
-                  <div className="shrink-0 border-b border-edge-dim px-4 py-2.5 flex flex-col gap-2 bg-inset">
-                    {renderOrganizeControls(s)}
+              <div
+                className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas ${whole.className ?? ''}`}
+                style={whole.style}
+              >
+                {/* The header IS the list's card, drawn again — Destin, round
+                    four: "a clone of the card on the lefthand side ... floats at
+                    the top of the window inside the container". Floating, not
+                    welded: older messages pass under it as you scroll back.
+                    pointer-events-none on the strip, auto on the card, so the
+                    gutter beside it does not swallow scroll wheels. */}
+                <div
+                  className={`absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none ${headerArr.className ?? ''}`}
+                  style={headerArr.style}
+                >
+                  <div className="pointer-events-auto drop-shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
+                    {renderSessionRow(s, true, true)}
                   </div>
-                )}
-                <div className="flex-1 min-h-0 flex flex-col">
+                </div>
+                <div
+                  className={`flex-1 min-h-0 flex flex-col ${bodyArr.className ?? ''}`}
+                  style={bodyArr.style}
+                >
                   <SessionPreviewPane
                     provider={(s.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
                     id={s.sessionId}
                     title={s.name}
                   />
                 </div>
-                {renderActionCard(s)}
+                <div className={cardArr.className} style={cardArr.style}>
+                  {renderActionCard(s)}
+                </div>
               </div>
             </div>
           );

@@ -908,6 +908,24 @@ body[data-mode="buddy-chat"] #theme-bg {
    theme-engine.ts. Honoured alongside the OS preference, never instead of it. */
 [data-reduced-effects] .switch-arrival { animation: none; }
 
+/* MOCKUP ONLY (2026-09-10, Resume-browser preview panel) — the quiet half of
+   one candidate: when only the header card is meant to move, the conversation
+   under it must not sit still either or the swap reads as a glitch. Opacity
+   only, no transform: this wraps the transcript, and a transform on a scroll
+   container's parent creates a containing block that the pane's sticky
+   scroll-fade pseudos then measure against. Delete with the mockup. */
+@keyframes row-fade-in-arrival {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.row-fade-in-arrival {
+  animation: row-fade-in-arrival var(--dur-switch) ease-out 1;
+}
+@media (prefers-reduced-motion: reduce) {
+  .row-fade-in-arrival { animation: none; }
+}
+[data-reduced-effects] .row-fade-in-arrival { animation: none; }
+
 /* ── Session pill label (2026-09-01) ─────────────────────────────────────────
    The label is a clipping box whose max-width animates (pill-label-style.ts);
    the name inside is laid out ONCE at its full width so it never re-wraps or
