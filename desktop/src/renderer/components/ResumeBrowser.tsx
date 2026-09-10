@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
@@ -58,54 +58,30 @@ function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
 
-// Shared trigger-button shape for the filter row beneath the search bar.
-// Inactive pills look like the search input frame; active pills tint with the
-// accent so the user can see at a glance which pills have departed from
-// default state — narrowing filters (Projects, Tags) AND a non-default sort
-// direction (Sort). Don't "tighten" the predicate to only narrowing — Sort
-// would lose its visual cue.
-function FilterPill({
-  active,
-  onClick,
-  children,
-  hasPopup,
-  expanded,
-  buttonRef,
-}: {
-  active: boolean;
-  // Receives the MouseEvent so dropdown-owning callers can stopPropagation()
-  // — the Projects + Tags pills (Tasks 4 + 5) rely on this to keep their
-  // outside-click handler from immediately re-closing the dropdown.
-  onClick: (e: React.MouseEvent) => void;
-  children: React.ReactNode;
-  // Optional: when the pill opens a dropdown, callers pass these so screen
-  // readers announce both "active filter" (aria-pressed) AND dropdown state.
-  // expanded is only read when hasPopup is true; React strips both attrs
-  // entirely when hasPopup is falsy (Sort pill).
-  hasPopup?: boolean;
-  expanded?: boolean;
-  // Optional: dropdown-owning callers pass a ref so they can measure the
-  // trigger's bounding rect for portal positioning. Sort doesn't need it.
-  buttonRef?: React.Ref<HTMLButtonElement>;
-}) {
+// Filter menu rows and footer (design guide G-21: 28px rows of mark · label ·
+// right-aligned count at text-xs; actions in a footer under a hairline, where
+// FolderSwitcher and ModelPicker put theirs). One recipe shared by the Projects
+// and Tags menus so the two cannot drift into two looks again (2026-09-10).
+const MENU_ROW = 'w-full h-7 px-3 text-xs flex items-center gap-2 text-left text-fg-2 hover:bg-inset transition-colors';
+const MENU_FOOTER = 'border-t border-edge flex divide-x divide-edge';
+const MENU_FOOTER_ACTION = 'flex-1 px-2.5 py-2 text-xs whitespace-nowrap text-fg-dim hover:bg-inset hover:text-fg transition-colors disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-fg-dim';
+
+// The sort chip's arrow: a stroked glyph like every other icon in the app,
+// replacing the "↓"/"↑" characters that used to sit inside the label text and
+// rendered as whatever the theme's font drew for them. Points down for
+// newest-first and turns to point up for oldest-first.
+function SortArrow({ up, muted }: { up: boolean; muted: boolean }) {
   return (
-    <button
-      ref={buttonRef}
-      type="button"
-      onClick={onClick}
-      // aria-pressed conveys the toggle state to assistive tech. Mirrors the
-      // Show Complete toggle's pattern further down in this file.
-      aria-pressed={active}
-      aria-haspopup={hasPopup ? 'listbox' : undefined}
-      aria-expanded={hasPopup ? !!expanded : undefined}
-      className={`px-2.5 py-1 rounded-full text-2xs flex items-center gap-1.5 transition-colors duration-75 ${
-        active
-          ? 'bg-accent/10 border border-accent/40 text-fg'
-          : 'bg-inset border border-edge-dim text-fg-muted hover:text-fg'
-      }`}
+    <svg
+      className={`w-3 h-3 shrink-0 transition-transform duration-150 ${up ? 'rotate-180' : ''} ${muted ? 'text-fg-muted' : ''}`.trim()}
+      fill="none"
+      viewBox="0 0 24 24"
+      stroke="currentColor"
+      strokeWidth={2}
+      aria-hidden="true"
     >
-      {children}
-    </button>
+      <path strokeLinecap="round" strokeLinejoin="round" d="M12 5v14M19 12l-7 7-7-7" />
+    </svg>
   );
 }
 
@@ -282,7 +258,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [renameSession, setRenameSession] = useState<PastSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
-  const searchRef = useRef<HTMLInputElement>(null);
+  // The shared search pill forwards its wrapper, not the input, so autofocus
+  // reaches the field through it (see the open-effect below).
+  const searchRef = useRef<HTMLDivElement>(null);
   const listRef = useScrollFade<HTMLDivElement>();
   // Wraps the filter pill row so outside-click can close the active dropdown.
   const filterRowRef = useRef<HTMLDivElement>(null);
@@ -374,7 +352,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         .then((list: PastSession[]) => setSessions(list))
         .catch(() => setSessions([]))
         .finally(() => setLoading(false));
-      const t = setTimeout(() => searchRef.current?.focus(), 50);
+      const t = setTimeout(() => searchRef.current?.querySelector('input')?.focus(), 50);
       return () => clearTimeout(t);
     }
   }, [open]);
@@ -552,15 +530,25 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // every known project, even when the user has narrowed the visible list.
   const availableProjects = useMemo(() => getAvailableProjects(sessions), [sessions]);
 
-  // Trigger label for the Projects pill: 0 selected → "Projects",
-  // 1 → label, 2-3 → comma-joined labels, 4+ → "Projects (N)".
-  const projectsLabel = useMemo(() => {
+  // Chip labels: nothing picked → the category; one picked → its name; more →
+  // the category and a count (design guide G-19: label, space, numeral — never
+  // parentheses). The old 2–3 → comma-joined names made one chip as wide as the
+  // whole row on a phone.
+  const projectsLabel = useMemo((): React.ReactNode => {
     if (selectedProjects.size === 0) return 'Projects';
     const selectedList = availableProjects.filter((p) => selectedProjects.has(p.path));
     if (selectedList.length === 1) return selectedList[0].label;
-    if (selectedList.length <= 3) return selectedList.map((p) => p.label).join(', ');
-    return `Projects (${selectedList.length})`;
+    return <>Projects <span className="opacity-70 tabular-nums">{selectedList.length}</span></>;
   }, [selectedProjects, availableProjects]);
+  const liveTags = useMemo(() => registry.tags.filter((t) => !t.archived), [registry.tags]);
+  const tagsLabel = useMemo((): React.ReactNode => {
+    if (selectedTagIds.size === 0) return 'Tags';
+    if (selectedTagIds.size === 1) {
+      const only = liveTags.find((t) => selectedTagIds.has(t.id));
+      if (only) return only.label;
+    }
+    return <>Tags <span className="opacity-70 tabular-nums">{selectedTagIds.size}</span></>;
+  }, [selectedTagIds, liveTags]);
 
   // Portal-anchored dropdown positions. Dropdown widths match the className
   // (Projects: w-64 = 256px, Tags: w-52 = 208px). Keep these in sync if the
@@ -1221,29 +1209,25 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 />
               </div>
             </div>
-            <div className="flex items-center gap-2 bg-inset rounded-lg px-3 py-2 border border-edge-dim">
-              <svg className="w-4 h-4 text-fg-muted shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <circle cx="11" cy="11" r="7" />
-                <path d="M21 21l-4.35-4.35" strokeLinecap="round" />
-              </svg>
-              <input
-                ref={searchRef}
-                type="text"
-                value={search}
-                onChange={(e) => setSearch(e.target.value)}
-                placeholder="Search sessions..."
-                className="flex-1 bg-transparent text-sm text-fg placeholder-fg-muted outline-none"
-              />
-            </div>
-            <div ref={filterRowRef} className="flex items-center gap-1.5 mt-2 relative">
-              {/* Projects: multi-select dropdown over distinct projectPaths in the loaded sessions.
-                  Dropdown is portaled to document.body so it escapes the OverlayPanel's
-                  overflow:hidden clipping (lets it overlap the panel edge). */}
-              <FilterPill
+            {/* The shared search pill (design guide §3 lists Resume among its homes).
+                Its filters are the chips on the next row, so no docked trigger —
+                the same call the Marketplace bar makes. */}
+            <SearchFilterPill
+              ref={searchRef}
+              value={search}
+              onChange={setSearch}
+              placeholder="Search sessions..."
+              inputAriaLabel="Search sessions"
+            />
+            <div ref={filterRowRef} className="flex items-center gap-2 mt-2 overflow-x-auto scrollbar-none">
+              {/* Projects: pick-any menu over the distinct project paths in the loaded
+                  sessions. The menu is portaled to document.body so it escapes the
+                  OverlayPanel's overflow:hidden clipping (lets it overlap the panel edge). */}
+              <FilterMenuChip
                 buttonRef={projectsTriggerRef}
                 active={selectedProjects.size > 0}
-                hasPopup
-                expanded={openPill === 'projects'}
+                open={openPill === 'projects'}
+                className="shrink-0 max-w-[14rem]"
                 onClick={(e) => {
                   e.stopPropagation();
                   // Measure synchronously so the dropdown renders with its final
@@ -1258,38 +1242,25 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                   }
                 }}
               >
-                <span>{projectsLabel}</span>
-                <span className="text-fg-faint text-4xs">▾</span>
-              </FilterPill>
+                {projectsLabel}
+              </FilterMenuChip>
               {openPill === 'projects' && projectsDropdownPos && createPortal(
                 <div
                   ref={projectsDropdownRef}
                   className="layer-surface w-64 max-w-[calc(100vw-1rem)] overflow-hidden"
-                  style={{
-                    position: 'fixed',
-                    top: projectsDropdownPos.top,
-                    left: projectsDropdownPos.left,
-                    zIndex: 60,
-                  }}
+                  style={{ position: 'fixed', top: projectsDropdownPos.top, left: projectsDropdownPos.left, zIndex: 60 }}
                 >
-                  {/* "Clear" — text-only affordance that empties selectedProjects (which the data
-                      model treats as "filter inactive"). No checkbox visual so it doesn't read as
-                      a master "select every project" toggle. Muted small-caps style separates it
-                      from the checkbox rows below. Always visible; clicks no-op when already cleared. */}
-                  <button
-                    type="button"
-                    onClick={() => setSelectedProjects(new Set())}
-                    className="w-full text-left px-2.5 py-1.5 text-2xs text-fg-muted tracking-wider uppercase hover:text-fg hover:bg-inset transition-colors"
-                  >
-                    Clear
-                  </button>
-                  <div className="max-h-56 overflow-y-auto border-t border-edge-dim">
+                  {/* The list scrolls; the footer stays put, so Clear never leaves
+                      the screen behind a long list of projects. */}
+                  <div role="listbox" aria-multiselectable aria-label="Filter by project" className="max-h-56 overflow-y-auto py-1">
                     {availableProjects.map((p) => {
                       const checked = selectedProjects.has(p.path);
                       return (
                         <button
                           key={p.path}
                           type="button"
+                          role="option"
+                          aria-selected={checked}
                           onClick={() => {
                             setSelectedProjects((prev) => {
                               const next = new Set(prev);
@@ -1298,80 +1269,119 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                               return next;
                             });
                           }}
-                          className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
+                          className={MENU_ROW}
                         >
-                          <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
+                          <CheckboxMark checked={checked} />
                           <span className="flex-1 truncate" title={p.path}>{p.label}</span>
-                          <span className="text-3xs text-fg-muted shrink-0">{p.count}</span>
+                          <span className="text-2xs text-fg-muted shrink-0 tabular-nums">{p.count}</span>
                         </button>
                       );
                     })}
+                  </div>
+                  {/* Clear empties the selection, which the data model treats as
+                      "filter inactive". Dimmed rather than hidden when there is
+                      nothing to clear, so the menu's height never jumps. */}
+                  <div className={MENU_FOOTER}>
+                    <button
+                      type="button"
+                      disabled={selectedProjects.size === 0}
+                      onClick={() => setSelectedProjects(new Set())}
+                      className={MENU_FOOTER_ACTION}
+                    >
+                      Clear
+                    </button>
                   </div>
                 </div>,
                 document.body,
               )}
 
-              {/* Tags: multi-select dropdown over the user's custom tags. Portaled
-                  to escape the OverlayPanel's overflow:hidden clipping. */}
-              <FilterPill
+              {/* Tags: pick-any menu over the user's tags. Portaled for the same reason. */}
+              <FilterMenuChip
                 buttonRef={tagsTriggerRef}
                 active={selectedTagIds.size > 0}
-                hasPopup
-                expanded={openPill === 'tags'}
+                open={openPill === 'tags'}
+                className="shrink-0 max-w-[14rem]"
                 onClick={(e) => {
                   e.stopPropagation();
                   if (openPill === 'tags') { setOpenPill(null); setTagsDropdownPos(null); }
                   else { setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208)); setOpenPill('tags'); }
                 }}
               >
-                <span>{selectedTagIds.size === 0 ? 'Tags' : `${selectedTagIds.size} tag${selectedTagIds.size > 1 ? 's' : ''}`}</span>
-                <span className="text-fg-faint text-4xs">▾</span>
-              </FilterPill>
+                {tagsLabel}
+              </FilterMenuChip>
               {openPill === 'tags' && tagsDropdownPos && createPortal(
                 <div
                   ref={tagsDropdownRef}
-                  className="layer-surface w-52 max-w-[calc(100vw-1rem)] max-h-64 overflow-y-auto"
+                  className="layer-surface w-52 max-w-[calc(100vw-1rem)] overflow-hidden"
                   style={{ position: 'fixed', top: tagsDropdownPos.top, left: tagsDropdownPos.left, zIndex: 60 }}
                 >
-                  {registry.tags.filter((t) => !t.archived).length === 0 && (
-                    <div className="px-2.5 py-1.5 text-xs text-fg-muted">No tags yet.</div>
+                  {liveTags.length === 0 ? (
+                    <div className="px-3 py-3">
+                      <EmptyState variant="inline" message="No tags yet" />
+                    </div>
+                  ) : (
+                    <div role="listbox" aria-multiselectable aria-label="Filter by tag" className="max-h-64 overflow-y-auto py-1">
+                      {liveTags.map((t) => {
+                        const checked = selectedTagIds.has(t.id);
+                        return (
+                          <button
+                            key={t.id}
+                            type="button"
+                            role="option"
+                            aria-selected={checked}
+                            onClick={() => setSelectedTagIds((prev) => {
+                              const next = new Set(prev);
+                              if (next.has(t.id)) next.delete(t.id); else next.add(t.id);
+                              return next;
+                            })}
+                            className={MENU_ROW}
+                          >
+                            <CheckboxMark checked={checked} />
+                            <TagChip tag={t} />
+                          </button>
+                        );
+                      })}
+                    </div>
                   )}
-                  {/* Second route to the tag manager, so "where do I rename a
-                      tag?" is answerable from the filter too — not only from a
-                      conversation's Organize popover. */}
-                  <button
-                    type="button"
-                    onClick={() => { setOpenPill(null); setTagManagerOpen(true); }}
-                    className="w-full text-left px-2.5 py-1.5 text-2xs text-fg-muted tracking-wider uppercase hover:text-fg hover:bg-inset transition-colors border-b border-edge-dim"
-                  >
-                    Manage tags…
-                  </button>
-                  {registry.tags.filter((t) => !t.archived).map((t) => {
-                    const checked = selectedTagIds.has(t.id);
-                    return (
-                      <button
-                        key={t.id}
-                        type="button"
-                        onClick={() => setSelectedTagIds((prev) => {
-                          const next = new Set(prev);
-                          if (next.has(t.id)) next.delete(t.id); else next.add(t.id);
-                          return next;
-                        })}
-                        className="w-full text-left px-2.5 py-1.5 text-xs flex items-center gap-2 hover:bg-inset transition-colors text-fg-2"
-                      >
-                        <span className={`w-3 h-3 shrink-0 rounded-sm border ${checked ? 'bg-accent border-accent' : 'border-edge'}`} />
-                        <TagChip tag={t} />
-                      </button>
-                    );
-                  })}
+                  {/* Footer: Clear, and the second route to the tag manager so
+                      "where do I rename a tag?" is answerable from the filter too —
+                      not only from a conversation's Organize popover. A footer,
+                      not a header row, because that is where FolderSwitcher,
+                      ModelPicker and TagPicker keep their "Manage…" entry. */}
+                  <div className={MENU_FOOTER}>
+                    <button
+                      type="button"
+                      disabled={selectedTagIds.size === 0}
+                      onClick={() => setSelectedTagIds(new Set())}
+                      className={MENU_FOOTER_ACTION}
+                    >
+                      Clear
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => { setOpenPill(null); setTagManagerOpen(true); }}
+                      className={MENU_FOOTER_ACTION}
+                    >
+                      Manage tags…
+                    </button>
+                  </div>
                 </div>,
                 document.body,
               )}
 
-              {/* Sort toggle — flips lastModified direction. Priority-pin still wins. */}
-              <FilterPill active={sortDir !== 'desc'} onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}>
-                {sortDir === 'desc' ? 'Most recent ↓' : 'Oldest first ↑'}
-              </FilterPill>
+              {/* Sort — one tap flips the order and the arrow turns with it. Lit,
+                  like a narrowing filter, only when the order is not the default,
+                  so the row says at a glance that the list is not newest-first.
+                  Priority-pin still wins over the sort. */}
+              <FilterChip
+                kind="toggle"
+                active={sortDir !== 'desc'}
+                onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
+                className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap"
+              >
+                <span>{sortDir === 'desc' ? 'Most recent' : 'Oldest first'}</span>
+                <SortArrow up={sortDir === 'asc'} muted={sortDir === 'desc'} />
+              </FilterChip>
             </div>
           </div>
 

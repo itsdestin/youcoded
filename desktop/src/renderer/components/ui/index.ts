@@ -39,7 +39,7 @@ export type { SelectProps, SelectOption } from './Select';
 export { TypeableSelect } from './TypeableSelect';
 export type { TypeableSelectProps } from './TypeableSelect';
 
-export { Checkbox } from './Checkbox';
+export { Checkbox, CheckboxMark } from './Checkbox';
 export type { CheckboxProps } from './Checkbox';
 
 export { Radio, RadioGroup } from './Radio';
@@ -65,6 +65,8 @@ export type { SearchFilterPillProps } from './SearchFilterPill';
 
 export { FilterChip } from './FilterChip';
 export type { FilterChipProps } from './FilterChip';
+export { FilterMenuChip } from './FilterMenuChip';
+export type { FilterMenuChipProps } from './FilterMenuChip';
 export { Dialog, DIALOG_WIDTHS } from './Dialog';
 export type { DialogProps, DialogSize } from './Dialog';
 
