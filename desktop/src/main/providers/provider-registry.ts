@@ -25,6 +25,7 @@ import { SecretsStore } from './secrets-store';
 import type { ChatGptAuth } from './chatgpt-auth';
 import { CHATGPT_CODEX_BASE_URL, CHATGPT_SIGN_IN_REQUIRED_MESSAGE } from './chatgpt-oauth';
 import { chatGptMiddleware } from './chatgpt-model';
+import { promptCacheMiddleware, type PromptCacheProvider } from './prompt-cache';
 
 const FILE = 'providers.json';
 const BUILT_INS: ProviderConfig[] = [
@@ -246,12 +247,22 @@ export class ProviderRegistry {
   /** THE factory (spec §2.2). Throws plain-language errors — they surface in the UI error banner.
    *  `opts.serialToolCalls` (spec §4.2) is honored ONLY on the local-engine branch —
    *  cloud providers handle parallel tool calls fine and ignore it.
-   *  `opts.cacheKey` (the harness session id) is honored ONLY on the chatgpt
-   *  branch, where it becomes the endpoint's prompt_cache_key. */
+   *  `opts.cacheKey` (the harness session id) is honored on three branches:
+   *  chatgpt (the endpoint's prompt_cache_key), anthropic (cache_control
+   *  markers) and openrouter (session_id pin + cache_control for Claude
+   *  models) — see prompt-cache.ts. A caller without one gets none of them. */
   async languageModel(
     binding: ModelBinding,
     opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
   ): Promise<LanguageModel> {
+    // WHY wrap only with a cacheKey: the registry's structural tests reach the
+    // inner SDK model's `config` (metadataExtractor, transformRequestBody) on
+    // the unwrapped handle, and the one caller without a key — session naming —
+    // is exactly the one-shot request that must carry no cache marker.
+    const cached = (provider: PromptCacheProvider, model: Parameters<typeof wrapLanguageModel>[0]['model']): LanguageModel =>
+      opts?.cacheKey
+        ? wrapLanguageModel({ model, middleware: promptCacheMiddleware({ provider, modelId: binding.modelId, cacheKey: opts.cacheKey }) })
+        : model;
     const p = this.readAll().find((x) => x.id === binding.providerId);
     // Kill switch (§6): with chatgpt null the virtual row is not in readAll(),
     // so a session still bound to it would otherwise read "not configured" —
@@ -338,7 +349,7 @@ export class ProviderRegistry {
       case 'openrouter': {
         const apiKey = await this.keyFor(p);
         if (!apiKey) throw new Error('OpenRouter needs an API key — add one in Settings → Providers.');
-        return createOpenAICompatible({
+        return cached('openrouter', createOpenAICompatible({
           name: 'openrouter',
           baseURL: p.baseUrl ?? OPENROUTER_BASE_URL,
           apiKey,
@@ -369,7 +380,7 @@ export class ProviderRegistry {
           // not. If OpenRouter ever stops volunteering the field, the metadata
           // simply comes back absent — which is already the handled case.
           metadataExtractor: openRouterCostExtractor,
-        })(binding.modelId);
+        })(binding.modelId));
       }
       case 'openai-compatible': {
         if (!p.baseUrl) throw new Error(`${p.label} has no endpoint URL configured.`);
@@ -384,7 +395,7 @@ export class ProviderRegistry {
       case 'anthropic': {
         const apiKey = await this.keyFor(p);
         if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Settings → Providers.`);
-        return createAnthropic({ apiKey })(binding.modelId);
+        return cached('anthropic', createAnthropic({ apiKey })(binding.modelId));
       }
       case 'openai': {
         const apiKey = await this.keyFor(p);
