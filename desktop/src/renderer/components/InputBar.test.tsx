@@ -998,3 +998,90 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
     expect(voiceBridge.stop).not.toHaveBeenCalled();
   });
 });
+
+// The idle unfocus frees the Shift shortcuts, but on a touchscreen laptop it
+// also dismisses the on-screen keyboard every pause. A "coarse primary pointer"
+// check cannot see that machine: with a touchpad or any mouse-like device
+// attached the primary pointer is "fine" even while the user types with a
+// finger (measured on the ROG Flow Z13 under KDE Wayland, 2026-09-10). So the
+// decision follows how the box was last reached — finger or pen keeps focus.
+describe('InputBar — idle unfocus vs the on-screen keyboard', () => {
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
+      session: { sendInput: vi.fn() },
+      skills: {
+        list: vi.fn().mockResolvedValue([]),
+        getFavorites: vi.fn().mockResolvedValue([]),
+        getChips: vi.fn().mockResolvedValue([]),
+        getCuratedDefaults: vi.fn().mockResolvedValue([]),
+      },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  function renderComposer() {
+    render(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    vi.useFakeTimers();
+    return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+  }
+
+  /** Reach the box the way a user would, then type one character. */
+  function tapAndType(textarea: HTMLTextAreaElement, pointerType: string) {
+    fireEvent.pointerDown(textarea, { pointerType });
+    act(() => { textarea.focus(); });
+    fireEvent.keyDown(textarea, { key: 'a' });
+  }
+
+  async function pause(ms: number) {
+    await act(async () => { vi.advanceTimersByTime(ms); });
+  }
+
+  it('a touchpad or mouse click still lets the box unfocus after a pause', async () => {
+    const textarea = renderComposer();
+    tapAndType(textarea, 'mouse');
+    expect(document.activeElement).toBe(textarea);
+    await pause(800);
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it.each(['touch', 'pen'])('a %s tap keeps the box focused through a pause', async (pointerType) => {
+    const textarea = renderComposer();
+    tapAndType(textarea, pointerType);
+    await pause(800);
+    expect(document.activeElement).toBe(textarea);
+  });
+
+  it('a touchpad click after a finger tap turns the unfocus back on', async () => {
+    const textarea = renderComposer();
+    tapAndType(textarea, 'touch');
+    fireEvent.pointerDown(textarea, { pointerType: 'mouse' });
+    fireEvent.keyDown(textarea, { key: 'b' });
+    await pause(800);
+    expect(document.activeElement).not.toBe(textarea);
+  });
+
+  it('typing on a real keyboard with the box unfocused turns the unfocus back on', async () => {
+    const textarea = renderComposer();
+    // A finger tap somewhere else in the app, then the folio keyboard: the
+    // window-level auto-focus pulls the box in, which no soft keyboard can do.
+    fireEvent.pointerDown(document.body, { pointerType: 'touch' });
+    fireEvent.keyDown(document.body, { key: 'h' });
+    expect(document.activeElement).toBe(textarea);
+    fireEvent.keyDown(textarea, { key: 'i' });
+    await pause(800);
+    expect(document.activeElement).not.toBe(textarea);
+  });
+});

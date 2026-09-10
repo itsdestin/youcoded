@@ -370,6 +370,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     },
   }));
 
+  // True when the user's last press was a finger or pen. Shared by the
+  // auto-focus handler below and the idle unfocus timer after it.
+  const lastPointerWasTouch = useRef(false);
+
   // Auto-focus input when user starts typing anywhere in the app.
   // When Enter is pressed while the textarea is blurred, we must also
   // preventDefault and send — otherwise the browser inserts a newline
@@ -392,6 +396,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'Backspace' && e.key !== 'Enter' && e.key.length !== 1) return;
+      // WHY: a key arriving while no text field has focus came from a physical
+      // keyboard — an on-screen keyboard only exists while a field is focused.
+      // So the user has switched to real keys: let the idle unfocus run again.
+      lastPointerWasTouch.current = false;
       inputRef.current?.focus();
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -423,12 +431,27 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // platform string: it's the actual question being asked, and it correctly
   // keeps idle-blur ON for a desktop browser connecting remotely (real
   // keyboard, shortcuts useful, no soft keyboard to dismiss).
+  //
+  // Fix (2026-09-10): the coarse-pointer check still misses a touchscreen
+  // laptop. "pointer" describes the PRIMARY pointer, which Chromium reports as
+  // "fine" whenever any touchpad or mouse-like device is attached — on the ROG
+  // Flow Z13 it stayed "fine" with the keyboard cover detached, most likely
+  // because a ydotool virtual mouse counts. It was also read once at mount, so docking or
+  // undocking never changed it. So the per-pause decision follows how the user
+  // last pointed: a finger or pen tap keeps focus (that is what raises the
+  // on-screen keyboard), a touchpad/mouse click or physical typing restores
+  // the unfocus (see lastPointerWasTouch in the auto-focus handler above).
   const idleBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const el = inputRef.current;
     const hasSoftKeyboard = isAndroid()
       || window.matchMedia?.('(pointer: coarse)')?.matches === true;
     if (!el || hasSoftKeyboard) return;
+    // Capture phase on window, so no component's stopPropagation can hide a tap.
+    const notePointer = (e: PointerEvent) => {
+      lastPointerWasTouch.current = e.pointerType === 'touch' || e.pointerType === 'pen';
+    };
+    window.addEventListener('pointerdown', notePointer, true);
     const resetTimer = () => {
       if (idleBlurTimer.current) clearTimeout(idleBlurTimer.current);
       idleBlurTimer.current = setTimeout(() => {
@@ -439,6 +462,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         // a machine a walkie-talkie dictation would have been cut off silently,
         // three-quarters of a second in. Found reviewing T9, 2026-09-05.
         if (spaceHeld.current || spaceHoldTimer.current !== null) return;
+        if (lastPointerWasTouch.current) return;
         if (document.activeElement === el) el.blur();
       }, 750);
     };
@@ -446,6 +470,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     el.addEventListener('input', resetTimer);
     el.addEventListener('paste', resetTimer);
     return () => {
+      window.removeEventListener('pointerdown', notePointer, true);
       el.removeEventListener('keydown', resetTimer);
       el.removeEventListener('input', resetTimer);
       el.removeEventListener('paste', resetTimer);
