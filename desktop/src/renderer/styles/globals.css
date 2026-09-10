@@ -1116,6 +1116,44 @@ body[data-mode="buddy-chat"] #theme-bg {
 .scroll-fade[data-fade-top="true"]::before { opacity: 1; }
 .scroll-fade[data-fade-bottom="true"]::after { opacity: 1; }
 
+/* Sideways twin of .scroll-fade for a single row of chips (design guide §4.8:
+   a chip row that does not fit scrolls sideways behind an edge fade). Same hook
+   (useScrollFade sets data-fade-left / data-fade-right), same sticky-pseudo
+   trick turned 90°. First home: the Resume browser's filter chips, where at
+   390px the third chip was simply cut off with nothing saying the row moved. */
+.scroll-fade-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  position: relative;
+}
+.scroll-fade-x::-webkit-scrollbar { display: none; }
+.scroll-fade-x::before,
+.scroll-fade-x::after {
+  content: '';
+  display: block;
+  position: sticky;
+  align-self: stretch;
+  flex: 0 0 24px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.scroll-fade-x::before {
+  left: 0;
+  margin-right: -24px;
+  background: linear-gradient(to right, var(--panel) 0%, transparent 100%);
+}
+.scroll-fade-x::after {
+  right: 0;
+  margin-left: -24px;
+  background: linear-gradient(to left, var(--panel) 0%, transparent 100%);
+}
+.scroll-fade-x[data-fade-left="true"]::before { opacity: 1; }
+.scroll-fade-x[data-fade-right="true"]::after { opacity: 1; }
+
 /* Floating overlays (portaled menus/popups). Solid themes: opaque.
    Wallpaper themes: translucent + blur (injected by theme-engine). */
 .glass-overlay {
@@ -1407,6 +1445,24 @@ pre.yc-code code {
   background: transparent;
   padding: 0;
   color: inherit;
+}
+
+/* Let the browser skip layout and paint for code blocks that are scrolled out
+   of sight.
+   WHY: syntax highlighting wraps every keyword, string and comment in its own
+   <span>. Measured 2026-09-10 on the perf rig's 394 KB fixture: 7,056 elements
+   without highlighting, 108,576 with — and laying all of them out was the
+   single largest share of a 1,487 ms open. The DOM is left completely intact,
+   so find-in-page, the Copy button and filepath chips are unaffected; only the
+   work for blocks nobody is looking at is deferred.
+   `auto` in contain-intrinsic-size means "remember the real height once you
+   have measured it", which keeps the scrollbar honest after the first pass;
+   the 8rem is only the guess for a block never yet rendered.
+   Scoped to the block wrapper MarkdownContent puts around every <pre> — keep
+   .yc-code-block there or this stops matching. */
+.yc-code-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 8rem;
 }
 
 /* Command-drawer tiles opt OUT of glassmorphism.

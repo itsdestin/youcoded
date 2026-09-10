@@ -432,12 +432,28 @@ function noteUnsupported(channel: string): void {
   const feature = remoteFeatureName(channel);
   if (announced.has(feature)) return;
   announced.add(feature);
-  console.warn(`[remote-shim] not available over remote access: ${channel}`);
+  // WHY the host matters: the phone's own bridge answers `unsupported` too
+  // (since 2026-09-10, for any channel it has no handler for), and a phone
+  // doing no remote access must not be told "via remote access".
+  const host = isAndroidLocal() ? 'phone' : 'remote';
+  console.warn(`[remote-shim] not available on this host (${host}): ${channel}`);
   // The app's own boot fetches are not something the person did. Recorded, not announced.
   if (connectedAt === 0 || Date.now() - connectedAt < BOOT_QUIET_MS) return;
   window.dispatchEvent(new CustomEvent(REMOTE_UNSUPPORTED_EVENT, {
-    detail: { channel, feature, message: remoteUnsupportedMessage(channel) },
+    detail: { channel, feature, message: remoteUnsupportedMessage(channel, host) },
   }));
+}
+
+/** A rejection shaped exactly like the host's `unsupported` refusal, minus the
+ *  notice. WHY: a few channels are asked for AUTOMATICALLY — on launch, on
+ *  opening Settings — and the phone's bridge cannot answer them until the
+ *  rebuild. Every caller already handles the rejection; what none of them
+ *  wants is a toast about it on an ordinary screen. Until 2026-09-10 the
+ *  bridge answered these with a bare `{error}` object that RESOLVED, which
+ *  crashed Project View (a status object with no `spaces`) and threw inside
+ *  the chat reducer on every launch. */
+function refuseQuietlyOnPhone(channel: string): Promise<never> {
+  return Promise.reject(new Error(`remote-unsupported: ${channel}`));
 }
 
 /** Settle one pending request from the host's answer. THE only place a
@@ -1479,8 +1495,8 @@ export function installShim(): void {
         window.open('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md', '_blank');
       },
       // On the ANDROID host, go through the bridge: React runs under file://
-      // there, and window.open from a promise callback is a no-op (the same
-      // trap SessionService.kt's sync:restore:browse-url comment records) — a
+      // there, and window.open from a promise callback is a no-op (a trap the
+      // old restore wizard's browse-url handler hit first, 2026-05) — a
       // link tile in the Deliverables card would be a dead button. The bridge
       // fires Intent.ACTION_VIEW, which always works. `targetUrl` means we are
       // a REMOTE browser talking to a desktop server instead, where opening a
@@ -1619,7 +1635,10 @@ export function installShim(): void {
     // browsers + Android (PITFALLS parity rule). onEvent returns an
     // unsubscribe function to match preload's shape.
     syncSpaces: {
-      status: () => invoke('syncspaces:status'),
+      // The phone has no Sync Spaces engine (audit 2026-09-10); status is polled
+      // on mount by Settings, Project View and the folder switcher, so it is
+      // refused without a notice — see refuseQuietlyOnPhone.
+      status: () => (isAndroidLocal() ? refuseQuietlyOnPhone('syncspaces:status') : invoke('syncspaces:status')),
       enable: (enabled: boolean) => invoke('syncspaces:enable', { enabled }),
       // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
       syncNow: (spaceId?: string) => invoke('syncspaces:sync-now', { spaceId }),
@@ -1991,12 +2010,16 @@ export function installShim(): void {
       // TypeError, not a no-op.
       claimPending: () => Promise.resolve([] as any[]),
       replayLiveState: (_sid: string) => Promise.resolve(),
-      // A REAL call, not a stub. requestTranscriptReplay above shipped as a
-      // no-op and silently gave the phone no history for months; paging is the
-      // phone's only way back through a long conversation, so it must reach the
-      // desktop.
+      // A REAL call, not a stub, when a desktop is on the other end.
+      // requestTranscriptReplay above shipped as a no-op and silently gave the
+      // phone no history for months; paging is the only way back through a long
+      // conversation, so it must reach the desktop.
+      // On the phone's OWN bridge there is no pager (deliberately absent since
+      // 2026-08-27, see tests/transcript-page-channel-parity.test.ts): App.tsx
+      // asks for the first page of every session on launch, so the refusal is
+      // quiet — the callers already treat it as "no older messages".
       requestTranscriptPage: (req: { sessionId: string; beforeCursor?: unknown; claudeSessionId?: string; projectSlug?: string }) =>
-        invoke('transcript:page', {
+        isAndroidLocal() ? refuseQuietlyOnPhone('transcript:page') : invoke('transcript:page', {
           sessionId: req.sessionId,
           beforeCursor: req.beforeCursor ?? null,
           claudeSessionId: req.claudeSessionId,

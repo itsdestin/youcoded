@@ -118,10 +118,6 @@ class SessionService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /** Layout insets reported by React UI (header and bottom bar pixel heights). */
-    data class LayoutInsets(val headerPx: Int, val bottomPx: Int)
-    private val _layoutInsets = kotlinx.coroutines.flow.MutableSharedFlow<LayoutInsets>(replay = 1)
-    val layoutInsets: kotlinx.coroutines.flow.SharedFlow<LayoutInsets> = _layoutInsets
-
     /** File picker bridge: Service sets the deferred, Activity completes it with paths. */
     var pendingFilePicker: CompletableDeferred<List<String>>? = null
     /** Callback for Activity to know when to launch the file picker. */
@@ -293,11 +289,6 @@ class SessionService : Service() {
     // Native sync engine — owns push/pull lifecycle, background timer.
     // Replaces bash sync.sh hooks when the app is running.
     var syncService: SyncService? = null
-        private set
-
-    // Restore service — directional user-initiated pull from a backup. Paused
-    // push loop during execute prevents uploading half-restored state.
-    var restoreService: RestoreService? = null
         private set
 
     // Legacy single-session API — kept for ServiceBinder compatibility during migration
@@ -476,12 +467,11 @@ class SessionService : Service() {
         // Start native sync engine — pulls on launch, pushes every 15 min
         syncService = SyncService(applicationContext, bs).also { it.start() }
 
-        // Wire up restore service — owns the snapshot + atomic-swap machinery.
-        // Startup housekeeping (orphan staging cleanup + retention) runs once here.
-        restoreService = RestoreService(syncService!!, File(bs.homeDir, ".claude")).also {
-            it.cleanupOrphanedStaging()
-            it.enforceRetention()
-        }
+        // The restore-from-backup wizard that used to be wired here (RestoreService,
+        // Drive/GitHub adapters, sync:restore:*) was deleted 2026-09-10 on Destin's
+        // decision (android rebuild deck Q-5): desktop demolished restore in July with
+        // sync Plan 2c, nothing in the shared UI called it any more, and the phone gets
+        // the current Sync Spaces when the built-in assistant's runtime arrives.
     }
 
     /** Watch ~/.claude-mobile/open-url for URLs written by the JS wrapper.
@@ -915,7 +905,6 @@ class SessionService : Service() {
         // Stop sync service — cancels timer, releases locks, removes .app-sync-active marker
         try { syncService?.stop() } catch (_: Exception) {}
         syncService = null
-        restoreService = null
         bridgeServer.stop()
         urlObserver?.stopWatching()
         urlObserver = null
@@ -1770,13 +1759,10 @@ class SessionService : Service() {
                 // flow existed solely to drive the deleted Compose TerminalView block, and
                 // desktop's relay of this action only exists to fan it out to OTHER remote
                 // clients, which Android doesn't host. So switch-view needs no native work.
-                when (action) {
-                    "layout-update" -> {
-                        val headerPx = msg.payload.optInt("headerHeight", 0)
-                        val bottomPx = msg.payload.optInt("bottomHeight", 0)
-                        _layoutInsets.tryEmit(LayoutInsets(headerPx, bottomPx))
-                    }
-                }
+                // No "layout-update" branch either (removed 2026-09-10): the header/bottom
+                // heights it carried fed a layoutInsets flow whose only collector was that
+                // same deleted Compose block. The React side stopped sending it too.
+                if (action.isNotEmpty()) android.util.Log.d("SessionService", "ui:action ignored on Android: $action")
             }
 
             // ── Android-only settings bridge ────────────────────────────
@@ -2247,34 +2233,15 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", url)) }
             }
 
-            // ── Restore from backup — directional user-initiated pull ─────────
-            // Separate code path from sync (which is bidirectional merge). See
-            // RestoreService.kt header for safety invariants (snapshot-first,
-            // atomic swap, paused push loop).
-            "sync:restore:probe" -> {
-                val backendId = msg.payload.optString("backendId", "")
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("hasData", false).put("categories", org.json.JSONArray())) }
-                } else {
-                    try {
-                        val (hasData, cats) = svc.probe(backendId)
-                        val payload = JSONObject()
-                            .put("hasData", hasData)
-                            .put("categories", org.json.JSONArray(cats.map { c -> c.wire }))
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("hasData", false).put("categories", org.json.JSONArray()).put("error", e.message ?: "probe failed")) }
-                    }
-                }
-            }
             // Android's half of Electron's shell.openExternal. The React UI
             // runs under file:// here, where window.open from a promise
-            // callback silently does nothing (see the sync:restore:browse-url
-            // comment below) — so a Deliverables link tile would be a dead
-            // button without this. Scheme-gated exactly like desktop's
-            // OPEN_EXTERNAL handler: http/https only, never file:, intent:,
-            // javascript:. The tap is always the user's own.
+            // callback silently does nothing — so a Deliverables link tile
+            // would be a dead button without this. Scheme-gated exactly like
+            // desktop's OPEN_EXTERNAL handler: http/https only, never file:,
+            // intent:, javascript:. The tap is always the user's own.
+            // (Restored 2026-09-10: it sat between the restore handlers and
+            // went with them when that block was deleted — caught by
+            // ipc-channels.test.ts.)
             "shell:open-external" -> {
                 val url = msg.payload.optString("url", "")
                 if (url.startsWith("http://") || url.startsWith("https://")) {
@@ -2285,142 +2252,6 @@ class SessionService : Service() {
                     } catch (_: Exception) {}
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
-            }
-
-            "sync:restore:browse-url" -> {
-                // Resolve a deep link into the remote backend for a given
-                // category (Drive folder, GitHub tree). UI shows a "browse remote"
-                // button from the preview screen. Adapters that don't support
-                // browse URLs return null → we pass JSONObject.NULL over the wire.
-                val backendId = msg.payload.optString("backendId", "")
-                val categoryStr = msg.payload.optString("category", "")
-                val versionRef = msg.payload.optString("versionRef", "HEAD")
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", JSONObject.NULL)) }
-                } else {
-                    val cat = RestoreCategory.fromWire(categoryStr)
-                    val url = if (cat == null) {
-                        null
-                    } else {
-                        try {
-                            svc.browseCategoryUrl(backendId, cat, versionRef)
-                        } catch (_: Exception) { null }
-                    }
-                    // Fire Intent.ACTION_VIEW here — desktop's handler calls
-                    // shell.openExternal as a side effect, but React on Android
-                    // runs under file:// so its window.open fallback is a no-op.
-                    // Without this, tapping the folder icon silently does
-                    // nothing on mobile. Still return the URL so the IPC
-                    // response shape stays identical to desktop.
-                    if (url != null) {
-                        platformBridge?.openUrl(url)
-                    }
-                    msg.id?.let {
-                        bridgeServer.respond(ws, msg.type, it,
-                            JSONObject().put("url", url ?: JSONObject.NULL))
-                    }
-                }
-            }
-            "sync:restore:list-versions" -> {
-                val backendId = msg.payload.optString("backendId", "")
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
-                } else {
-                    try {
-                        val points = svc.listVersions(backendId)
-                        val arr = org.json.JSONArray()
-                        points.forEach { p -> arr.put(p.toJson()) }
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "listVersions failed")) }
-                    }
-                }
-            }
-            "sync:restore:preview" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        // React shim wraps as { opts: {...} } for preview/execute;
-                        // other sync:restore:* handlers pass backendId at the top
-                        // level. Mirror desktop's `payload.opts || payload` fallback.
-                        val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
-                        val opts = RestoreOptions.fromJson(optsJson)
-                        val preview = svc.previewRestore(opts)
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, preview.toJson()) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "preview failed")) }
-                    }
-                }
-            }
-            "sync:restore:execute" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        // Same { opts } unwrap as sync:restore:preview above.
-                        val optsJson = msg.payload.optJSONObject("opts") ?: msg.payload
-                        val opts = RestoreOptions.fromJson(optsJson)
-                        // Progress events are broadcast (no id) — matches desktop's
-                        // sync:restore:progress push-event shape. Wizard UI subscribes
-                        // to them across every connected client.
-                        val result = svc.executeRestore(opts) { evt ->
-                            bridgeServer.broadcast(JSONObject().apply {
-                                put("type", "sync:restore:progress")
-                                put("payload", evt.toJson())
-                            })
-                        }
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, result.toJson()) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "execute failed")) }
-                    }
-                }
-            }
-            "sync:restore:list-snapshots" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
-                } else {
-                    try {
-                        val arr = org.json.JSONArray()
-                        svc.listSnapshots().forEach { s -> arr.put(s.toJson()) }
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, arr) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("error", e.message ?: "listSnapshots failed")) }
-                    }
-                }
-            }
-            "sync:restore:undo" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        val snapshotId = msg.payload.optString("snapshotId", "")
-                        svc.undoRestore(snapshotId)
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "undo failed")) }
-                    }
-                }
-            }
-            "sync:restore:delete-snapshot" -> {
-                val svc = restoreService
-                if (svc == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", "RestoreService not initialized")) }
-                } else {
-                    try {
-                        val snapshotId = msg.payload.optString("snapshotId", "")
-                        svc.deleteSnapshot(snapshotId)
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", true)) }
-                    } catch (e: Exception) {
-                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("ok", false).put("error", e.message ?: "delete failed")) }
-                    }
-                }
             }
 
             // ── Theme file IPC — parity with desktop's theme:list /
@@ -4442,8 +4273,9 @@ class SessionService : Service() {
             }
 
             else -> {
+                // An honest refusal, not a bare error: see MessageRouter.buildUnsupportedResponse.
                 android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildErrorResponse("Unknown: ${msg.type}")) }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildUnsupportedResponse("not-implemented-on-mobile (no handler for ${msg.type})")) }
             }
         }
     }

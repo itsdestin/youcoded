@@ -25,6 +25,7 @@ import { latestUnresolvedError, deriveSyncBoxState, type SyncStatusData } from '
 // wording ladder, shared by the device recency label and the fallback below).
 import { deviceActivityLabel, relativeMs } from './device-activity-label';
 import { summarizeSpaceSyncError } from './sync-space-error-summary';
+import { plainMessage } from '../utils/ipc-error';
 
 // --- Explainer content (updated for V2 multi-instance model) ---
 
@@ -760,7 +761,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       wasMidEnableRef.current = unprovisioned;
       if (unprovisioned) await refreshGithubStatus();
     } catch (err: any) {
-      setSpacesError(String(err?.message ?? err));
+      // plainMessage: a refusal from the phone's bridge arrives as
+      // "remote-unsupported: syncspaces:enable"; the user reads the sentence, not the id.
+      setSpacesError(plainMessage(err));
       // Remember an enable-turn-on that failed so a subsequent GitHub connect
       // can re-kick it automatically. (Enable also emits a provisioning error
       // event when gh is missing / not signed in — same recovery target.)
@@ -857,7 +860,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     // as "Couldn't sync". A retry that fails again re-sets it in the catch.
     setSpacesError(null);
     void (window as any).claude.syncSpaces.syncNow()
-      .catch((err: any) => setSpacesError(String(err?.message ?? err)))
+      .catch((err: any) => setSpacesError(plainMessage(err)))
       .finally(() => setSpacesSyncing(false));
   }, []);
 
