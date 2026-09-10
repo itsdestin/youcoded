@@ -94,6 +94,8 @@ export interface ClientInfo {
   connectedAt: number;
 }
 
+const HOST_ADMIN_REFUSAL = 'Change this on the computer itself.';
+
 export class RemoteServer {
   private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -2256,23 +2258,25 @@ export class RemoteServer {
         this.respond(client.ws, type, id, config);
         break;
       }
+      // Host administration does not travel over this socket at all. It stays on desktop
+      // IPC, which no remote client can reach.
+      //
+      // WHY not the old source-address check: it compared client.ip to 127.0.0.1. Behind a
+      // loopback bind — which is where this is going — every remote device arrives as
+      // 127.0.0.1, so that check would pass for all of them and any paired phone could
+      // change the host password, which also throws every other device off. Refusing the
+      // whole class is what makes the bind safe. set-config was never checked at all, so a
+      // phone could switch remote access off on the computer.
       case 'remote:set-password': {
-        // Security: only allow password changes from local connections (not remote clients)
-        const isLocal = client.ip === '127.0.0.1' || client.ip === '::1' || client.ip === '::ffff:127.0.0.1';
-        if (!isLocal) {
-          this.respond(client.ws, type, id, { error: 'Password change only allowed from local connection' });
-          break;
-        }
-        await this.config.setPassword(payload);
-        this.invalidateTokens();
-        this.respond(client.ws, type, id, true);
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
         break;
       }
       case 'remote:set-config': {
-        if (typeof payload.enabled === 'boolean') this.config.enabled = payload.enabled;
-        if (typeof payload.keepAwakeHours === 'number') this.config.keepAwakeHours = payload.keepAwakeHours;
-        this.config.save();
-        this.respond(client.ws, type, id, this.config.toSafeObject());
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
+        break;
+      }
+      case 'remote:disconnect-client': {
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
         break;
       }
       case 'remote:detect-tailscale': {
@@ -2289,12 +2293,6 @@ export class RemoteServer {
         this.respond(client.ws, type, id, this.getClientList());
         break;
       }
-      case 'remote:disconnect-client': {
-        const result = this.disconnectClient(payload.clientId || payload);
-        this.respond(client.ws, type, id, result);
-        break;
-      }
-
       // --- Sync management ---
       case 'sync:get-status': {
         const syncStatus = await getSyncStatus();

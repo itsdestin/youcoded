@@ -314,9 +314,12 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
 // color="red" maps to tone="danger" (the theme's destructive token, replacing the
 // raw red-600); the default maps to the app accent, replacing green-600.
 
-export function Toggle({ enabled, onToggle, color = 'green', label }: { enabled: boolean; onToggle: () => void; color?: 'green' | 'red'; label?: string }) {
+export function Toggle({ enabled, onToggle, color = 'green', label, disabled }: { enabled: boolean; onToggle: () => void; color?: 'green' | 'red'; label?: string; disabled?: boolean }) {
   return (
     <UiToggle
+      // The primitive already dims and blocks a disabled switch; this wrapper just
+      // never passed it through, so a caller could not express "shown, not operable".
+      disabled={disabled}
       checked={enabled}
       // The primitive hands back the next state; every call site here is a plain
       // flip, so we discard it and keep the existing zero-arg handlers intact.
@@ -1306,6 +1309,21 @@ interface RemoteButtonProps {
 }
 
 function RemoteButton(props: RemoteButtonProps) {
+  // WHY the controls stay and are disabled rather than hidden: host administration is
+  // refused over the remote socket, so leaving them live means a phone taps them and gets
+  // an error every time; hiding them contradicts contract row R4, which promises Enabled,
+  // Password and Keep awake stay exactly where they are. Disabled, with the reason, is the
+  // only option that is both true and keeps the panel recognisable.
+  const [hostOnly, setHostOnly] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void import('../platform').then(({ isRemoteMode, onConnectionModeChange }) => {
+      if (!live) return;
+      setHostOnly(isRemoteMode());
+      onConnectionModeChange(mode => { if (live) setHostOnly(mode === 'remote'); });
+    });
+    return () => { live = false; };
+  }, []);
   let {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
@@ -1548,9 +1566,12 @@ function RemoteButton(props: RemoteButtonProps) {
                       <SettingRow
                         variant="item"
                         title="Enabled"
-                        onClick={onToggleEnabled}
-                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} label="Remote access server enabled" />}
+                        onClick={hostOnly ? undefined : onToggleEnabled}
+                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} disabled={hostOnly} label="Remote access server enabled" />}
                       />
+                      {hostOnly && (
+                        <p className="text-2xs text-fg-muted pb-2">Change these on the computer itself.</p>
+                      )}
                       {/* The server is started from the toggle now, so it can fail
                           (port already bound, permission denied). Show the real
                           reason here — the toggle has already snapped back off. */}
@@ -1577,12 +1598,13 @@ function RemoteButton(props: RemoteButtonProps) {
                             onChange={(e) => onSetNewPassword(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
                             aria-label="Remote access password"
+                            disabled={hostOnly}
                           />
                           <Button
                             variant="secondary"
                             size="sm"
                             onClick={onSetPassword}
-                            disabled={!newPassword.trim() || passwordStatus === 'saving'}
+                            disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
                           >
                             {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
                           </Button>

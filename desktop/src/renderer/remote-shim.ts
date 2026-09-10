@@ -221,6 +221,13 @@ const announced = new Set<string>();
  *  `{ ok:false }` object and is NOT in this list, and LocalModelsSection casts
  *  its answer straight to an array and filters it. That predates this list. */
 export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
+  // Host administration is refused over the remote socket (desktop IPC only). Without
+  // these three the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
+  // tried to change the host password saw the field's success tick for a change that never
+  // happened — a false success on the one surface where it matters most.
+  'remote:set-password',
+  'remote:set-config',
+  'remote:disconnect-client',
   // Success is `{ sessionId }`.
   'engine:run-in-terminal',
   // Success is the engine STATUS object. Without this a failed speed-switch

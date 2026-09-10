@@ -59,6 +59,12 @@ describe('the shim rejects a failure instead of resolving it', () => {
       'models:settings',
       'native:get-step-guard',
       'native:set-step-guard',
+      // Host administration is refused over the remote socket. Without these the refusal
+      // resolves as a value and the phone shows a success tick for a change that never
+      // happened — the false success this whole file exists to prevent.
+      'remote:disconnect-client',
+      'remote:set-config',
+      'remote:set-password',
     ]);
   });
 
