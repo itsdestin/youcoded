@@ -404,6 +404,21 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Close the active filter dropdown on outside click. Recognizes clicks
   // inside the trigger row AND the portaled dropdowns (which live in
   // document.body, outside filterRowRef).
+  // A tap that only meant "close this menu" must not travel on to the scrim
+  // and close the whole browser with the filters in it (UX review 2, U2): the
+  // mousedown that closes a menu arms a one-shot capture listener that swallows
+  // the click that follows it.
+  const swallowNextClick = useRef(false);
+  useEffect(() => {
+    const swallow = (e: MouseEvent) => {
+      if (!swallowNextClick.current) return;
+      swallowNextClick.current = false;
+      e.stopPropagation();
+      e.preventDefault();
+    };
+    document.addEventListener('click', swallow, true);
+    return () => document.removeEventListener('click', swallow, true);
+  }, []);
   useEffect(() => {
     if (!openPill) return;
     const handler = (e: Event) => {
@@ -411,6 +426,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       if (filterRowRef.current?.contains(target)) return;
       if (projectsDropdownRef.current?.contains(target)) return;
       if (tagsDropdownRef.current?.contains(target)) return;
+      // Inside the phone panel the panel itself stays; the click is still spent.
+      swallowNextClick.current = true;
       setOpenPill(null);
     };
     document.addEventListener('mousedown', handler);
@@ -430,6 +447,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       if (filtersPopoverRef.current?.contains(target)) return;
       if (projectsDropdownRef.current?.contains(target)) return;
       if (tagsDropdownRef.current?.contains(target)) return;
+      swallowNextClick.current = true;
       setFiltersOpen(false);
       setOpenPill(null);
     };
@@ -639,7 +657,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     if (openPill === 'projects') setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256, filterRowRef));
     if (openPill === 'tags') setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208, filterRowRef));
     if (filtersOpen) setFiltersPos(measureFilters());
-  }, [openPill, filtersOpen, filtered.length]);
+    // filtersPos is a dependency on purpose: at phone width the chips live inside
+    // the panel, so their menus can only be placed once the panel has landed
+    // (UX review 2, U3 — the menu stayed over the search box after a pick).
+  }, [openPill, filtersOpen, filtered.length, filtersPos]);
   useEffect(() => {
     if (!filtersOpen) return;
     const remeasure = () => setFiltersPos(measureFilters());
@@ -1274,7 +1295,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             buttonRef={projectsTriggerRef}
             active={selectedProjects.size > 0}
             open={openPill === 'projects'}
-            className="shrink-0 max-w-[9rem]"
+            className="shrink-0 max-w-[7rem]"
             onClick={(e) => {
               e.stopPropagation();
               // Measure synchronously so the dropdown renders with its final
@@ -1347,7 +1368,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             buttonRef={tagsTriggerRef}
             active={selectedTagIds.size > 0}
             open={openPill === 'tags'}
-            className="shrink-0 max-w-[9rem]"
+            className="shrink-0 max-w-[7rem]"
             onClick={(e) => {
               e.stopPropagation();
               if (openPill === 'tags') { setOpenPill(null); setTagsDropdownPos(null); }
