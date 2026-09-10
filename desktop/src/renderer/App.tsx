@@ -550,6 +550,17 @@ function AppInner() {
   // Ref mirror of artifact state so the (once-registered) tool-use handler can
   // dedup Read-tracking against the session's already-known artifacts without
   // re-subscribing on every reducer tick.
+  // MEMOIZED, and it has to be: an inline `{ state, dispatch }` object literal is
+  // a new identity on every render of this component — which is every streamed
+  // token — so every consumer of ArtifactContext (the session drawer, the file
+  // pane, Project View) re-rendered on each one, whether or not any artifact
+  // state had changed. `artifactState` only changes on a dispatch and
+  // `dispatchArtifact` is stable, so this now changes exactly when the artifact
+  // state does. Renderer rule: memoize every Context value.
+  const artifactContextValue = useMemo(
+    () => ({ state: artifactState, dispatch: dispatchArtifact }),
+    [artifactState, dispatchArtifact],
+  );
   const artifactStateRef = useRef(artifactState);
   useEffect(() => { artifactStateRef.current = artifactState; }, [artifactState]);
   // Latest-value ref so transcript-shrink and turn-complete handlers see
@@ -3068,7 +3079,7 @@ function AppInner() {
     // ArtifactProvider: exposes artifact state + dispatch to the entire AppInner
     // subtree. Sits inside all top-level providers (ChatProvider, ThemeProvider,
     // etc.) because artifact operations may eventually consume chat/theme context.
-    <ArtifactProvider value={{ state: artifactState, dispatch: dispatchArtifact }}>
+    <ArtifactProvider value={artifactContextValue}>
     <div className={`app-shell flex w-screen h-full text-fg ${getPlatform() === 'android' && currentViewMode === 'terminal' ? '' : 'bg-canvas'}`}>
       {/* Mount-only: listens for chat:export-snapshot from main, serializes
           ChatState, and sends the snapshot back for remote-browser hydration. */}

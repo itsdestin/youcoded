@@ -144,7 +144,14 @@ function IconBtn({ name, title, onClick, active, glyph }: { name?: string; title
   );
 }
 
-export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, cwd }: Props) {
+// React.memo, and the reason it is worth the wrapper: this component lives
+// inside ChatView, which re-renders on EVERY streamed token. Its five props are
+// all plain strings that only change when you switch conversation or project, so
+// a shallow compare skips the whole drawer — the file list, the open file's
+// viewer, the git footer — for the entire length of a reply. It has no chat
+// subscription of its own; the one thing it does watch, ArtifactContext, is
+// memoized at the provider (App.tsx), so a context change still redraws it.
+export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, projectRoot, projectId, projectName, cwd }: Props) {
   const { state, dispatch } = useArtifact();
   const { showDeletedArtifacts, setShowDeletedArtifacts, drawerWidth, setDrawerWidth, resetDrawerWidth } = useTheme();
   const allArtifacts = state.sessionArtifacts[sessionId] ?? [];
@@ -368,7 +375,7 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
   const isElectron = getPlatform() === 'electron';
   const gitReviewOpen = state.gitReviewBySession?.[sessionId] ?? false;
   // Footer git status only for the open file, only while the drawer is visible.
-  const gitStatus = useGitFileStatus(projectRoot, active && isElectron ? active.path : null, drawerOpen);
+  const gitStatus = useGitFileStatus(projectRoot, active && isElectron ? active.path : null, drawerOpen, active?.id ?? null);
   const gitFooter = gitFooterState(gitStatus);
   // L3 discard confirm (Task 9). discardError is the ONE error surface for the
   // review view — rendered via GitReviewView's externalError prop, cleared (a)
@@ -1123,7 +1130,7 @@ export function SessionDrawer({ sessionId, projectRoot, projectId, projectName, 
       </div>
     </aside>
   );
-}
+});
 
 // Footer entry for the git surface (mockup ledger 9). Rendered inside the
 // metadata strip; absent entirely when show=false so the strip reads exactly
