@@ -1239,6 +1239,10 @@ function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAc
   if (view.stage === 'checking') {
     return <StatusStrip tone="busy" detail="Keep YouCoded open">Checking this computer&apos;s connection…</StatusStrip>;
   }
+  if (view.stage === 'checked') {
+    // Straight through to the real one — see the note on RemoteAccessView.check.
+    return renderSetupProgress('checked', '', view.check ?? null, () => act({ type: 'check' }), () => act({ type: 'report' }), () => {}, () => {});
+  }
   if (view.stage === 'conflict') {
     return (
       <ErrorState
@@ -1579,7 +1583,7 @@ function RemoteButton(props: RemoteButtonProps) {
   // showed a separate "Tailscale" tag next to the title whenever installed;
   // folding it into the subtitle only when it adds information (fully
   // connected) avoids a redundant "Tailscale VPN not active · Tailscale".
-  const previewLabels = { setup: 'Set up secure access', consent: 'Ready to connect', checking: 'Checking connection…', ready: 'Ready to connect', conflict: 'Address in use', error: 'Check failed', disabled: 'Remote access is off' };
+  const previewLabels = { setup: 'Set up secure access', consent: 'Ready to connect', checking: 'Checking connection…', checked: 'Setup checked', ready: 'Ready to connect', conflict: 'Address in use', error: 'Check failed', disabled: 'Remote access is off' };
   const subtitle = previewView ? previewLabels[previewView.stage] : isFullyConnected ? `${statusText} · Tailscale` : statusText;
 
   return (

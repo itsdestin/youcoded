@@ -9,8 +9,15 @@ export interface RemoteAccessView {
    * certificate, so nothing about this computer is published and there is nothing to
    * consent to (Destin, 2026-09-10).
    */
-  stage: 'setup' | 'consent' | 'checking' | 'ready' | 'conflict' | 'error' | 'disabled';
+  stage: 'setup' | 'consent' | 'checking' | 'checked' | 'ready' | 'conflict' | 'error' | 'disabled';
   address: string;
+  /**
+   * The end-of-setup check's answer. `checked` renders through the SAME function the real
+   * panel uses, not a preview lookalike — this stage was added after the decks, so there is
+   * no approved mock wording for it to drift from, and a second copy of the words would be
+   * one more thing to keep in step.
+   */
+  check?: { listening: boolean; address: string | null; reason: string | null };
   prerequisite?: 'not-installed' | 'sign-in-required' | 'ready';
   notice?: string;
   devices: { id: string; name: string; online: boolean }[];

@@ -2,10 +2,21 @@ import type { RemoteAccessPreview, RemoteAccessView } from '../../../components/
 
 /** Fake checks never open Tailscale or contact a host; every transition is local to this preview. */
 export function createRemoteAccessPreview(raw: string): RemoteAccessPreview {
-  const stages: RemoteAccessView['stage'][] = ['setup', 'consent', 'checking', 'ready', 'conflict', 'error', 'disabled'];
+  const stages: RemoteAccessView['stage'][] = ['setup', 'consent', 'checking', 'checked', 'ready', 'conflict', 'error', 'disabled'];
+  // The three answers the end-of-setup check can give. `checked` is listening; the other
+  // two are the failure with a reason and the failure without one, which are different
+  // screens on purpose — the second must not invent the first's cause.
+  const CHECKS: Record<string, RemoteAccessView['check']> = {
+    checked: { listening: true, address: 'http://100.82.14.7:9900', reason: null },
+    'checked-failed': { listening: false, address: null, reason: 'listen EADDRINUSE: address already in use 100.82.14.7:9900' },
+    'checked-silent': { listening: false, address: null, reason: null },
+  };
   let view: RemoteAccessView = {
-    stage: raw === 'not-installed' || raw === 'sign-in-required' ? 'setup' : stages.includes(raw as RemoteAccessView['stage']) ? raw as RemoteAccessView['stage'] : 'ready',
+    stage: raw === 'not-installed' || raw === 'sign-in-required' ? 'setup'
+      : CHECKS[raw] ? 'checked'
+        : stages.includes(raw as RemoteAccessView['stage']) ? raw as RemoteAccessView['stage'] : 'ready',
     prerequisite: raw === 'not-installed' || raw === 'sign-in-required' ? raw : 'ready',
+    check: CHECKS[raw],
     address: 'https://home-laptop.example-tailnet.ts.net',
     // WHY empty before approval: a computer that is "not set up yet" cannot already
     // remember paired devices, and showing both at once told two different stories.
