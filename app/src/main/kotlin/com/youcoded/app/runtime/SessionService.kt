@@ -118,10 +118,6 @@ class SessionService : Service() {
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /** Layout insets reported by React UI (header and bottom bar pixel heights). */
-    data class LayoutInsets(val headerPx: Int, val bottomPx: Int)
-    private val _layoutInsets = kotlinx.coroutines.flow.MutableSharedFlow<LayoutInsets>(replay = 1)
-    val layoutInsets: kotlinx.coroutines.flow.SharedFlow<LayoutInsets> = _layoutInsets
-
     /** File picker bridge: Service sets the deferred, Activity completes it with paths. */
     var pendingFilePicker: CompletableDeferred<List<String>>? = null
     /** Callback for Activity to know when to launch the file picker. */
@@ -1734,13 +1730,10 @@ class SessionService : Service() {
                 // flow existed solely to drive the deleted Compose TerminalView block, and
                 // desktop's relay of this action only exists to fan it out to OTHER remote
                 // clients, which Android doesn't host. So switch-view needs no native work.
-                when (action) {
-                    "layout-update" -> {
-                        val headerPx = msg.payload.optInt("headerHeight", 0)
-                        val bottomPx = msg.payload.optInt("bottomHeight", 0)
-                        _layoutInsets.tryEmit(LayoutInsets(headerPx, bottomPx))
-                    }
-                }
+                // No "layout-update" branch either (removed 2026-09-10): the header/bottom
+                // heights it carried fed a layoutInsets flow whose only collector was that
+                // same deleted Compose block. The React side stopped sending it too.
+                if (action.isNotEmpty()) android.util.Log.d("SessionService", "ui:action ignored on Android: $action")
             }
 
             // ── Android-only settings bridge ────────────────────────────
