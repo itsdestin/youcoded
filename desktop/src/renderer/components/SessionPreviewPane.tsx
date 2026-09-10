@@ -20,7 +20,7 @@ import { COPY, READ_TAIL_DEFAULT, type TranscriptMessage, type ChatsearchProvide
 // (build-menu.ts) already falls back to COPY.untitled when it's empty.
 type Phase = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string };
 
-export default function SessionPreviewPane({ provider, id, title, onSettled }: {
+export default function SessionPreviewPane({ provider, id, title, onSettled, holdWhileLoading }: {
   provider: ChatsearchProvider;
   id: string;
   title: string;
@@ -31,6 +31,12 @@ export default function SessionPreviewPane({ provider, id, title, onSettled }: {
    *  land afterwards — "chat bubbles in the preview feel like they pop in a
    *  second or so after the actual animation" (Destin, 2026-09-10). */
   onSettled?: (id: string) => void;
+  /** Keep the conversation already on screen while the NEXT one is read,
+   *  instead of blanking to a loading line. Only for a caller that also holds
+   *  the rest of its chrome (the Resume browser holds its header and action
+   *  card): on its own this would put one conversation's text under another
+   *  one's name. Off by default, so the Session Drawer is unchanged. */
+  holdWhileLoading?: boolean;
 }) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -89,10 +95,19 @@ export default function SessionPreviewPane({ provider, id, title, onSettled }: {
   // transcript each time.
   const onSettledRef = useRef(onSettled);
   onSettledRef.current = onSettled;
+  // Refs, not deps: loadNewest must not be rebuilt (and the transcript re-read)
+  // just because the caller re-rendered or the phase moved.
+  const holdRef = useRef(holdWhileLoading);
+  holdRef.current = holdWhileLoading;
+  const phaseRef = useRef(phase.kind);
+  phaseRef.current = phase.kind;
 
   const loadNewest = useCallback(() => {
     const myGen = ++genRef.current;
-    setPhase({ kind: 'loading' }); setMessages([]); setOlderError(null); setLoadingOlder(false);
+    // Holding: leave `phase` and `messages` alone so the previous conversation
+    // stays on screen, and painted, until this read replaces it in one commit.
+    if (!holdRef.current || phaseRef.current !== 'ready') { setPhase({ kind: 'loading' }); setMessages([]); }
+    setOlderError(null); setLoadingOlder(false);
     return load().then((r) => {
       if (genRef.current !== myGen) return; // superseded — see genRef comment above
       setMessages(r.messages); setHasMore(r.hasMore); setPhase({ kind: 'ready' }); setScrollKey((k) => k + 1);

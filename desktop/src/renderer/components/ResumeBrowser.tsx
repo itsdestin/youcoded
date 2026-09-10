@@ -302,6 +302,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const previewNames = useRenamedSessions(sourceNames);
   const sessions = useMemo(() => sourceSessions.map((s) => previewNames[s.sessionId] === undefined
     ? s : { ...s, name: previewNames[s.sessionId] }), [sourceSessions, previewNames]);
+  // Read by the settle effect below, which must not re-run every time the list
+  // re-renders — only when the row it is about to show changes.
+  const sessionsRef = useRef<PastSession[]>([]);
+  sessionsRef.current = sessions;
   const [renameSession, setRenameSession] = useState<PastSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -323,21 +327,62 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
   // The header clone's own tags/note sheet (see renderSessionRow).
   const [cloneOrganizeId, setCloneOrganizeId] = useState<string | null>(null);
-  // One animation window per previewed conversation — fired when its transcript
-  // has SETTLED, not when the row was clicked. ChatView can key its arrival on
-  // the session id because the conversation it swaps to is already in memory;
-  // here it is read off disk, and on a large transcript that is about a second.
-  // Keyed on the click, the spring played out over a loading line and the
-  // bubbles arrived after it had finished — "chat bubbles in the preview feel
-  // like they pop in a second or so after the actual animation" (Destin,
-  // 2026-09-10). Keyed on settled, the sheet and its contents arrive together.
+  // ── One arrival, not three ──────────────────────────────────────────────
+  // Everything in the sheet — the header card, the conversation, the action
+  // card — changes at ONE moment, and that moment is after the new transcript
+  // is both read and painted. Three separate moments is what this replaced:
+  // the header and action card swapped on the click (local data), the
+  // transcript blanked and came back a second later (a disk read), and its
+  // bubbles painted a beat after that again (forty markdown blocks take longer
+  // than a frame to build, so the arrival — running on the compositor —
+  // started before they were drawn). Destin, 2026-09-10: "the header/footer
+  // cards switch, THEN the animation happens, THEN the messages pop in."
   //
-  // It lives up here with the other hooks, NOT beside the render helpers that
-  // use it: everything below `if (!open) return null` runs conditionally, and a
-  // hook there is the "rendered more hooks than during the previous render"
-  // crash — which is exactly what it did on the first try.
-  const [settledId, setSettledId] = useState<string | null>(null);
-  const arriving = useOneShotWindow(settledId);
+  // So the sheet renders `shownId`, which LAGS `previewId` until the read
+  // settles. The click's acknowledgement is the row lighting up in the list,
+  // which is instant; the pane holds the previous conversation meanwhile
+  // (holdWhileLoading) rather than blanking under a name that already changed.
+  //
+  // `staged` is the frame in between: the new content is committed and laid
+  // out while the sheet is still transparent, so the expensive paint happens
+  // invisibly. Only then does `.switch-arrival` go on. Without it the bubbles
+  // paint after the animation has begun, which is the third beat above.
+  const [shownId, setShownId] = useState<string | null>(null);
+  const [arrival, setArrival] = useState<'staged' | 'run' | null>(null);
+  const onPreviewSettled = useCallback((id: string) => {
+    setShownId(id);
+    setArrival('staged');
+  }, []);
+  useEffect(() => {
+    if (arrival !== 'staged') return;
+    // Two frames: the first lets React's commit lay the new bubbles out, the
+    // second is the one the animation can start on with them already painted.
+    let inner = 0;
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setArrival('run')); });
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+  }, [arrival]);
+  // The resume controls belong to the row the action card is about to show, so
+  // they are derived here rather than on the click — otherwise the card spent
+  // the read showing the OLD conversation's name over the NEW one's model.
+  useEffect(() => {
+    if (!shownId) return;
+    const s = sessionsRef.current.find((r) => r.sessionId === shownId);
+    if (!s) return;
+    setResumeModel(claudeModelForRow(s));
+    setResumeDangerous(defaultSkipPermissions || false);
+    setResumeLaunchInNewWindow(false);
+    setNativeResumeBinding(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- claudeModelForRow
+    // is redefined every render; the row id is what actually changes here.
+  }, [shownId, defaultSkipPermissions]);
+
+  useEffect(() => {
+    if (arrival !== 'run') return;
+    // Just past --dur-switch (380ms). Dropping the class afterwards keeps a
+    // stale animation off the element the next time it re-renders.
+    const t = setTimeout(() => setArrival(null), 420);
+    return () => clearTimeout(t);
+  }, [arrival]);
 
   const narrowViewport = useNarrowViewport();
   // Two reasons the browser stays single-column, and they are different:
@@ -504,9 +549,14 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     return applyFilters(sessions, state);
   }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
 
-  // The previewed row, resolved once.
-  const previewSession = previewOn && previewId
+  // Two different rows, deliberately: `selectedSession` is what the user just
+  // clicked (it drives the list's highlight and the read); `previewSession` is
+  // what the sheet is currently showing, which lags it until that read settles.
+  const selectedSession = previewOn && previewId
     ? filtered.find((r) => r.sessionId === previewId) ?? null
+    : null;
+  const previewSession = previewOn && shownId
+    ? filtered.find((r) => r.sessionId === shownId) ?? null
     : null;
 
   // PERF: the transcript pane is memoised on the three values that actually
@@ -517,15 +567,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // subtree on every keypress. Nothing below the memo depends on this
   // component's state, so there is no correctness cost.
   const previewPane = useMemo(
-    () => (previewSession ? (
+    () => (selectedSession ? (
       <SessionPreviewPane
-        provider={(previewSession.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
-        id={previewSession.sessionId}
-        title={previewSession.name}
-        onSettled={setSettledId}
+        provider={(selectedSession.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
+        id={selectedSession.sessionId}
+        title={selectedSession.name}
+        onSettled={onPreviewSettled}
+        holdWhileLoading
       />
     ) : null),
-    [previewSession?.provider, previewSession?.sessionId, previewSession?.name],
+    [selectedSession?.provider, selectedSession?.sessionId, selectedSession?.name, onPreviewSettled],
   );
 
   // Group by project path ONLY when the user has narrowed via the Projects
@@ -789,10 +840,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setPreviewSheetOpen(false);
       setCloneOrganizeId(null);
       setOrganizeId(null);
-      setResumeModel(claudeModelForRow(s));
-      setResumeDangerous(defaultSkipPermissions || false);
-      setResumeLaunchInNewWindow(false);
-      setNativeResumeBinding(null);
+      // NOT the resume state — the action card still belongs to the
+      // conversation on screen until this one has loaded. It is reset in the
+      // settle effect below, with the row the card is about to show.
       return;
     }
     if (expandedId === s.sessionId) {
@@ -1604,8 +1654,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         </div>
         {/* The transcript column. */}
         {previewOn && (() => {
-          const s = previewSession;
-          if (!s) {
+          if (!selectedSession && !previewSession) {
             return (
               <div className="flex-1 min-w-0 flex items-center justify-center px-8">
                 {/* Plain words, no invented benefit: the panel is empty because
@@ -1614,41 +1663,43 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               </div>
             );
           }
-          // FIXED from here on: the sheet, the header clone, and the action
-          // card. `bg-canvas` + a border, never `.layer-surface` — a second one
-          // of those inside the overlay is the stacked-glass bug the card
-          // comment in the list warns about.
-          //
-          // MOTION: the WHOLE sheet arrives, on ONE element — Destin, round
-          // five, over the alternative where only the header card moved. That
-          // it is one element is also what keeps it cheap: `.switch-arrival` is
-          // the curve he picked on 2026-09-02 for this same event, ChatView
-          // wears it the same way, and animating one wrapper costs the same
-          // whether the conversation holds ten messages or ten thousand (see
-          // tests/animation-frame-budget.test.ts). `arriving` is one window per
-          // change of previewId, from the hook ChatView uses.
+          // `s` is what the sheet SHOWS; null while the first conversation of
+          // the session is still being read. The sheet is mounted either way —
+          // the pane inside it is what does the reading, so it cannot be
+          // withheld until the read finishes. It just stays invisible, with the
+          // empty state over it, until there is something to show.
+          const s = previewSession;
           return (
-            <div className="flex-1 min-w-0 flex flex-col min-h-0 p-3">
-              <div className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas${arriving ? ' switch-arrival' : ''}`}>
-                {/* The header IS the list's card, drawn again — Destin, round
-                    four: "a clone of the card on the lefthand side ... floats at
-                    the top of the window inside the container". Floating, not
-                    welded: older messages pass under it as you scroll back.
-                    pointer-events-none on the strip, auto on the card, so the
-                    gutter beside it does not swallow scroll wheels. */}
-                <div className="absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none">
-                  {/* PERF: box-shadow, not `drop-shadow-[…]`. drop-shadow is a CSS
-                      FILTER — it traces the alpha of the whole subtree and
-                      re-runs on every paint, and this card floats over a
-                      scrolling transcript, so it repaints constantly. A
-                      box-shadow on the rounded card is one cheap primitive and
-                      looks the same here. */}
-                  <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
-                    {renderSessionRow(s, true, true)}
-                  </div>
+            <div className="relative flex-1 min-w-0 flex flex-col min-h-0 p-3">
+              {!s && (
+                <div className="absolute inset-0 flex items-center justify-center px-8">
+                  <EmptyState message="Pick a conversation to read it here before you resume." />
                 </div>
+              )}
+              <div className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas${
+                !s || arrival === 'staged' ? ' opacity-0' : arrival === 'run' ? ' switch-arrival' : ''
+              }`}>
+                {s && (
+                  <>
+                    {/* The header IS the list's card, drawn again — Destin, round
+                        four: "a clone of the card on the lefthand side ... floats at
+                        the top of the window inside the container". Floating, not
+                        welded: older messages pass under it as you scroll back.
+                        pointer-events-none on the strip, auto on the card, so the
+                        gutter beside it does not swallow scroll wheels. */}
+                    <div className="absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none">
+                      {/* PERF: box-shadow, not `drop-shadow-[…]`. drop-shadow is a CSS
+                          FILTER — it traces the alpha of the whole subtree and re-runs
+                          on every paint, and this card floats over a scrolling
+                          transcript, so it repaints constantly. */}
+                      <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
+                        {renderSessionRow(s, true, true)}
+                      </div>
+                    </div>
+                  </>
+                )}
                 <div className="flex-1 min-h-0 flex flex-col">{previewPane}</div>
-                {renderActionCard(s)}
+                {s && renderActionCard(s)}
               </div>
             </div>
           );
