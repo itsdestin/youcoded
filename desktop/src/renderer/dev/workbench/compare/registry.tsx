@@ -5784,7 +5784,7 @@ function SfxCardAltA({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: b
 
       {/* System prompt */}
       <SfxCard title="System prompt" meta={`${c.systemPrompt.length.toLocaleString()} chars`}>
-        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-fg-2 leading-relaxed">
+        <pre className="max-h-40 overflow-y-auto whitespace-pre-wrap break-words font-mono text-2xs text-fg-2 leading-relaxed">
           {c.systemPrompt}
         </pre>
       </SfxCard>
@@ -5798,7 +5798,7 @@ function SfxCardAltA({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: b
           <FilepathToken path={c.projectInstructions.path} sessionId="sfx" variant="inline" label={c.projectInstructions.path.split('/').slice(-1)[0]} />
           {c.projectInstructions.truncated && <span className="text-[#FF9800]">— read as outline</span>}
         </div>
-        <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words font-mono text-[11px] text-fg-2 leading-relaxed">
+        <pre className="max-h-36 overflow-y-auto whitespace-pre-wrap break-words font-mono text-2xs text-fg-2 leading-relaxed">
           {c.projectInstructions.truncated ? c.projectInstructions.text + '\n\n… (outlined to fit the window — open the full file above)' : c.projectInstructions.text}
         </pre>
       </SfxCard>
@@ -6121,7 +6121,7 @@ function SfxTabbedClear({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed
               {/* Change 4: one tappable row per cut, leading to the tab that shows it. */}
               {trimmed && (
                 <div className="flex flex-col gap-1.5">
-                  <p className="text-3xs font-medium text-fg-muted uppercase tracking-wider">What was left out</p>
+                  <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase">What was left out</p>
                   <div className="flex flex-col divide-y divide-edge-dim border border-edge-dim rounded-lg overflow-hidden">
                     {c.projectInstructions.truncated && (
                       <SettingRow variant="item" title="This project’s rules" description="Shortened to headings only" onClick={() => setTab('project')} />

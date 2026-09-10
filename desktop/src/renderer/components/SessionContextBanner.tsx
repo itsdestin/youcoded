@@ -50,7 +50,7 @@ export function SessionContextBanner({ context, onOpen }: Props) {
       type="button"
       onClick={onOpen}
       title="See everything the assistant was given for this chat"
-      className={`w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
+      className={`group w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
         trimmed
           ? 'border-[#FF9800]/40 bg-[#FF9800]/10 hover:bg-[#FF9800]/15 text-fg-2'
           : 'border-edge-dim bg-inset/50 hover:bg-inset text-fg-2'
@@ -64,7 +64,11 @@ export function SessionContextBanner({ context, onOpen }: Props) {
           ? 'This model’s context window is small, so some rules and skills were left out'
           : fullSummary(context)}
       </span>
-      <span className="ml-auto shrink-0 text-3xs text-fg-dim uppercase tracking-wider">
+      {/* WHY the hover colour and no font-medium: "Details" borrows the section-label type
+          treatment but it is an ACTION, not a heading over a group — the same family as
+          "Copy"/"Clear". section-label-authority.test.ts enforces that distinction, and a
+          heading-weight spelling here would fail it. */}
+      <span className="ml-auto shrink-0 text-3xs text-fg-dim uppercase tracking-wider group-hover:text-fg transition-colors">
         Details
       </span>
     </button>
