@@ -93,5 +93,16 @@ describe('the file pane and a streaming reply', () => {
     expect(call![0]).not.toMatch(/value=\{\{/);          // the inline-literal form
     expect(call![0]).toContain('value={artifactContextValue}');
     expect(src).toMatch(/const artifactContextValue = useMemo\(/);
+
+    // The DEPENDENCIES are the load-bearing half, and the failure they prevent
+    // is far worse than the one above. `useMemo(() => ({...}), [])` satisfies
+    // every assertion so far and ships a FROZEN context: opening a file,
+    // closing the drawer and switching the active file would all stop updating
+    // anywhere in the app, because no consumer would ever see a new value.
+    // Whatever the body closes over must appear in the deps.
+    const memo = src.slice(src.indexOf('const artifactContextValue = useMemo('));
+    const deps = memo.match(/\}\),\s*\[([^\]]*)\]/);
+    expect(deps, 'could not read the useMemo dependency array').toBeTruthy();
+    expect(deps![1]).toContain('artifactState');
   });
 });
