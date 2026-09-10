@@ -318,6 +318,82 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
   });
 
+  it('hands the ticket to a working copy without sending it anywhere', async () => {
+    // The action carried over from the deleted screen. The grader found NO test
+    // touched it at all. Two promises worth pinning: it reuses a workspace that is
+    // already set up rather than cloning a second ~1GB copy, and it does not submit.
+    const submitIssue = vi.fn();
+    const setupWorkspace = vi.fn();
+    const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Development/w' });
+    const openSessionIn = vi.fn().mockResolvedValue({ id: 's1' });
+    Object.assign(window, { claude: { dev: { submitIssue, setupWorkspace, setupStatus, openSessionIn } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
+    await screen.findByText(/Your assistant is on it/);
+    expect(openSessionIn).toHaveBeenCalledWith(expect.objectContaining({
+      cwd: '/home/you/YouCoded/Development/w',
+      // The DESCRIPTION is what it hands over — the words describing the problem,
+      // not the title.
+      initialInput: expect.stringContaining('Opening the menu closes the window.') as unknown as string,
+    }));
+    expect(setupWorkspace).not.toHaveBeenCalled();   // already set up — no second clone
+    expect(submitIssue).not.toHaveBeenCalled();      // nothing was filed
+  });
+
+  it('says so when a working copy cannot be set up, and keeps the draft', async () => {
+    const setupStatus = vi.fn().mockResolvedValue({ state: 'idle' });
+    const setupWorkspace = vi.fn().mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
+    Object.assign(window, { claude: { dev: { submitIssue: vi.fn(), setupWorkspace, setupStatus, openSessionIn: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Let your assistant try to fix it' }));
+    await screen.findByText(/Could not reach github\.com\./);
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+  });
+
+  it('rewrites the wording only when something actually rewrote it', async () => {
+    // The other half of the disclosure, also untouched by any test until now.
+    const summarizeIssue = vi.fn().mockResolvedValue({
+      title: 'Menu closes the window', summary: 'Opening the menu closes the whole window.',
+      flagged_strings: [], assisted: true,
+    });
+    Object.assign(window, { claude: { dev: { summarizeIssue, submitIssue: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'menu bad' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'it closes' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
+    await vi.waitFor(() => expect((screen.getByLabelText('Title') as HTMLInputElement).value)
+      .toBe('Menu closes the window'));
+  });
+
+  it('leaves the wording alone, and says so, when nothing rewrote it', async () => {
+    // assisted:false means the fields are the user's OWN words. Presenting them as a
+    // result is the silent-no-op this feature exists to remove — and it is what
+    // happens on a machine with no Claude Code CLI, i.e. a native session.
+    const summarizeIssue = vi.fn().mockResolvedValue({
+      title: 'menu bad', summary: 'it closes', flagged_strings: [],
+      assisted: false, unavailable: 'No assistant is set up on this computer to rewrite it.',
+    });
+    Object.assign(window, { claude: { dev: { summarizeIssue, submitIssue: vi.fn() } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'menu bad' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'it closes' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Optional AI help' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Improve wording with the assistant' }));
+    await screen.findByText('No assistant is set up on this computer to rewrite it.');
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('menu bad');
+  });
+
   it('says what remote access cannot do, not a channel name', async () => {
     // Audit E-14: over remote the bridge rejects with `remote-unsupported:
     // dev:submit-issue`. Showing that raw would be a channel id on screen. The

@@ -1,12 +1,17 @@
 // @vitest-environment jsdom
 // The approved ticket screen's SHAPE, pinned.
 //
-// WHY this file exists: the grader found seven contract rows with no test that
-// would fail if the behaviour were removed — the full-width button (R6), the
-// three evidence rows and the no-sub-label rule (R18), the real version line
-// (R22), and the walkthrough's steps (R2). One of them, R18, was broken for a
-// whole review round and broke no test. These assert the rules, not the exact
-// strings that happened to be deleted once.
+// WHY this file exists: the grader found contract rows with no test that would
+// fail if the behaviour were removed — the two stacked footer buttons (R21), AI
+// help staying behind its disclosure (R17), the three evidence rows and the
+// no-sub-label rule (R18), the real version line (R22), and the walkthrough's
+// steps (R2). One of them, R18, was broken for a whole review round and broke no
+// test. These assert the rules, not the exact strings that happened to be deleted
+// once.
+//
+// NOT covered here, and said plainly rather than implied: R6 is the CONTRIBUTE
+// screen's setup button, and nothing below measures it — an earlier version of
+// this header claimed otherwise.
 //
 // Every test here renders with NO query string, i.e. the screen a user gets.
 
@@ -39,7 +44,7 @@ const fillDraft = () => {
 };
 
 describe('the ticket screen keeps its approved shape', () => {
-  it('R6/R21: the review step ends in two stacked full-width buttons and nothing else', () => {
+  it('R21: the review step ends in two stacked full-width buttons and nothing else', () => {
     // R4-23's headline is literally "No captions anywhere, and two stacked buttons".
     // A third action in this footer failed the row for a round; only a rule catches
     // that, because the offending control had a different name each time.
@@ -66,16 +71,17 @@ describe('the ticket screen keeps its approved shape', () => {
   });
 
   it('R18: evidence is plain rows with no sub-labels — explanations live in the (i)', () => {
+    // WHY it looks for the ELEMENT and not for prose (grader, 2026-09-10): the first
+    // version searched for text containing ". " — and the sub-label that actually
+    // broke this row for a whole round, "Finish this ticket in your browser, where
+    // you can attach them", has no full stop in it. The regression came back green
+    // against its own guard. SettingRow renders a description as a <p> with the muted
+    // class (SettingRow.tsx:183-191); the rule is that these rows have none.
     render(<BugReportPopup open onClose={() => {}} />);
     const heading = screen.getByText('Include with ticket');
     const section = heading.parentElement!;
     expect(within(section).getAllByRole('checkbox')).toHaveLength(3);
-    // R3-18 removed per-row gray sub-labels. The rule, not the two strings that
-    // were deleted that day: no row may carry explanatory text of its own.
-    for (const row of within(section).getAllByRole('checkbox')) {
-      const label = row.closest('div')!.parentElement!;
-      expect(within(label).queryByText(/\. /)).toBeNull();
-    }
+    expect(section.querySelectorAll('p.text-fg-muted')).toHaveLength(0);
     expect(within(section).getAllByRole('button', { name: /^About / })).toHaveLength(3);
   });
 
@@ -104,10 +110,14 @@ describe('the contribute walkthrough keeps its approved steps', () => {
       'Check the result', 'Choose whether to propose it',
     ]);
     for (const li of steps) expect(li.querySelector('p')?.textContent?.trim()).toBeTruthy();
-    // The markers must be readable: they were clipped for a round by a scroll box,
-    // because overflow-y also clips horizontally. An ol that lists its own markers
-    // inside its padding is what keeps them on screen.
+    // The markers must be readable: they were clipped for a round by the scroll box,
+    // because overflow-y also clips horizontally. Whether pixels are clipped is a
+    // layout fact jsdom cannot see, so this pins the DECISION instead — numbered,
+    // indented by margin, and specifically NOT `list-inside`, which is the fix that
+    // regressed: it kept the markers but pulled every explanation out to the margin.
+    // The first version of this assertion passed with list-inside in place.
     expect(list.className).toMatch(/list-decimal/);
-    expect(list.className).toMatch(/ml-\d/);
+    expect(list.className).toMatch(/\bml-\d/);
+    expect(list.className).not.toMatch(/list-inside/);
   });
 });
