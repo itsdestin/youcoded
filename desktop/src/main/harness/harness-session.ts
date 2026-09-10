@@ -1518,7 +1518,7 @@ export class HarnessSession extends EventEmitter {
    *  everything after it. On a small local window that repeated every step
    *  until a summary finally landed. The prune the model reads before a
    *  summary is now done on a copy and committed together with the summary. */
-  private async maybeCompact(model: LanguageModel, lastInputTokens: number): Promise<void> {
+  private async maybeCompact(model: LanguageModel, lastInputTokens: number, aiTools: Record<string, any>): Promise<void> {
     const cfg = this.compactionConfig();
     const decision = planCompaction(this.history, cfg, lastInputTokens);
     if (decision.action === 'none') return;
@@ -1540,8 +1540,9 @@ export class HarnessSession extends EventEmitter {
     const pruned = pruneToolOutputs(this.history, cfg);
     const keep = pruned.slice(cut);
     const span = pruned.slice(0, cut);
-    let summary = '';
-    try { summary = await this.generateSummary(model, span); } catch { summary = ''; }
+    let generated: { text: string; usage?: StepUsage } = { text: '' };
+    try { generated = await this.generateSummary(model, span, aiTools); } catch { generated = { text: '' }; }
+    const summary = generated.text;
     if (!summary.trim()) return;                          // FAIL-SAFE: no summary → history untouched
     this.commitPrune(pruned);
     // Existing frozen event (no new type). `summary` is the canonical field the
@@ -1549,8 +1550,8 @@ export class HarnessSession extends EventEmitter {
     // this as a SPONTANEOUS native compaction so the renderer surfaces the marker
     // even though the manual-/compact `compactionPending` flag was never set —
     // CC's own compact-summary events never carry it, so the manual path is
-    // untouched.
-    const summaryUuid = this.emitEvent('compact-summary', { summary, autoCompaction: true });
+    // untouched. `usage` is the summary call's own bill (see generateSummary).
+    const summaryUuid = this.emitEvent('compact-summary', { summary, autoCompaction: true, ...(generated.usage ? { usage: generated.usage } : {}) });
     this.prefixMoved = true;   // the next request starts with the summary — a known full miss
     // Fix 2 (2026-08-11): the summarized-away span can still contain a
     // delivered image. pruneToolOutputs collapses 'content' (image) outputs too,
@@ -1721,21 +1722,24 @@ export class HarnessSession extends EventEmitter {
       const keep = this.history.slice(cut);
       const span = this.history.slice(0, cut);
       if (span.length === 0) return { ok: false, reason: 'nothing-to-compact' };
-      let summary = '';
+      let generated: { text: string; usage?: StepUsage } = { text: '' };
       try {
         const model = await this.modelFactory(this.binding, {
           serialToolCalls: this.profile.constrainToolArgs && !this.profile.supportsParallelToolCalls,
           cacheKey: this.opts.sessionId,
         });
-        summary = await this.generateSummary(model, span);
+        // The same tool set a turn would carry, so the summary request's
+        // prefix matches the conversation's (see generateSummary).
+        generated = await this.generateSummary(model, span, this.buildAiTools());
       } catch {
-        summary = '';
+        generated = { text: '' };
       }
+      const summary = generated.text;
       // FAIL-SAFE, same as the automatic path: a failed or empty summary leaves
       // the PRUNED history in place rather than discarding anything. The user
       // still gets a real (if smaller) reduction, and never a lost conversation.
       if (!summary.trim()) return { ok: false, reason: 'summary-failed' };
-      const summaryUuid = this.emitEvent('compact-summary', { summary });
+      const summaryUuid = this.emitEvent('compact-summary', { summary, ...(generated.usage ? { usage: generated.usage } : {}) });
       this.prefixMoved = true;   // same as the auto path: the next request is a known full miss
       // Fix 2 (2026-08-11): same reasoning as maybeCompact above — the manual
       // /compact path discards the summarized span exactly the same way, so
@@ -1822,15 +1826,40 @@ export class HarnessSession extends EventEmitter {
    *  re-entrancy guard. On abort OR timeout we stop consuming and return whatever
    *  partial text we have (the fail-safe tolerates ''): the summary never wedges
    *  the turn. */
-  private async generateSummary(model: LanguageModel, span: ModelMessage[]): Promise<string> {
-    const cfg = this.compactionConfig();
+  private async generateSummary(model: LanguageModel, span: ModelMessage[], aiTools: Record<string, any>): Promise<{ text: string; usage?: StepUsage }> {
+    // Bound the span to the same floor the conversation's own request is fitted
+    // to (system + span + instruction ≤ trimBudget). In steady state the span
+    // is a prefix of a history that already fit, so this trims nothing — which
+    // is what keeps the prefix below warm. It used to be a flat 60% of the
+    // window, which sat BELOW the compaction trigger and so cut the front of
+    // most spans, defeating the prefix match on every summary.
+    const systemTokens = Math.ceil(this.systemText.length / APPROX_CHARS_PER_TOKEN);
+    const instructionTokens = Math.ceil(summarizePrompt().length / APPROX_CHARS_PER_TOKEN);
+    const spanBudget = this.budget().trimBudget - systemTokens - instructionTokens;
     let bounded = span;
-    while (estimateTokens(bounded) > cfg.contextLength * 0.6 && bounded.length > 1) bounded = bounded.slice(1);
-    // Summaries are text about text: images are ALWAYS stripped here, regardless
-    // of the session's actual profile — the summarizer may be a non-vision local
-    // model, and pixels add nothing to a compression prompt.
-    // WHY: compression is not the next dispatched conversation prefix.
-    const result = withChatGptRequest(this.opts.sessionId, 'summary', () => streamText({ model, system: 'You compress conversation history. Be faithful and concise.', messages: [...adaptForWire(bounded, { nativeImageToolResults: false, supportsVision: false }), { role: 'user', content: summarizePrompt() } as ModelMessage], abortSignal: this.abort!.signal }));
+    while (estimateTokens(bounded) > spanBudget && bounded.length > 1) bounded = bounded.slice(1);
+    // WHY the request is shaped like the CONVERSATION's own request (cache
+    // follow-ups item 4, 2026-09-10): the span IS the front of the history, so
+    // a request that starts with the same system text, the same tools and the
+    // same messages — then one instruction — begins with exactly the bytes the
+    // provider just cached for the chat. On OpenAI/ChatGPT, DeepSeek and
+    // llama.cpp (prefix-hash caches) the whole span reads warm instead of being
+    // billed again at full price; the summary used to be a fresh "You compress
+    // conversation history" prompt with no tools and images stripped, which
+    // matched nothing. Same profile options as the chat request for the same
+    // reason: a stripped image is a different byte. `toolChoice: 'none'` makes
+    // a tool call impossible (no retry ladder); Anthropic's SDK drops the tools
+    // on 'none', so there this is simply the plain 1x request it always was —
+    // and prompt-cache.ts gives a summary no cache marker for exactly that reason.
+    const streamArgs: Parameters<typeof streamText>[0] = {
+      model,
+      system: this.systemText,
+      messages: [...adaptForWire(bounded, { nativeImageToolResults: this.profile.nativeImageToolResults, supportsVision: this.profile.supportsVision }), { role: 'user', content: summarizePrompt() } as ModelMessage],
+      toolChoice: 'none',
+      abortSignal: this.abort!.signal,
+    };
+    if (Object.keys(aiTools).length > 0) streamArgs.tools = aiTools;
+    const result = withChatGptRequest(this.opts.sessionId, 'summary', () => streamText(streamArgs));
 
     // Race iterator.next() against the abort signal AND a 30s wall-clock floor —
     // the same hardening consumeStep uses, since a stalled local stream honors
@@ -1857,12 +1886,20 @@ export class HarnessSession extends EventEmitter {
       if (chunk.done) break;
       if (chunk.value) text += chunk.value;
     }
-    // WHY the summary call's tokens are NOT folded into turnUsage: awaiting
-    // result.usage would only settle once the stream ends cleanly — on the
-    // abort/timeout break above it may never settle, which would reintroduce the
-    // exact hang C1 exists to prevent. Under-reporting the (small) summary-call
-    // tokens is the accepted trade for a summary that can never wedge the turn.
-    return text.trim();
+    // The summary call's own usage, raced against the SAME stop promise so it
+    // can never reintroduce the hang C1 exists to prevent: after a clean finish
+    // result.usage settles at once; after an abort/timeout it may never settle,
+    // and the race returns without it. It rides the compact-summary event
+    // (cache follow-ups item 4) instead of being folded into turnUsage, which
+    // sums the CONVERSATION's requests — a summary is a different request whose
+    // cost used to vanish entirely.
+    let usage: StepUsage | undefined;
+    const settled = await Promise.race([result.usage.then((u) => ({ u })), stopPromise]);
+    if (settled !== 'stop') {
+      const u = settled.u;
+      usage = { inputTokens: u?.inputTokens ?? 0, outputTokens: u?.outputTokens ?? 0, ...cacheTokensForStep(u, undefined) };
+    }
+    return { text: text.trim(), usage };
   }
 
   /** Run a user-invoked skill (/skill-name, M3 item 1).
@@ -2174,7 +2211,7 @@ export class HarnessSession extends EventEmitter {
         // Two-stage compaction FIRST (spec §4.4) — prune, then summarize only if
         // pruning can't get under budget. Inert (returns immediately) below the
         // trigger, so the existing loop behavior is unchanged for normal turns.
-        await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0));
+        await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0), aiTools);
         // Consume the prefix-moved flag into THIS request: everything above
         // (compaction, a swap between turns) has had its say, and the request
         // below is the one that pays for it. See the field's WHY.

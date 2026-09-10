@@ -277,7 +277,9 @@ export interface TranscriptEvent {
     // Task 1.1: widened turn-complete payload so the reducer can attach the
     // per-turn model, token/cache usage, and the Anthropic requestId to the
     // completing AssistantTurn for UI surfacing. All optional — the field is
-    // shared across event types, and turn-complete is the only current writer.
+    // shared across event types. Writers: turn-complete (the turn's requests)
+    // and, since 2026-09-10, a native compact-summary (the summary call's OWN
+    // bill, which is a separate request and used to vanish from every total).
     /** Model ID used for the completing turn (e.g. "claude-opus-4-7"). */
     model?: string;
     /** Anthropic API request id from the JSONL line's top-level `requestId`. */
