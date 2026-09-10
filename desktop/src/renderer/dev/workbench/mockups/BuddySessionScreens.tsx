@@ -18,6 +18,26 @@ import React from 'react';
 import { BuddyWelcome } from '../../../components/buddy/BuddyWelcome';
 import { CHAT_SIZE } from '../../../../shared/buddy-geometry';
 
+// ?theme=<slug> for review shots, handled HERE rather than in index.tsx.
+//
+// index.tsx has a ?theme= override already, but it is deliberately pinned to
+// the three-parameter `view=live` address and its WHY says why: that block runs
+// outside the dev-only branch, so widening it would let a query string move the
+// theme on the real remote web UI too. This module is only ever reached through
+// a dev/workbench dynamic import, so the same capability is free here.
+//
+// It runs at module scope on purpose — during the import, BEFORE index.tsx
+// constructs <ThemeProvider>, whose lazy useState reads this very key. Setting
+// it from an effect would paint one frame of the previous theme, which is
+// exactly the flash a review screenshot would capture.
+try {
+  const t = new URLSearchParams(window.location.search).get('theme');
+  if (t) {
+    localStorage.setItem('youcoded-theme', t);
+    document.documentElement.setAttribute('data-theme', t);
+  }
+} catch { /* private mode — fall through to whatever theme is stored */ }
+
 export function BuddySessionScreensMockup() {
   const [created, setCreated] = React.useState<string | null>(null);
   // ?bare=1 drops the explainer and lets the panel BE the viewport.
