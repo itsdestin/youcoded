@@ -25,7 +25,14 @@ describe('the indicator reports the listener, not the setting', () => {
   it('a failure shows the reason the OS gave, and does not invent one', () => {
     // Interpolated in the panel; matched here without writing a template expression of our
     // own, which the lint rule bans in a plain string.
-    expect(panel).toMatch(/Not running: .\{status\.reason\}/);
+    // plainReason() wraps it: the raw text is kept, after a sentence a person can act on.
+    // A tester shown `listen EADDRINUSE: address already in use 100.82.14.7:9900` had no
+    // idea what was wrong or what to do about it.
+    expect(panel).toMatch(/Not running: .\{plainReason\(status\.reason\)\}/);
+    expect(panel).toContain('export function plainReason');
+    // Only codes we recognise are translated; anything else is passed through unchanged
+    // rather than described with a guess.
+    expect(panel).toContain('return reason;');
     expect(panel).toContain("'Not running.'");
   });
 });

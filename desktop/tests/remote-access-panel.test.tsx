@@ -30,7 +30,11 @@ it('preserves the panel: enabled, password, keep awake, full-width Add Device an
   const add = screen.getByRole('button', { name: 'Add Device' });
   expect(add.className).toContain('w-full');
   fireEvent.click(add);
-  expect(screen.getByText(address)).toBeTruthy();
+  // The address appears in the Tailscale section AND in the Add Device panel, and the two
+  // must be the same string. A tester was shown a bare IP in one place and a tailnet
+  // hostname in the other, with nothing saying they were the same machine.
+  const shown = screen.getAllByText(address);
+  expect(shown.length).toBeGreaterThanOrEqual(2);
 });
 
 it('draws every setup stage with the banner it already has, never a bespoke panel', () => {

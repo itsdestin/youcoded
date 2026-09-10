@@ -434,6 +434,28 @@ describe('RemoteServer runtime start/stop', () => {
     expect(server.isRunning()).toBe(false);
   });
 
+  it('stops meaning stopped, even after a start that failed', async () => {
+    // The reason was cleared only by a successful listen, and stop() skipped its own
+    // status emit whenever the reason was set. So one failed start left the panel reading
+    // "Not running: <that reason>" for the rest of the process — including after the user
+    // had switched remote access off, which is a state the server was genuinely in.
+    listenBehavior.mode = 'error';
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+
+    await expect(server.start()).rejects.toThrow(/EADDRINUSE/);
+    expect(server.getStatus().state).toBe('failed');
+
+    const seen: string[] = [];
+    server.onStatusChange(st => seen.push(st.state));
+    server.stop();
+
+    expect(server.getStatus().state).toBe('stopped');
+    expect(server.getStatus().reason).toBeUndefined();
+    // And the panel is told, rather than being left on the stale answer until it reopens.
+    expect(seen).toContain('stopped');
+  });
+
   it('leaves no subscriptions behind after a failed start', async () => {
     listenBehavior.mode = 'error';
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -482,6 +504,40 @@ describe('RemoteServer unhandled channels', () => {
     const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
     return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
   }
+
+  it('answers remote:status over the socket a browser actually uses', async () => {
+    // This channel reached preload, the shim, the desktop IPC handlers and Android, and
+    // not this host. The shim rejects on `unsupported`, and the panel asks for status in
+    // the same Promise.all as the config, the Tailscale info and the device list — so the
+    // whole Remote Access screen opened blank on a phone, and every reconnect re-asked.
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const sent = await sendAndCollect(server, { type: 'remote:status', id: 'req-status', payload: {} });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].payload.unsupported).toBeUndefined();
+    expect(sent[0].payload.state).toBe('stopped');
+    expect(sent[0].payload.port).toBe(9900);
+  });
+
+  it('answers about this device\u2019s requests and nobody else\u2019s', async () => {
+    // Request ids carry the device that made them. Without the check, any paired device
+    // could ask the host whether another device's action had run.
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    server.noteCompleted('phone-a:1:7');
+    server.noteCompleted('phone-b:1:9');
+
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    await server.handleMessage({ ws, deviceId: 'phone-a' }, JSON.stringify({
+      type: 'remote:request-outcome', id: 'req-o', payload: { ids: ['phone-a:1:7', 'phone-b:1:9'] },
+    }));
+
+    expect(sent[0].payload.outcomes['phone-a:1:7']).toBe('completed');
+    // Not a lie — the host genuinely will not say. Unknown is what a client shows as
+    // "we could not tell", which is the honest answer to a question that isn't its own.
+    expect(sent[0].payload.outcomes['phone-b:1:9']).toBe('unknown');
+  });
 
   it('answers an unknown channel instead of dropping it', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');

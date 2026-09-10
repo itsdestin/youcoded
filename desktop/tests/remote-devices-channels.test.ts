@@ -35,8 +35,11 @@ describe('the device list exists on every platform', () => {
     expect(shim).not.toContain('disconnectClient:');
     expect(kotlin).not.toContain('"remote:disconnect-client"');
     expect(read('../src/main/remote-server.ts')).not.toContain('disconnectClient(clientId: string)');
-    // The server still REFUSES the old channel rather than ignoring it, so a client that
-    // has not updated is told no instead of being met with silence.
-    expect(read('../src/main/remote-server.ts')).toContain("case 'remote:disconnect-client'");
+    // And it has no case in the WS host either. It briefly had one, answering an explicit
+    // `{ok:false}` so an un-upgraded client would be told no — but a shim only converts
+    // `{ok:false}` into an error for channels in its own REJECT_ON_NOT_OK list, and no
+    // released version lists this one, so that "refusal" resolved as an ordinary value.
+    // The `default:` arm answers `{unsupported:true}`, which every shim version rejects.
+    expect(read('../src/main/remote-server.ts')).not.toContain("case 'remote:disconnect-client'");
   });
 });

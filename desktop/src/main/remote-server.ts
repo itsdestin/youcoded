@@ -84,7 +84,6 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 // The point of moving off a per-ADDRESS bucket: behind the loopback bind every device is
 // 127.0.0.1, so one bucket is the whole household — five bad guesses from anyone would lock
 // everyone out, and on upgrade day every retired credential fails at once.
-const AUTH_ATTEMPTS_PER_SOCKET = 5;
 // A guesser can still open a new socket per five tries, so the host counts failures across
 // all sockets too. Above this it SLOWS new connections rather than refusing them: a
 // refusal here is indistinguishable from the feature being broken, and the person locked
@@ -435,8 +434,10 @@ export class RemoteServer {
         if (settled) return;
         settled = true;
         // Roll back the half-built state (event subscriptions, timer, sockets)
-        // so a retry starts clean instead of double-subscribing.
-        this.stop();
+        // so a retry starts clean instead of double-subscribing. Rollback, not a user
+        // stop: the reason is set on the next line, and announcing 'stopped' first would
+        // flash the panel through a state the server was never in.
+        this.stop(true);
         // Keep the reason: a bind failure was only logged, so the panel had nothing to show
         // and fell back to reporting the saved setting as though it had worked.
         this.lastStartError = err.message;
@@ -474,7 +475,9 @@ export class RemoteServer {
     this.broadcast({ type: 'status:data', payload: data });
   }
 
-  stop(): void {
+  /** @param forRollback internal use: unwinding a start that failed, where the caller sets
+   *  the real reason on the next line. Every other caller is a user switching it off. */
+  stop(forRollback = false): void {
     this.running = false;
     if (this.uploadCleanupTimer) {
       clearInterval(this.uploadCleanupTimer);
@@ -500,9 +503,13 @@ export class RemoteServer {
 
     if (this.wss) { this.wss.close(); this.wss = null; }
     if (this.httpServer) { this.httpServer.close(); this.httpServer = null; }
-    // stop() also runs from the failed-start rollback, where onError sets the reason
-    // immediately after; emitting here would announce 'stopped' and then 'failed'.
-    if (!this.lastStartError) this.emitStatus();
+    if (forRollback) return;
+    // A stop the USER asked for clears the last failure. It used to be cleared only by a
+    // successful listen, and this method skipped its own emit whenever the field was set —
+    // so after one failed start the panel read "Not running: <that reason>" for the rest of
+    // the process, including after remote access had been switched off entirely.
+    this.lastStartError = null;
+    this.emitStatus();
   }
 
   /** Every device loses access — what a password change means. */
@@ -834,9 +841,16 @@ export class RemoteServer {
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     const ip = req.socket.remoteAddress || '';
-    // Counted on THIS socket, so a device that fails cannot spend anyone else's budget.
-    let attemptsOnThisSocket = 0;
-    const slowStart = this.connectionDelayMs() ? HOST_SLOWDOWN_MS : 0;
+    // ONE auth attempt per connection. The handler below detaches itself on the first
+    // message and every failure path closes the socket, so a guesser pays a full
+    // reconnect per try and cannot spend anyone else's budget.
+    //
+    // This used to carry a five-attempt counter. The counter was unreachable — the
+    // detach happens before a second message could ever be counted — so the code
+    // claimed five and delivered one. One is the stronger of the two, so it is what
+    // the code now says. Found by writing the behaviour test in remote-rate-limit.test.ts;
+    // the source-scan version passed happily, because the words were all present.
+    const slowStart = this.shouldSlowConnection() ? HOST_SLOWDOWN_MS : 0;
 
     // Contract R9: a device needs the password even on a private network. The block that
     // stood here auto-paired any peer inside 100.64.0.0/10 with no password exchanged — a
@@ -851,10 +865,6 @@ export class RemoteServer {
     const authHandler = async (raw: Buffer | string) => {
       clearTimeout(timeout);
       if (slowStart) await new Promise(r => setTimeout(r, slowStart));
-      if (++attemptsOnThisSocket > AUTH_ATTEMPTS_PER_SOCKET) {
-        ws.close(4029, 'Too many attempts on this connection');
-        return;
-      }
       ws.off('message', authHandler);
 
       try {
@@ -899,9 +909,13 @@ export class RemoteServer {
 
         if (msg.password && await this.config.verifyPassword(msg.password)) {
           this.clearFailedAttempts();
-          // The secret is returned exactly once, at pairing. Re-authenticating reuses the
-          // record rather than minting another credential, which is why one device could
-          // never be shown as one row before.
+          // The secret is returned exactly once, at pairing. A device that still HOLDS its
+          // credential re-authenticates with it above and keeps its row; arriving here
+          // with only the password means the credential is gone, and the host has no way
+          // to know which earlier row this is — matching on a name would merge two people
+          // with the same phone. So this is a new pairing, and the old row stays until it
+          // is unpaired, going cold in the Last seen column. Do not "deduplicate" it: that
+          // would be the host guessing about identity, which is what the password is for.
           const paired = this.devices.pair(msg.deviceName);
           this.config.markPaired();
           this.addClient(ws, paired.deviceId, ip);
@@ -2404,10 +2418,14 @@ export class RemoteServer {
         this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
         break;
       }
-      case 'remote:disconnect-client': {
-        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
-        break;
-      }
+      // remote:disconnect-client has NO case on purpose, and this comment is the guard's
+      // explanation. It was kept as an explicit `{ok:false}` refusal so an un-upgraded
+      // client would be told no rather than met with silence — but that reasoning was
+      // backwards. A shim only turns `{ok:false}` into an error for channels in its own
+      // REJECT_ON_NOT_OK, and no released version lists this one, so the refusal resolved
+      // as an ordinary value: another false success. Falling through to `default:` answers
+      // `{unsupported:true}`, which EVERY shim version rejects. Silence was never the
+      // alternative; the honest "no" is the one the default already gives.
       case 'remote:detect-tailscale': {
         const { RemoteConfig } = require('./remote-config');
         const result = await RemoteConfig.detectTailscale(this.config.port);
@@ -2425,8 +2443,27 @@ export class RemoteServer {
       case 'remote:request-outcome': {
         const ids: string[] = Array.isArray(payload?.ids) ? payload.ids : [];
         const outcomes: Record<string, 'completed' | 'unknown'> = {};
-        for (const requestId of ids.slice(0, 200)) outcomes[requestId] = this.outcomeOf(requestId);
+        for (const requestId of ids.slice(0, 200)) {
+          // WHY the caller's own device id is checked: a request id carries the device
+          // that made it, and without this any paired device could ask about any other
+          // device's requests. Nothing secret comes back, but "did that phone's action
+          // run?" is not this phone's business, and the id was already there to check.
+          outcomes[requestId] = requestId.split(':')[0] === client.deviceId
+            ? this.outcomeOf(requestId)
+            : 'unknown';
+        }
         this.respond(client.ws, type, id, { outcomes });
+        break;
+      }
+      // WHY this case exists at all: the channel was added to preload, the shim, the
+      // desktop IPC handlers and Android — but not here, and this is the host a remote
+      // BROWSER talks to. Without it the answer is `{unsupported:true}`, which the shim
+      // rejects; the panel asks for it in the same Promise.all as the config, the
+      // Tailscale info and the device list, so one missing case opened the whole Remote
+      // Access screen blank on a phone. Reading status is not administration — it is the
+      // same question the indicator already answers — so it is answered, not refused.
+      case 'remote:status': {
+        this.respond(client.ws, type, id, this.getStatus());
         break;
       }
       case 'remote:devices:list': {
@@ -2918,10 +2955,11 @@ export class RemoteServer {
 
   // --- Rate limiting ---
 
-  /** How long to wait before answering a new connection, in ms. Zero unless the host is
-   *  seeing a burst of failures. Slowing beats refusing: the owner is locked out far more
-   *  often than the attacker is stopped. */
-  private connectionDelayMs(): boolean {
+  /** Whether a new connection should be answered slowly, because the host is seeing a
+   *  burst of failed attempts. Slowing beats refusing: the owner is locked out far more
+   *  often than the attacker is stopped. (This returned a boolean while being named and
+   *  documented as milliseconds; the caller applied the delay. Renamed to what it is.) */
+  private shouldSlowConnection(): boolean {
     if (Date.now() > this.hostFailures.resetAt) {
       this.hostFailures = { count: 0, resetAt: 0 };
       return false;

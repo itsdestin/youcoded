@@ -3,10 +3,14 @@ import { readFileSync } from 'node:fs';
 import { responseOutcome, REJECT_ON_NOT_OK } from '../src/renderer/remote-shim';
 
 const SERVER = readFileSync(new URL('../src/main/remote-server.ts', import.meta.url), 'utf8');
-const ADMIN = ['remote:set-password', 'remote:set-config', 'remote:disconnect-client'];
+// Two, not three: `remote:disconnect-client` is no longer answered here at all. It kept a
+// refusing case so an un-upgraded client would be told no, but a shim only turns `{ok:false}`
+// into an error for channels in its own REJECT_ON_NOT_OK, and none lists that one — so the
+// refusal read as success. `default:` answers `{unsupported:true}`, which every shim rejects.
+const ADMIN = ['remote:set-password', 'remote:set-config'];
 
 describe('host administration does not travel over the remote socket', () => {
-  it('refuses all three channels, and not by comparing an address', () => {
+  it('refuses the administration channels, and not by comparing an address', () => {
     // WHY the address check had to go, not be fixed: it compared client.ip to 127.0.0.1.
     // Behind the loopback bind this is heading for, every remote device arrives as
     // 127.0.0.1, so it would have passed for all of them — any paired phone changing the
@@ -21,9 +25,9 @@ describe('host administration does not travel over the remote socket', () => {
   it('the refusal reaches the caller as a failure, not as a success', () => {
     // Without this the phone showed the password field's success tick for a change the
     // host refused — a false success on the surface where it matters most.
-    // disconnect-client is absent on purpose: the shim no longer invokes it at all, and a
-    // reject entry for a channel nobody calls is dead weight pretending to protect something.
-    for (const channel of ['remote:set-password', 'remote:set-config']) {
+    // The two device channels joined this list after a review found the same false success
+    // on Unpair: the row vanished from the list while the device kept full access.
+    for (const channel of [...ADMIN, 'remote:devices:rename', 'remote:devices:unpair']) {
       expect(REJECT_ON_NOT_OK.has(channel)).toBe(true);
       expect(responseOutcome(channel, { ok: false, error: 'x' })).toBe('failure');
     }

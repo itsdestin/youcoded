@@ -139,7 +139,10 @@ function getWsUrl(): string {
  *
  *   'user-action' — something the person did. Refused while disconnected; the composer keeps
  *                   the text. NEVER queued, because queueing is what makes it run twice.
- *   'read'        — safe to ask again, because asking changes nothing.
+ *   'read'        — safe to SEND again, because sending it twice lands where sending it once
+ *                   does. Usually because it asks rather than changes; `session:resize` is
+ *                   the exception that made the older wording ("asking changes nothing")
+ *                   false, since a resize does change the host and is still safe to repeat.
  *   'transport'   — the connection talking about itself.
  *
  * An unclassified channel fails remote-message-kinds.test.ts. That is deliberate: the way
@@ -320,6 +323,12 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   // happened — a false success on the one surface where it matters most.
   'remote:set-password',
   'remote:set-config',
+  // Same refusal, same reason: renaming and unpairing decide who may reach this computer.
+  // Left out of this set, an unpair on a phone removed the row from the list while the
+  // device kept full access — the false success this list exists to prevent, on the one
+  // action where believing it is most dangerous.
+  'remote:devices:rename',
+  'remote:devices:unpair',
   // Success is `{ sessionId }`.
   'engine:run-in-terminal',
   // Success is the engine STATUS object. Without this a failed speed-switch

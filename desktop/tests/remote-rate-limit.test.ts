@@ -18,13 +18,54 @@ describe('one device cannot lock out the others', () => {
   it('a burst slows new connections instead of refusing them', () => {
     // A refusal is indistinguishable from the feature being broken, and the person who
     // hits it is the owner far more often than an attacker.
+    //
+    // Matched as a SHAPE, not a spelling: the previous version pinned the helper's exact
+    // name and failed on a rename that changed no behaviour, which is the kind of noise
+    // that teaches a session to edit the test instead of reading it.
     expect(server).toContain('HOST_FAILURES_BEFORE_SLOWDOWN');
-    expect(server).toContain('HOST_SLOWDOWN_MS');
-    expect(server).toContain('const slowStart = this.connectionDelayMs()');
+    expect(server).toMatch(/const slowStart = this\.\w+\(\) \? HOST_SLOWDOWN_MS : 0;/);
+    expect(server).toContain('if (slowStart) await new Promise');
   });
 
-  it('attempts are counted on the connection they arrived on', () => {
-    expect(server).toContain('attemptsOnThisSocket');
-    expect(server).toContain('AUTH_ATTEMPTS_PER_SOCKET');
+  it('no failure budget is shared between connections', () => {
+    // What the deleted `attemptsOnThisSocket` grep was really guarding: nothing counts
+    // attempts in a place two connections can both reach. The per-connection behaviour
+    // itself is asserted below, by driving a socket rather than reading the file.
+    expect(server).not.toMatch(/this\.\w*[aA]ttempts\w*\.(get|set)\(ip/);
+  });
+});
+
+describe('a single connection cannot be used as an unlimited guessing channel', () => {
+  it('gives a socket ONE auth attempt and then closes it', async () => {
+    // Behaviour, not a grep — and writing it is what found the gap. The source-scan
+    // version asserted that `attemptsOnThisSocket` and `AUTH_ATTEMPTS_PER_SOCKET`
+    // appeared in the file; they did, and the five-attempt budget they named was
+    // unreachable, because the handler detaches itself on the first message and never
+    // re-attaches. One attempt per connection is STRICTER than the five the code claimed,
+    // so the code was corrected to say one rather than the behaviour loosened to five.
+    const { EventEmitter } = await import('node:events');
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const sessionManager: any = new EventEmitter();
+    Object.assign(sessionManager, { listSessions: () => [] });
+    const closes: number[] = [];
+    const socket: any = new EventEmitter();
+    Object.assign(socket, {
+      readyState: 1,
+      send: () => {},
+      close: (code: number) => closes.push(code),
+      off: EventEmitter.prototype.off.bind(socket),
+    });
+
+    const server: any = new RemoteServer(sessionManager, new EventEmitter() as any, {
+      enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}),
+    } as any);
+    server.handleConnection(socket, { socket: { remoteAddress: '100.64.0.9' } });
+
+    for (let i = 0; i < 6; i++) socket.emit('message', JSON.stringify({ type: 'auth', password: 'guess' }));
+    await new Promise(r => setImmediate(r));
+
+    // Closed once, on the first attempt, and deaf to the five that followed.
+    expect(closes).toHaveLength(1);
+    expect(socket.listenerCount('message')).toBe(0);
   });
 });
