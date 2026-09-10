@@ -128,6 +128,14 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // mock-only.ts. Listed so the contract test covers the fake.
   'voice.status', 'voice.download', 'voice.start', 'voice.stop', 'voice.cancel', 'voice.onEvent',
   'voice.sendAudio', 'voice.micAccess',
+  // Development tickets and contribution setup (design 2026-09-08). The first four
+  // are real channels (dev:* in preload.ts) faked so the workbench has evidence and
+  // a submission result; the last two have NO real backend and are registered in
+  // mock-only.ts. `dev` was in NAMESPACES with no impl, so all six used to answer
+  // `[]` from the catch-all — which is a submit button that can never report an
+  // outcome.
+  'dev.logTail', 'dev.diagnostics', 'dev.summarizeIssue', 'dev.submitIssue',
+  'dev.setupWorkspace', 'dev.onSetupProgress',
   'shell.openPath',
   // Chatsearch session references — real backend too, same reason for the fake:
   // the tool gallery needs an index that shows every row state on demand.
@@ -1257,6 +1265,65 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return () => { statusListeners.delete(cb); };
     },
     onModelsChanged: () => () => {},
+  };
+
+  // Development: tickets and the contribution workspace (design
+  // 2026-09-08-error-states-development). `dev` was in NAMESPACES but had no
+  // hand-written impl, so every call fell through to the catch-all and answered
+  // `[]` — which is why the approved screens have no working buttons and no
+  // outcome states at all. A ticket screen whose Submit resolves to `[]` can
+  // never show sent, failed or opened-in-browser.
+  //
+  // The `refused` scenario drives the FAILURE side of each flow, so the deck can
+  // capture it from the toolbar rather than from a bespoke query parameter.
+  const devMock = {
+    // Real channels (dev:log-tail, dev:diagnostics, dev:summarize-issue,
+    // dev:submit-issue in preload.ts) — faked so the workbench has evidence text
+    // and a submission result without a log file, a provider or a GitHub token.
+    logTail: async (_n?: number) =>
+      [
+        '[14:22:07] session 7f3a started · model opus-5',
+        '[14:22:09] transcript watcher attached',
+        '[14:31:44] artifacts: write refused, no modification token',
+        '[14:31:44]   at write-authorization.ts:143',
+      ].join('\n'),
+    diagnostics: async () => 'git 2.47.1 · claude 2.1.94 · ~/.claude writable · marketplace cache warm',
+    summarizeIssue: async (input: { description?: string }) => ({
+      title: 'Saving an edited file fails after the refresh times out',
+      summary: input?.description ?? '',
+      flagged_strings: [] as string[],
+    }),
+    submitIssue: async () =>
+      activeScenario === 'refused'
+        // A failure the user can act on, and one this flow can actually produce:
+        // GitHub refusing the credential. Never a guessed cause.
+        ? { ok: false as const, error: 'GitHub rejected the request: your sign-in has expired.' }
+        : { ok: true as const, url: 'https://github.com/itsdestin/youcoded/issues/471', number: 471 },
+
+    // NO real backend — registered in mock-only.ts. This is the managed-project
+    // setup that replaces the legacy fixed-folder installer; it must never reach
+    // installWorkspace(), which is pinned by DevelopmentDesign.test.tsx.
+    setupWorkspace: async () =>
+      activeScenario === 'refused'
+        ? { ok: false as const, error: 'Could not reach github.com to download the project.' }
+        : { ok: true as const, path: '/home/destin/YouCoded/Projects/youcoded-workspace' },
+    onSetupProgress: (cb: (line: string) => void) => {
+      // A REAL registrar, not a no-op: the setting-up screen has nothing to show
+      // until lines arrive, so a stubbed subscription would leave the workbench
+      // on an empty progress panel and the state would never be reviewable.
+      const lines = [
+        'Downloading the project…',
+        'Downloading the five sub-projects (this takes a minute)…',
+        'Installing what it needs…',
+        'Registering it as one of your projects…',
+      ];
+      let i = 0;
+      const timer = setInterval(() => {
+        if (i >= lines.length) { clearInterval(timer); return; }
+        cb(lines[i++]);
+      }, Math.max(latencyMs, 400));
+      return () => clearInterval(timer);
+    },
   };
 
   // Voice prompting (deck 2026-09-05) — NO real backend yet (mock-only.ts).
@@ -2458,7 +2525,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, search, ...(remote ? { remote } : {}),
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, search,
+    dev: devMock, ...(remote ? { remote } : {}),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 

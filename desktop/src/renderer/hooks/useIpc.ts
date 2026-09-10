@@ -262,10 +262,23 @@ declare global {
         diagnostics: () => Promise<string>;
         summarizeIssue: (args: { kind: string; description: string; log?: string }) => Promise<{ title: string; summary: string; flagged_strings: string[] }>;
         // WHY: body is now assembled in the main process; renderer passes raw fields (Fix 2).
-        submitIssue: (args: { kind: 'bug' | 'feature'; title: string; summary: string; description: string; log?: string; label: string }) => Promise<{ ok: boolean; url?: string; fallbackUrl?: string }>;
+        // `summary` is OPTIONAL as of 2026-09-10: AI help is a separate choice, so a ticket
+        // written and sent with no provider call has no summary to pass (contract R12).
+        // The result is a DISCRIMINATED union for the same reason R23 exists — the old
+        // `{ ok: boolean; url?: string }` could not carry a reason, so a failed submit had
+        // nothing to say and the caller silently opened a browser tab instead.
+        submitIssue: (args: { kind: string; title: string; summary?: string; description: string; log?: string; label: string }) => Promise<
+          | { ok: true; url: string; number?: number }
+          | { ok: false; error: string; fallbackUrl?: string }>;
         installWorkspace: () => Promise<{ path: string; alreadyInstalled: boolean } | { error: string }>;
         onInstallProgress: (handler: (line: string) => void) => () => void;
         openSessionIn: (args: { cwd: string; initialInput?: string }) => Promise<{ id: string }>;
+        // Contribution workspace as a managed project (contract R9/R10). NO real
+        // backend yet — registered in dev/workbench/mock-only.ts, which is the
+        // backend to-do list. Deliberately NOT installWorkspace(): that one clones
+        // into a fixed folder and pulls into an existing one, both ruled out by R9.
+        setupWorkspace: () => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
+        onSetupProgress: (handler: (line: string) => void) => () => void;
       };
       // GPU / performance preference — multiGpuDetected: false means the
       // Performance section in Settings hides itself (no hardware to toggle).

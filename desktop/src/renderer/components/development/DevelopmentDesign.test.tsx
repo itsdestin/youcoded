@@ -112,15 +112,63 @@ describe('development design safety', () => {
     fireEvent.click(screen.getByRole('tab', { name: 'Feature' }));
     expect(screen.queryByRole('checkbox', { name: 'Include recent logs' })).toBeNull();
   });
-  it('never connects managed setup to the old installer', () => {
+  it('never connects managed setup to the old installer', async () => {
     const installWorkspace = vi.fn();
-    Object.assign(window, { claude: { dev: { installWorkspace } } });
+    const setupWorkspace = vi.fn().mockResolvedValue({ ok: true, path: '/home/you/YouCoded/Projects/w' });
+    const onSetupProgress = vi.fn(() => () => {});
+    Object.assign(window, { claude: { dev: { installWorkspace, setupWorkspace, onSetupProgress } } });
     render(<ContributePopup open onClose={() => {}} />);
     // WHY: the guard is that the legacy installer is never reached — not that the button looks
     // dead. Destin rejected the disabled/greyed treatment: the workbench must look like the app.
+    // It now also asserts the NEW path IS taken: "installWorkspace was not called" alone stays
+    // true if the button does nothing at all, which is how a dead button passes a safety test.
     fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
-    fireEvent.click(screen.getByRole('button', { name: 'How contributing works' }));
-    expect(screen.getByText('Choose whether to propose it')).toBeTruthy();
+    expect(setupWorkspace).toHaveBeenCalledTimes(1);
     expect(installWorkspace).not.toHaveBeenCalled();
+    await screen.findByText(/Your development workspace is ready/);
+  });
+
+  it('offers a way forward when setup fails, and never just Done', async () => {
+    // WHY: the legacy screen's only action on failure was Done (audit E-08), which
+    // discards what already succeeded. The reason shown is the one the operation
+    // gave — never a guess (docs/error-message-standards.md).
+    const setupWorkspace = vi.fn().mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
+    Object.assign(window, { claude: { dev: { setupWorkspace, onSetupProgress: vi.fn(() => () => {}) } } });
+    render(<ContributePopup open onClose={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
+    await screen.findByText('Could not reach github.com.');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+  });
+
+  it('keeps the draft and offers a retry when a ticket cannot be sent', async () => {
+    // Contract R23. A failure must not be a dead end that costs the user their words.
+    const submitIssue = vi.fn().mockResolvedValue({ ok: false, error: 'GitHub rejected the request.' });
+    Object.assign(window, { claude: { dev: { submitIssue } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await screen.findByText('GitHub rejected the request.');
+    expect(screen.getByRole('button', { name: 'Retry' })).toBeTruthy();
+    // This file does not load jest-dom, so read the values directly.
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+    expect((screen.getByLabelText('Description') as HTMLTextAreaElement).value)
+      .toBe('Opening the menu closes the window.');
+  });
+
+  it('sends a ticket with no AI call at all', async () => {
+    // Contract R12. Asking an assistant is a separate choice, so submitting must
+    // never reach a provider.
+    const summarizeIssue = vi.fn();
+    const submitIssue = vi.fn().mockResolvedValue({ ok: true, url: 'https://github.com/itsdestin/youcoded/issues/471' });
+    Object.assign(window, { claude: { dev: { submitIssue, summarizeIssue } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await screen.findByText(/Your ticket is submitted/);
+    expect(summarizeIssue).not.toHaveBeenCalled();
   });
 });
