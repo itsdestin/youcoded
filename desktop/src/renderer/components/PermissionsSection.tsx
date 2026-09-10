@@ -209,7 +209,9 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
  *  These four items STAY in the body: they are the only place in the app that
  *  says what the app itself will not wave through, and a user cannot go find
  *  them anywhere else. Only the prose around them moved to the explainer. */
-const ALWAYS_ASKS: readonly string[] = [
+// Exported for the first-time Full auto warning (first-time-warnings.ts), which
+// repeats this list verbatim so the two never disagree.
+export const ALWAYS_ASKS: readonly string[] = [
   'Deleting files or folders',
   'Sending your work to a shared code repository',
   "Throwing away changes you haven't saved anywhere else",

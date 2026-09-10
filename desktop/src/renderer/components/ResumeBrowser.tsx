@@ -29,6 +29,7 @@ import { ProviderIcon } from './ProviderIcon';
 import { claudeAliasForModelId } from '../../shared/model-ids';
 import type { ModelBinding } from '../../shared/provider-types';
 import { SkipPermissionsCaption } from './SkipPermissionsCaption';
+import { useFirstTimeGate } from './FirstTimeWarning';
 
 function formatRelativeTime(epochMs: number): string {
   const diff = Date.now() - epochMs;
@@ -297,6 +298,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
+  // First-time Skip Permissions warning (spec §5). This browser is an L1
+  // modal, so the L2 warning simply sits on top of it — no yielding needed.
+  const { gate: gateSkipPermissions, dialog: skipPermissionsDialog } = useFirstTimeGate('skip-permissions');
   // Task 6 — native resume ALWAYS offers the provider-scoped model selector
   // (Destin's ruling: never auto-launch a binding). null until the user picks
   // a row OR ModelPicker auto-selects a prefill match; the Resume button
@@ -846,7 +850,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                   associated with the control — screen readers announced nothing. */}
               <Toggle
                 checked={resumeDangerous}
-                onChange={setResumeDangerous}
+                // Turning ON goes through the first-time warning; Cancel there
+                // leaves it off. Turning off never asks.
+                onChange={(next) => (next ? gateSkipPermissions(() => setResumeDangerous(true)) : setResumeDangerous(false))}
                 tone="danger"
                 aria-label="Skip Permissions"
               />
@@ -1195,6 +1201,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   return (
     <>
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
+      {skipPermissionsDialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
       <Scrim layer={1} onClick={onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>

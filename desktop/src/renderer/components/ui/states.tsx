@@ -1,6 +1,7 @@
 import React from 'react';
 import BrailleSpinner from '../BrailleSpinner';
 import { Button } from './Button';
+import { triggerTip } from '../guide/tips';
 
 /**
  * The loading / empty / error family (changes 31-34, §1.6).
@@ -118,6 +119,10 @@ export type ErrorStateProps = ErrorStateRecoverable | ErrorStateGeneral;
  */
 export function ErrorState(props: ErrorStateProps) {
   const container = `bg-inset/50 rounded-lg p-3 ${props.className ?? ''}`.trim();
+  // The help tip's moment: the first general error a new user sees is the
+  // moment "Report bug" and the community become worth knowing about.
+  const general = props.mode === 'general';
+  React.useEffect(() => { if (general) triggerTip('help'); }, [general]);
 
   if (props.mode === 'general') {
     return (

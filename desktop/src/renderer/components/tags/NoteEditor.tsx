@@ -8,7 +8,10 @@ const NOTE_MAX = 8000;
 // remaining-count appears near the limit. Saves on blur (only when changed),
 // and also on unmount so a note typed then ESC-closed (which fires no blur)
 // isn't lost.
-export function NoteEditor({ value, onSave, placeholder = 'Add a note…', fieldClassName = '' }: {
+// Default placeholder (first-run guide, empty screens): says what a note is FOR
+// and where it turns up again, instead of the bare "Add a note…" — a new user
+// had no way to know the note surfaces in Resume. Callers may still override.
+export function NoteEditor({ value, onSave, placeholder = 'A note to your future self — it shows in Resume', fieldClassName = '' }: {
   value: string;
   onSave: (text: string) => void;
   placeholder?: string;

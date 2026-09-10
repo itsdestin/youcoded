@@ -36,6 +36,8 @@ import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
 import { buildCatalog } from './fixtures/marketplace/catalog';
+// `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
+import { triggerTip } from '../../components/guide/tips';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -1767,6 +1769,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // YouCoded repo's own files behind a student's conversation.
   const studentSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('student') === '1';
+  // `&projects=none`: the project index answers with NO projects, so the
+  // Projects screen's first-run explainer (ProjectsEmptyCard) is reachable.
+  // WHY a switch and not a scenario: the `empty` scenario has no sessions, so
+  // the header — and its Projects button — never renders there (same trap the
+  // arcade switch above documents). This composes with any scenario.
+  const noProjectsSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('projects') === 'none';
 
   // Promo (model beat): the model picker shows ONLY favourites until you type
   // (components/model/ModelPicker.tsx), and it keeps them in localStorage under
@@ -1985,7 +1994,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       ok: true,
       // MOCKUP: descriptions edited in-session override the seeded ones, so the
       // inline editor behaves like the real thing instead of snapping back.
-      projects: (studentSwitch
+      projects: noProjectsSwitch ? [] : (studentSwitch
         ? (opts?.withCounts ? studentProjectsWithCounts((path) => conversationsIn(path).length) : studentProjects())
         : (opts?.withCounts ? projectsWithCounts() : artifactProjects()))
         .map((p) => ({ ...p, description: descriptionFor(p.path, p.description) })),
@@ -2124,6 +2133,22 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // sees and, until 2026-08-25, the only surface no review rig could reach —
   // the mock always answered COMPLETE, so App routed straight past it.
   const firstRunStep = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('firstRun')) || 'COMPLETE';
+  // `?guide=tour` stands in for "the wizard just finished on this install":
+  // it owes the tour and arms tips, exactly what App's first-run hand-off
+  // writes. `?guide=tips` arms tips alone and forgets which were read, so a
+  // trigger fires again. (The real app sets these flags from FirstRunView's
+  // hand-off; the workbench routes past the wizard, so nothing else would.)
+  // `?guide=tip:<id>` fires that one tip a moment after boot, so a tip can be
+  // photographed without walking to its real moment.
+  const guideFlag = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('guide') : null;
+  if (guideFlag && typeof localStorage !== 'undefined') {
+    try {
+      localStorage.removeItem('youcoded-tips-seen');
+      localStorage.setItem('youcoded-tips-armed', '1');
+      if (guideFlag === 'tour') localStorage.setItem('youcoded-guide-pending', '1');
+      if (guideFlag.startsWith('tip:')) setTimeout(() => triggerTip(guideFlag.slice(4)), 1500);
+    } catch { /* the workbench can live without it */ }
+  }
   const firstRun = {
     getState: async () => ({
       currentStep: firstRunStep,

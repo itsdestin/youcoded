@@ -293,7 +293,9 @@ export function ProjectHero({
     // Stacks below 640px. Before the cog collapse the right column was shrink-0
     // with two size="lg" buttons (~268px together), which on a 390px phone left
     // the entire left column — name, path, sync strip, stats — about 34px wide.
-    <div className="layer-surface p-3 sm:p-5 flex flex-col gap-3 sm:gap-4">
+    // data-guide-anchor: the first-run tour's Projects stop rings this card
+    // once a project exists (a fresh install rings "Add a project" instead).
+    <div className="layer-surface p-3 sm:p-5 flex flex-col gap-3 sm:gap-4" data-guide-anchor="project-hero">
       {/* Top row: the content column, plus the narrow-only cog pinned right.
           WHY the card is a COLUMN now (2026-08-06): New Conversation moved to
           the bottom-right, so the old left/right split stopped describing the

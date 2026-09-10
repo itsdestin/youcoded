@@ -34,6 +34,7 @@ import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
 import { ProjectHero, formatFileCount } from './ProjectHero';
+import { ProjectsEmptyCard } from './ProjectsEmptyCard';
 import { ProjectSwitcher } from './ProjectSwitcher';
 import { syncDotFor, findSpaceFor, lastSyncedLabel, type SyncStatusData } from '../sync-dot-state';
 import AddProjectModal from './AddProjectModal';
@@ -155,6 +156,11 @@ export function matchProjectByPath<T extends { path: string }>(
 export function ProjectView(props: ProjectViewProps) {
   const { state, dispatch } = useArtifact();
   const [projects, setProjects] = useState<CentralIndexProject[]>([]);
+  // WHY a separate flag: `projects` starts as `[]`, which is ALSO what a
+  // brand-new install's index returns. Without this the first-run explainer
+  // (ProjectsEmptyCard) would flash on every open for the beat before the
+  // index answers. False until phase 1 of the load below resolves.
+  const [indexLoaded, setIndexLoaded] = useState(false);
   const [activeProject, setActiveProject] = useState<CentralIndexProject | null>(null);
   // Latest focused-conversation cwd, held in a ref so the load effect can read
   // it WITHOUT depending on it. A dep would re-run the whole open-time load —
@@ -298,11 +304,16 @@ export function ProjectView(props: ProjectViewProps) {
     convCache.current.clear();
     ctxCache.current.clear();
     let cancelled = false;
+    // Re-arm the loaded flag per open: the component never unmounts, so a
+    // stale `true` from the last open would let the empty card render off the
+    // previous list for a beat before this open's answer arrives.
+    setIndexLoaded(false);
     // Phase 1: fast list (sidecar-only counts) so the list/switcher appears
     // instantly and a project is selected without waiting on disk scans.
     (window.claude as any).artifacts.listProjectsIndex().then((res: any) => {
       if (cancelled || !res?.ok) return;
       setProjects(res.projects);
+      setIndexLoaded(true);
       // Every open re-homes to the focused conversation's project. Destin's
       // ruling: opening project view should always land on the folder you are
       // currently working in, never on whatever you happened to browse to last
@@ -735,6 +746,15 @@ export function ProjectView(props: ProjectViewProps) {
             layout (hero pinned, body scrolls independently) — there's vertical
             room for it there, and it's the design the view was built around. */}
         <main className="flex-1 flex flex-col max-sm:overflow-y-auto sm:overflow-hidden min-w-0">
+          {/* No projects at all (first-run guide, spec §1 item 5): the
+              explainer card replaces BOTH the hero and the seg-row + tab body —
+              three tabs with "0" badges over nothing is a dashboard for nothing.
+              Gated on indexLoaded so it never flashes while the index is still
+              answering; the header above (title + back) is untouched. */}
+          {indexLoaded && projects.length === 0 ? (
+            <ProjectsEmptyCard onAdd={handleAddProject} />
+          ) : (
+          <>
           {/* Chrome: hero + seg-row, centered to a comfortable reading width to
               match the prototype (the tab body below shares the same max-width). */}
           {/* px-2 on narrow: stacked gutters (this px-4 plus the hero's own p-5)
@@ -822,6 +842,8 @@ export function ProjectView(props: ProjectViewProps) {
                       onClick={() => setTab(s.id)}
                       title={s.label}
                       aria-label={s.label}
+                      // The first-run tour's Files stop rings the Files tab.
+                      data-guide-anchor={s.id === 'files' ? 'files-tab' : undefined}
                       aria-current={active ? 'page' : undefined}
                     >
                       <span className="shrink-0 inline-flex">{s.icon}</span>
@@ -958,6 +980,8 @@ export function ProjectView(props: ProjectViewProps) {
               />
             )}
           </div>
+          </>
+          )}
         </main>
       </div>
 

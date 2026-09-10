@@ -33,6 +33,8 @@ import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import type { MenuEntry } from './context-menu/build-menu';
 import { SkipPermissionsCaption } from './SkipPermissionsCaption';
+import { useFirstTimeGate } from './FirstTimeWarning';
+import { isSmallModel } from './first-time-warnings';
 
 // Stable empty map for the non-dragging render, so a new Map is not allocated
 // on every frame the strip re-renders.
@@ -400,6 +402,16 @@ export default function SessionStrip({
   const [runtime, setRuntime] = useState<Runtime>(() => defaultRuntime());
   const [binding, setBinding] = useState<Binding | null>(() => loadLastBinding());
   const nb = useNativeBinding({ active: showNewForm, runtime, binding, setBinding });
+
+  // First-time warnings (spec §5): Skip Permissions on its toggle, small model
+  // on Create. The popover at z-9000 would sit ABOVE the warning and its
+  // outside-click closer would read a click in the dialog as "outside", so the
+  // popover hides while the warning is up and returns after. Only `menuOpen`
+  // flips — `showNewForm` and every field stay put, so Cancel lands back on the
+  // form exactly as it was (see useFirstTimeGate for the why).
+  const yieldToWarning = { onShow: () => setMenuOpen(false), onSettle: () => setMenuOpen(true) };
+  const { gate: gateSkipPermissions, dialog: skipPermissionsDialog } = useFirstTimeGate('skip-permissions', yieldToWarning);
+  const { gate: gateSmallModel, dialog: smallModelDialog } = useFirstTimeGate('small-model', yieldToWarning);
   // Native harness preset (Assistant | Coder) — shared lifecycle hook (see
   // RuntimeBinding.usePreset). Follows the folder heuristic until the user picks a
   // card, then latches; re-arms every time the form (re)opens via `showNewForm`.
@@ -781,31 +793,48 @@ export default function SessionStrip({
   const handleCreate = useCallback(() => {
     // Native runtime carries a provider/model binding; a missing binding is
     // already guarded by the disabled Create button, so bail defensively.
-    if (runtime === 'native') {
-      if (!nb.effectiveBinding) return;
-      persistLastBinding(nb.effectiveBinding);
-    }
-    onCreateSession(
-      newCwd,
-      // Hidden for native (see the gate on the toggle), so a value left over
-      // from an earlier Claude pick must not ride along into the create.
-      runtime === 'native' ? false : dangerous,
-      newModel,
-      runtime,
-      launchInNewWindow,
-      runtime === 'native' ? (nb.effectiveBinding ?? undefined) : undefined,
-      runtime === 'native' ? preset : undefined,
-    );
-    setMenuOpen(false);
-    setShowNewForm(false);
-    setDangerous(defaultSkipPermissions || false);
-    setNewModel(defaultModel || 'sonnet');
-    setLaunchInNewWindow(false);
-    // Reset to the remembered default, NOT the literal 'claude' -- otherwise a
-    // ChatGPT-only install's default would last one session (review R2-3).
-    setRuntime(defaultRuntime());
-    if (defaultStartModel) applyModelChoice(defaultStartModel);
-  }, [newCwd, dangerous, newModel, launchInNewWindow, onCreateSession, defaultSkipPermissions, defaultModel, defaultStartModel, applyModelChoice, runtime, nb.effectiveBinding, preset]);
+    const nativeBinding = runtime === 'native' ? nb.effectiveBinding : null;
+    if (runtime === 'native' && !nativeBinding) return;
+    const proceed = () => {
+      // Persisted inside `proceed`, not before the gate: a cancelled create
+      // should leave no trace, and "last used" is a trace.
+      if (nativeBinding) persistLastBinding(nativeBinding);
+      onCreateSession(
+        newCwd,
+        // Hidden for native (see the gate on the toggle), so a value left over
+        // from an earlier Claude pick must not ride along into the create.
+        runtime === 'native' ? false : dangerous,
+        newModel,
+        runtime,
+        launchInNewWindow,
+        nativeBinding ?? undefined,
+        runtime === 'native' ? preset : undefined,
+      );
+      setMenuOpen(false);
+      setShowNewForm(false);
+      setDangerous(defaultSkipPermissions || false);
+      setNewModel(defaultModel || 'sonnet');
+      setLaunchInNewWindow(false);
+      // Reset to the remembered default, NOT the literal 'claude' -- otherwise a
+      // ChatGPT-only install's default would last one session (review R2-3).
+      setRuntime(defaultRuntime());
+      if (defaultStartModel) applyModelChoice(defaultStartModel);
+    };
+    // First session on a small model gets the once-only explainer (spec §5).
+    // The catalog row supplies the label and, for a local model, the file size
+    // that decides when the name carries no parameter count. Claude aliases
+    // ('sonnet', 'haiku'…) name no size, so they never trip it.
+    const row = nativeBinding
+      ? nb.modelCatalog.find((m) => m.providerId === nativeBinding.providerId && m.id === nativeBinding.modelId)
+      : undefined;
+    const small = isSmallModel({
+      modelId: nativeBinding ? nativeBinding.modelId : newModel,
+      modelLabel: row?.label,
+      localSizeBytes: (row as { local?: { sizeBytes?: number } } | undefined)?.local?.sizeBytes,
+    });
+    if (small) gateSmallModel(proceed);
+    else proceed();
+  }, [newCwd, dangerous, newModel, launchInNewWindow, onCreateSession, defaultSkipPermissions, defaultModel, defaultStartModel, applyModelChoice, runtime, nb.effectiveBinding, nb.modelCatalog, preset, gateSmallModel]);
 
   /* ── Pointer-event drag handlers ───────────────────────── */
 
@@ -2099,6 +2128,8 @@ export default function SessionStrip({
           );
         })}
         {renameId && <SessionRenameDialog id={renameId} name={sessions.find((s) => s.id === renameId)?.name ?? 'Untitled session'} onClose={() => setRenameId(null)} />}
+        {skipPermissionsDialog}
+        {smallModelDialog}
         {pillMenu && (
           <ContextMenu x={pillMenu.x} y={pillMenu.y} entries={pillMenuEntries} onClose={() => setPillMenu(null)} />
         )}
@@ -2640,7 +2671,9 @@ export default function SessionStrip({
                         control, so it announced as an unnamed button. */}
                     <Toggle
                       checked={dangerous}
-                      onChange={setDangerous}
+                      // Turning ON goes through the first-time warning; Cancel
+                      // there leaves it off. Turning off never asks.
+                      onChange={(next) => (next ? gateSkipPermissions(() => setDangerous(true)) : setDangerous(false))}
                       tone="danger"
                       aria-label="Skip Permissions"
                     />
