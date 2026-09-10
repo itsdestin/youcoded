@@ -722,13 +722,16 @@ export class GitTransport implements SyncTransport {
    *  any error or a missing repo, and returns whatever was summed so far if the
    *  walk trips its bound (a partial-but-nonzero size still trips the warning). */
   async gitDirSizeBytes(space: SyncSpace): Promise<number> {
+    // WHY async walk (2026-09-10): this runs from the engine's 120 s poll for
+    // every space; readdirSync/statSync over a large .git held the main thread
+    // for the whole walk. Same caps, same symlink rule, off the event loop.
     const root = this.gitDir(space);
     let total = 0;
     let visited = 0;
-    const walk = (dir: string, depth: number): void => {
+    const walk = async (dir: string, depth: number): Promise<void> => {
       if (visited >= SIZE_WALK_MAX_ENTRIES || depth > SIZE_WALK_MAX_DEPTH) return;
       let entries: fs.Dirent[];
-      try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+      try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
       for (const e of entries) {
         if (visited >= SIZE_WALK_MAX_ENTRIES) return;
         visited++;
@@ -736,13 +739,13 @@ export class GitTransport implements SyncTransport {
         // Skip symlinks outright (never follow) — a defense the junction-cycle
         // depth cap backstops on Windows where isSymbolicLink misses junctions.
         if (e.isSymbolicLink()) continue;
-        if (e.isDirectory()) walk(full, depth + 1);
-        else if (e.isFile()) { try { total += fs.statSync(full).size; } catch { /* raced away */ } }
+        if (e.isDirectory()) await walk(full, depth + 1);
+        else if (e.isFile()) { try { total += (await fs.promises.stat(full)).size; } catch { /* raced away */ } }
       }
     };
     try {
-      if (!fs.existsSync(root)) return 0;
-      walk(root, 0);
+      try { await fs.promises.access(root); } catch { return 0; }
+      await walk(root, 0);
     } catch { return 0; }
     return total;
   }

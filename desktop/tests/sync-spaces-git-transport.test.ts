@@ -180,6 +180,28 @@ describe('GitTransport specifics', () => {
     await h.cleanup();
   });
 
+  // New (Task 1C): the async walk must keep the SAME behavior as the sync one
+  // it replaces — sums real files, skips symlinks outright (never follows),
+  // and honours the entry cap. Built directly under a fake .youcoded/sync.git
+  // (no real git needed) so the byte counts are exact and controllable.
+  it('gitDirSizeBytes sums files, skips symlinks, and honours the entry cap', async () => {
+    const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-gt-walk-'));
+    const root = path.join(tmp, 'space');
+    const gitDir = path.join(root, '.youcoded', 'sync.git');
+    fs.mkdirSync(gitDir, { recursive: true });
+    fs.writeFileSync(path.join(gitDir, 'a.bin'), 'x'.repeat(100));
+    fs.writeFileSync(path.join(gitDir, 'b.bin'), 'x'.repeat(200));
+    // A symlink to a real file must NOT be counted — skipped outright, never
+    // followed (also the Windows-junction backstop's first line of defense).
+    fs.symlinkSync(path.join(gitDir, 'a.bin'), path.join(gitDir, 'link-to-a.bin'));
+
+    const t = new GitTransport({ deviceName: 'T' });
+    const space: SyncSpace = { id: 'project:walk', kind: 'project', root };
+    expect(await t.gitDirSizeBytes(space)).toBe(300); // 100 + 200, symlink excluded
+
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
   // ---- Honest failures (2026-07-30 spec §1). Pins the 2026-07-27 bug: a
   // crash-truncated loose object made every git op fail while push() returned
   // {pushed:false} ("nothing to push") — sync dead 3 days, panel green. ----
