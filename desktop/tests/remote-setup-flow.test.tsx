@@ -64,6 +64,19 @@ describe('the setup banner says which prerequisite is missing', () => {
     render(<>{renderPrerequisite(ts(), false, noop, noop)}</>);
     expect(screen.getByText(/Set a password below/)).toBeTruthy();
   });
+
+  it('does not send a fully configured computer back to the installer', () => {
+    // Installed, connected, password set, and no address: Tailscale's status gave no IP and
+    // the fallback lookup failed too. This ran off the end of the function to "Not set up
+    // yet." with a Set up button — the installer, for a machine that has everything but the
+    // one thing the message did not mention.
+    const connect = vi.fn();
+    render(<>{renderPrerequisite(ts({ url: null, ip: null }), true, noop, connect)}</>);
+    expect(screen.queryByText('Not set up yet.')).toBeNull();
+    expect(screen.getByText(/hasn.t given this computer an address yet/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(connect).toHaveBeenCalled();
+  });
 });
 
 describe('the end of setup is a check, not a claim', () => {

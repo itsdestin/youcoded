@@ -1367,6 +1367,17 @@ export function renderPrerequisite(
     // Connected, but nothing can pair without a password — the field is directly below.
     return <StatusStrip tone="warn">Set a password below to finish enabling remote access.</StatusStrip>;
   }
+  if (!tailscale.url) {
+    // Installed, connected, password set — and still no address. Tailscale's status gave no
+    // IP and the fallback lookup failed too. This used to fall off the end of the function
+    // to "Not set up yet." with a Set up button, which walks a fully configured machine back
+    // into the installer. What is actually missing is the address, so that is what it says.
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Try again</Button>}>
+        Tailscale is connected, but it hasn&apos;t given this computer an address yet.
+      </StatusStrip>
+    );
+  }
   return notSetUp;
 }
 

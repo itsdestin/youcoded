@@ -110,7 +110,20 @@ function isAndroidLocal(): boolean {
 // appear in the command drawer." Bound at MAX_QUEUE to prevent unbounded
 // growth if a real flow ever fans out faster than the auth handshake.
 const MAX_QUEUE = 256;
-let pendingSendQueue: string[] = [];
+/** How long a request waits for an answer, and therefore how long a queued message can
+ *  still have somebody waiting on it. The two must be the same number. */
+const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Queued while the socket is down, with the time each was queued.
+ *
+ * WHY the timestamp: the queue is what makes a FIRST connect work — mount-time reads fire
+ * before auth and would otherwise be lost — but it was also replaying requests whose caller
+ * had already been told, thirty seconds earlier, that they failed. So an action you were
+ * told did not happen could happen minutes later. Anything older than the request timeout
+ * is dropped at flush instead: nobody is still waiting on it, and the honest outcome for a
+ * caller that already gave up is nothing at all.
+ */
+let pendingSendQueue: { data: string; at: number }[] = [];
 
 function setConnectionState(state: RemoteConnectionState) {
   connectionState = state;
@@ -195,7 +208,7 @@ function send(msg: any): boolean {
     console.warn('[remote-shim] send queue overflow — dropping oldest');
     pendingSendQueue.shift();
   }
-  pendingSendQueue.push(data);
+  pendingSendQueue.push({ data, at: Date.now() });
   return true;
 }
 
@@ -255,9 +268,12 @@ function rehydrate(): void {
 // the bridge rejects application traffic before auth completes.
 function flushSendQueue(): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const queued = pendingSendQueue;
+  const cutoff = Date.now() - REQUEST_TIMEOUT_MS;
+  const queued = pendingSendQueue.filter(item => item.at >= cutoff);
+  const dropped = pendingSendQueue.length - queued.length;
+  if (dropped > 0) console.warn(`[remote-shim] dropped ${dropped} queued message(s) older than the request timeout`);
   pendingSendQueue = [];
-  for (const data of queued) {
+  for (const { data } of queued) {
     try { ws.send(data); } catch (e) {
       console.error('[remote-shim] flush failed:', e);
     }
@@ -269,7 +285,7 @@ function flushSendQueue(): void {
 // repo, etc.) can legitimately take minutes. Callers pass a larger timeoutMs
 // for those — see `sync.force` below.
 function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Promise<any> {
-  const timeoutMs = opts?.timeoutMs ?? 30_000;
+  const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
     const id = `${myDeviceId || 'anon'}:${connectionGeneration}:${++messageId}`;
     const timeout = setTimeout(() => {

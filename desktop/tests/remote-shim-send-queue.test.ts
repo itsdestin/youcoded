@@ -62,6 +62,38 @@ describe('remote-shim send queue', () => {
     await expect(invokePromise).resolves.toEqual([]);
   });
 
+  it('drops a queued message whose caller was already told it failed', async () => {
+    // The queue exists so a FIRST connect works: mount-time reads fire before auth and
+    // would otherwise be lost. But it was replaying EVERYTHING, including requests that
+    // had timed out thirty seconds earlier and told the user they failed — so an action
+    // you were told did not happen could happen minutes later, once the phone reconnected.
+    // Only the CLOCK is faked, not timers: the shim's own connect timeout is a real
+    // setTimeout, and fast-forwarding it would close the socket before the flush.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    try {
+      shim.connect('pw', false);
+      const ws = FakeWebSocket.instances[0];
+      shim.installShim();
+
+      // One request queued while the socket is still connecting...
+      (window as any).claude.skills.list().catch(() => {});
+      // ...then more than the 30s request timeout passes, so its caller has already been
+      // told it failed and nobody is waiting for it any more.
+      vi.setSystemTime(Date.now() + 31_000);
+      (window as any).claude.commands.list().catch(() => {});
+
+      ws.open();
+      ws.receive({ type: 'auth:ok', token: 'tok', platform: 'browser' });
+      await Promise.resolve();
+
+      const flushed = ws.sent.slice(1).map(s => JSON.parse(s).type);
+      expect(flushed).toContain('commands:list');
+      expect(flushed).not.toContain('skills:list');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('auth message bypasses the queue (sent directly during ws.onopen)', async () => {
     shim.connect('pw', false);
     const ws = FakeWebSocket.instances[0];
