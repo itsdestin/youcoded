@@ -31,9 +31,9 @@ import { runGuardedDiscard } from './git/discard-guard';
 import type { ArtifactRecord, VersionEvent } from '../../shared/artifacts/types';
 import { fileTypeGroup } from '../../shared/artifacts/categorization';
 import type { FileTypeGroup } from '../../shared/artifacts/categorization';
-import { getPlatform } from '../platform';
+import { getPlatform, isRemoteMode } from '../platform';
 import { formatRelativeTime } from '../utils/format-time';
-import { Button, CloseButton, EmptyState, FieldError, SearchFilterPill, Tooltip } from './ui';
+import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
 import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -95,6 +95,9 @@ const PATHS: Record<string, string> = {
   folder: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
   // External-link (box + arrow-out) — "Open externally" (OS default app).
   external: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3',
+  // Tray + arrow-down — "Download" (remote access batch 3, 2026-09-10): the
+  // phone's stand-in for Open externally / Reveal, which have no meaning there.
+  download: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
   // Four standalone corner arrows (approved mockup 12, stems shortened) —
   // the old bare brackets did not read as expand/contract.
   expand: 'M9 4.5H4.5V9M15 4.5h4.5V9M9 19.5H4.5V15M15 19.5h4.5V15M5 5l4.2 4.2M19 5l-4.2 4.2M5 19l4.2-4.2M19 19l-4.2-4.2',
@@ -254,17 +257,29 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Opening the Files drawer should show what is on disk NOW, and it should key
   // off the RESOLVED projectRoot (useActiveProject), which is not always the raw
   // cwd ChatView used.
+  // The real message when the list could not be fetched. WHY: over remote access
+  // the host refused this channel until batch 3, the refusal rejected, and the
+  // catch below swallowed it — so a phone read "Nothing here yet" for a session
+  // with thirteen files (found 2026-09-10). A failure is a state with a Retry,
+  // never an empty state that claims to know.
+  const [listError, setListError] = useState<string | null>(null);
+  const [listRetry, setListRetry] = useState(0);
   useEffect(() => {
     if (!drawerOpen || !projectRoot || !sessionId) return;
     let cancelled = false;
+    setListError(null);
     (window.claude as any).artifacts?.listSession?.(sessionId, projectRoot)
       .then((r: any) => {
         if (cancelled || !r?.ok || !Array.isArray(r.artifacts)) return;
         dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: r.artifacts });
       })
-      .catch(() => { /* the drawer keeps whatever it already had */ });
+      .catch((err: any) => {
+        // The drawer keeps whatever rows it already had, and says why it could
+        // not refresh them — never a guess about the cause.
+        if (!cancelled) setListError(err?.message ? String(err.message) : '');
+      });
     return () => { cancelled = true; };
-  }, [drawerOpen, projectRoot, sessionId, dispatch]);
+  }, [drawerOpen, projectRoot, sessionId, dispatch, listRetry]);
 
   // Multi-select type filter; EMPTY set = all types. Matches Project View
   // (Destin, 2026-07-23 — the drawer gained the Type group).
@@ -471,6 +486,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     if (absolutePath) (window.claude as any).shell?.openPath?.(absolutePath);
   }, [absolutePath]);
 
+  // Remote access batch 3 (questions deck 2026-09-10, Q-7 yes): a phone cannot
+  // reveal or open a file that lives on another computer, so it gets Download —
+  // the file lands in the phone's own downloads folder without blocking the chat.
+  const handleDownload = useCallback(() => {
+    if (absolutePath) void (window.claude as any).artifacts?.download?.(absolutePath);
+  }, [absolutePath]);
+
   // Rows to render: the filtered set, narrowed by the search box and sorted.
   // Search/sort affect ONLY the rendered list — not `artifacts`, which still
   // backs the active-artifact lookup (so searching never hides the open file).
@@ -664,7 +686,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             {pillError}
           </div>
         )}
-        {listSettling ? null : listedArtifacts.length === 0 ? (
+        {listSettling ? null : listError !== null && listedArtifacts.length === 0 ? (
+          <div className="px-3 pt-2">
+            <ErrorState
+              mode="recoverable"
+              message={listError ? `Couldn’t load this chat’s files: ${listError}` : 'Couldn’t load this chat’s files.'}
+              onRetry={() => setListRetry((t) => t + 1)}
+            />
+          </div>
+        ) : listedArtifacts.length === 0 ? (
           pillError ? null /* the note above already explains the state */ : (
             /* Same EmptyState + way-out pattern as the Project View files tab and
                the Resume browser (change 32). A search that matched nothing gets a
@@ -947,6 +977,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
         {active && isElectron && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
+        {active && isRemoteMode() && <IconBtn name="download" title="Download to this device" onClick={handleDownload} />}
         {active && <IconBtn name="copypath" title="Copy path" onClick={handleCopyPath} />}
         {active && isElectron && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}
         <IconBtn name={expanded ? 'shrink' : 'expand'} title={expanded ? 'Shrink panel' : 'Expand panel'} active={expanded} onClick={() => dispatch({ type: 'DRAWER_EXPAND_TOGGLED' })} />

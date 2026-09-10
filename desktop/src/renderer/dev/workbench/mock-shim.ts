@@ -10,6 +10,9 @@ import type {
 import type { DelegatedModelsView } from '../../../shared/types';
 import { RUNS } from './specialist-runs';
 import { FULL_READ_MAX_BYTES } from '../../../shared/artifacts/editable-path-policy';
+import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../../../shared/remote-file-limits';
+import { isRemoteMode } from '../../platform';
+import { REMOTE_UNSUPPORTED_EVENT, remoteFeatureName, remoteUnsupportedMessage } from '../../remote-unsupported';
 import { previewKind } from '../../../shared/artifacts/categorization';
 import { READ_HEAD_DEFAULT_BYTES, READ_HEAD_MAX_BYTES } from '../../../shared/read-head';
 import { buildHydratePayload } from './seed-chat';
@@ -1799,9 +1802,33 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // a filmed take can show the change take effect without a second round trip.
   const previewState = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('remotePreview') : null;
   const preview = previewState ? createRemoteAccessPreview(previewState) : undefined;
-  const remote = remoteSwitch || preview ? {
+  // ── Remote access batch 2 mockup (questions deck 2026-09-10, Q-3) ──
+  // `?connection=remote&conversation=reconnecting|incomplete` puts the phone's
+  // copy of the conversation in the state the strip above the chat describes.
+  // The real push comes from the shim's connection machine and the hydrate
+  // result; Refresh (remote.rehydrate) asks the host for a fresh copy and, in
+  // the workbench, simply resolves the strip.
+  type ConversationPhase = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
+  const conversationSwitch = typeof location !== 'undefined'
+    ? new URLSearchParams(location.search).get('conversation') as ConversationPhase | null : null;
+  const conversationSubs = new Set<(s: { phase: ConversationPhase }) => void>();
+  const pushConversation = (phase: ConversationPhase) => conversationSubs.forEach((cb) => cb({ phase }));
+  const onRemoteConversationStatus = (cb: (s: { phase: ConversationPhase }) => void) => {
+    conversationSubs.add(cb);
+    if (conversationSwitch) cb({ phase: conversationSwitch });
+    return () => { conversationSubs.delete(cb); };
+  };
+  const rehydrate = async () => {
+    pushConversation('restoring');
+    await new Promise((r) => setTimeout(r, 900));
+    pushConversation('complete');
+    return { ok: true };
+  };
+
+  const remote = remoteSwitch || preview || isRemoteMode() ? {
     // MOCK_ONLY: an explicit preview API, never a real transport or host operation.
     ...(preview ? { preview: () => preview } : {}),
+    rehydrate,
     getConfig: async () => remoteConfig,
     setConfig: async (updates: Partial<typeof remoteConfig>) => { remoteConfig = { ...remoteConfig, ...updates }; return remoteConfig; },
     setPassword: async () => { remoteConfig = { ...remoteConfig, hasPassword: true }; return remoteConfig; },
@@ -1992,6 +2019,38 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // a reload — the Workbench has no disk and must not pretend otherwise.
   const EDITED_ARTIFACTS = new Map<string, string>();
   const EDITED_MTIME = new Map<string, number>();
+
+  // ── Remote access batch 3 mockups (questions deck 2026-09-10) ──
+  // `?connection=remote&remoteFiles=refused` reproduces what a phone gets TODAY:
+  // every file channel is refused by the host, the shim rejects, and one toast
+  // names the feature. It is the "Before" of the file-reading deck, staged here
+  // because master's workbench has no remote mode to shoot it in. Everything
+  // else under `?connection=remote` is the "After": lists resolve, previews open,
+  // and a file over the phone's preview ceiling answers too-large with its size.
+  const remoteFilesSwitch = typeof location !== 'undefined'
+    ? new URLSearchParams(location.search).get('remoteFiles') : null;
+  const refuseAsToday = (channel: string): Promise<never> => {
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent(REMOTE_UNSUPPORTED_EVENT, {
+        detail: { channel, feature: remoteFeatureName(channel), message: remoteUnsupportedMessage(channel) },
+      }));
+    }
+    return Promise.reject(new Error(`remote-unsupported: ${channel}`));
+  };
+  const filesRefused = () => remoteFilesSwitch === 'refused';
+  // A file only a phone would balk at: 24 MB is over the 10 MB image/PDF ceiling
+  // but well under the desktop's 50 MB, so the same row previews fine at the
+  // desk and shows the too-large card on the phone. Appended to the lists only in
+  // remote mode so every desktop deck keeps its measured 9 rows.
+  const REMOTE_BIG_PDF = {
+    id: 'a-annual-report-pdf', path: 'docs/reports/annual-report.pdf', kind: 'internal' as const,
+    absolutePath: null, lastModified: Date.now() - 3 * 3600_000, status: 'active' as const,
+    versions: [{ id: 'wb-1', kind: 'create', at: Date.now() - 3 * 3600_000 }], comments: [], tags: [],
+  };
+  const REMOTE_BIG_PDF_BYTES = 24 * 1024 * 1024;
+  const withRemoteRows = <T extends { id: string }>(rows: T[]): T[] =>
+    isRemoteMode() ? [...rows, REMOTE_BIG_PDF as unknown as T] : rows;
+
   const artifacts = {
     listProjectsIndex: async (opts?: { withCounts?: boolean }) => ({
       ok: true,
@@ -2004,16 +2063,26 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     }),
     // Student mode: every session's drawer lists the Econ 201 session's files
     // (fixtures/artifacts.ts studentSessionFiles — why every session is there).
-    listSession: async (sessionId: string) => ({
-      ok: true, artifacts: studentSwitch ? studentSessionFiles() : sessionArtifacts(sessionId),
-    }),
+    listSession: async (sessionId: string) => {
+      if (filesRefused()) return refuseAsToday('artifacts:list-session');
+      return { ok: true, artifacts: withRemoteRows(studentSwitch ? studentSessionFiles() : sessionArtifacts(sessionId)) };
+    },
     listProject: async (projectId: string) => ({
       ok: true, artifacts: studentSwitch ? studentAllFiles(projectId) : allFiles(projectId),
     }),
-    listAllFiles: async (projectId: string) => ({
-      ok: true, files: studentSwitch ? studentAllFiles(projectId) : allFiles(projectId), truncated: false,
-    }),
+    listAllFiles: async (projectId: string) => {
+      if (filesRefused()) return refuseAsToday('artifacts:list-all-files');
+      return { ok: true, files: withRemoteRows(studentSwitch ? studentAllFiles(projectId) : allFiles(projectId)), truncated: false };
+    },
+    // Batch 3, Q-7 (yes): save a copy to the phone. The real channel mints a
+    // short-lived download link on the host and opens it; here it only records
+    // the ask, because a workbench has no bytes to hand over.
+    download: async (absolutePath: string) => {
+      console.log('[workbench] artifacts.download', absolutePath);
+      return { ok: true };
+    },
     get: async (_projectRoot: string, artifactId: string, opts?: { full?: boolean }) => {
+      if (filesRefused()) return refuseAsToday('artifacts:get');
       // An in-session edit wins over the seeded body. Without this the artifact
       // editor was a dead end in the Workbench: Save had no handler at all, so
       // the panel snapped back to the fixture and the whole edit-a-file story
@@ -2044,6 +2113,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // above FULL_READ_MAX_BYTES, so the mock has to refuse it too or the
       // Workbench would show a state the real backend can never produce.
       const fake = OVERSIZE_FIXTURES[artifactId];
+      // On a phone the host does not send a prefix of a big text file — it answers
+      // too-large with the real size, and the phone offers Download (Q-6, Q-8).
+      if (isRemoteMode() && (fake ?? content.length) > REMOTE_TEXT_PREVIEW_MAX_BYTES) {
+        return { ok: false, error: 'too-large', sizeBytes: fake ?? content.length, limitBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES };
+      }
       const grantFull = opts?.full === true && fake !== undefined && fake <= FULL_READ_MAX_BYTES;
       if (fake !== undefined && !grantFull) {
         return {
@@ -2077,7 +2151,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // CARD, not the picture. Non-images get an honest refusal so the glyph
     // fallback stays reviewable.
     readBinary: async (absolutePath: string) => {
+      if (filesRefused()) return refuseAsToday('artifacts:read-binary');
       const ext = absolutePath.split('.').pop()?.toLowerCase() ?? '';
+      // The 24 MB report: over the phone's image/PDF ceiling, so the phone gets
+      // the too-large card with a Download button instead of a frozen tab.
+      if (isRemoteMode() && absolutePath.endsWith(REMOTE_BIG_PDF.path) && REMOTE_BIG_PDF_BYTES > REMOTE_BINARY_PREVIEW_MAX_BYTES) {
+        return { ok: false, error: 'too-large', sizeBytes: REMOTE_BIG_PDF_BYTES, limitBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES };
+      }
       // SVG is a vector source with no native resolution — the one format whose
       // magnified detail should stay perfectly sharp. Served as its own fixture
       // so that path is reviewable at all (it used to fall through to a refusal).
@@ -2239,7 +2319,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // sessionRenamed is registered but never fired: preload has no renderer-side
   // rename writer (renames are emitted by the main process's auto-namer), so
   // there is nothing in a browser-only workbench that could trigger one.
-  const on: Ns<'on'> & { sessionMetaChanged: (fn: (id: string, meta: any) => void) => () => void } = {
+  const on: Ns<'on'> & {
+    sessionMetaChanged: (fn: (id: string, meta: any) => void) => () => void;
+    // MOCK_ONLY until batch 2's backend lands the channel on every surface.
+    remoteConversationStatus: typeof onRemoteConversationStatus;
+  } = {
     sessionCreated: (cb) => { subs.created.add(cb); return () => { subs.created.delete(cb); }; },
     sessionDestroyed: (cb) => { subs.destroyed.add(cb); return () => { subs.destroyed.delete(cb); }; },
     sessionRenamed: (cb) => { subs.renamed.add(cb); return () => { subs.renamed.delete(cb); }; },
@@ -2254,6 +2338,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       cb(buildHydratePayload());
       return () => {};
     },
+    // Batch 2 (2026-09-10): where the phone's copy of the conversation stands.
+    remoteConversationStatus: onRemoteConversationStatus,
 
     // Fires once, synchronously, same reasoning as chatHydrate above — App's
     // subscribe happens in an effect, so this lands in the same commit instead

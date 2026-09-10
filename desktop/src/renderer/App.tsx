@@ -86,6 +86,9 @@ import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+
+/** Remote access batch 2: where a phone's copy of the conversation stands. */
+type ConversationStatus = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
 import type { SessionStatusColor } from './components/StatusDot';
 import { ThemeProvider } from './state/theme-context';
 import { SkillProvider } from './state/skill-context';
@@ -244,6 +247,12 @@ function AppInner() {
   const bottomBarRef = useRef<HTMLDivElement>(null);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [settingsBadge, setSettingsBadge] = useState(false);
+  // Remote access batch 2: the phone's copy of the conversation (see the
+  // remoteConversationStatus subscription below). Undefined on the desktop.
+  const [conversationStatus, setConversationStatus] = useState<ConversationStatus | undefined>(undefined);
+  const handleRefreshConversation = useCallback(() => {
+    void (window.claude as any).remote?.rehydrate?.();
+  }, []);
   const [syncAutoOpen, setSyncAutoOpen] = useState(false);
   // Deep-link flag for the Model Providers popup — set by a provider-error
   // bubble's "Open Settings" jump so Settings opens straight to that section.
@@ -1702,6 +1711,13 @@ function AppInner() {
     const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
       dispatch({ type: 'HYDRATE_CHAT_STATE', sessions: payload });
     });
+    // Remote access batch 2 (2026-09-10): where the phone's copy of the
+    // conversation stands — reconnecting, restoring, incomplete, complete. Only
+    // a remote client ever receives it; ChatView renders the strip. Typed
+    // `any` until the technical design lands the channel on every surface.
+    const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
+      setConversationStatus(s?.phase);
+    });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
     // root, call appendVersion so the central index is populated, then refresh the
@@ -1790,6 +1806,7 @@ function AppInner() {
       if (promptCompleteHandler) window.claude.off('prompt:complete', promptCompleteHandler);
       if (sessionPermissionModeHandler) window.claude.off('session:permission-mode', sessionPermissionModeHandler);
       if (chatHydrateHandler) window.claude.off('chat:hydrate', chatHydrateHandler);
+      if (typeof conversationStatusOff === 'function') conversationStatusOff();
       if (artifactToolUseHandler) window.claude.off('transcript:event', artifactToolUseHandler);
       artifactTracker.dispose();
       if (deliverableAutoOpenHandler) window.claude.off('transcript:event', deliverableAutoOpenHandler);
@@ -3252,6 +3269,8 @@ function AppInner() {
                       onSwitchProviders={() => setModelPickerOpen(true)}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
+                      conversationStatus={conversationStatus}
+                      onRefreshConversation={handleRefreshConversation}
                     />
                   </ErrorBoundary>
                   <ErrorBoundary name="Terminal">

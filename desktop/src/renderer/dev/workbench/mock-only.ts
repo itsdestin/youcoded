@@ -89,4 +89,14 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // Remote access batches 2 and 3 (questions deck 2026-09-10). Designed ahead of their
+  // backend; each row is a channel the technical design has to build on all five
+  // surfaces, then delete here.
+  // Batch 2: the host tells the phone where its copy of the conversation stands —
+  // reconnecting, restoring, incomplete (Q-3 "keep it, say so"), complete — and the
+  // phone can ask for a fresh copy.
+  { channel: 'on.remoteConversationStatus', feature: 'Remote access batch 2 — conversation restoration status' },
+  { channel: 'remote.rehydrate', feature: 'Remote access batch 2 — Refresh on the may-be-behind strip' },
+  // Batch 3: save a copy of a file to the phone (Q-7 yes).
+  { channel: 'artifacts.download', feature: 'Remote access batch 3 — Download a file to the phone' },
 ];

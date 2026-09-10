@@ -96,7 +96,9 @@ export function useArtifactContent(
         // disk". Everything else that resolved ok is ready.
         setContentState(res.orphan ? { phase: 'missing' } : { phase: 'ready' });
       } else {
-        setContentState({ phase: 'error', message: describeReadError(res?.error) });
+        // Keep the handler's own code and the size beside the message: the
+        // remote too-large answer needs both to render as a file card.
+        setContentState({ phase: 'error', message: describeReadError(res?.error), code: res?.error, sizeBytes: res?.sizeBytes });
       }
     }).catch((e: any) => {
       // A rejected invoke (e.g. EACCES thrown in the handler) is a read

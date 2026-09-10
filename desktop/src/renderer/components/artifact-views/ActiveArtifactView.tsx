@@ -11,6 +11,16 @@ import { editTier, EDIT_MAX_BYTES } from '../../../shared/artifacts/editable-pat
 import { canonicalize } from '../../../shared/artifacts/canonicalize';
 import { UnifiedDiff } from '../diff/UnifiedDiff';
 import { LoadingState, ErrorState } from '../ui/states';
+import { RemoteFileCard } from './RemoteFileCard';
+import { isRemoteMode } from '../../platform';
+
+/** Absolute on-disk path of an artifact — the same join SessionDrawer and
+ *  FilesTab make for Copy path, so Download asks the host for the same file. */
+function absoluteArtifactPath(projectRoot: string, a: ArtifactRecord): string {
+  return a.kind === 'internal'
+    ? `${projectRoot.replace(/\\/g, '/').replace(/\/+$/, '')}/${a.path.replace(/\\/g, '/')}`
+    : (a.absolutePath ?? a.path);
+}
 import { openEditorSearch, revealLineIn } from './cm/editor-registry';
 import { draftKey, stashDraft, takeDraft, clearDraft } from './draft-store';
 
@@ -90,7 +100,11 @@ export type ArtifactContentState =
   | { phase: 'loading' }
   | { phase: 'ready' }
   | { phase: 'missing' }
-  | { phase: 'error'; message: string };
+  // `code` is the handler's own error code (e.g. 'too-large') and `sizeBytes`
+  // rides with it: over remote access a too-large answer carries the file's real
+  // size so the phone can show "24.0 MB · PDF" with a Download button rather
+  // than a bare error (RemoteFileCard).
+  | { phase: 'error'; message: string; code?: string; sizeBytes?: number };
 
 export interface ActiveArtifactViewProps {
   artifact: ArtifactRecord;
@@ -499,6 +513,12 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   if (!editing && readState.phase === 'missing') {
     // ONLY shown when artifacts:get genuinely returned orphan:true.
     return <div className="text-fg-muted text-sm p-4">This file is no longer on disk.</div>;
+  }
+  if (!editing && readState.phase === 'error' && readState.code === 'too-large' && isRemoteMode()) {
+    // A phone asked for a file over its preview ceiling. Not an error to retry —
+    // the host answered honestly with the size — so the card offers Download
+    // (questions deck 2026-09-10, Q-6/Q-8).
+    return <RemoteFileCard path={absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" />;
   }
   if (!editing && readState.phase === 'error') {
     // The REAL failure with a Retry — never mapped to "no longer on disk"
