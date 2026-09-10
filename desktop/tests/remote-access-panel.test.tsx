@@ -42,16 +42,6 @@ it('draws every setup stage with the banner it already has, never a bespoke pane
   expect(setup).toHaveBeenCalledWith({ type: 'consent' });
   cleanup();
 
-  const consent = mount('consent');
-  // Consent belongs to the OPTIONAL level now: the default setup issues no certificate, so
-  // it publishes nothing and has nothing to consent to.
-  expect(screen.getByText(/public list of issued certificates/)).toBeTruthy();
-  expect(screen.getByText(/cannot be undone/i)).toBeTruthy();
-  expect(screen.getByText('home-laptop.example-tailnet.ts.net')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'I understand — continue' }));
-  expect(consent).toHaveBeenCalledWith({ type: 'check' });
-  cleanup();
-
   mount('checking');
   expect(screen.getByText(/Checking this computer/)).toBeTruthy();
   expect(screen.queryByRole('button', { name: 'Approve and continue' })).toBeNull();
@@ -67,15 +57,23 @@ it('names the missing prerequisite instead of one generic setup button', () => {
   expect(signIn).toHaveBeenCalledWith({ type: 'prerequisite' });
 });
 
-it('offers browser encryption as an upgrade, and says what it costs before it is taken', () => {
-  // Destin, 2026-09-10: default to the plain setup, then plainly explain what the advanced
-  // level gains and what it risks. The gain is concrete — phone microphone, copy, fonts —
-  // because "more secure" is not true here: both levels are encrypted.
+it('keeps browser encryption behind its own screen, and explains it there', () => {
+  // Destin, round 4: "this whole browser protection menu should be hidden behind a second
+  // level popup". The main panel shows a row and its state, nothing more.
   const action = mount('ready');
   expect(screen.getByText('Advanced')).toBeTruthy();
-  expect(screen.getByText(/Private either way/)).toBeTruthy();
-  expect(screen.getByText(/permanent public list/)).toBeTruthy();
-  expect(screen.getByText(/Tailscale's website|Tailscale’s website/)).toBeTruthy();
+  expect(screen.queryByText(/public list of issued certificates/)).toBeNull();
+
+  fireEvent.click(screen.getByText('Browser encryption'));
+
+  // The gain is named concretely, because "more secure" would be false: both levels are
+  // encrypted. The cost is stated as permanent, and the website step before it is taken.
+  expect(screen.getByText(/already private either way/)).toBeTruthy();
+  expect(screen.getByText(/microphone, copy buttons and the font picker/)).toBeTruthy();
+  expect(screen.getByText(/cannot be undone/i)).toBeTruthy();
+  expect(screen.getByText(/public list of issued certificates/)).toBeTruthy();
+  expect(screen.getByText(/YouCoded cannot\s+do that part for you/)).toBeTruthy();
+
   fireEvent.click(screen.getByRole('switch', { name: 'Browser encryption' }));
   expect(action).toHaveBeenCalledWith({ type: 'advanced' });
 });

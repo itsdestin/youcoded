@@ -1216,41 +1216,6 @@ export function BuddyButton() {
  * a state, a warning callout for something to read first, an ErrorState for a failure.
  * WHY no bespoke panel: round-2 review rejected one for not looking like the app.
  */
-/**
- * The optional level's consent. It lives in the Advanced section, NOT the setup banner:
- * putting it at the top read as "setup is incomplete" when the default setup is finished
- * and private on its own (Destin, 2026-09-10).
- */
-function renderBrowserEncryptionConsent(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
-  {
-    // WHY the address is shown whole: the public record is the machine name, and a user
-    // cannot approve publishing a name we did not put in front of them.
-    let host = '';
-    try { const u = new URL(view.address); if (u.protocol === 'https:') host = u.hostname; } catch { /* shown as unavailable */ }
-    return (
-      <div className="space-y-2">
-        <p className="text-xs text-fg-2">
-          Your connection is already private either way. This adds a certificate, which lets your
-          phone use the microphone, copy buttons and font picker — things a browser only allows on
-          a connection it can verify.
-        </p>
-        <Callout tone="warning" title="This cannot be undone:">
-          This computer&apos;s name — <span className="font-mono">{host || 'unavailable'}</span> — is added to a
-          public list of issued certificates. The list is permanent: turning this off later does not
-          remove it, and renaming the computer does not either. Only the name is public. Your
-          conversations and files are not.
-        </Callout>
-        <p className="text-xs text-fg-2">
-          You will also need to turn on certificates for your Tailscale account, on their website.
-        </p>
-        <Button onClick={() => act({ type: 'check' })} className="w-full" disabled={!host}>
-          I understand — continue
-        </Button>
-      </div>
-    );
-  }
-}
-
 function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
   if (view.stage === 'checking') {
     return <StatusStrip tone="busy" detail="Keep YouCoded open">Checking this computer&apos;s connection…</StatusStrip>;
@@ -1376,7 +1341,18 @@ function RemoteButton(props: RemoteButtonProps) {
   // Reset to false whenever the popup re-opens so users always start on the
   // main settings, not whichever screen they last viewed.
   const [showInfo, setShowInfo] = useState(false);
+  // Browser encryption gets its OWN screen inside this dialog rather than sitting inline
+  // (Destin, round 4: "this whole browser protection menu should be hidden behind a second
+  // level popup"). The main panel stays short; the explanation gets the room it needs.
+  const [showEncryption, setShowEncryption] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  // WHY: Dialog owns one scroll region and keeps its position across a view swap, so a
+  // sub-screen opened from the bottom of a long panel started scrolled past its own first
+  // sentence. Navigating within a dialog should start at the top, like opening a page.
+  useEffect(() => {
+    const region = popupRef.current?.querySelector('.scroll-fade');
+    if (region) region.scrollTop = 0;
+  }, [showEncryption, showInfo]);
   // No scroll ref here any more — Dialog owns the scroll region and its edge
   // fades for both views.
 
@@ -1469,15 +1445,59 @@ function RemoteButton(props: RemoteButtonProps) {
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title={showInfo ? 'About Remote Access' : 'Remote Access'}
-        onBack={showInfo ? () => setShowInfo(false) : undefined}
+        title={showInfo ? 'About Remote Access' : showEncryption ? 'Browser encryption' : 'Remote Access'}
+        onBack={showInfo ? () => setShowInfo(false) : showEncryption ? () => setShowEncryption(false) : undefined}
         // WHY: Workbench catch-all APIs can return a truthy Promise; only a rendered preview view replaces the legacy Info action.
-        headerActions={showInfo ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
+        headerActions={showInfo || showEncryption ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
         size="panel"
         fill
         panelRef={popupRef}
       >
-            {showInfo ? (previewView ? <p className="text-xs text-fg-2">Connect your other device to Tailscale, then use Add Device to open YouCoded and pair. Paired devices can use the assistant, not just read conversations. Keep this computer awake while connecting.</p> : (
+            {showEncryption && previewView && preview ? (
+              <div className="space-y-4 text-sm">
+                <p className="text-fg-2">
+                  Your connection is already private either way — Tailscale encrypts everything
+                  between your devices.
+                </p>
+                <div>
+                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">What this adds</h4>
+                  <p className="text-fg-2 text-xs">
+                    A certificate, so your phone&apos;s browser can verify the connection. Browsers only
+                    allow the microphone, copy buttons and the font picker on a connection they can
+                    verify, so turning this on is what makes those work on a phone.
+                  </p>
+                </div>
+                <Callout tone="warning" title="This cannot be undone:">
+                  This computer&apos;s name is added to a public list of issued certificates. The list is
+                  permanent: turning this off later does not remove it, and renaming the computer does
+                  not either. Only the name is public. Your conversations and files are not.
+                </Callout>
+                <div>
+                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">You will also need</h4>
+                  <p className="text-fg-2 text-xs">
+                    To turn on certificates for your Tailscale account, on their website. YouCoded cannot
+                    do that part for you.
+                  </p>
+                </div>
+                <SettingRow
+                  variant="item"
+                  title="Browser encryption"
+                  description={previewView.browserEncryption === 'on'
+                    ? 'On — your phone can use the microphone, copy buttons and font picker.'
+                    : 'Off'}
+                  control={<Toggle
+                    enabled={previewView.browserEncryption === 'on'}
+                    onToggle={() => preview.act({ type: 'advanced' })}
+                    label="Browser encryption"
+                  />}
+                />
+                {previewView.stage === 'consent' && (
+                  <Button onClick={() => preview.act({ type: 'check' })} className="w-full">
+                    I understand — continue
+                  </Button>
+                )}
+              </div>
+            ) : showInfo ? (previewView ? <p className="text-xs text-fg-2">Connect your other device to Tailscale, then use Add Device to open YouCoded and pair. Paired devices can use the assistant, not just read conversations. Keep this computer awake while connecting.</p> : (
               <SettingsExplainer
                 intro={REMOTE_ACCESS_EXPLAINER.intro}
                 sections={REMOTE_ACCESS_EXPLAINER.sections}
@@ -1769,23 +1789,9 @@ function RemoteButton(props: RemoteButtonProps) {
                         <SettingRow
                           variant="item"
                           title="Browser encryption"
-                          description={previewView.browserEncryption === 'on'
-                            ? 'On — your phone can use the microphone, copy buttons and font picker.'
-                            : 'Adds microphone, copy and font picker on your phone. Private either way.'}
-                          control={<Toggle
-                            enabled={previewView.browserEncryption === 'on'}
-                            onToggle={() => preview.act({ type: 'advanced' })}
-                            label="Browser encryption"
-                          />}
+                          description={previewView.browserEncryption === 'on' ? 'On' : 'Off'}
+                          onClick={() => setShowEncryption(true)}
                         />
-                        {previewView.stage === 'consent'
-                          ? <div className="pt-2">{renderBrowserEncryptionConsent(previewView, preview.act)}</div>
-                          : previewView.browserEncryption !== 'on' && (
-                            <p className="text-2xs text-fg-muted pt-2">
-                              Turning it on adds this computer&apos;s name to a permanent public list and
-                              needs a setting changed on Tailscale&apos;s website.
-                            </p>
-                          )}
                       </section>
                     )}
 
