@@ -324,7 +324,7 @@ declare global {
         // "What the assistant was given" (2026-09-10). onSessionContext returns
         // its unsubscribe fn; sessionContextText answers { error } rather than
         // throwing, so the panel shows a line instead of an unhandled rejection.
-        sessionContextText: (sessionId: string, kind: 'project' | 'skill', id?: string) => Promise<SessionContextText | { error: string }>;
+        sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => Promise<SessionContextText | { error: string }>;
         onSessionContext: (cb: (e: { sessionId: string; context: SessionContext | null }) => void) => () => void;
       };
       // Provider registry — native runtime model providers (desktop-only; the

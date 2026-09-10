@@ -42,7 +42,7 @@ type Fetched = { state: 'loading' } | { state: 'error' } | { state: 'ready'; val
  *  actually looks. */
 export function useSessionContextText(
   sessionId: string | undefined,
-  kind: 'project' | 'skill',
+  kind: 'project' | 'user' | 'skill',
   id: string | undefined,
   enabled: boolean,
 ): Fetched | null {

@@ -1389,7 +1389,7 @@ contextBridge.exposeInMainWorld('claude', {
     // One file's text for the "What the assistant was given" panel, read when the
     // user opens that row. Runs the session's OWN fitter and budget in main, so
     // what the panel shows is what the model would receive.
-    sessionContextText: (sessionId: string, kind: 'project' | 'skill', id?: string) =>
+    sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) =>
       ipcRenderer.invoke(IPC.NATIVE_SESSION_CONTEXT_TEXT, { sessionId, kind, id }),
     // Pushed once per session from nativeHost's 'session-context' listener in
     // ipc-handlers.ts. Returns the unsubscribe fn, same as shellEvent above.

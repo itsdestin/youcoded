@@ -4,6 +4,7 @@ import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
+import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
@@ -983,6 +984,26 @@ export function registerIpcHandlers(
       // the first message. Fire-and-forget; the model poll drives the UI.
       const eagerModelId = nativeHost.modelForSession(info.id);
       if (eagerModelId) { void engineManager.loadModel(eagerModelId).catch(() => { /* engine not installed / boot failed — the first send surfaces it */ }); }
+    } else if (info.provider === 'claude') {
+      // Contract R23: EVERY chat carries the line saying what the assistant
+      // started with — a Claude Code chat is still a chat. The native runtime
+      // pushes its own record from the host's wire(); Claude Code has no host
+      // here, so it is assembled from what this machine can honestly say (the
+      // instruction files on disk, the skills the app installed) and marked as
+      // Claude Code's own for everything else. See claude-code-context.ts.
+      //
+      // nextTick for the same reason the SESSION_CREATED forward defers: the
+      // renderer must have the session in state before a record about it lands.
+      // Never fatal — a chat that will not start is worse than an unexplained one.
+      process.nextTick(() => {
+        try {
+          const payload = { sessionId: info.id, context: buildClaudeCodeContext(info.cwd, info.model ?? null) };
+          sendForSession(info.id, IPC.NATIVE_SESSION_CONTEXT, payload);
+          remoteServer?.broadcast({ type: 'native:session-context', payload });
+        } catch (err) {
+          log('ERROR', 'ipc-handlers', 'could not describe a Claude Code session context', { sessionId: info.id, error: String(err) });
+        }
+      });
     }
     return info;
   });
@@ -3139,8 +3160,17 @@ export function registerIpcHandlers(
   // that row. Synchronous disk read of a file the session already depends on;
   // the host answers { error } rather than throwing, so a deleted skill shows a
   // line in the panel instead of an unhandled rejection in the renderer.
-  ipcMain.handle(IPC.NATIVE_SESSION_CONTEXT_TEXT, (_e, { sessionId, kind, id }: { sessionId: string; kind: 'project' | 'skill'; id?: string }) =>
-    nativeHost.sessionContextText(sessionId, kind, id));
+  ipcMain.handle(IPC.NATIVE_SESSION_CONTEXT_TEXT, (_e, { sessionId, kind, id }: { sessionId: string; kind: 'project' | 'user' | 'skill'; id?: string }) => {
+    // The native harness answers for its own sessions, because only it knows the
+    // budget the text would be cut to. Everything else — a Claude Code session,
+    // and the user-level instructions the harness never reads — is a plain file
+    // read: nothing shortened it, so both sides of the comparison are the file.
+    if (kind !== 'user') {
+      const fromHost = nativeHost.sessionContextText(sessionId, kind, id);
+      if (!('error' in fromHost) || fromHost.error !== 'not-live') return fromHost;
+    }
+    return readWholeContextFile(sessionManager, sessionId, kind, id);
+  });
   // Provider management (Settings → Providers).
   ipcMain.handle(IPC.PROVIDER_LIST, async () => providerRegistry.list());
   ipcMain.handle(IPC.PROVIDER_UPSERT, async (_e, config: any) => providerRegistry.upsert(config));

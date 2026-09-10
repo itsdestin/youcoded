@@ -217,6 +217,7 @@ const DEFAULT_LATENCY_MS = 150;
  *  deliberately SHORTENED — the comparison is most of what the panel is for, and
  *  a workbench that only ever shows whole files never renders it. */
 const CONTEXT_TEXT: {
+  user: { path: string; text: string; full: string; truncated: boolean };
   project: { path: string; text: string; full: string; truncated: boolean };
   skills: Record<string, { path: string; text: string; full: string; truncated: boolean }>;
 } = (() => {
@@ -246,6 +247,13 @@ const CONTEXT_TEXT: {
   ].join('\n');
   const whole = (path: string, text: string) => ({ path, text, full: text, truncated: false });
   return {
+    // Your own rules, read whole — nothing shortens this one, which is the point
+    // of having an untrimmed fixture beside the trimmed project file.
+    user: whole('/home/destin/.claude/CLAUDE.md', [
+      '# My rules', '',
+      '## How to talk to me', '- Plain words, no jargon.', '- Say what I will see change.', '',
+      '## Always', '- Ask before deleting anything.',
+    ].join('\n')),
     project: { path: '/home/destin/youcoded-dev/wecoded-themes/CLAUDE.md', text: projectCut, full: projectFull, truncated: true },
     skills: {
       'wecoded-themes-plugin:theme-builder': {
@@ -1376,8 +1384,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // filesystem here, so the fixtures below stand in — including a genuinely
     // shortened one, because the got/cut comparison is most of what this panel
     // is for and a workbench that only ever shows whole files never renders it.
-    sessionContextText: async (_sessionId: string, kind: 'project' | 'skill', id?: string) => {
-      const fixture = kind === 'project' ? CONTEXT_TEXT.project : CONTEXT_TEXT.skills[id ?? ''];
+    sessionContextText: async (_sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => {
+      const fixture = kind === 'project' ? CONTEXT_TEXT.project
+        : kind === 'user' ? CONTEXT_TEXT.user
+          : CONTEXT_TEXT.skills[id ?? ''];
       if (!fixture) return { error: 'unreadable' };
       return fixture;
     },

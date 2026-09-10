@@ -1854,7 +1854,7 @@ export function installShim(): void {
       // One file's text for the session-context panel. NOT gated on `supported`,
       // for the same reason killShell is not: the desktop owns the session and
       // its files, and a phone looking at that chat must be able to read them.
-      sessionContextText: (sessionId: string, kind: 'project' | 'skill', id?: string) =>
+      sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) =>
         invoke('native:session-context-text', { sessionId, kind, id }),
       onSessionContext: (cb: (e: unknown) => void) => {
         const handler: Callback = (payload: any) => cb(payload);

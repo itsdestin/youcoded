@@ -181,7 +181,7 @@ function CutBlock({ fullText, supplied, what }: { fullText?: string | null; supp
  *  A failure says only that the file could not be read: the reasons are several
  *  (deleted since the chat started, permissions, an unreadable encoding) and
  *  naming the wrong one is worse than naming none — error-message-standards.md. */
-function FileText({ sessionId, kind, id, what }: { sessionId?: string; kind: 'project' | 'skill'; id?: string; what: string }) {
+function FileText({ sessionId, kind, id, what }: { sessionId?: string; kind: 'project' | 'user' | 'skill'; id?: string; what: string }) {
   const fetched = useSessionContextText(sessionId, kind, id, true);
   if (!fetched || fetched.state === 'loading') return <p className="p-3 text-2xs text-fg-muted">Reading…</p>;
   if (fetched.state === 'error') return <p className="p-3 text-2xs text-fg-muted">This file couldn’t be read.</p>;
@@ -189,6 +189,45 @@ function FileText({ sessionId, kind, id, what }: { sessionId?: string; kind: 'pr
   return truncated
     ? <CutBlock fullText={full} supplied={text} what={what} />
     : <Md text={text} flush />;
+}
+
+/** One instruction file, with its text open — there is at most one of each, so
+ *  unlike a skill card this does not wait to be asked.
+ *
+ *  `assembledByClaudeCode` changes what "not shortened" is allowed to mean. For
+ *  the native harness it is a record: we read the file, we did not cut it. For a
+ *  Claude Code chat it means only that WE did not cut it — Claude Code manages
+ *  its own window and we cannot see what it did. Saying "read in full" there
+ *  would be a claim about someone else's work. */
+function RulesCard({ file, kind, label, sessionId, openFile, assembledByClaudeCode }: {
+  file: { path: string; truncated: boolean };
+  kind: 'project' | 'user';
+  label: string;
+  sessionId?: string;
+  openFile: (p: string) => void | Promise<void>;
+  assembledByClaudeCode: boolean;
+}) {
+  const description = file.truncated
+    ? 'Shortened to headings only'
+    : assembledByClaudeCode
+      ? 'YouCoded didn’t shorten it'
+      : 'Read in full';
+  return (
+    <DetailCard
+      header={(
+        <SettingRow
+          variant="item"
+          className="rounded-none bg-transparent"
+          icon={<Dot ok={!file.truncated} />}
+          title={basename(file.path)}
+          description={`${label} · ${description}`}
+          accessory={<Button variant="secondary" size="sm" onClick={() => { void openFile(file.path); }}>Open</Button>}
+        />
+      )}
+    >
+      <FileText sessionId={sessionId} kind={kind} what={label} />
+    </DetailCard>
+  );
 }
 
 /** One skill, its text behind its own row.
@@ -303,6 +342,12 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
   // Shared with the strip, so an amber line can never open a panel saying
   // everything fit — see session-context-facts.ts for what counts.
   const trimmed = wasTrimmed(context);
+  // A Claude Code chat is run by the Claude Code CLI, which builds its own
+  // instructions. Everything below that YouCoded cannot see is worded as Claude
+  // Code's own rather than as nothing — an empty tab reads as "you have no
+  // tools", which would be a lie in the more alarming direction.
+  const cc = context.assembledBy === 'claude-code';
+  const userRules = context.userInstructions ?? null;
   const skillsHidden = context.skillsOffered === false && skills.length > 0;
   const skillsWord = `${skills.length} skill${skills.length === 1 ? '' : 's'}`;
   const toolsWord = `${tools.length} tool${tools.length === 1 ? '' : 's'}`;
@@ -350,10 +395,20 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               <div className="rounded-lg bg-inset/50 px-3 py-2.5 flex items-start gap-2">
                 <span className="mt-1.5"><Dot ok /></span>
                 <p className="text-2xs text-fg-2 leading-relaxed">
-                  <span className="font-medium text-fg">Everything fit.</span>{' '}
-                  {rules
-                    ? `The assistant has this project’s full rules, ${skillsWord} and ${toolsWord}.`
-                    : `The assistant has ${skillsWord} and ${toolsWord}.`}
+                  {cc ? (
+                    <>
+                      <span className="font-medium text-fg">Claude Code manages this chat.</span>{' '}
+                      It builds its own instructions, so YouCoded didn’t shorten anything. Below is
+                      what it can see from here.
+                    </>
+                  ) : (
+                    <>
+                      <span className="font-medium text-fg">Everything fit.</span>{' '}
+                      {rules
+                        ? `The assistant has this project’s full rules, ${skillsWord} and ${toolsWord}.`
+                        : `The assistant has ${skillsWord} and ${toolsWord}.`}
+                    </>
+                  )}
                 </p>
               </div>
             )}
@@ -398,12 +453,16 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
                   variant="item"
                   title="Context window"
                   description={trimmed ? 'How much it can hold at once — small' : 'How much it can hold at once'}
-                  value={`${windowLabel(context.contextWindowTokens)} tokens`}
+                  // Never a number we cannot check. For a Claude Code chat the
+                  // window depends on the plan it runs under as well as the
+                  // model, so naming one would be a guess in a panel whose whole
+                  // job is to be trusted.
+                  value={context.contextWindowTokens ? `${windowLabel(context.contextWindowTokens)} tokens` : cc ? 'Set by Claude Code' : 'Unknown'}
                 />
                 <SettingRow
                   variant="item"
                   title="Given"
-                  value={`${rules ? '1 rules file · ' : ''}${skillsWord} · ${toolsWord}`}
+                  value={[rules ? '1 rules file' : null, skillsWord, tools.length > 0 ? toolsWord : null].filter(Boolean).join(' · ')}
                 />
               </div>
             </section>
@@ -421,7 +480,11 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               What every chat starts with, before your project’s rules. Open any part to read it.
             </p>
             {sections.length === 0 ? (
-              <p className="text-2xs text-fg-muted">Nothing was reported for this chat.</p>
+              <p className="text-2xs text-fg-2 leading-relaxed">
+                {cc
+                  ? 'Claude Code writes its own system instructions for this chat, and doesn’t share them with YouCoded — so there is nothing here that would be true. Your own rules are on the Project tab, and they are read.'
+                  : 'Nothing was reported for this chat.'}
+              </p>
             ) : (
               <div className="space-y-1.5">
                 {sections.map((s) => (
@@ -441,23 +504,35 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
           <section>
             <h3 className={EYEBROW}>This project’s rules</h3>
             <p className="text-2xs text-fg-muted leading-snug mb-2">Written for this project and read once when the chat started.</p>
-            {!rules ? (
-              <p className="text-2xs text-fg-muted">This project has no rules file.</p>
+            {!rules && !userRules ? (
+              <p className="text-2xs text-fg-muted">There is no rules file for this project, and none of your own.</p>
             ) : (
-              <DetailCard
-                header={(
-                  <SettingRow
-                    variant="item"
-                    className="rounded-none bg-transparent"
-                    icon={<Dot ok={!rules.truncated} />}
-                    title={basename(rules.path)}
-                    description={rules.truncated ? 'Shortened to headings only' : 'Read in full'}
-                    accessory={<Button variant="secondary" size="sm" onClick={() => { void openFile(rules.path); }}>Open</Button>}
+              <div className="space-y-2">
+                {rules && (
+                  <RulesCard
+                    file={rules}
+                    kind="project"
+                    label="This project"
+                    sessionId={sessionId}
+                    openFile={openFile}
+                    assembledByClaudeCode={cc}
                   />
                 )}
-              >
-                <FileText sessionId={sessionId} kind="project" what="Project rules" />
-              </DetailCard>
+                {/* Your own rules, the ones that apply everywhere. Claude Code
+                    reads this file; the native harness does not, so this card
+                    appears on a Claude Code chat and not on a native one — the
+                    difference is real and worth seeing. */}
+                {userRules && (
+                  <RulesCard
+                    file={userRules}
+                    kind="user"
+                    label="You, in every project"
+                    sessionId={sessionId}
+                    openFile={openFile}
+                    assembledByClaudeCode={cc}
+                  />
+                )}
+              </div>
             )}
           </section>
         )}
@@ -490,7 +565,11 @@ function SessionContextPanel({ open, onClose, context, sessionId }: Props & { co
               <h3 className={EYEBROW}>Tools</h3>
               <p className="text-2xs text-fg-muted leading-snug mb-2">Actions the assistant can take in this chat. Open one to see what it does.</p>
               {tools.length === 0 ? (
-                <p className="text-2xs text-fg-muted">This chat has no tools — the assistant can only talk.</p>
+                <p className="text-2xs text-fg-2 leading-relaxed">
+                  {cc
+                    ? 'Claude Code chooses its own tools for this chat. YouCoded isn’t told which, so listing them here would be a guess.'
+                    : 'This chat has no tools — the assistant can only talk.'}
+                </p>
               ) : (
                 <div className="space-y-1.5">
                   {tools.map((t) => (

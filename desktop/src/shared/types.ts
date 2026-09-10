@@ -808,6 +808,21 @@ export interface SessionContextSkill {
 }
 
 export interface SessionContext {
+  /** Who assembled this session's instructions.
+   *
+   *  'youcoded' — the native harness built the prompt, read the files and did any
+   *  shortening, so every field here is a record of what it did.
+   *
+   *  'claude-code' — the Claude Code CLI runs the session and assembles its own
+   *  instructions. YouCoded can still name, accurately, the files Claude Code
+   *  reads and the skills it can reach, because both live on this machine and the
+   *  app manages them. It CANNOT report Claude Code's system prompt, its tool set,
+   *  or whether Claude Code shortened anything — so those are absent rather than
+   *  guessed, and the panel says which is which. Never present one as the other.
+   *
+   *  Absent on a record written before this field existed; the panel treats that
+   *  as 'youcoded', which is what every such record was. */
+  assembledBy?: 'youcoded' | 'claude-code';
   /** The model this session is bound to, e.g. "qwen2.5-coder:14b". */
   modelLabel?: string | null;
   /** The model's context window in tokens, when known. */
@@ -829,6 +844,15 @@ export interface SessionContext {
     /** True when the file was outlined to fit the window. */
     truncated: boolean;
     /** Human line when truncated — "3 of 12 sections shown as headings". */
+    note?: string | null;
+  } | null;
+  /** Your own instructions, the ones that apply in every project
+   *  (`~/.claude/CLAUDE.md`). Claude Code reads this file; the native harness
+   *  does NOT — it only walks up from the working folder — which is a real
+   *  difference between the two, and worth showing rather than hiding. */
+  userInstructions?: {
+    path: string;
+    truncated: boolean;
     note?: string | null;
   } | null;
   skills?: SessionContextSkill[] | null;
