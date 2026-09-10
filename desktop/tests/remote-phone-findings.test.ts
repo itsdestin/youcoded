@@ -39,6 +39,25 @@ describe('a phone is never shown a channel id', () => {
   });
 });
 
+describe('connecting a phone does not open with a list of what is broken', () => {
+  it('the app\u2019s own boot fetches are recorded, not announced', () => {
+    // Ten of these fired the moment a phone connected: skills, commands, themes, the
+    // marketplace, project files, presence — every one a fetch the app makes on mount,
+    // none of them asked for, none actionable. The person had not looked at anything yet.
+    expect(shim).toContain('const BOOT_QUIET_MS = 4000;');
+    expect(shim).toContain('if (connectedAt === 0 || Date.now() - connectedAt < BOOT_QUIET_MS) return;');
+    // Measured from a real connection, not from page load: a slow first hop would
+    // otherwise spend the quiet window waiting to connect.
+    expect(shim).toMatch(/setConnectionState\('connected'\);\s*\n\s*markConnectedForNotices\(\);/);
+  });
+
+  it('several at once become one sentence, not a flicker of half-read ones', () => {
+    const notice = read('../src/renderer/components/RemoteUnsupportedNotice.tsx');
+    expect(notice).toContain('if (prev && prev.feature !== detail.feature)');
+    expect(notice).toContain('setAlso(list =>');
+  });
+});
+
 describe('a computer with no password says so before asking for one', () => {
   it('the host answers what it needs, without authentication and without saying more', () => {
     expect(server).toContain("=== '/remote-state'");

@@ -2,7 +2,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { REJECT_ON_NOT_OK, responseOutcome, applyResponse } from '../src/renderer/remote-shim';
+import { REJECT_ON_NOT_OK, responseOutcome, applyResponse, markConnectedForNotices } from '../src/renderer/remote-shim';
 import { REMOTE_UNSUPPORTED_EVENT } from '../src/renderer/remote-unsupported';
 
 // WHY this file exists: remote-server.ts answers `{ ok:false, error }` when a
@@ -127,6 +127,13 @@ describe('the shim rejects a failure instead of resolving it', () => {
     const seen: any[] = [];
     const onNotice = (e: any) => seen.push(e.detail);
     window.addEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);
+    // The notice is silent for the first seconds of a connection — that window is the
+    // app's own mount fetches, and announcing them greeted a new phone with a list of
+    // what does not work. This case is a person hitting the feature later, so it marks a
+    // connection and steps past that window. Only the clock is faked.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    markConnectedForNotices();
+    vi.setSystemTime(Date.now() + 10_000);
     try {
       const resolve = vi.fn(); const reject = vi.fn();
       applyResponse({ resolve, reject }, 'models:settings', { ok: false, unsupported: true });
@@ -139,6 +146,7 @@ describe('the shim rejects a failure instead of resolving it', () => {
       expect(seen).toHaveLength(1);
       expect(seen[0].message).toBe("The local model manager isn't available via remote access yet.");
     } finally {
+      vi.useRealTimers();
       window.removeEventListener(REMOTE_UNSUPPORTED_EVENT, onNotice);
     }
   });

@@ -317,6 +317,27 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
 // toast per poll would be unusable.
 const announced = new Set<string>();
 
+/**
+ * When this connection finished authenticating, and how long after that we stay quiet.
+ *
+ * WHY a quiet window at all: connecting a phone announced TEN of these at once, because
+ * mounting the app fetches skills, commands, themes, the marketplace, project files and
+ * presence before the person has looked at anything. None of it was asked for, none of it
+ * was actionable, and the first thing a new phone did was list what does not work.
+ *
+ * This notice earns its place LATER — when someone opens a panel and it is empty, the
+ * explanation is worth having. So: the boot fetches go to the console, and anything after
+ * the app has settled goes on screen, because by then it followed something the user did.
+ */
+let connectedAt = 0;
+const BOOT_QUIET_MS = 4000;
+
+/** Called when auth completes, so the quiet window is measured from a real connection
+ *  rather than from page load — a slow tailnet hop would otherwise spend it waiting. */
+export function markConnectedForNotices(): void {
+  connectedAt = Date.now();
+}
+
 /** Channels whose `{ ok:false, error }` answer is a FAILURE to re-throw, not a
  *  value to hand back.
  *
@@ -404,6 +425,8 @@ function noteUnsupported(channel: string): void {
   if (announced.has(feature)) return;
   announced.add(feature);
   console.warn(`[remote-shim] not available over remote access: ${channel}`);
+  // The app's own boot fetches are not something the person did. Recorded, not announced.
+  if (connectedAt === 0 || Date.now() - connectedAt < BOOT_QUIET_MS) return;
   window.dispatchEvent(new CustomEvent(REMOTE_UNSUPPORTED_EVENT, {
     detail: { channel, feature, message: remoteUnsupportedMessage(channel) },
   }));
@@ -735,6 +758,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           reconnectAttempts = 0;
           console.log('[remote-shim] auth:ok from', getWsUrl());
           setConnectionState('connected');
+          markConnectedForNotices();
           // Fix: drain any messages queued during the cold-start window
           // (mount-time fetches that fired before auth completed). Must be
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.
