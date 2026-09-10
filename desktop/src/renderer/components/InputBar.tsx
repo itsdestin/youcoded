@@ -1082,6 +1082,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           {/* Voice prompting: the mic sits where the eye already goes to
               send. Hidden entirely when the host has no speech engine
               (remote browser, older builds) and in terminal view. */}
+          {/* WHY a group: Destin asked for the mic "a smidge closer to the stop button"
+              (live deck L-2, 2026-09-10). gap-1 inside the pair tightens only that
+              space; Send keeps the form's own gap. Rendered only when one of them shows,
+              because an empty flex child would still claim a gap in the row. */}
+          {((!minimal && voice.supported) || showStop) && (
+          <div className="flex items-center gap-1 shrink-0">
           {!minimal && voice.supported && (
             <VoiceButton
               phase={voice.phase}
@@ -1099,6 +1105,8 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             />
           )}
           <StopButton sessionId={sessionId} provider={provider} visible={showStop} live={stopLive} />
+          </div>
+          )}
           {/* The app's most-used control. Geometry is unchanged — 28x28 is exactly
               what size="icon" emits — and it keeps `bg-accent`, which matters:
               community packs style the send button through `.bg-accent` (Halftone's
