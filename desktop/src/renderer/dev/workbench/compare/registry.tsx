@@ -5738,6 +5738,15 @@ const ALL_SURFACES: CompareSurface[] = [
             note: 'The green state: a dot-and-sentence card instead of the callout, then the same This chat rows.',
             render: () => <SfxTabbedStyled ctx={SFX_CTX_FULL} trimmed={false} />,
           },
+          {
+            // UX review 1 (U16): a context-free tester read the two-colour comparison as a
+            // developer artefact and could not say what the assistant ended up with. This
+            // candidate shows ONLY the cut text under "What was cut". Same panel otherwise.
+            id: 'styled-trimmed-plain',
+            label: 'After — small model, cut text shown plainly',
+            note: 'Identical to styled-trimmed except the "What was cut" tab: just the text that was cut, no line numbers and no red/green comparison.',
+            render: () => <SfxTabbedStyled ctx={SFX_CTX} trimmed cutStyle="plain" />,
+          },
         ],
       },
     ],
@@ -6247,8 +6256,24 @@ function SfxDot({ ok }: { ok: boolean }) {
   return <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${ok ? 'bg-green-500' : 'bg-amber-500'}`} aria-hidden />;
 }
 
-/** Trimmed text with the got/cut switch — the SegmentedTabs primitive, bare. */
-function SfxCutBlock({ fullText, supplied, what }: { fullText?: string | null; supplied: string; what: string }) {
+/** The lines present in the full file but absent from what the model was given.
+ *  WHY a set difference rather than a real diff: this is mockup data, and the
+ *  question the "plain" candidate exists to answer is whether a plain list READS
+ *  better than a code diff — not how the cut is computed. The shipped version
+ *  gets the removed lines from the same diff UnifiedDiff already runs. */
+function sfxCutLines(fullText: string, supplied: string): string {
+  const kept = new Set(supplied.split('\n').map((l) => l.trim()));
+  return fullText.split('\n').filter((l) => l.trim() && !kept.has(l.trim())).join('\n');
+}
+
+/** Trimmed text with the got/cut switch — the SegmentedTabs primitive, bare.
+ *
+ *  `cutStyle` is the open question from UX review 1 (U16): "diff" is the app's
+ *  own two-colour comparison, which a context-free tester read as a developer
+ *  artefact — repeating line numbers, +/- markers, and green lines that are
+ *  additions rather than cuts under a tab labelled "What was cut". "plain" shows
+ *  only the text that was cut. Destin picks on the deck. */
+function SfxCutBlock({ fullText, supplied, what, cutStyle = 'diff' }: { fullText?: string | null; supplied: string; what: string; cutStyle?: 'diff' | 'plain' }) {
   const [view, setView] = React.useState<'got' | 'cut'>('got');
   const diffable = !!fullText && fullText !== supplied;
   if (!diffable) return <pre className={SFX_CODE}>{supplied}</pre>;
@@ -6261,17 +6286,26 @@ function SfxCutBlock({ fullText, supplied, what }: { fullText?: string | null; s
         value={view}
         onChange={(v) => setView(v as 'got' | 'cut')}
       />
-      {view === 'cut' ? <UnifiedDiff oldStr={fullText} newStr={supplied} /> : <pre className={SFX_CODE}>{supplied}</pre>}
+      {/* WHY the caption sits ABOVE the text (UX review 1, U17): underneath, it was
+          below the fold of the box and read only after the reader had already been
+          confused by the colours it explains. */}
       {view === 'cut' && (
         <p className="text-2xs text-fg-muted leading-snug">
-          Red lines were cut to fit this model’s context window — the assistant never saw them. Green lines are the shorter version it got instead.
+          {cutStyle === 'plain'
+            ? 'The assistant never saw this — it was cut to fit.'
+            : 'Red was cut — the assistant never saw it. Green is the shorter version it got instead.'}
         </p>
       )}
+      {view === 'cut'
+        ? (cutStyle === 'plain'
+          ? <pre className={SFX_CODE}>{sfxCutLines(fullText, supplied)}</pre>
+          : <UnifiedDiff oldStr={fullText} newStr={supplied} />)
+        : <pre className={SFX_CODE}>{supplied}</pre>}
     </div>
   );
 }
 
-function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimmed: boolean }) {
+function SfxTabbedStyled({ ctx, trimmed, cutStyle = 'diff' }: { ctx: CompleteSessionContext; trimmed: boolean; cutStyle?: 'diff' | 'plain' }) {
   const [tab, setTab] = React.useState('overview');
   const c = ctx;
   const cutSkills = c.skills.filter((s) => s.truncated);
@@ -6291,20 +6325,32 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
         <CloseButton onClick={() => {}} label="Close What the assistant was given" />
       </div>
 
-      {/* Dialog.tsx scroll track */}
-      <div className="px-4 py-4 space-y-5">
+      {/* Dialog.tsx scroll track. WHY a fixed height rather than hugging the content
+          (UX review 1, U1 + U8): the panel is vertically centred, so a body that grew
+          with its tab moved the tab strip ~120px between tabs — you re-aimed for every
+          tab — and expanding the cut text pushed Collapse off the bottom of a window
+          that had no scrollbar at all. One height, one scroller, nothing escapes. */}
+      <div className="px-4 py-4 space-y-5 h-[460px] overflow-y-auto">
         {/* Destin, deck 3 (2026-09-09): "shrink the top banner to 1 sentence with (See details
             below)". The itemised cuts moved out — the list under WHAT WAS LEFT OUT already
-            carries them — and the one sentence keeps the consequence, which is the point. */}
+            carries them — and the one sentence keeps the consequence, which is the point.
+            "(see details below)" is GONE pending Destin's answer (UX review 1, U4). The
+            banner is pinned above the tabs, so on four of the five tabs the phrase pointed
+            at nothing; and showing it only on Overview made the sentence one line shorter
+            elsewhere, moving the whole tab strip 16px — the jumping U8 is about. The phrase
+            is his, from deck 3, so it is not deleted quietly: review-4 step G-1 asks whether
+            he wants it back on the Overview tab. */}
         {trimmed ? (
           <Callout tone="warning" title="Not everything fit">
-            This model’s context window is small ({sfxWindowLabel(c.contextWindowTokens)}), so some rules and skills were cut and it may miss steps it would normally follow (see details below).
+            This model’s context window is small ({sfxWindowLabel(c.contextWindowTokens)}), so some rules and skills were cut and it may miss steps it would normally follow.
           </Callout>
         ) : (
           <div className="rounded-lg bg-inset/50 px-3 py-2.5 flex items-start gap-2">
             <span className="mt-1.5"><SfxDot ok /></span>
+            {/* WHY not "all 2 skills" (UX review 1, U11): the word "all" reads wrong
+                against a small number — a tester stopped on it. The count alone says it. */}
             <p className="text-2xs text-fg-2 leading-relaxed">
-              <span className="font-medium text-fg">Everything fit.</span> The assistant has this project’s full rules, all {skillsWord} and all {toolsWord}.
+              <span className="font-medium text-fg">Everything fit.</span> The assistant has this project’s full rules, {skillsWord} and {toolsWord}.
             </p>
           </div>
         )}
@@ -6330,7 +6376,7 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
                 <h3 className={SFX_EYEBROW}>What was left out</h3>
                 <div className="space-y-1.5">
                   {c.projectInstructions.truncated && (
-                    <SettingRow variant="item" icon={<SfxDot ok={false} />} title="This project’s rules" description="Shortened to headings only" onClick={() => setTab('project')} />
+                    <SettingRow variant="item" icon={<SfxDot ok={false} />} title="This project’s rules" description={`Shortened to headings only · ${basename(c.projectInstructions.path)}`} onClick={() => setTab('project')} />
                   )}
                   {cutSkills.map((sk) => (
                     <SettingRow key={sk.id} variant="item" icon={<SfxDot ok={false} />} title={`${sk.label} skill`} description="Cut short" onClick={() => setTab('skills')} />
@@ -6351,7 +6397,9 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
                   description={trimmed ? 'How much it can hold at once — small' : 'How much it can hold at once'}
                   value={`${sfxWindowLabel(c.contextWindowTokens)} tokens`}
                 />
-                <SettingRow variant="item" title="Given" value={`rules · ${skillsWord} · ${toolsWord}`} />
+                {/* WHY the rules file is counted too (UX review 1, U12): "rules · 3 skills ·
+                    7 tools" read like a number had been dropped from the first item. */}
+                <SettingRow variant="item" title="Given" value={`1 rules file · ${skillsWord} · ${toolsWord}`} />
               </div>
             </section>
             <section>
@@ -6369,7 +6417,9 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
         {tab === 'builtin' && (
           <section>
             <h3 className={SFX_EYEBROW}>Built-in instructions</h3>
-            <p className="text-2xs text-fg-muted leading-snug mb-2">YouCoded’s standing instructions. The same in every chat, whatever the project.</p>
+            {/* WHY shorter (UX review 1, U30): "standing instructions" is stiff, and the
+                two halves said the same thing twice. */}
+            <p className="text-2xs text-fg-muted leading-snug mb-2">The same in every chat, whatever the project.</p>
             <pre className={SFX_CODE}>{c.systemPrompt}</pre>
           </section>
         )}
@@ -6379,6 +6429,12 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
             <h3 className={SFX_EYEBROW}>This project’s rules</h3>
             <p className="text-2xs text-fg-muted leading-snug mb-2">Written for this project and read once when the chat started.</p>
             <div className="space-y-1.5 mb-2">
+              {/* WHY the filename is still the row's title (UX review 1, U15): a tester
+                  clicked "This project's rules" on Overview and landed on a row called
+                  CLAUDE.md, which meant nothing to them. The eyebrow above already
+                  repeats the friendly name, so the fix is on the Overview row — it now
+                  names the file it will take you to — rather than saying the same four
+                  words twice on this tab. */}
               <SettingRow
                 variant="item"
                 icon={<SfxDot ok={!c.projectInstructions.truncated} />}
@@ -6388,7 +6444,7 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
               />
             </div>
             {c.projectInstructions.truncated
-              ? <SfxCutBlock fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" />
+              ? <SfxCutBlock fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" cutStyle={cutStyle} />
               : <pre className={SFX_CODE}>{c.projectInstructions.text}</pre>}
           </section>
         )}
@@ -6407,12 +6463,19 @@ function SfxTabbedStyled({ ctx, trimmed }: { ctx: CompleteSessionContext; trimme
                     description={sk.truncated ? 'Cut short' : 'Loaded in full'}
                     accessory={<Button variant="secondary" size="sm">Open</Button>}
                   />
-                  {sk.truncated && (
+                  {/* WHY a skill that fit shows its text too (UX review 1, U9): a tester
+                      found skills readable only when they had been CUT, while the Project
+                      tab showed its file either way — so in a chat where nothing was cut
+                      the Skills tab was two rows and nothing to read. */}
+                  {sk.truncated ? (
                     <SfxCutBlock
                       fullText={sk.fullText}
                       supplied={sk.fullText ? sk.fullText.split('\n').slice(0, 5).join('\n') + '\n… (cut here)' : '… (cut short)'}
                       what={`${sk.label} skill`}
+                      cutStyle={cutStyle}
                     />
+                  ) : (
+                    sk.fullText && <pre className={SFX_CODE}>{sk.fullText}</pre>
                   )}
                 </div>
               ))}
