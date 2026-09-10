@@ -103,6 +103,11 @@ interface WatchEntry {
   // (see WATCH_GRACE_MS). null whenever someone is subscribed.
   graceTimer: ReturnType<typeof setTimeout> | null;
   graceAt: number | null;
+  // The watch could not be started at all (chokidar threw). Distinct from
+  // `watcher === null`, which is ALSO the normal state while the initial walk is
+  // still running — and those two want opposite treatment when the last
+  // subscriber leaves. See parkEntry.
+  failed: boolean;
 }
 
 // How long a watcher outlives its last subscriber. Rebuilding one means chokidar
@@ -196,7 +201,7 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     entry.refs.set(subscriberId, (entry.refs.get(subscriberId) ?? 0) + 1);
     return { ok: entry.watcher !== null };
   }
-  entry = { watcher: null, refs: new Map([[subscriberId, 1]]), stopped: false, graceTimer: null, graceAt: null };
+  entry = { watcher: null, refs: new Map([[subscriberId, 1]]), stopped: false, graceTimer: null, graceAt: null, failed: false };
   // Register BEFORE the async watcher start so a concurrent watchProject for the
   // same root refcounts this entry instead of starting a second watcher — the
   // topicWatchers overwrite-leak class (ipc-handlers.ts:2314).
@@ -219,11 +224,18 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     const watcher = chokidar.watch(projectRoot, {
       ignored: (p: string, stats?: Stats) => {
         if (isWatchIgnoredPath(projectRoot, p)) return true;
-        if (stats?.isFile()) return false;       // files can't be a repo root
+        if (stats && !stats.isDirectory()) return false;   // only a directory can be a repo root
         const canon = canonicalize(p, null);
-        if (canon === canonRoot) return false;   // the root itself is always watched
-        let nested = nestedRepoCache.get(canon);
-        if (nested === undefined) { nested = isNestedRepoDir(p); nestedRepoCache.set(canon, nested); }
+        if (canon === canonRoot) return false;             // the root itself is always watched,
+        // even though it is normally a repo — ignoring it would watch NOTHING, silently.
+        const cached = nestedRepoCache.get(canon);
+        if (cached !== undefined) return cached;
+        const nested = isNestedRepoDir(p);
+        // Cache DIRECTORY answers only. chokidar also calls this with no stats for
+        // every raw event path, and caching those would grow the map by one entry
+        // per file the watcher ever sees — for the whole of its now-longer life.
+        // The initial walk does supply stats, which is the pass worth caching.
+        if (stats?.isDirectory()) nestedRepoCache.set(canon, nested);
         return nested;
       },
       ignoreInitial: true,
@@ -249,7 +261,9 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     return { ok: true };
   } catch {
     // chokidar unavailable / root missing — subscribers stay registered so a
-    // later retry could upgrade, but there is no live refresh.
+    // later retry could upgrade, but there is no live refresh. Marked so the
+    // grace period does not cache this failure for another minute.
+    entry.failed = true;
     return { ok: false };
   }
 }
@@ -291,10 +305,20 @@ export function unwatchProject(projectRoot: string, subscriberId: number): void 
  */
 function parkEntry(key: string, entry: WatchEntry): void {
   if (entry.graceTimer) return;    // already parked
+  // Nothing worth keeping. Parking a FAILED entry would make every later
+  // subscribe for that root answer {ok:false} from the cached entry for a
+  // further 60 s, so a transient cause — an unmounted drive, inotify exhaustion
+  // — could no longer be recovered by reopening Project View.
+  // Deliberately NOT the same as `watcher === null`: that is also the normal
+  // state while the initial walk is still running, and abandoning a walk in
+  // flight is the exact restart this grace period exists to prevent. A starting
+  // entry parks like any other; the walk finishes and fills in its watcher.
+  if (entry.failed) { closeEntry(key, entry); return; }
   entry.graceAt = Date.now();
   entry.graceTimer = setTimeout(() => closeEntry(key, entry), graceMs);
-  // Never hold the process open on a parked watcher — Electron quit and the
-  // test runner both need to exit while one is waiting out its grace.
+  // The TIMER does not hold the process open. The parked chokidar watcher still
+  // does — its fs handles are ref'd — which is what `stopProjectWatchers()` is
+  // for at quit; unref here only means the timer is not the thing keeping it up.
   entry.graceTimer.unref?.();
   const parked = [...entries].filter(([, e]) => e.graceTimer !== null);
   if (parked.length <= MAX_GRACE_ENTRIES) return;
@@ -309,8 +333,9 @@ function parkEntry(key: string, entry: WatchEntry): void {
  */
 export function dropSubscriber(subscriberId: number): void {
   for (const [key, entry] of entries) {
-    // Same grace as an ordinary unwatch: a renderer that reloads (dev HMR, a
-    // detached window reopening) comes straight back to the same projects.
+    // Same grace as an ordinary unwatch. ('destroyed' fires when a window
+    // CLOSES, not on reload — so this is the detached-window case: close one and
+    // reopen it, and its projects are still warm.)
     if (entry.refs.delete(subscriberId) && entry.refs.size === 0) parkEntry(key, entry);
   }
 }
@@ -321,6 +346,18 @@ function closeEntry(key: string, entry: WatchEntry): void {
   entry.graceAt = null;
   entries.delete(key);
   void entry.watcher?.close().catch(() => { /* already dead */ });
+}
+
+/**
+ * Close every watcher, parked or live — app shutdown.
+ *
+ * Before the grace period a watcher could only outlive its window by
+ * microseconds ('destroyed' closed it), so quit had nothing to clean up. Now a
+ * parked watcher is alive with zero windows by design, and its fs handles are
+ * ref'd, so shutdown has to say so out loud rather than rely on the force-exit.
+ */
+export function stopProjectWatchers(): void {
+  for (const [key, entry] of entries) closeEntry(key, entry);
 }
 
 /** Test helper: tear everything down between cases. */

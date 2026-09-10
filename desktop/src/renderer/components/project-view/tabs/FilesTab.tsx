@@ -326,11 +326,21 @@ export function FilesTab({
   // — a git checkout emits hundreds of add/remove events in a burst, and each
   // uncoalesced refresh would re-run the (cache-invalidated) discovery scan.
   useProjectWatch(project.path);
+  // This tab now stays mounted while another tab shows, so the refresh has to
+  // know that. Refreshing while hidden would be a full uncached disk walk in the
+  // main process (main drops the discovery cache on every add/remove) for a list
+  // nobody is looking at — the very cost this whole change removes, moved to a
+  // worse moment: a git checkout or an npm install running while you read
+  // Conversations. Remember instead, and refresh once on the way back.
+  const hiddenRef = useRef(hidden);
+  hiddenRef.current = hidden;
+  const missedChangeRef = useRef(false);
   useEffect(() => {
     let timer: ReturnType<typeof setTimeout> | null = null;
     const unsub = (window.claude as any).artifacts?.onChanged?.((evt: any) => {
       if (evt.projectRoot !== project.path || evt.by !== 'external') return;
       if (evt.kind !== 'add' && evt.kind !== 'remove') return; // edits refetch per-file
+      if (hiddenRef.current) { missedChangeRef.current = true; return; }
       if (timer) clearTimeout(timer);
       timer = setTimeout(() => { timer = null; refreshRef.current(); }, 500);
     });
@@ -339,6 +349,11 @@ export function FilesTab({
       if (typeof unsub === 'function') unsub();
     };
   }, [project.path]);
+  useEffect(() => {
+    if (hidden || !missedChangeRef.current) return;
+    missedChangeRef.current = false;
+    refreshRef.current();
+  }, [hidden]);
 
   // ── Project-wide CONTENT search (unified list, Destin 2026-07-22: no
   // toggle — name matches rank above these). Debounced; desktop-only (the
@@ -560,9 +575,9 @@ export function FilesTab({
   const emptyHere = !flat && dirView.folders.length === 0 && dirView.files.length === 0;
 
   return (
-    // `hidden` REPLACES the layout classes rather than riding alongside them:
-    // Tailwind's `flex` utility and the `[hidden]` preflight rule have equal
-    // specificity, so the display class would win and the tab would stay visible.
+    // `hidden` REPLACES the layout classes rather than riding alongside them —
+    // `hidden` and `flex` are both display utilities, so keeping both would
+    // leave which one wins up to their order in the generated stylesheet.
     <div className={hidden ? 'hidden' : 'relative flex flex-col h-full overflow-hidden px-2 sm:px-4 pt-4 pb-4 gap-3 min-w-0 max-sm:h-auto max-sm:overflow-visible'}>
       {/* Breadcrumb line — folder path on the left, view switch on the right.
           Rendered even when search/type-filter has flattened the tree (which
@@ -856,7 +871,14 @@ export function FilesTab({
       {/* Selected-artifact detail — rendered in the shared centered overlay
           (Task 2.4). Same load/view/edit/exclude behavior as the prior inline
           detail; only the presentation changed (full-bleed → centered overlay). */}
-      {activeArtifact && (
+      {/* `!hidden`: the open-file overlay must not survive a switch to another
+          tab. It registers on the shared Escape stack (which also drives
+          Android's back button), and a display:none overlay still sitting on
+          that stack eats the first Escape press on the Conversations tab —
+          Project View would appear not to close. The selection itself lives in
+          ArtifactContext, so coming back to Files re-opens the same file,
+          exactly as it did when the whole tab was unmounted. */}
+      {activeArtifact && !hidden && (
         <ArtifactDetail
           artifact={activeArtifact}
           project={project}

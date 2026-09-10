@@ -166,6 +166,62 @@ describe('project watcher lifecycle', () => {
     expect(events).toEqual([]);
   }, 15000);
 
+  it('still watches a project root that is ITSELF a git repo', async () => {
+    // The failure this guards is silent and total: the nested-repo rule applied
+    // to the root would ignore the root, chokidar would watch nothing, and the
+    // only symptom is that the file list quietly stops noticing outside edits.
+    // Most real projects ARE repos, so this is the common case, not an edge one.
+    await fs.promises.mkdir(path.join(root, '.git'), { recursive: true });
+    await fs.promises.mkdir(path.join(root, 'src'), { recursive: true });
+    await watchProject(root, 1);
+    await fs.promises.writeFile(path.join(root, 'src/app.ts'), 'in my own repo');
+    await settle();
+    expect(events.map((e) => e.artifactId)).toContain('src/app.ts');
+  }, 20000);
+
+  it('parks at most MAX_GRACE_ENTRIES watchers, closing the oldest', async () => {
+    // The bound on parked OS watch handles (inotify is capped per user), so a
+    // click through a long project list cannot accumulate them.
+    __setWatchGraceMsForTest(10_000);
+    const roots: string[] = [];
+    for (let i = 0; i < 6; i++) {
+      const r = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'ycd-cap-'));
+      roots.push(r);
+      await watchProject(r, 1);
+      unwatchProject(r, 1);   // straight into the grace
+    }
+    await wait(200);          // closes are async
+    // The two oldest are gone: a write there emits nothing.
+    events = [];
+    await fs.promises.writeFile(path.join(roots[0], 'a.txt'), 'evicted');
+    await fs.promises.writeFile(path.join(roots[1], 'a.txt'), 'evicted');
+    await settle();
+    expect(events).toEqual([]);
+    // The four most recent are still parked and still live.
+    await fs.promises.writeFile(path.join(roots[5], 'b.txt'), 'still parked');
+    await settle();
+    expect(events.length).toBeGreaterThan(0);
+    for (const r of roots) await fs.promises.rm(r, { recursive: true, force: true });
+  }, 25000);
+
+  it('leaving mid-walk and coming back does not abandon the walk in flight', async () => {
+    // The worst version of the reported symptom: click away DURING the initial
+    // scan and back again. The entry exists but has no watcher yet, and treating
+    // "no watcher" as "nothing to keep" would throw the half-finished walk away
+    // and start a second one — the restart this whole change removes. No timing
+    // here: watchProject registers its entry synchronously, before it awaits.
+    __setWatchGraceMsForTest(10_000);
+    const before = __watchersStartedForTest();
+    const first = watchProject(root, 1);   // deliberately NOT awaited
+    unwatchProject(root, 1);               // refs -> 0 while the walk is running
+    const second = watchProject(root, 1);
+    await Promise.all([first, second]);
+    expect(__watchersStartedForTest() - before).toBe(1);
+    await fs.promises.writeFile(path.join(root, 'midwalk.txt'), 'still watched');
+    await settle();
+    expect(events.map((e) => e.artifactId)).toContain('midwalk.txt');
+  }, 20000);
+
   it('does not watch inside a NESTED git repo, but does watch its siblings', async () => {
     // youcoded-dev holds 43 worktrees and several clones: 9,583 directories
     // within the depth cap, 4 s to chokidar-ready with 300 ms+ event-loop
