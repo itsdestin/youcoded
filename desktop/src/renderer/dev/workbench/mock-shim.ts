@@ -1,5 +1,6 @@
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
+import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
 import type { TranscriptEvent } from '../../../shared/types';
 import type { MockStore } from './mock-store';
 import type { MarketplaceUser } from '../../../main/marketplace-auth-store';
@@ -883,6 +884,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       return true;
     },
   };
+
+  // ── Claude Code's own sign-in ──────────────────────────────────────────────
+  // Pinned by `?claudeCode=` (signed-in | signed-out | apikey | not-installed |
+  // unknown). Default signed-in on a Max plan, because that is the ordinary
+  // install every other workbench shot assumes — a default of anything else
+  // would grey out every Claude row in the model picker for a tooling reason,
+  // which is exactly the bug this whole channel exists to fix (2026-09-09).
+  const claudeCodePin = typeof location !== 'undefined'
+    ? new URLSearchParams(location.search).get('claudeCode')
+    : null;
+  const claudeCodeStatus: ClaudeAccountStatus =
+    claudeCodePin === 'signed-out' ? { state: 'signed-out' }
+    : claudeCodePin === 'not-installed' ? { state: 'not-installed' }
+    : claudeCodePin === 'unknown' ? { state: 'unknown' }
+    : claudeCodePin === 'apikey' ? { state: 'signed-in', apiKey: true }
+    : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false };
+  const claudeCode = { status: async () => claudeCodeStatus };
 
   // Web search backends: two rows, neither keyed, as a fresh install has them.
   // `test` accepts any key so the Save path can be walked; `setKey`/`removeKey`
@@ -2468,7 +2486,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, search, ...(remote ? { remote } : {}),
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search, ...(remote ? { remote } : {}),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 

@@ -1908,6 +1908,13 @@ export function installShim(): void {
       cancelSignIn: () => invoke('chatgpt:cancel-sign-in'),
       signOut: () => invoke('chatgpt:sign-out'),
     },
+    // Claude Code's live sign-in (2026-09-09). Real over the wire: remote-server
+    // answers from the DESKTOP's probe, which is the machine the session
+    // actually runs on. A browser has no `claude` binary of its own, so asking
+    // locally would be meaningless.
+    claudeCode: {
+      status: (opts?: { refresh?: boolean }) => invoke('claude-code:status', opts),
+    },
     // WebSearch providers (Phase 2 Plan B) — WS transport. Object payloads match
     // remote-server's WS case reads (payload.backend / payload.key).
     search: {

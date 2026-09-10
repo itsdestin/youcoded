@@ -1894,6 +1894,12 @@ export const IPC = {
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // ---- Claude Code's own sign-in, read LIVE (2026-09-09) ----
+  // → ClaudeAccountStatus (shared/claude-account-types.ts). Payload
+  // `{refresh?: true}` drops the cache first. There is no sign-in/sign-out verb
+  // here on purpose: Claude Code owns its login, and the app has never had a
+  // way to clear it (the card says to use /logout in a terminal).
+  CLAUDE_CODE_STATUS: 'claude-code:status',
   // ---- WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades ----
   // list = the fixed upgradeable-backend rows (hasKey flags); set/remove-key
   // manage the encrypted key; test = never-throws connectivity check.
