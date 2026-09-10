@@ -36,6 +36,34 @@ function selectionText(): string {
   return window.getSelection()?.toString() ?? '';
 }
 
+// App chrome (every <button>, and anything marked `select-none`) is not
+// highlightable (globals.css + the chrome areas' own classes), so it is not
+// copy material from this menu either (Destin, 2026-09-10): right-clicking it
+// offers nothing, and a whole-message Copy / "Ask about this" leaves its text
+// out. CSS cannot do this half: `textContent` reads unselectable text just the
+// same. `select-text` is the opt-back-in (a clickable file name in a message is
+// a <button>, but its label is part of the message's words).
+const CHROME = 'button, .select-none';
+
+function isChrome(el: Element): boolean {
+  const chrome = el.closest(CHROME);
+  if (!chrome) return false;
+  const optIn = el.closest('.select-text');
+  return !(optIn && chrome.contains(optIn));
+}
+
+// An element's text as a user could have selected it: text inside chrome is
+// skipped. A live selection already leaves chrome out in Chromium (measured
+// 2026-09-10), so this only matters for the no-selection fallback.
+function readableText(root: Element): string {
+  let text = '';
+  const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+  for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+    if (node.parentElement && !isChrome(node.parentElement)) text += node.textContent ?? '';
+  }
+  return text;
+}
+
 function closestBubble(el: Element): Element | null {
   return el.closest('.assistant-bubble, .user-bubble');
 }
@@ -91,7 +119,9 @@ function textBasics(bubble: Element | null): MenuEntry[] {
       icon: 'copy',
       kbd: mod('C'),
       disabled: !sel && !bubble,
-      run: () => void copyText(sel || (bubble?.textContent ?? '')),
+      // readableText, not textContent: a whole-message copy must leave tool
+      // card titles and other chrome out (see isChrome).
+      run: () => void copyText(sel || (bubble ? readableText(bubble) : '')),
     },
     {
       type: 'item',
@@ -276,7 +306,9 @@ function artifactMenu(container: HTMLElement): MenuEntry[] {
 
 function textMenu(target: HTMLElement): MenuEntry[] {
   const bubble = closestBubble(target);
-  const quote = (selectionText().trim() || bubble?.textContent?.trim()) ?? '';
+  // readableText: "Ask about this" quotes the message as a user could have
+  // selected it, without tool card titles or other chrome.
+  const quote = (selectionText().trim() || (bubble ? readableText(bubble).trim() : '')) ?? '';
   // "you said" reads right for an assistant message; flip it for the user's own
   // bubble, and stay neutral if we can't tell.
   const lead = bubble?.classList.contains('assistant-bubble')
@@ -318,8 +350,12 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
 
   // Artifact viewer (SessionDrawer / ProjectView file tab) lives outside
   // .chat-scroll, so it's checked before that gate.
+  // Chrome (a button, an unselectable label) gets no menu, in the viewer or the
+  // chat: nothing on it can be highlighted, so nothing on it is copyable.
+  // Checked after the editable surfaces above, which are never chrome.
+  const onChrome = isChrome(target);
   const artifactViewer = target.closest('[data-artifact-viewer]');
-  if (artifactViewer instanceof HTMLElement) return finalize(artifactMenu(artifactViewer));
+  if (artifactViewer instanceof HTMLElement) return onChrome ? null : finalize(artifactMenu(artifactViewer));
 
   // Everything else is scoped to chat content — never hijack the terminal, the
   // settings panels, or other chrome. A previewed past conversation
@@ -343,6 +379,9 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   const pre = target.closest('pre');
   if (pre instanceof HTMLElement) return finalize(codeMenu(pre, target));
 
+  // After the file-name, link and code checks: those keep their own menus even
+  // when they sit on a button.
+  if (onChrome) return null;
   return finalize(textMenu(target));
 }
 

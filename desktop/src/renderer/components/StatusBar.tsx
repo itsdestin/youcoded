@@ -1034,7 +1034,12 @@ export default function StatusBar({
   const speedIsSessionAverage = outTokens != null && ss?.apiDuration != null && ss.apiDuration > 0;
 
   return (
-    <div className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-3xs text-fg-muted">
+    <div
+      // select-none: every chip and label here is chrome, not highlightable or
+      // copyable (Destin, 2026-09-10). Its dialogs and hover hints portal out
+      // of this subtree, so their text is unaffected.
+      className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-3xs text-fg-muted select-none"
+    >
       {/* Combined model + effort pill — clicking opens the full picker (same as /effort).
          Shift+Space still cycles models via the keyboard shortcut in App.tsx.
 

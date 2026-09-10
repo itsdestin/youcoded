@@ -879,7 +879,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
   return (
     <div
-      className="input-bar-container shrink-0"
+      // select-none: the composer's chrome (buttons, the placeholder/mirror
+      // layer, attachment chips) is not highlightable or copyable (Destin,
+      // 2026-09-10). The textarea itself stays selectable: globals.css
+      // re-enables text fields.
+      className="input-bar-container shrink-0 select-none"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
