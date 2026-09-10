@@ -170,7 +170,7 @@ import { formatArgErrors } from './tools/arg-errors';
 import type { AskRequest, AskDecision } from './permission-broker';
 import { CLOUD_DEFAULT, type CapabilityProfile } from './capability-profile';
 import { adaptForWire } from './wire-adapter';
-import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, type CompactionConfig } from './compaction';
+import { planCompaction, pruneToolOutputs, summarizePrompt, estimateTokens, countImageOutputs, contextBudget, type CompactionConfig } from './compaction';
 import { toReport, type PrefillProgress } from '../providers/prefill-progress';
 import { messageTokens, messagesTokens, APPROX_CHARS_PER_TOKEN } from './message-size';
 import { createSkillTool } from './tools/skill';
@@ -1377,10 +1377,15 @@ export class HarnessSession extends EventEmitter {
    *  shownImages field comment's KNOWN GAP section for the reachability
    *  analysis and why that isn't fixed here. */
   private fitToContext(messages: ModelMessage[]): ModelMessage[] {
-    const ctx = this.opts.contextLength ?? 32_768;
-    const budgetTokens = ctx - (this.opts.harness.limits?.maxTokens ?? 4096) - 1024; // output + margin
+    // The emergency floor. Since 2026-09-10 (cache follow-ups item 2) the
+    // compaction trigger is derived from THIS budget and sits below it, so in
+    // steady state compaction has already made the history fit and this trims
+    // nothing — which is what keeps the local KV prefix (and every provider's
+    // cache) still from step to step. It still guards a single oversized
+    // message, a chars/4 misestimate, and the first step of a resumed session.
+    const budgetTokens = this.budget().trimBudget;
     // Degenerate case: a tiny contextLength (a real Plan B possibility — a small
-    // local model with, say, a 2k window) can make budgetTokens zero or negative.
+    // local model with, say, a 2k window) can make budgetTokens very small.
     // The `kept.length > 0` gate below means we ALWAYS keep the newest message
     // regardless of budget, so history collapses to that single message rather
     // than erroring. That's intentional — one turn through a tiny model beats a
@@ -1487,59 +1492,58 @@ export class HarnessSession extends EventEmitter {
   private compactionConfig(): CompactionConfig {
     const ctx = this.opts.contextLength ?? 32_768;
     const big = ctx >= 100_000;
-    return { contextLength: ctx, triggerRatio: 0.75, protectedTokens: big ? 40_000 : Math.floor(ctx * 0.4), minPruneSavings: big ? 20_000 : Math.floor(ctx * 0.1), pruneToChars: 2000 };
+    return { contextLength: ctx, triggerTokens: this.budget().triggerTokens, protectedTokens: big ? 40_000 : Math.floor(ctx * 0.4), minPruneSavings: big ? 20_000 : Math.floor(ctx * 0.1), pruneToChars: 2000 };
   }
 
-  /** Two-stage compaction (spec §4.4). PRUNE first (nearly lossless, shrinks the
-   *  summarize span too); if pruning can't get under budget, SUMMARIZE the condensed
-   *  span, keeping the last 2 user-delimited turns verbatim, and emit compact-summary.
-   *  FAIL-SAFE: a summary that throws or comes back empty leaves the pruned history —
-   *  fitToContext (in consumeStep) is the hard floor, so the turn never bricks. */
+  /** The one window budget (compaction.ts `contextBudget`): reply reserve,
+   *  trim floor and compaction trigger all come from here, so the trigger can
+   *  never sit above the floor again. */
+  private budget() {
+    return contextBudget({ contextLength: this.opts.contextLength ?? null, maxTokens: this.opts.harness.limits?.maxTokens ?? 4096 });
+  }
+
+  /** Two-stage compaction (spec §4.4). PRUNE when pruning alone frees enough
+   *  (planCompaction's 'prune' — batched by minPruneSavings); otherwise SUMMARIZE
+   *  the condensed span, keeping the last 2 user-delimited turns verbatim, and
+   *  emit compact-summary. FAIL-SAFE: a summary that throws or comes back empty
+   *  leaves history exactly as it was — fitToContext (in consumeStep) is the
+   *  hard floor, so the turn never bricks.
+   *
+   *  WHY history is touched ONLY on a 'prune' decision or a summary that
+   *  succeeded (cache follow-ups item 3, 2026-09-10): this used to "always
+   *  prune first" on both decisions. On the summarize path that prune was
+   *  usually a small edit in the MIDDLE of the history — and when the summary
+   *  then bailed (too few user turns, a trivial span, a failed call) the edit
+   *  stood, so the next step's prefix had moved and every provider re-billed
+   *  everything after it. On a small local window that repeated every step
+   *  until a summary finally landed. The prune the model reads before a
+   *  summary is now done on a copy and committed together with the summary. */
   private async maybeCompact(model: LanguageModel, lastInputTokens: number): Promise<void> {
     const cfg = this.compactionConfig();
     const decision = planCompaction(this.history, cfg, lastInputTokens);
     if (decision.action === 'none') return;
-    // Prune can now collapse an image 'content' output to text (compaction.ts)
-    // outside its protected window — a THIRD path (besides /clear and
-    // summarize) that discards a delivered image. Diff the image count across
-    // the call to catch it regardless of what decision.action turns out to be
-    // below, including the plain 'prune' early-return two lines down.
-    const imagesBeforePrune = countImageOutputs(this.history);
-    const beforePrune = this.history;
-    this.history = pruneToolOutputs(this.history, cfg);   // always prune first
-    // WHY the per-message identity check (fix pass, review finding 2):
-    // pruneToolOutputs always returns a NEW array, so array identity says
-    // nothing — but it returns each individual message it did not touch as the
-    // SAME object (its documented identity contract, pinned by
-    // tests/compaction.test.ts). Most compactions above the trigger prune
-    // NOTHING (short tool outputs, or all of them inside the protected window);
-    // tagging those as a transformation would bump the revision and invalidate a
-    // published checkpoint for a history that never moved. Only a changed
-    // message means "tool output no longer equals its event's text".
-    if (this.history.some((m, i) => m !== beforePrune[i])) { this.capture.markPruned(); this.prefixMoved = true; }
-    if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
-    // G-11: prune may have sliced an old Read result down to 2,000 chars (and
-    // summarize below discards it outright) — forget what was served so Read
-    // never claims the model still has content it no longer does. Cleared on
-    // every non-'none' action rather than diffed, because a text prune has no
-    // cheap before/after signal the way images do; the cost of over-clearing
-    // is one redundant re-read, the cost of under-clearing is a false notice.
-    this.servedReads.clear();
-    if (decision.action === 'prune') return;
+    if (decision.action === 'prune') { this.commitPrune(pruneToolOutputs(this.history, cfg)); return; }
+    // Summarize. Decide whether a summary will actually run BEFORE touching
+    // anything: the cut and the thrash guard depend only on message count and
+    // size, which pruning does not change.
     const cut = this.summarizeCutIndex();
-    if (cut <= 0) return;                                  // nothing safely condensable → pruned history stands
-    const keep = this.history.slice(cut);
-    const span = this.history.slice(0, cut);              // already pruned
+    if (cut <= 0) return;                                  // nothing safely condensable → history stands
     // I3 thrash guard: if the last-2-turns `keep` span ALONE exceeds the trigger
     // (e.g. a fresh 6k-token tool result in an 8k window), the condensable `span`
     // is tiny yet planCompaction keeps saying 'summarize' every step. Re-summarizing
     // a near-empty span burns a model call + emits a dead compact-summary each step
-    // (~25/turn). Bail when the span is trivial — the pruned history stands and
-    // fitToContext remains the floor.
-    if (span.length <= 1 || estimateTokens(span) < HarnessSession.MIN_SUMMARIZE_SPAN_TOKENS) return;
+    // (~25/turn). Bail when the span is trivial — history stands and fitToContext
+    // remains the floor.
+    if (cut <= 1 || estimateTokens(this.history.slice(0, cut)) < HarnessSession.MIN_SUMMARIZE_SPAN_TOKENS) return;
+    // Prune on a COPY so the summary model reads a smaller span; committed only
+    // together with the summary below.
+    const pruned = pruneToolOutputs(this.history, cfg);
+    const keep = pruned.slice(cut);
+    const span = pruned.slice(0, cut);
     let summary = '';
     try { summary = await this.generateSummary(model, span); } catch { summary = ''; }
-    if (!summary.trim()) return;                          // FAIL-SAFE: no summary → leave pruned history
+    if (!summary.trim()) return;                          // FAIL-SAFE: no summary → history untouched
+    this.commitPrune(pruned);
     // Existing frozen event (no new type). `summary` is the canonical field the
     // renderer reads (types.ts / App.tsx / BubbleFeed.tsx). `autoCompaction` tags
     // this as a SPONTANEOUS native compaction so the renderer surfaces the marker
@@ -1549,15 +1553,14 @@ export class HarnessSession extends EventEmitter {
     const summaryUuid = this.emitEvent('compact-summary', { summary, autoCompaction: true });
     this.prefixMoved = true;   // the next request starts with the summary — a known full miss
     // Fix 2 (2026-08-11): the summarized-away span can still contain a
-    // delivered image. pruneToolOutputs (above) now DOES collapse 'content'
-    // (image) outputs too, but only ones OUTSIDE its own token-budget
-    // protected window — see the imagesBeforePrune diff above, which handles
-    // that case. An image can sit INSIDE that window (survive prune) yet
+    // delivered image. pruneToolOutputs collapses 'content' (image) outputs too,
+    // but only ones OUTSIDE its own token-budget protected window — commitPrune
+    // handles that case. An image can sit INSIDE that window (survive prune) yet
     // still fall in THIS summarize span (older than the turn-based last-2
     // cut) and get flattened into `summary` here. An un-cleared shownImages
     // would then keep vouching for an image no longer in history — the same
     // false "already visible" bug /clear had (Fix 1), reachable here
-    // automatically at 75% context instead of only on an explicit /clear.
+    // automatically at the trigger instead of only on an explicit /clear.
     this.shownImages.clear();
     this.history = [{ role: 'user', content: `[Earlier conversation summary]\n${summary}` } as ModelMessage, ...keep];
     // The new leading message IS that event's summary text, so the uuid enters
@@ -1568,6 +1571,37 @@ export class HarnessSession extends EventEmitter {
     // covers "user-message, skill-invoked, tool-use, tool-result, compact-summary").
     this.capture.recordEvent(summaryUuid);
     this.capture.markSummary(summaryUuid);
+  }
+
+  /** Make a pruned copy of the history the live history, with every
+   *  bookkeeping consequence a prune has. Shared by the 'prune' decision and
+   *  the summary commit above. */
+  private commitPrune(pruned: ModelMessage[]): void {
+    const before = this.history;
+    // Prune can collapse an image 'content' output to text (compaction.ts)
+    // outside its protected window — a THIRD path (besides /clear and
+    // summarize) that discards a delivered image. Diff the image count across
+    // the swap to catch it.
+    const imagesBefore = countImageOutputs(before);
+    this.history = pruned;
+    // WHY the per-message identity check (fix pass, review finding 2):
+    // pruneToolOutputs always returns a NEW array, so array identity says
+    // nothing — but it returns each individual message it did not touch as the
+    // SAME object (its documented identity contract, pinned by
+    // tests/compaction.test.ts). Most compactions above the trigger prune
+    // NOTHING (short tool outputs, or all of them inside the protected window);
+    // tagging those as a transformation would bump the revision and invalidate a
+    // published checkpoint for a history that never moved. Only a changed
+    // message means "tool output no longer equals its event's text".
+    if (pruned.some((m, i) => m !== before[i])) { this.capture.markPruned(); this.prefixMoved = true; }
+    if (countImageOutputs(pruned) < imagesBefore) this.shownImages.clear();
+    // G-11: prune may have sliced an old Read result down to 2,000 chars (and
+    // a summary discards it outright) — forget what was served so Read never
+    // claims the model still has content it no longer does. Cleared on every
+    // commit rather than diffed, because a text prune has no cheap
+    // before/after signal the way images do; the cost of over-clearing is one
+    // redundant re-read, the cost of under-clearing is a false notice.
+    this.servedReads.clear();
   }
 
   // Live prefill progress from llama.cpp, forwarded onto the SAME
@@ -2594,7 +2628,11 @@ export class HarnessSession extends EventEmitter {
         nativeImageToolResults: this.profile.nativeImageToolResults,
         supportsVision: this.profile.supportsVision,
       }),
-      maxOutputTokens: this.opts.harness.limits?.maxTokens,
+      // The same reserve fitToContext budgets for (contextBudget): on a known
+      // window at most a quarter of it, so a reply can never overflow the
+      // space the history was fitted to. Absent stays absent — the manifest
+      // comment above explains why an uncapped request is its own hazard.
+      maxOutputTokens: this.opts.harness.limits?.maxTokens === undefined ? undefined : this.budget().replyReserve,
       abortSignal: this.abort!.signal,
       // Fix (2026-08-10 incident): streamText's DEFAULT onError is
       // `({ error }) => console.error(error)` — Node's console.error on a raw

@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { planCompaction, pruneToolOutputs, estimateTokens, type CompactionConfig } from '../src/main/harness/compaction';
 import type { ModelMessage } from 'ai';
 
-const cfg: CompactionConfig = { contextLength: 8192, triggerRatio: 0.75, protectedTokens: 4000, minPruneSavings: 1000, pruneToChars: 2000 };
+const cfg: CompactionConfig = { contextLength: 8192, triggerTokens: 6144, protectedTokens: 4000, minPruneSavings: 1000, pruneToChars: 2000 };
 const toolMsg = (id: string, chars: number): ModelMessage => ({ role: 'tool', content: [{ type: 'tool-result', toolCallId: id, toolName: 'Read', output: { type: 'text', value: 'x'.repeat(chars) } }] } as any);
 const userMsg = (t: string): ModelMessage => ({ role: 'user', content: t } as any);
 
