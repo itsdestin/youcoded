@@ -1578,6 +1578,7 @@ export const IPC = {
   REMOTE_DETECT_TAILSCALE: 'remote:detect-tailscale',
   REMOTE_GET_CLIENT_COUNT: 'remote:get-client-count',
   REMOTE_GET_CLIENT_LIST: 'remote:get-client-list',
+  REMOTE_STATUS: 'remote:status',
   REMOTE_DEVICES_LIST: 'remote:devices:list',
   REMOTE_DEVICES_RENAME: 'remote:devices:rename',
   REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',

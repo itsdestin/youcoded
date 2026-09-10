@@ -78,7 +78,18 @@ const PTY_CHUNK_COALESCE_BELOW = 4096;
 const HOOK_BUFFER_SIZE = 10_000; // ~10MB max, covers full conversations without excessive memory
 const AUTH_TIMEOUT_MS = 5000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_FAILURES = 5;
+// A failed authentication closes the socket, so a connection gets ONE real attempt; this
+// only bounds a client that pipelines several auth messages before the close lands.
+// The point of moving off a per-ADDRESS bucket: behind the loopback bind every device is
+// 127.0.0.1, so one bucket is the whole household — five bad guesses from anyone would lock
+// everyone out, and on upgrade day every retired credential fails at once.
+const AUTH_ATTEMPTS_PER_SOCKET = 5;
+// A guesser can still open a new socket per five tries, so the host counts failures across
+// all sockets too. Above this it SLOWS new connections rather than refusing them: a
+// refusal here is indistinguishable from the feature being broken, and the person locked
+// out is the owner far more often than the attacker.
+const HOST_FAILURES_BEFORE_SLOWDOWN = 25;
+const HOST_SLOWDOWN_MS = 2_000;
 
 interface AuthenticatedClient {
   id: string;
@@ -95,6 +106,12 @@ export interface ClientInfo {
 }
 
 const HOST_ADMIN_REFUSAL = 'Change this on the computer itself.';
+
+export interface RemoteStatus {
+  state: 'listening' | 'stopped' | 'failed';
+  reason?: string;
+  port: number;
+}
 
 export class RemoteServer {
   private httpServer: http.Server | null = null;
@@ -132,7 +149,11 @@ export class RemoteServer {
   // G-1: sessionId -> shellId -> latest run view, same latest-per-key shape.
   private shellRunBuffers = new Map<string, Map<string, ShellEvent>>();
   // statusInterval removed — status data now fed by ipc-handlers.ts via broadcastStatusData()
-  private failedAttempts = new Map<string, { count: number; resetAt: number }>();
+  // Host-wide failure count, for the slowdown. Per-socket attempts live on the socket.
+  private hostFailures = { count: 0, resetAt: 0 };
+  private statusListeners = new Set<(status: RemoteStatus) => void>();
+  /** The OS reason the last start() failed, so the panel can say it rather than guess. */
+  private lastStartError: string | null = null;
   // Last-known topic names, fed by ipc-handlers.ts via setLastTopic()
   private lastTopics = new Map<string, string>();
   // Last-known FULL status payload, fed by ipc-handlers.ts via broadcastStatusData(),
@@ -264,6 +285,28 @@ export class RemoteServer {
     return this.running;
   }
 
+  /**
+   * What the listener is actually doing. WHY this exists: the panel's indicator was derived
+   * from saved settings plus Tailscale's state, so it said "connected" whenever the switch
+   * was on — including when the port never bound. isRunning() was here all along with no
+   * caller outside tests.
+   */
+  getStatus(): RemoteStatus {
+    if (this.running) return { state: 'listening', port: this.config.port };
+    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port };
+    return { state: 'stopped', port: this.config.port };
+  }
+
+  onStatusChange(listener: (status: RemoteStatus) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => { this.statusListeners.delete(listener); };
+  }
+
+  private emitStatus(): void {
+    const status = this.getStatus();
+    for (const l of this.statusListeners) l(status);
+  }
+
   async start(): Promise<void> {
     if (!this.config.enabled) {
       console.log('[RemoteServer] Disabled in config, not starting');
@@ -362,6 +405,10 @@ export class RemoteServer {
         // Roll back the half-built state (event subscriptions, timer, sockets)
         // so a retry starts clean instead of double-subscribing.
         this.stop();
+        // Keep the reason: a bind failure was only logged, so the panel had nothing to show
+        // and fell back to reporting the saved setting as though it had worked.
+        this.lastStartError = err.message;
+        this.emitStatus();
         reject(err);
       };
       server.once('error', onError);
@@ -370,7 +417,9 @@ export class RemoteServer {
         settled = true;
         server.removeListener('error', onError);
         this.running = true;
+        this.lastStartError = null;
         console.log(`[RemoteServer] Listening on port ${this.config.port}`);
+        this.emitStatus();
         resolve();
       });
     });
@@ -410,6 +459,9 @@ export class RemoteServer {
 
     if (this.wss) { this.wss.close(); this.wss = null; }
     if (this.httpServer) { this.httpServer.close(); this.httpServer = null; }
+    // stop() also runs from the failed-start rollback, where onError sets the reason
+    // immediately after; emitting here would announce 'stopped' and then 'failed'.
+    if (!this.lastStartError) this.emitStatus();
   }
 
   /** Every device loses access — what a password change means. */
@@ -741,12 +793,9 @@ export class RemoteServer {
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     const ip = req.socket.remoteAddress || '';
-
-    // Check rate limiting
-    if (this.isRateLimited(ip)) {
-      ws.close(4029, 'Too many failed attempts');
-      return;
-    }
+    // Counted on THIS socket, so a device that fails cannot spend anyone else's budget.
+    let attemptsOnThisSocket = 0;
+    const slowStart = this.connectionDelayMs() ? HOST_SLOWDOWN_MS : 0;
 
     // Contract R9: a device needs the password even on a private network. The block that
     // stood here auto-paired any peer inside 100.64.0.0/10 with no password exchanged — a
@@ -760,6 +809,11 @@ export class RemoteServer {
     // Wait for auth message
     const authHandler = async (raw: Buffer | string) => {
       clearTimeout(timeout);
+      if (slowStart) await new Promise(r => setTimeout(r, slowStart));
+      if (++attemptsOnThisSocket > AUTH_ATTEMPTS_PER_SOCKET) {
+        ws.close(4029, 'Too many attempts on this connection');
+        return;
+      }
       ws.off('message', authHandler);
 
       try {
@@ -783,7 +837,7 @@ export class RemoteServer {
         if (msg.deviceId) {
           const result = this.devices.authenticate(msg.deviceId, msg.secret);
           if (result.ok) {
-            this.clearFailedAttempts(ip);
+            this.clearFailedAttempts();
             this.config.markPaired();
             this.addClient(ws, result.device.id, ip);
             ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop' }));
@@ -803,7 +857,7 @@ export class RemoteServer {
         }
 
         if (msg.password && await this.config.verifyPassword(msg.password)) {
-          this.clearFailedAttempts(ip);
+          this.clearFailedAttempts();
           // The secret is returned exactly once, at pairing. Re-authenticating reuses the
           // record rather than minting another credential, which is why one device could
           // never be shown as one row before.
@@ -815,7 +869,7 @@ export class RemoteServer {
             console.error('[remote-server] replayBuffers failed:', err);
           });
         } else {
-          this.recordFailedAttempt(ip);
+          this.recordFailedAttempt();
           ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' }));
           ws.close(4001, 'Auth failed');
         }
@@ -2775,27 +2829,27 @@ export class RemoteServer {
 
   // --- Rate limiting ---
 
-  private isRateLimited(ip: string): boolean {
-    const entry = this.failedAttempts.get(ip);
-    if (!entry) return false;
-    if (Date.now() > entry.resetAt) {
-      this.failedAttempts.delete(ip);
+  /** How long to wait before answering a new connection, in ms. Zero unless the host is
+   *  seeing a burst of failures. Slowing beats refusing: the owner is locked out far more
+   *  often than the attacker is stopped. */
+  private connectionDelayMs(): boolean {
+    if (Date.now() > this.hostFailures.resetAt) {
+      this.hostFailures = { count: 0, resetAt: 0 };
       return false;
     }
-    return entry.count >= RATE_LIMIT_MAX_FAILURES;
+    return this.hostFailures.count >= HOST_FAILURES_BEFORE_SLOWDOWN;
   }
 
-  private recordFailedAttempt(ip: string): void {
-    const entry = this.failedAttempts.get(ip);
-    if (entry && Date.now() < entry.resetAt) {
-      entry.count++;
+  private recordFailedAttempt(): void {
+    if (Date.now() > this.hostFailures.resetAt) {
+      this.hostFailures = { count: 1, resetAt: Date.now() + RATE_LIMIT_WINDOW_MS };
     } else {
-      this.failedAttempts.set(ip, { count: 1, resetAt: Date.now() + RATE_LIMIT_WINDOW_MS });
+      this.hostFailures.count++;
     }
   }
 
-  private clearFailedAttempts(ip: string): void {
-    this.failedAttempts.delete(ip);
+  private clearFailedAttempts(): void {
+    this.hostFailures = { count: 0, resetAt: 0 };
   }
 }
 

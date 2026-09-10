@@ -1805,6 +1805,10 @@ export function registerIpcHandlers(
 
     // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
     // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
+    ipcMain.handle(IPC.REMOTE_STATUS, async () => {
+      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0 };
+    });
+
     ipcMain.handle(IPC.REMOTE_DEVICES_LIST, async () => {
       return remoteServer?.getDeviceList() ?? [];
     });

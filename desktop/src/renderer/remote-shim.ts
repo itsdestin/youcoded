@@ -1285,6 +1285,10 @@ export function installShim(): void {
       detectTailscale: () => invoke('remote:detect-tailscale'),
       getClientCount: () => invoke('remote:get-client-count'),
       getClientList: () => invoke('remote:get-client-list'),
+      getStatus: () => invoke('remote:status'),
+      // No push channel over the socket yet: a remote client reads the state when it opens
+      // the panel. Returning a no-op unsubscribe keeps the caller's cleanup honest.
+      onStatus: () => () => {},
       // Renaming and unpairing are refused over this socket by design; list is read-only.
       devices: {
         list: () => invoke('remote:devices:list').then((r: { devices?: unknown[] }) => r?.devices ?? []),

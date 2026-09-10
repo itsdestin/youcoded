@@ -99,6 +99,7 @@ const IPC = {
   REMOTE_DETECT_TAILSCALE: 'remote:detect-tailscale',
   REMOTE_GET_CLIENT_COUNT: 'remote:get-client-count',
   REMOTE_GET_CLIENT_LIST: 'remote:get-client-list',
+  REMOTE_STATUS: 'remote:status',
   REMOTE_DEVICES_LIST: 'remote:devices:list',
   REMOTE_DEVICES_RENAME: 'remote:devices:rename',
   REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
@@ -844,6 +845,12 @@ contextBridge.exposeInMainWorld('claude', {
     detectTailscale: () => ipcRenderer.invoke(IPC.REMOTE_DETECT_TAILSCALE),
     getClientCount: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_COUNT),
     getClientList: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_LIST),
+    getStatus: () => ipcRenderer.invoke(IPC.REMOTE_STATUS),
+    onStatus: (cb: (status: unknown) => void) => {
+      const listener = (_e: unknown, status: unknown) => cb(status);
+      ipcRenderer.on(IPC.REMOTE_STATUS, listener);
+      return () => ipcRenderer.removeListener(IPC.REMOTE_STATUS, listener);
+    },
     devices: {
       list: () => ipcRenderer.invoke(IPC.REMOTE_DEVICES_LIST),
       rename: (deviceId: string, name: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_RENAME, deviceId, name),

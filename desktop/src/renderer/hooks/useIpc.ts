@@ -119,6 +119,8 @@ declare global {
         detectTailscale: () => Promise<any>;
         getClientCount: () => Promise<number>;
         getClientList: () => Promise<any[]>;
+        getStatus: () => Promise<{ state: string; reason?: string; port: number } | null>;
+        onStatus: (cb: (status: any) => void) => () => void;
         devices: {
           list: () => Promise<any[]>;
           rename: (deviceId: string, name: string) => Promise<boolean>;

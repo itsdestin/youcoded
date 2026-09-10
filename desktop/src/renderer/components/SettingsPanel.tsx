@@ -103,6 +103,13 @@ interface TailscaleInfo {
  * an address and how long ago it connected — so a device that closed its browser vanished
  * and could never be unpaired.
  */
+/** What the listener is actually doing, straight from the server. */
+interface RemoteStatus {
+  state: 'listening' | 'stopped' | 'failed';
+  reason?: string;
+  port: number;
+}
+
 interface RemoteDeviceRow {
   id: string;
   name: string;
@@ -1303,6 +1310,7 @@ interface RemoteButtonProps {
   setupStatus: 'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error';
   setupError: string;
   onUnpairDevice: (deviceId: string) => void;
+  status: RemoteStatus | null;
   onCopyLink: () => void;
   onSetShowSetupQR: (v: boolean) => void;
   onSetShowAddDevice: (v: boolean) => void;
@@ -1336,7 +1344,7 @@ function RemoteButton(props: RemoteButtonProps) {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
   onSetNewPassword, onSetPassword, onToggleEnabled, enableError,
-  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onUnpairDevice, onCopyLink,
+  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onUnpairDevice, status, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
   } = props;
   const [open, setOpen] = useState(!!props.mockView);
@@ -1397,19 +1405,24 @@ function RemoteButton(props: RemoteButtonProps) {
     else onUnpairDevice(deviceId);
   };
   const hasClients = deviceRows.length > 0;
-  // Green: enabled + Tailscale installed + VPN active. Gray otherwise (disabled, or VPN not connected).
-  const isFullyConnected = previewView ? previewView.stage === 'ready' : config?.enabled && tailscale?.installed && tailscale?.connected;
+  // WHY this reads `status` and not `config.enabled`: the indicator used to go green
+  // because the switch was on, so a server whose port never bound still reported Connected
+  // and the reason was only in a log nobody sees.
+  const listening = status?.state === 'listening';
+  const isFullyConnected = previewView ? previewView.stage === 'ready' : listening && tailscale?.installed && tailscale?.connected;
   const statusText = loading
     ? 'Loading...'
-    : !config?.enabled
-      ? 'Disabled'
-      : isFullyConnected
-        ? hasClients
-          ? `Connected · ${clients.length} client${clients.length > 1 ? 's' : ''}`
-          : 'Connected'
-        : tailscale?.installed
-          ? 'Tailscale VPN not active'
-          : 'Enabled · No Tailscale';
+    : status?.state === 'failed'
+      ? 'Not running'
+      : !config?.enabled || status?.state === 'stopped'
+        ? 'Disabled'
+        : isFullyConnected
+          ? hasClients
+            ? `Connected · ${deviceRows.filter(d => d.online).length} online`
+            : 'Connected'
+          : tailscale?.installed
+            ? 'Tailscale VPN not active'
+            : 'Enabled · No Tailscale';
 
   // Tailscale is the transport under a fully-connected session — the old UI
   // showed a separate "Tailscale" tag next to the title whenever installed;
@@ -1591,6 +1604,13 @@ function RemoteButton(props: RemoteButtonProps) {
                           reason here — the toggle has already snapped back off. */}
                       {enableError && (
                         <FieldError as="p" size="2xs" className="pb-2">{enableError}</FieldError>
+                      )}
+                      {/* A bind failure was logged and nowhere else. Specific and accurate
+                          when the OS gave us a reason; never a guess. */}
+                      {!enableError && status?.state === 'failed' && (
+                        <FieldError as="p" size="2xs" className="pb-2">
+                          {status.reason ? `Not running: ${status.reason}` : 'Not running.'}
+                        </FieldError>
                       )}
 
                       <div className="py-2">
@@ -1781,7 +1801,7 @@ function RemoteButton(props: RemoteButtonProps) {
 /** Same dialog and body as Settings; the candidate provides no real settings callbacks. */
 export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessView; onAction: (action: RemoteAccessAction) => void }) {
   const noop = () => {};
-  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onUnpairDevice={noop} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
+  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onUnpairDevice={noop} status={null} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
 }
 
 // Mirrors PackageTier.kt — descriptions list the actual packages each tier
@@ -2382,6 +2402,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [config, setConfig] = useState<RemoteConfig | null>(null);
   const [tailscale, setTailscale] = useState<TailscaleInfo | null>(null);
   const [clients, setClients] = useState<RemoteDeviceRow[]>([]);
+  const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [loading, setLoading] = useState(true);
@@ -2414,11 +2435,13 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       claude.remote.getConfig(),
       claude.remote.detectTailscale(),
       claude.remote.devices?.list?.() ?? [],
+      claude.remote.getStatus?.() ?? null,
       claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
-    ]).then(([cfg, ts, cls, defs]: [RemoteConfig, TailscaleInfo, RemoteDeviceRow[], any]) => {
+    ]).then(([cfg, ts, cls, st, defs]: [RemoteConfig, TailscaleInfo, RemoteDeviceRow[], RemoteStatus | null, any]) => {
       setConfig(cfg);
       setTailscale(ts);
       setClients(cls);
+      setRemoteStatus(st);
       setDefaults(defs);
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -2496,6 +2519,13 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       setSetupError(String(err));
       setSetupStatus('error');
     }
+  }, []);
+
+  useEffect(() => {
+    // WHY subscribe as well as fetch: a bind failure happens once, seconds after launch.
+    // Fetching alone shows it only if the panel happened to be open at that moment.
+    const off = (window as any).claude?.remote?.onStatus?.((st: RemoteStatus) => setRemoteStatus(st));
+    return () => { if (typeof off === 'function') off(); };
   }, []);
 
   const handleUnpairDevice = useCallback(async (deviceId: string) => {
@@ -2579,6 +2609,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           setupStatus={setupStatus}
           setupError={setupError}
           onUnpairDevice={handleUnpairDevice}
+          status={remoteStatus}
           onCopyLink={handleCopyLink}
           onSetShowSetupQR={setShowSetupQR}
           onSetShowAddDevice={setShowAddDevice}

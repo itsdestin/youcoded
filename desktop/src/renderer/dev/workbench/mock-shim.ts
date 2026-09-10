@@ -194,7 +194,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // (remote:, syncSpaces.lease*), hand-written so a filmed take shows the QR/
   // takeover states on demand instead of whatever the catch-all's [] renders as.
   'remote.getConfig', 'remote.setConfig', 'remote.setPassword', 'remote.detectTailscale',
-  'remote.getClientCount', 'remote.getClientList', 'remote.devices',
+  'remote.getClientCount', 'remote.getClientList', 'remote.devices', 'remote.getStatus', 'remote.onStatus',
   'syncSpaces.leaseQuery', 'syncSpaces.leaseTakeover', 'syncSpaces.leaseForce',
 ];
 
@@ -1696,6 +1696,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     detectTailscale: async () => ({ installed: true, connected: true, ip: '100.92.14.3', hostname: 'destin-laptop', url: 'http://destin-laptop:7842' }),
     getClientCount: async () => remoteClients.length,
     getClientList: async () => remoteClients,
+    getStatus: async () => ({ state: 'listening', port: 7842 }),
+    onStatus: () => () => {},
     devices: {
       list: async () => remoteClients.map((c, i) => ({ id: c.id, name: i === 0 ? 'My phone' : 'My tablet', online: i === 0, createdAt: 0, lastSeenAt: 0 })),
       rename: async () => true,
