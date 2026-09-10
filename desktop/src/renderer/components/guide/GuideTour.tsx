@@ -64,13 +64,15 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
 
   if (!stop) return null;
 
+  // Order (Destin, review deck 2026-09-10, T-1): Back, any action, Skip tour,
+  // then Next at the far right — the filled button is the last thing read.
   const buttons: GuideBubbleButton[] = [];
   if (index > 0) buttons.push({ label: 'Back', onClick: () => setIndex(index - 1) });
-  buttons.push({ label: last ? 'Done' : 'Next', role: 'next', onClick: () => (last ? onExit(true) : setIndex(index + 1)) });
   if (stop.action && (stop.action.kind !== 'click-anchor' || actionAvailable)) {
     buttons.push({ label: stop.action.label, onClick: () => runAction(stop.action!) });
   }
   if (!last) buttons.push({ label: 'Skip tour', onClick: () => onExit(false) });
+  buttons.push({ label: last ? 'Done' : 'Next', role: 'next', onClick: () => (last ? onExit(true) : setIndex(index + 1)) });
 
   return (
     <>

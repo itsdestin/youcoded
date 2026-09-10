@@ -68,7 +68,9 @@ export default function GuideBubble({ eyebrow, children, buttons, pose, label }:
         >
           <span className="text-2xs font-medium uppercase tracking-wider text-on-accent/70">{eyebrow}</span>
           <p className="text-sm leading-snug">{children}</p>
-          <div className="flex items-center gap-1 pt-1 flex-wrap">
+          {/* Right-aligned so the filled Next/Done button sits at the far
+              right, with Skip tour beside it (review deck T-1). */}
+          <div className="flex items-center justify-end gap-1 pt-1 flex-wrap">
             {buttons.map((b) => (
               <Button
                 key={b.label}

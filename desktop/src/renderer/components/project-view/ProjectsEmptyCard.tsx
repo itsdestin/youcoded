@@ -46,18 +46,20 @@ export function ProjectsEmptyCard({ onAdd }: ProjectsEmptyCardProps) {
             {/* Eyebrow: same micro-label as ContextIntroBanner's "About context",
                 at the guide's text-2xs floor for anything that carries meaning. */}
             <div className="text-2xs font-medium text-fg-muted tracking-wider uppercase mb-1">Projects</div>
-            <h3 className="text-base font-semibold text-fg leading-snug">A project is a folder you keep coming back to</h3>
+            <h3 className="text-base font-semibold text-fg leading-snug">Projects keep your work together</h3>
           </div>
-          {/* Two plain sentences. "Files", never "artifacts" — user-facing copy. */}
+          {/* Two plain sentences (Destin, review deck 2026-09-10, E-1: the old
+              tagline read as word salad). "Files", never "artifacts". */}
           <p className="text-sm text-fg-2 leading-relaxed">
-            The assistant keeps a project&rsquo;s instructions, memories and conversations
-            together, and this screen lists the files it made there.
+            A project is a folder on your computer that you work in often: a class, a client,
+            a hobby. The assistant remembers what you told it there, keeps those conversations
+            together, and lists the files it made.
           </p>
           <p className="text-sm text-fg-2 leading-relaxed">
-            Any folder can be one. Start with the one you work in most.
+            Pick the folder you use most to start.
           </p>
-          {/* The ONE primary on this screen (G-4). No second button on purpose. */}
-          <Button variant="primary" onClick={onAdd} data-guide-anchor="add-project">
+          {/* The ONE primary on this screen (G-4), as wide as the words above it. */}
+          <Button variant="primary" onClick={onAdd} data-guide-anchor="add-project" className="w-full">
             Add a project
           </Button>
         </div>

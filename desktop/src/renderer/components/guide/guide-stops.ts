@@ -47,7 +47,7 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     id: 'buddy',
     // No ring: the buddy beside this bubble IS the one talking (U29 — a ring
     // around the big welcome mascot made it look like two different buddies).
-    text: 'Hi, I’m your buddy. This takes about a minute. Skip any time, and find me again under Settings, Help & feedback.',
+    text: 'Hi, I’m your buddy. I’ll show you around the app. Skip any time, and find me again under Settings, Help & feedback.',
     screen: 'welcome',
     pose: 'welcome',
   },
@@ -82,7 +82,7 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
   },
   {
     id: 'models',
-    text: 'Choose who answers you: the account you signed in with, another service, or a model running on your own computer.',
+    text: 'The account you signed in with is what answers you, and it is already set up. If you ever want a different AI service, or one that runs free on your own computer, you add it here.',
     screen: 'settings:cloud',
     anchor: 'providers',
     pose: 'inquisitive',

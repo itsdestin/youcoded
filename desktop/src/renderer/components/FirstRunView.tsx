@@ -129,9 +129,10 @@ function AuthScreen({
           skip. It lives on the sign-in step because every install passes
           through here; the app's own dialogs only warn the first time a
           permission switch flips. */}
+      {/* Wording is Destin's (review deck 2026-09-10, Z-1). */}
       <p className="text-sm text-fg-dim text-center leading-relaxed">
-        The assistant can create, change and delete files in any folder you point it at.
-        Keep your own backups of anything you cannot replace.
+        With your permission, the assistant may create, change, or delete files on your device.
+        Create backups for anything you cannot replace.
       </p>
 
       {/* Documented pill exception: first-run hero CTAs keep rounded-full and
@@ -231,7 +232,7 @@ function CompletionCard() {
       {/* First-run guide design 2026-09-10 §1.2: the three "try this first"
           bullets are gone — the buddy's tour covers them once the app opens,
           so listing them here would say everything twice. */}
-      <p className="text-sm text-fg-dim text-center">Your buddy will show you around once the app opens.</p>
+      <p className="text-sm text-fg-dim text-center">Your assistant will show you around once the app opens.</p>
       <div className="flex items-center justify-center gap-2 text-xs text-fg-muted pt-1">
         <BrailleSpinner size="sm" />
         <span>Opening YouCoded…</span>

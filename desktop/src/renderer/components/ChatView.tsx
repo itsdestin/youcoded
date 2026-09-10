@@ -990,15 +990,10 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               (local/cloud) sessions shouldn't be told to talk to "Claude". */}
           {state.timeline.length === 0 && !state.isThinking && (
             <div
-              className="absolute inset-x-0 flex flex-col items-center justify-center gap-1 text-center text-fg-muted text-sm pointer-events-none"
+              className="absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none"
               style={{ top: 'var(--top-chrome-bottom, 3rem)', bottom: 'var(--bottom-chrome-height, 5rem)' }}
             >
-              <span>Start a conversation with {assistantName(provider)}</span>
-              {/* First-run guide (empty screens): one line under the prompt so a
-                  new person knows the assistant acts on THIS folder's files, not
-                  just chats. Same muted tone, one step smaller; px keeps it off
-                  the frame edge on a phone. */}
-              <span className="text-xs px-6">It works in this session&rsquo;s folder — ask it to read, write or change files there.</span>
+              Start a conversation with {assistantName(provider)}
             </div>
           )}
           {/* Chat-history find bar — sibling of (not inside) the scroll/content
