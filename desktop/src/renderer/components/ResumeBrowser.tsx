@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
 import { Button, Toggle, LoadingState, EmptyState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill } from './ui';
@@ -93,13 +93,18 @@ function SortArrow({ up, muted }: { up: boolean; muted: boolean }) {
 function measureDropdown(
   triggerRef: React.RefObject<HTMLButtonElement | null>,
   dropdownWidthPx: number,
+  boundsRef?: React.RefObject<HTMLElement | null>,
 ): { top: number; left: number } | null {
   const el = triggerRef.current;
   if (!el) return null;
   const rect = el.getBoundingClientRect();
-  // Clamp so the dropdown's right edge stays at least 8px inside the viewport.
+  // Clamp so the dropdown's right edge stays inside the row it hangs from (so
+  // it never pokes past the panel — UX review U15 saw the Tags menu reach to
+  // within 9px of a phone's screen edge) and at least 8px inside the viewport.
   // If the trigger sits too far right, the dropdown shifts left.
-  const maxLeft = Math.max(8, window.innerWidth - dropdownWidthPx - 8);
+  const bounds = boundsRef?.current?.getBoundingClientRect();
+  const rightLimit = Math.min(window.innerWidth - 8, bounds ? bounds.right : Infinity);
+  const maxLeft = Math.max(8, rightLimit - dropdownWidthPx);
   return {
     top: rect.bottom + 4,
     left: Math.min(rect.left, maxLeft),
@@ -115,11 +120,12 @@ function useDropdownReposition(
   triggerRef: React.RefObject<HTMLButtonElement | null>,
   dropdownWidthPx: number,
   setPosition: React.Dispatch<React.SetStateAction<{ top: number; left: number } | null>>,
+  boundsRef?: React.RefObject<HTMLElement | null>,
 ): void {
   useEffect(() => {
     if (!isOpen) return;
     const remeasure = () => {
-      const next = measureDropdown(triggerRef, dropdownWidthPx);
+      const next = measureDropdown(triggerRef, dropdownWidthPx, boundsRef);
       if (next) setPosition(next);
     };
     window.addEventListener('resize', remeasure);
@@ -130,7 +136,7 @@ function useDropdownReposition(
       window.removeEventListener('resize', remeasure);
       window.removeEventListener('scroll', remeasure, true);
     };
-  }, [isOpen, triggerRef, dropdownWidthPx, setPosition]);
+  }, [isOpen, triggerRef, dropdownWidthPx, setPosition, boundsRef]);
 }
 
 // Right padding reserved on a card's upper rows for the absolutely-positioned
@@ -264,6 +270,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const listRef = useScrollFade<HTMLDivElement>();
   // Wraps the filter pill row so outside-click can close the active dropdown.
   const filterRowRef = useRef<HTMLDivElement>(null);
+  // The chips row scrolls sideways at phone width; the fade says so (design guide §4.8).
+  useScrollFade(filterRowRef);
   // Trigger refs for portal positioning + dropdown refs so the outside-click
   // handler can recognize clicks inside the portaled dropdown body (which is
   // no longer a child of filterRowRef).
@@ -430,8 +438,17 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // project label instead). Within-group sort is priority-pinned + lastModified
   // by sortDir; between-group order also follows sortDir. Search always stays
   // flat so results read as one ranked list.
+  const filtersActive = selectedProjects.size > 0 || selectedTagIds.size > 0;
+  // The way out of an empty list names what emptied it (design guide G-18).
+  const emptyAction = search.trim() && filtersActive
+    ? { label: 'Clear search and filters', onClick: () => { setSearch(''); setSelectedProjects(new Set()); setSelectedTagIds(new Set()); } }
+    : search.trim() ? { label: 'Clear search', onClick: () => setSearch('') }
+    : filtersActive ? { label: 'Clear filters', onClick: () => { setSelectedProjects(new Set()); setSelectedTagIds(new Set()); } }
+    : undefined;
+  // One project picked needs no group header — it would repeat the chip's own
+  // label above the only group (UX review U17).
   const grouped = useMemo(() => {
-    if (search.trim() || selectedProjects.size === 0) return null;
+    if (search.trim() || selectedProjects.size <= 1) return null;
     return groupSessions(filtered, sortDir);
   }, [filtered, search, selectedProjects, sortDir]);
 
@@ -528,7 +545,19 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // Distinct projects with counts — what the Projects pill dropdown displays.
   // Derived from the unfiltered session list so the dropdown always shows
   // every known project, even when the user has narrowed the visible list.
-  const availableProjects = useMemo(() => getAvailableProjects(sessions), [sessions]);
+  // Counts and rows reflect what the list can actually show: with Show Complete
+  // off, a finished conversation is not counted and a project with only finished
+  // conversations is not offered (UX review U6: "youcoded 2" then showed one row).
+  const countable = useMemo(
+    () => (showComplete ? sessions : sessions.filter((s) => !s.flags?.complete || stickyComplete.has(s.sessionId))),
+    [sessions, showComplete, stickyComplete],
+  );
+  const availableProjects = useMemo(() => getAvailableProjects(countable), [countable]);
+  const tagCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const s of countable) for (const id of s.tags ?? []) m.set(id, (m.get(id) ?? 0) + 1);
+    return m;
+  }, [countable]);
 
   // Chip labels: nothing picked → the category; one picked → its name; more →
   // the category and a count (design guide G-19: label, space, numeral — never
@@ -561,8 +590,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [tagsDropdownPos, setTagsDropdownPos] = useState<{ top: number; left: number } | null>(null);
   // Reposition while open (resize / scroll updates only — not the initial
   // measurement, which is sync in the click handler).
-  useDropdownReposition(openPill === 'projects', projectsTriggerRef, 256, setProjectsDropdownPos);
-  useDropdownReposition(openPill === 'tags', tagsTriggerRef, 208, setTagsDropdownPos);
+  useDropdownReposition(openPill === 'projects', projectsTriggerRef, 256, setProjectsDropdownPos, filterRowRef);
+  useDropdownReposition(openPill === 'tags', tagsTriggerRef, 208, setTagsDropdownPos, filterRowRef);
+  // The panel re-centres when a pick shrinks or grows the list, which moves the
+  // chips without any scroll or resize event. A menu left at its old spot then
+  // covers the row, and the next click ticks a row nobody chose (UX review U1/U3).
+  useLayoutEffect(() => {
+    if (openPill === 'projects') setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256, filterRowRef));
+    if (openPill === 'tags') setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208, filterRowRef));
+  }, [openPill, filtered.length]);
 
   // Clear stale position state when the dropdown closes via outside-click or
   // ESC (the click handlers do this themselves, but those external paths
@@ -1219,7 +1255,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               placeholder="Search sessions..."
               inputAriaLabel="Search sessions"
             />
-            <div ref={filterRowRef} className="flex items-center gap-2 mt-2 overflow-x-auto scrollbar-none">
+            <div ref={filterRowRef} className="flex items-center gap-2 mt-2 scroll-fade-x">
               {/* Projects: pick-any menu over the distinct project paths in the loaded
                   sessions. The menu is portaled to document.body so it escapes the
                   OverlayPanel's overflow:hidden clipping (lets it overlap the panel edge). */}
@@ -1227,7 +1263,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 buttonRef={projectsTriggerRef}
                 active={selectedProjects.size > 0}
                 open={openPill === 'projects'}
-                className="shrink-0 max-w-[14rem]"
+                className="shrink-0 max-w-[9rem]"
                 onClick={(e) => {
                   e.stopPropagation();
                   // Measure synchronously so the dropdown renders with its final
@@ -1237,7 +1273,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     setOpenPill(null);
                     setProjectsDropdownPos(null);
                   } else {
-                    setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256));
+                    setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256, filterRowRef));
                     setOpenPill('projects');
                   }
                 }}
@@ -1285,7 +1321,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     <button
                       type="button"
                       disabled={selectedProjects.size === 0}
-                      onClick={() => setSelectedProjects(new Set())}
+                      onClick={() => { setSelectedProjects(new Set()); setOpenPill(null); setProjectsDropdownPos(null); }}
                       className={MENU_FOOTER_ACTION}
                     >
                       Clear
@@ -1300,11 +1336,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 buttonRef={tagsTriggerRef}
                 active={selectedTagIds.size > 0}
                 open={openPill === 'tags'}
-                className="shrink-0 max-w-[14rem]"
+                className="shrink-0 max-w-[9rem]"
                 onClick={(e) => {
                   e.stopPropagation();
                   if (openPill === 'tags') { setOpenPill(null); setTagsDropdownPos(null); }
-                  else { setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208)); setOpenPill('tags'); }
+                  else { setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208, filterRowRef)); setOpenPill('tags'); }
                 }}
               >
                 {tagsLabel}
@@ -1338,6 +1374,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                           >
                             <CheckboxMark checked={checked} />
                             <TagChip tag={t} />
+                            <span className="ml-auto text-2xs text-fg-muted shrink-0 tabular-nums">{tagCounts.get(t.id) ?? 0}</span>
                           </button>
                         );
                       })}
@@ -1352,7 +1389,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                     <button
                       type="button"
                       disabled={selectedTagIds.size === 0}
-                      onClick={() => setSelectedTagIds(new Set())}
+                      onClick={() => { setSelectedTagIds(new Set()); setOpenPill(null); setTagsDropdownPos(null); }}
                       className={MENU_FOOTER_ACTION}
                     >
                       Clear
@@ -1379,7 +1416,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 onClick={() => setSortDir((d) => (d === 'desc' ? 'asc' : 'desc'))}
                 className="inline-flex items-center gap-1.5 shrink-0 whitespace-nowrap"
               >
-                <span>{sortDir === 'desc' ? 'Most recent' : 'Oldest first'}</span>
+                <span className="grid">
+                  <span className="col-start-1 row-start-1">{sortDir === 'desc' ? 'Most recent' : 'Oldest first'}</span>
+                  {/* The other label, invisible, so the chip keeps one width when it
+                      flips and the row stops nudging (UX review U19). */}
+                  <span className="col-start-1 row-start-1 invisible" aria-hidden="true">{sortDir === 'desc' ? 'Oldest first' : 'Most recent'}</span>
+                </span>
                 <SortArrow up={sortDir === 'asc'} muted={sortDir === 'desc'} />
               </FilterChip>
             </div>
@@ -1400,8 +1442,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 <LoadingState what="sessions" />
               ) : filtered.length === 0 ? (
                 <EmptyState
-                  message={search.trim() ? 'No matching sessions' : 'No previous sessions found'}
-                  action={search.trim() ? { label: 'Clear search', onClick: () => setSearch('') } : undefined}
+                  message={search.trim() || filtersActive ? 'No matching sessions' : 'No previous sessions found'}
+                  action={emptyAction}
                 />
               ) : (
                 // ONE list for both modes — grouped (project header + its rows,
