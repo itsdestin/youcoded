@@ -46,6 +46,7 @@ import { PRIORITY_TAG, PRIORITY_HINT } from '../../../components/tags/built-in-t
 import { TagGlyph, NotePageGlyph, PencilGlyph } from '../../../components/tags/glyphs';
 import { FilepathToken } from '../../../components/FilepathToken';
 import { UnifiedDiff } from '../../../components/diff/UnifiedDiff';
+import MarkdownContent from '../../../components/MarkdownContent';
 import type { TagRecord } from '../../../../shared/tags';
 // voice-mic: the REAL composer against a per-pane fake of window.claude.voice.
 import InputBar from '../../../components/InputBar';
@@ -5749,6 +5750,38 @@ const ALL_SURFACES: CompareSurface[] = [
           },
         ],
       },
+      {
+        // Round 5 (2026-09-10): Destin approved the words on review-4 G-1 and
+        // asked for seven changes in the note. See SfxTabbedR5's header.
+        n: 5,
+        basis: 'Words approved (review-4 G-1 = yes). His note: one-line expandable warning, moved below the tabs and Overview-only; markdown for "what it got"; full-width switch; a rough size; tools as expandable rows.',
+        candidates: [
+          {
+            id: 'r4-trimmed',
+            label: 'Before — round 4, small model',
+            note: 'What you answered yes to: warning pinned above the tabs on every tab, raw text in a code block, a small got/cut switch, tools as chips.',
+            render: () => <SfxTabbedStyled ctx={SFX_CTX} trimmed />,
+          },
+          {
+            id: 'r5-trimmed',
+            label: 'After — small model, changes 21 to 27',
+            note: 'Tabs first; the warning is one line on Overview only, opening to the full sentence with "(see details below)" back; markdown; a full-width switch with a line count; tools open in place.',
+            render: () => <SfxTabbedR5 ctx={SFX_CTX} trimmed />,
+          },
+          {
+            id: 'r5-full',
+            label: 'After — cloud model, everything fit',
+            note: 'The green state under the same changes: tabs first, the everything-fit card below them, tools that open.',
+            render: () => <SfxTabbedR5 ctx={SFX_CTX_FULL} trimmed={false} />,
+          },
+          {
+            id: 'r5-trimmed-plain',
+            label: 'After — cut text shown plainly',
+            note: 'Changes 21 to 27, with the "What was cut" tab showing only the text that was cut instead of the red/green comparison.',
+            render: () => <SfxTabbedR5 ctx={SFX_CTX} trimmed cutStyle="plain" />,
+          },
+        ],
+      },
     ],
   },
 ];
@@ -6504,6 +6537,321 @@ function SfxTabbedStyled({ ctx, trimmed, cutStyle = 'diff' }: { ctx: CompleteSes
   );
 }
 
+
+// ── Round 5 (2026-09-10) — Destin's notes on his G-1 answer ──────────────────
+// He approved the words ("yes"), then asked for seven changes. Numbered from 21
+// so nothing already approved is renumbered:
+//   21 the warning is ONE line, expandable;
+//   22 it sits BELOW the tab strip, and only on Overview;
+//   23 "(see details below)" comes back — round 4 removed it because a banner
+//      pinned above the tabs pointed at nothing on four of the five tabs, and 22
+//      makes it true again: the card now sits directly above the list it names;
+//   24 "What it got" renders through the app's own markdown renderer;
+//   25 the got/cut switch spans the width of the panel;
+//   26 each side carries a rough size;
+//   27 tools are full-width expandable rows carrying a description.
+
+/** Plain-English blurbs for the app's own tools. WHY they live here rather than
+ *  arriving with the session: a tool's description is a constant of the tool, not
+ *  a fact about this chat, so shipping it per session would be paying on every
+ *  connection for something that never changes. And the descriptions in the tool
+ *  registry are written FOR THE MODEL — "Load a named skill's instructions and
+ *  follow them" is not what a non-developer needs to read. An MCP tool has no
+ *  entry here and falls back to naming the add-on it came from. */
+const SFX_TOOL_BLURBS: Record<string, string> = {
+  Read: 'Opens a file and reads what is in it.',
+  Write: 'Creates a new file, or replaces one that already exists.',
+  Edit: 'Changes part of a file and leaves the rest alone.',
+  Bash: 'Runs a command on your computer, the way a terminal does.',
+  Glob: 'Finds files by name — every file ending in .md, say.',
+  Grep: 'Searches inside files for a word or phrase.',
+  TodoWrite: 'Keeps a checklist of what it is working on.',
+  WebFetch: 'Opens a web page and reads it.',
+  WebSearch: 'Searches the web.',
+  Task: 'Hands a piece of work to a helper that works on its own.',
+  Skill: 'Loads a set of step-by-step instructions you have installed.',
+  AskUserQuestion: 'Stops and asks you a question when it needs a decision.',
+};
+
+function sfxToolBlurb(name: string): string {
+  const known = SFX_TOOL_BLURBS[name];
+  if (known) return known;
+  const parts = name.split('__');
+  return parts.length >= 3 && parts[0] === 'mcp'
+    ? `Part of the ${parts[1]} add-on. Only that add-on knows what it does.`
+    : 'An action the assistant can take in this chat.';
+}
+
+/** Change 27. SettingRow's own `expanded` mode — the shape Destin picked on
+ *  2026-09-05 ("I HATE the bare dropdowns with a chevron"): the same right-hand
+ *  chevron every navigating row has, turned down while open. */
+function SfxToolRow({ name }: { name: string }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <div>
+      <SettingRow variant="item" title={name} expanded={open} onClick={() => setOpen((o) => !o)} />
+      {open && <p className="text-2xs text-fg-2 leading-relaxed px-3 pt-1.5">{sfxToolBlurb(name)}</p>}
+    </div>
+  );
+}
+
+/** Change 21 + 23. Collapsed it is one line; opened it is the sentence approved
+ *  in round 3, with Destin's "(see details below)" restored now that 22 puts the
+ *  card directly above the list that phrase points at. */
+function SfxWarnCard({ windowLabel }: { windowLabel: string }) {
+  const [open, setOpen] = React.useState(false);
+  return (
+    <Callout tone="warning">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        aria-expanded={open}
+        className="w-full flex items-center gap-2 text-left cursor-pointer"
+      >
+        {/* Collapsed it is Destin's own four words, which fit the panel at every
+            width — an explanatory clause here clipped at 420px, and a warning you
+            cannot finish reading is not a warning. */}
+        <span className={`flex-1 min-w-0 font-medium ${open ? '' : 'truncate'}`}>
+          {open
+            ? `This model’s context window is small (${windowLabel}), so some rules and skills were cut and it may miss steps it would normally follow (see details below).`
+            : 'Not everything fit'}
+        </span>
+        <svg
+          className={`w-4 h-4 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`}
+          fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 5l7 7-7 7" />
+        </svg>
+      </button>
+    </Callout>
+  );
+}
+
+/** Change 24. The app's own markdown renderer, inside the well the code blocks
+ *  used. A SKILL.md and a CLAUDE.md ARE markdown, so showing them as raw source
+ *  made the panel look like a developer tool for no gain. */
+function SfxMd({ text }: { text: string }) {
+  // WHY the heading overrides: MarkdownContent is sized for a chat bubble, where a
+  // level-1 heading is a real heading. Dropped unchanged into a 420px panel it
+  // dwarfs everything around it and the quote stops reading as a detail of the
+  // row above it. Sizes only — the renderer still owns lists, code and links.
+  return (
+    <div className="max-h-64 overflow-y-auto rounded-lg bg-well p-3 border border-edge-dim text-2xs text-fg-2
+      [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-2xs [&_h4]:text-2xs
+      [&_h1]:mt-0 [&_h2]:mt-2 [&_h3]:mt-2
+      [&_p]:text-2xs [&_li]:text-2xs [&_code]:text-2xs [&_pre]:text-2xs">
+      <MarkdownContent content={text} />
+    </div>
+  );
+}
+
+const sfxLines = (s: string) => s.split('\n').filter((l) => l.trim() !== '').length;
+
+/** Changes 24, 25, 26 applied to the got/cut switch. */
+function SfxCutBlockR5({ fullText, supplied, what, cutStyle = 'diff' }: { fullText?: string | null; supplied: string; what: string; cutStyle?: 'diff' | 'plain' }) {
+  const [view, setView] = React.useState<'got' | 'cut'>('got');
+  const diffable = !!fullText && fullText !== supplied;
+  if (!diffable) return <SfxMd text={supplied} />;
+  const cutCount = Math.max(0, sfxLines(fullText) - sfxLines(supplied));
+  return (
+    <div className="space-y-2">
+      <SegmentedTabs
+        variant="contained"
+        aria-label={`${what}: what the assistant got, or what was cut`}
+        tabs={[{ id: 'got', label: 'What it got' }, { id: 'cut', label: 'What was cut' }]}
+        value={view}
+        onChange={(v) => setView(v as 'got' | 'cut')}
+      />
+      {/* Change 26: a rough size, so "some was cut" has a scale attached. Lines
+          rather than a count of characters — it is the unit a person can picture. */}
+      <p className="text-3xs text-fg-muted">
+        {view === 'got'
+          ? `${sfxLines(supplied)} lines the assistant read`
+          : `${cutCount} lines it never saw`}
+      </p>
+      {view === 'cut' && (
+        <p className="text-2xs text-fg-muted leading-snug">
+          {cutStyle === 'plain'
+            ? 'The assistant never saw this — it was cut to fit.'
+            : 'Red was cut — the assistant never saw it. Green is the shorter version it got instead.'}
+        </p>
+      )}
+      {view === 'cut'
+        ? (cutStyle === 'plain'
+          ? <pre className={SFX_CODE}>{sfxCutLines(fullText, supplied)}</pre>
+          : <UnifiedDiff oldStr={fullText} newStr={supplied} />)
+        : <SfxMd text={supplied} />}
+    </div>
+  );
+}
+
+function SfxTabbedR5({ ctx, trimmed, cutStyle = 'diff' }: { ctx: CompleteSessionContext; trimmed: boolean; cutStyle?: 'diff' | 'plain' }) {
+  const [tab, setTab] = React.useState('overview');
+  const c = ctx;
+  const cutSkills = c.skills.filter((s) => s.truncated);
+  const dropped = c.droppedMcpServers;
+  const skillsWord = `${c.skills.length} skill${c.skills.length === 1 ? '' : 's'}`;
+  const toolsWord = `${c.tools.length} tool${c.tools.length === 1 ? '' : 's'}`;
+  const basename = (p: string) => p.split('/').slice(-1)[0];
+
+  return (
+    <div className="flex flex-col">
+      <div className="flex items-center justify-between px-4 py-3 border-b border-edge shrink-0">
+        <div className="min-w-0">
+          <h2 className="text-sm font-bold text-fg truncate">What the assistant was given</h2>
+          <p className="text-3xs text-fg-muted mt-0.5">Its instructions, skills and tools for this chat.</p>
+        </div>
+        <CloseButton onClick={() => {}} label="Close What the assistant was given" />
+      </div>
+
+      <div className="px-4 py-4 space-y-5 h-[460px] overflow-y-auto">
+        {/* Change 22: the tabs come FIRST now. The status card belongs to the
+            Overview tab rather than standing over all five. */}
+        <SegmentedTabs
+          variant="contained"
+          aria-label="What the assistant was given"
+          tabs={[
+            { id: 'overview', label: 'Overview' },
+            { id: 'builtin', label: 'YouCoded' },
+            { id: 'project', label: 'Project' },
+            { id: 'skills', label: 'Skills' },
+            { id: 'tools', label: 'Tools' },
+          ]}
+          value={tab}
+          onChange={setTab}
+        />
+
+        {tab === 'overview' && (
+          <>
+            {trimmed ? (
+              <SfxWarnCard windowLabel={sfxWindowLabel(c.contextWindowTokens)} />
+            ) : (
+              <div className="rounded-lg bg-inset/50 px-3 py-2.5 flex items-start gap-2">
+                <span className="mt-1.5"><SfxDot ok /></span>
+                <p className="text-2xs text-fg-2 leading-relaxed">
+                  <span className="font-medium text-fg">Everything fit.</span> The assistant has this project’s full rules, {skillsWord} and {toolsWord}.
+                </p>
+              </div>
+            )}
+            {trimmed && (
+              <section>
+                <h3 className={SFX_EYEBROW}>What was left out</h3>
+                <div className="space-y-1.5">
+                  {c.projectInstructions.truncated && (
+                    <SettingRow variant="item" icon={<SfxDot ok={false} />} title="This project’s rules" description={`Shortened to headings only · ${basename(c.projectInstructions.path)}`} onClick={() => setTab('project')} />
+                  )}
+                  {cutSkills.map((sk) => (
+                    <SettingRow key={sk.id} variant="item" icon={<SfxDot ok={false} />} title={`${sk.label} skill`} description="Cut short" onClick={() => setTab('skills')} />
+                  ))}
+                  {dropped.map((d) => (
+                    <SettingRow key={d} variant="item" icon={<SfxDot ok={false} />} title={`${d} add-on`} description="Not attached — its tools can’t be used in this chat" onClick={() => setTab('tools')} />
+                  ))}
+                </div>
+              </section>
+            )}
+            <section>
+              <h3 className={SFX_EYEBROW}>This chat</h3>
+              <div className="space-y-1.5">
+                <SettingRow variant="item" title="Model" value={c.modelLabel} />
+                <SettingRow
+                  variant="item"
+                  title="Context window"
+                  description={trimmed ? 'How much it can hold at once — small' : 'How much it can hold at once'}
+                  value={`${sfxWindowLabel(c.contextWindowTokens)} tokens`}
+                />
+                <SettingRow variant="item" title="Given" value={`1 rules file · ${skillsWord} · ${toolsWord}`} />
+              </div>
+            </section>
+            <section>
+              <h3 className={SFX_EYEBROW}>More</h3>
+              <SettingRow
+                variant="item"
+                title="Assistant settings"
+                description="Change the model, or what the assistant is given"
+                onClick={() => {}}
+              />
+            </section>
+          </>
+        )}
+
+        {tab === 'builtin' && (
+          <section>
+            <h3 className={SFX_EYEBROW}>Built-in instructions</h3>
+            <p className="text-2xs text-fg-muted leading-snug mb-2">The same in every chat, whatever the project.</p>
+            <SfxMd text={c.systemPrompt} />
+          </section>
+        )}
+
+        {tab === 'project' && (
+          <section>
+            <h3 className={SFX_EYEBROW}>This project’s rules</h3>
+            <p className="text-2xs text-fg-muted leading-snug mb-2">Written for this project and read once when the chat started.</p>
+            <div className="space-y-1.5 mb-2">
+              <SettingRow
+                variant="item"
+                icon={<SfxDot ok={!c.projectInstructions.truncated} />}
+                title={basename(c.projectInstructions.path)}
+                description={c.projectInstructions.truncated ? 'Shortened to headings only' : 'Read in full'}
+                accessory={<Button variant="secondary" size="sm">Open</Button>}
+              />
+            </div>
+            {c.projectInstructions.truncated
+              ? <SfxCutBlockR5 fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" cutStyle={cutStyle} />
+              : <SfxMd text={c.projectInstructions.text} />}
+          </section>
+        )}
+
+        {tab === 'skills' && (
+          <section>
+            <h3 className={SFX_EYEBROW}>Skills</h3>
+            <p className="text-2xs text-fg-muted leading-snug mb-2">Step-by-step guides the assistant follows when a task matches one.</p>
+            <div className="space-y-1.5">
+              {c.skills.map((sk) => (
+                <div key={sk.id} className="space-y-2">
+                  <SettingRow
+                    variant="item"
+                    icon={<SfxDot ok={!sk.truncated} />}
+                    title={sk.label}
+                    description={sk.truncated ? 'Cut short' : 'Loaded in full'}
+                    accessory={<Button variant="secondary" size="sm">Open</Button>}
+                  />
+                  {sk.truncated ? (
+                    <SfxCutBlockR5
+                      fullText={sk.fullText}
+                      supplied={sk.fullText ? sk.fullText.split('\n').slice(0, 5).join('\n') + '\n… (cut here)' : '… (cut short)'}
+                      what={`${sk.label} skill`}
+                      cutStyle={cutStyle}
+                    />
+                  ) : (
+                    sk.fullText && <SfxMd text={sk.fullText} />
+                  )}
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {tab === 'tools' && (
+          <section className="space-y-3">
+            <div>
+              <h3 className={SFX_EYEBROW}>Tools</h3>
+              <p className="text-2xs text-fg-muted leading-snug mb-2">Actions the assistant can take in this chat. Open one to see what it does.</p>
+              {/* Change 27: full-width rows that expand, not chips. */}
+              <div className="space-y-1.5">
+                {c.tools.map((t) => <SfxToolRow key={t} name={t} />)}
+              </div>
+            </div>
+            {dropped.length > 0 && (
+              <Callout tone="warning" title="Not attached">
+                {dropped.join(', ')} — there was no room for {dropped.length === 1 ? 'its' : 'their'} tools, so the assistant can’t use them in this chat.
+              </Callout>
+            )}
+          </section>
+        )}
+      </div>
+    </div>
+  );
+}
 
 // CompareView opens on COMPARE_SURFACES[0] and has no URL param for the surface,
 // so whichever entry is first is the one a plain ?view=compare lands on. Order by
