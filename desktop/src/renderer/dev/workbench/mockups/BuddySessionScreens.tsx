@@ -20,6 +20,38 @@ import { CHAT_SIZE } from '../../../../shared/buddy-geometry';
 
 export function BuddySessionScreensMockup() {
   const [created, setCreated] = React.useState<string | null>(null);
+  // ?bare=1 drops the explainer and lets the panel BE the viewport.
+  //
+  // WHY IT MATTERS, and it is not cosmetic: the framed version below is a 320px
+  // BOX inside a browser window several hundred pixels wide, so `innerWidth` is
+  // that wider number. Anything that clamps to the VIEWPORT — the model
+  // picker's panel does — therefore behaves as it does in the main window, and
+  // the framed page silently fails to reproduce the one condition the buddy
+  // actually imposes. Screenshot this route at a 320x480 viewport with ?bare=1
+  // to see what the floater really shows.
+  const bare = new URLSearchParams(window.location.search).get('bare') === '1';
+
+  const panel = (
+    <div
+      className="buddy-chat-panel"
+      style={{
+        width: bare ? '100vw' : CHAT_SIZE.width,
+        height: bare ? '100vh' : CHAT_SIZE.height,
+        // Matches BuddyChat's own shell padding so the panes sit where they
+        // really sit — a mock-up with different padding measures nothing.
+        padding: '12px 10px',
+        display: 'flex',
+        flexDirection: 'column',
+      }}
+    >
+      <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
+        <BuddyWelcome onSessionCreated={setCreated} />
+      </div>
+    </div>
+  );
+
+  if (bare) return panel;
+
   return (
     <div className="min-h-screen bg-canvas text-fg p-8">
       <h1 className="text-sm font-semibold mb-1">Buddy floater — session screens</h1>
@@ -30,22 +62,13 @@ export function BuddySessionScreensMockup() {
         conversation, press Create or Resume.
       </p>
 
-      <div
-        className="buddy-chat-panel"
-        style={{
-          width: CHAT_SIZE.width,
-          height: CHAT_SIZE.height,
-          // Matches BuddyChat's own shell padding so the panes sit where they
-          // really sit — a mock-up with different padding measures nothing.
-          padding: '12px 10px',
-          display: 'flex',
-          flexDirection: 'column',
-        }}
-      >
-        <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
-          <BuddyWelcome onSessionCreated={setCreated} />
-        </div>
-      </div>
+      {panel}
+
+      <p className="text-2xs text-fg-dim mt-4 max-w-xl leading-relaxed">
+        Add <code className="text-fg">&amp;bare=1</code> and size the window to
+        320&times;480 to reproduce the floater&rsquo;s real viewport — the only way to see
+        how a popover that clamps to the viewport actually lands there.
+      </p>
 
       {created && (
         <p className="text-2xs text-fg-dim mt-4">
