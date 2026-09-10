@@ -10,6 +10,20 @@ export interface CompactionConfig {
 }
 const PRUNE_TRAILER = (n: number) => `\n\n[pruned — ${n} chars of tool output elided to fit context; re-run the tool if you need it again]`;
 
+// WHY: the durable continuation manifest REFERENCES transcript text instead of
+// copying it, so it has to recompute a pruned tool result byte-for-byte from the
+// untouched event text. These two helpers are the single definition of that
+// transform — pruneToolOutputs below calls them, and accepted-history-store.ts
+// calls them to recognise and rebuild a pruned part. If prune ever diverged from
+// the recomputation, a resumed session would silently disagree with the live one.
+export function prunedToolResultText(value: string, keepChars: number): string {
+  return value.slice(0, keepChars) + PRUNE_TRAILER(value.length - keepChars);
+}
+export function imageCollapsedToolResultText(text: string, toolName: string | undefined): string {
+  const note = `[image pruned — re-run ${toolName ?? 'the tool'} if you need to see it again]`;
+  return text ? `${text}\n${note}` : note;
+}
+
 export function estimateTokens(messages: ModelMessage[]): number {
   return messagesTokens(messages);   // binary-aware (#290 follow-up fix 1)
 }
@@ -38,40 +52,56 @@ export function pruneToolOutputs(messages: ModelMessage[], cfg: CompactionConfig
   const cutoff = protectedFrom(messages, cfg.protectedTokens);
   return messages.map((m, i) => {
     if (i >= cutoff || (m as any).role !== 'tool' || !Array.isArray((m as any).content)) return m;
+    // WHY the identity contract (cache Stage 4): a message NONE of whose parts
+    // were touched is returned as the SAME object, not a rebuilt copy. The
+    // harness decides whether a compaction really changed history by diffing
+    // this array per message (harness-session.ts, maybeCompact/compactNow), and
+    // an unconditional `{ ...m, content }` made that diff fire on a genuine
+    // no-op — bumping the accepted-history revision and invalidating a
+    // published checkpoint for a history that never moved. Pinned by
+    // tests/compaction.test.ts ("returns an UNCHANGED tool message by identity").
+    let changed = false;
     const content = (m as any).content.map((part: any) => {
-      if (part?.type !== 'tool-result') return part;
-      const output = part.output;
-      // AI SDK v7 'content' output (tool-delivered images: text + file parts).
-      // Outside the protected window this collapses to its text plus a named
-      // note — same rule as the string branch below. Without this branch,
-      // stage-1 prune could only ever shrink STRING outputs, so an image sat
-      // in the window unreclaimed until a full summarize silently destroyed
-      // it (the exact silent-loss class this milestone exists to eliminate).
-      if (output?.type === 'content' && Array.isArray(output.value)) {
-        const text = output.value.filter((v: any) => v?.type === 'text').map((v: any) => v.text).join('\n');
-        // Fix 2 (2026-08-11 review): only claim "[image pruned]" when a file
-        // part is actually present. Both known producers of 'content' output
-        // always attach a file, so this is unreachable today — but a fileless
-        // 'content' output collapsing to an "[image pruned]" note would be
-        // model-facing text about an image that never existed, AND would (via
-        // countImageOutputs, kept in sync with this check below) trip the
-        // shownImages cache-clear for no reason. Must agree with
-        // countImageOutputs on what counts as "an image output" or the two
-        // sites disagree about the same message.
-        const hasFile = output.value.some((v: any) => v?.type === 'file');
-        if (!hasFile) return { ...part, output: { type: 'text', value: text } };
-        // Fix 3 (2026-08-11 review): join with '\n' only when there's text to
-        // join onto, so a text-less image output doesn't collapse to a bare
-        // leading newline.
-        const note = `[image pruned — re-run ${part.toolName ?? 'the tool'} if you need to see it again]`;
-        return { ...part, output: { type: 'text', value: text ? `${text}\n${note}` : note } };
-      }
-      const value = output?.value;
-      if (typeof value !== 'string' || value.length <= cfg.pruneToChars) return part;
-      return { ...part, output: { ...output, value: value.slice(0, cfg.pruneToChars) + PRUNE_TRAILER(value.length - cfg.pruneToChars) } };
+      const pruned = prunePart(part, cfg);
+      if (pruned !== part) changed = true;
+      return pruned;
     });
-    return { ...(m as any), content };
+    return changed ? { ...(m as any), content } : m;
   });
+}
+// One tool-result part's prune, returning the part ITSELF when nothing applies —
+// which is what lets pruneToolOutputs above keep whole untouched messages by
+// identity. Split out only so that "unchanged" is a single, obvious signal.
+function prunePart(part: any, cfg: CompactionConfig): any {
+  if (part?.type !== 'tool-result') return part;
+  const output = part.output;
+  // AI SDK v7 'content' output (tool-delivered images: text + file parts).
+  // Outside the protected window this collapses to its text plus a named
+  // note — same rule as the string branch below. Without this branch,
+  // stage-1 prune could only ever shrink STRING outputs, so an image sat
+  // in the window unreclaimed until a full summarize silently destroyed
+  // it (the exact silent-loss class this milestone exists to eliminate).
+  if (output?.type === 'content' && Array.isArray(output.value)) {
+    const text = output.value.filter((v: any) => v?.type === 'text').map((v: any) => v.text).join('\n');
+    // Fix 2 (2026-08-11 review): only claim "[image pruned]" when a file
+    // part is actually present. Both known producers of 'content' output
+    // always attach a file, so this is unreachable today — but a fileless
+    // 'content' output collapsing to an "[image pruned]" note would be
+    // model-facing text about an image that never existed, AND would (via
+    // countImageOutputs, kept in sync with this check below) trip the
+    // shownImages cache-clear for no reason. Must agree with
+    // countImageOutputs on what counts as "an image output" or the two
+    // sites disagree about the same message.
+    const hasFile = output.value.some((v: any) => v?.type === 'file');
+    if (!hasFile) return { ...part, output: { type: 'text', value: text } };
+    // Fix 3 (2026-08-11 review): join with '\n' only when there's text to
+    // join onto, so a text-less image output doesn't collapse to a bare
+    // leading newline.
+    return { ...part, output: { type: 'text', value: imageCollapsedToolResultText(text, part.toolName) } };
+  }
+  const value = output?.value;
+  if (typeof value !== 'string' || value.length <= cfg.pruneToChars) return part;
+  return { ...part, output: { ...output, value: prunedToolResultText(value, cfg.pruneToChars) } };
 }
 // Counts tool-result parts still carrying an unpruned 'content' (image)
 // output. harness-session.ts diffs this before/after pruneToolOutputs to
@@ -86,7 +116,7 @@ export function countImageOutputs(messages: ModelMessage[]): number {
     if ((m as any).role !== 'tool' || !Array.isArray((m as any).content)) continue;
     for (const part of (m as any).content) {
       // Fix 2 (2026-08-11 review): must agree with the hasFile check in
-      // pruneToolOutputs above — a fileless 'content' output isn't an image
+      // prunePart above — a fileless 'content' output isn't an image
       // output there anymore, so it can't count as one here either, or the
       // cache-clear gate and the prune branch would disagree about the same
       // message.

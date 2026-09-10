@@ -16,7 +16,7 @@ const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 const PROJECTS_DIR = path.join(CLAUDE_DIR, 'projects');
 const TOPICS_DIR = path.join(CLAUDE_DIR, 'topics');
 const CONVERSATION_INDEX_PATH = path.join(CLAUDE_DIR, 'conversation-index.json');
-// Mirrors NativeHome's private sessionPath() convention (~/.youcoded/sessions/
+// Mirrors NativeHome's sessionFilePath() convention (~/.youcoded/sessions/
 // <slug>/<id>.jsonl) — captured at module load like CLAUDE_DIR above, which is
 // why tests reset modules + re-stub os.homedir() before each listPastSessions
 // call (see session-browser.test.ts).

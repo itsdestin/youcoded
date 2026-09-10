@@ -318,3 +318,17 @@ describe('buildNamingPrompt', () => {
     expect(prompt).not.toContain('current name');
   });
 });
+
+describe('the diagnostics lane', () => {
+  it('runs the naming model call in the title lane, never the chat baseline', async () => {
+    const { currentChatGptRequest } = await import('../src/main/providers/chatgpt-request-diagnostics');
+    const seen: Array<{ sessionId: string; purpose: string } | undefined> = [];
+    const h = harness({
+      generate: async () => { const c = currentChatGptRequest(); seen.push(c && { sessionId: c.sessionId, purpose: c.purpose }); return 'Generated name'; },
+    });
+    h.namer.noteEvent(userMessage('help me with photosynthesis'));
+    h.namer.noteEvent(turnComplete());
+    await settle();
+    expect(seen).toEqual([{ sessionId: SID, purpose: 'title' }]);
+  });
+});

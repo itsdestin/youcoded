@@ -52,6 +52,7 @@ import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
 import { NativeSessionHost } from './harness/native-session-host';
+import { AcceptedHistoryStore } from './harness/accepted-history-store';
 import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
 import { PermissionStore } from './harness/permission-store';
@@ -207,7 +208,7 @@ const CLIPBOARD_MAX_AGE_MS = 60 * 60 * 1000;
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
 // Native transcript existence probe: does ~/.youcoded/sessions/<slug>/<id>.jsonl
-// exist for this cwd? Mirrors NativeHome.sessionPath's convention — the RAW
+// exist for this cwd? Mirrors NativeHome.sessionFilePath's convention — the RAW
 // frozen nativeStoreSlug, NOT ccProjectSlug (see session-store.ts's slug-divergence
 // note). Used by the native RESUME path to validate a cwd BEFORE handing it to
 // nativeHost.resume, so session-manager's silent cwd→$HOME fallback can never
@@ -2578,6 +2579,13 @@ export function registerIpcHandlers(
   // its in-memory per-source state is what makes re-reading only a CHANGED
   // folder work across turns and across conversations sharing one project.
   const specialistCatalog = new SpecialistCatalog({ home: nativeHome });
+  // Durable accepted-history continuation (cache Stage 4). Profile-PRIVATE
+  // state: it lives under Electron's userData, never under NativeHome (which
+  // syncs) and never beside the transcripts it describes. One sweep at startup
+  // drops sidecars whose transcript is gone — the only lifecycle boundary the
+  // app has, since there is no native transcript-deletion UI today.
+  const acceptedHistory = new AcceptedHistoryStore(app.getPath('userData'));
+  void acceptedHistory.cleanupOrphans().catch(() => { /* best-effort cleanup */ });
   const nativeHost = new NativeSessionHost(
     new SessionStore(nativeHome),
     // Pass the per-turn opts (e.g. serialToolCalls for small local models) straight through.
@@ -2725,6 +2733,12 @@ export function registerIpcHandlers(
     // above, sharing nativeHome with every other ~/.youcoded/ writer here.
     specialistCatalog,
     () => stepGuardSettings.read(),
+    // Continuation (16th param): the private store above, plus the registry's
+    // SINGLE continuation-identity method — the same one the ChatGPT model's
+    // owner closure calls, so what the harness accepts and what a resume looks
+    // up can never disagree. It throws when ChatGPT is signed out; the host
+    // treats that as a fallback to ordinary reconstruction.
+    { acceptedHistory, continuationIdentityFor: (binding) => providerRegistry.continuationIdentity(binding) },
   );
 
   // Task 4: resolves sessionId's CURRENT model binding into the portable ref

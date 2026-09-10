@@ -41,6 +41,26 @@ describe('pruneToolOutputs', () => {
     expect(JSON.stringify(out[0])).not.toContain('"data"');
   });
 
+  it('returns an UNCHANGED tool message by identity, and only a really-pruned one as a new object', () => {
+    // WHY identity matters here (cache Stage 4): the harness decides whether a
+    // compaction really changed history by diffing this array PER MESSAGE
+    // (harness-session.ts, maybeCompact/compactNow). Rebuilding a message whose
+    // parts are all untouched makes that diff fire on a genuine no-op, which
+    // bumps the accepted-history revision and invalidates a published
+    // checkpoint for a history that is byte-for-byte what it was.
+    const short = toolMsg('short', 10);              // already under pruneToChars
+    const big = toolMsg('big', 40_000);              // the only real prune
+    const filler = userMsg('x'.repeat(40_000));      // pushes both tool messages out of the window
+    const out = pruneToolOutputs([short, big, filler], cfg);
+    expect(out[0]).toBe(short);
+    expect(out[1]).not.toBe(big);
+    expect(out[2]).toBe(filler);                     // non-tool messages were always by identity
+    // Byte-identical output otherwise: the pruned message is still pruned, and
+    // the untouched one still carries all 10 characters.
+    expect((out[1] as any).content[0].output.value).toContain('[pruned');
+    expect((out[0] as any).content[0].output.value).toBe('x'.repeat(10));
+  });
+
   it('leaves an image content-output INSIDE the protected window untouched', () => {
     // Same shape as the prune case above, but nothing pushes it out of the
     // protected window — the image must survive byte-for-byte.

@@ -4,6 +4,128 @@
 
 `SessionProvider = 'claude' | 'native' | 'shell'`. The third member arrived 2026-09-05 with the local engine's set-up flow: a `'shell'` session is a plain terminal running the user's own `$SHELL` (`powershell.exe` on Windows) with **no AI in it at all** — no hook pipe, no transcript watcher, no model, no binding. It exists so the app can offer "Run in terminal" for a set-up command (`engine:run-in-terminal`, minted only by `prepareRunInTerminal` in `session-manager.ts`) instead of sending the user off to find a terminal. It is never offered in the new-session form, but the button SELECTS the session it makes, so every renderer branch that reads a provider can see it. The native runtime is a cloud-first + local slice layered so a native session emits the exact `TranscriptEventType` shapes CC does, letting the shared chat reducer/UI render it unchanged. `native.supported=true` in production as of 2026-07-16 (env kill switch: `YOUCODED_NATIVE=0`) — known Phase 2 Plan B/C gaps still apply (see roadmap spec). Modules: `desktop/src/main/harness/`, `desktop/src/main/providers/`, `native-home.ts`, `desktop/src/renderer/components/native-send.ts`. Governing specs: `docs/active/specs/2026-07-09-platform-vision-roadmap.md`, the archived phase0/phase1 design docs, ADRs 006–010. Empirical couplings: `youcoded/docs/provider-dependencies.md`.
 
+## ChatGPT request diagnostics (Stage 1, unshipped)
+
+The provider registry owns a process-local diagnostic observer under
+`<userData>/private-diagnostics/chatgpt-cache/`, outside NativeHome, transcripts,
+sync and ordinary bug-report logs. Actual sends (including internal 401 resends)
+are observed inside the credential wrapper without handing it headers. Chat,
+specialist, summary and title scopes are separate; the logical step is allocated
+outside the harness retry loop. Dispatch, not completion, advances comparison.
+Raw SDK usage distinguishes missing cache detail from a real zero. Comparisons
+are item counts, never cached-token-prefix estimates or proof of cache residency.
+
+The observer retains per-process HMAC fingerprints only in memory (8 MiB bound),
+256 unfinished observations for at most ten minutes, and at most 1,000 sanitized
+queued records. Two rotating JSONL files are each limited to 5 MiB, with private
+permissions where supported. File failures are nonfatal; cumulative loss counters
+make incomplete diagnostic coverage visible. No raw body, fingerprint, cache
+key, reasoning, account identity or provider error is written.
+
+Local summary (from `youcoded/desktop`, pass only diagnostic files):
+
+```sh
+node scripts/chatgpt-cache-summary.mjs /path/to/requests.previous.jsonl /path/to/requests.jsonl
+```
+
+It groups by opaque session/model/purpose, reports valid-subset weighted reuse
+and fresh input, overall input/output, request/token coverage, changes and timing.
+Unknown reuse is `null`, not zero. Offline tests do not establish cache savings.
+Parsing and hashing remain synchronous, and the body is now walked ONCE: the
+hand-rolled serialized-value scanner reports the input-array length and the model
+id itself, so the second full `JSON.parse` is gone. A scan that does not reach its
+container's closing bracket is dropped as an unparseable observation (counted,
+new baseline) rather than compared — a short walk yields a short fingerprint, and
+two short fingerprints of different requests would compare `identical`. A
+2026-09-09 offline 20-iteration CPU measurement, five runs each on one machine,
+medians: **12.98 ms -> 12.72 ms** for a 433,018-byte, 100k-token-like request and
+**29.33 ms -> 27.99 ms** with an additional 4 MiB encrypted part (4,627,366 bytes
+total). The single-parser change is worth a few percent; hashing dominates.
+Absolute figures move with machine load — an earlier same-day run of the same
+benchmark read 23.45 ms / 50.00 ms — so compare before/after within one run, not
+across sessions. These are observations, not performance budgets. The benchmark
+is opt-in: `YOUCODED_DIAG_BENCH=1 npx vitest run
+tests/chatgpt-request-diagnostics.test.ts` from `youcoded/desktop`. Stage 1 does not alter
+continuation acceptance/persistence.
+
+## Durable accepted history (Stage 4, unshipped)
+
+A ChatGPT continuation only stays cache-warm if the session can put the SAME
+earlier items back on the wire after the app closes. The transcript cannot do
+that: it never stores reasoning ciphertext, item ids or provider metadata.
+Stage 4 therefore keeps a private per-session sidecar beside nothing else.
+
+**Where.** `<userData>/private-continuation/<sessionId>.manifest.json` (the
+checkpoint) and `<sessionId>.eligibility.json` (the revision fence), both with
+the session id URL-encoded. Directory 0700, files 0600 where the platform
+supports it. This is the Electron profile, NOT NativeHome — so the sidecar is
+outside the transcript tree, outside sync, and outside every reader that walks
+either. Owned by `harness/accepted-history-store.ts`, which is the only module
+in the app that names the directory.
+
+**Referenced, not copied.** The manifest describes each history message as
+POINTERS into the persisted transcript: an event uuid (plus a byte range when a
+coalesced text/reasoning part was streamed in deltas), or a concatenation of
+consecutive uuids. Message text, tool input, tool output and image bytes are
+never copied; images are re-read from their transcript paths and digest-checked
+at restore, and pruned tool output is RECOMPUTED with the same helpers
+compaction uses (`prunedToolResultText`, `imageCollapsedToolResultText`). What
+the manifest does hold is provider continuation metadata under a per-part key
+allowlist — reasoning ciphertext, item ids, response phase — plus two bounded
+exceptions: a user string with no matching anchor (an injected rule or steer)
+is stored as a literal capped at 64 KiB, and
+`providerOptions.openai.parallelToolCall.input` is kept verbatim because the
+pinned `@ai-sdk/openai` converter re-emits that wrapper argument string byte for
+byte and the transcript (which keeps only each child call's parsed input) cannot
+rebuild it. Be honest about what that second exception holds: the wrapper
+argument string is the concatenated RAW ARGUMENTS of that step's child calls, so
+a parallel step's tool input does sit in the sidecar — as the wrapper's own
+string, never as a per-call copy — and it is kept only because the SDK re-emits
+it verbatim and it cannot be rebuilt from the transcript. One further descriptor
+cites nothing at all: `{kind:'empty', field:'reasoning-text'}`, for an encrypted
+reasoning item whose summary never emitted a token (`@ai-sdk/openai` still opens
+the part, so `ai` hands over `text:''`, and no anchor can reproduce an empty
+string). Reasoning is the only part allowed to be empty; an empty part of any
+other kind still fails the publish. Anything the descriptor cannot express fails
+the publish rather than restoring an approximation. Pinned by `tests/accepted-history-privacy.test.ts`,
+which runs a real session whose reasoning ciphertext is a sentinel and proves it
+reaches the manifest and no other reader.
+
+**Bound.** A serialized manifest over **16 MiB** (`ACCEPTED_HISTORY_MAX_BYTES`)
+is refused, and a stored file over that size is refused at restore. The refusal
+happens after the fence, so an oversized replacement leaves the older checkpoint
+ineligible rather than restorable-but-stale.
+
+**Fallback reason codes.** Every failure logs one fixed code and no content; the
+session silently falls back to rebuilding history from the transcript, which is
+correct but loses the ciphertext. Publish: `stale-generation`, `oversized`,
+`write-failed`, `unreferenced-history`, plus `persistence-failed` /
+`unknown-reference` from the transcript flush and `publish-failed` if the store
+itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
+`missing-transcript`, `transcript-advanced`, `binding-mismatch`,
+`assembly-mismatch`, `image-mismatch`, plus `identity-unavailable` when the
+continuation identity cannot be built (ChatGPT signed out). The line carries a
+`phase` of `publish` or `restore`, because a restore fallback is routine (no
+sidecar yet, another device, a changed model) and used to read as a failed write.
+
+**Credential epoch.** The checkpoint is bound to a continuation identity, which
+for ChatGPT is `providerId\0modelId\0sha256(accountId)\0credentialEpoch`. The
+epoch is 16 random bytes stored in `chatgpt-account.json`, minted on every fresh
+sign-in and removed with the account on sign-out; a legacy row without one reads
+`legacy` until the next sign-in. `ProviderRegistry.continuationIdentity()` is
+the single place that string is built. Changing account, model or credentials
+therefore mismatches the manifest and falls back instead of replaying one
+account's ciphertext under another's credentials.
+
+**Lifecycle.** There is no native transcript-deletion UI today, so there is no
+delete hook to attach to. The two boundaries are `cleanupOrphans()`, run once at
+startup from `ipc-handlers.ts`, which drops sidecars whose transcript is gone,
+and restore's own removal when the transcript it names is missing.
+
+**Cross-device.** The sidecar is profile-local and never syncs. A session taken
+over on another device finds no manifest, falls back to a rebuild, and becomes
+durable again on that device at its next publication.
+
 ## Provider seam (Phase 0, PR #115)
 
 - **`'native'` has NO runtime in Phase 0.** `SessionManager.createSession` throws loudly for any non-claude provider — a deliberate guard so a stray native create (e.g. from a remote client payload) fails instead of spawning a broken PTY. Phase 1 branches BEFORE the PTY worker spawn.

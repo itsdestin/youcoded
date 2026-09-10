@@ -10,7 +10,8 @@
 // failed answer, a cut-off turn treated as a clean stop, and dead network
 // connections piling up behind a run of failures.
 import { describe, it, expect } from 'vitest';
-import { foldStream, transformParams } from '../src/main/providers/chatgpt-model';
+import { foldStream, transformParams, chatGptMiddleware } from '../src/main/providers/chatgpt-model';
+import { ChatGptRequestDiagnostics, currentChatGptRequest } from '../src/main/providers/chatgpt-request-diagnostics';
 import type { LanguageModelV4CallOptions } from '@ai-sdk/provider';
 
 /** A stream of the given parts. `onCancel` fires if the reader cancels it —
@@ -37,6 +38,42 @@ const FINISH = {
 };
 
 describe('foldStream', () => {
+  it('releases the underlying reader after a rejected read without replacing its error', async () => {
+    const error = new Error('PRIVATE_READ_ERROR');
+    const underlying = new ReadableStream({ pull() { throw error; } }, { highWaterMark: 0 });
+    const diagnostics = new ChatGptRequestDiagnostics({ directory: '/unused', write: async () => {} });
+    const result = await chatGptMiddleware('session', diagnostics).wrapStream!({ params: {}, doStream: async () => ({ stream: underlying }) } as any);
+    await expect(result.stream.getReader().read()).rejects.toBe(error);
+    expect(underlying.locked).toBe(false);
+  });
+  it('diagnostic observer never pulls before consumer demand and cancellation records abort', async () => {
+    const rows: any[] = [];
+    const diagnostics = new ChatGptRequestDiagnostics({ directory: '/unused', write: async row => { rows.push(row); } });
+    let pulls = 0;
+    let canceled = false;
+    const middleware = chatGptMiddleware('session', diagnostics);
+    const result = await middleware.wrapStream!({
+      params: {},
+      doStream: async () => {
+        const context = currentChatGptRequest()!;
+        context.attemptId = diagnostics.dispatch(context, '{"model":"gpt-5","input":[]}');
+        return { stream: new ReadableStream({
+          pull(controller) { pulls++; controller.enqueue({ type: 'text-delta', id: 'x', delta: 'PRIVATE_DELTA' }); },
+          cancel() { canceled = true; },
+        }, { highWaterMark: 0 }) };
+      },
+    } as any);
+    await Promise.resolve();
+    expect(pulls).toBe(0);
+    const reader = result.stream.getReader();
+    await reader.read();
+    expect(pulls).toBe(1);
+    await reader.cancel();
+    expect(canceled).toBe(true);
+    await diagnostics.flush();
+    expect(rows[0].outcome).toBe('aborted');
+    expect(JSON.stringify(rows)).not.toContain('PRIVATE_DELTA');
+  });
   it('folds text parts and carries the stream’s finish reason and usage', async () => {
     const out = await foldStream({
       stream: partsStream([

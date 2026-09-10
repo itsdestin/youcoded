@@ -29,6 +29,7 @@ import {
   NamingRecord, basicNameFrom, isReviewDue, sanitizeAutoName,
 } from './conversations/naming-core';
 import { isRealSessionName } from '../shared/session-title';
+import { withChatGptRequest } from './providers/chatgpt-request-diagnostics';
 
 /** How many consecutive failed generations one scheduled review will spend
  *  before giving up and waiting for the next scheduled point. Without this an
@@ -219,7 +220,10 @@ export function createSessionNamer(deps: SessionNamerDeps): SessionNamer {
       state.attempts += 1;
       let raw: string;
       try {
-        raw = await deps.generate(binding, prompt);
+        // WHY (cache-efficiency design §1): naming work shares the session's
+        // binding but must never overwrite the conversation's diagnostic
+        // comparison baseline; it runs in its own 'title' lane.
+        raw = await withChatGptRequest(sessionId, 'title', () => deps.generate(binding, prompt));
       } catch {
         // Provider down, model removed, timeout. Stay silent — chat is not
         // interrupted and the name on screen is untouched. Retry next reply
