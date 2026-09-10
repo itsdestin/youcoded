@@ -43,9 +43,12 @@ it('draws every setup stage with the banner it already has, never a bespoke pane
   cleanup();
 
   const consent = mount('consent');
-  expect(screen.getByText(/public certificate record/)).toBeTruthy();
+  // Consent belongs to the OPTIONAL level now: the default setup issues no certificate, so
+  // it publishes nothing and has nothing to consent to.
+  expect(screen.getByText(/public list of issued certificates/)).toBeTruthy();
+  expect(screen.getByText(/cannot be undone/i)).toBeTruthy();
   expect(screen.getByText('home-laptop.example-tailnet.ts.net')).toBeTruthy();
-  fireEvent.click(screen.getByRole('button', { name: 'Approve and continue' }));
+  fireEvent.click(screen.getByRole('button', { name: 'I understand — continue' }));
   expect(consent).toHaveBeenCalledWith({ type: 'check' });
   cleanup();
 
@@ -62,6 +65,19 @@ it('names the missing prerequisite instead of one generic setup button', () => {
   const signIn = mount('setup', 'sign-in-required');
   fireEvent.click(screen.getByRole('button', { name: 'Sign in' }));
   expect(signIn).toHaveBeenCalledWith({ type: 'prerequisite' });
+});
+
+it('offers browser encryption as an upgrade, and says what it costs before it is taken', () => {
+  // Destin, 2026-09-10: default to the plain setup, then plainly explain what the advanced
+  // level gains and what it risks. The gain is concrete — phone microphone, copy, fonts —
+  // because "more secure" is not true here: both levels are encrypted.
+  const action = mount('ready');
+  expect(screen.getByText('Advanced')).toBeTruthy();
+  expect(screen.getByText(/Private either way/)).toBeTruthy();
+  expect(screen.getByText(/permanent public list/)).toBeTruthy();
+  expect(screen.getByText(/Tailscale's website|Tailscale’s website/)).toBeTruthy();
+  fireEvent.click(screen.getByRole('switch', { name: 'Browser encryption' }));
+  expect(action).toHaveBeenCalledWith({ type: 'advanced' });
 });
 
 it('keeps offline devices, marks them, and confirms unpairing before acting', () => {

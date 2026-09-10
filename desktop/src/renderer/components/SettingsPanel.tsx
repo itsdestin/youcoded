@@ -1216,23 +1216,42 @@ export function BuddyButton() {
  * a state, a warning callout for something to read first, an ErrorState for a failure.
  * WHY no bespoke panel: round-2 review rejected one for not looking like the app.
  */
-function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
-  if (view.stage === 'consent') {
+/**
+ * The optional level's consent. It lives in the Advanced section, NOT the setup banner:
+ * putting it at the top read as "setup is incomplete" when the default setup is finished
+ * and private on its own (Destin, 2026-09-10).
+ */
+function renderBrowserEncryptionConsent(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
+  {
     // WHY the address is shown whole: the public record is the machine name, and a user
     // cannot approve publishing a name we did not put in front of them.
     let host = '';
     try { const u = new URL(view.address); if (u.protocol === 'https:') host = u.hostname; } catch { /* shown as unavailable */ }
     return (
       <div className="space-y-2">
-        <Callout tone="warning" title="Before continuing:">
-          This computer&apos;s connection name — <span className="font-mono">{host || 'unavailable'}</span> — becomes part of a public certificate record. Your conversations and files stay private.
+        <p className="text-xs text-fg-2">
+          Your connection is already private either way. This adds a certificate, which lets your
+          phone use the microphone, copy buttons and font picker — things a browser only allows on
+          a connection it can verify.
+        </p>
+        <Callout tone="warning" title="This cannot be undone:">
+          This computer&apos;s name — <span className="font-mono">{host || 'unavailable'}</span> — is added to a
+          public list of issued certificates. The list is permanent: turning this off later does not
+          remove it, and renaming the computer does not either. Only the name is public. Your
+          conversations and files are not.
         </Callout>
+        <p className="text-xs text-fg-2">
+          You will also need to turn on certificates for your Tailscale account, on their website.
+        </p>
         <Button onClick={() => act({ type: 'check' })} className="w-full" disabled={!host}>
-          Approve and continue
+          I understand — continue
         </Button>
       </div>
     );
   }
+}
+
+function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
   if (view.stage === 'checking') {
     return <StatusStrip tone="busy" detail="Keep YouCoded open">Checking this computer&apos;s connection…</StatusStrip>;
   }
@@ -1428,7 +1447,7 @@ function RemoteButton(props: RemoteButtonProps) {
   // showed a separate "Tailscale" tag next to the title whenever installed;
   // folding it into the subtitle only when it adds information (fully
   // connected) avoids a redundant "Tailscale VPN not active · Tailscale".
-  const previewLabels = { setup: 'Set up secure access', consent: 'Approval needed', checking: 'Checking connection…', ready: 'Ready to connect', conflict: 'Address in use', error: 'Check failed', disabled: 'Remote access is off' };
+  const previewLabels = { setup: 'Set up secure access', consent: 'Ready to connect', checking: 'Checking connection…', ready: 'Ready to connect', conflict: 'Address in use', error: 'Check failed', disabled: 'Remote access is off' };
   const subtitle = previewView ? previewLabels[previewView.stage] : isFullyConnected ? `${statusText} · Tailscale` : statusText;
 
   return (
@@ -1470,7 +1489,7 @@ function RemoteButton(props: RemoteButtonProps) {
                 ) : (
                   <>
                     {/* Setup banner — shown when no clients connected */}
-                    {(previewView ? previewView.stage !== 'ready' : !hasClients) && (
+                    {(previewView ? previewView.stage !== 'ready' && previewView.stage !== 'consent' : !hasClients) && (
                       // Info callouts are accent-tinted, warnings are amber. The
                       // amber "setup required" boxes below stay amber — they're a
                       // true warning status, not information.
@@ -1672,7 +1691,9 @@ function RemoteButton(props: RemoteButtonProps) {
                         not signal. */}
                     {(previewView || (tailscale?.installed && tailscale?.connected && tailscale?.url && config?.hasPassword)) && (
                       <Button
-                        disabled={!!previewView && previewView.stage !== 'ready'}
+                        // WHY consent counts as ready: the default setup is complete and
+                        // pairing works; the optional level is only being considered.
+                        disabled={!!previewView && previewView.stage !== 'ready' && previewView.stage !== 'consent'}
                         onClick={() => onSetShowAddDevice(!showAddDevice)}
                         variant="secondary"
                         className="w-full py-2"
@@ -1736,6 +1757,35 @@ function RemoteButton(props: RemoteButtonProps) {
                         <Button variant="secondary" onClick={onCopyLink} className="w-full mt-2">
                           {copied ? 'Copied!' : 'Copy Link'}
                         </Button>
+                      </section>
+                    )}
+
+                    {/* The optional second level. It sits BELOW the working setup, as its own
+                        eyebrow section, because the default is complete on its own — this is
+                        an upgrade, not an unfinished step (Destin, 2026-09-10). */}
+                    {previewView && preview && (previewView.stage === 'ready' || previewView.stage === 'consent') && (
+                      <section>
+                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Advanced</h3>
+                        <SettingRow
+                          variant="item"
+                          title="Browser encryption"
+                          description={previewView.browserEncryption === 'on'
+                            ? 'On — your phone can use the microphone, copy buttons and font picker.'
+                            : 'Adds microphone, copy and font picker on your phone. Private either way.'}
+                          control={<Toggle
+                            enabled={previewView.browserEncryption === 'on'}
+                            onToggle={() => preview.act({ type: 'advanced' })}
+                            label="Browser encryption"
+                          />}
+                        />
+                        {previewView.stage === 'consent'
+                          ? <div className="pt-2">{renderBrowserEncryptionConsent(previewView, preview.act)}</div>
+                          : previewView.browserEncryption !== 'on' && (
+                            <p className="text-2xs text-fg-muted pt-2">
+                              Turning it on adds this computer&apos;s name to a permanent public list and
+                              needs a setting changed on Tailscale&apos;s website.
+                            </p>
+                          )}
                       </section>
                     )}
 
