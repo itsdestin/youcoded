@@ -20,14 +20,39 @@ vi.mock('ws', async () => {
 // listenBehavior lets a test turn the next listen() into a bind failure
 // (EADDRINUSE) instead of a success, so the start-failure path is exercised
 // rather than assumed.
-const listenBehavior: { mode: 'ok' | 'error'; calls: number } = { mode: 'ok', calls: 0 };
+const listenBehavior: { mode: 'ok' | 'error'; calls: number; boundHost: string | null } =
+  { mode: 'ok', calls: 0, boundHost: null };
+
+// Remote access refuses to start without a private address to listen on, so every start()
+// test needs one. Real detection shells out to the tailscale binary.
+vi.mock('../src/main/remote-config', async () => {
+  const actual = await vi.importActual<typeof import('../src/main/remote-config')>('../src/main/remote-config');
+  return {
+    ...actual,
+    RemoteConfig: Object.assign(
+      function RemoteConfigStub() { /* tests pass their own config object */ } as unknown as typeof actual.RemoteConfig,
+      actual.RemoteConfig,
+      {
+        detectTailscale: vi.fn(async () => ({
+          installed: true, connected: true, ip: '100.64.0.1',
+          hostname: 'test-host', url: 'http://test-host:9900',
+        })),
+      },
+    ),
+  };
+});
 
 vi.mock('http', async () => {
   const { EventEmitter: EE } = await import('events');
   function createServer(_handler?: any) {
     const emitter: any = new EE();
     return Object.assign(emitter, {
-      listen: vi.fn((_port: number, cb?: () => void) => {
+      // Signature matches net.Server: (port, host?, cb?). The server now names a host —
+      // the Tailscale address — so a mock that assumed (port, cb) would silently never
+      // call back and every start() test would hang.
+      listen: vi.fn((_port: number, hostOrCb?: string | (() => void), maybeCb?: () => void) => {
+        const cb = typeof hostOrCb === 'function' ? hostOrCb : maybeCb;
+        listenBehavior.boundHost = typeof hostOrCb === 'string' ? hostOrCb : null;
         listenBehavior.calls++;
         if (listenBehavior.mode === 'error') {
           const err: any = new Error('listen EADDRINUSE: address already in use :::9900');

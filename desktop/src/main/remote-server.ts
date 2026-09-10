@@ -22,6 +22,7 @@ import type { SessionManager } from './session-manager';
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
+import { RemoteConfig as RemoteConfigStatics } from './remote-config';
 import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import type { SerializedChatState } from '../renderer/state/chat-types';
@@ -168,6 +169,9 @@ export class RemoteServer {
   private completedRequests = new Map<string, { id: string; at: number }[]>();
   /** The OS reason the last start() failed, so the panel can say it rather than guess. */
   private lastStartError: string | null = null;
+  /** The tailnet address to bind to. Null means Tailscale is not up, and start() refuses
+   *  rather than falling back to every interface — that fallback IS the open listener. */
+  private bindAddress: string | null = null;
   // Last-known topic names, fed by ipc-handlers.ts via setLastTopic()
   private lastTopics = new Map<string, string>();
   // Last-known FULL status payload, fed by ipc-handlers.ts via broadcastStatusData(),
@@ -328,6 +332,20 @@ export class RemoteServer {
     }
     if (this.running) return;
 
+    // WHY this refuses instead of falling back: binding every interface is exactly the
+    // open, unencrypted listener this batch exists to remove. No Tailscale, no remote
+    // access — and the panel says so rather than reporting a server that is not private.
+    const ts = await RemoteConfigStatics.detectTailscale(this.config.port);
+    if (!ts.connected || !ts.ip) {
+      this.bindAddress = null;
+      this.lastStartError = ts.installed
+        ? 'Tailscale is installed but not connected, so there is no private address to listen on.'
+        : 'Tailscale is not installed, so there is no private address to listen on.';
+      this.emitStatus();
+      throw new Error(this.lastStartError);
+    }
+    this.bindAddress = ts.ip;
+
     // Subscribe to events for buffering and broadcasting
     this.sessionManager.on('pty-output', this.onPtyOutput);
     this.hookRelay.on('hook-event', this.onHookEvent);
@@ -426,7 +444,11 @@ export class RemoteServer {
         reject(err);
       };
       server.once('error', onError);
-      server.listen(this.config.port, () => {
+      // Bind to the Tailscale address ONLY. Verified 2026-09-09: a server bound this way
+      // answers on the tailnet name and REFUSES the machine's home-wifi address, which is
+      // contract row R10 — and it needs neither Tailscale Serve nor an administrator
+      // password, because nothing about Tailscale's own configuration changes.
+      server.listen(this.config.port, this.bindAddress ?? undefined, () => {
         if (settled) return;
         settled = true;
         server.removeListener('error', onError);
