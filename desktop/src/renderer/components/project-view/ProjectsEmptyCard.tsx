@@ -50,8 +50,8 @@ export function ProjectsEmptyCard({ onAdd }: ProjectsEmptyCardProps) {
           </div>
           {/* Two plain sentences. "Files", never "artifacts" — user-facing copy. */}
           <p className="text-sm text-fg-2 leading-relaxed">
-            The assistant remembers a project&rsquo;s context files, keeps its conversations
-            together, and this screen shows the files it made there.
+            The assistant keeps a project&rsquo;s instructions, memories and conversations
+            together, and this screen lists the files it made there.
           </p>
           <p className="text-sm text-fg-2 leading-relaxed">
             Any folder can be one. Start with the one you work in most.

@@ -11,7 +11,7 @@ const NOTE_MAX = 8000;
 // Default placeholder (first-run guide, empty screens): says what a note is FOR
 // and where it turns up again, instead of the bare "Add a note…" — a new user
 // had no way to know the note surfaces in Resume. Callers may still override.
-export function NoteEditor({ value, onSave, placeholder = 'A note to your future self — it shows in Resume', fieldClassName = '' }: {
+export function NoteEditor({ value, onSave, placeholder = 'A note for later — shows under All Sessions', fieldClassName = '' }: {
   value: string;
   onSave: (text: string) => void;
   placeholder?: string;

@@ -126,12 +126,13 @@ import { playSound } from './utils/sounds';
 import GuideTour from './components/guide/GuideTour';
 import GuideTipHost from './components/guide/GuideTipHost';
 import { findGuideAnchor } from './components/guide/GuideRing';
-import { requestGuideReset } from './components/guide/guide-events';
+import { requestGuideAdvance, requestGuideReset } from './components/guide/guide-events';
 import { armGuideForFreshInstall, bumpCounter, guideDoneAt, isGuidePending, markGuideDone } from './components/guide/guide-state';
 import { triggerTip } from './components/guide/tips';
 // --- First-time warnings: Skip Permissions, Full auto, a small model ---
 import { useFirstTimeGate } from './components/FirstTimeWarning';
 import { isSmallModel } from './components/first-time-warnings';
+import { SkipPermissionsInfoTooltip } from './components/SkipPermissionsInfoTooltip';
 import type { GuideScreen } from './components/guide/guide-stops';
 
 interface SessionStats {
@@ -2589,6 +2590,8 @@ function AppInner() {
     const m = sessionModel || realModelAlias(currentModel);
     // The projects tip's moment: the fifth session ever started (tips.ts).
     if (bumpCounter('sessions-started') === 5) triggerTip('projects');
+    // A session started while the tour's form stop is up moves the tour on.
+    requestGuideAdvance();
     // The four native/claude conditionals this payload needs (drop the alias,
     // force skipPermissions false, carry binding, carry preset) live in ONE
     // place now — shared/session-create-args.ts. They were hand-written at each
@@ -3132,7 +3135,13 @@ function AppInner() {
   // What each tour stop's screen means in THIS app. The tour names screens
   // (guide-stops.ts); only App knows the state that opens them, so the mapping
   // lives here and reuses the exact setters every button already uses.
+  const lastGuideScreen = useRef<GuideScreen | null>(null);
   const openGuideScreen = useCallback((screen: GuideScreen) => {
+    // Two stops in a row on the same screen (Projects, then Files) keep it
+    // open instead of closing and reopening it between them (UX tester, U6).
+    const previous = lastGuideScreen.current;
+    lastGuideScreen.current = screen;
+    if (previous === screen) return;
     const closeAll = () => {
       setSettingsOpen(false); setProvidersAutoOpen(false); setResumeRequested(false);
       dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
@@ -3186,6 +3195,7 @@ function AppInner() {
   const exitTour = useCallback(() => {
     markGuideDone();
     setTourOpen(false);
+    lastGuideScreen.current = null;
     // Leave the person on the welcome screen, or their session — never inside
     // a settings page the tour opened for its own reasons.
     setSettingsOpen(false); setProvidersAutoOpen(false);
@@ -3673,7 +3683,12 @@ function AppInner() {
                   {welcomeRuntime !== 'native' && (
                     <>
                       <div className="flex items-center justify-between">
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Skip Permissions</label>
+                        {/* The same (i) explainer the strip form carries — the
+                            welcome form had none (UX tester run 1, U10). */}
+                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
+                          Skip Permissions
+                          <SkipPermissionsInfoTooltip />
+                        </label>
                         {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state; now
                             the shared Toggle on the danger tone, so theme packs can restyle
                             it (changes 15/17). The <label> beside it isn't bound to this

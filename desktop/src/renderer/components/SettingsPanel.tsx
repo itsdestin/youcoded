@@ -2173,7 +2173,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
             </svg>
           }
           title="Help & feedback"
-          description="The tour, tips, the community, and reporting a bug"
+          description="Tour, tips, community, bug reports"
           onClick={() => setShowHelp(true)}
           // data-guide-anchor (on the wrapper below): the tour's last stop
           // presses this row to open the page it talks about. SettingRow
@@ -2506,7 +2506,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             </svg>
           }
           title="Help & feedback"
-          description="The tour, tips, the community, and reporting a bug"
+          description="Tour, tips, community, bug reports"
           onClick={() => setShowHelp(true)}
           // data-guide-anchor (on the wrapper below): the tour's last stop
           // presses this row to open the page it talks about. SettingRow

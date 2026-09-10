@@ -101,13 +101,13 @@ export function HelpPopup({ open, onClose, onShowMeAround, onOpenBug, version, b
         <SettingRow
           icon={<BugIcon />}
           title="Report a bug or request a feature"
-          description="Send it to the maintainers"
+          description="Send it to the team"
           onClick={() => { onOpenBug(); onClose(); }}
         />
         <SettingRow
           icon={<ClipboardListIcon />}
           title="Known issues and planned features"
-          description="Browse open issues on GitHub"
+          description="See what is known and what is coming"
           onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
         />
         {/* The version, so a bug report or a Reddit post can quote it without

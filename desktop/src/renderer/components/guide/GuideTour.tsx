@@ -12,6 +12,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import GuideBubble, { type GuideBubbleButton } from './GuideBubble';
 import GuideRing, { findGuideAnchor } from './GuideRing';
+import { useGuideAdvance } from './guide-events';
 import { GUIDE_STOPS, type GuideAction, type GuideScreen, type GuideStop } from './guide-stops';
 
 interface Props {
@@ -32,16 +33,26 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
 
   // "Do it now" only while the control it would press is on screen — a
   // button that does nothing is worse than no button. Polled, because the
-  // control arrives with the screen's transition, not with the stop.
+  // control arrives with the screen's transition, not with the stop. The
+  // same poll decides whether a stop's control is on screen at all, which
+  // picks between `text` and `textWhenMissing`.
   const actionAnchor = stop?.action?.kind === 'click-anchor' ? stop.action.anchor : null;
   const [actionAvailable, setActionAvailable] = useState(false);
+  const [anchorPresent, setAnchorPresent] = useState(true);
   useEffect(() => {
-    if (!actionAnchor) { setActionAvailable(false); return; }
-    const check = () => setActionAvailable(!!findGuideAnchor(actionAnchor));
+    const check = () => {
+      setActionAvailable(!!actionAnchor && !!findGuideAnchor(actionAnchor));
+      setAnchorPresent(!stop?.anchor || !!findGuideAnchor(stop.anchor));
+    };
     check();
     const t = setInterval(check, 300);
     return () => clearInterval(t);
-  }, [actionAnchor]);
+  }, [actionAnchor, stop]);
+
+  // Started a session while the form stop was up: move on (guide-events.ts).
+  useGuideAdvance(useCallback(() => {
+    if (stop?.screen === 'welcome-form' && index < stops.length - 1) setIndex(index + 1);
+  }, [stop, index, stops.length]));
 
   const runAction = useCallback((action: GuideAction) => {
     if (action.kind === 'marketplace') { onMarketplace?.(); return; }
@@ -65,7 +76,7 @@ export default function GuideTour({ stops = GUIDE_STOPS, onOpenScreen, onExit, o
     <>
       {stop.anchor && <GuideRing anchor={stop.anchor} />}
       <GuideBubble eyebrow={`${index + 1} of ${stops.length}`} buttons={buttons} pose={stop.pose} label="Tour">
-        {stop.text}
+        {!anchorPresent && stop.textWhenMissing ? stop.textWhenMissing : stop.text}
       </GuideBubble>
     </>
   );

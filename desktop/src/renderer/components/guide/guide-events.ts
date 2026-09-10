@@ -12,6 +12,22 @@
 import { useEffect } from 'react';
 
 const RESET_EVENT = 'youcoded:guide-reset';
+const ADVANCE_EVENT = 'youcoded:guide-advance';
+
+/** The person did the thing a stop was about (started a session while the
+ *  form stop was up): the tour moves on instead of pointing at a form that
+ *  is gone (UX tester run 1, U2). */
+export function requestGuideAdvance(): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new Event(ADVANCE_EVENT));
+}
+
+export function useGuideAdvance(next: () => void): void {
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.addEventListener(ADVANCE_EVENT, next);
+    return () => window.removeEventListener(ADVANCE_EVENT, next);
+  }, [next]);
+}
 
 /** The tour is moving to another screen: every listening dialog closes. */
 export function requestGuideReset(): void {

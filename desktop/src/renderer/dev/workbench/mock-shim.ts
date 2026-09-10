@@ -2140,13 +2140,20 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // hand-off; the workbench routes past the wizard, so nothing else would.)
   // `?guide=tip:<id>` fires that one tip a moment after boot, so a tip can be
   // photographed without walking to its real moment.
+  // With no flag the tour debt is CLEARED: the workbench routes past the wizard,
+  // so the only way the flag exists here is a previous `?guide=tour` load in
+  // the same browser profile, and a review shot taken after one came back with
+  // the tour over the surface it meant to photograph (2026-09-10).
   const guideFlag = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('guide') : null;
-  if (guideFlag && typeof localStorage !== 'undefined') {
+  if (typeof localStorage !== 'undefined') {
     try {
-      localStorage.removeItem('youcoded-tips-seen');
-      localStorage.setItem('youcoded-tips-armed', '1');
       if (guideFlag === 'tour') localStorage.setItem('youcoded-guide-pending', '1');
-      if (guideFlag.startsWith('tip:')) setTimeout(() => triggerTip(guideFlag.slice(4)), 1500);
+      else localStorage.removeItem('youcoded-guide-pending');
+      if (guideFlag) {
+        localStorage.removeItem('youcoded-tips-seen');
+        localStorage.setItem('youcoded-tips-armed', '1');
+        if (guideFlag.startsWith('tip:')) setTimeout(() => triggerTip(guideFlag.slice(4)), 1500);
+      }
     } catch { /* the workbench can live without it */ }
   }
   const firstRun = {

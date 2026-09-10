@@ -82,7 +82,11 @@ export function FirstTimeWarning({ kind, open, onCancel, onContinue }: FirstTime
       )}
       {/* Footer: a decision to confirm, so Cancel + one primary (design guide
           G-4, §4.3). Continue is disabled, not hidden, until the box is ticked
-          so the person can see what the checkbox unlocks. */}
+          so the person can see what the checkbox unlocks — and one muted line
+          says so (UX tester run 1, U26: a greyed button with no hint). */}
+      {needsConsent && !checked && (
+        <p className="text-2xs text-fg-muted text-right">Tick the box to continue</p>
+      )}
       <div className="flex gap-2 justify-end">
         <Button variant="secondary" onClick={() => close(onCancel)}>
           Cancel
