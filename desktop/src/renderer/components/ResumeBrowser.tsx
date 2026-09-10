@@ -323,13 +323,21 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
   // The header clone's own tags/note sheet (see renderSessionRow).
   const [cloneOrganizeId, setCloneOrganizeId] = useState<string | null>(null);
-  // One animation window per change of previewed conversation.
-  // Same hook ChatView uses for the identical event (see its `arriving`). It
-  // lives up here with the other hooks, NOT beside the render helpers that use
-  // it: everything below `if (!open) return null` runs conditionally, and a
+  // One animation window per previewed conversation — fired when its transcript
+  // has SETTLED, not when the row was clicked. ChatView can key its arrival on
+  // the session id because the conversation it swaps to is already in memory;
+  // here it is read off disk, and on a large transcript that is about a second.
+  // Keyed on the click, the spring played out over a loading line and the
+  // bubbles arrived after it had finished — "chat bubbles in the preview feel
+  // like they pop in a second or so after the actual animation" (Destin,
+  // 2026-09-10). Keyed on settled, the sheet and its contents arrive together.
+  //
+  // It lives up here with the other hooks, NOT beside the render helpers that
+  // use it: everything below `if (!open) return null` runs conditionally, and a
   // hook there is the "rendered more hooks than during the previous render"
   // crash — which is exactly what it did on the first try.
-  const arriving = useOneShotWindow(previewId);
+  const [settledId, setSettledId] = useState<string | null>(null);
+  const arriving = useOneShotWindow(settledId);
 
   const narrowViewport = useNarrowViewport();
   // Two reasons the browser stays single-column, and they are different:
@@ -514,6 +522,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         provider={(previewSession.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
         id={previewSession.sessionId}
         title={previewSession.name}
+        onSettled={setSettledId}
       />
     ) : null),
     [previewSession?.provider, previewSession?.sessionId, previewSession?.name],

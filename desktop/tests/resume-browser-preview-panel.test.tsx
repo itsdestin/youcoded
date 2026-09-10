@@ -91,6 +91,28 @@ describe('Resume browser — the preview panel', () => {
     expect(screen.getAllByRole('button', { name: 'Resume Session' })).toHaveLength(1);
   });
 
+  // The arrival is keyed on the transcript having SETTLED, not on the click:
+  // reading one off disk takes real time, and keyed on the click the spring
+  // played out over a loading line while the bubbles landed after it.
+  it('waits for the transcript before it animates the sheet in', async () => {
+    setViewport(false);
+    mockClaude([row()]);
+    let release: (v: unknown) => void = () => {};
+    (window as any).claude.chatsearch.read = vi.fn(() => new Promise((r) => {
+      release = () => r({ ok: true, messages: [{ role: 'user', content: 'why did the ask time out', timestamp: 1, seq: 0 }], hasMore: false });
+    }));
+    const { container } = open();
+    fireEvent.click(await screen.findByText('Permission ask timeout'));
+    // Still reading: nothing is wearing the arrival yet.
+    await waitFor(() => expect((window as any).claude.chatsearch.read).toHaveBeenCalled());
+    expect(container.querySelector('.switch-arrival')).toBeNull();
+
+    release(null);
+    await waitFor(() => expect(container.querySelector('.switch-arrival')).not.toBeNull());
+    // …and the bubbles are already there when it starts, which is the point.
+    expect(container.querySelector('.switch-arrival')!.textContent).toContain('why did the ask time out');
+  });
+
   it('reads the conversation ONCE per row, not on every keystroke in the search box', async () => {
     setViewport(false);
     mockClaude([row()]);

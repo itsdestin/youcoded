@@ -20,7 +20,18 @@ import { COPY, READ_TAIL_DEFAULT, type TranscriptMessage, type ChatsearchProvide
 // (build-menu.ts) already falls back to COPY.untitled when it's empty.
 type Phase = { kind: 'loading' } | { kind: 'ready' } | { kind: 'error'; message: string };
 
-export default function SessionPreviewPane({ provider, id, title }: { provider: ChatsearchProvider; id: string; title: string }) {
+export default function SessionPreviewPane({ provider, id, title, onSettled }: {
+  provider: ChatsearchProvider;
+  id: string;
+  title: string;
+  /** Fired once a first load has SETTLED (ready or error) for this id. The
+   *  Resume browser holds its arrival animation until this fires: a transcript
+   *  is read off disk, and on a large one that is a second, so animating on the
+   *  click played the whole arrival over a loading line and let the bubbles
+   *  land afterwards — "chat bubbles in the preview feel like they pop in a
+   *  second or so after the actual animation" (Destin, 2026-09-10). */
+  onSettled?: (id: string) => void;
+}) {
   const [messages, setMessages] = useState<TranscriptMessage[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: 'loading' });
@@ -73,14 +84,24 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
     return res as { messages: TranscriptMessage[]; hasMore: boolean };
   }, [provider, id]);
 
+  // Held in a ref, not a dep: a caller that passes an inline arrow would
+  // otherwise rebuild loadNewest on every one of ITS renders and re-read the
+  // transcript each time.
+  const onSettledRef = useRef(onSettled);
+  onSettledRef.current = onSettled;
+
   const loadNewest = useCallback(() => {
     const myGen = ++genRef.current;
     setPhase({ kind: 'loading' }); setMessages([]); setOlderError(null); setLoadingOlder(false);
     return load().then((r) => {
       if (genRef.current !== myGen) return; // superseded — see genRef comment above
       setMessages(r.messages); setHasMore(r.hasMore); setPhase({ kind: 'ready' }); setScrollKey((k) => k + 1);
+      onSettledRef.current?.(id);
     }).catch((e) => {
       if (genRef.current !== myGen) return;
+      // An error settles too: the card that says so should arrive the same way
+      // a conversation does, rather than appearing without motion.
+      onSettledRef.current?.(id);
       // e.message is '' exactly when load() couldn't find a real reason —
       // keep it '' rather than falling back to String(e) ('Error'), which
       // would just be a different hardcoded guess wearing a JS-native mask.
