@@ -29,6 +29,15 @@
  * probe that timed out or returned something unparsable must NOT grey out a
  * model the user can perfectly well run. Only a definite `signed-out` or
  * `not-installed` does that.
+ *
+ * DECIDED, DO NOT REVERSE WITHOUT ASKING HIM AGAIN: the alternative — grey the
+ * models out and say the check failed — was put to Destin on 2026-09-09 as a
+ * two-option question and he picked "leave the models switched on"
+ * (`claude-signin-live-status-r2#R2-2`, answer `leave-on`). The trade he
+ * accepted: no warning up front on the rare occasion something really is
+ * broken, in exchange for never repeating the lock-out he reported that
+ * morning. A future session that finds this "unsafe" is reopening a settled
+ * decision and owes him a deck, not a patch.
  */
 export type ClaudeAccountStatus =
   /** `claude auth status` said `loggedIn: true`. */
