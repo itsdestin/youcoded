@@ -66,6 +66,7 @@ export type { SearchFilterPillProps } from './SearchFilterPill';
 export { FilterChip } from './FilterChip';
 export type { FilterChipProps } from './FilterChip';
 export { FilterMenuChip } from './FilterMenuChip';
+export { ChevronDown } from './ChevronDown';
 export type { FilterMenuChipProps } from './FilterMenuChip';
 export { Dialog, DIALOG_WIDTHS } from './Dialog';
 export type { DialogProps, DialogSize } from './Dialog';

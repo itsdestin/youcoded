@@ -15,6 +15,7 @@ import {
   sortSessions,
   groupSessions,
   getAvailableProjects,
+  pickLabel,
   type FilterState,
   type FlagName,
 } from './resume-browser-filters';
@@ -67,6 +68,11 @@ function formatModelId(id: string): string {
 const MENU_ROW = 'w-full h-7 px-3 text-xs flex items-center gap-2 text-left text-fg-2 hover:bg-inset transition-colors';
 const MENU_FOOTER = 'border-t border-edge flex divide-x divide-edge';
 const MENU_FOOTER_ACTION = 'flex-1 px-2.5 py-2 text-xs whitespace-nowrap text-fg-dim hover:bg-inset hover:text-fg transition-colors disabled:opacity-50 disabled:hover:bg-transparent disabled:hover:text-fg-dim';
+
+// Renders pickLabel()'s answer: the text, and a muted numeral when there is one.
+function PickLabel({ text, count }: { text: string; count?: number }) {
+  return count ? <>{text} <span className="opacity-70 tabular-nums">{count}</span></> : <>{text}</>;
+}
 
 // The sort chip's glyph: three bars with a down arrow, running wide-to-narrow
 // for newest first and narrow-to-wide for oldest first. Destin picked it on the
@@ -349,8 +355,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const organizeTriggerRef = useRef<HTMLButtonElement | null>(null);
   const organizePopRef = useRef<HTMLDivElement>(null);
   // The tag registry editor (rename/recolor/archive/delete). Opened from the
-  // "Manage tags…" footer in either the Organize popover's TagPicker or the
-  // Tags filter dropdown, so there is ONE destination for tag management.
+  // "Manage tags…" footer of the Organize popover's TagPicker; the Tags filter
+  // menu's second route was removed at Destin's request (deck round 1, S-4), so
+  // there is ONE destination for tag management.
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
 
   // Fetch sessions when opened
@@ -600,20 +607,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // the category and a count (design guide G-19: label, space, numeral — never
   // parentheses). The old 2–3 → comma-joined names made one chip as wide as the
   // whole row on a phone.
+  // A picked project that the menu no longer offers (all its conversations are
+  // finished and Show Complete is off) still names itself from its path.
   const projectsLabel = useMemo((): React.ReactNode => {
-    if (selectedProjects.size === 0) return 'Projects';
-    const selectedList = availableProjects.filter((p) => selectedProjects.has(p.path));
-    if (selectedList.length === 1) return selectedList[0].label;
-    return <>Projects <span className="opacity-70 tabular-nums">{selectedList.length}</span></>;
+    const picked = [...selectedProjects].map((path) => availableProjects.find((p) => p.path === path)?.label ?? path.split(/[\\/]/).filter(Boolean).pop() ?? path);
+    return <PickLabel {...pickLabel('Projects', picked)} />;
   }, [selectedProjects, availableProjects]);
   const liveTags = useMemo(() => registry.tags.filter((t) => !t.archived), [registry.tags]);
   const tagsLabel = useMemo((): React.ReactNode => {
-    if (selectedTagIds.size === 0) return 'Tags';
-    if (selectedTagIds.size === 1) {
-      const only = liveTags.find((t) => selectedTagIds.has(t.id));
-      if (only) return only.label;
-    }
-    return <>Tags <span className="opacity-70 tabular-nums">{selectedTagIds.size}</span></>;
+    const picked = [...selectedTagIds].map((id) => liveTags.find((t) => t.id === id)?.label ?? id);
+    return <PickLabel {...pickLabel('Tags', picked)} />;
   }, [selectedTagIds, liveTags]);
 
   // Portal-anchored dropdown positions. Dropdown widths match the className
@@ -1456,9 +1459,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 />
               </div>
             </div>
-            {/* The shared search pill (design guide §3 lists Resume among its homes).
-                Its filters are the chips on the next row, so no docked trigger —
-                the same call the Marketplace bar makes. */}
+            {/* Phones get the shared search pill with its docked filter button, which
+                opens the filter panel (deck round 1, S-7). Desktop keeps the box
+                Destin chose over the pill (S-2), with the chips on the next row. */}
             {narrow ? (
               <SearchFilterPill
                 ref={searchRef}
@@ -1491,7 +1494,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 />
               </div>
             )}
-            {filtersOpen && filtersPos && createPortal(
+            {narrow && filtersOpen && filtersPos && createPortal(
               <ResumeFilterPopover
                 ref={filtersPopoverRef}
                 anchor={filtersPos}

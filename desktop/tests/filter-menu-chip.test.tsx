@@ -22,6 +22,7 @@ import { join } from 'path';
 import { FilterMenuChip } from '../src/renderer/components/ui/FilterMenuChip';
 import { FilterChip, FILTER_CHIP_BASE, FILTER_CHIP_ACTIVE, FILTER_CHIP_INACTIVE } from '../src/renderer/components/ui/FilterChip';
 import { Checkbox, CheckboxMark } from '../src/renderer/components/ui/Checkbox';
+import { pickLabel } from '../src/renderer/components/resume-browser-filters';
 import { stripComments, RENDERER } from './helpers/guard-scope';
 
 afterEach(cleanup);
@@ -93,6 +94,25 @@ describe('CheckboxMark', () => {
     expect(markOn.getAttribute('aria-hidden')).toBe('true');
     expect(markOn.querySelector('svg')).not.toBeNull();
     expect(markOff.querySelector('svg')).toBeNull();
+  });
+});
+
+describe('chip labels (pickLabel — contract R4)', () => {
+  // Deck round 1, S-5: nothing picked → the category; one picked → its name;
+  // two or more → the category and a count, like "Tags 2". Never parentheses,
+  // never a comma-joined list of names.
+  it('names the one pick and counts several', () => {
+    expect(pickLabel('Projects', [])).toEqual({ text: 'Projects' });
+    expect(pickLabel('Projects', ['youcoded'])).toEqual({ text: 'youcoded' });
+    expect(pickLabel('Tags', ['work', 'bug'])).toEqual({ text: 'Tags', count: 2 });
+    expect(pickLabel('Projects', ['a', 'b', 'c', 'd'])).toEqual({ text: 'Projects', count: 4 });
+  });
+
+  it('is what the Resume browser renders on both chips', () => {
+    const src = stripComments(readFileSync(join(RENDERER, 'components/ResumeBrowser.tsx'), 'utf8'));
+    expect(src.match(/pickLabel\('(Projects|Tags)'/g)).toEqual(["pickLabel('Projects'", "pickLabel('Tags'"]);
+    expect(src).not.toMatch(/join\(', '\)/); // the old comma-joined names
+    expect(src).not.toMatch(/Projects \(\$\{/); // the old "Projects (N)"
   });
 });
 

@@ -41,8 +41,8 @@ function Tick() {
  * <Checkbox> button inside a row button is invalid HTML and gives one choice two
  * focus stops; a hand-drawn `w-3 h-3 rounded-sm border` span — which is what the
  * Resume browser's menus drew — turns into a circle on a big-radius theme and
- * reads as a radio. The row carries role="menuitemcheckbox" / aria-checked; this
- * span is decoration and says so.
+ * reads as a radio. The row carries its own role and state (the Resume menus
+ * use role="option" / aria-selected); this span is decoration and says so.
  */
 export function CheckboxMark({ checked, className = '' }: { checked: boolean; className?: string }) {
   return (
