@@ -96,6 +96,26 @@ describe('ErrorState — what the widening adds', () => {
   });
 });
 
+describe('ErrorState — where the buttons sit (G-28)', () => {
+  it('puts its actions on the right, never at the bottom left', () => {
+    // Destin, 2026-09-10: "buttons should either be full modal width or on the
+    // righthand side." A filled button at the bottom left reads as stray.
+    const { container } = render(
+      <ErrorState title="Setup didn’t finish" explainer="No network." onRetry={() => {}} onReportBug={() => {}} />,
+    );
+    const row = container.querySelector('button')!.parentElement!;
+    expect(row.className).toContain('justify-end');
+  });
+
+  it('keeps a one-line error’s action inline with its text', () => {
+    // The other permitted placement: the action belongs to that line, on its right.
+    const { container } = render(<ErrorState message="Could not read the file." onRetry={() => {}} />);
+    const row = container.querySelector('button')!.parentElement!;
+    expect(row.className).not.toContain('justify-end');
+    expect(row.textContent).toContain('Could not read the file.');
+  });
+});
+
 describe('ErrorState — the refusals', () => {
   it('refuses an error with no action, and an error with no text', () => {
     // These two never render; they exist so `tsc` fails if the type loosens.

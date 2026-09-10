@@ -278,7 +278,10 @@ declare global {
         // backend to-do list. Deliberately NOT installWorkspace(): that one clones
         // into a fixed folder and pulls into an existing one, both ruled out by R9.
         setupWorkspace: () => Promise<{ ok: true; path: string } | { ok: false; error: string }>;
-        onSetupProgress: (handler: (line: string) => void) => () => void;
+        // Setup runs in the main process, so closing the dialog cannot cancel it. The
+        // screen asks where it got to when it reopens — which is what makes "you can
+        // close this and it carries on" a true statement rather than a hopeful one.
+        setupStatus: () => Promise<{ state: 'idle' | 'running' | 'ready' | 'failed'; path?: string; error?: string }>;
       };
       // GPU / performance preference — multiGpuDetected: false means the
       // Performance section in Settings hides itself (no hardware to toggle).

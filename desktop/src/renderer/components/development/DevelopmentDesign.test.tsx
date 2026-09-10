@@ -8,6 +8,10 @@ import { DevelopmentPopup } from './DevelopmentPopup';
 
 beforeEach(() => window.history.replaceState({}, '', '/?mode=workbench'));
 afterEach(() => { cleanup(); window.history.replaceState({}, '', '/'); });
+// Every Contribute render now reads setup status on mount (R6-24: "you can close
+// this and setup keeps going" is only true if the screen can ask where it got to).
+const idle = () => Promise.resolve({ state: 'idle' as const });
+
 describe('development design safety', () => {
   it('keeps the walkthrough inside Contribute and public navigation usable', () => {
     const openExternal = vi.spyOn(window, 'open').mockImplementation(() => null);
@@ -115,8 +119,7 @@ describe('development design safety', () => {
   it('never connects managed setup to the old installer', async () => {
     const installWorkspace = vi.fn();
     const setupWorkspace = vi.fn().mockResolvedValue({ ok: true, path: '/home/you/YouCoded/Projects/w' });
-    const onSetupProgress = vi.fn(() => () => {});
-    Object.assign(window, { claude: { dev: { installWorkspace, setupWorkspace, onSetupProgress } } });
+    Object.assign(window, { claude: { dev: { installWorkspace, setupWorkspace, setupStatus: idle } } });
     render(<ContributePopup open onClose={() => {}} />);
     // WHY: the guard is that the legacy installer is never reached — not that the button looks
     // dead. Destin rejected the disabled/greyed treatment: the workbench must look like the app.
@@ -128,12 +131,31 @@ describe('development design safety', () => {
     await screen.findByText(/Your development workspace is ready/);
   });
 
+  it('finds setup still running when you close and come back', async () => {
+    // WHY: the setting-up screen tells you "you can close this — setup keeps going,
+    // and you'll find it here when you come back" (Destin, R6-24). A sentence like
+    // that is a promise; this is what makes it one. Reopening asks the main process
+    // where setup got to instead of showing the start button over a running setup.
+    const setupStatus = vi.fn().mockResolvedValue({ state: 'running' });
+    Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn() } } });
+    render(<ContributePopup open onClose={() => {}} />);
+    await screen.findByText(/Setting up your development workspace/);
+    expect(screen.queryByRole('button', { name: 'Set up development workspace' })).toBeNull();
+  });
+
+  it('shows a setup that finished while you were away', async () => {
+    const setupStatus = vi.fn().mockResolvedValue({ state: 'ready', path: '/home/you/YouCoded/Projects/w' });
+    Object.assign(window, { claude: { dev: { setupStatus, setupWorkspace: vi.fn() } } });
+    render(<ContributePopup open onClose={() => {}} />);
+    await screen.findByText(/Your development workspace is ready/);
+  });
+
   it('offers a way forward when setup fails, and never just Done', async () => {
     // WHY: the legacy screen's only action on failure was Done (audit E-08), which
     // discards what already succeeded. The reason shown is the one the operation
     // gave — never a guess (docs/error-message-standards.md).
     const setupWorkspace = vi.fn().mockResolvedValue({ ok: false, error: 'Could not reach github.com.' });
-    Object.assign(window, { claude: { dev: { setupWorkspace, onSetupProgress: vi.fn(() => () => {}) } } });
+    Object.assign(window, { claude: { dev: { setupWorkspace, setupStatus: idle } } });
     render(<ContributePopup open onClose={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: 'Set up development workspace' }));
     await screen.findByText(/Could not reach github\.com\./);

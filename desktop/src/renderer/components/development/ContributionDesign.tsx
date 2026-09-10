@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Dialog, ErrorState, LoadingState } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { ContributionWalkthrough } from './ContributionWalkthrough';
@@ -8,22 +8,34 @@ type Phase = 'idle' | 'setting-up' | 'ready' | 'failed';
 export function ContributionDesign({ open, onClose }: { open: boolean; onClose: () => void }) {
   useEscClose(open, onClose);
   const [phase, setPhase] = useState<Phase>('idle');
-  const [lines, setLines] = useState<string[]>([]);
   const [error, setError] = useState('');
   const [path, setPath] = useState('');
-  const offRef = useRef<(() => void) | null>(null);
 
-  // WHY: the progress subscription outlives the await, so it is torn down on
-  // unmount as well as on completion. Leaving it registered kept a timer running
-  // against a dead component every time the dialog was closed mid-setup.
-  useEffect(() => () => { offRef.current?.(); }, []);
+  // WHY this exists at all: the setting-up screen promises "you can close this and
+  // setup carries on in the background" (Destin, R6-24). That is only true if setup
+  // belongs to the main process AND the screen can ask where it got to when it
+  // reopens — otherwise reopening would show the start button while a setup ran,
+  // and the promise would be a lie the user catches immediately.
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    // Optional-chained: this now runs on MOUNT, so a caller without the bridge
+    // (a test, a surface that renders before preload) would otherwise crash the
+    // dialog rather than simply show its start screen.
+    const status = window.claude?.dev?.setupStatus?.();
+    if (!status) return;
+    void status.then(s => {
+      if (!live || s.state === 'idle') return;
+      setPath(s.path ?? '');
+      setError(s.error ?? '');
+      setPhase(s.state === 'running' ? 'setting-up' : s.state);
+    }).catch(() => {/* a status read that fails leaves the normal start screen */});
+    return () => { live = false; };
+  }, [open]);
 
   const setup = async () => {
     setPhase('setting-up');
-    setLines([]);
     setError('');
-    offRef.current = window.claude.dev.onSetupProgress((line: string) =>
-      setLines(prev => [...prev.slice(-5), line]));
     try {
       const r = await window.claude.dev.setupWorkspace();
       if (r.ok) { setPath(r.path); setPhase('ready'); }
@@ -35,9 +47,6 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
       // screen sat on the progress state for ever (audit E-02).
       setError(String(e?.message || e));
       setPhase('failed');
-    } finally {
-      offRef.current?.();
-      offRef.current = null;
     }
   };
 
@@ -54,11 +63,11 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
 
       {phase === 'setting-up' && <>
         <LoadingState verb="Setting up" what="your development workspace" />
-        {/* WHY: name the step being done. "Setting up…" alone for a multi-minute
-            download reads as a hang, which is what the legacy screen looked like. */}
-        <div className="text-xs text-fg-muted font-mono space-y-1">
-          {lines.map((l, i) => <div key={i}>{l}</div>)}
-        </div>
+        {/* WHY one line and no per-step feed (Destin, R6-24): the steps were noise.
+            What he asked for instead is the reassurance — and it is only honest
+            because setup runs in the main process and this screen re-reads its
+            status on open, so closing really does leave it running. */}
+        <p className="text-xs text-fg-2 text-center">This can take a few minutes. You can close this — setup keeps going, and you’ll find it here when you come back.</p>
       </>}
 
       {phase === 'ready' && <>

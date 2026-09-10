@@ -135,7 +135,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // `[]` from the catch-all — which is a submit button that can never report an
   // outcome.
   'dev.logTail', 'dev.diagnostics', 'dev.summarizeIssue', 'dev.submitIssue',
-  'dev.setupWorkspace', 'dev.onSetupProgress',
+  'dev.setupWorkspace', 'dev.setupStatus',
   'shell.openPath',
   // Chatsearch session references — real backend too, same reason for the fake:
   // the tool gallery needs an index that shows every row state on demand.
@@ -1279,6 +1279,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // Long enough that the setting-up state is a state you can look at, short
   // enough not to stall a capture run.
   const SETUP_MS = 2500;
+  // Main-process state in the real thing: setup is not owned by the dialog, so
+  // closing it cannot cancel setup and reopening can ask where it got to.
+  let setupState: 'idle' | 'running' | 'ready' | 'failed' = 'idle';
+  let setupPath = '';
+  let setupError = '';
   const devMock = {
     // Real channels (dev:log-tail, dev:diagnostics, dev:summarize-issue,
     // dev:submit-issue in preload.ts) — faked so the workbench has evidence text
@@ -1311,28 +1316,26 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // and a mock that resolves in 150ms means the setting-up state — progress
     // lines and all — flashes past and is never actually reviewed. That is the
     // exact failure the latency knob exists to prevent, one size too small.
-    setupWorkspace: () => new Promise(resolve => setTimeout(() => resolve(
-      activeScenario === 'refused'
-        ? { ok: false as const, error: 'Could not reach github.com to download the project.' }
-        : { ok: true as const, path: '/home/destin/YouCoded/Projects/youcoded-workspace' },
-    ), SETUP_MS)),
-    onSetupProgress: (cb: (line: string) => void) => {
-      // A REAL registrar, not a no-op: the setting-up screen has nothing to show
-      // until lines arrive, so a stubbed subscription would leave the workbench
-      // on an empty progress panel and the state would never be reviewable.
-      const lines = [
-        'Downloading the project…',
-        'Downloading the five sub-projects (this takes a minute)…',
-        'Installing what it needs…',
-        'Registering it as one of your projects…',
-      ];
-      let i = 0;
-      const timer = setInterval(() => {
-        if (i >= lines.length) { clearInterval(timer); return; }
-        cb(lines[i++]);
-      }, SETUP_MS / (lines.length + 1));
-      return () => clearInterval(timer);
+    setupWorkspace: () => {
+      setupState = 'running';
+      return new Promise(resolve => setTimeout(() => {
+        if (activeScenario === 'refused') {
+          setupState = 'failed';
+          setupError = 'Could not reach github.com to download the project.';
+          resolve({ ok: false as const, error: setupError });
+        } else {
+          setupState = 'ready';
+          setupPath = '/home/destin/YouCoded/Projects/youcoded-workspace';
+          resolve({ ok: true as const, path: setupPath });
+        }
+      }, SETUP_MS));
     },
+    // WHY a status read rather than a progress stream (Destin, R6-24 2026-09-10):
+    // he asked for one line plus "you can close this and setup carries on in the
+    // background". That sentence is only true if setup is owned by the main process
+    // and the screen can ASK what it is doing when it reopens. A per-step progress
+    // feed cannot answer that question — reopening would show nothing.
+    setupStatus: async () => ({ state: setupState, path: setupPath, error: setupError }),
   };
 
   // Voice prompting (deck 2026-09-05) — NO real backend yet (mock-only.ts).

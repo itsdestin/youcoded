@@ -85,5 +85,5 @@
 // the backend to-do it leaves behind.
 export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   { channel: 'dev.setupWorkspace', feature: 'contribution workspace as a managed project' },
-  { channel: 'dev.onSetupProgress', feature: 'contribution workspace as a managed project' },
+  { channel: 'dev.setupStatus', feature: 'contribution workspace as a managed project' },
 ];

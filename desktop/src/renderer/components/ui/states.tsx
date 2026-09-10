@@ -183,7 +183,11 @@ export function ErrorState(props: ErrorStateProps) {
           <div className="flex flex-col gap-2 min-w-0">
             <span className="text-sm font-medium text-fg">{props.title}</span>
             <span className="text-2xs text-fg-dim leading-relaxed">{props.explainer}</span>
-            <div className="flex items-center gap-2">{actions}</div>
+            {/* WHY justify-end (G-28, Destin 2026-09-10): "buttons should either be full
+                modal width or on the righthand side" — a filled button at the bottom LEFT
+                reads as stray rather than as the thing to press. The row layout below is
+                the other permitted case: its action is inline with the text, on the right. */}
+            <div className="flex items-center justify-end gap-2">{actions}</div>
           </div>
         </div>
       </div>
