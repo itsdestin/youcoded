@@ -20,7 +20,7 @@ import { resolveModelBrand, type ProviderIconKey } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
 import type { SessionTotals } from '../state/session-totals';
 import { selectCacheReuse, selectReuseDisplay } from '../state/cache-reuse';
-import { CLAUDE_ALIASES, type ClaudeAlias } from '../../shared/model-ids';
+import { CLAUDE_ALIASES, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
 import { formatTime12, formatDayLong, formatMonthDay } from '../../shared/time-format';
 import { usableOtherWindows, windowLengthLabel } from './plan-windows';
 
@@ -73,12 +73,12 @@ const MODEL_DISPLAY: Record<ModelAlias | 'unknown', { label: string; color: stri
   // in the JSX, not here) like every other status-bar chip, with brand-colored
   // TEXT + a matching tinted BORDER.
   // CC sessions use the official Claude Code CLI mascot and adaptive brand token.
-  sonnet:      { label: 'Sonnet', color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
-  'opus[1m]':  { label: 'Opus',   color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
-  haiku:       { label: 'Haiku',  color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
+  sonnet:      { label: CLAUDE_ALIAS_LABELS.sonnet,     color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
+  'opus[1m]':  { label: CLAUDE_ALIAS_LABELS['opus[1m]'], color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
+  haiku:       { label: CLAUDE_ALIAS_LABELS.haiku,      color: 'var(--brand-claude)', border: 'color-mix(in srgb, var(--brand-claude) 35%, transparent)',  icon: 'claudecode' },
   // Fable 5 — most capable. Fuchsia text keeps it as the top/premium tier,
   // distinct from the Anthropic-orange aliases and the amber reserved for AUTO.
-  fable:       { label: 'Fable',  color: '#E879F9', border: 'rgba(232,121,249,0.35)',  icon: 'claudecode' },
+  fable:       { label: CLAUDE_ALIAS_LABELS.fable,      color: '#E879F9', border: 'rgba(232,121,249,0.35)',  icon: 'claudecode' },
   // Error state, not a real model — red like the high-danger usage threshold
   // (utilizationColor/contextColor) so it reads as "wrong", never as a normal pill.
   unknown:     { label: 'Model Unknown', color: '#DD4444', border: 'rgba(221,68,68,0.3)' },
