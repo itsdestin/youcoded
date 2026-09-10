@@ -81,6 +81,7 @@ function readStoredFileView(): FileViewMode {
 }
 import { Button, Checkbox, CloseButton, SearchFilterPill } from '../ui';
 import { ImportFileDialog } from './ImportFileDialog';
+import { isRemoteMode } from '../../platform';
 
 interface ProjectViewProps {
   // cwd of the conversation that is focused RIGHT NOW (undefined on the welcome
@@ -888,15 +889,20 @@ export function ProjectView(props: ProjectViewProps) {
                       for floating overlay affordances — this sits in a toolbar row,
                       so it takes the app's standard button radius. */}
                   {/* No tab check here: the whole block is already gated on
-                      tab === 'files' above. */}
-                  <Button
-                    variant="secondary"
-                    className="shrink-0"
-                    onClick={importFiles}
-                    title="Copy or move a file into this project folder"
-                  >
-                    + Add file
-                  </Button>
+                      tab === 'files' above. Not offered over remote access:
+                      uploads are a later, separately approved batch, and a
+                      button that does nothing on a phone read as broken
+                      (tester U4, 2026-09-10). */}
+                  {!isRemoteMode() && (
+                    <Button
+                      variant="secondary"
+                      className="shrink-0"
+                      onClick={importFiles}
+                      title="Copy or move a file into this project folder"
+                    >
+                      + Add file
+                    </Button>
+                  )}
                 </div>
               )}
             </div>

@@ -99,6 +99,27 @@ interface Props {
 export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
+
+  // What the conversation strip shows: the live status, plus a 2.5 s "Up to
+  // date" after a refresh so the person can see it worked (tester U9). An
+  // initial `complete` — the desktop, or a phone that connected cleanly —
+  // shows nothing; only a transition OUT of restoring/incomplete earns the beat.
+  const [stripStatus, setStripStatus] = useState<'reconnecting' | 'restoring' | 'incomplete' | 'up-to-date' | null>(null);
+  const prevStatusRef = useRef<typeof conversationStatus>(undefined);
+  useEffect(() => {
+    const prev = prevStatusRef.current;
+    prevStatusRef.current = conversationStatus;
+    if (conversationStatus === 'complete') {
+      if (prev === 'restoring' || prev === 'incomplete') {
+        setStripStatus('up-to-date');
+        const t = window.setTimeout(() => setStripStatus(null), 2500);
+        return () => window.clearTimeout(t);
+      }
+      setStripStatus(null);
+      return;
+    }
+    setStripStatus(conversationStatus ?? null);
+  }, [conversationStatus]);
   const { showTimestamps, reducedEffects } = useTheme();
 
   // Motion on a SESSION SWITCH only.
@@ -1031,20 +1052,31 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               top of the scroll content was never on screen (measured 2026-09-10).
               `.find-row` clears the overlaid header the same way. Desktop never
               sets the prop, so nothing changes there. */}
-          {conversationStatus && conversationStatus !== 'complete' && (
-            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={conversationStatus}>
-              {conversationStatus === 'incomplete' ? (
+          {stripStatus && (
+            <div className={`find-row px-3 pb-2 shrink-0${findOpen ? ' !mt-0' : ''}`} data-conversation-status={stripStatus}>
+              {stripStatus === 'incomplete' ? (
+                // Wording per the first phone tester (U11, 2026-09-10): "behind
+                // your computer" read as a place, not a time.
                 <StatusStrip
                   tone="warn"
-                  detail="The last refresh from your computer didn’t finish, so newer messages may be missing."
+                  detail="The last refresh didn’t finish, so newer messages may be missing."
                   action={<Button size="sm" onClick={onRefreshConversation}>Refresh</Button>}
                 >
-                  This conversation may be behind your computer.
+                  This conversation may be out of date.
+                </StatusStrip>
+              ) : stripStatus === 'reconnecting' ? (
+                <StatusStrip tone="busy" detail="Your draft is safe. It sends once you’re reconnected.">
+                  Reconnecting to your computer…
+                </StatusStrip>
+              ) : stripStatus === 'restoring' ? (
+                // No draft line here: the connection IS back (tester U8).
+                <StatusStrip tone="busy" detail="Loading the newest messages…">
+                  Catching up with your computer…
                 </StatusStrip>
               ) : (
-                <StatusStrip tone="busy" detail="Your draft is kept. Sending waits until the connection is back.">
-                  {conversationStatus === 'reconnecting' ? 'Reconnecting to your computer…' : 'Catching up with your computer…'}
-                </StatusStrip>
+                // A beat of "Up to date" after a refresh, so it visibly worked
+                // (tester U9) — then the row goes away on its own.
+                <StatusStrip tone="ok">Up to date.</StatusStrip>
               )}
             </div>
           )}
@@ -1054,7 +1086,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               drops the header-clearing padding-top while the row is open —
               the content no longer starts under the header, it starts under
               the row. */}
-          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || (conversationStatus && conversationStatus !== 'complete') ? ' chat-scroll--below-find-row' : ''}`}>
+          <div ref={scrollContainerRef} className={`chat-scroll flex-1 min-h-0 overflow-y-auto${findOpen || stripStatus ? ' chat-scroll--below-find-row' : ''}`}>
            {/* The arrival class is on the CONTENT wrapper, not the scroller:
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}

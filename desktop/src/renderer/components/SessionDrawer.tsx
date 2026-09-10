@@ -32,6 +32,7 @@ import type { ArtifactRecord, VersionEvent } from '../../shared/artifacts/types'
 import { fileTypeGroup } from '../../shared/artifacts/categorization';
 import type { FileTypeGroup } from '../../shared/artifacts/categorization';
 import { getPlatform, isRemoteMode } from '../platform';
+import { downloadFile } from './artifact-views/download-file';
 import { formatRelativeTime } from '../utils/format-time';
 import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
@@ -471,8 +472,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     : '';
 
   // ── Toolbar actions ──
+  // A tick for a moment after Copy path, because on a phone the hover hint that
+  // used to be the only acknowledgement never shows (tester U5, 2026-09-10).
+  const [copiedPath, setCopiedPath] = useState(false);
   const handleCopyPath = useCallback(() => {
-    if (absolutePath) navigator.clipboard?.writeText(absolutePath).catch(() => {});
+    if (!absolutePath) return;
+    navigator.clipboard?.writeText(absolutePath).then(() => {
+      setCopiedPath(true);
+      window.setTimeout(() => setCopiedPath(false), 1500);
+    }).catch(() => {});
   }, [absolutePath]);
 
   const handleReveal = useCallback(() => {
@@ -490,7 +498,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // reveal or open a file that lives on another computer, so it gets Download —
   // the file lands in the phone's own downloads folder without blocking the chat.
   const handleDownload = useCallback(() => {
-    if (absolutePath) void (window.claude as any).artifacts?.download?.(absolutePath);
+    if (absolutePath) void downloadFile(absolutePath);
   }, [absolutePath]);
 
   // Rows to render: the filtered set, narrowed by the search box and sorted.
@@ -739,11 +747,16 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 // Cancel any in-progress rename first so its open field doesn't
                 // bleed onto the newly-selected artifact.
                 if (renameActiveRef.current || renaming) cancelRename();
+                // On a phone the list and the file take turns (stack navigation,
+                // see drawer-body below), so a tap must SHOW the file — the first
+                // phone tester (2026-09-10, U3) tapped a row, saw only a title
+                // bar appear above the same list, and assumed the tap had failed.
+                const keepListOpen = !narrowViewport;
                 // Re-selecting the open file never discards anything — skip the guard.
-                if (a.id === activeArtifactId) { setListOpen(true); return; }
+                if (a.id === activeArtifactId) { setListOpen(keepListOpen); return; }
                 guardUnsaved(() => {
                   dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: a.id });
-                  setListOpen(true);
+                  setListOpen(keepListOpen);
                 });
               }}
               // Discovered records have no sidecar entry to remove.
@@ -881,7 +894,16 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           second title/close row in its body; that was the "two X's" bug
           Destin flagged, so it no longer renders one. Don't add one back. */}
       <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
-        <IconBtn name="list" title={listOpen ? 'Hide list' : 'Show list'} active={listOpen} onClick={() => setListOpen((v) => !v)} />
+        {narrowViewport && active && !listOpen ? (
+          // A phone has no hover hint to explain a bare list glyph, and a file
+          // that has replaced the list needs a way BACK that reads as one
+          // (tester U3, 2026-09-10): a labelled button, like every phone app.
+          <Button variant="ghost" size="sm" className="shrink-0 px-1.5" onClick={() => setListOpen(true)} aria-label="Back to the file list">
+            ‹ Files
+          </Button>
+        ) : (
+          <IconBtn name="list" title={listOpen ? 'Hide list' : 'Show list'} active={listOpen} onClick={() => setListOpen((v) => !v)} />
+        )}
         {active ? (renaming ? (
           <div className="flex items-center gap-2 min-w-0 px-1 relative">
             <span className={`inline-flex items-center border rounded-md overflow-hidden ${renameError ? 'border-red-500' : 'border-accent'}`}>
@@ -977,10 +999,14 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
         {active && isElectron && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
-        {active && isRemoteMode() && <IconBtn name="download" title="Download to this device" onClick={handleDownload} />}
-        {active && <IconBtn name="copypath" title="Copy path" onClick={handleCopyPath} />}
+        {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
+        {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
         {active && isElectron && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}
-        <IconBtn name={expanded ? 'shrink' : 'expand'} title={expanded ? 'Shrink panel' : 'Expand panel'} active={expanded} onClick={() => dispatch({ type: 'DRAWER_EXPAND_TOGGLED' })} />
+        {/* Expand is a no-op at phone width — the drawer is already the whole
+            screen — so it is not offered there (tester U6, 2026-09-10). */}
+        {!narrowViewport && (
+          <IconBtn name={expanded ? 'shrink' : 'expand'} title={expanded ? 'Shrink panel' : 'Expand panel'} active={expanded} onClick={() => dispatch({ type: 'DRAWER_EXPAND_TOGGLED' })} />
+        )}
         {/* Resume sits between expand and close — Destin, 2026-08-27 gate
             (M-header): "i want resume to be between expand and X button."
             It no longer resumes on click; it opens the options popover below,

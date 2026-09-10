@@ -24,7 +24,11 @@ const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith(
  *  Fix: this was gated to `navigator.platform === 'Win32'`, which left Linux
  *  (`navigator.platform` is e.g. `Linux x86_64`) with zero window controls on
  *  a frameless window. Gate on "desktop and not macOS" instead. */
-const showCaptionButtons = typeof navigator !== 'undefined'
+// A FUNCTION, not a module constant: remote mode is declared when the phone's
+// connection authenticates, long after this module loaded, so a constant read
+// 'local' for ever and a phone browser got Minimize / Maximize / Close buttons
+// that squeezed the conversation name to one letter (tester U10, 2026-09-10).
+const showCaptionButtons = () => typeof navigator !== 'undefined'
   && !isMac
   && !isAndroid()
   && !isRemoteMode();
@@ -622,7 +626,7 @@ export default function HeaderBar({
         </div>
 
         {/* Custom caption buttons (Windows/Linux only) */}
-        {showCaptionButtons && <CaptionButtons />}
+        {showCaptionButtons() && <CaptionButtons />}
       </div>
     </div>
   );
@@ -672,7 +676,7 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
       {/* Empty middle — stays part of the drag region. */}
       <div className="flex-1 min-w-0" />
       <div className="flex items-center justify-end gap-1 sm:gap-2">
-        {showCaptionButtons && <CaptionButtons />}
+        {showCaptionButtons() && <CaptionButtons />}
       </div>
     </div>
   );

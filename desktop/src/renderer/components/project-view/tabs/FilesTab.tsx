@@ -31,6 +31,8 @@ import {
 // Compact relative-time for the detail meta strip (shared util).
 import { formatRelativeTime as relTime } from '../../../utils/format-time';
 import { getPlatform, isRemoteMode } from '../../../platform';
+import { downloadFile } from '../../artifact-views/download-file';
+import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 
 // Is the project path a bare drive/filesystem root (vs. the home folder)?
 // Only used to pick the right word in the gated-folder message.
@@ -975,7 +977,8 @@ function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed 
   // the right action for formats the in-app viewer can't render (html) or only
   // renders partially (docx/xlsx). Desktop-only (shell.openPath); no-op on remote.
   const handleOpenExternal = () => (window.claude as any).shell?.openPath?.(absPath);
-  const handleDownload = () => { void (window.claude as any).artifacts?.download?.(absPath); };
+  const handleDownload = () => { void downloadFile(absPath); };
+  const narrowViewport = useNarrowViewport();
   const handleCopyPath = () => {
     navigator.clipboard?.writeText(absPath).then(() => {
       setCopied(true);
@@ -1021,9 +1024,11 @@ function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed 
           Download where the desktop has Open and Reveal — the file lands in the
           phone's own downloads folder, and the transfer does not block the chat. */}
       {isRemoteMode() && (
-        <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleDownload}>
+        <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleDownload} aria-label="Download" title="Download">
           <DownloadIcon size={13} />
-          Download
+          {/* Icon-only at phone width: with the label, Download and Copy path
+              left the file name one syllable ("latenc…") — tester U20. */}
+          {!narrowViewport && 'Download'}
         </button>
       )}
       <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleCopyPath}>

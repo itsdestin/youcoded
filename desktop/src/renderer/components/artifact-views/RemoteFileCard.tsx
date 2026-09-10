@@ -1,6 +1,7 @@
 import React from 'react';
 import { Button } from '../ui';
 import { formatFileSize, REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../../../shared/remote-file-limits';
+import { downloadFile } from './download-file';
 
 // The card a PHONE shows for a file it will not preview (questions deck
 // 2026-09-10, Q-8 "Name, size, Download"). Over remote access a file over the
@@ -35,7 +36,7 @@ export function RemoteFileCard({ path, sizeBytes, reason }: {
   const limit = kind === 'Text'
     ? formatFileSize(REMOTE_TEXT_PREVIEW_MAX_BYTES)
     : formatFileSize(REMOTE_BINARY_PREVIEW_MAX_BYTES);
-  const download = () => { void (window.claude as any).artifacts?.download?.(path); };
+  const download = () => { void downloadFile(path); };
   return (
     <div className="h-full flex items-center justify-center p-6">
       <div className="w-full max-w-xs rounded-lg bg-inset px-4 py-5 flex flex-col items-center text-center gap-1.5">
@@ -44,8 +45,11 @@ export function RemoteFileCard({ path, sizeBytes, reason }: {
           {typeof sizeBytes === 'number' ? `${formatFileSize(sizeBytes)} · ${kind}` : kind}
         </div>
         {reason === 'too-large' && (
+          // Tester U13 (2026-09-10): "Too large… Previews stop at 10.0 MB for this
+          // kind of file" read as a computer talking. One sentence, the limit in
+          // brackets, and what to do instead.
           <p className="text-xs text-fg-muted mt-1">
-            Too large to preview on a phone. Previews stop at {limit} for {kind === 'Text' ? 'text' : 'this kind of file'}.
+            Too big to preview on a phone (limit {limit}). Download it instead.
           </p>
         )}
         <div className="mt-3">

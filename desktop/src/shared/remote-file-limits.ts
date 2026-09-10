@@ -16,7 +16,12 @@ export const REMOTE_BINARY_PREVIEW_MAX_BYTES = 10 * 1024 * 1024;
 /** "24.0 MB", "812 KB", "3 B" — for the too-big card and the download row. */
 export function formatFileSize(bytes: number): string {
   if (!Number.isFinite(bytes) || bytes < 0) return '';
-  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024 * 1024) {
+    const mb = bytes / (1024 * 1024);
+    // "10 MB", not "10.0 MB" — a limit reads as a person's number, a
+    // measurement keeps one decimal ("24.3 MB"). Tester U13, 2026-09-10.
+    return Number.isInteger(mb) ? `${mb} MB` : `${mb.toFixed(1)} MB`;
+  }
   if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${bytes} B`;
 }

@@ -86,6 +86,7 @@ import { decideFirstPage, FIRST_PAGE_RETRY_MS } from './state/first-page-retry';
 
 import FirstRunView from './components/FirstRunView';
 import { getPlatform, isRemoteMode, onConnectionModeChange } from './platform';
+import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 
 /** Remote access batch 2: where a phone's copy of the conversation stands. */
 type ConversationStatus = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
@@ -490,6 +491,17 @@ function AppInner() {
     | string
     | { message: string; durationMs?: number; action?: { label: string; onClick: () => void } };
   const [toast, setToast] = useState<ToastState | null>(null);
+  // Components with no prop path to this state (the file drawer's Download and
+  // Copy path, the too-big card) announce through a window event — see
+  // utils/announce.ts for why.
+  useEffect(() => {
+    const onNotice = (e: Event) => {
+      const d = (e as CustomEvent<AppNoticeDetail>).detail;
+      if (d?.message) setToast(d.durationMs ? { message: d.message, durationMs: d.durationMs } : d.message);
+    };
+    window.addEventListener(APP_NOTICE_EVENT, onNotice);
+    return () => window.removeEventListener(APP_NOTICE_EVENT, onNotice);
+  }, []);
   // Zoom state + handlers extracted to useZoomControls (tranche 1).
   const { zoomPercent, zoomVisible, handleZoomIn, handleZoomOut, handleZoomReset } = useZoomControls();
 
