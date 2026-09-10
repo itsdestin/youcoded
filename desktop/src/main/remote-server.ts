@@ -22,6 +22,7 @@ import type { SessionManager } from './session-manager';
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
+import { RemoteDeviceStore } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import type { SerializedChatState } from '../renderer/state/chat-types';
 import { VITE_DEV_PORT } from '../shared/ports';
@@ -82,7 +83,7 @@ const RATE_LIMIT_MAX_FAILURES = 5;
 interface AuthenticatedClient {
   id: string;
   ws: WebSocket;
-  token: string;
+  deviceId: string;
   ip: string;
   connectedAt: number;
 }
@@ -106,8 +107,7 @@ export class RemoteServer {
   private uploadCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private clients = new Set<AuthenticatedClient>();
   private lastClientActivityMs = 0; // see getLastClientActivityMs()
-  private tokens = new Map<string, boolean>(); // token → valid
-  private tokensPath: string;
+  private devices: RemoteDeviceStore;
   // `${encoding}:${urlPath}` → compressed bytes. Safe to hold indefinitely
   // because Vite content-hashes the URLs it serves; see compressStatic().
   private compressedAssets = new Map<string, Buffer>();
@@ -171,8 +171,7 @@ export class RemoteServer {
     private skillProvider?: LocalSkillProvider,
     opts?: { requestSnapshot?: () => Promise<SerializedChatState> },
   ) {
-    this.tokensPath = path.join(os.homedir(), '.claude', '.remote-tokens.json');
-    this.loadTokens();
+    this.devices = new RemoteDeviceStore();
     // Default is a no-op that returns an empty snapshot — allows the server to
     // be constructed before the main window exists (e.g. during first-run setup).
     this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
@@ -258,23 +257,6 @@ export class RemoteServer {
     canWrite: (sessionId: string, resolved: string) => boolean;
   };
 
-  private loadTokens(): void {
-    try {
-      const data = JSON.parse(fs.readFileSync(this.tokensPath, 'utf8'));
-      if (Array.isArray(data)) {
-        for (const t of data) this.tokens.set(t, true);
-      }
-    } catch { /* no persisted tokens yet */ }
-  }
-
-  private saveTokens(): void {
-    try {
-      fs.mkdirSync(path.dirname(this.tokensPath), { recursive: true });
-      // Security: restrict file permissions to owner-only (prevents other users reading tokens)
-      fs.writeFileSync(this.tokensPath, JSON.stringify(Array.from(this.tokens.keys())), { mode: 0o600 });
-    } catch { /* best effort */ }
-  }
-
   /** True once start() has bound the port; false after stop() or a failed start. */
   isRunning(): boolean {
     return this.running;
@@ -286,11 +268,6 @@ export class RemoteServer {
       return;
     }
     if (this.running) return;
-
-    // Re-read persisted tokens: stop() clears the in-memory map, and loadTokens()
-    // only ran in the constructor. Without this, toggling remote access off and
-    // back on forced every already-paired device to re-enter the password.
-    this.loadTokens();
 
     // Subscribe to events for buffering and broadcasting
     this.sessionManager.on('pty-output', this.onPtyOutput);
@@ -426,16 +403,16 @@ export class RemoteServer {
       client.ws.close(1001, 'Server shutting down');
     }
     this.clients.clear();
-    this.tokens.clear();
+    // Nothing to clear for devices: the store is file-backed, so toggling remote access off
+    // and on no longer forces every paired device to re-enter the password.
 
     if (this.wss) { this.wss.close(); this.wss = null; }
     if (this.httpServer) { this.httpServer.close(); this.httpServer = null; }
   }
 
-  /** Invalidate all session tokens (e.g., after password change). */
+  /** Every device loses access — what a password change means. */
   invalidateTokens(): void {
-    this.tokens.clear();
-    this.saveTokens();
+    this.devices.revokeAll();
     for (const client of this.clients) {
       client.ws.close(4001, 'Password changed');
     }
@@ -782,22 +759,40 @@ export class RemoteServer {
           return;
         }
 
-        let authenticated = false;
-
-        if (msg.token && this.tokens.has(msg.token)) {
-          authenticated = true;
-        } else if (msg.password) {
-          authenticated = await this.config.verifyPassword(msg.password);
+        // A credential first, then the password. WHY the credential answers with a REASON:
+        // "unpaired" and "credential retired" are terminal — the client must stop retrying
+        // rather than hammer the host into its own lockout — while a bad secret is not.
+        if (msg.deviceId) {
+          const result = this.devices.authenticate(msg.deviceId, msg.secret);
+          if (result.ok) {
+            this.clearFailedAttempts(ip);
+            this.config.markPaired();
+            this.addClient(ws, result.device.id, ip);
+            ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop' }));
+            this.replayBuffers(ws).catch((err) => {
+              console.error('[remote-server] replayBuffers failed:', err);
+            });
+            return;
+          }
+          if (result.reason !== 'bad-secret') {
+            // Not a failed guess, so it does not count toward the lockout: on upgrade day
+            // every retired credential arrives at once and must not lock the household out.
+            ws.send(JSON.stringify({ type: 'auth:failed', reason: result.reason }));
+            ws.close(result.reason === 'revoked' ? 4003 : 4004,
+              result.reason === 'revoked' ? 'Device unpaired' : 'Credential retired');
+            return;
+          }
         }
 
-        if (authenticated) {
+        if (msg.password && await this.config.verifyPassword(msg.password)) {
           this.clearFailedAttempts(ip);
-          const token = msg.token && this.tokens.has(msg.token) ? msg.token : randomUUID();
-          this.tokens.set(token, true);
-          this.saveTokens();
+          // The secret is returned exactly once, at pairing. Re-authenticating reuses the
+          // record rather than minting another credential, which is why one device could
+          // never be shown as one row before.
+          const paired = this.devices.pair(msg.deviceName);
           this.config.markPaired();
-          this.addClient(ws, token, ip);
-          ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
+          this.addClient(ws, paired.deviceId, ip);
+          ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop' }));
           this.replayBuffers(ws).catch((err) => {
             console.error('[remote-server] replayBuffers failed:', err);
           });
@@ -815,8 +810,10 @@ export class RemoteServer {
     ws.on('message', authHandler);
   }
 
-  private addClient(ws: WebSocket, token: string, ip: string): void {
-    const client: AuthenticatedClient = { id: randomUUID(), ws, token, ip, connectedAt: Date.now() };
+  private addClient(ws: WebSocket, deviceId: string, ip: string): void {
+    // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
+    // panel lists. Two id spaces, deliberately not merged.
+    const client: AuthenticatedClient = { id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now() };
     this.clients.add(client);
 
     ws.on('message', (raw) => this.handleMessage(client, raw as Buffer | string));

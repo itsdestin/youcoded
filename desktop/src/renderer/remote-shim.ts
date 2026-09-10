@@ -129,6 +129,26 @@ function send(msg: any): void {
   pendingSendQueue.push(data);
 }
 
+/**
+ * The stored credential is `<deviceId>:<secret>`.
+ *
+ * WHY a value with no colon is sent as a device id with no secret: that is a credential from
+ * the retired token file. The host answers "unknown", which is terminal, so the client stops
+ * and asks for the password once rather than retrying a credential that can never work.
+ */
+function splitCredential(stored: string): { deviceId: string; secret?: string } {
+  const at = stored.indexOf(':');
+  return at === -1 ? { deviceId: stored } : { deviceId: stored.slice(0, at), secret: stored.slice(at + 1) };
+}
+
+/** A name for this device's row in the host's list — never its address. */
+function describeThisDevice(): string {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  const os = /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iPhone' : /Mac/i.test(ua) ? 'Mac' : /Windows/i.test(ua) ? 'Windows' : /Linux/i.test(ua) ? 'Linux' : '';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  return os ? `${browser} on ${os}` : browser;
+}
+
 // Flush queued application messages once auth:ok has resolved.
 // Called ONLY from inside the auth:ok branch — never from ws.onopen, since
 // the bridge rejects application traffic before auth completes.
@@ -550,8 +570,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       const authMsg = isLocalBridge && bridgeToken
         ? { type: 'auth', token: bridgeToken }
         : isToken
-          ? { type: 'auth', token: passwordOrToken }
-          : { type: 'auth', password: passwordOrToken };
+          ? { type: 'auth', ...splitCredential(passwordOrToken) }
+          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice() };
       ws!.send(JSON.stringify(authMsg));
     };
 
@@ -572,9 +592,12 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // (mount-time fetches that fired before auth completed). Must be
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.
           flushSendQueue();
-          // Store token for reconnection
-          const token = msg.token;
-          localStorage.setItem('youcoded-remote-token', token);
+          // The secret comes back exactly once, at pairing; later connections answer with
+          // the device id alone, so keep what is already stored.
+          const token = msg.secret
+            ? `${msg.deviceId}:${msg.secret}`
+            : (localStorage.getItem('youcoded-remote-token') ?? msg.deviceId ?? '');
+          if (token) localStorage.setItem('youcoded-remote-token', token);
           // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
           // the desktop server responds with platform:"electron" but we're still on a phone
           if (!preservePlatform) {
