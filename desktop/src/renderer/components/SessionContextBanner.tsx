@@ -1,4 +1,4 @@
-import { Button } from './ui';
+import { FOCUS_RING } from './ui/Button';
 import type { SessionContext } from '../state/chat-types';
 import { wasTrimmed } from './session-context-facts';
 
@@ -6,16 +6,14 @@ import { wasTrimmed } from './session-context-facts';
 // timeline that summarizes its STARTING context (Step 3, 2026-08-17, broadened
 // from "context truncation" to "context transparency").
 //
-// Every session shows one: "Full context loaded — 4 skills, 8 tools, project
-// instructions" when everything fit, or the amber "Context was trimmed" line
-// when something was cut. Clicking it opens SessionContextPopup — the full
-// accounting (system prompt, CLAUDE.md as-truncated, skills, tools, dropped
-// MCP servers, Manage Assistant Settings).
+// Every session shows one — including a session that started with everything
+// intact, because a missing line cannot be told apart from a broken app. It says
+// what the assistant was handed, or goes amber when something was left out.
+// Pressing anywhere on it opens SessionContextPopup.
 //
-// The dismissible design from v1 (2026-08-17) is GONE: this is not a one-off
-// notice, it is a persistent affordance — the user can always reopen the
-// accounting. Dismissal still hides the strip for the session; the popup's
-// × closes only the popup.
+// The dismissible design from v1 (2026-08-17) is GONE, and so is dismissal
+// itself: this is not a one-off notice but the only way back into the
+// accounting, so there is nothing to dismiss. The popup's × closes the popup.
 
 interface Props {
   context: SessionContext;
@@ -51,12 +49,27 @@ export function SessionContextBanner({ context, onOpen }: Props) {
   // The strip is now the ONLY way into the panel — review-5 Q-1 chose "never"
   // for opening by itself — so the amber state is load-bearing: it is the only
   // thing on screen that says something was left out.
+  // THE WHOLE ROW IS THE BUTTON (Destin, 2026-09-10: "i want the whole row thing
+  // to be a clickable button that opens the popup"). Which forces the shape of
+  // everything below it: a <button> may not contain another interactive element,
+  // so "Details" CANNOT be a real <Button> any more — it would be a control
+  // inside a control, which browsers treat inconsistently and screen readers
+  // announce as two things when there is one.
+  //
+  // So Details keeps the look and gives up the mechanism: a plain <span> wearing
+  // the secondary recipe, lighting up with the row through `group-hover`. This is
+  // the same trade ThemeShareSheet already makes for its <a> styled as a button
+  // (see NOT_CALLOUTS in callout-authority.test.tsx). The focus ring is the
+  // primitive's own export, not a copy, so keyboard focus still looks like every
+  // other control in the app.
   return (
-    <div
-      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors ${
+    <button
+      type="button"
+      onClick={onOpen}
+      className={`group w-full flex items-center gap-2 px-3 py-2 rounded-lg border text-left cursor-pointer transition-colors ${FOCUS_RING} ${
         trimmed
-          ? 'border-amber-500/40 bg-amber-500/10 text-fg-2'
-          : 'border-edge-dim bg-inset/50 text-fg-2'
+          ? 'border-amber-500/40 bg-amber-500/10 text-fg-2 hover:bg-amber-500/15'
+          : 'border-edge-dim bg-inset/50 text-fg-2 hover:bg-inset'
       }`}
     >
       <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${trimmed ? 'bg-amber-500' : 'bg-green-500'}`} aria-hidden />
@@ -65,9 +78,14 @@ export function SessionContextBanner({ context, onOpen }: Props) {
           ? 'This model’s context window is small, so some rules and skills were left out'
           : fullSummary(context)}
       </span>
-      <Button variant="secondary" size="sm" onClick={onOpen} className="shrink-0">
+      {/* aria-hidden: the row already says what it does, and announcing
+          "Details" after the sentence would read as a second thing to press. */}
+      <span
+        aria-hidden
+        className="shrink-0 rounded-md border border-edge-dim px-2 py-1 text-2xs font-medium text-fg-2 transition-colors group-hover:bg-inset group-hover:text-fg"
+      >
         Details
-      </Button>
-    </div>
+      </span>
+    </button>
   );
 }

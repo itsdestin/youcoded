@@ -103,9 +103,10 @@ const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'AssistantTurnBubble.tsx': { count: 1, why: 'the Plan card in the chat timeline — not a menu surface at all' },
   'SessionContextBanner.tsx': {
     count: 1,
-    why: 'the strip above a conversation saying what the assistant started with — it carries the '
-      + 'Details button that is the ONLY way into the panel (review-5 Q-1 chose "never" for '
-      + 'opening by itself), so it is a K5 status strip, not passive text',
+    why: 'the strip above a conversation saying what the assistant started with — the whole row '
+      + 'IS the button into the panel (Destin, 2026-09-10), and that panel is the ONLY way in '
+      + '(review-5 Q-1 chose "never" for opening by itself), so it is a K5 status strip rather '
+      + 'than passive text',
   },
   'SettingsPanel.tsx': {
     count: 3,
