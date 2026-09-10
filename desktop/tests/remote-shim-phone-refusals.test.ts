@@ -85,6 +85,7 @@ describe('remote-shim on the phone\'s own bridge', () => {
     window.addEventListener(REMOTE_UNSUPPORTED_EVENT, listener);
   });
   afterEach(() => {
+    vi.useRealTimers();
     window.removeEventListener(REMOTE_UNSUPPORTED_EVENT, listener);
     Object.defineProperty(window, 'location', realLocation);
     delete (globalThis as any).WebSocket;
@@ -93,6 +94,12 @@ describe('remote-shim on the phone\'s own bridge', () => {
 
   it('a refusal from the phone says "on the phone", not "via remote access"', async () => {
     const ws = await connectPhone();
+    // WHY the clock moves: nothing is announced for the first seconds after a connection,
+    // because the app's own boot fetches are not something the person did
+    // (remote-shim-unsupported.test.ts covers that window). This test is about a tap the
+    // user made AFTER the app settled, so it has to happen after the window closes.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.now() + 10_000);
     const p = (window as any).claude.syncSpaces.enable(true);
     const msg = JSON.parse(ws.sent[ws.sent.length - 1]);
     expect(msg.type).toBe('syncspaces:enable');

@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
@@ -331,6 +331,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // visible until the menu is closed and reopened, so the row doesn't vanish
   // mid-interaction when Show Complete is off. Reset on every open.
   const [stickyComplete, setStickyComplete] = useState<Set<string>>(new Set());
+  /** Non-null when the last load FAILED. Empty string = it failed and said no reason. */
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // New filter state — all reset on each open (no localStorage). Default values
   // (empty Sets, sortDir='desc') produce identical behaviour to the prior
@@ -373,6 +375,25 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const [tagManagerOpen, setTagManagerOpen] = useState(false);
 
   // Fetch sessions when opened
+  // WHY a failed load is not an empty list: this used to `.catch(() => setSessions([]))`,
+  // so anything going wrong — a dropped connection on a phone, a request that timed out
+  // after thirty seconds — produced "No previous sessions found". A confident, wrong
+  // sentence about someone's own history. Destin hit it over remote access on 2026-09-10:
+  // nothing appeared, then it worked on the second try, and there was no way to tell from
+  // the screen that the first attempt had failed at all.
+  const loadSessions = useCallback(() => {
+    setLoading(true);
+    setLoadError(null);
+    (window as any).claude.session.browse()
+      .then((list: PastSession[]) => { setSessions(list); setLoadError(null); })
+      .catch((err: any) => {
+        setSessions([]);
+        // The real message when there is one; never a guess about the cause.
+        setLoadError(err?.message ? String(err.message) : '');
+      })
+      .finally(() => setLoading(false));
+  }, []);
+
   useEffect(() => {
     if (open) {
       setSearch('');
@@ -391,11 +412,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setSelectedProjects(new Set());
       setSelectedTagIds(new Set());
       setSortDir('desc');
-      setLoading(true);
-      (window as any).claude.session.browse()
-        .then((list: PastSession[]) => setSessions(list))
-        .catch(() => setSessions([]))
-        .finally(() => setLoading(false));
+      loadSessions();
       const t = setTimeout(() => searchRef.current?.querySelector('input')?.focus(), 50);
       return () => clearTimeout(t);
     }
@@ -1557,6 +1574,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             <div className="py-2">
               {loading ? (
                 <LoadingState what="sessions" />
+              ) : loadError !== null ? (
+                loadError ? (
+                  <ErrorState mode="recoverable" message={`Couldn\u2019t load your conversations: ${loadError}`} onRetry={loadSessions} variant="inline" />
+                ) : (
+                  <ErrorState mode="recoverable" message="Couldn\u2019t load your conversations." onRetry={loadSessions} variant="inline" />
+                )
               ) : filtered.length === 0 ? (
                 <EmptyState
                   message={search.trim() || filtersActive ? 'No matching sessions' : 'No previous sessions found'}

@@ -1784,10 +1784,9 @@ export function registerIpcHandlers(
       return true;
     });
 
-    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; trustTailscale?: boolean; keepAwakeHours?: number }) => {
+    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; keepAwakeHours?: number }) => {
       const wasEnabled = remoteConfig.enabled;
       if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
-      if (typeof updates.trustTailscale === 'boolean') remoteConfig.trustTailscale = updates.trustTailscale;
       if (typeof updates.keepAwakeHours === 'number') {
         remoteConfig.keepAwakeHours = updates.keepAwakeHours;
         applyKeepAwake(updates.keepAwakeHours);
@@ -1837,8 +1836,22 @@ export function registerIpcHandlers(
       return remoteServer?.getClientList() ?? [];
     });
 
-    ipcMain.handle(IPC.REMOTE_DISCONNECT_CLIENT, async (_event, clientId: string) => {
-      return remoteServer?.disconnectClient(clientId) ?? false;
+    // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
+    // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
+    ipcMain.handle(IPC.REMOTE_STATUS, async () => {
+      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0 };
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_LIST, async () => {
+      return remoteServer?.getDeviceList() ?? [];
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_RENAME, async (_event, deviceId: string, name: string) => {
+      return remoteServer?.renameDevice(deviceId, name) ?? false;
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_UNPAIR, async (_event, deviceId: string) => {
+      return remoteServer?.unpairDevice(deviceId) ?? false;
     });
 
     ipcMain.handle(IPC.REMOTE_INSTALL_TAILSCALE, async () => {

@@ -100,7 +100,10 @@ const IPC = {
   REMOTE_DETECT_TAILSCALE: 'remote:detect-tailscale',
   REMOTE_GET_CLIENT_COUNT: 'remote:get-client-count',
   REMOTE_GET_CLIENT_LIST: 'remote:get-client-list',
-  REMOTE_DISCONNECT_CLIENT: 'remote:disconnect-client',
+  REMOTE_STATUS: 'remote:status',
+  REMOTE_DEVICES_LIST: 'remote:devices:list',
+  REMOTE_DEVICES_RENAME: 'remote:devices:rename',
+  REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
   REMOTE_INSTALL_TAILSCALE: 'remote:install-tailscale',
   REMOTE_AUTH_TAILSCALE: 'remote:auth-tailscale',
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
@@ -498,6 +501,9 @@ contextBridge.exposeInMainWorld('claude', {
     destroy: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_DESTROY, sessionId),
     list: () => ipcRenderer.invoke(IPC.SESSION_LIST),
+    // The desktop talks over IPC, so there is no connection to be down. Present on both
+    // bridges so the composer can ask without knowing which one it has.
+    canSend: () => true,
     sendInput: (sessionId: string, text: string) =>
       ipcRenderer.send(IPC.SESSION_INPUT, sessionId, text),
     resize: (sessionId: string, cols: number, rows: number) =>
@@ -879,12 +885,22 @@ contextBridge.exposeInMainWorld('claude', {
   remote: {
     getConfig: () => ipcRenderer.invoke(IPC.REMOTE_GET_CONFIG),
     setPassword: (password: string) => ipcRenderer.invoke(IPC.REMOTE_SET_PASSWORD, password),
-    setConfig: (updates: { enabled?: boolean; trustTailscale?: boolean }) =>
+    setConfig: (updates: { enabled?: boolean }) =>
       ipcRenderer.invoke(IPC.REMOTE_SET_CONFIG, updates),
     detectTailscale: () => ipcRenderer.invoke(IPC.REMOTE_DETECT_TAILSCALE),
     getClientCount: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_COUNT),
     getClientList: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_LIST),
-    disconnectClient: (clientId: string) => ipcRenderer.invoke(IPC.REMOTE_DISCONNECT_CLIENT, clientId),
+    getStatus: () => ipcRenderer.invoke(IPC.REMOTE_STATUS),
+    onStatus: (cb: (status: unknown) => void) => {
+      const listener = (_e: unknown, status: unknown) => cb(status);
+      ipcRenderer.on(IPC.REMOTE_STATUS, listener);
+      return () => ipcRenderer.removeListener(IPC.REMOTE_STATUS, listener);
+    },
+    devices: {
+      list: () => ipcRenderer.invoke(IPC.REMOTE_DEVICES_LIST),
+      rename: (deviceId: string, name: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_RENAME, deviceId, name),
+      unpair: (deviceId: string) => ipcRenderer.invoke(IPC.REMOTE_DEVICES_UNPAIR, deviceId),
+    },
     installTailscale: () => ipcRenderer.invoke(IPC.REMOTE_INSTALL_TAILSCALE),
     authTailscale: () => ipcRenderer.invoke(IPC.REMOTE_AUTH_TAILSCALE),
     broadcastAction: (action: any) => ipcRenderer.send(IPC.UI_ACTION_BROADCAST, action),

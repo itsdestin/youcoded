@@ -535,6 +535,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         }
       }
 
+      // Contract row R2: while the connection is down what you typed stays a draft and
+      // waits for you to press Send. It is NOT queued — queueing is what let a message the
+      // app had already reported as failed run minutes later, after a reconnect.
+      if (window.claude.session.canSend?.() === false) {
+        onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+        return false;
+      }
+
       // Route slash commands through the central dispatcher BEFORE attachment
       // merging so the intercept sees the pristine command text (not "file.txt /clear").
       // The dispatcher decides: fully intercept, forward-and-intercept, or let through.
@@ -769,6 +777,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const val = inputRef.current?.value ?? text;
       // pty-worker auto-splits text+\r with a 600ms gap so Enter isn't
       // swallowed by Ink's paste buffer. No renderer-side setTimeout needed.
+      // A false return means the connection is down: keep the draft (R2).
+      if (window.claude.session.canSend?.() === false) {
+        onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+        return;
+      }
       window.claude.session.sendInput(sessionId, val + '\r');
       setText('');
       if (inputRef.current) {

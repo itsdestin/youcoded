@@ -20,14 +20,39 @@ vi.mock('ws', async () => {
 // listenBehavior lets a test turn the next listen() into a bind failure
 // (EADDRINUSE) instead of a success, so the start-failure path is exercised
 // rather than assumed.
-const listenBehavior: { mode: 'ok' | 'error'; calls: number } = { mode: 'ok', calls: 0 };
+const listenBehavior: { mode: 'ok' | 'error'; calls: number; boundHost: string | null } =
+  { mode: 'ok', calls: 0, boundHost: null };
+
+// Remote access refuses to start without a private address to listen on, so every start()
+// test needs one. Real detection shells out to the tailscale binary.
+vi.mock('../src/main/remote-config', async () => {
+  const actual = await vi.importActual<typeof import('../src/main/remote-config')>('../src/main/remote-config');
+  return {
+    ...actual,
+    RemoteConfig: Object.assign(
+      function RemoteConfigStub() { /* tests pass their own config object */ } as unknown as typeof actual.RemoteConfig,
+      actual.RemoteConfig,
+      {
+        detectTailscale: vi.fn(async () => ({
+          installed: true, connected: true, ip: '100.64.0.1',
+          hostname: 'test-host', url: 'http://test-host:9900',
+        })),
+      },
+    ),
+  };
+});
 
 vi.mock('http', async () => {
   const { EventEmitter: EE } = await import('events');
   function createServer(_handler?: any) {
     const emitter: any = new EE();
     return Object.assign(emitter, {
-      listen: vi.fn((_port: number, cb?: () => void) => {
+      // Signature matches net.Server: (port, host?, cb?). The server now names a host —
+      // the Tailscale address — so a mock that assumed (port, cb) would silently never
+      // call back and every start() test would hang.
+      listen: vi.fn((_port: number, hostOrCb?: string | (() => void), maybeCb?: () => void) => {
+        const cb = typeof hostOrCb === 'function' ? hostOrCb : maybeCb;
+        listenBehavior.boundHost = typeof hostOrCb === 'string' ? hostOrCb : null;
         listenBehavior.calls++;
         if (listenBehavior.mode === 'error') {
           const err: any = new Error('listen EADDRINUSE: address already in use :::9900');
@@ -99,9 +124,7 @@ describe('RemoteServer', () => {
       enabled: true,
       port: 9900,
       passwordHash: '$2b$10$fakehash',
-      trustTailscale: false,
       verifyPassword: vi.fn(async (pw: string) => pw === 'correct'),
-      isTailscaleIp: vi.fn(() => false),
     };
   });
 
@@ -147,7 +170,7 @@ describe('RemoteServer and the shell provider', () => {
       resizeSession: vi.fn(),
     });
     shellHookRelay = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
-    shellConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    shellConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client. */
@@ -221,7 +244,7 @@ describe('RemoteServer carries a per-model settings save end to end', () => {
       sendInput: vi.fn(), resizeSession: vi.fn(),
     });
     hr = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
-    cfg = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    cfg = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function drive(server: any, msg: any) {
@@ -323,9 +346,7 @@ describe('RemoteServer auth flow', () => {
       enabled: true,
       port: 9900,
       passwordHash: null,
-      trustTailscale: false,
       verifyPassword: vi.fn(async () => false),
-      isTailscaleIp: vi.fn(() => false),
     };
     const { RemoteServer } = await import('../src/main/remote-server');
     const server = new RemoteServer(mockSessionManager, mockHookRelay, config);
@@ -361,9 +382,7 @@ describe('RemoteServer runtime start/stop', () => {
       enabled: true,
       port: 9900,
       passwordHash: '$2b$10$fakehash',
-      trustTailscale: false,
       verifyPassword: vi.fn(async () => false),
-      isTailscaleIp: vi.fn(() => false),
     };
   });
 
@@ -415,6 +434,28 @@ describe('RemoteServer runtime start/stop', () => {
     expect(server.isRunning()).toBe(false);
   });
 
+  it('stops meaning stopped, even after a start that failed', async () => {
+    // The reason was cleared only by a successful listen, and stop() skipped its own
+    // status emit whenever the reason was set. So one failed start left the panel reading
+    // "Not running: <that reason>" for the rest of the process — including after the user
+    // had switched remote access off, which is a state the server was genuinely in.
+    listenBehavior.mode = 'error';
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+
+    await expect(server.start()).rejects.toThrow(/EADDRINUSE/);
+    expect(server.getStatus().state).toBe('failed');
+
+    const seen: string[] = [];
+    server.onStatusChange(st => seen.push(st.state));
+    server.stop();
+
+    expect(server.getStatus().state).toBe('stopped');
+    expect(server.getStatus().reason).toBeUndefined();
+    // And the panel is told, rather than being left on the stale answer until it reopens.
+    expect(seen).toContain('stopped');
+  });
+
   it('leaves no subscriptions behind after a failed start', async () => {
     listenBehavior.mode = 'error';
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -453,7 +494,7 @@ describe('RemoteServer unhandled channels', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client and collect
@@ -463,6 +504,40 @@ describe('RemoteServer unhandled channels', () => {
     const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
     return server.handleMessage({ ws }, JSON.stringify(msg)).then(() => sent);
   }
+
+  it('answers remote:status over the socket a browser actually uses', async () => {
+    // This channel reached preload, the shim, the desktop IPC handlers and Android, and
+    // not this host. The shim rejects on `unsupported`, and the panel asks for status in
+    // the same Promise.all as the config, the Tailscale info and the device list — so the
+    // whole Remote Access screen opened blank on a phone, and every reconnect re-asked.
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const sent = await sendAndCollect(server, { type: 'remote:status', id: 'req-status', payload: {} });
+    expect(sent).toHaveLength(1);
+    expect(sent[0].payload.unsupported).toBeUndefined();
+    expect(sent[0].payload.state).toBe('stopped');
+    expect(sent[0].payload.port).toBe(9900);
+  });
+
+  it('answers about this device\u2019s requests and nobody else\u2019s', async () => {
+    // Request ids carry the device that made them. Without the check, any paired device
+    // could ask the host whether another device's action had run.
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    server.noteCompleted('phone-a:1:7');
+    server.noteCompleted('phone-b:1:9');
+
+    const sent: any[] = [];
+    const ws: any = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    await server.handleMessage({ ws, deviceId: 'phone-a' }, JSON.stringify({
+      type: 'remote:request-outcome', id: 'req-o', payload: { ids: ['phone-a:1:7', 'phone-b:1:9'] },
+    }));
+
+    expect(sent[0].payload.outcomes['phone-a:1:7']).toBe('completed');
+    // Not a lie — the host genuinely will not say. Unknown is what a client shows as
+    // "we could not tell", which is the honest answer to a question that isn't its own.
+    expect(sent[0].payload.outcomes['phone-b:1:9']).toBe('unknown');
+  });
 
   it('answers an unknown channel instead of dropping it', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
@@ -557,7 +632,7 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function sendAndCollect(server: any, msg: any) {
@@ -946,7 +1021,7 @@ describe('RemoteServer account bridge', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function sendAndCollect(server: any, msg: any) {
@@ -1029,7 +1104,7 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function fakeWs() {
@@ -1189,7 +1264,7 @@ describe('RemoteServer transcript:read-meta path containment', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-rs-transcript-'));
     // Point os.homedir() at the tmp dir so the handler's ~/.claude/projects
     // containment root lives inside the fixture, not the real home.
@@ -1254,7 +1329,7 @@ describe('RemoteServer transcript:read-meta malformed payloads', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client and collect
@@ -1312,7 +1387,7 @@ describe('RemoteServer session:history id validation', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-rs-history-'));
     // Point os.homedir() at the tmp dir so the handler's ~/.claude/projects
     // probe root lives inside the fixture, not the real home. A slug dir must
@@ -1406,7 +1481,7 @@ describe('RemoteServer replay buffers stay bounded and replay the same tail', ()
   beforeEach(() => {
     mockSessionManager = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function fakeWs() {

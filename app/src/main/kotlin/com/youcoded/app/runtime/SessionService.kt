@@ -1500,7 +1500,6 @@ class SessionService : Service() {
                         put("enabled", false)
                         put("port", 9901)
                         put("hasPassword", false)
-                        put("trustTailscale", false)
                         put("keepAwakeHours", 0)
                         put("clientCount", 1)
                     })
@@ -1533,6 +1532,13 @@ class SessionService : Service() {
                     bridgeServer.respond(ws, msg.type, id, JSONObject().apply {
                         put("installed", installed)
                         put("connected", connected)
+                        // Desktop reads Tailscale's own BackendState and can say WHICH
+                        // prerequisite is missing. All this phone can see is an installed
+                        // package and a CGNAT address, so it reports only what it knows:
+                        // running, or not installed. "Signed out" and "switched off" are
+                        // indistinguishable from here, and guessing between them would put
+                        // an invented cause in front of the user.
+                        put("state", if (!installed) "not-installed" else if (connected) "running" else "unknown")
                         if (tsIp != null) put("ip", tsIp)
                     })
                 }
@@ -1540,14 +1546,44 @@ class SessionService : Service() {
             "remote:get-client-list" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
             }
-            "remote:set-password" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            // Host administration does not travel over the remote socket on either platform.
+            // Answering `true` here told the caller a change had happened when none had.
+            "remote:set-password", "remote:set-config",
+            "remote:devices:rename", "remote:devices:unpair" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("ok", false)
+                        put("error", "Change this on the computer itself.")
+                    })
+                }
             }
-            "remote:set-config" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
+            // This phone hosts no paired devices of its own, so the list is empty rather
+            // than absent — an absent channel would read as "not supported yet".
+            // The phone is not a host: it is neither listening nor failed.
+            // The phone keeps no ring of completed requests, so it answers unknown for
+            // every id. Stated rather than hidden: pretending otherwise would be inventing
+            // a cause, which docs/error-message-standards.md forbids.
+            "remote:request-outcome" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("outcomes", JSONObject())
+                    })
+                }
             }
-            "remote:disconnect-client" -> {
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, true) }
+            "remote:status" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("state", "stopped")
+                        put("port", 0)
+                    })
+                }
+            }
+            "remote:devices:list" -> {
+                msg.id?.let {
+                    bridgeServer.respond(ws, msg.type, it, JSONObject().apply {
+                        put("devices", org.json.JSONArray())
+                    })
+                }
             }
             "transcript:read-meta" -> {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject.NULL) }

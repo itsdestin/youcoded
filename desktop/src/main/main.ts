@@ -288,6 +288,15 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   },
 });
 
+// WHY push and not poll: a bind failure happens once, seconds after launch, and a panel
+// that is not open cannot poll for it. The indicator has to learn about it when it opens
+// (getStatus) and while it is open (this).
+remoteServer.onStatusChange((status) => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(IPC.REMOTE_STATUS, status);
+  }
+});
+
 // Dev server URL — env override wins; otherwise compute from YOUCODED_PORT_OFFSET
 // (via shared/ports.ts) so Vite and main stay in sync without a second env var.
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VITE_DEV_PORT}`;
