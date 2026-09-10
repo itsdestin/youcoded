@@ -3,7 +3,11 @@
 // timers are driven by vitest fake timers; the lease-file fallback is asserted
 // against a REAL temp dir (readFileSync/existsSync), not mocks.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as fs from 'fs';
+// WHY default import (not `import * as fs`): a namespace import produces a
+// frozen ES module namespace object whose properties vi.spyOn cannot redefine
+// ("Cannot redefine property: writeFileSync") — needed below to prove the
+// hung-write guard never touches the SYNC fs surface.
+import fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { createLeaseClient, type LeaseClient } from '../src/main/conversations/lease-client';
@@ -200,7 +204,10 @@ describe('lease-client', () => {
     await vi.advanceTimersByTimeAsync(RENEW_MS);
 
     expect(client.isHeld('s1')).toBe(false);
-    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    // WHY vi.waitFor: the renew tick's deleteLeaseFile is now fire-and-forget
+    // (`void deleteLeaseFile(...)`) — the file removal is off the event loop,
+    // so it may not have landed the instant advanceTimersByTimeAsync returns.
+    await vi.waitFor(() => expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false));
     // The renew reply carries the new holder — the takeover is attributed so
     // the MovedGate can name the device instead of "another device".
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
@@ -256,7 +263,8 @@ describe('lease-client', () => {
     await vi.advanceTimersByTimeAsync(RENEW_MS);
 
     expect(client.isHeld('s1')).toBe(false);
-    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    // WHY vi.waitFor: same fire-and-forget delete as above.
+    await vi.waitFor(() => expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false));
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
   });
 
@@ -351,5 +359,36 @@ describe('lease-client', () => {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(parsed.deviceId).toBe(DEVICE_ID);
     expect(typeof parsed.expiresAt).toBe('number');
+  });
+
+  it('acquire then release in the same tick leaves no lease file (write/delete stay ordered)', async () => {
+    hubRequest.mockResolvedValue({ ok: true, op: 'acquire', sessionId: 's1', holder: { deviceId: DEVICE_ID, device: DEVICE_NAME, expiresAt: Date.now() + 100_000 } });
+    const p1 = client.acquire('s1');
+    const p2 = client.release('s1');
+    await Promise.all([p1, p2]);
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+  });
+
+  it('a hung lease-file write does not hang the event loop', async () => {
+    // WHY: this is the 2026-09-08 freeze shape — a disk stall inside the lease
+    // write. The write must be off the event loop, so a real timer still fires
+    // while the write is pending. Controller decision (task-1-brief deviation):
+    // also assert the SYNC fs writers were never called and that fs.promises
+    // writeFile WAS called, so a fast writeFileSync can't make this pass by
+    // accident.
+    vi.useRealTimers(); // afterEach re-enables fake timers for the next case
+    hubRequest.mockResolvedValue({ ok: true, op: 'acquire', sessionId: 's1', holder: { deviceId: DEVICE_ID, device: DEVICE_NAME, expiresAt: Date.now() + 100_000 } });
+    const never = new Promise<void>(() => {});
+    const writeFileSpy = vi.spyOn(fs.promises, 'writeFile').mockReturnValue(never as any);
+    const syncWriteSpy = vi.spyOn(fs, 'writeFileSync');
+    const syncMkdirSpy = vi.spyOn(fs, 'mkdirSync');
+    try {
+      void client.acquire('s1');
+      const ticked = await new Promise<boolean>((r) => setTimeout(() => r(true), 20));
+      expect(ticked).toBe(true);
+      expect(syncWriteSpy).not.toHaveBeenCalled();
+      expect(syncMkdirSpy).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(writeFileSpy).toHaveBeenCalled());
+    } finally { writeFileSpy.mockRestore(); syncWriteSpy.mockRestore(); syncMkdirSpy.mockRestore(); }
   });
 });

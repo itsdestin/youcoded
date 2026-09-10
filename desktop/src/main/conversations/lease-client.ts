@@ -159,7 +159,27 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
   // heartbeat loop, double-renewing).
   const gen = new Map<string, number>();
 
-  // ---- lease-file helpers (all best-effort, all try/caught) ----
+  // ---- lease-file helpers (all best-effort, all try/caught, all OFF the event loop) ----
+  //
+  // WHY async: on 2026-09-08 the whole app froze for 6+ minutes right after a
+  // `[lease] acquire` log line. writeLeaseFile used fs.mkdirSync/writeFileSync —
+  // the only blocking calls in a module whose contract is "never block". A disk
+  // stall inside a blocking write halts every timer and every IPC handler in the
+  // main process at once. fs.promises moves the wait onto libuv's threadpool.
+  //
+  // WHY a per-session chain: sync calls were implicitly ordered. Now
+  // acquire()'s write and release()'s delete could race, and a delete that
+  // finishes before the write would resurrect the lease file. Each session's
+  // file ops run strictly one after another.
+  const fileChain = new Map<string, Promise<void>>();
+  function enqueueFileOp(sessionId: string, op: () => Promise<void>): Promise<void> {
+    const prev = fileChain.get(sessionId) ?? Promise.resolve();
+    const next = prev.then(op, op).catch(() => { /* best-effort */ });
+    fileChain.set(sessionId, next);
+    // Drop the entry once this op is the last one, so the map cannot grow forever.
+    void next.finally(() => { if (fileChain.get(sessionId) === next) fileChain.delete(sessionId); });
+    return next;
+  }
 
   function leaseFile(sessionId: string): string | null {
     const dir = opts.leaseDir();
@@ -167,27 +187,52 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
     return path.join(dir, `${sessionId}.json`);
   }
 
-  function writeLeaseFile(sessionId: string, expiresAt: number): void {
+  // The raw write, no queue position of its own — callers place it in the chain
+  // (writeLeaseFile below, or a reserved slot — see reserveFileSlot's WHY).
+  async function writeLeaseFileBody(sessionId: string, expiresAt: number): Promise<void> {
     const file = leaseFile(sessionId);
     if (!file) return;
-    try {
-      fs.mkdirSync(path.dirname(file), { recursive: true });
-      const body: LeaseFileContent = { deviceId: opts.deviceId, device: opts.deviceName, expiresAt };
-      fs.writeFileSync(file, JSON.stringify(body));
-    } catch { /* best-effort: file fallback is a nicety, not a correctness guarantee */ }
+    const body: LeaseFileContent = { deviceId: opts.deviceId, device: opts.deviceName, expiresAt };
+    await fs.promises.mkdir(path.dirname(file), { recursive: true });
+    await fs.promises.writeFile(file, JSON.stringify(body));
   }
 
-  function deleteLeaseFile(sessionId: string): void {
+  function writeLeaseFile(sessionId: string, expiresAt: number): Promise<void> {
+    if (!leaseFile(sessionId)) return Promise.resolve();
+    return enqueueFileOp(sessionId, () => writeLeaseFileBody(sessionId, expiresAt));
+  }
+
+  // FIX (found in TDD, not in the brief's Step 3 sketch): enqueueFileOp orders
+  // ops by when they are ENQUEUED, not by when their caller was CALLED. acquire()
+  // can't know whether/what to write until the hub round-trip resolves, so a
+  // naive `writeLeaseFile(...)` call after that await enqueues LATE. A release()
+  // fired in the same tick with no await between (the exact "acquire then
+  // release" guard test) calls deleteLeaseFile synchronously, before any await,
+  // so its delete would win the queue position and run BEFORE the write it was
+  // supposed to follow — the file would end up WRITTEN, not gone. Reserving a
+  // slot synchronously, before the hub call, makes queue order match call
+  // order regardless of how long the hub takes to answer.
+  function reserveFileSlot(sessionId: string): { settle: (op: (() => Promise<void>) | null) => void; done: Promise<void> } {
+    let settle!: (op: (() => Promise<void>) | null) => void;
+    const opPromise = new Promise<(() => Promise<void>) | null>((resolve) => { settle = resolve; });
+    const done = enqueueFileOp(sessionId, async () => {
+      const op = await opPromise;
+      if (op) await op();
+    });
+    return { settle, done };
+  }
+
+  function deleteLeaseFile(sessionId: string): Promise<void> {
     const file = leaseFile(sessionId);
-    if (!file) return;
-    try { fs.rmSync(file, { force: true }); } catch { /* best-effort */ }
+    if (!file) return Promise.resolve();
+    return enqueueFileOp(sessionId, () => fs.promises.rm(file, { force: true }));
   }
 
-  function readLeaseFile(sessionId: string): LeaseFileContent | null {
+  async function readLeaseFile(sessionId: string): Promise<LeaseFileContent | null> {
     const file = leaseFile(sessionId);
     if (!file) return null;
     try {
-      const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+      const parsed = JSON.parse(await fs.promises.readFile(file, 'utf8'));
       if (parsed && typeof parsed.expiresAt === 'number' && Number.isFinite(parsed.expiresAt)) {
         return { deviceId: String(parsed.deviceId ?? ''), device: String(parsed.device ?? ''), expiresAt: parsed.expiresAt };
       }
@@ -246,7 +291,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
           if (holder && holder.deviceId && holder.deviceId !== opts.deviceId) {
             stopTimer(sessionId);
             held.delete(sessionId);
-            deleteLeaseFile(sessionId);
+            void deleteLeaseFile(sessionId); // fire-and-forget: best-effort, already try/caught in the chain
             opts.onTakeoverRequest(sessionId, { deviceId: holder.deviceId, device: holder.device });
             return;
           }
@@ -259,7 +304,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
             // and our re-acquire. Genuine loss — tear down with attribution.
             stopTimer(sessionId);
             held.delete(sessionId);
-            deleteLeaseFile(sessionId);
+            void deleteLeaseFile(sessionId); // fire-and-forget: best-effort, already try/caught in the chain
             const h = re.holder;
             opts.onTakeoverRequest(
               sessionId,
@@ -272,19 +317,19 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
           // Re-acquired (re.ok), or hub went down mid-recovery (re === null) —
           // on the null path we hold optimistically, same never-block rule as
           // the transient-null branch below.
-          writeLeaseFile(sessionId, re?.holder?.expiresAt ?? Date.now() + LEASE_TTL_MS);
+          void writeLeaseFile(sessionId, re?.holder?.expiresAt ?? Date.now() + LEASE_TTL_MS); // fire-and-forget: renew tick, already try/caught in the chain
           schedule();
           return;
         }
 
         if (r && r.ok) {
           // Still ours — extend the file fallback with the hub's fresh deadline.
-          writeLeaseFile(sessionId, r.holder?.expiresAt ?? Date.now() + LEASE_TTL_MS);
+          void writeLeaseFile(sessionId, r.holder?.expiresAt ?? Date.now() + LEASE_TTL_MS); // fire-and-forget
         } else {
           // r === null: hub transiently disconnected. Do NOT drop the lease on a
           // blip — keep renewing and keep the file fallback fresh with a local
           // deadline (never-block / tolerate transient hub loss).
-          writeLeaseFile(sessionId, Date.now() + LEASE_TTL_MS);
+          void writeLeaseFile(sessionId, Date.now() + LEASE_TTL_MS); // fire-and-forget
         }
         schedule(); // reschedule the next heartbeat only if we still hold it
       } catch {
@@ -302,6 +347,12 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
 
   return {
     async acquire(sessionId) {
+      // Reserve this call's place in the file-op chain BEFORE the hub round-trip
+      // — see reserveFileSlot's WHY. Must happen before ANY await in this
+      // function, so a release() fired back-to-back (no await between) can
+      // never enqueue its delete ahead of this write.
+      const slot = reserveFileSlot(sessionId);
+
       let res: LeaseResult | null = null;
       try { res = await opts.hubRequest('acquire', sessionId, opts.deviceId); }
       catch { res = null; } // never throw from acquire
@@ -309,6 +360,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       if (res && !res.ok) {
         // Someone else holds it. Don't start a timer, don't write a file — the
         // caller inspects res.holder to decide whether to request a takeover.
+        slot.settle(null); // release our reserved slot — no write
         return res;
       }
 
@@ -321,17 +373,24 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       // awaiting hubRequest becomes a no-op when it resumes (no leaked 2nd loop).
       stopTimer(sessionId);
       held.delete(sessionId);
-      writeLeaseFile(sessionId, expiresAt);
+      // Awaited: the existing "writes the lease file" test and the hub-down
+      // fallback both assert the file exists right after acquire() resolves —
+      // awaiting a promise here does not block the event loop, only the caller.
+      slot.settle(() => writeLeaseFileBody(sessionId, expiresAt));
+      await slot.done;
       startRenewTimer(sessionId);
       return res ?? { ok: true, op: 'acquire', sessionId, holder: { deviceId: opts.deviceId, device: opts.deviceName, expiresAt } };
     },
 
     async release(sessionId) {
       // Stop local state FIRST so a late renew can't re-arm anything, then tell
-      // the hub best-effort. Release must never throw.
+      // the hub best-effort. Release must never throw. Awaited so the existing
+      // test ("file is gone after `await release()`") stays true, and so a
+      // caller that awaits release() before re-acquiring never races its own
+      // delete against a later write.
       stopTimer(sessionId);
       held.delete(sessionId);
-      deleteLeaseFile(sessionId);
+      await deleteLeaseFile(sessionId);
       try { await opts.hubRequest('release', sessionId, opts.deviceId); } catch { /* best-effort */ }
     },
 
@@ -356,7 +415,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
 
       // Hub down — consult the file fallback with the 300s stale rule (local clock).
       // The lease file stores the holder's deviceId too, so self keys on it here as well.
-      const file = readLeaseFile(sessionId);
+      const file = await readLeaseFile(sessionId);
       if (file && file.expiresAt > Date.now()) {
         console.log(`[lease] query ${sessionId.slice(0, 8)}: hub down — FILE fallback says held by ${file.deviceId.slice(0, 8)} (a takeover request cannot be delivered in this state)`);
         return {
