@@ -69,8 +69,6 @@ function formatModelId(id: string): string {
 // rather than four copies of the component: the pieces inside (the list, the
 // transcript pane, the resume controls) are identical in every candidate — only
 // the chrome around them is under review, and four copies would have drifted.
-// Delete this block, PREVIEW_VARIANT, SHELL and every branch that reads them
-// once a shell is chosen; the shipped browser has exactly one.
 //
 // ROUND 3 (2026-09-10). Round two's answers narrowed this hard, and the shells
 // below all obey those answers — they are variations WITHIN the direction he
@@ -81,41 +79,26 @@ function formatModelId(id: string): string {
 //   · D-1 "never" — the list never collapses. There is no ≡ button anywhere.
 //   · D-2 "blank" — the right half stays one line of text until he clicks; it
 //     never opens the most recent conversation by itself.
-// ROUND 5 (2026-09-10). Round four answered with two more directives, and both
-// are now BUILT rather than offered:
-//   · "i want the model/project picker and resume button to be vertically
-//     stacked on top of eachother" and, on the switches, "this should look like
-//     it does in our other existing new/resume surfaces" — so the action card is
-//     literally renderExpandedOptions, the block the expanded card in the list
-//     and ResumeOptionsPopover already use, with the folder above it.
-//   · "i think i want the header to be a clone of the card on the lefthand side
-//     that just pops/animates in when changing sessions and floats at the top of
-//     the window inside the container" — so the header IS renderSessionRow, the
-//     same function that draws the list, floating over the conversation. Rename,
-//     tags and mark-complete come with it for free; the four hand-drawn headers
-//     of round four are deleted.
-//
-// What is left to choose is the motion, which is why these variants are timing
-// rather than layout. The curve itself is NOT a candidate: `.switch-arrival`
-// (globals.css) is the arrival Destin picked on 2026-09-02 from four, for this
-// exact event — changing which conversation you are looking at — and ChatView
-// already uses it with `useOneShotWindow`. Inventing a second one here would be
-// two answers to one question.
-//
-//   off      today's browser, unchanged — the "before" picture
-//   whole    the sheet's whole content arrives as one, exactly as the chat view
-//            does it: one animated element, whatever the conversation's length
-//   header   only the header card arrives; the conversation underneath it just
-//            fades, so the thing that changed is the thing that moves
-//   stagger  header, then conversation, then action card, 70 ms apart
-//   none     no motion at all — the control, and what someone with reduced
-//            effects turned on already gets
-type PreviewVariant = 'off' | 'whole' | 'header' | 'stagger' | 'none';
-const VARIANTS: PreviewVariant[] = ['off', 'whole', 'header', 'stagger', 'none'];
+// MOCKUP (2026-09-10) — the conversation preview panel, now a SINGLE design.
+// Five rounds of decks narrowed it; every choice below is Destin's answer, not
+// a default, and none of them are still open:
+//   R2  the list keeps its cards; it never collapses and never hides itself;
+//       the right half stays one line of text until a row is clicked.
+//   R3  the sheet: heading, conversation and actions on one inset surface with
+//       the window showing all round it.
+//   R4  the header IS the list's card, drawn again, floating at the top of the
+//       sheet; the action card sits at its foot, vertically stacked, and its
+//       switches are the existing resume block rather than a restyled copy.
+//   R5  the whole sheet arrives on a jump (not just the card); the action card
+//       stays open while you read; the folder chip is gone from it — the header
+//       card already says which folder this is.
+// `?rbpreview=on` is all that is left of the switch, so the unchanged browser
+// stays photographable beside it until this ships. Delete PREVIEW_VARIANT and
+// `previewOn` when it does; everything else is the design.
+type PreviewVariant = 'off' | 'on';
 const PREVIEW_VARIANT: PreviewVariant = (() => {
   try {
-    const v = new URLSearchParams(location.search).get('rbpreview') as PreviewVariant;
-    return VARIANTS.includes(v) ? v : 'off';
+    return new URLSearchParams(location.search).get('rbpreview') === 'on' ? 'on' : 'off';
   } catch { return 'off'; }
 })();
 
@@ -1334,24 +1317,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // other existing new/resume surfaces", and re-styling them here is exactly how
   // three surfaces drift apart. `flush` only drops the top hairline, which would
   // otherwise double up against the card's own border.
-  const renderActionCard = (s: PastSession) => {
-    const project = s.projectPath.replace(/\\/g, '/').split('/').pop();
-    return (
-      <div className="shrink-0 p-3 pt-0">
-        <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
-          {/* Read-only: a resume cannot move a conversation to another folder,
-              so this states where it will land rather than offering a pick. */}
-          <div className="flex items-center gap-1.5 px-3 pt-2.5 text-3xs text-fg-muted">
-            <svg className="w-3 h-3 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2} aria-hidden>
-              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z" />
-            </svg>
-            <span className="truncate" title={s.projectPath}>{project}</span>
-          </div>
-          {renderExpandedOptions(s, { flush: true })}
-        </div>
+  const renderActionCard = (s: PastSession) => (
+    <div className="shrink-0 p-3 pt-0">
+      <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
+        {/* No folder chip here. It was above the model picker until Destin
+            pointed out the header card at the top of the sheet already says
+            which folder this is — the same fact twice, 300px apart. */}
+        {renderExpandedOptions(s, { flush: true })}
       </div>
-    );
-  };
+    </div>
+  );
 
   return (
     <>
@@ -1604,59 +1579,36 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           // of those inside the overlay is the stacked-glass bug the card
           // comment in the list warns about.
           //
-          // MOTION: `arriving` is true for one window after previewId changes
-          // (useOneShotWindow, the same hook ChatView uses), and the variants
-          // differ only in which elements wear `.switch-arrival` and when.
-          // animationFillMode backwards on the delayed ones so a staggered
-          // element does not paint at its final position for 70ms and then jump
-          // back to the start.
-          type Arrival = { className?: string; style?: React.CSSProperties };
-          const arr = (delay?: number): Arrival => {
-            if (!arriving || PREVIEW_VARIANT === 'none') return {};
-            return {
-              className: 'switch-arrival',
-              style: delay ? { animationDelay: `${delay}ms`, animationFillMode: 'backwards' } : undefined,
-            };
-          };
-          const whole: Arrival = PREVIEW_VARIANT === 'whole' ? arr() : {};
-          const headerArr: Arrival = PREVIEW_VARIANT === 'header' || PREVIEW_VARIANT === 'stagger' ? arr() : {};
-          const bodyArr: Arrival = PREVIEW_VARIANT === 'header'
-            ? (arriving ? { className: 'row-fade-in-arrival' } : {})
-            : PREVIEW_VARIANT === 'stagger' ? arr(70) : {};
-          const cardArr: Arrival = PREVIEW_VARIANT === 'stagger' ? arr(140) : {};
+          // MOTION: the WHOLE sheet arrives, on ONE element — Destin, round
+          // five, over the alternative where only the header card moved. That
+          // it is one element is also what keeps it cheap: `.switch-arrival` is
+          // the curve he picked on 2026-09-02 for this same event, ChatView
+          // wears it the same way, and animating one wrapper costs the same
+          // whether the conversation holds ten messages or ten thousand (see
+          // tests/animation-frame-budget.test.ts). `arriving` is one window per
+          // change of previewId, from the hook ChatView uses.
           return (
             <div className="flex-1 min-w-0 flex flex-col min-h-0 p-3">
-              <div
-                className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas ${whole.className ?? ''}`}
-                style={whole.style}
-              >
+              <div className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas${arriving ? ' switch-arrival' : ''}`}>
                 {/* The header IS the list's card, drawn again — Destin, round
                     four: "a clone of the card on the lefthand side ... floats at
                     the top of the window inside the container". Floating, not
                     welded: older messages pass under it as you scroll back.
                     pointer-events-none on the strip, auto on the card, so the
                     gutter beside it does not swallow scroll wheels. */}
-                <div
-                  className={`absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none ${headerArr.className ?? ''}`}
-                  style={headerArr.style}
-                >
+                <div className="absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none">
                   <div className="pointer-events-auto drop-shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
                     {renderSessionRow(s, true, true)}
                   </div>
                 </div>
-                <div
-                  className={`flex-1 min-h-0 flex flex-col ${bodyArr.className ?? ''}`}
-                  style={bodyArr.style}
-                >
+                <div className="flex-1 min-h-0 flex flex-col">
                   <SessionPreviewPane
                     provider={(s.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
                     id={s.sessionId}
                     title={s.name}
                   />
                 </div>
-                <div className={cardArr.className} style={cardArr.style}>
-                  {renderActionCard(s)}
-                </div>
+                {renderActionCard(s)}
               </div>
             </div>
           );
