@@ -430,7 +430,7 @@ export function noteTranscriptEvent(claudeSessionId: string, ev: TranscriptEvent
       // flight and push the space's PREVIOUS (pre-copy) size. Both halves are
       // best-effort: the reconciler re-mirrors, and the 120s poll covers a
       // missed nudge.
-      mirrorIn({
+      void mirrorIn({
         localJsonlPath: localJsonlPath(ctx.cwd, claudeSessionId, sessionProvider),
         spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, sessionProvider),
       }).catch(() => { /* best-effort; the reconciler catches up */ }).then(() => {
