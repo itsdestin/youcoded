@@ -1751,10 +1751,9 @@ export function registerIpcHandlers(
       return true;
     });
 
-    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; trustTailscale?: boolean; keepAwakeHours?: number }) => {
+    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; keepAwakeHours?: number }) => {
       const wasEnabled = remoteConfig.enabled;
       if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
-      if (typeof updates.trustTailscale === 'boolean') remoteConfig.trustTailscale = updates.trustTailscale;
       if (typeof updates.keepAwakeHours === 'number') {
         remoteConfig.keepAwakeHours = updates.keepAwakeHours;
         applyKeepAwake(updates.keepAwakeHours);

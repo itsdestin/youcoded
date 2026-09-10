@@ -837,7 +837,7 @@ contextBridge.exposeInMainWorld('claude', {
   remote: {
     getConfig: () => ipcRenderer.invoke(IPC.REMOTE_GET_CONFIG),
     setPassword: (password: string) => ipcRenderer.invoke(IPC.REMOTE_SET_PASSWORD, password),
-    setConfig: (updates: { enabled?: boolean; trustTailscale?: boolean }) =>
+    setConfig: (updates: { enabled?: boolean }) =>
       ipcRenderer.invoke(IPC.REMOTE_SET_CONFIG, updates),
     detectTailscale: () => ipcRenderer.invoke(IPC.REMOTE_DETECT_TAILSCALE),
     getClientCount: () => ipcRenderer.invoke(IPC.REMOTE_GET_CLIENT_COUNT),

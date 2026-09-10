@@ -30,7 +30,6 @@ interface ConfigData {
   enabled: boolean;
   port: number;
   passwordHash: string | null;
-  trustTailscale: boolean;
   keepAwakeHours: number; // 0 = off
   everPaired: boolean;
 }
@@ -39,7 +38,6 @@ export class RemoteConfig {
   enabled: boolean;
   port: number;
   passwordHash: string | null;
-  trustTailscale: boolean;
   keepAwakeHours: number;
   everPaired: boolean;
 
@@ -50,7 +48,6 @@ export class RemoteConfig {
       // don't fight over the same port when both have remote access enabled.
       port: REMOTE_SERVER_DEFAULT_PORT,
       passwordHash: null,
-      trustTailscale: false,
       keepAwakeHours: 0,
       everPaired: false,
     };
@@ -69,7 +66,6 @@ export class RemoteConfig {
         // Note: a `passwordPlain` field used to exist on disk (never read, only
         // written). save() no longer serializes it, so it'll disappear on the
         // next save. We intentionally don't load it into memory here.
-        this.trustTailscale = data.trustTailscale ?? defaults.trustTailscale;
         this.keepAwakeHours = data.keepAwakeHours ?? defaults.keepAwakeHours;
         this.everPaired = data.everPaired ?? defaults.everPaired;
         return;
@@ -81,7 +77,6 @@ export class RemoteConfig {
     this.enabled = defaults.enabled;
     this.port = defaults.port;
     this.passwordHash = defaults.passwordHash;
-    this.trustTailscale = defaults.trustTailscale;
     this.keepAwakeHours = defaults.keepAwakeHours;
     this.everPaired = defaults.everPaired;
   }
@@ -96,18 +91,6 @@ export class RemoteConfig {
     return bcrypt.compare(plaintext, this.passwordHash);
   }
 
-  /** Check if an IP is in the Tailscale CGNAT range (100.64.0.0/10). */
-  isTailscaleIp(ip: string): boolean {
-    // Strip IPv6-mapped IPv4 prefix
-    const normalized = ip.startsWith('::ffff:') ? ip.slice(7) : ip;
-    const parts = normalized.split('.');
-    if (parts.length !== 4) return false;
-    const first = parseInt(parts[0], 10);
-    const second = parseInt(parts[1], 10);
-    // 100.64.0.0/10 = 100.64.0.0 – 100.127.255.255
-    return first === 100 && second >= 64 && second <= 127;
-  }
-
   save(): void {
     // The dev-profile no-op that used to live here is gone: CONFIG_PATH() is
     // per-profile, so a dev save can no longer reach the built app's file.
@@ -119,20 +102,18 @@ export class RemoteConfig {
       enabled: this.enabled,
       port: this.port,
       passwordHash: this.passwordHash,
-      trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,
     }, null, 2), { mode: 0o600 });
   }
 
   /** Return config data safe for the renderer (no password hash, no plaintext password). */
-  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: null; trustTailscale: boolean; keepAwakeHours: number; everPaired: boolean } {
+  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: null; keepAwakeHours: number; everPaired: boolean } {
     return {
       enabled: this.enabled,
       port: this.port,
       hasPassword: !!this.passwordHash,
       password: null, // Security: never expose plaintext password over IPC or WebSocket
-      trustTailscale: this.trustTailscale,
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,
     };

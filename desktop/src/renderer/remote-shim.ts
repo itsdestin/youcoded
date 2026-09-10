@@ -1251,7 +1251,7 @@ export function installShim(): void {
     remote: {
       getConfig: () => invoke('remote:get-config'),
       setPassword: (password: string) => invoke('remote:set-password', password),
-      setConfig: (updates: { enabled?: boolean; trustTailscale?: boolean }) =>
+      setConfig: (updates: { enabled?: boolean }) =>
         invoke('remote:set-config', updates),
       detectTailscale: () => invoke('remote:detect-tailscale'),
       getClientCount: () => invoke('remote:get-client-count'),

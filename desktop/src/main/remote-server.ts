@@ -753,19 +753,9 @@ export class RemoteServer {
       return;
     }
 
-    // Auto-accept Tailscale-trusted connections
-    if (this.config.trustTailscale && this.config.isTailscaleIp(ip)) {
-      const token = randomUUID();
-      this.tokens.set(token, true);
-      this.saveTokens();
-      this.config.markPaired();
-      this.addClient(ws, token, ip);
-      ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
-      this.replayBuffers(ws).catch((err) => {
-        console.error('[remote-server] replayBuffers failed:', err);
-      });
-      return;
-    }
+    // Contract R9: a device needs the password even on a private network. The block that
+    // stood here auto-paired any peer inside 100.64.0.0/10 with no password exchanged — a
+    // carrier-grade NAT range, not one Tailscale owns. Nothing is trusted for its address.
 
     // Auth timeout
     const timeout = setTimeout(() => {
@@ -2283,7 +2273,6 @@ export class RemoteServer {
       }
       case 'remote:set-config': {
         if (typeof payload.enabled === 'boolean') this.config.enabled = payload.enabled;
-        if (typeof payload.trustTailscale === 'boolean') this.config.trustTailscale = payload.trustTailscale;
         if (typeof payload.keepAwakeHours === 'number') this.config.keepAwakeHours = payload.keepAwakeHours;
         this.config.save();
         this.respond(client.ws, type, id, this.config.toSafeObject());

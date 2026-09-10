@@ -1505,7 +1505,6 @@ class SessionService : Service() {
                         put("enabled", false)
                         put("port", 9901)
                         put("hasPassword", false)
-                        put("trustTailscale", false)
                         put("keepAwakeHours", 0)
                         put("clientCount", 1)
                     })

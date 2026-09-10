@@ -46,7 +46,6 @@ describe('RemoteConfig', () => {
     expect(config.enabled).toBe(false);
     expect(config.port).toBe(9900);
     expect(config.passwordHash).toBeNull();
-    expect(config.trustTailscale).toBe(false);
   });
 
   it('loads config from disk', async () => {
@@ -63,7 +62,9 @@ describe('RemoteConfig', () => {
     expect(config.enabled).toBe(false);
     expect(config.port).toBe(8080);
     expect(config.passwordHash).toBe('$2b$10$fakehash');
-    expect(config.trustTailscale).toBe(true);
+    // Contract R9: a saved trustTailscale is read past and granted nothing. An existing
+    // user who had switched it on is not silently left trusted after the upgrade.
+    expect((config as unknown as Record<string, unknown>).trustTailscale).toBeUndefined();
   });
 
   it('setPassword hashes and saves to disk', async () => {
@@ -106,18 +107,15 @@ describe('RemoteConfig', () => {
     expect(result).toBe(false);
   });
 
-  it('isTailscaleIp detects CGNAT range', async () => {
+  it('no longer offers a way to trust an address instead of a password', async () => {
+    // The removed check treated 100.64.0.0/10 as proof of Tailscale membership. That is the
+    // carrier-grade NAT range, not one Tailscale owns, and membership was never authorization.
     vi.mocked(fs.existsSync).mockReturnValue(false);
     const { RemoteConfig } = await import('../src/main/remote-config');
-    const config = new RemoteConfig();
+    const config = new RemoteConfig() as unknown as Record<string, unknown>;
 
-    expect(config.isTailscaleIp('100.64.1.1')).toBe(true);
-    expect(config.isTailscaleIp('100.127.255.255')).toBe(true);
-    expect(config.isTailscaleIp('100.128.0.0')).toBe(false);
-    expect(config.isTailscaleIp('192.168.1.1')).toBe(false);
-    // IPv6-mapped IPv4
-    expect(config.isTailscaleIp('::ffff:100.64.1.1')).toBe(true);
-    expect(config.isTailscaleIp('::ffff:192.168.1.1')).toBe(false);
+    expect(config.isTailscaleIp).toBeUndefined();
+    expect(config.trustTailscale).toBeUndefined();
   });
 
   describe('detectTailscale', () => {

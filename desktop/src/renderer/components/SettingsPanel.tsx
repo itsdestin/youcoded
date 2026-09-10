@@ -57,7 +57,6 @@ const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } =
         { term: 'Enabled', text: 'Turns the remote server on or off. When off, no other device can connect to this computer.' },
         { term: 'Password', text: "A short word or phrase you'll type on your phone or tablet to prove it's really you. Required by default." },
         { term: 'Keep awake', text: "Stops your computer from going to sleep so it stays ready to respond. Set to a few hours during a session, or 'Off' to let it sleep normally." },
-        { term: 'Skip password on Tailscale', text: 'If a device is already on your private Tailscale network, you trust it and skip the password. Convenient, but only turn on if you trust everyone on your Tailscale.' },
       ],
     },
     {
@@ -78,7 +77,6 @@ interface RemoteConfig {
   enabled: boolean;
   port: number;
   hasPassword: boolean;
-  trustTailscale: boolean;
   keepAwakeHours: number;
   clientCount: number;
 }
@@ -1287,7 +1285,6 @@ interface RemoteButtonProps {
   onToggleEnabled: () => void;
   /** Why the server refused to start, shown under the Enabled toggle. */
   enableError: string;
-  onToggleTailscaleTrust: () => void;
   onSetKeepAwake: (hours: number) => void;
   onRunSetup: () => void;
   onConfirmSetup: () => void;
@@ -1312,7 +1309,7 @@ function RemoteButton(props: RemoteButtonProps) {
   let {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
-  onSetNewPassword, onSetPassword, onToggleEnabled, enableError, onToggleTailscaleTrust,
+  onSetNewPassword, onSetPassword, onToggleEnabled, enableError,
   onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onDisconnectClient, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
   } = props;
@@ -1354,7 +1351,7 @@ function RemoteButton(props: RemoteButtonProps) {
   // WHY reuse the original body: mock review must retain familiar controls, while every write stays local.
   if (previewView && preview) {
     loading = false;
-    config = { enabled: previewView.stage !== 'disabled', hasPassword: true, port: 9900, trustTailscale: false, keepAwakeHours: mockAwake, clientCount: previewView.devices.length };
+    config = { enabled: previewView.stage !== 'disabled', hasPassword: true, port: 9900, keepAwakeHours: mockAwake, clientCount: previewView.devices.length };
     tailscale = { installed: previewView.prerequisite !== 'not-installed', connected: previewView.prerequisite === 'ready' || !previewView.prerequisite, ip: '100.82.14.7', hostname: 'home-laptop', url: previewView.stage === 'ready' ? previewView.address : null };
     clients = previewView.devices.map(d => ({ id: d.id, ip: d.name, connectedAt: 0 }));
     newPassword = mockPassword; passwordStatus = mockSaved ? 'saved' : 'idle';
@@ -1715,12 +1712,6 @@ function RemoteButton(props: RemoteButtonProps) {
                             }
                           />
                           <SettingRow variant="item" title="IP" value={tailscale.ip ?? '—'} />
-                          {!previewView && <SettingRow
-                            variant="item"
-                            title="Skip password on Tailscale"
-                            onClick={onToggleTailscaleTrust}
-                            control={<Toggle enabled={!!config?.trustTailscale} onToggle={onToggleTailscaleTrust} label="Skip password on Tailscale" />}
-                          />}
                         </div>
                       ) : (
                         <div className="py-2">
@@ -1754,7 +1745,7 @@ function RemoteButton(props: RemoteButtonProps) {
 /** Same dialog and body as Settings; the candidate provides no real settings callbacks. */
 export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessView; onAction: (action: RemoteAccessAction) => void }) {
   const noop = () => {};
-  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onToggleTailscaleTrust={noop} onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onDisconnectClient={noop} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
+  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" onDisconnectClient={noop} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
 }
 
 // Mirrors PackageTier.kt — descriptions list the actual packages each tier
@@ -2423,12 +2414,6 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
   }, [config]);
 
-  const handleToggleTailscaleTrust = useCallback(async () => {
-    if (!config) return;
-    const updated = await (window as any).claude.remote.setConfig({ trustTailscale: !config.trustTailscale });
-    setConfig(prev => prev ? { ...prev, ...updated } : prev);
-  }, [config]);
-
   const handleSetKeepAwake = useCallback(async (hours: number) => {
     const updated = await (window as any).claude.remote.setConfig({ keepAwakeHours: hours });
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
@@ -2548,7 +2533,6 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onSetPassword={handleSetPassword}
           onToggleEnabled={handleToggleEnabled}
           enableError={enableError}
-          onToggleTailscaleTrust={handleToggleTailscaleTrust}
           onSetKeepAwake={handleSetKeepAwake}
           onRunSetup={handleRunSetup}
           onConfirmSetup={handleConfirmSetup}

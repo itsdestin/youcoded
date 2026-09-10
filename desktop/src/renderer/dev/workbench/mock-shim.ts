@@ -1681,7 +1681,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // Shapes: SettingsPanel.tsx RemoteConfig / TailscaleInfo / ClientInfo.
   const remoteClients = remoteSwitch === 'connected'
     ? [{ id: 'c-phone', ip: '100.92.14.9', connectedAt: Date.now() - 600_000 }] : [];
-  let remoteConfig = { enabled: true, port: 7842, hasPassword: true, trustTailscale: true, keepAwakeHours: 4, clientCount: remoteClients.length };
+  let remoteConfig = { enabled: true, port: 7842, hasPassword: true, keepAwakeHours: 4, clientCount: remoteClients.length };
   // Ns<'remote'> (Partial<Window['claude']['remote']>) rejects this literal: the real
   // setConfig/setPassword resolve to void, but the mock returns the updated config so
   // a filmed take can show the change take effect without a second round trip.

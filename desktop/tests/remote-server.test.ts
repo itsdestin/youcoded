@@ -99,9 +99,7 @@ describe('RemoteServer', () => {
       enabled: true,
       port: 9900,
       passwordHash: '$2b$10$fakehash',
-      trustTailscale: false,
       verifyPassword: vi.fn(async (pw: string) => pw === 'correct'),
-      isTailscaleIp: vi.fn(() => false),
     };
   });
 
@@ -147,7 +145,7 @@ describe('RemoteServer and the shell provider', () => {
       resizeSession: vi.fn(),
     });
     shellHookRelay = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
-    shellConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    shellConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client. */
@@ -221,7 +219,7 @@ describe('RemoteServer carries a per-model settings save end to end', () => {
       sendInput: vi.fn(), resizeSession: vi.fn(),
     });
     hr = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
-    cfg = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    cfg = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function drive(server: any, msg: any) {
@@ -323,9 +321,7 @@ describe('RemoteServer auth flow', () => {
       enabled: true,
       port: 9900,
       passwordHash: null,
-      trustTailscale: false,
       verifyPassword: vi.fn(async () => false),
-      isTailscaleIp: vi.fn(() => false),
     };
     const { RemoteServer } = await import('../src/main/remote-server');
     const server = new RemoteServer(mockSessionManager, mockHookRelay, config);
@@ -361,9 +357,7 @@ describe('RemoteServer runtime start/stop', () => {
       enabled: true,
       port: 9900,
       passwordHash: '$2b$10$fakehash',
-      trustTailscale: false,
       verifyPassword: vi.fn(async () => false),
-      isTailscaleIp: vi.fn(() => false),
     };
   });
 
@@ -453,7 +447,7 @@ describe('RemoteServer unhandled channels', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client and collect
@@ -557,7 +551,7 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function sendAndCollect(server: any, msg: any) {
@@ -946,7 +940,7 @@ describe('RemoteServer account bridge', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function sendAndCollect(server: any, msg: any) {
@@ -1029,7 +1023,7 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function fakeWs() {
@@ -1189,7 +1183,7 @@ describe('RemoteServer transcript:read-meta path containment', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-rs-transcript-'));
     // Point os.homedir() at the tmp dir so the handler's ~/.claude/projects
     // containment root lives inside the fixture, not the real home.
@@ -1254,7 +1248,7 @@ describe('RemoteServer transcript:read-meta malformed payloads', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   /** Drive handleMessage directly with a fake authenticated client and collect
@@ -1312,7 +1306,7 @@ describe('RemoteServer session:history id validation', () => {
     mockSessionManager = new EventEmitter();
     Object.assign(mockSessionManager, { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
     tmpHome = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-rs-history-'));
     // Point os.homedir() at the tmp dir so the handler's ~/.claude/projects
     // probe root lives inside the fixture, not the real home. A slug dir must
@@ -1406,7 +1400,7 @@ describe('RemoteServer replay buffers stay bounded and replay the same tail', ()
   beforeEach(() => {
     mockSessionManager = Object.assign(new EventEmitter(), { listSessions: vi.fn(() => []) });
     mockHookRelay = new EventEmitter();
-    mockConfig = { enabled: true, port: 9900, passwordHash: null, trustTailscale: false, toSafeObject: () => ({}) };
+    mockConfig = { enabled: true, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
   });
 
   function fakeWs() {
