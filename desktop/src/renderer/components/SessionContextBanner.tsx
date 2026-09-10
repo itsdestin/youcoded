@@ -1,3 +1,4 @@
+import { Button } from './ui';
 import type { SessionContext } from '../state/chat-types';
 
 // SessionContextBanner — the always-visible strip at the top of a session's
@@ -29,6 +30,9 @@ function fullSummary(ctx: SessionContext): string {
   if (ctx.projectInstructions) parts.push('this project’s rules');
   if (ctx.skills?.length) parts.push(`${ctx.skills.length} skill${ctx.skills.length === 1 ? '' : 's'}`);
   if (ctx.tools?.length) parts.push(`${ctx.tools.length} tool${ctx.tools.length === 1 ? '' : 's'}`);
+  // The strip appears even when nothing extra was given (review-5 Q-2,
+  // "always-show"): its absence would otherwise be ambiguous between "nothing was
+  // given" and "the app failed to report", and the panel stays reachable.
   if (parts.length === 0) return 'Started with no extra instructions';
   const last = parts.pop();
   return parts.length ? `Started with ${parts.join(', ')} and ${last}` : `Started with ${last}`;
@@ -45,32 +49,32 @@ function wasTrimmed(ctx: SessionContext): boolean {
 export function SessionContextBanner({ context, onOpen }: Props) {
   const trimmed = wasTrimmed(context);
 
+  // WHY a dot rather than a tick or a warning glyph (Destin, review-5 G-3:
+  // "remove the checkmark. improve the button"): dot-plus-text is the app's own
+  // badge shape (design guide G-14), the same one the panel's own rows use, so
+  // the strip and the panel it opens agree. A ✓/⚠ pair was two glyphs from
+  // nowhere else in the app.
+  //
+  // The strip is now the ONLY way into the panel — review-5 Q-1 chose "never"
+  // for opening by itself — so the amber state is load-bearing: it is the only
+  // thing on screen that says something was left out.
   return (
-    <button
-      type="button"
-      onClick={onOpen}
-      title="See everything the assistant was given for this chat"
-      className={`group w-full text-left flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors cursor-pointer ${
+    <div
+      className={`w-full flex items-center gap-2 px-3 py-2 rounded-lg border transition-colors ${
         trimmed
-          ? 'border-[#FF9800]/40 bg-[#FF9800]/10 hover:bg-[#FF9800]/15 text-fg-2'
-          : 'border-edge-dim bg-inset/50 hover:bg-inset text-fg-2'
+          ? 'border-amber-500/40 bg-amber-500/10 text-fg-2'
+          : 'border-edge-dim bg-inset/50 text-fg-2'
       }`}
     >
-      <span className={`shrink-0 text-xs ${trimmed ? 'text-[#FF9800]' : 'text-fg-dim'}`}>
-        {trimmed ? '⚠' : '✓'}
-      </span>
-      <span className="text-xs leading-snug min-w-0">
+      <span className={`inline-block w-1.5 h-1.5 rounded-full shrink-0 ${trimmed ? 'bg-amber-500' : 'bg-green-500'}`} aria-hidden />
+      <span className="text-xs leading-snug min-w-0 flex-1">
         {trimmed
           ? 'This model’s context window is small, so some rules and skills were left out'
           : fullSummary(context)}
       </span>
-      {/* WHY the hover colour and no font-medium: "Details" borrows the section-label type
-          treatment but it is an ACTION, not a heading over a group — the same family as
-          "Copy"/"Clear". section-label-authority.test.ts enforces that distinction, and a
-          heading-weight spelling here would fail it. */}
-      <span className="ml-auto shrink-0 text-3xs text-fg-dim uppercase tracking-wider group-hover:text-fg transition-colors">
+      <Button variant="secondary" size="sm" onClick={onOpen} className="shrink-0">
         Details
-      </span>
-    </button>
+      </Button>
+    </div>
   );
 }

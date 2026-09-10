@@ -168,20 +168,15 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
   // via the same CSS-Highlight ContentFindBar the artifact viewer uses.
   const [findOpen, setFindOpen] = useState(false);
 
-  // Step 3 (2026-08-17, broadened): the session-start context panel. Opens ONCE
-  // per session the first time the session's starting context is known and this
-  // ChatView is the visible one — the "popup at the start of every session"
-  // behavior Destin asked for. The persistent strip stays clickable for the
-  // rest of the session; the popup is one-time (a modal per session would be
-  // noise). Per-session ref (not state) so background sessions never auto-open.
+  // "What the assistant was given" — opened ONLY from the strip above the
+  // conversation. It used to open itself once per session; Destin chose "never"
+  // on review-5 Q-1, with the note that the strip carries the warning state
+  // instead. WHY that is the safer default even though the panel matters most on
+  // a small model: a panel nobody asked for lands exactly when they were about to
+  // type, and an interruption you did not ask for is the fastest way to teach
+  // someone to dismiss a warning unread. The strip is amber when something was
+  // cut, which is the signal that has to earn the click.
   const [contextPopupOpen, setContextPopupOpen] = useState(false);
-  const contextAutoOpenedRef = useRef<Record<string, boolean>>({});
-  useEffect(() => {
-    if (!visible || !state.sessionContext) return;
-    if (contextAutoOpenedRef.current[sessionId]) return;
-    contextAutoOpenedRef.current[sessionId] = true;
-    setContextPopupOpen(true);
-  }, [visible, state.sessionContext, sessionId]);
 
   // Single pass — compute all tool status flags, memoized to avoid re-iterating
   // the Map on every render (toolCalls is a new ref on every reducer dispatch)

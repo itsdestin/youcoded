@@ -186,6 +186,15 @@ export interface SessionContext {
   summary?: string | null;
   /** The system prompt the assistant began with (host-assembled). */
   systemPrompt?: string | null;
+  /** The same prompt split into the parts the host assembled it from — identity,
+   *  the chosen preset, the environment snapshot, the shared doctrine, and the
+   *  steering overlay a small model gets. WHY split: Destin, review-5 G-2 — "we
+   *  should make this tab include both preset instructions and general system
+   *  instructions. i want to be fully transparent about what models load in
+   *  with." One wall of text answers "how much" but not "what".
+   *  Optional: a host that cannot split them still sends `systemPrompt`, and the
+   *  panel shows it whole rather than showing nothing. */
+  systemPromptSections?: Array<{ id: string; label: string; text: string }> | null;
   /** Project instructions (CLAUDE.md / AGENTS.md): the OUTLINE received by the
    *  model, as-truncated. When untruncated this is the full file. */
   projectInstructions?: {
