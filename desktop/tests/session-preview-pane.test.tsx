@@ -67,14 +67,14 @@ describe('SessionPreviewPane', () => {
   // cause ("the read failed") nobody verified — the guard this pins is
   // tests/status-strip-authority.test.tsx's "no user-facing error falls back
   // to a hardcoded cause". The honest answer is the general two-action card:
-  // no invented message, Report bug / Diagnose with Claude instead.
+  // no invented message, Report bug / Diagnose with the assistant instead.
   it('a failure with no error string shows the general card, not a fabricated cause', async () => {
     (window as any).claude.chatsearch.read.mockResolvedValueOnce({ ok: false });
     render(<SessionPreviewPane provider="claude" id="abc" title={TITLE} />);
     expect(await screen.findByText(COPY.errReadUnknownTitle)).toBeTruthy();
     expect(screen.getByText(COPY.errReadUnknownExplainer)).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Report bug' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Diagnose with Claude' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeTruthy();
     // No invented cause anywhere on the card, and no Retry (that affordance
     // belongs to case (a) only).
     expect(screen.queryByText('Unknown error reading the transcript')).toBeNull();

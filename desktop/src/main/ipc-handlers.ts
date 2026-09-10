@@ -101,7 +101,7 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
-import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus } from './dev-tools';
+import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
 import type { UpdateProgressEvent } from '../shared/update-install-types';
 import { getChangelog } from './changelog-service';
@@ -4104,6 +4104,8 @@ export function registerIpcHandlers(
   );
 
   ipcMain.handle(IPC.DEV_SETUP_STATUS, async () => workspaceSetupStatus());
+
+  ipcMain.handle(IPC.DEV_SETUP_CLEAR, async () => { clearWorkspaceSetupStatus(); });
 
   ipcMain.handle(IPC.DEV_OPEN_SESSION_IN, async (_event, args: { cwd: string; initialInput?: string }) => {
     // Delegate to the exported helper so the logic is independently testable.

@@ -131,7 +131,7 @@ describe('status adoption', () => {
     }
     expect(
       drift,
-      'Show the real error, or say you do not have one and offer Report bug / Diagnose with Claude '
+      'Show the real error, or say you do not have one and offer Report bug / Diagnose with the assistant '
         + '(<ErrorState mode="general">). A hardcoded fallback asserts a cause nobody verified. '
         + 'The counts above are the v1.3.1 audit backlog — they may shrink, never grow.',
     ).toEqual([]);

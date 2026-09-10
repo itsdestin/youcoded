@@ -135,7 +135,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // `[]` from the catch-all — which is a submit button that can never report an
   // outcome.
   'dev.logTail', 'dev.diagnostics', 'dev.summarizeIssue', 'dev.submitIssue',
-  'dev.setupWorkspace', 'dev.setupStatus',
+  'dev.setupWorkspace', 'dev.setupStatus', 'dev.clearSetupStatus',
   'shell.openPath',
   // Chatsearch session references — real backend too, same reason for the fake:
   // the tool gallery needs an index that shows every row state on demand.
@@ -1316,9 +1316,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         : { ok: true as const, url: 'https://github.com/itsdestin/youcoded/issues/471' };
     },
 
-    // NO real backend — registered in mock-only.ts. This is the managed-project
-    // setup that replaces the legacy fixed-folder installer; it must never reach
-    // installWorkspace(), which is pinned by DevelopmentDesign.test.tsx.
+    // Real since 2026-09-10 (dev-tools.ts's setupManagedWorkspace). Kept fake here
+    // because the workbench has no git, no network and no ~/YouCoded — it still
+    // needs a setup that "runs" for 2.5s and a status it can answer.
+    //
+    // The path MATTERS and is not decoration: ~/YouCoded/Development, never
+    // ~/YouCoded/Projects. Every folder under Projects becomes a synced space and
+    // the transport stages with `git add -A`, so the real code refuses that folder
+    // to avoid pushing ~1GB to the user's backup. A fixture that shows the forbidden
+    // path teaches the wrong thing to everyone who reads the screen (code review C14).
     // WHY the fixed wait, rather than the latency knob: this clones five
     // repositories and installs their dependencies. It takes MINUTES in reality,
     // and a mock that resolves in 150ms means the setting-up state — progress
@@ -1333,17 +1339,19 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           resolve({ ok: false as const, error: setupError });
         } else {
           setupState = 'ready';
-          setupPath = '/home/destin/YouCoded/Projects/youcoded-workspace';
+          setupPath = '/home/destin/YouCoded/Development/youcoded-workspace';
           resolve({ ok: true as const, path: setupPath });
         }
       }, SETUP_MS));
     },
-    // WHY a status read rather than a progress stream (Destin, R6-24 2026-09-10):
+    // Real since 2026-09-10 too. WHY a status read rather than a progress stream
+    // (Destin, R6-24 2026-09-10):
     // he asked for one line plus "you can close this and setup carries on in the
     // background". That sentence is only true if setup is owned by the main process
     // and the screen can ASK what it is doing when it reopens. A per-step progress
     // feed cannot answer that question — reopening would show nothing.
     setupStatus: async () => ({ state: setupState, path: setupPath, error: setupError }),
+    clearSetupStatus: async () => { if (setupState !== 'running') { setupState = 'idle'; setupPath = ''; setupError = ''; } },
   };
 
   // Voice prompting (deck 2026-09-05) — NO real backend yet (mock-only.ts).

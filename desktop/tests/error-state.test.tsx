@@ -7,7 +7,7 @@
 // could not be expressed. Widening it risks two regressions, and both are pinned here:
 //
 //   1. The five existing general-mode sites must not shift. They render Report bug
-//      (secondary) then Diagnose with Claude (primary), in that order.
+//      (secondary) then Diagnose with the assistant (primary), in that order.
 //   2. The type must still refuse a dead-end error (no action) and a silent one
 //      (no text). Those two are @ts-expect-error pins rather than runtime assertions,
 //      because a runtime test only catches the dead end someone remembered to write —
@@ -43,11 +43,11 @@ describe('ErrorState — the shapes that already ship', () => {
       />,
     );
     const names = screen.getAllByRole('button').map(b => b.textContent);
-    expect(names).toEqual(['Report bug', 'Diagnose with Claude']);
+    expect(names).toEqual(['Report bug', 'Diagnose with the assistant']);
     // Diagnose stays the FILLED action and Report bug the outline one. Assert the
     // actual variant classes, not merely that they differ: "they differ" also holds
     // when the emphasis is swapped, which is exactly the regression this guards.
-    expect(screen.getByRole('button', { name: 'Diagnose with Claude' }).className)
+    expect(screen.getByRole('button', { name: 'Diagnose with the assistant' }).className)
       .toContain('bg-accent');
     expect(screen.getByRole('button', { name: 'Report bug' }).className)
       .toContain('border-edge-dim');
@@ -87,7 +87,7 @@ describe('ErrorState — what the widening adds', () => {
       />,
     );
     expect(screen.getAllByRole('button').map(b => b.textContent))
-      .toEqual(['Retry', 'Report bug', 'Diagnose with Claude']);
+      .toEqual(['Retry', 'Report bug', 'Diagnose with the assistant']);
   });
 
   it('renders only the actions it was given', () => {

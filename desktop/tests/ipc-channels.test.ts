@@ -148,22 +148,32 @@ describe('dev:* channel parity', () => {
   // "Developer tools isn't available via remote access yet"
   // (renderer/remote-unsupported.ts maps the whole 'dev:' namespace), and Android
   // has no shell to clone into. Adding one here is a deliberate act.
-  const DESKTOP_ONLY = new Set(['dev:setup-workspace', 'dev:setup-status']);
+  const DESKTOP_ONLY = new Set(['dev:setup-workspace', 'dev:setup-status', 'dev:setup-clear']);
   const NEW_TYPES = ALL_DEV_TYPES.filter(t => !DESKTOP_ONLY.has(t));
 
-  it('every dev:* channel is either cross-platform or explicitly desktop-only', () => {
-    // Fails on a channel that is neither — i.e. one nobody decided about.
-    for (const t of ALL_DEV_TYPES) {
-      expect(NEW_TYPES.includes(t) || DESKTOP_ONLY.has(t)).toBe(true);
+  // WHY the previous version of this test was deleted (code review C9): it asserted
+  // `NEW_TYPES.includes(t) || DESKTOP_ONLY.has(t)`, and NEW_TYPES is DEFINED as
+  // ALL_DEV_TYPES minus DESKTOP_ONLY — so it was true for every possible input,
+  // including the undecided channel its own comment claimed to catch. Worse, when it
+  // was "proven" by adding a dummy channel, four tests went red and none of them was
+  // this one; the pre-existing parity tests did all the work.
+  //
+  // What actually needs asserting is the thing C6 got wrong in the shipped code:
+  // desktop-only must be a REFUSAL, not an omission. The renderer's `dev` namespace
+  // in remote-shim.ts is HAND-BUILT, so a channel merely left out of it is
+  // `undefined`, and calling it throws "…is not a function" — which a phone user then
+  // reads as the explanation for why setup failed.
+  it('a desktop-only dev channel is refused on remote, never merely missing', () => {
+    const preload = readSource('src', 'main', 'preload.ts');
+    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    const unsupported = readSource('src', 'renderer', 'remote-unsupported.ts');
+    for (const t of DESKTOP_ONLY) {
+      expect(preload, `${t} must exist on desktop`).toContain(`'${t}'`);
+      // Present in the shim = it reaches invoke(), so the server answers
+      // `unsupported` and the shim rejects with a message plainMessage can read.
+      expect(shim, `${t} must route through the shim so remote REFUSES it`).toContain(`'${t}'`);
     }
-    expect(ALL_DEV_TYPES.length).toBeGreaterThan(NEW_TYPES.length);
-  });
-
-  it('the desktop-only ones are still on desktop, and refused elsewhere', () => {
-    const preload = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
-    for (const t of DESKTOP_ONLY) expect(preload).toContain(`'${t}'`);
-    // The refusal is namespace-wide, so it already covers these.
-    const unsupported = fs.readFileSync(path.join(__dirname, '..', 'src', 'renderer', 'remote-unsupported.ts'), 'utf8');
+    // …and the namespace has a plain-language name, or the refusal is a channel id.
     expect(unsupported).toContain("'dev:'");
   });
 

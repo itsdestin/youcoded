@@ -328,6 +328,7 @@ const IPC = {
   DEV_INSTALL_WORKSPACE: 'dev:install-workspace',
   DEV_SETUP_WORKSPACE: 'dev:setup-workspace',
   DEV_SETUP_STATUS: 'dev:setup-status',
+  DEV_SETUP_CLEAR: 'dev:setup-clear',
   DEV_INSTALL_PROGRESS: 'dev:install-progress',
   DEV_OPEN_SESSION_IN: 'dev:open-session-in',
   // Anonymous analytics opt-out — read/write the boolean gate that
@@ -913,6 +914,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.DEV_SETUP_WORKSPACE),
     setupStatus: () =>
       ipcRenderer.invoke(IPC.DEV_SETUP_STATUS),
+    clearSetupStatus: () =>
+      ipcRenderer.invoke(IPC.DEV_SETUP_CLEAR),
     onInstallProgress: (cb: (line: string) => void) => {
       const listener = (_e: unknown, line: string) => cb(line);
       ipcRenderer.on(IPC.DEV_INSTALL_PROGRESS, listener);

@@ -146,7 +146,7 @@ export function ErrorState(props: ErrorStateProps) {
   const general = (props.mode ?? ('title' in props ? 'general' : 'recoverable')) === 'general';
 
   // WHY this exact order and emphasis: five existing general-mode sites render
-  // "Report bug" secondary then "Diagnose with Claude" primary, and they must not
+  // "Report bug" secondary then "Diagnose with the assistant" primary, and must not
   // shift. So the order is fixed at Retry, Report bug, Diagnose, and the primary is
   // the first of Retry → Diagnose → Report bug that was actually supplied. With no
   // Retry that reproduces today's pairing exactly; with one, Retry leads.
@@ -167,7 +167,7 @@ export function ErrorState(props: ErrorStateProps) {
       )}
       {props.onDiagnose && (
         <Button variant={primary === 'diagnose' ? 'primary' : 'secondary'} size="sm" onClick={props.onDiagnose}>
-          Diagnose with Claude
+          Diagnose with the assistant
         </Button>
       )}
     </>

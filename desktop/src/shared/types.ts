@@ -1834,6 +1834,7 @@ export const IPC = {
   // above, which targets a fixed folder and pulls into an existing one.
   DEV_SETUP_WORKSPACE: 'dev:setup-workspace',
   DEV_SETUP_STATUS: 'dev:setup-status',
+  DEV_SETUP_CLEAR: 'dev:setup-clear',
   DEV_INSTALL_PROGRESS: 'dev:install-progress',
   DEV_OPEN_SESSION_IN: 'dev:open-session-in',
   // Performance / GPU settings — not app:restart because future restart-required

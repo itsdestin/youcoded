@@ -397,6 +397,12 @@ export interface SummaryResult {
   title: string;
   summary: string;
   flagged_strings: string[];
+  /** False when nothing rewrote the text — the fields above are the user's own
+   *  words, unchanged. The caller MUST say so rather than present them as a
+   *  result (design review F17). */
+  assisted?: boolean;
+  /** Why it did not run, when it did not. Only ever the reason we actually have. */
+  unavailable?: string;
 }
 
 /**
@@ -407,6 +413,18 @@ export interface SummaryResult {
  * log excerpt is large. On any failure (CLI missing, not authenticated,
  * JSON parse error) we degrade gracefully to a fallback envelope built
  * from the user's description — submission still works.
+ */
+/**
+ * WHY this reports whether it ran (design review F17, and Destin 2026-09-10 on
+ * native sessions): it used to `catch { return fallbackSummary(...) }`, and the
+ * fallback is the user's OWN text with the title sliced off the front. So when
+ * nothing was available to ask — no Claude Code CLI on the machine, which is the
+ * normal state for someone using YouCoded's own assistant — pressing "improve this
+ * with the assistant" handed back what the user already wrote and said it had
+ * worked. A button that silently does nothing is the defect this feature exists to
+ * remove, and it was in the feature's own screen.
+ *
+ * `assisted: false` means the text is unchanged and the caller must say so.
  */
 export async function summarizeIssue(args: SummarizeArgs): Promise<SummaryResult> {
   const prompt = buildSummarizerPrompt(args);
@@ -428,9 +446,19 @@ export async function summarizeIssue(args: SummarizeArgs): Promise<SummaryResult
       child.stdin.write(prompt);
       child.stdin.end();
     });
+    // NOT `{...parseSummary(), assisted: true}`: parseSummary falls back to the
+    // user's own text when the reply will not parse, and spreading true over that
+    // would restore the exact lie this change removes. It sets the flag itself.
     return parseSummary(stdout, args.description);
-  } catch {
-    return fallbackSummary(args.description);
+  } catch (e: any) {
+    return {
+      ...fallbackSummary(args.description),
+      assisted: false,
+      // Say which thing was not there. Never a guessed cause.
+      unavailable: String(e?.message || e).includes('ENOENT')
+        ? 'No assistant is set up on this computer to rewrite it.'
+        : `The assistant could not be reached: ${String(e?.message || e).slice(0, 200)}`,
+    };
   }
 }
 
@@ -466,17 +494,24 @@ function parseSummary(stdout: string, fallbackText: string): SummaryResult {
       flagged_strings: Array.isArray(parsed.flagged_strings)
         ? parsed.flagged_strings.map(String)
         : [],
+      assisted: true,
     };
   } catch {
-    return fallbackSummary(fallbackText);
+    return {
+      ...fallbackSummary(fallbackText),
+      unavailable: 'The assistant replied with something this screen could not read, so your wording is unchanged.',
+    };
   }
 }
 
 function fallbackSummary(description: string): SummaryResult {
+  // Deliberately the user's own words: there is nothing better to say, and
+  // inventing a summary would be worse. `assisted` is what tells the caller so.
   return {
     title: description.slice(0, 80),
     summary: description,
     flagged_strings: [],
+    assisted: false,
   };
 }
 
@@ -791,6 +826,18 @@ export function workspaceSetupStatus(): WorkspaceSetupStatus {
   return setupStatusState;
 }
 
+/**
+ * WHY this exists (code review C12): the status was never cleared, so after one
+ * failure every later open of the Contribute screen showed that same old failure and
+ * the "Set up development workspace" button became unreachable for the rest of the
+ * session. A 'ready' state outlived the folder the same way. The screen clears it
+ * when the user acknowledges the outcome.
+ */
+export function clearWorkspaceSetupStatus(): void {
+  if (setupInFlight) return;   // never lose sight of a run still going
+  setupStatusState = { state: 'idle' };
+}
+
 /** A folder under ~/YouCoded/Development that does not exist yet. Never reuses one. */
 function freeWorkspacePath(): string {
   const root = path.join(os.homedir(), 'YouCoded', 'Development');
@@ -810,19 +857,40 @@ export function setupManagedWorkspace(
   if (setupInFlight) return setupInFlight;
   setupInFlight = (async () => {
     setupStatusState = { state: 'running' };
+    let target = '';
+    // WHY the output is kept (code review C10): both steps used to stream into a
+    // no-op, so a failure surfaced as "git exited with code 128" — the ONE number
+    // that says nothing — while git's actual sentence ("could not resolve host",
+    // "Permission denied") was captured and thrown away. The tail is what the user
+    // is shown, so keep the last lines and nothing more.
+    const output: string[] = [];
+    const keep = (line: string) => { output.push(line); if (output.length > 40) output.shift(); };
+    const withOutput = (e: unknown) => {
+      const base = String((e as { message?: unknown })?.message ?? e);
+      const tail = output.filter(l => l.trim()).slice(-3).join(' ').trim();
+      return tail ? `${base} — ${tail}` : base;
+    };
     try {
-      const target = freeWorkspacePath();
+      target = freeWorkspacePath();
       fs.mkdirSync(path.dirname(target), { recursive: true });
-      const noop = () => {};
-      await runStreamed('git', ['clone', '--depth', '50', WORKSPACE_REPO, target], noop);
-      await runStreamed('bash', ['setup.sh'], noop, { cwd: target });
+      await runStreamed('git', ['clone', '--depth', '50', WORKSPACE_REPO, target], keep);
+      await runStreamed('bash', ['setup.sh'], keep, { cwd: target });
       registerFolder(target);
       setupStatusState = { state: 'ready', path: target };
       return { ok: true as const, path: target };
-    } catch (e: any) {
+    } catch (e: unknown) {
       // The reason is the one the failing step gave. Never a guessed cause
       // (docs/error-message-standards.md).
-      const error = String(e?.message || e);
+      const error = withOutput(e);
+      // WHY the partial tree goes (code review C11): a half-finished clone used to
+      // stay on disk, so the next attempt walked past it to a NEW name and the user
+      // silently accumulated broken copies — up to 100 of them. The screen tells them
+      // "nothing was left behind, so trying again starts cleanly"; this is what makes
+      // that true. Only ever the folder THIS run created.
+      if (target) {
+        try { fs.rmSync(target, { recursive: true, force: true }); }
+        catch { /* a tree we cannot remove is not worth failing the report over */ }
+      }
       setupStatusState = { state: 'failed', error };
       return { ok: false as const, error };
     } finally {

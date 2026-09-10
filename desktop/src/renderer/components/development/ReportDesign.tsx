@@ -15,7 +15,7 @@ type Phase = 'draft' | 'review' | 'sending' | 'sent' | 'opened';
  * only open/close, so the failure being reported was gone the moment the user
  * clicked Report and they had to describe it from memory.
  *
- * `diagnose` is the "Diagnose with Claude" entry: same screen, but it opens on the
+ * `diagnose` is the "Diagnose with the assistant" entry: same screen, but it opens on the
  * review step with the AI disclosure already expanded, because that action promises
  * to hand the error to Claude. Without it, moving the AI call behind a disclosure
  * would have quietly turned Diagnose into a button that opens a blank form
@@ -38,13 +38,56 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
   );
   const [includeContext, setIncludeContext] = useState(true);
   const [logs, setLogs] = useState(false);
+  const [logsBusy, setLogsBusy] = useState(false);
   const [logText, setLogText] = useState('');
   const [attachments, setAttachments] = useState(false);
   const [aiInfo, setAiInfo] = useState(!!context?.diagnose);
   const [error, setError] = useState('');
   const [url, setUrl] = useState('');
   const [truncated, setTruncated] = useState(false);
+  const [aiBusy, setAiBusy] = useState(false);
+  const [aiNote, setAiNote] = useState('');
   const review = phase === 'review';
+
+  // Reading them is what ticking the box means. It happens when they tick it, so the
+  // text is on screen for review before the review step — never collected silently.
+  const chooseLogs = async (on: boolean) => {
+    setLogs(on);
+    if (!on || logText) return;
+    setLogsBusy(true);
+    try {
+      setLogText(await window.claude.dev.logTail(200));
+    } catch (e: unknown) {
+      setLogText('');
+      setAiNote('');
+      setError(plainMessage(e, 'The recent logs could not be read, so none are attached.'));
+    } finally {
+      setLogsBusy(false);
+    }
+  };
+
+  const improve = async () => {
+    setAiBusy(true);
+    setAiNote('');
+    try {
+      const r = await window.claude.dev.summarizeIssue({
+        kind, description,
+        log: kind === 'bug' && logs ? logText : undefined,
+      });
+      if (r.assisted) {
+        // Its words replace yours only when it actually produced some.
+        if (r.title) setTitle(r.title);
+        if (r.summary) setDescription(r.summary);
+        setAiNote('Rewritten. Read it before you send it — the wording is the assistant’s, the ticket is yours.');
+      } else {
+        setAiNote(r.unavailable || 'Nothing rewrote it, so your wording is unchanged.');
+      }
+    } catch (e: unknown) {
+      setAiNote(plainMessage(e, 'The assistant could not be reached, so your wording is unchanged.'));
+    } finally {
+      setAiBusy(false);
+    }
+  };
 
   const send = async () => {
     setError('');
@@ -142,7 +185,7 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Include with ticket</h3>
           {kind === 'bug' && <>
             <SettingRow title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={includeContext} onChange={setIncludeContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
-            <SettingRow title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={setLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
+            <SettingRow title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={chooseLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
           </>}
           <SettingRow title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Attach reviewed files yourself in GitHub.</AnchorTip>} />
         </section> : <section className="space-y-3">
@@ -160,7 +203,11 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           {kind === 'bug' && logs && <div className="space-y-1">
             <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Recent logs</h3>
             <p className="text-xs text-fg-2">Remove private details before sharing.</p>
-            <Textarea id="report-logs" aria-label="Logs to review" className="w-full h-24 mt-2" value={logText} onChange={e => setLogText(e.target.value)} placeholder="Sample text only — no logs collected" />
+            {/* WHY this is filled by logTail (code review C5): ticking "Recent logs"
+                used to collect nothing at all, and the empty box explained itself with
+                "Sample text only — no logs collected" — a mockup caption on a shipped
+                screen, which R21 forbids, telling the user their choice had no effect. */}
+            <Textarea id="report-logs" aria-label="Logs to review" className="w-full h-24 mt-2" value={logText} onChange={e => setLogText(e.target.value)} placeholder={logsBusy ? 'Reading recent logs…' : 'No recent log lines were found.'} />
           </div>}
         </section>}
         {attachments && <Callout>Review and crop files before attaching them. GitHub uploads a file as soon as you attach it — before you submit the issue. You’ll attach approved files yourself in the browser; nothing is uploaded here.</Callout>}
@@ -168,7 +215,14 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
           <SettingRow title="Optional AI help" expanded={aiInfo} onClick={() => setAiInfo(!aiInfo)} />
           {aiInfo && <div className="px-3 space-y-2">
             <p className="text-sm text-fg-2">Only this draft and selected details go to your chosen assistant. Review them first. Nothing is sent automatically; provider usage may apply.</p>
-            <Button variant="secondary" className="w-full py-2.5">Improve wording with AI</Button>
+            {/* WHY this reports doing nothing: the assistant call falls back to the
+                user's OWN words when nothing is available to ask, which on a native
+                session is the normal case. Presenting that as a result would be a
+                button that silently does nothing (design review F17). */}
+            {aiNote && <p className="text-xs text-fg-2">{aiNote}</p>}
+            <Button variant="secondary" className="w-full py-2.5" disabled={aiBusy} onClick={improve}>
+              {aiBusy ? 'Rewriting…' : 'Improve wording with the assistant'}
+            </Button>
           </div>}
           {/* WHY: the app's dialogs stack full-width actions (see the legacy ContributePopup and
               BugReportPopup) — primary on top, secondary under it. Chip-sized right-aligned

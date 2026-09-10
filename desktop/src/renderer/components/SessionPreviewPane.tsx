@@ -51,7 +51,7 @@ export default function SessionPreviewPane({ provider, id, title }: { provider: 
   // Opens BugReportPopup for the "no reason given" branch of a read failure
   // (case (b) below) — same one-destination pattern as SettingsPanel's
   // Tailscale setup error and PermissionsSection's load failure: both
-  // "Report bug" and "Diagnose with Claude" land on this popup, which already
+  // "Report bug" and "Diagnose with the assistant" land on this popup, which already
   // wraps dev:summarize-issue + dev:submit-issue.
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 

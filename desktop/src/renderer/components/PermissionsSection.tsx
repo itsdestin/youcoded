@@ -337,7 +337,7 @@ export default function PermissionsSection() {
   const [loadFailed, setLoadFailed] = useState(false);
   // Both of the general ErrorState's actions land on the app's existing
   // bug-report surface, exactly as Remote Access does: "Report bug" files it and
-  // "Diagnose with Claude" is the same popup's summarize path. One destination,
+  // "Diagnose with the assistant" is the same popup's summarize path. One destination,
   // no invented flow. It portals, so nesting it here is safe.
   const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 
@@ -490,7 +490,7 @@ export default function PermissionsSection() {
               <ErrorState
                 mode="general"
                 title="Unable to show what you've approved."
-                explainer="Nothing was changed. Diagnosing will collect the app's logs so Claude can look at what happened."
+                explainer="Nothing was changed. Diagnosing will collect the app's logs so the assistant can look at what happened."
                 onReportBug={() => setReportContext({ surface: 'Settings → Permissions' })}
                 onDiagnose={() => setReportContext({ surface: 'Settings → Permissions', diagnose: true })}
               />

@@ -501,7 +501,7 @@ export default function EngineCard({ showDetails = false }: { showDetails?: bool
               mode="general"
               className="mt-2"
               title="Each model&rsquo;s own settings are off right now"
-              explainer="Every model is running on the engine&rsquo;s own settings, and the engine gave no reason we can show you. It tries again the next time the engine starts. Diagnosing will collect the app&rsquo;s logs so Claude can look at what happened."
+              explainer="Every model is running on the engine&rsquo;s own settings, and the engine gave no reason we can show you. It tries again the next time the engine starts. Diagnosing will collect the app&rsquo;s logs so the assistant can look at what happened."
               onReportBug={() => setReportContext({ surface: 'Local model settings' })}
               onDiagnose={() => setReportContext({ surface: 'Local model settings', diagnose: true })}
             />

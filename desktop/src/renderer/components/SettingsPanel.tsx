@@ -1224,7 +1224,7 @@ interface RemoteButtonProps {
   /**
    * Opens the app's existing bug-report surface (BugReportPopup, which wraps
    * dev:summarize-issue + dev:submit-issue). Both actions on a general
-   * ErrorState land here: "Report bug" files it, "Diagnose with Claude" is the
+   * ErrorState land here: "Report bug" files it, "Diagnose with the assistant" is the
    * same popup's summarize path, which collects the logs. One destination, no
    * invented flow.
    */
@@ -1402,7 +1402,7 @@ function RemoteButton({
                             <ErrorState
                               mode="general"
                               title="Unable to set up remote access."
-                              explainer="The Tailscale installer didn't report a reason. Diagnosing will collect the setup log so Claude can look at what happened."
+                              explainer="The Tailscale installer didn't report a reason. Diagnosing will collect the setup log so the assistant can look at what happened."
                               onReportBug={() => onReportIssue({ surface: 'Settings' })}
                               onDiagnose={() => onReportIssue({ surface: 'Settings', diagnose: true })}
                             />

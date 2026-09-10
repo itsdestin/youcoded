@@ -4,7 +4,7 @@ import { useEscClose } from '../../hooks/use-esc-close';
 import { plainMessage } from '../../utils/ipc-error';
 import { ContributionWalkthrough } from './ContributionWalkthrough';
 
-type Phase = 'idle' | 'setting-up' | 'ready' | 'failed';
+type Phase = 'idle' | 'setting-up' | 'ready' | 'failed' | 'open-failed';
 
 export function ContributionDesign({ open, onClose }: { open: boolean; onClose: () => void }) {
   useEscClose(open, onClose);
@@ -23,15 +23,26 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
     // Optional-chained: this now runs on MOUNT, so a caller without the bridge
     // (a test, a surface that renders before preload) would otherwise crash the
     // dialog rather than simply show its start screen.
-    const status = window.claude?.dev?.setupStatus?.();
-    if (!status) return;
-    void status.then(s => {
-      if (!live || s.state === 'idle') return;
-      setPath(s.path ?? '');
-      setError(s.error ?? '');
-      setPhase(s.state === 'running' ? 'setting-up' : s.state);
-    }).catch(() => {/* a status read that fails leaves the normal start screen */});
-    return () => { live = false; };
+    // WHY it POLLS while running (code review C7): the status was read exactly once
+    // on open, and the only thing that moved the screen off "Setting up…" was the
+    // setupWorkspace promise belonging to THIS dialog. Reopen mid-setup and there is
+    // no such promise, so the spinner sat there for ever — while the setup it was
+    // describing finished perfectly well behind it. Polling is the honest option:
+    // the run is not ours to await, so we ask.
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const read = () => {
+      const status = window.claude?.dev?.setupStatus?.();
+      if (!status) return;
+      void status.then(s => {
+        if (!live || s.state === 'idle') return;
+        setPath(s.path ?? '');
+        setError(s.error ?? '');
+        setPhase(s.state === 'running' ? 'setting-up' : s.state);
+        if (s.state === 'running') timer = setTimeout(read, 1000);
+      }).catch(() => {/* a status read that fails leaves the normal start screen */});
+    };
+    read();
+    return () => { live = false; if (timer) clearTimeout(timer); };
   }, [open]);
 
   const setup = async () => {
@@ -54,15 +65,27 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
     }
   };
 
+  // WHY the outcome is cleared when the user leaves it (code review C12): the
+  // status lives in the main process so setup survives closing the dialog, but that
+  // means a finished outcome outlives it too — one failure and every later open
+  // showed that same old failure, with the start button unreachable for the rest of
+  // the session. Acknowledging an outcome is what ends it.
+  const dismiss = () => {
+    void window.claude.dev.clearSetupStatus?.().catch(() => {});
+    onClose();
+  };
+
   const openProject = async () => {
     try {
       await window.claude.dev.openSessionIn({ cwd: path });
-      onClose();
+      dismiss();
     } catch (e: unknown) {
-      // Setup succeeded; only opening failed. Say that, and leave the finished
-      // project where it is rather than pretending setup broke.
-      setError(plainMessage(e, 'The project is ready, but it could not be opened.'));
-      setPhase('failed');
+      // WHY its own phase (code review C2): this used to set 'failed', so a failure
+      // to OPEN was titled "Setup didn't finish" and its Retry re-ran setup — cloning
+      // a second entire workspace, ~1GB, for a project that was already sitting on
+      // disk. Two false statements and an unrequested download, from one wrong word.
+      setError(plainMessage(e, 'It could not be opened.'));
+      setPhase('open-failed');
     }
   };
 
@@ -95,8 +118,16 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
               is the dead-button shape this whole feature exists to remove — and it is
               what the legacy screen's "Open in New Session" already did. */}
           <Button className="w-full py-2.5" onClick={openProject}>Open it</Button>
-          <Button variant="secondary" className="w-full py-2.5" onClick={onClose}>Not now</Button>
+          <Button variant="secondary" className="w-full py-2.5" onClick={dismiss}>Not now</Button>
         </div>
+      </>}
+
+      {phase === 'open-failed' && <>
+        <ErrorState
+          title="Your workspace is ready, but it didn’t open"
+          explainer={`${error} It is still there, at ${path}.`}
+          onRetry={openProject}
+        />
       </>}
 
       {phase === 'failed' && <>
@@ -108,11 +139,15 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
             three actions at two sizes, which is the "weirdly sized buttons, poor
             visual hierarchy" Destin rejected on this very screen (S-6). The error
             owns its actions; the dialog's ✕ is how you leave. */}
+        {/* WHY no Report bug here (code review C3): it was wired to onClose, so the
+            button filed nothing and just shut the dialog — a dead control on the
+            screen whose whole purpose is honest failure. Reporting belongs to the
+            ticket flow, which this screen cannot reach; offering it here would be a
+            second lie. Retry is the action this screen actually has. */}
         <ErrorState
           title="Setup didn’t finish"
-          explainer={`${error} Anything already downloaded is kept, so trying again picks up where it stopped.`}
+          explainer={`${error} Nothing was left behind, so trying again starts cleanly.`}
           onRetry={setup}
-          onReportBug={onClose}
         />
       </>}
 
