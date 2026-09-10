@@ -7,6 +7,9 @@ import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import SessionPreviewPane from './SessionPreviewPane';
+import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 import {
   applyFilters,
@@ -58,6 +61,27 @@ function formatSize(bytes: number): string {
 function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
+
+// ── MOCKUP ONLY (2026-09-10) ────────────────────────────────────────────────
+// Three candidate designs for the preview panel Destin asked to see, switched
+// by `?rbpreview=off|a|b|c` so one workbench boot can show all of them. WHY a
+// switch at all: the three differ in WHERE the resume controls live, which is
+// the only real decision on the table — everything else (the transcript pane,
+// the header, the empty state) is shared, so building three copies of the panel
+// would have made them drift. Delete this block, PREVIEW_VARIANT and every
+// `variant`/`previewOn` branch below when the design is chosen — the shipped
+// panel has exactly one behaviour.
+//   off — today's browser, unchanged (the "before" shot)
+//   a   — preview panel; rows still expand inline for the resume controls
+//   b   — preview panel holds the resume controls; rows no longer expand
+//   c   — preview panel with a Resume button that opens the controls on demand
+type PreviewVariant = 'off' | 'a' | 'b' | 'c';
+const PREVIEW_VARIANT: PreviewVariant = (() => {
+  try {
+    const v = new URLSearchParams(location.search).get('rbpreview');
+    return v === 'a' || v === 'b' || v === 'c' || v === 'off' ? v : 'off';
+  } catch { return 'off'; }
+})();
 
 // Shared trigger-button shape for the filter row beneath the search bar.
 // Inactive pills look like the search input frame; active pills tint with the
@@ -295,6 +319,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const projectsDropdownRef = useRef<HTMLDivElement | null>(null);
   const tagsDropdownRef = useRef<HTMLDivElement | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // MOCKUP ONLY — the row whose transcript the right panel is showing. Distinct
+  // from expandedId because in variants b/c nothing expands in the list at all.
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // variant c's Resume sheet
+  const narrowViewport = useNarrowViewport();
+  // The panel is single-column on a phone: a 390px screen cannot hold a list
+  // AND a transcript, and the narrow-viewport rule forbids inventing a second
+  // breakpoint for it.
+  const previewOn = PREVIEW_VARIANT !== 'off' && !narrowViewport;
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
   // Task 6 — native resume ALWAYS offers the provider-scoped model selector
@@ -700,6 +733,21 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // starts on the model THIS conversation last ran on, which only the row
   // knows. See claudeModelForRow.
   const handleSelectSession = (s: PastSession) => {
+    // MOCKUP ONLY — variants b/c: clicking a row PREVIEWS it (and re-clicking
+    // the same row does nothing, because collapsing the panel would leave the
+    // right half empty for no reason the user asked for). The resume controls
+    // live in the panel, so the card itself never expands.
+    if (previewOn && PREVIEW_VARIANT !== 'a') {
+      setPreviewId(s.sessionId);
+      setPreviewSheetOpen(false);
+      setOrganizeId(null);
+      setResumeModel(claudeModelForRow(s));
+      setResumeDangerous(defaultSkipPermissions || false);
+      setResumeLaunchInNewWindow(false);
+      setNativeResumeBinding(null);
+      return;
+    }
+    if (previewOn) setPreviewId(s.sessionId); // variant a: preview AND expand
     if (expandedId === s.sessionId) {
       setExpandedId(null);
     } else {
@@ -904,6 +952,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
 
   const renderSessionRow = (s: PastSession, showPath?: boolean) => {
     const isExpanded = expandedId === s.sessionId;
+    // MOCKUP ONLY — with the resume controls out of the card, the accent border
+    // is the ONLY thing left saying which row the right panel is showing, so
+    // the previewed row has to claim it whether or not anything expanded.
+    const isSelected = isExpanded || (previewOn && previewId === s.sessionId);
     // Unresumable rows are inert: no card hover, no expand. See the note on the
     // click handler below for the two reasons a row lands here.
     const inert = !!(s.missingProject || s.notSyncedYet);
@@ -949,7 +1001,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // trigger, never nested — a button inside a button is invalid HTML and
         // the inner one would never receive its own click.
         className={`relative rounded-lg border bg-inset overflow-hidden transition-colors ${
-          isExpanded ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
+          isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
         }`}
       >
       {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
@@ -994,7 +1046,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // resume control announces nothing but its metadata line.
         aria-label={s.name}
         className={`w-full text-left px-3 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          inert ? 'text-fg-dim cursor-default' : isExpanded ? 'text-fg' : 'text-fg-dim'
+          inert ? 'text-fg-dim cursor-default' : isSelected ? 'text-fg' : 'text-fg-dim'
         }`}
       >
         <div className="min-w-0">
@@ -1200,10 +1252,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
-          className="w-full max-w-md max-h-[70vh] flex flex-col pointer-events-auto"
+          // MOCKUP ONLY — preview mode swaps max-h for a DEFINITE height. The
+          // note on the list below explains why: with only a max-height, a
+          // flex-1 child does not grow in Chromium, and the transcript column
+          // needs a real height to scroll inside.
+          className={`w-full pointer-events-auto ${previewOn
+            ? 'max-w-[1000px] h-[76vh] flex flex-row'
+            : 'max-w-md max-h-[70vh] flex flex-col'}`}
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
+        {/* MOCKUP ONLY — list column. `contents` when the preview is off so the
+            header and list stay DIRECT flex children of the panel and the
+            unchanged browser renders byte-for-byte as it does on master. */}
+        <div className={previewOn ? 'w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge' : 'contents'}>
           {/* Header */}
           <div className="px-4 pt-4 pb-3 border-b border-edge">
             <div className="flex items-center justify-between mb-3">
@@ -1385,7 +1447,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               no padding. Sticky fade pseudos then sit flush with the scroll-fade's
               outer edge, and the `overflow: hidden` on .layer-surface clips them to
               the OverlayPanel's rounded corners. */}
-          <div ref={listRef} className="scroll-fade">
+          <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
             <div className="py-2">
               {loading ? (
                 <LoadingState what="sessions" />
@@ -1422,6 +1484,62 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               )}
             </div>
           </div>
+        </div>
+        {/* MOCKUP ONLY — the preview column. */}
+        {previewOn && (() => {
+          const s = previewId ? filtered.find((r) => r.sessionId === previewId) ?? null : null;
+          if (!s) {
+            return (
+              <div className="flex-1 min-w-0 flex items-center justify-center px-8">
+                {/* Plain words, no invented benefit: the panel is empty because
+                    nothing is picked, and that is the whole message. */}
+                <EmptyState message="Pick a conversation to read it here before you resume." />
+              </div>
+            );
+          }
+          return (
+            <div className="flex-1 min-w-0 flex flex-col min-h-0">
+              <div className="px-4 pt-4 pb-3 border-b border-edge flex items-start gap-2">
+                <div className="min-w-0 flex-1">
+                  <h3 className="text-sm-tight font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
+                  <div className="mt-1 flex items-center gap-1.5 text-3xs text-fg-muted">
+                    <span className="truncate">{s.projectPath.replace(/\\/g, '/').split('/').pop()}</span>
+                    <span aria-hidden>·</span>
+                    <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
+                    <span aria-hidden>·</span>
+                    <span className="shrink-0">{formatSize(s.size)}</span>
+                  </div>
+                </div>
+                {PREVIEW_VARIANT === 'c' && (
+                  <Button
+                    variant="primary"
+                    size="sm"
+                    className="shrink-0"
+                    aria-haspopup="dialog"
+                    aria-expanded={previewSheetOpen}
+                    onClick={() => setPreviewSheetOpen((v) => !v)}
+                  >
+                    Resume
+                  </Button>
+                )}
+              </div>
+              {/* Variant c's options drop IN below the header rather than
+                  floating: a floating popover here would be a second
+                  `.layer-surface` inside the overlay, which is the stacked-glass
+                  bug the card comment above warns about. Same in-flow choice the
+                  organize sheet already makes. */}
+              {PREVIEW_VARIANT === 'c' && previewSheetOpen && renderExpandedOptions(s)}
+              <div className="flex-1 min-h-0 flex flex-col">
+                <SessionPreviewPane
+                  provider={(s.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
+                  id={s.sessionId}
+                  title={s.name}
+                />
+              </div>
+              {PREVIEW_VARIANT === 'b' && renderExpandedOptions(s)}
+            </div>
+          );
+        })()}
         </OverlayPanel>
       </div>
 

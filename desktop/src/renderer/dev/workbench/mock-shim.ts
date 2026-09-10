@@ -1646,22 +1646,45 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // fake transcript tail rather than reading anything real; CS_ERR_READ is
   // the one id wired to fail, so the "transcript unreadable" card state has
   // something to point at.
+  // [user, assistant] pairs the fake transcript above cycles through.
+  const CHAT_TURNS: [string, string][] = [
+    ['the chat jumps to the bottom while I am reading older messages',
+     'Reproduced. The scroll container re-pins to the end on every transcript event, not just on a new turn.\n\n```ts\nif (atBottomRef.current) scrollToEnd();\n```\n\nThe flag is read before the new rows are measured, so a tall row lands after the check and the view snaps.'],
+    ['so the fix is to measure after paint?',
+     'Yes — move the read into a layout effect that runs after the rows exist, and only re-pin when the user was genuinely within a few pixels of the end.'],
+    ['does that break the "new message" jump when I AM at the bottom?',
+     'No. That path still fires; it just fires with a correct measurement. I added a test that scrolls up 400px, appends a tall message and asserts the offset did not move.'],
+    ['what about the terminal view, same container?',
+     'Different one, and it already measures after paint. I checked the other three scrolling surfaces too — the drawer list and the file view use the shared hook, so they inherit the fix.'],
+    ['ok. anything else you noticed while you were in there',
+     'One thing worth knowing: the fade at the top and bottom of the list is painted by the scroll container itself, so any surface that adds its own padding loses it. Nothing is broken today; it is just a trap for the next change.'],
+    ['fine, leave it. run the tests',
+     'All 41 in that file pass, plus the new one. Types and lint are clean.'],
+  ];
+
   const chatsearch = {
     resolve: async (shortIds: string[]) => ({ ok: true as const, results: shortIds.map(resolveFixture) }),
     read: async (req: { provider: string; id: string; tail: number; before?: number }) => {
       if (req.id === CS_ERR_READ) return { ok: false as const, error: "EACCES: permission denied, open '/home/destin/YouCoded/Personal/Conversations/claude/transcripts/youcoded/ee0011aa.jsonl'" };
       // 60 fake messages; every 4th assistant message follows a "tool gap".
+      //
+      // The turns cycle through CHAT_TURNS rather than printing "step 57" /
+      // "User question number 58". WHY (2026-09-10): the resume-browser preview
+      // panel puts this text in front of a human who is deciding whether the
+      // panel earns its half of the screen, and filler that says nothing makes
+      // that judgement impossible — "does reading this tell me which
+      // conversation it is?" is the entire question the panel exists to answer.
+      // The words are still invented; nothing here is read off disk.
       const total = 60;
       const end = Math.min(req.before ?? total, total);
       const start = Math.max(0, end - Math.min(req.tail, 200));
       const messages = [];
       for (let seq = start; seq < end; seq++) {
         const assistant = seq % 2 === 1;
+        const turn = CHAT_TURNS[Math.floor(seq / 2) % CHAT_TURNS.length];
         messages.push({
           role: assistant ? 'assistant' : 'user',
-          content: assistant
-            ? `Here is what I found for step ${seq}:\n\n\`\`\`ts\nconst x = ${seq};\n\`\`\`\n\n- one\n- two`
-            : `User question number ${seq}`,
+          content: assistant ? turn[1] : turn[0],
           timestamp: Date.now() - (total - seq) * 60_000,
           seq,
           droppedToolCalls: assistant && seq % 4 === 3 ? 3 : 0,
