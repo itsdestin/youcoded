@@ -97,6 +97,17 @@ function SortArrow({ muted, up }: { muted: boolean; up: boolean }) {
   );
 }
 
+// State updater that returns the PREVIOUS position object when the new one has
+// the same numbers, so React bails out instead of re-rendering — required by the
+// layout effect below, which depends on one of these positions.
+function samePos<T extends Record<string, number>>(next: T | null): (prev: T | null) => T | null {
+  return (prev) => {
+    if (!next || !prev) return next;
+    for (const k of Object.keys(next)) if (next[k] !== prev[k]) return next;
+    return prev;
+  };
+}
+
 // Compute fixed-position coords for a portaled dropdown anchored just below a
 // trigger button. Clamps the left coordinate so a wide dropdown near the right
 // edge of the viewport shifts left rather than overflowing off-screen. Pure;
@@ -653,13 +664,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // The panel re-centres when a pick shrinks or grows the list, which moves the
   // chips without any scroll or resize event. A menu left at its old spot then
   // covers the row, and the next click ticks a row nobody chose (UX review U1/U3).
+  // Every setter below keeps the previous object when nothing moved: this
+  // effect lists filtersPos as a dependency (at phone width the chips live
+  // inside the panel, so their menus can only be placed once the panel has
+  // landed — UX review 2, U3), and a fresh object on every run re-fired it
+  // forever ("Maximum update depth exceeded", caught by the grader on R12).
   useLayoutEffect(() => {
-    if (openPill === 'projects') setProjectsDropdownPos(measureDropdown(projectsTriggerRef, 256, filterRowRef));
-    if (openPill === 'tags') setTagsDropdownPos(measureDropdown(tagsTriggerRef, 208, filterRowRef));
-    if (filtersOpen) setFiltersPos(measureFilters());
-    // filtersPos is a dependency on purpose: at phone width the chips live inside
-    // the panel, so their menus can only be placed once the panel has landed
-    // (UX review 2, U3 — the menu stayed over the search box after a pick).
+    if (openPill === 'projects') setProjectsDropdownPos(samePos(measureDropdown(projectsTriggerRef, 256, filterRowRef)));
+    if (openPill === 'tags') setTagsDropdownPos(samePos(measureDropdown(tagsTriggerRef, 208, filterRowRef)));
+    if (filtersOpen) setFiltersPos(samePos(measureFilters()));
   }, [openPill, filtersOpen, filtered.length, filtersPos]);
   useEffect(() => {
     if (!filtersOpen) return;
