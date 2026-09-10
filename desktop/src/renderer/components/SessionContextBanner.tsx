@@ -78,12 +78,14 @@ export function SessionContextBanner({ context, onOpen }: Props) {
           ? 'This model’s context window is small, so some rules and skills were left out'
           : fullSummary(context)}
       </span>
-      {/* aria-hidden: the row already says what it does, and announcing
-          "Details" after the sentence would read as a second thing to press. */}
-      <span
-        aria-hidden
-        className="shrink-0 rounded-md border border-edge-dim px-2 py-1 text-2xs font-medium text-fg-2 transition-colors group-hover:bg-inset group-hover:text-fg"
-      >
+      {/* No border (Destin, 2026-09-10). The box was the last thing making this
+          look like a target of its own, which it no longer is — the row is. What
+          remains is a label that brightens with the row, so it still reads as
+          "there is more behind this" without pretending to be pressable.
+          The fill and radius went with the border: an unbordered chip whose
+          hover tint matched the row's own would have been invisible anyway.
+          aria-hidden so the row is announced as one thing, not two. */}
+      <span aria-hidden className="shrink-0 px-2 text-2xs font-medium text-fg-2 transition-colors group-hover:text-fg">
         Details
       </span>
     </button>
