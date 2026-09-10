@@ -285,6 +285,16 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
             <Button variant="secondary" className="w-full py-2.5" disabled={aiBusy} onClick={improve}>
               {aiBusy ? 'Rewriting…' : 'Improve wording with the assistant'}
             </Button>
+            {/* WHY this lives INSIDE the disclosure (grader, 2026-09-10): carried over
+                from the screen this replaces, it was first put in the footer — and that
+                broke two signed rows on their own words. R2-12 is "keep AI help behind a
+                review-stage disclosure" and this is AI help; R4-23 is headlined "No
+                captions anywhere, and two stacked buttons" and it made four. Behind the
+                disclosure it is the same feature, contradicting neither. */}
+            <Button variant="secondary" className="w-full py-2.5" disabled={!description.trim()} onClick={handOver}>
+              {kind === 'bug' ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'}
+            </Button>
+            <p className="text-3xs text-fg-muted text-center">Uses a lot of your model allowance — not recommended on smaller plans.</p>
           </div>}
           {/* WHY: the app's dialogs stack full-width actions (see the legacy ContributePopup and
               BugReportPopup) — primary on top, secondary under it. Chip-sized right-aligned
@@ -295,13 +305,6 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
               retry; the footer keeps only the way back to editing. */}
           <div className="flex flex-col gap-2">
             {!error && <Button className="w-full py-2.5" onClick={send}>{attachments ? 'Continue in GitHub' : 'Submit public ticket'}</Button>}
-            {/* Secondary, and second, for the same reason the old screen gave it that
-                weight: it spends a lot of the user's model usage. The warning under it
-                is the old screen's, minus the vendor name. */}
-            <Button variant="secondary" className="w-full py-2.5" disabled={!description.trim()} onClick={handOver}>
-              {kind === 'bug' ? 'Let your assistant try to fix it' : 'Let your assistant try to build it'}
-            </Button>
-            <p className="text-3xs text-fg-muted text-center">Uses a lot of your model allowance — not recommended on smaller plans.</p>
             <Button variant="secondary" className="w-full py-2.5" onClick={() => { setError(''); setPhase('draft'); }}>Back to draft</Button>
           </div>
         </> : <>

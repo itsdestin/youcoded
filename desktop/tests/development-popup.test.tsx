@@ -12,18 +12,22 @@ import { ContributePopup } from '../src/renderer/components/development/Contribu
 afterEach(cleanup);
 
 describe('DevelopmentPopup', () => {
-  it('renders all three rows', () => {
+  it('renders all four rows', () => {
     render(<DevelopmentPopup open={true} onClose={() => undefined} onOpenBug={() => undefined} onOpenContribute={() => undefined} />);
     expect(screen.getByText(/Report a Bug or Request a Feature/i)).toBeInTheDocument();
     expect(screen.getByText(/Contribute to YouCoded/i)).toBeInTheDocument();
-    expect(screen.getByText(/Known Issues and Planned Features/i)).toBeInTheDocument();
+    expect(screen.getByText(/Known issues/i)).toBeInTheDocument();
+    // Roadmap was designed and approved, then shipped invisible: this list kept two
+    // copies of itself and users only ever saw the older one (grader, 2026-09-10).
+    expect(screen.getByText(/^Roadmap$/)).toBeInTheDocument();
+    expect(screen.getByText(/Share a problem, suggest an idea/i)).toBeInTheDocument();
   });
 
   it('opens the GitHub issues URL when Known Issues is clicked', () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     const onClose = vi.fn();
     render(<DevelopmentPopup open={true} onClose={onClose} onOpenBug={() => undefined} onOpenContribute={() => undefined} />);
-    fireEvent.click(screen.getByText(/Known Issues and Planned Features/i));
+    fireEvent.click(screen.getByText(/Known issues/i));
     expect(openSpy).toHaveBeenCalledWith('https://github.com/itsdestin/youcoded/issues', '_blank');
     expect(onClose).toHaveBeenCalled();
     openSpy.mockRestore();
