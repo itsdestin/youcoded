@@ -23,7 +23,7 @@ import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useStreamingGate } from '../hooks/useStreamingGate';
+import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
 
 // WHY: the composer auto-focus listener must leave controls and composite widgets
@@ -289,6 +289,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // `attentionState === 'ok'`, which used to hide the button for the whole
   // stall countdown (see useStreamingGate.ts).
   const showStop = useStreamingGate(sessionId);
+  // WHY a second gate: `showStop` keeps the button reachable through stalls and
+  // permission asks; `stopLive` only animates it while the turn is really working
+  // (stop-button-alive questions deck Q-1/Q-2, 2026-09-10). Same cheap selector.
+  const stopLive = useTurnIsWorking(sessionId);
 
   // Per-session draft store — keeps input text and attachments separate
   // across sessions so switching away and back preserves your draft.
@@ -1091,6 +1095,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           {/* Voice prompting: the mic sits where the eye already goes to
               send. Hidden entirely when the host has no speech engine
               (remote browser, older builds) and in terminal view. */}
+          {/* WHY a group: Destin asked for the mic "a smidge closer to the stop button"
+              (live deck L-2, 2026-09-10). gap-1 inside the pair tightens only that
+              space; Send keeps the form's own gap. Rendered only when one of them shows,
+              because an empty flex child would still claim a gap in the row. */}
+          {((!minimal && voice.supported) || showStop) && (
+          <div className="flex items-center gap-1 shrink-0">
           {!minimal && voice.supported && (
             <VoiceButton
               phase={voice.phase}
@@ -1107,7 +1117,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               onReady={() => onToast?.('Voice is ready — tap the mic to talk.')}
             />
           )}
-          <StopButton sessionId={sessionId} provider={provider} visible={showStop} />
+          <StopButton sessionId={sessionId} provider={provider} visible={showStop} live={stopLive} />
+          </div>
+          )}
           {/* The app's most-used control. Geometry is unchanged — 28x28 is exactly
               what size="icon" emits — and it keeps `bg-accent`, which matters:
               community packs style the send button through `.bg-accent` (Halftone's

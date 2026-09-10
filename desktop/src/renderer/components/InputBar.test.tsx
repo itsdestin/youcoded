@@ -284,6 +284,27 @@ describe('InputBar — stop button (Task 10 placement)', () => {
     expect((window as any).claude.session.sendInput).toHaveBeenCalledWith('sess-1', '\x1b');
   });
 
+  // Motion is separate from visibility (stop-button-alive questions deck Q-1/Q-2,
+  // 2026-09-10): the button glows only while the turn is really working, and holds
+  // still — but stays on screen — while stuck or while a permission card waits on you.
+  it('glows the stop button only while the turn is working', () => {
+    renderInputBar('claude');
+    const glowing = () => screen.getByRole('button', { name: 'Stop generating' }).classList.contains('stop-live');
+    act(() => { capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' }); });
+    act(() => {
+      capturedDispatch!({ type: 'USER_PROMPT', sessionId: 'sess-1', content: 'hi', timestamp: 1 });
+    });
+    expect(glowing()).toBe(true);
+    act(() => { capturedDispatch!({ type: 'ATTENTION_STATE_CHANGED', sessionId: 'sess-1', state: 'stuck' }); });
+    expect(glowing()).toBe(false);
+    act(() => { capturedDispatch!({ type: 'ATTENTION_STATE_CHANGED', sessionId: 'sess-1', state: 'ok' }); });
+    expect(glowing()).toBe(true);
+    act(() => {
+      capturedDispatch!({ type: 'PERMISSION_REQUEST', sessionId: 'sess-1', toolName: 'Bash', input: { command: 'ls' }, requestId: 'req-1' });
+    });
+    expect(glowing()).toBe(false);
+  });
+
   it('hides the stop button once the turn has ENDED (provider error)', () => {
     renderInputBar();
     act(() => { capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' }); });
