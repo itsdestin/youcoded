@@ -2197,6 +2197,27 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("url", url)) }
             }
 
+            // Android's half of Electron's shell.openExternal. The React UI
+            // runs under file:// here, where window.open from a promise
+            // callback silently does nothing — so a Deliverables link tile
+            // would be a dead button without this. Scheme-gated exactly like
+            // desktop's OPEN_EXTERNAL handler: http/https only, never file:,
+            // intent:, javascript:. The tap is always the user's own.
+            // (Restored 2026-09-10: it sat between the restore handlers and
+            // went with them when that block was deleted — caught by
+            // ipc-channels.test.ts.)
+            "shell:open-external" -> {
+                val url = msg.payload.optString("url", "")
+                if (url.startsWith("http://") || url.startsWith("https://")) {
+                    try {
+                        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url))
+                        intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+                        applicationContext.startActivity(intent)
+                    } catch (_: Exception) {}
+                }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()) }
+            }
+
             // ── Theme file IPC — parity with desktop's theme:list /
             // theme:read-file / theme:write-file handlers. theme-context.tsx
             // calls these to populate the appearance picker with installed
