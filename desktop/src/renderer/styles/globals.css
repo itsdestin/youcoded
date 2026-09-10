@@ -2704,8 +2704,9 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
 /* Stop button — alive while the turn is working (questions deck
    stop-button-alive-questions, 2026-09-10). `.stop-live` is only on the button while
    useTurnIsWorking() is true, so stuck/parked turns and permission asks get a still
-   button with no extra CSS. Three candidate motions are under review in the workbench
-   compare view (surface `stop-button-alive`); the two not picked are deleted then.
+   button with no extra CSS. C (slow glow) SHIPS — picked on the live deck (L-1). A and B
+   were not picked; like the mic's alternatives they stay only as the round-1 record in
+   the workbench compare view (surface `stop-button-alive`), reachable nowhere else.
    Every one is stepped (deck S-2, tests/animation-frame-budget.test.ts): this runs for
    the whole of every reply, which can be many minutes, and smooth looping motion was
    measured at ~30% of a core on a 180 Hz panel. */
@@ -2730,10 +2731,12 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
   pointer-events: none;
   animation: stop-orbit 1.2s steps(16) infinite;
 }
-/* C · Slow glow: the button's own soft glow swells and settles; nothing leaves it. */
+/* C · Slow glow (SHIPPING): the button's own soft glow swells and settles; nothing leaves
+   it. Peak was 12px blur / 3px spread in round 1; Destin asked for the glow's reach "a bit
+   smaller" (L-1), so it peaks at 8px / 1px around the smaller 24px button. */
 @keyframes stop-glow {
   0%, 100% { box-shadow: 0 0 2px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
-  50%      { box-shadow: 0 0 12px 3px color-mix(in srgb, var(--accent) 60%, transparent); }
+  50%      { box-shadow: 0 0 8px 1px color-mix(in srgb, var(--accent) 55%, transparent); }
 }
 .stop-live--glow { animation: stop-glow 2.2s steps(12) infinite; }
 /* Reduced Effects and the OS preference (deck S-1): no motion, one still ring, so the

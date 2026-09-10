@@ -6,7 +6,9 @@ import { Button } from './ui/Button';
  *  compare view mounts one pane per value, the same way VoiceStyleContext lets
  *  the mic's motions sit side by side. The context default is what the app shows. */
 export type StopMotion = 'halo' | 'orbit' | 'glow';
-export const StopMotionContext = React.createContext<StopMotion>('halo');
+// 'glow' picked on the live deck (L-1, 2026-09-10); halo/orbit stay reachable only
+// through the workbench compare view's round-1 record, like the mic's alternatives.
+export const StopMotionContext = React.createContext<StopMotion>('glow');
 
 interface StopButtonProps {
   sessionId: string;
@@ -58,12 +60,15 @@ export default function StopButton({ sessionId, provider, visible, live = false 
       // `relative` anchors the orbit candidate's ring (a ::before outside the box).
       // Motion classes live in globals.css beside the mic's, with both
       // Reduced-Effects gates.
-      className={`relative shrink-0 rounded-full ${live ? `stop-live stop-live--${motion}` : ''}`}
+      // WHY 24px, not size="icon"'s 28 (live deck L-1, 2026-09-10: "make the button
+      // and glow circumference a bit smaller"). w-/h- replace the size's classes via
+      // mergeClasses; `coarse-hit` stays, so the touch target does not shrink.
+      className={`relative shrink-0 rounded-full w-6 h-6 ${live ? `stop-live stop-live--${motion}` : ''}`}
       data-live={live ? 'true' : 'false'}
     >
       {/* Square stop glyph, currentColor — same inline-svg-in-Button pattern
           as the send button's arrow (InputBar.tsx). */}
-      <svg className="w-3 h-3 text-on-accent" viewBox="0 0 24 24" fill="currentColor">
+      <svg className="w-2.5 h-2.5 text-on-accent" viewBox="0 0 24 24" fill="currentColor">
         <rect x="6" y="6" width="12" height="12" rx="1.5" />
       </svg>
     </Button>

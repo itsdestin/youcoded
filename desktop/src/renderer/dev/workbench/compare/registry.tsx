@@ -6998,9 +6998,16 @@ export const COMPARE_SURFACES: CompareSurface[] = [
         n: 1,
         basis: 'Questions deck stop-button-alive-questions (2026-09-10): moves only while working (Q-1), still while asking permission (Q-2), round (Q-3), a still ring under Reduce Visual Effects (S-1), stepped motion (S-2). Every pane loops 6 s replying, 3 s stuck (still).',
         candidates: [
-          { id: 'halo', label: 'A · Breathing ring', note: 'A soft ring grows out of the button and fades, every 1.6 s.', render: () => <StopComposerDemo motion="halo" /> },
-          { id: 'orbit', label: 'B · Circling light', note: 'A thin light chases around the button once every 1.2 s, like a loading ring around the stop mark.', render: () => <StopComposerDemo motion="orbit" /> },
-          { id: 'glow', label: 'C · Slow glow', note: 'The button\'s own glow swells and settles every 2.2 s; nothing leaves the button.', render: () => <StopComposerDemo motion="glow" /> },
+          { id: 'halo', label: 'A · Breathing ring', note: 'A soft ring grows out of the button and fades, every 1.6 s. NOT PICKED (L-1, 2026-09-10).', render: () => <StopComposerDemo motion="halo" /> },
+          { id: 'orbit', label: 'B · Circling light', note: 'A thin light chases around the button once every 1.2 s, like a loading ring around the stop mark. NOT PICKED (L-1, 2026-09-10).', render: () => <StopComposerDemo motion="orbit" /> },
+          { id: 'glow', label: 'C · Slow glow', note: 'The button\'s own glow swells and settles every 2.2 s; nothing leaves the button. PICKED (L-1, 2026-09-10) with "make the button and glow circumference a bit smaller" — see round 2. Panes here now render at round 2\'s size.', render: () => <StopComposerDemo motion="glow" /> },
+        ],
+      },
+      {
+        n: 2,
+        basis: 'R1 · C (slow glow), with Destin\'s L-1 note: "make the button and glow circumference a bit smaller". Button 28 → 24 px, stop mark 12 → 10 px, glow peak 12 px / 3 px → 8 px / 1 px.',
+        candidates: [
+          { id: 'glow-small', label: 'Smaller glow', note: '24 px button, glow reaching 8 px. Loops 6 s replying, 3 s stuck (still).', render: () => <StopComposerDemo motion="glow" /> },
         ],
       },
     ],

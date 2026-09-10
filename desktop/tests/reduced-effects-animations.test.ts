@@ -32,6 +32,8 @@ const GATED_SELECTORS = [
   '.flowing-word',
   '.model-load-track::after',
   '.model-load-finalize::after',
+  // The stop button's glow runs for the whole of every reply (stop-button-alive, 2026-09-10).
+  '.stop-live',
 ];
 
 describe('Reduced Effects stops perpetual CSS animations', () => {
