@@ -274,6 +274,18 @@ describe('sync-spaces service transition serialization', () => {
     expect(engine.syncSpace.mock.calls.length).toBeGreaterThan(1);
   });
 
+  it('syncSpacesSyncNow rejects while Backup & Sync is turned off', async () => {
+    const svc = await freshService();
+    await expect(svc.syncSpacesSyncNow()).rejects.toThrow('Turn on Backup & Sync before trying again.');
+  });
+
+  it('syncSpacesSyncNow rejects when its requested space no longer exists', async () => {
+    const svc = await enabledMultiSpaceService();
+    await expect(svc.syncSpacesSyncNow('project:missing')).rejects.toThrow(
+      'This synced space is no longer available. Refresh and try again.',
+    );
+  });
+
   // ---- Awaitable sync variant (2026-07-18 takeover mirror-before-release fix) ----
   // syncSpacesSyncNowAwaited backs the takeover handoff barrier: it must NOT resolve
   // until the targeted space's push settles (unlike fire-and-forget syncSpacesSyncNow).

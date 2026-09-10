@@ -544,12 +544,16 @@ export async function syncSpacesEnable(enabled: boolean) {
 export async function syncSpacesSyncNow(spaceId?: string) {
   // spaceId narrows to one space (the Project View hero's "Sync now" button);
   // no arg keeps the SyncPanel's existing sync-everything behavior.
-  if (engine && roots) {
-    for (const s of roots.spaces()) {
-      if (spaceId && s.id !== spaceId) continue;
-      void engine.syncSpace(s);
-    }
+  if (!engine || !roots) {
+    // WHY: returning success when sync is disabled makes the renderer's retry
+    // button look broken; the caller needs a real rejection to show feedback.
+    throw new Error('Turn on Backup & Sync before trying again.');
   }
+  const targets = roots.spaces().filter((s) => !spaceId || s.id === spaceId);
+  if (targets.length === 0) {
+    throw new Error('This synced space is no longer available. Refresh and try again.');
+  }
+  for (const s of targets) void engine.syncSpace(s);
   return { ok: true };
 }
 

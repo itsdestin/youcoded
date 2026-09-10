@@ -684,7 +684,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   }, []);
   useEffect(() => {
     void refreshSpacesStatus();
-    const off = (window as any).claude.syncSpaces.onEvent?.(() => { void refreshSpacesStatus(); });
+    const off = (window as any).claude.syncSpaces.onEvent?.((event: any) => {
+      // WHY: syncNow() deliberately acknowledges only that the engine accepted
+      // the request; its promise settles before Git reports success or failure.
+      // Keep the retry acknowledgement visible until that eventual result event,
+      // rather than flashing "Syncing…" too quickly for someone to see.
+      if (event?.type === 'synced' || event?.type === 'error') setSpacesSyncing(false);
+      void refreshSpacesStatus();
+    });
     return () => { off?.(); };
   }, [refreshSpacesStatus]);
 
@@ -846,19 +853,26 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
     })();
   }, [claude]);
 
-  // Wrap syncNow() so the header shows the blue "Syncing…" state while it runs. .catch
-  // routes a rejected invoke into the same red note slot as before; .finally clears the
-  // flag whether it resolved or failed. Used by the box's "Sync now" and "Try again".
+  // syncNow() acknowledges only that the engine accepted the request. Its promise
+  // resolves before Git finishes, so keep the visible "Syncing…" acknowledgement
+  // until the resulting synced/error event arrives (the subscription above clears it).
   const runSpacesSyncNow = useCallback(() => {
+    const syncNow = (window as any).claude?.syncSpaces?.syncNow;
+    if (typeof syncNow !== 'function') {
+      setSpacesError('Sync is not available in this version of YouCoded.');
+      return;
+    }
     setSpacesSyncing(true);
     // Clear the PREVIOUS attempt's error before retrying. Without this, the
     // "Try again" button could never turn the header green again: a failure set
     // spacesError and nothing ever cleared it, so a succeeding retry still read
     // as "Couldn't sync". A retry that fails again re-sets it in the catch.
     setSpacesError(null);
-    void (window as any).claude.syncSpaces.syncNow()
-      .catch((err: any) => setSpacesError(String(err?.message ?? err)))
-      .finally(() => setSpacesSyncing(false));
+    void syncNow()
+      .catch((err: any) => {
+        setSpacesError(String(err?.message ?? err));
+        setSpacesSyncing(false);
+      });
   }, []);
 
   // Additional-backups master toggle. WHY: there is no dedicated "additional backups
@@ -1099,9 +1113,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                   </Button>
                 ) : hk === 'error' ? (
                   <>
-                    {/* Try again reuses syncNow() with the existing .catch error routing. */}
-                    <Button size="sm" onClick={runSpacesSyncNow}>
-                      Try again
+                    {/* The engine reports its result asynchronously, so the button
+                        itself acknowledges that this retry was accepted meanwhile. */}
+                    <Button size="sm" onClick={runSpacesSyncNow} disabled={spacesSyncing}>
+                      {spacesSyncing ? 'Trying again…' : 'Try again'}
                     </Button>
                     {/* secondary (outline) so it reads as a peer of the primary "Try again"
                         rather than competing with it for the same weight. */}

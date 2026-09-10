@@ -22,7 +22,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup, fireEvent, screen, waitFor } from '@testing-library/react';
 import SyncSection from '../src/renderer/components/SyncPanel';
 
 function spacesStatus() {
@@ -48,6 +48,7 @@ function installClaudeMock(status: unknown) {
     },
     syncSpaces: {
       status: vi.fn().mockResolvedValue(spacesStatus()),
+      syncNow: vi.fn().mockResolvedValue({ ok: true }),
       onEvent: vi.fn().mockReturnValue(() => {}),
       listDevices: vi.fn().mockResolvedValue([]),
     },
@@ -110,5 +111,30 @@ describe('Backup & Sync — a partial status must not crash the app', () => {
       expect(document.body.textContent).toContain('Memory');
     }, { timeout: 3000 });
     expect(document.body.textContent).toContain('Conversations');
+  });
+
+  it('acknowledges Try again until the engine reports its eventual result', async () => {
+    installClaudeMock({
+      backends: [], lastSyncEpoch: null, backupMeta: null, warnings: [],
+      syncInProgress: false, syncingBackendId: null, syncedCategories: [],
+    });
+    const errorStatus: any = spacesStatus();
+    errorStatus.recentEvents = [{ type: 'error', spaceId: 'personal', message: 'network failed' }];
+    (window as any).claude.syncSpaces.status.mockResolvedValue(errorStatus);
+    const listeners: Array<(event: any) => void> = [];
+    (window as any).claude.syncSpaces.onEvent.mockImplementation((listener: (event: any) => void) => {
+      listeners.push(listener);
+      return () => {};
+    });
+    await renderOpen();
+
+    await waitFor(() => expect(screen.getByText('Try again')).toBeTruthy());
+    fireEvent.click(screen.getByText('Try again'));
+
+    expect((window as any).claude.syncSpaces.syncNow).toHaveBeenCalledOnce();
+    await waitFor(() => expect(screen.getByText('Trying again…')).toBeTruthy());
+
+    listeners.forEach((listener) => listener({ type: 'error', spaceId: 'personal', message: 'network failed' }));
+    await waitFor(() => expect(screen.getByText('Try again')).toBeTruthy());
   });
 });
