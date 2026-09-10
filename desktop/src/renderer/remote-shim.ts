@@ -1249,8 +1249,8 @@ export function installShim(): void {
         window.open('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md', '_blank');
       },
       // On the ANDROID host, go through the bridge: React runs under file://
-      // there, and window.open from a promise callback is a no-op (the same
-      // trap SessionService.kt's sync:restore:browse-url comment records) — a
+      // there, and window.open from a promise callback is a no-op (a trap the
+      // old restore wizard's browse-url handler hit first, 2026-05) — a
       // link tile in the Deliverables card would be a dead button. The bridge
       // fires Intent.ACTION_VIEW, which always works. `targetUrl` means we are
       // a REMOTE browser talking to a desktop server instead, where opening a

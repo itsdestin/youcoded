@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import { describe, it, expect } from 'vitest';
 
@@ -49,6 +49,14 @@ describe('Android builds tell the truth about themselves', () => {
     expect(router.slice(builder, builder + 300)).toContain('put("unsupported", true)');
     const catchAll = service.lastIndexOf('else -> {');
     expect(service.slice(catchAll, catchAll + 400)).toContain('buildUnsupportedResponse(');
+  });
+
+  it('no longer carries the restore-from-backup wizard desktop demolished in July', () => {
+    // Deleted on Destin's decision (2026-09-10 deck Q-5): nothing in the shared UI
+    // called it, and it was the only place restore still existed in the product.
+    const service = read('app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+    expect(service).not.toMatch(/"sync:restore:[a-z-]+"\s*->/);
+    expect(existsSync(join(ROOT, 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'RestoreService.kt'))).toBe(false);
   });
 
   it('stamps the version in CI so a beta is never identical to the last release', () => {
