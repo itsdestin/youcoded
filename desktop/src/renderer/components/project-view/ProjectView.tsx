@@ -759,7 +759,10 @@ export function ProjectView(props: ProjectViewProps) {
                 onNewConversation={props.onNewConversation}
                 sync={heroSync}
                 onTurnOnSync={() => setTurnOnSyncFor({ path: activeProject.path, name: activeProject.name })}
-                onSyncNow={(spaceId) => { void (window.claude as any).syncSpaces.syncNow(spaceId); }}
+                // .catch: the phone's bridge refuses sync-now (no engine there), and a
+                // refused promise nobody catches is an unhandled rejection in the console.
+                // The sync dot already shows the outcome; nothing to say here.
+                onSyncNow={(spaceId) => { void (window.claude as any).syncSpaces.syncNow(spaceId).catch(() => {}); }}
                 onRenamed={async () => {
                   // try/catch + slash/case-normalized match — same conventions
                   // as handleAdded (exact === path compare is a latent Windows

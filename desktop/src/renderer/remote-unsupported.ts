@@ -38,7 +38,19 @@ const FEATURE_NAMES: Array<[string, string]> = [
   // here is a toast reading a raw channel id at somebody.
   ['provider:', 'The model providers list'],
   ['native:', 'The built-in assistant'],
+  // Neither exists on the phone's own bridge (2026-09-10). Both are asked for
+  // automatically — syncspaces:status on opening Settings or Project View,
+  // transcript:page on every launch — so without a name the phone would greet
+  // the user with a raw channel id. The shim refuses those two quietly on the
+  // phone; the names are for the remaining, user-initiated calls in each family.
+  ['syncspaces:', 'Syncing across your devices'],
+  ['transcript:', 'Older messages'],
 ];
+
+/** Which host refused: a desktop reached over remote access, or the phone's
+ *  own bridge. The sentence has to say which, because "via remote access"
+ *  read at somebody using no remote access is a lie about their setup. */
+export type UnsupportedHost = 'remote' | 'phone';
 
 /** Plain-language name for the feature a channel belongs to. Falls back to the
  *  raw channel so an unmapped namespace still says something specific. */
@@ -49,6 +61,7 @@ export function remoteFeatureName(channel: string): string {
   return channel;
 }
 
-export function remoteUnsupportedMessage(channel: string): string {
-  return `${remoteFeatureName(channel)} isn't available via remote access yet.`;
+export function remoteUnsupportedMessage(channel: string, host: UnsupportedHost = 'remote'): string {
+  const where = host === 'phone' ? 'on the phone' : 'via remote access';
+  return `${remoteFeatureName(channel)} isn't available ${where} yet.`;
 }

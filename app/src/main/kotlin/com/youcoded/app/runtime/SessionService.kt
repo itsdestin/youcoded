@@ -4392,8 +4392,9 @@ class SessionService : Service() {
             }
 
             else -> {
+                // An honest refusal, not a bare error: see MessageRouter.buildUnsupportedResponse.
                 android.util.Log.w("SessionService", "Unknown bridge message: ${msg.type}")
-                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildErrorResponse("Unknown: ${msg.type}")) }
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, MessageRouter.buildUnsupportedResponse("not-implemented-on-mobile (no handler for ${msg.type})")) }
             }
         }
     }

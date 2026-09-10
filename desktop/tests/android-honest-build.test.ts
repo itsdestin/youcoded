@@ -37,6 +37,20 @@ describe('Android builds tell the truth about themselves', () => {
     expect(gitignore).not.toContain('!app/src/main/assets/web/index.html');
   });
 
+  it('refuses an unknown bridge channel as unsupported, never as a bare error', () => {
+    // The dispatcher's catch-all used to answer `{error}` alone, which the shim
+    // RESOLVES as a value: Project View crashed on a sync status with no spaces,
+    // and the chat reducer threw on every launch. `unsupported: true` makes the
+    // shim reject and show one plain-language notice instead.
+    const router = read('app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'bridge', 'MessageRouter.kt');
+    const service = read('app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt');
+    const builder = router.indexOf('fun buildUnsupportedResponse');
+    expect(builder).toBeGreaterThan(-1);
+    expect(router.slice(builder, builder + 300)).toContain('put("unsupported", true)');
+    const catchAll = service.lastIndexOf('else -> {');
+    expect(service.slice(catchAll, catchAll + 400)).toContain('buildUnsupportedResponse(');
+  });
+
   it('stamps the version in CI so a beta is never identical to the last release', () => {
     // Every beta APK on GitHub carried versionCode 20 / "1.2.4" — the May release's
     // identity — so a phone could not tell a beta was newer.
