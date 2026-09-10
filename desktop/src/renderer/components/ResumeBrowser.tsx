@@ -71,19 +71,35 @@ function formatModelId(id: string): string {
 // Delete this block, PREVIEW_VARIANT, SHELL and every branch that reads them
 // once a shell is chosen; the shipped browser has exactly one.
 //
-//   off       today's browser, unchanged — the "before" picture
-//   pane      transcript bolted to the right of today's modal (round 1)
-//   drawer    the Session Files panel's chrome: one top bar across both panes
-//             (list toggle · title · Resume · close), a bg-well list of flat
-//             rows, the transcript on bg-canvas, a metadata strip at the foot
-//   searchbar search + filters span the full width as a page header; each pane
-//             below it is only its content
-//   hero      today's card list, and the transcript pane leads with a header
-//             block carrying the title, project, model, tags and Resume
-//   page      the drawer shell, but filling the window like a screen instead of
-//             floating as a dialog, with the transcript in a reading column
-type PreviewVariant = 'off' | 'pane' | 'drawer' | 'searchbar' | 'hero' | 'page';
-const VARIANTS: PreviewVariant[] = ['off', 'pane', 'drawer', 'searchbar', 'hero', 'page'];
+// ROUND 3 (2026-09-10). Round two's answers narrowed this hard, and the shells
+// below all obey those answers — they are variations WITHIN the direction he
+// picked, not a fresh spread:
+//   · "i really dislike all of a-c" — the Session Files top bar, the full-screen
+//     page and the full-width search header are gone, and with them the flat
+//     list: every shell here keeps today's CARDS.
+//   · D-1 "never" — the list never collapses. There is no ≡ button anywhere.
+//   · D-2 "blank" — the right half stays one line of text until he clicks; it
+//     never opens the most recent conversation by itself.
+// Round two's rejected shells are not kept alive here: their pictures and their
+// code are in the round-two deck and in commit b95fd7d9.
+//
+//   off        today's browser, unchanged — the "before" picture
+//   hero       round two's pick: the transcript pane opens with a heading block
+//              carrying the name, project, date, size, tags and Resume
+//   band       hero's two headers forced into ONE band — same height, same
+//              baseline, the divider running straight through, and the window
+//              stops naming itself because the conversation names it
+//   windowbar  a slim bar across the top owning the window (name, count, ✕), so
+//              the heading below it is free to be only the conversation
+//   document   the transcript set as a document: a rule under the title,
+//              small-caps meta, page margins. NOT a recessed list column — in
+//              Midnight `--well` and `--canvas` are the same #0D1117, so a
+//              recessed index would be the exact colour of the document beside
+//              it and the distinction would say nothing.
+//   sheet      the transcript and its heading lifted onto an inset sheet that
+//              sits INSIDE the window, the way a page sits on a desk
+type PreviewVariant = 'off' | 'hero' | 'band' | 'windowbar' | 'document' | 'sheet';
+const VARIANTS: PreviewVariant[] = ['off', 'hero', 'band', 'windowbar', 'document', 'sheet'];
 const PREVIEW_VARIANT: PreviewVariant = (() => {
   try {
     const v = new URLSearchParams(location.search).get('rbpreview') as PreviewVariant;
@@ -92,25 +108,19 @@ const PREVIEW_VARIANT: PreviewVariant = (() => {
 })();
 
 // What each shell turns on. Reading these by name keeps the JSX below readable —
-// `SHELL.topBar` says what it is, `PREVIEW_VARIANT === 'drawer' || … === 'page'`
-// repeated six times does not.
+// `SHELL.windowBar` says what it is, `PREVIEW_VARIANT === 'windowbar'` repeated
+// six times does not.
 const SHELL = {
-  /** List rows lose their card chrome and become drawer-style rows. */
-  flatList: PREVIEW_VARIANT === 'drawer' || PREVIEW_VARIANT === 'searchbar' || PREVIEW_VARIANT === 'page',
-  /** One bar across BOTH panes: list toggle, title, Resume, close. */
-  topBar: PREVIEW_VARIANT === 'drawer' || PREVIEW_VARIANT === 'page',
-  /** Search and filters span the full width above both panes. */
-  topSearch: PREVIEW_VARIANT === 'searchbar',
-  /** The transcript pane opens with a title/tags/Resume block. */
-  hero: PREVIEW_VARIANT === 'hero',
-  /** Fills the window instead of floating as a dialog. */
-  fullPage: PREVIEW_VARIANT === 'page',
-  /** A quiet metadata line along the bottom, as the Session Files panel has. */
-  bottomStrip: PREVIEW_VARIANT === 'drawer' || PREVIEW_VARIANT === 'page',
-  /** The transcript gets a centred reading column instead of full bleed. */
-  readingColumn: PREVIEW_VARIANT === 'page',
-  /** Resume lives in the transcript pane's footer (round 1's design "b"). */
-  footerResume: PREVIEW_VARIANT === 'pane',
+  /** A slim bar across the top that owns the WINDOW: name, count, ✕. */
+  windowBar: PREVIEW_VARIANT === 'windowbar',
+  /** Both headers are one band: equal height, shared baseline. */
+  band: PREVIEW_VARIANT === 'band',
+  /** Title, rule, small-caps meta, page margins on the transcript. */
+  document: PREVIEW_VARIANT === 'document',
+  /** The transcript and its heading sit on an inset sheet within the window. */
+  sheet: PREVIEW_VARIANT === 'sheet',
+  /** The window's own "Resume Session" title row is redundant here. */
+  noWindowTitle: PREVIEW_VARIANT === 'band' || PREVIEW_VARIANT === 'windowbar',
 };
 
 // Shared trigger-button shape for the filter row beneath the search bar.
@@ -357,9 +367,6 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // from expandedId because in variants b/c nothing expands in the list at all.
   const [previewId, setPreviewId] = useState<string | null>(null);
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
-  // MOCKUP ONLY — the drawer/page shells can collapse the list away, the same
-  // toggle the Session Files panel puts first in its top bar.
-  const [listOpen, setListOpen] = useState(true);
   const narrowViewport = useNarrowViewport();
   // The panel is single-column on a phone: a 390px screen cannot hold a list
   // AND a transcript, and the narrow-viewport rule forbids inventing a second
@@ -997,15 +1004,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     const inert = !!(s.missingProject || s.notSyncedYet);
     // px-4 matches the search bar and the project group headers above, so the
     // card's outer edge lines up with the rest of the panel.
-    // MOCKUP ONLY — the flat shells drop the card entirely: no gap, no radius,
-    // no inset fill, a hairline between rows and an accent bar down the left of
-    // the selected one. WHY the accent bar rather than the Session Files panel's
-    // bare `bg-well`: that panel's selected fill and its hover fill are the SAME
-    // token, which works there because a file row is one line of text and the
-    // colour of that text carries the state. These rows are three lines with
-    // chips in them, so hover and selected have to differ by more than text.
     return (
-    <div key={s.sessionId} className={SHELL.flatList ? '' : 'px-4 pb-2'}>
+    <div key={s.sessionId} className="px-4 pb-2">
       {/* Expandable card. The surface is `bg-inset` + `border-edge-dim`, NOT
           `.layer-surface`.
           `.layer-surface` is the FLOATING surface — panel fill + border +
@@ -1043,13 +1043,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // this card, not the panel. The icon buttons are SIBLINGS of the expand
         // trigger, never nested — a button inside a button is invalid HTML and
         // the inner one would never receive its own click.
-        className={SHELL.flatList
-          ? `relative overflow-hidden transition-colors border-b border-b-edge-dim border-l-2 ${
-              isSelected ? 'bg-well border-l-accent' : inert ? 'border-l-transparent' : 'border-l-transparent hover:bg-well'
-            }`
-          : `relative rounded-lg border bg-inset overflow-hidden transition-colors ${
-              isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
-            }`}
+        className={`relative rounded-lg border bg-inset overflow-hidden transition-colors ${
+          isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
+        }`}
       >
       {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
           the organize icons. Keep the viewer unchanged and retain this dialog's
@@ -1316,52 +1312,56 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     ? filtered.find((r) => r.sessionId === previewId) ?? null
     : null;
 
-  // MOCKUP ONLY — the Session Files panel's top-bar button shape, copied from
-  // SessionDrawer's local IconBtn (it is not exported). Same paddings, same
-  // border-on-hover, so the two bars cannot look like different apps.
-  const topBarIcon = (title: string, active: boolean, onClick: () => void, glyph: React.ReactNode) => (
-    <button
-      type="button"
-      title={title}
-      aria-label={title}
-      aria-pressed={active}
-      onClick={onClick}
-      className={`shrink-0 rounded-md border p-1.5 transition-colors ${
-        active ? 'text-fg bg-well border-edge' : 'text-fg-dim border-transparent hover:text-fg hover:bg-well hover:border-edge'
-      }`}
-    >
-      {glyph}
-    </button>
-  );
-
-  // MOCKUP ONLY — the metadata strip along the foot of the drawer/page shells,
-  // matching SessionDrawer's own footer (`text-2xs`, `bg-well`, hairline top).
-  const bottomStrip = SHELL.bottomStrip && previewOn ? (
-    <div className="flex items-center gap-2 px-3.5 py-1 text-2xs text-fg-muted border-t border-edge-dim bg-well shrink-0">
-      {previewSession ? (
-        <>
-          <span className="truncate">{previewSession.projectPath.replace(/\\/g, '/').split('/').pop()}</span>
-          <span aria-hidden>·</span>
-          <span className="shrink-0">{formatRelativeTime(previewSession.lastModified)}</span>
-          <span aria-hidden>·</span>
-          <span className="shrink-0">{formatSize(previewSession.size)}</span>
-          <span className="ml-auto shrink-0">Read-only until you resume</span>
-        </>
-      ) : (
-        <span>{filtered.length} conversation{filtered.length === 1 ? '' : 's'}</span>
-      )}
-    </div>
-  ) : null;
+  // MOCKUP ONLY — the conversation's facts, drawn once and arranged differently
+  // per shell. `size` picks the heading's weight; `rule` puts a hairline under
+  // the title and sets the meta line in small caps, which is what turns a header
+  // into something that reads as a document rather than a toolbar.
+  const conversationHeading = (s: PastSession, opts: { rule?: boolean; compact?: boolean }) => {
+    const project = s.projectPath.replace(/\\/g, '/').split('/').pop();
+    const tags = (s.tags ?? []).map((id) => registry.tags.find((t) => t.id === id)).filter(Boolean);
+    return (
+      <div className="flex items-start gap-3">
+        <div className="min-w-0 flex-1">
+          <h3
+            className={`${opts.compact ? 'text-sm-tight' : 'text-base'} font-semibold text-fg truncate`}
+            title={s.name}
+          >
+            {s.name}
+          </h3>
+          {opts.rule && <div className="mt-2 border-b border-edge-dim" />}
+          <div className={`flex items-center gap-1.5 text-3xs text-fg-muted ${opts.rule ? 'mt-2 tracking-wider uppercase' : 'mt-1.5'}`}>
+            <span className="truncate">{project}</span>
+            <span aria-hidden>·</span>
+            <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
+            <span aria-hidden>·</span>
+            <span className="shrink-0">{formatSize(s.size)}</span>
+          </div>
+          {tags.length > 0 && (
+            <div className="mt-2 flex flex-wrap items-center gap-1">
+              {tags.map((t) => <TagChip key={t!.id} tag={t!} />)}
+            </div>
+          )}
+        </div>
+        <Button
+          variant="primary"
+          size="sm"
+          className="shrink-0"
+          aria-haspopup="dialog"
+          aria-expanded={previewSheetOpen}
+          onClick={() => setPreviewSheetOpen((v) => !v)}
+        >
+          Resume
+        </Button>
+      </div>
+    );
+  };
 
   return (
     <>
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
       <Scrim layer={1} onClick={onClose} />
-      <div
-        className={`fixed inset-0 flex items-center justify-center pointer-events-none ${SHELL.fullPage && previewOn ? 'p-0' : 'p-4'}`}
-        style={{ zIndex: CONTENT_Z[1] }}
-      >
+      <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
           // MOCKUP ONLY — preview mode swaps max-h for a DEFINITE height. The
@@ -1369,56 +1369,22 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           // flex-1 child does not grow in Chromium, and the transcript column
           // needs a real height to scroll inside.
           className={`w-full pointer-events-auto flex flex-col ${previewOn
-            ? (SHELL.fullPage ? 'max-w-none h-full' : 'max-w-[1000px] h-[76vh]')
+            ? 'max-w-[1000px] h-[76vh]'
             : 'max-w-md max-h-[70vh]'}`}
-          // A full-window shell has no corners to round and no shadow to cast —
-          // and `.layer-surface` sets both as UNLAYERED css, which a Tailwind
-          // utility (layered) cannot override. It has to be an inline style.
-          style={SHELL.fullPage && previewOn
-            ? { position: 'relative', zIndex: 'auto', borderRadius: 0, border: 'none', boxShadow: 'none' }
-            : { position: 'relative', zIndex: 'auto' }}
+          style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
-        {/* MOCKUP ONLY — the unified top bar: ONE row across both panes, the way
-            the Session Files panel does it. The conversation's own title takes
-            the slot the file name takes there, and Resume sits between the
-            panel controls and the ✕ — the position Destin fixed for the drawer
-            on 2026-08-27. */}
-        {SHELL.topBar && previewOn && (
-          <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
-            {topBarIcon(listOpen ? 'Hide list' : 'Show list', listOpen, () => setListOpen((v) => !v), (
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" aria-hidden>
-                <path d="M4 6h16M4 12h16M4 18h16" />
-              </svg>
-            ))}
-            <div className="min-w-0 px-2 py-1">
-              <span className="block text-sm-tight font-semibold text-fg truncate">
-                {previewSession ? previewSession.name : 'Resume Session'}
-              </span>
-            </div>
-            <div className="ml-auto flex items-center gap-1">
-              {previewSession && (
-                <Button
-                  variant="primary"
-                  size="sm"
-                  aria-haspopup="dialog"
-                  aria-expanded={previewSheetOpen}
-                  onClick={() => setPreviewSheetOpen((v) => !v)}
-                >
-                  Resume
-                </Button>
-              )}
-              <CloseButton size="icon-sm" onClick={onClose} />
-            </div>
-          </div>
-        )}
-        {/* MOCKUP ONLY — the `searchbar` shell's page header: the search field
-            across the full width, above both panes, instead of tucked into the
-            list column. */}
-        {SHELL.topSearch && previewOn && (
-          <div className="flex items-center gap-2 px-3 py-2.5 border-b border-edge shrink-0">
-            <div className="flex-1 min-w-0">{searchBox}</div>
-            <CloseButton size="icon-sm" onClick={onClose} />
+        {/* MOCKUP ONLY — a slim bar that owns the WINDOW rather than the
+            conversation: what this window is, how many are in it, and the way
+            out. It carries no Resume, deliberately — Resume belongs to the
+            conversation, and the heading below owns that. */}
+        {SHELL.windowBar && previewOn && (
+          <div className="flex items-center gap-2 px-3 py-2 border-b border-edge shrink-0">
+            <h2 className="text-sm font-bold text-fg shrink-0">Resume Session</h2>
+            <span className="text-3xs text-fg-muted truncate">
+              {filtered.length} conversation{filtered.length === 1 ? '' : 's'}
+            </span>
+            <div className="ml-auto"><CloseButton size="icon-sm" onClick={onClose} /></div>
           </div>
         )}
         {/* MOCKUP ONLY — the body row. `contents` when there is no preview so the
@@ -1427,22 +1393,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         <div className={previewOn ? 'flex-1 min-h-0 flex' : 'contents'}>
         {/* MOCKUP ONLY — list column. */}
         <div className={previewOn
-          ? `shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden transition-[width] duration-200 ${
-              SHELL.flatList ? 'bg-well' : ''
-            } ${SHELL.topBar && !listOpen ? 'w-0 border-r-0' : SHELL.flatList ? 'w-[340px]' : 'w-[420px]'}`
+          ? 'w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden'
           : 'contents'}>
-          {/* MOCKUP ONLY — inner wrapper at a FIXED width so collapsing the
-              column to w-0 slides it out instead of crushing its contents into
-              a 0px column. Same two-div trick SessionDrawer's list uses. */}
-          <div className={previewOn ? `${SHELL.flatList ? 'w-[340px]' : 'w-[420px]'} flex flex-col h-full min-h-0` : 'contents'}>
-          {/* Header */}
-          <div className="px-4 pt-4 pb-3 border-b border-edge">
-            {/* MOCKUP ONLY — the whole title row goes when a top bar or a page
-                search header already carries the title: what was left was a lone
-                SHOW COMPLETE toggle floating above the search field with nothing
-                on its left. Show Complete becomes a pill in the filter row
-                below instead, where it reads as the filter it is. */}
-            {!(previewOn && (SHELL.topBar || SHELL.topSearch)) && (
+          <div className={previewOn ? 'w-[420px] flex flex-col h-full min-h-0' : 'contents'}>
+          {/* Header. MOCKUP ONLY — `band` gives it a floor so it lands on the
+              same baseline as the conversation heading across the divider; that
+              step between two unequal headers is what read as two things stuck
+              together. */}
+          <div className={`px-4 pt-4 pb-3 border-b border-edge shrink-0 ${previewOn && SHELL.band ? 'min-h-[104px] flex flex-col justify-center' : ''}`}>
+            {/* MOCKUP ONLY — the whole title row goes when something else already
+                names the window: what was left of it was a lone SHOW COMPLETE
+                toggle floating above the search field with nothing on its left.
+                Show Complete becomes a pill in the filter row below instead,
+                where it reads as the filter it is. */}
+            {!(previewOn && SHELL.noWindowTitle) && (
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-fg">Resume Session</h2>
               {/* Show Complete — same toggle pattern as Skip Permissions
@@ -1460,10 +1424,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               </div>
             </div>
             )}
-            {/* Hidden in the `searchbar` shell — it renders this same field
-                across the top of the window instead. */}
-            {!(previewOn && SHELL.topSearch) && searchBox}
-            <div ref={filterRowRef} className={`flex flex-wrap items-center gap-1.5 relative ${previewOn && SHELL.topSearch ? 'mt-0' : 'mt-2'}`}>
+            {searchBox}
+            <div ref={filterRowRef} className="flex flex-wrap items-center gap-1.5 relative mt-2">
               {/* Projects: multi-select dropdown over distinct projectPaths in the loaded sessions.
                   Dropdown is portaled to document.body so it escapes the OverlayPanel's
                   overflow:hidden clipping (lets it overlap the panel edge). */}
@@ -1601,8 +1563,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                 {sortDir === 'desc' ? 'Most recent ↓' : 'Oldest first ↑'}
               </FilterPill>
               {/* MOCKUP ONLY — Show Complete as a pill, for the shells whose
-                  title row (and its toggle) has moved into a top bar. */}
-              {previewOn && (SHELL.topBar || SHELL.topSearch) && (
+                  title row (and its toggle) is gone. */}
+              {previewOn && SHELL.noWindowTitle && (
                 <FilterPill active={showComplete} onClick={() => setShowComplete((v) => !v)}>
                   Show complete
                 </FilterPill>
@@ -1620,7 +1582,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               outer edge, and the `overflow: hidden` on .layer-surface clips them to
               the OverlayPanel's rounded corners. */}
           <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
-            <div className={SHELL.flatList && previewOn ? '' : 'py-2'}>
+            <div className="py-2">
               {loading ? (
                 <LoadingState what="sessions" />
               ) : filtered.length === 0 ? (
@@ -1670,92 +1632,63 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               </div>
             );
           }
-          const project = s.projectPath.replace(/\\/g, '/').split('/').pop();
-          const tags = (s.tags ?? []).map((id) => registry.tags.find((t) => t.id === id)).filter(Boolean);
-          return (
-            <div className={`flex-1 min-w-0 flex flex-col min-h-0 ${SHELL.readingColumn ? 'bg-canvas' : ''}`}>
-              {/* The hero shell leads with the conversation itself: title, where
-                  it ran, what it ran on, its tags, and Resume — the same facts
-                  the card in the list carries, at the size of a page heading
-                  rather than a row. */}
-              {SHELL.hero && (
-                <div className="px-5 pt-4 pb-4 border-b border-edge bg-inset">
-                  <div className="flex items-start gap-3">
-                    <div className="min-w-0 flex-1">
-                      <h3 className="text-base font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
-                      <div className="mt-1.5 flex items-center gap-1.5 text-3xs text-fg-muted">
-                        <span className="truncate">{project}</span>
-                        <span aria-hidden>·</span>
-                        <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
-                        <span aria-hidden>·</span>
-                        <span className="shrink-0">{formatSize(s.size)}</span>
-                      </div>
-                      {tags.length > 0 && (
-                        <div className="mt-2 flex flex-wrap items-center gap-1">
-                          {tags.map((t) => <TagChip key={t!.id} tag={t!} />)}
-                        </div>
-                      )}
-                    </div>
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="shrink-0"
-                      aria-haspopup="dialog"
-                      aria-expanded={previewSheetOpen}
-                      onClick={() => setPreviewSheetOpen((v) => !v)}
-                    >
-                      Resume
-                    </Button>
-                  </div>
-                </div>
-              )}
-              {/* The shells with no top bar and no hero still need to say WHICH
-                  conversation is on the right. A slim line does it. */}
-              {!SHELL.topBar && !SHELL.hero && (
-                <div className="px-4 pt-4 pb-3 border-b border-edge flex items-start gap-2">
-                  <div className="min-w-0 flex-1">
-                    <h3 className="text-sm-tight font-semibold text-fg truncate" title={s.name}>{s.name}</h3>
-                    <div className="mt-1 flex items-center gap-1.5 text-3xs text-fg-muted">
-                      <span className="truncate">{project}</span>
-                      <span aria-hidden>·</span>
-                      <span className="shrink-0">{formatRelativeTime(s.lastModified)}</span>
-                      <span aria-hidden>·</span>
-                      <span className="shrink-0">{formatSize(s.size)}</span>
-                    </div>
-                  </div>
-                  {SHELL.topSearch && (
-                    <Button
-                      variant="primary"
-                      size="sm"
-                      className="shrink-0"
-                      aria-haspopup="dialog"
-                      aria-expanded={previewSheetOpen}
-                      onClick={() => setPreviewSheetOpen((v) => !v)}
-                    >
-                      Resume
-                    </Button>
-                  )}
-                </div>
-              )}
-              {/* The options drop IN below whatever header opened them rather
-                  than floating: a floating popover here would be a second
-                  `.layer-surface` inside the overlay, which is the stacked-glass
-                  bug the card comment above warns about. Same in-flow choice the
-                  organize sheet already makes. */}
-              {!SHELL.footerResume && previewSheetOpen && renderExpandedOptions(s)}
-              <div className={`flex-1 min-h-0 flex flex-col ${SHELL.readingColumn ? 'w-full max-w-[760px] mx-auto' : ''}`}>
+          // The transcript, plus the options sheet the heading's Resume opens.
+          // The sheet drops IN below the heading rather than floating: a
+          // floating popover here would be a second `.layer-surface` inside the
+          // overlay, which is the stacked-glass bug the card comment above
+          // warns about. Same in-flow choice the organize sheet already makes.
+          const body = (
+            <>
+              {previewSheetOpen && renderExpandedOptions(s)}
+              {/* `document` widens the transcript's own gutters (the pane has
+                  px-4 of its own) so the conversation sits in page margins
+                  rather than running to the divider. */}
+              <div className={`flex-1 min-h-0 flex flex-col ${SHELL.document ? 'px-4' : ''}`}>
                 <SessionPreviewPane
                   provider={(s.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
                   id={s.sessionId}
                   title={s.name}
                 />
               </div>
-              {SHELL.footerResume && renderExpandedOptions(s)}
+            </>
+          );
+          // `sheet` lifts the heading AND the transcript onto one inset surface
+          // with the window's fill showing around it. bg-canvas + a border,
+          // never `.layer-surface`: a second one of those inside the overlay is
+          // the stacked-glass bug.
+          if (SHELL.sheet) {
+            return (
+              <div className="flex-1 min-w-0 flex flex-col min-h-0 p-3">
+                <div className="flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas">
+                  <div className="px-5 pt-4 pb-4 border-b border-edge-dim">
+                    {conversationHeading(s, {})}
+                  </div>
+                  {body}
+                </div>
+              </div>
+            );
+          }
+          return (
+            <div className="flex-1 min-w-0 flex flex-col min-h-0">
+              {/* `band`: the heading is vertically centred in a floor equal to
+                  the list header's, so the divider between them runs straight
+                  instead of stepping. `document`: a rule under the title and
+                  small-caps meta, with page margins carried into the transcript
+                  by the padding below. Everything else: round two's `hero`. */}
+              <div
+                className={`border-b border-edge shrink-0 ${
+                  SHELL.band ? 'px-5 min-h-[104px] flex flex-col justify-center'
+                    : SHELL.document ? 'px-8 pt-5 pb-4'
+                    : 'px-5 pt-4 pb-4 bg-inset'
+                }`}
+              >
+                {conversationHeading(s, { rule: SHELL.document })}
+              </div>
+              {body}
             </div>
           );
         })()}
         </div>
-        {bottomStrip}
         </OverlayPanel>
       </div>
 
