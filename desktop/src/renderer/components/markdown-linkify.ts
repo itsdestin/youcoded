@@ -75,6 +75,19 @@ export function detectLinkTokens(
   text: string,
   opts: { filepaths: boolean },
 ): LinkToken[] {
+  // Fast path: no slash, no match — provable, not a heuristic. URL_RE requires
+  // `https?://`, and EVERY alternative in PATH_RE's opening group ends in
+  // [\\/] (drive letter, ~/, ./, /, or segment/). So text containing neither
+  // "/" nor "\" cannot produce either kind of token.
+  //
+  // WHY it is worth a branch: this runs once per TEXT NODE, and syntax
+  // highlighting shreds a code block into one text node per token. The perf
+  // rig's 394 KB fixture goes from 7,056 nodes to 108,576 once highlighted
+  // (measured 2026-09-10), and the overwhelming majority of those are things
+  // like `const`, `=` and a space — two regex scans each, all of them certain
+  // to fail. Guarded by markdown-linkify.test.ts ("no slash means no token").
+  if (!text.includes('/') && !text.includes('\\')) return [];
+
   const urls = detectUrls(text);
   if (!opts.filepaths) return urls;
   const paths: LinkToken[] = detectFilepaths(text)
