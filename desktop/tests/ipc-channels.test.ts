@@ -1276,6 +1276,11 @@ describe('native:* channel parity', () => {
     'native:get-permission-mode',
     'native:sessions-list',
     'native:kill-shell',
+    // "What the assistant was given" — the on-demand read of one file's text.
+    // The session-context PUSH is pinned separately below: a push has no
+    // ipc-handlers request arm and no Kotlin case, so it does not belong in a
+    // list whose three tests all assert one.
+    'native:session-context-text',
   ];
 
   it('every native:* channel is declared in preload.ts', () => {

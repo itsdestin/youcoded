@@ -4,7 +4,7 @@ import { useEffect, useRef } from 'react';
 // before Task 2 switched the IPC channel to invoke/ack. shared/types.ts (not
 // main-only) is the existing exception to the "no cross-boundary import"
 // comment just below — native-send.ts already imports it the same way.
-import type { NativeSendResult } from '../../shared/types';
+import type { NativeSendResult, SessionContext, SessionContextText } from '../../shared/types';
 
 // Discriminated union for IPC calls that can fail with a structured error.
 // Using a local type (not imported from main) keeps the renderer/main boundary
@@ -321,6 +321,11 @@ declare global {
         // Per-session bound-model residency push (2026-07-14): { sessionId,
         // modelId, state: 'unloaded'|'loading'|'loaded'|'sleeping', sizeBytes }.
         onModelState: (cb: (s: any) => void) => () => void;
+        // "What the assistant was given" (2026-09-10). onSessionContext returns
+        // its unsubscribe fn; sessionContextText answers { error } rather than
+        // throwing, so the panel shows a line instead of an unhandled rejection.
+        sessionContextText: (sessionId: string, kind: 'project' | 'user' | 'skill', id?: string) => Promise<SessionContextText | { error: string }>;
+        onSessionContext: (cb: (e: { sessionId: string; context: SessionContext | null }) => void) => () => void;
       };
       // Provider registry — native runtime model providers (desktop-only; the
       // Android/remote stubs reject with not-implemented).

@@ -1087,6 +1087,17 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
+      case 'native:session-context-text': {
+        // "What the assistant was given" — one file's text, read on the DESKTOP,
+        // where the session and its files live. Without this case the panel opens
+        // on a phone and every row reads "This file couldn't be read": the
+        // default arm answers {unsupported:true}, which is not an answer.
+        const result = this.nativeRuntime
+          ? this.nativeRuntime.nativeHost.sessionContextText(payload.sessionId, payload.kind, payload.id)
+          : { error: 'not-live' };
+        this.respond(client.ws, type, id, result);
+        break;
+      }
       case 'provider:list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.providerRegistry.list() : []);
         break;

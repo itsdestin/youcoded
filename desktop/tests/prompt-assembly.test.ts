@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { assembleSystemPrompt } from '../src/main/harness/prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from '../src/main/harness/prompt-assembly';
 import { CODER_DEFAULT_BODY } from '../src/main/harness/prompts/coder-default';
 
 // Each test gets a fresh tmp sandbox so filesystem walk-up state never leaks.
@@ -210,5 +210,90 @@ describe('assembleSystemPrompt — shared doctrine (2026-09-04)', () => {
   });
   it('the identity line says the model may be any vendor', () => {
     expect(assembleSystemPrompt(base)).toMatch(/any model the user chose/);
+  });
+});
+
+// The panel's System tab shows the prompt in pieces (Destin, review-5 G-2). The
+// pieces and the prompt must be the same thing — see assembleSystemPromptParts's
+// own WHY comment on why two parallel implementations would drift invisibly.
+describe('assembleSystemPromptParts — the pieces ARE the prompt', () => {
+  const base = { presetBody: PRESET, cwd: '/tmp', appVersion: '1.0.0' };
+
+  // The join test below is TAUTOLOGICAL while assembleSystemPrompt is literally
+  // defined as that join — it proves nothing today and would only go red if
+  // someone later gave the prompt its own assembly. That day is exactly the
+  // failure worth catching, so this reads the source and refuses the split
+  // outright, rather than trusting a test that certifies its own definition.
+  it('the prompt is assembled FROM the parts, never beside them', () => {
+    const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'harness', 'prompt-assembly.ts'), 'utf8');
+    const body = src.slice(src.indexOf('export function assembleSystemPrompt(i: PromptInputs): string {'));
+    expect(
+      body.slice(0, body.indexOf('\n}')),
+      'assembleSystemPrompt must return assembleSystemPromptParts joined — the System tab shows what it returns, '
+        + 'so a second assembly would drift from the prompt invisibly',
+    ).toContain('assembleSystemPromptParts(i)');
+  });
+
+  it('joining the parts reproduces the prompt exactly, in every shape', () => {
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), '# Rules\nPROJECT_INSTR_MARKER');
+    const shapes = [
+      base,
+      { ...base, cwd: dir },
+      { ...base, promptVariant: 'local-small' as const },
+      { ...base, hasTools: false },
+      { ...base, audience: 'parent' as const, supportsParallelToolCalls: true },
+      { ...base, cwd: dir, promptVariant: 'local-small' as const, instructionBudgetTokens: 5 },
+    ];
+    for (const shape of shapes) {
+      expect(assembleSystemPromptParts(shape).map((p) => p.text).join('\n\n')).toBe(assembleSystemPrompt(shape));
+    }
+  });
+
+  it('drops the parts the joined prompt drops, rather than leaving them blank', () => {
+    // No instructions file in the cwd, and the default variant is a no-op — the
+    // prompt has never carried either, so the panel must not list an empty row.
+    const ids = assembleSystemPromptParts(base).map((p) => p.id);
+    expect(ids).not.toContain('project');
+    expect(ids).not.toContain('steering');
+    expect(ids).toEqual(['identity', 'preset', 'env', 'doctrine']);
+  });
+
+  it('names the project instructions part only when there is a file', () => {
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'PROJECT_INSTR_MARKER');
+    const part = assembleSystemPromptParts({ ...base, cwd: dir }).find((p) => p.id === 'project');
+    expect(part?.text).toContain('PROJECT_INSTR_MARKER');
+  });
+
+  it('a small local model gets a steering part; a frontier one does not', () => {
+    expect(assembleSystemPromptParts({ ...base, promptVariant: 'local-small' }).map((p) => p.id)).toContain('steering');
+    expect(assembleSystemPromptParts(base).map((p) => p.id)).not.toContain('steering');
+  });
+
+  it('presetName labels the preset part and changes NO byte of the prompt', () => {
+    const withName = { ...base, presetName: 'Coder' };
+    expect(assembleSystemPrompt(withName)).toBe(assembleSystemPrompt(base));
+    expect(assembleSystemPromptParts(withName).find((p) => p.id === 'preset')?.label).toBe('Its preset — Coder');
+    expect(assembleSystemPromptParts(base).find((p) => p.id === 'preset')?.label).toBe('Its preset');
+  });
+});
+
+describe('findProjectInstructions', () => {
+  it('returns the absolute path and the FULL text, uncut', () => {
+    const body = `# Big\n${'x'.repeat(5000)}`;
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), body);
+    const found = findProjectInstructions(dir);
+    expect(found?.path).toBe(path.join(dir, 'CLAUDE.md'));
+    expect(found?.name).toBe('CLAUDE.md');
+    expect(found?.text).toBe(body);
+  });
+
+  it('prefers AGENTS.md in a directory holding both, matching the prompt', () => {
+    fs.writeFileSync(path.join(dir, 'AGENTS.md'), 'AGENTS');
+    fs.writeFileSync(path.join(dir, 'CLAUDE.md'), 'CLAUDE');
+    expect(findProjectInstructions(dir)?.text).toBe('AGENTS');
+  });
+
+  it('is null when the walk finds nothing', () => {
+    expect(findProjectInstructions(dir)).toBeNull();
   });
 });

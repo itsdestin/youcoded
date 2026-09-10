@@ -960,6 +960,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    // Step 3 (2026-08-17, broadened): the session's STARTING context — the full
+    // accounting the session-start panel renders (system prompt, project
+    // instructions as-truncated, skills, tools, dropped MCP servers). Session
+    // level (not a timeline entry) so it survives resume. No-op when unchanged.
+    case 'SESSION_CONTEXT': {
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const ctx = action.context ?? null;
+      if (JSON.stringify(session.sessionContext) === JSON.stringify(ctx)) return state;
+      next.set(action.sessionId, { ...session, sessionContext: ctx });
+      return next;
+    }
+
     // Native model residency changed (loaded/loading/sleeping/unloaded). Purely
     // informational — does NOT touch the turn/attention machinery. Drives the
     // ModelLoadingBar (unloaded → reload; loading → loading indicator).
