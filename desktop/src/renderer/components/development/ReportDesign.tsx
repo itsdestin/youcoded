@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { versionLine } from '../../app-version';
+import { plainMessage } from '../../utils/ipc-error';
 import { AnchorTip, Button, Callout, Checkbox, Dialog, ErrorState, LoadingState, SegmentedTabs, SettingRow, Textarea, TextInput } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
 
@@ -79,8 +80,13 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
       // typed is still in state, so retrying costs nothing (audit E-02).
       setError(r.error);
       setPhase('review');
-    } catch (e: any) {
-      setError(String(e?.message || e));
+    } catch (e: unknown) {
+      // WHY plainMessage (audit E-14/E-15): over remote access the bridge rejects
+      // with `remote-unsupported: dev:submit-issue`, a channel name that means
+      // nothing to anyone. This turns it into "Developer tools isn't available via
+      // remote access yet." and strips Electron's wrapper on desktop. The helper
+      // already existed and was adopted at four call sites out of the whole app.
+      setError(plainMessage(e, 'Your ticket could not be sent.'));
       setPhase('review');
     }
   };

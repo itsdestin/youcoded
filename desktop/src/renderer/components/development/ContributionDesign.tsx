@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Dialog, ErrorState, LoadingState } from '../ui';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { plainMessage } from '../../utils/ipc-error';
 import { ContributionWalkthrough } from './ContributionWalkthrough';
 
 type Phase = 'idle' | 'setting-up' | 'ready' | 'failed';
@@ -42,10 +43,25 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
       // WHY: the reason comes from the operation that failed, never from a guess
       // here (docs/error-message-standards.md).
       else { setError(r.error); setPhase('failed'); }
-    } catch (e: any) {
-      // WHY: a rejection used to fall through a try/finally with no catch, so the
-      // screen sat on the progress state for ever (audit E-02).
-      setError(String(e?.message || e));
+    } catch (e: unknown) {
+      // WHY there is a catch at all: a rejection used to fall through a try/finally
+      // with none, so the screen sat on the progress state for ever (audit E-02).
+      // WHY plainMessage (E-14/E-15): over remote access the bridge rejects with
+      // `remote-unsupported: dev:setup-workspace`, a channel name that means nothing
+      // to anyone; this says "Developer tools isn't available via remote access yet."
+      setError(plainMessage(e, 'Setup could not finish.'));
+      setPhase('failed');
+    }
+  };
+
+  const openProject = async () => {
+    try {
+      await window.claude.dev.openSessionIn({ cwd: path });
+      onClose();
+    } catch (e: unknown) {
+      // Setup succeeded; only opening failed. Say that, and leave the finished
+      // project where it is rather than pretending setup broke.
+      setError(plainMessage(e, 'The project is ready, but it could not be opened.'));
       setPhase('failed');
     }
   };
@@ -74,7 +90,11 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
         <p className="text-sm text-fg">Your development workspace is ready.</p>
         <p className="text-xs text-fg-2">It’s one of your projects now, at <code className="text-2xs">{path}</code>. Nothing else on your computer changed.</p>
         <div className="flex flex-col gap-2">
-          <Button className="w-full py-2.5" onClick={onClose}>Open it</Button>
+          {/* WHY this calls openSessionIn: contract R10 is "setup finishes and the
+              project OPENS". A button labelled "Open it" that only closes the dialog
+              is the dead-button shape this whole feature exists to remove — and it is
+              what the legacy screen's "Open in New Session" already did. */}
+          <Button className="w-full py-2.5" onClick={openProject}>Open it</Button>
           <Button variant="secondary" className="w-full py-2.5" onClick={onClose}>Not now</Button>
         </div>
       </>}

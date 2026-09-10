@@ -34,6 +34,14 @@ const PROMPT_FEATURE = (description: string) =>
   `Both desktop and Android share the React UI — keep that in mind.`;
 
 // WHY: review-only design is deliberately disconnected from AI, reports and installation.
+// WHY this gate is STILL here while the Contribute one is gone (2026-09-10):
+// the legacy review screen carries "Let Claude Try to Fix It" — install the
+// workspace, open a session, hand it the bug. The approved ticket design has no
+// such action, so flipping this gate would DELETE a working feature that no deck
+// ever asked to remove. `.claude/rules/feature-flow.md`: a contradiction with the
+// approved UI is a reopen deck, never a silent change. The question goes to Destin
+// on the acceptance deck — keep it, cut it, or redesign it — and this line goes
+// with his answer, not before it.
 export function BugReportPopup(props: Props) {
   return new URLSearchParams(window.location.search).get('mode') === 'workbench'
     ? <ReportDesign {...props} /> : <LegacyBugReportPopup {...props} />;

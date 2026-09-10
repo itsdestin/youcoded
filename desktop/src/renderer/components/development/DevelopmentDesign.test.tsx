@@ -255,6 +255,24 @@ describe('development design safety', () => {
     expect(screen.getByRole('button', { name: 'Improve wording with AI' })).toBeTruthy();
   });
 
+  it('says what remote access cannot do, not a channel name', async () => {
+    // Audit E-14: over remote the bridge rejects with `remote-unsupported:
+    // dev:submit-issue`. Showing that raw would be a channel id on screen. The
+    // existing helper turns it into a sentence — E-15 recorded that it existed and
+    // was adopted at four call sites in the whole app.
+    const submitIssue = vi.fn().mockRejectedValue(new Error('remote-unsupported: dev:submit-issue'));
+    Object.assign(window, { claude: { dev: { submitIssue } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await screen.findByText(/Developer tools isn.t available via remote access yet/);
+    expect(document.body.textContent).not.toContain('remote-unsupported');
+    // The draft survives it, like any other failure (R23).
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+  });
+
   it('sends a ticket with no AI call at all', async () => {
     // Contract R12. Asking an assistant is a separate choice, so submitting must
     // never reach a provider.

@@ -124,34 +124,40 @@ describe('BugReportPopup', () => {
 });
 
 describe('ContributePopup', () => {
+  // Rewritten 2026-09-10. These two tests protected real behaviour — setup runs,
+  // then you can open the project — but against the legacy screen's fixed-folder
+  // installer, which was deleted. Same promises, current mechanism: contract R9
+  // (never touch an existing folder) is why dev:setup-workspace exists, and R10
+  // ("setup finishes and the project opens") is why "Open it" must actually open it.
   beforeEach(() => {
     (window as any).claude = {
       dev: {
-        installWorkspace: vi.fn().mockResolvedValue({ path: '/h/youcoded-dev', alreadyInstalled: false }),
-        onInstallProgress: vi.fn(() => () => undefined),
+        setupWorkspace: vi.fn().mockResolvedValue({ ok: true, path: '/h/YouCoded/Development/youcoded-workspace' }),
+        setupStatus: vi.fn().mockResolvedValue({ state: 'idle' }),
         openSessionIn: vi.fn().mockResolvedValue({ id: 's1' }),
+        // Present so a wrong call is a FAILED ASSERTION rather than a TypeError that
+        // could be mistaken for an unrelated crash.
+        installWorkspace: vi.fn(),
       },
     };
   });
 
-  it('shows install button initially and triggers install on click', async () => {
+  it('sets the workspace up and never uses the fixed-folder installer', async () => {
     render(<ContributePopup open={true} onClose={() => undefined} />);
-    expect(screen.getByText(/Install Workspace/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByText(/Install Workspace/i));
-    await screen.findByText(/Workspace installed at/i);
-    expect((window as any).claude.dev.installWorkspace).toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up development workspace' }));
+    await screen.findByText(/Your development workspace is ready/i);
+    expect((window as any).claude.dev.setupWorkspace).toHaveBeenCalled();
+    expect((window as any).claude.dev.installWorkspace).not.toHaveBeenCalled();
   });
 
-  it('opens new session when "Open in New Session" is clicked', async () => {
+  it('opens the finished project in a session', async () => {
     const onClose = vi.fn();
     render(<ContributePopup open={true} onClose={onClose} />);
-    fireEvent.click(screen.getByText(/Install Workspace/i));
-    await screen.findByText(/Open in New Session/i);
-    fireEvent.click(screen.getByText(/Open in New Session/i));
-    await new Promise((r) => setTimeout(r, 0)); // let async settle
-    expect((window as any).claude.dev.openSessionIn).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: '/h/youcoded-dev' })
-    );
-    expect(onClose).toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up development workspace' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open it' }));
+    await vi.waitFor(() => expect((window as any).claude.dev.openSessionIn).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/h/YouCoded/Development/youcoded-workspace' }),
+    ));
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });
