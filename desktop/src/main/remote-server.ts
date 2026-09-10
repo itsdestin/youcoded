@@ -39,6 +39,7 @@ import type { StepGuardSettings } from './harness/step-guard-settings';
 import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
+import type { ClaudeAccount } from './providers/claude-account';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow } from 'electron';
@@ -158,7 +159,7 @@ export class RemoteServer {
   // field (Plan 2b) — both were added independently on master and this branch.
   // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
   // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null } | null = null;
+  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null } | null = null;
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -197,7 +198,7 @@ export class RemoteServer {
   /** Injected by ipc-handlers after it constructs the native stack, so remote
    *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
    *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null }): void {
+  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null }): void {
     this.nativeRuntime = rt;
   }
 
@@ -1179,6 +1180,21 @@ export class RemoteServer {
         try {
           const auth = this.nativeRuntime?.chatgptAuth ?? null;
           this.respond(client.ws, type, id, auth ? await auth.signOut() : false);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      // Claude Code's live sign-in (2026-09-09). The DESKTOP's answer, not the
+      // browser's: the phone has no `claude` binary, and the session it is
+      // driving runs here. `unknown` when the runtime is not wired yet, which
+      // every reader treats as available — a remote client must never grey out
+      // a model on the strength of a missing object.
+      case 'claude-code:status': {
+        try {
+          const account = this.nativeRuntime?.claudeAccount ?? null;
+          if (payload?.refresh) account?.invalidate();
+          this.respond(client.ws, type, id, account ? await account.status() : { state: 'unknown' });
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
         }

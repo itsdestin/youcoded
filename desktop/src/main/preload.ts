@@ -7,6 +7,7 @@ import type { AttentionSummary, AttentionReport, PerformanceConfigSnapshot, Sess
 // runtime — same footing as the '../shared/types' line above.
 import type { FirstRunState } from '../shared/first-run-types';
 import type { ChatGptAccountStatus } from '../shared/chatgpt-types';
+import type { ClaudeAccountStatus } from '../shared/claude-account-types';
 
 // WHY: buddy geometry and pointer offsets are native DIPs, so its CSS pixels
 // must stay at 100% even when a same-origin main window is zoomed. In Electron
@@ -387,6 +388,8 @@ const IPC = {
   CHATGPT_SIGN_IN: 'chatgpt:sign-in',
   CHATGPT_CANCEL_SIGN_IN: 'chatgpt:cancel-sign-in',
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
+  // Claude Code's own sign-in, read live (2026-09-09) — mirrors shared/types.ts.
+  CLAUDE_CODE_STATUS: 'claude-code:status',
   // ---- Native runtime Plan B (Phase 1): local llama.cpp engine ----
   ENGINE_STATUS: 'engine:status',
   ENGINE_INSTALL: 'engine:install',
@@ -1452,6 +1455,15 @@ contextBridge.exposeInMainWorld('claude', {
     signIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_IN)),
     cancelSignIn: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_CANCEL_SIGN_IN)),
     signOut: (): Promise<boolean> => unwrapInvokeError(ipcRenderer.invoke(IPC.CHATGPT_SIGN_OUT)),
+  },
+  // Claude Code's own sign-in, read live from `claude auth status` (2026-09-09).
+  // Read-only on purpose — the other three verbs have no equivalent here,
+  // because Claude Code owns its login and the app cannot clear it.
+  // `refresh: true` drops main's 60s cache first; the Cloud providers page
+  // passes it so opening Settings always shows today's answer.
+  claudeCode: {
+    status: (opts?: { refresh?: boolean }): Promise<ClaudeAccountStatus> =>
+      ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS, opts),
   },
   // WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades. list = the
   // fixed backend rows (hasKey flags); set/remove-key manage the encrypted key;

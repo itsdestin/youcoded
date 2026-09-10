@@ -31,6 +31,7 @@ import { ProviderRegistry } from './providers/provider-registry';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): constructed by main.ts
 // (it needs the post-dev-profile userData) and passed IN; this file only wires it.
 import type { ChatGptAuth } from './providers/chatgpt-auth';
+import { ClaudeAccount } from './providers/claude-account';
 // Task 7: native auto-title generation over the AI SDK — the SAME `ai`
 // package harness-session.ts already depends on (never through
 // HarnessSession.send(), which hard-throws on re-entrancy).
@@ -2537,6 +2538,13 @@ export function registerIpcHandlers(
   // ModelCatalog/CuratedCatalog (both take app.getPath('userData')). The
   // SearchService is injected into the native tool framework as `toolServices`
   // so the WebSearch tool can reach it (see NativeSessionHost.toolWiring).
+  // Claude Code's live sign-in probe (2026-09-09). ONE instance for the whole
+  // process, because the cache is the point: the model menu, the Cloud
+  // providers card and the new-session form all ask, and a second instance
+  // would mean a second `claude auth status` spawn for the same answer.
+  // Shared with the remote server below so a paired browser gets the desktop's
+  // real answer rather than its own guess.
+  const claudeAccount = new ClaudeAccount();
   const searchKeyStore = new SearchKeyStore(nativeHome, secretsStore);
   const searchService = new SearchService(
     new SearchChain(app.getPath('userData')),
@@ -2950,7 +2958,7 @@ export function registerIpcHandlers(
   // stale data relative to whichever surface wrote last.
   // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
   // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, specialistCatalog, chatgptAuth: chatgptForUi });
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
@@ -3223,6 +3231,17 @@ export function registerIpcHandlers(
   ipcMain.handle(IPC.CHATGPT_SIGN_IN, async () => chatgptForUi ? chatgptForUi.signIn() : false);
   ipcMain.handle(IPC.CHATGPT_CANCEL_SIGN_IN, async () => chatgptForUi ? chatgptForUi.cancelSignIn() : false);
   ipcMain.handle(IPC.CHATGPT_SIGN_OUT, async () => chatgptForUi ? chatgptForUi.signOut() : false);
+  // Claude Code's own sign-in, read LIVE (2026-09-09). The model menu and the
+  // Cloud providers card both read this; before it existed they read the setup
+  // wizard's saved notes, which on every launch after the first arrive with no
+  // auth fields at all — so a signed-in install had every Claude model greyed
+  // out with "Sign in to use". Cached 60s inside ClaudeAccount; `refresh`
+  // drops that cache. Never throws: a failed probe answers `unknown`, which
+  // every reader treats as available.
+  ipcMain.handle(IPC.CLAUDE_CODE_STATUS, async (_e, opts?: { refresh?: boolean }) => {
+    if (opts?.refresh) claudeAccount.invalidate();
+    return claudeAccount.status();
+  });
   // WebSearch key management (Settings → Providers → Search). list returns the
   // fixed Tavily/Exa rows with hasKey flags; set/remove manage the encrypted key;
   // test is never-throws ({ ok, message } is the result, not an exception).

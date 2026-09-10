@@ -3,9 +3,10 @@ import { createPortal } from 'react-dom';
 import { useEscClose } from '../hooks/use-esc-close';
 import ProvidersSection from './ProvidersSection';
 import LocalModelsSection from './LocalModelsSection';
-import type { FirstRunState } from '../../shared/first-run-types';
 import type { ProviderStatus } from '../../shared/provider-types';
 import { chatGptPlanLabel, type ChatGptAccountStatus } from '../../shared/chatgpt-types';
+import { claudePlanLabel } from '../../shared/claude-account-types';
+import { useClaudeStatus } from './model/availability';
 import { AnchorTip, Button, Dialog, InputGroup, TextInput } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { PlanWindows, type PlanUsage } from './plan-windows';
@@ -108,44 +109,47 @@ export function ClaudeCodeBlock({
   onOpenClaudePreferences?: () => void;
   onCloseParent: () => void;
 }) {
-  const [state, setState] = useState<FirstRunState | null>(null);
-  const [loaded, setLoaded] = useState(false);
+  // The LIVE sign-in, not the setup wizard's saved notes (2026-09-09). This card
+  // used to read `FirstRunState.authComplete`, which is a record of what happened
+  // during setup — so on every launch after the first it arrived with no auth
+  // fields at all and the card said "Not set up yet" on a working install, while
+  // the model menu greyed out every Claude model beside it. It also could never
+  // notice a `/logout` typed in a terminal. `refresh` is passed on mount so
+  // opening Settings always re-asks rather than trusting main's 60s cache.
+  const { status, refresh } = useClaudeStatus();
+  useEffect(() => { refresh(); }, [refresh]);
 
-  useEffect(() => {
-    let alive = true;
-    // First-run state carries the Claude Code install + sign-in result. It's the
-    // only signal available without adding a new IPC; it reflects the last known
-    // setup outcome (a later sign-out via the terminal isn't tracked here).
-    // `firstRun` isn't part of the typed window.claude shape — FirstRunView
-    // reaches it via an `any` cast too. Match that pattern.
-    (window as any).claude.firstRun.getState()
-      .then((s: FirstRunState) => { if (alive) { setState(s); setLoaded(true); } })
-      .catch(() => { if (alive) setLoaded(true); });
-    return () => { alive = false; };
-  }, []);
+  const signedIn = status?.state === 'signed-in';
 
-  // Guard `prerequisites` too — getState() can resolve to a state whose array
-  // is absent (e.g. a profile that never ran first-run), and `state?.` alone
-  // would still call .find on undefined.
-  const claudePrereq = state?.prerequisites?.find((p) => p.name === 'claude');
-  const installed = claudePrereq?.status === 'installed';
-  // authComplete is set by ANY finished sign-in, ChatGPT included, so on its
-  // own it would make this Claude row claim a Claude account that does not
-  // exist — and draw Claude plan-usage bars under it. (fix 3, 2026-09-05)
-  const signedIn = state?.authComplete === true && state?.authMode !== 'chatgpt';
-
-  // Plain-word status line (no ●◐○ glyphs), in the same grey as every other row.
-  let statusText: string;
-  if (!loaded) {
-    statusText = 'Checking…';
-  } else if (signedIn) {
-    statusText = state?.authMode === 'apikey'
+  // Same three-part shape as the ChatGPT card below — plain-word status line (no
+  // ●◐○ glyphs), a detail line for the one extra thing worth saying, one action
+  // on the right — because the two sit on the same Cloud providers page and
+  // Destin asked for them to read as one system (2026-09-09).
+  let line: React.ReactNode = 'Checking…';
+  let detail: { text: React.ReactNode; tone?: 'muted' | 'bad' } | null = null;
+  if (status?.state === 'signed-in') {
+    // Email on the status line, plan on the detail line — the ChatGPT card's
+    // layout exactly. An API-key login has neither a plan nor (usually) an
+    // email, so it says which kind of connection it is instead of promising
+    // limits that do not exist.
+    line = status.apiKey
       ? 'Connected with an Anthropic API key'
-      : 'Signed in with your Claude account';
-  } else if (installed) {
-    statusText = 'Installed — not signed in yet';
-  } else {
-    statusText = 'Not set up yet';
+      : status.email ? `Signed in as ${status.email}` : 'Signed in with your Claude account';
+    detail = status.apiKey ? { text: 'Billed per token — no plan limits.' } : { text: claudePlanLabel(status.plan) };
+  } else if (status?.state === 'signed-out') {
+    line = 'Not signed in';
+    detail = { text: "Your Claude plan's models, in YouCoded's assistant." };
+  } else if (status?.state === 'not-installed') {
+    // Never a guessed cause (docs/error-message-standards.md): the probe found
+    // no `claude` on PATH, and that is exactly what this says. Signing in is
+    // not the fix, so the words must not suggest it.
+    line = 'Claude Code is not installed';
+    detail = { text: 'Restart YouCoded to run setup again.', tone: 'bad' };
+  } else if (status?.state === 'unknown') {
+    // The probe ran and could not answer. We do not know, so we do not claim —
+    // and everything keeps working, because "unknown" never blocks a model.
+    line = "Signed-in state couldn't be read";
+    detail = { text: 'Your models still work; this line will catch up.' };
   }
   const claudeUsage = useClaudePlanUsage();
   const [signOutOpen, setSignOutOpen] = useState(false);
@@ -172,7 +176,8 @@ export function ClaudeCodeBlock({
             </>
           ),
         }}
-        status={statusText}
+        status={line}
+        detail={detail}
         account={signedIn ? 'https://claude.ai/settings/usage' : undefined}
         action={
           <>
@@ -189,7 +194,8 @@ export function ClaudeCodeBlock({
           </>
         }
       >
-        {signedIn && state?.authMode !== 'apikey' && <PlanWindows usage={claudeUsage} />}
+        {/* Plan bars only for a real plan — an API-key login has no windows to draw. */}
+        {status?.state === 'signed-in' && !status.apiKey && <PlanWindows usage={claudeUsage} />}
       </ProviderRow>
 
       {/* Round 3 (R3-5, pick a): the button stays, but nothing here signs you
