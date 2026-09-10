@@ -1,26 +1,30 @@
 import type { SessionProvider } from '../../shared/types';
 
 /**
- * User-facing name for the assistant, by session provider.
+ * User-facing name for the assistant.
  *
- * Claude sessions say "Claude"; native (local/cloud model) sessions say
- * "your assistant" — the app must not call a Llama/GPT/other model "Claude".
- * Use `capitalized` for a standalone label ("Your Assistant") vs the default
- * inline/mid-sentence form ("…start a conversation with your assistant").
+ * Destin, 2026-09-10: *"we should replace any direct references to 'claude' with
+ * 'the assistant' or something similar, and make sure they work with native
+ * sessions."*
  *
- * NOTE: this is for generic "the assistant" references only. Product-name
- * references that are genuinely about Claude the service (e.g. "Sign in with
- * your Claude plan", "Claude Pro/Max") must stay "Claude" and should NOT use
- * this helper.
+ * It used to answer "Claude" for a Claude-Code session and "your assistant" only
+ * for a native one. That still put a vendor's name in ordinary product copy —
+ * "Message Claude…", "Still waiting on Claude" — and it meant every sentence had
+ * to be threaded with a provider to be correct. One name for the thing that does
+ * the work removes both problems, and it is the app's own voice: YouCoded is the
+ * product, and which model is behind it is a setting, not an identity.
+ *
+ * `provider` is kept so call sites do not churn and a future per-provider name
+ * (a user-chosen one, say) has somewhere to live.
+ *
+ * NOT for product names. "Claude Code", "Claude Pro/Max", "Sign in with your
+ * Claude account" and model names are genuinely about Anthropic's product and
+ * MUST stay — renaming those would tell the user something false about what they
+ * are signing into or paying for.
  */
 export function assistantName(
-  provider: SessionProvider | undefined,
+  _provider?: SessionProvider | undefined,
   opts?: { capitalized?: boolean },
 ): string {
-  if (provider === 'native') return opts?.capitalized ? 'Your Assistant' : 'your assistant';
-  // 'shell' deliberately falls through. A shell session has no assistant at
-  // all, but it also never renders chat copy — App forces it to the terminal
-  // view and draws no composer — so there is no sentence for a third answer to
-  // appear in. A branch here would be unreachable code pretending otherwise.
-  return 'Claude';
+  return opts?.capitalized ? 'Your assistant' : 'your assistant';
 }

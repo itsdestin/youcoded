@@ -525,7 +525,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               sendRef.current(true);
             });
           } else {
-            onToast?.('Claude is waiting for your response — answer the prompt first.');
+            onToast?.('Your assistant is waiting for your response — answer the prompt first.');
           }
           return false;
         }
@@ -1035,7 +1035,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // a held key repeats, and every repeat resets that timer.)
             onBlur={releaseSpaceHold}
             onPaste={handlePaste}
-            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : 'Message Claude...'}
+            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : 'Message your assistant...'}
             disabled={disabled}
             // Text color is transparent so the mirror div behind it shows
             // through (with animated keyword spans). caret-color keeps the

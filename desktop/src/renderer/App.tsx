@@ -572,7 +572,7 @@ function AppInner() {
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
     const session = chatStateMapRef.current.get(sid);
     if (session && hasPendingInteraction(session)) {
-      setToast('Claude is waiting for your response — answer the prompt first.');
+      setToast('Your assistant is waiting for your response — answer the prompt first.');
       return true;
     }
     return false;
@@ -3346,7 +3346,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Claude is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={{
                     usage: onChatGptPlan ? statusData.chatgptUsage : statusData.usage,
@@ -3516,7 +3516,7 @@ function AppInner() {
                           others). Change 17 puts it on the destructive token so it
                           tracks the toggle above it under a community theme. */}
                       {welcomeDangerous && (
-                        <p className="text-3xs text-destructive-fg">Claude will execute tools without asking for approval.</p>
+                        <p className="text-3xs text-destructive-fg">Your assistant will execute tools without asking for approval.</p>
                       )}
                     </>
                   )}

@@ -94,7 +94,7 @@ describe('one status per compaction', () => {
     mocks.state.attentionState = 'stuck';
     renderChat();
     expect(screen.queryByTestId('thinking-indicator')).toBeNull();   // still no spinner
-    expect(screen.getByText(/Still waiting on Claude/)).toBeTruthy(); // but the warning survives
+    expect(screen.getByText(/Still waiting on your assistant/)).toBeTruthy(); // but the warning survives
   });
 
   it('still shows the thinking indicator on an ordinary turn', () => {

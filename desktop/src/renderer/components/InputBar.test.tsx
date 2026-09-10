@@ -80,7 +80,7 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
       </ChatProvider>,
     );
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'hello world' } });
     expect(textarea.value).toBe('hello world');
 
@@ -120,7 +120,7 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
       </ChatProvider>,
     );
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'first message' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(textarea.value).toBe('');
@@ -156,7 +156,7 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
       </ChatProvider>,
     );
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'hello world' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
     expect(textarea.value).toBe('');
@@ -362,21 +362,21 @@ describe('InputBar — InputBarHandle hasDraft/fillDraft (Task 11)', () => {
 
   it('hasDraft() is false for a whitespace-only draft (trimmed)', () => {
     const ref = renderWithRef();
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: '   ' } });
     expect(ref.current!.hasDraft()).toBe(false);
   });
 
   it('hasDraft() is true once the user has typed something', () => {
     const ref = renderWithRef();
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'a draft in progress' } });
     expect(ref.current!.hasDraft()).toBe(true);
   });
 
   it('fillDraft() replaces the composer content and focuses it', () => {
     const ref = renderWithRef();
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     act(() => { ref.current!.fillDraft('the edited queued message'); });
     expect(textarea.value).toBe('the edited queued message');
     expect(ref.current!.hasDraft()).toBe(true);
@@ -428,7 +428,7 @@ describe('InputBar native send — queued ack dispatches QUEUED_MESSAGE_ADDED, n
     );
     act(() => { capturedDispatch!({ type: 'SESSION_INIT', sessionId: 'sess-1' }); });
 
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     fireEvent.change(textarea, { target: { value: 'queue me' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send message' }));
 
@@ -509,7 +509,7 @@ describe('InputBar — voice prompting (T9)', () => {
         </SkillProvider>
       </ChatProvider>,
     );
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     // The mic's label only becomes "Speak your message" once status() has
     // answered, so this is also the wait for readiness to arrive.
     await waitFor(() => screen.getByRole('button', { name: 'Speak your message' }));
@@ -729,7 +729,7 @@ describe('InputBar — hold the space bar to talk (T9)', () => {
         </SkillProvider>
       </ChatProvider>,
     );
-    const textarea = screen.getByPlaceholderText('Message Claude...') as HTMLTextAreaElement;
+    const textarea = screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
     await waitFor(() => screen.getByRole('button', { name: 'Speak your message' }));
     rerenderComposer = () => rerender(
       <ChatProvider>

@@ -1159,8 +1159,8 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                   style={folded && foldHeight ? { height: foldHeight } : undefined}
                   title={isPreCompaction
                     ? (archiveKind === 'clear'
-                      ? 'Cleared — still here to read, but not in Claude\'s context'
-                      : 'Archived by compaction — not in Claude\'s active context')
+                      ? 'Cleared — still here to read, but not in your assistant\'s context'
+                      : 'Archived by compaction — not in your assistant\'s active context')
                     : undefined}
                 >
                   {folded && foldHeight ? null : content}

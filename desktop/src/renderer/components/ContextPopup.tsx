@@ -11,7 +11,7 @@ import { useTheme } from '../state/theme-context';
 function hintFor(pct: number): string {
   if (pct > 60) return 'Plenty of room — no action needed.';
   if (pct >= 20) return 'Getting tight — consider compacting soon.';
-  return 'Very low — compact now or Claude may start forgetting earlier context.';
+  return 'Very low — compact now or your assistant may start forgetting earlier context.';
 }
 
 // Match the color function in StatusBar.tsx exactly so the popup number tracks the chip.
@@ -27,14 +27,14 @@ const INFO_SECTIONS: ExplainerSection[] = [
   {
     heading: 'Why it matters',
     paragraphs: [
-      "The higher it is, the more Claude remembers — every file you opened, every decision you made together, the full thread of what you’re building. When it gets low, Claude may forget files you discussed earlier, lose track of decisions, or repeat questions it already asked. Running out mid-task usually means worse answers and extra back-and-forth.",
+      "The higher it is, the more your assistant remembers — every file you opened, every decision you made together, the full thread of what you’re building. When it gets low, your assistant may forget files you discussed earlier, lose track of decisions, or repeat questions it already asked. Running out mid-task usually means worse answers and extra back-and-forth.",
     ],
   },
   {
     heading: 'What fills it up',
     bullets: [
-      { term: 'Your messages and Claude’s replies', text: 'Every turn of the conversation stays in memory.' },
-      { term: 'Tool output', text: "When Claude reads files, runs commands, or lists directories, the results go into context too. This is usually the biggest contributor." },
+      { term: 'Your messages and your assistant’s replies', text: 'Every turn of the conversation stays in memory.' },
+      { term: 'Tool output', text: "When your assistant reads files, runs commands, or lists directories, the results go into context too. This is usually the biggest contributor." },
       { term: 'Attached files and images', text: 'Anything you drag into the input bar.' },
       { term: 'Loaded skills', text: 'Installed skills contribute their instructions to every turn.' },
     ],
@@ -43,7 +43,7 @@ const INFO_SECTIONS: ExplainerSection[] = [
   {
     heading: 'What to do when it gets low',
     bullets: [
-      { term: 'Compact', text: 'Claude summarizes the conversation so far and keeps going in the same session. The thread stays alive. Use optional instructions to tell Claude what to prioritize keeping (e.g. code decisions vs. debugging output).' },
+      { term: 'Compact', text: 'Your assistant summarizes the conversation so far and keeps going in the same session. The thread stays alive. Use optional instructions to tell it what to prioritize keeping (e.g. code decisions vs. debugging output).' },
       { term: 'Clear', text: "Wipes the conversation and starts fresh in the same session. No summary is kept. Good when you’re switching to an unrelated task." },
       { term: 'New session', text: 'Opens a separate conversation from scratch and leaves this one intact. Good when you want to preserve this conversation’s state while working on something else. Use the + button in the session strip at the top of the window.' },
     ],
@@ -51,7 +51,7 @@ const INFO_SECTIONS: ExplainerSection[] = [
 ];
 
 const INFO_INTRO =
-  "Context is Claude’s short-term memory for this conversation. The percentage shows how much room Claude has left before it starts forgetting the earliest messages.";
+  "Context is your assistant’s short-term memory for this conversation. The percentage shows how much room it has left before it starts forgetting the earliest messages.";
 
 export interface ContextPopupProps {
   open: boolean;
@@ -292,7 +292,7 @@ export default function ContextPopup({
                       Clear and start over
                     </Button>
                     <p className="text-2xs text-fg-muted mt-1 leading-snug">
-                      Erases the visible timeline and resets Claude's memory for this session. No summary is kept.
+                      Erases the visible timeline and resets your assistant's memory for this session. No summary is kept.
                     </p>
                   </div>
                 </>
