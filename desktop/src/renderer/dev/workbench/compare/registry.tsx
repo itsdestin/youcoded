@@ -50,7 +50,9 @@ import MarkdownContent from '../../../components/MarkdownContent';
 import type { TagRecord } from '../../../../shared/tags';
 // voice-mic: the REAL composer against a per-pane fake of window.claude.voice.
 import InputBar from '../../../components/InputBar';
-import { ChatProvider } from '../../../state/chat-context';
+import { ChatProvider, useChatDispatch } from '../../../state/chat-context';
+// stop-button-alive: the real stop button's motion switch (one pane per motion).
+import { StopMotionContext, type StopMotion } from '../../../components/StopButton';
 import { SkillProvider } from '../../../state/skill-context';
 import { createVoiceMock } from '../mock-shim';
 import { VoiceStyleContext, DEFAULT_VOICE_STYLE, type VoiceStyle } from '../../../components/VoiceButton';
@@ -6937,7 +6939,72 @@ function VoiceComposerDemo({ state, style, loop }: { state: 'ready' | 'needs-dow
   );
 }
 
+// ── stop-button-alive ────────────────────────────────────────────────────────
+// The real composer with a reply in progress. Each pane owns its chat store and
+// drives it with the same actions a real session produces: SESSION_INIT +
+// USER_PROMPT start a turn (so the real useStreamingGate shows the button), then
+// the pane loops 6 s working → 3 s with the stall warning set ('stuck'), so the
+// still state the questions deck decided (Q-1) is SEEN in every candidate rather
+// than described. A permission ask produces the same still button (Q-2) through
+// the same hook, so one still phase stands for both.
+const STOP_DEMO_SESSION = 'stop-demo';
+function StopTurnDriver() {
+  const dispatch = useChatDispatch();
+  const [stuck, setStuck] = React.useState(false);
+  React.useEffect(() => {
+    dispatch({ type: 'SESSION_INIT', sessionId: STOP_DEMO_SESSION });
+    dispatch({ type: 'USER_PROMPT', sessionId: STOP_DEMO_SESSION, content: 'Tidy up the budget sheet', timestamp: Date.now() });
+    let isStuck = false;
+    let timer = 0;
+    const flip = () => {
+      isStuck = !isStuck;
+      setStuck(isStuck);
+      dispatch({ type: 'ATTENTION_STATE_CHANGED', sessionId: STOP_DEMO_SESSION, state: isStuck ? 'stuck' : 'ok' });
+      timer = window.setTimeout(flip, isStuck ? 3000 : 6000);
+    };
+    timer = window.setTimeout(flip, 6000);
+    return () => window.clearTimeout(timer);
+  }, [dispatch]);
+  return (
+    <div className="px-3 text-2xs text-fg-muted">
+      {stuck ? 'Reply looks stuck — the button holds still' : 'Replying…'}
+    </div>
+  );
+}
+function StopComposerDemo({ motion }: { motion: StopMotion }) {
+  return (
+    <ChatProvider>
+      <SkillProvider>
+      <StopMotionContext.Provider value={motion}>
+        <div className="flex flex-col gap-3">
+          <StopTurnDriver />
+          <InputBar sessionId={STOP_DEMO_SESSION} compact />
+        </div>
+      </StopMotionContext.Provider>
+      </SkillProvider>
+    </ChatProvider>
+  );
+}
+
 export const COMPARE_SURFACES: CompareSurface[] = [
+  {
+    id: 'stop-button-alive',
+    label: 'Message box — stop button while replying',
+    question: 'Which stop button looks alive while the assistant works?',
+    frame: 'canvas',
+    paneWidth: { min: 440, max: 700 },
+    rounds: [
+      {
+        n: 1,
+        basis: 'Questions deck stop-button-alive-questions (2026-09-10): moves only while working (Q-1), still while asking permission (Q-2), round (Q-3), a still ring under Reduce Visual Effects (S-1), stepped motion (S-2). Every pane loops 6 s replying, 3 s stuck (still).',
+        candidates: [
+          { id: 'halo', label: 'A · Breathing ring', note: 'A soft ring grows out of the button and fades, every 1.6 s.', render: () => <StopComposerDemo motion="halo" /> },
+          { id: 'orbit', label: 'B · Circling light', note: 'A thin light chases around the button once every 1.2 s, like a loading ring around the stop mark.', render: () => <StopComposerDemo motion="orbit" /> },
+          { id: 'glow', label: 'C · Slow glow', note: 'The button\'s own glow swells and settles every 2.2 s; nothing leaves the button.', render: () => <StopComposerDemo motion="glow" /> },
+        ],
+      },
+    ],
+  },
   {
     id: 'friendly-mascots', label: 'Default buddy palette',
     question: 'Does the lighter body and dark face feel friendlier?',

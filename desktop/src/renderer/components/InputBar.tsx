@@ -23,7 +23,7 @@ import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useStreamingGate } from '../hooks/useStreamingGate';
+import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
 
 // WHY: the composer auto-focus listener must leave controls and composite widgets
@@ -289,6 +289,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // `attentionState === 'ok'`, which used to hide the button for the whole
   // stall countdown (see useStreamingGate.ts).
   const showStop = useStreamingGate(sessionId);
+  // WHY a second gate: `showStop` keeps the button reachable through stalls and
+  // permission asks; `stopLive` only animates it while the turn is really working
+  // (stop-button-alive questions deck Q-1/Q-2, 2026-09-10). Same cheap selector.
+  const stopLive = useTurnIsWorking(sessionId);
 
   // Per-session draft store — keeps input text and attachments separate
   // across sessions so switching away and back preserves your draft.
@@ -1094,7 +1098,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               onReady={() => onToast?.('Voice is ready — tap the mic to talk.')}
             />
           )}
-          <StopButton sessionId={sessionId} provider={provider} visible={showStop} />
+          <StopButton sessionId={sessionId} provider={provider} visible={showStop} live={stopLive} />
           {/* The app's most-used control. Geometry is unchanged — 28x28 is exactly
               what size="icon" emits — and it keeps `bg-accent`, which matters:
               community packs style the send button through `.bg-accent` (Halftone's

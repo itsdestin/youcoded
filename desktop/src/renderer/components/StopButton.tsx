@@ -1,4 +1,12 @@
+import React, { useContext } from 'react';
 import { Button } from './ui/Button';
+
+/** How the button moves while the turn is working. Three candidates are under
+ *  review (docs/active/design/2026-09-10-stop-button-alive/); the workbench's
+ *  compare view mounts one pane per value, the same way VoiceStyleContext lets
+ *  the mic's motions sit side by side. The context default is what the app shows. */
+export type StopMotion = 'halo' | 'orbit' | 'glow';
+export const StopMotionContext = React.createContext<StopMotion>('halo');
 
 interface StopButtonProps {
   sessionId: string;
@@ -14,6 +22,12 @@ interface StopButtonProps {
    *  than computed here) so this component stays a pure function of its inputs
    *  and is testable without mounting a provider tree. */
   visible: boolean;
+  /** True while the turn is actually WORKING — `useTurnIsWorking(sessionId)`.
+   *  Separate from `visible` on purpose (questions deck, 2026-09-10): the button
+   *  must stay reachable through a stall and a permission ask, but its motion
+   *  says "busy", so it holds still whenever the assistant is stuck (Q-1) or
+   *  waiting on you (Q-2). A still-but-visible button is the honest middle. */
+  live?: boolean;
 }
 
 /**
@@ -27,7 +41,8 @@ interface StopButtonProps {
  * sessions have no PTY, so interrupt the in-process harness stream directly;
  * Claude Code sessions get the same single ESC byte the physical key sends.
  */
-export default function StopButton({ sessionId, provider, visible }: StopButtonProps) {
+export default function StopButton({ sessionId, provider, visible, live = false }: StopButtonProps) {
+  const motion = useContext(StopMotionContext);
   if (!visible) return null;
   return (
     <Button
@@ -37,7 +52,14 @@ export default function StopButton({ sessionId, provider, visible }: StopButtonP
         if (provider === 'native') window.claude.native.interrupt(sessionId);
         else window.claude.session.sendInput(sessionId, '\x1b');
       }}
-      className="shrink-0"
+      // WHY round (deck Q-3, 2026-09-10): Stop and Send were two identical filled
+      // squares side by side. Round tells them apart even with motion off, and
+      // matches the mic — the other control in the box that shows something live.
+      // `relative` anchors the orbit candidate's ring (a ::before outside the box).
+      // Motion classes live in globals.css beside the mic's, with both
+      // Reduced-Effects gates.
+      className={`relative shrink-0 rounded-full ${live ? `stop-live stop-live--${motion}` : ''}`}
+      data-live={live ? 'true' : 'false'}
     >
       {/* Square stop glyph, currentColor — same inline-svg-in-Button pattern
           as the send button's arrow (InputBar.tsx). */}
