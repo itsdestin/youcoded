@@ -12,7 +12,7 @@ import { createHash } from 'node:crypto';
 import { bindOpenAIContinuationModel } from '../harness/openai-continuation';
 import { ChatGptRequestDiagnostics } from './chatgpt-request-diagnostics';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { openRouterCostExtractor } from '../harness/pricing';
+import { openRouterCostExtractor, localTimingsExtractor } from '../harness/pricing';
 import { withPrefillProgress, type PrefillProgress } from './prefill-progress';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -317,6 +317,11 @@ export class ProviderRegistry {
           // guess for output. That silently starved both the context chip and the
           // compaction trigger, which is fed the same number (Destin, 2026-07-28).
           includeUsage: true,
+          // llama.cpp's `timings.cache_n` (prompt tokens reused from the KV
+          // cache) rides the final frame; the SDK's usage never sees it. This
+          // is how a local step learns whether its prefix stayed still — see
+          // cache-usage.ts.
+          metadataExtractor: localTimingsExtractor,
           // Serial-only for small local models (spec §4.2): llama-server honors
           // parallel_tool_calls:false; --jinja already grammar-constrains the args.
           // NEVER a top-level json_schema — that would force JSON on every reply.

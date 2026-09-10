@@ -12,6 +12,7 @@
 // values; max_steps and doom_loop surface as PERMISSION ASKS (askUser), never as
 // new event types.
 import { withChatGptRequest } from '../providers/chatgpt-request-diagnostics';
+import { cacheTokensForStep } from './cache-usage';
 import { EventEmitter } from 'events';
 import { createHash, randomUUID } from 'crypto';
 import * as fs from 'fs';
@@ -937,6 +938,10 @@ export class HarnessSession extends EventEmitter {
     // Filtering (rather than clearing all history) preserves ordinary text and
     // local call/results while preventing incompatible private parts reaching wire.
     if (changed) this.stripOpenAIContinuation();
+    // Caches are model-scoped on every provider, so a real swap makes the next
+    // request a known full miss. A same-binding call (a pricing or context
+    // refresh) moves nothing and must not claim to.
+    if (changed) this.prefixMoved = true;
     this.continuationBinding = undefined;
     // WHY only when `changed` (fix pass, review finding 1, then this pass):
     // a real swap makes the OLD identity unquotable — left in place, the seeded
@@ -1460,6 +1465,16 @@ export class HarnessSession extends EventEmitter {
   // in maybeCompact.
   private static readonly MIN_SUMMARIZE_SPAN_TOKENS = 500;
 
+  /** Cache follow-ups item 8 (2026-09-10): set whenever THIS session moves the
+   *  prompt prefix on purpose — a prune commit, a summary (auto or manual), a
+   *  real model swap — and consumed by the next request, which reports it on
+   *  its turn's usage as `expectedRebuild`. A flag, not a classifier: the
+   *  harness knows every time it moves the prefix, so anything with low cache
+   *  reads and no flag is a regression in one of the cache fixes. Appends
+   *  (rules, notices, new turns) never set it — they extend the prefix, they
+   *  do not move it. */
+  private prefixMoved = false;
+
   /** Compaction thresholds scaled to the model window. Big models protect ~40k
    *  and only prune when it saves ≥20k; tiny local windows scale those down so
    *  the trigger/prune/protect bands are actually REACHABLE in an 8k (or smaller)
@@ -1501,7 +1516,7 @@ export class HarnessSession extends EventEmitter {
     // tagging those as a transformation would bump the revision and invalidate a
     // published checkpoint for a history that never moved. Only a changed
     // message means "tool output no longer equals its event's text".
-    if (this.history.some((m, i) => m !== beforePrune[i])) this.capture.markPruned();
+    if (this.history.some((m, i) => m !== beforePrune[i])) { this.capture.markPruned(); this.prefixMoved = true; }
     if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
     // G-11: prune may have sliced an old Read result down to 2,000 chars (and
     // summarize below discards it outright) — forget what was served so Read
@@ -1532,6 +1547,7 @@ export class HarnessSession extends EventEmitter {
     // CC's own compact-summary events never carry it, so the manual path is
     // untouched.
     const summaryUuid = this.emitEvent('compact-summary', { summary, autoCompaction: true });
+    this.prefixMoved = true;   // the next request starts with the summary — a known full miss
     // Fix 2 (2026-08-11): the summarized-away span can still contain a
     // delivered image. pruneToolOutputs (above) now DOES collapse 'content'
     // (image) outputs too, but only ones OUTSIDE its own token-budget
@@ -1661,7 +1677,7 @@ export class HarnessSession extends EventEmitter {
       const beforePrune = this.history;
       this.history = pruneToolOutputs(this.history, cfg);
       // Same per-message identity check as maybeCompact's prune — see its WHY.
-      if (this.history.some((m, i) => m !== beforePrune[i])) this.capture.markPruned();
+      if (this.history.some((m, i) => m !== beforePrune[i])) { this.capture.markPruned(); this.prefixMoved = true; }
       if (countImageOutputs(this.history) < imagesBeforePrune) this.shownImages.clear();
       this.servedReads.clear(); // G-11: same reasoning as maybeCompact — prune may have cut a served Read
       const cut = this.summarizeCutIndex();
@@ -1686,6 +1702,7 @@ export class HarnessSession extends EventEmitter {
       // still gets a real (if smaller) reduction, and never a lost conversation.
       if (!summary.trim()) return { ok: false, reason: 'summary-failed' };
       const summaryUuid = this.emitEvent('compact-summary', { summary });
+      this.prefixMoved = true;   // same as the auto path: the next request is a known full miss
       // Fix 2 (2026-08-11): same reasoning as maybeCompact above — the manual
       // /compact path discards the summarized span exactly the same way, so
       // the dedupe cache must be cleared here too or it keeps vouching for
@@ -2021,7 +2038,7 @@ export class HarnessSession extends EventEmitter {
     this.lastStepPromptTokens = 0;   // a new turn always begins with a full prefill
 
     const startedAt = Date.now();
-    const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0 };
+    const turnUsage = { inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheCreationTokens: 0, expectedRebuild: false };
     // The PROVIDER's own bill for this turn, summed over the same steps
     // turnUsage covers, so the two figures are comparable.
     //
@@ -2124,6 +2141,10 @@ export class HarnessSession extends EventEmitter {
         // pruning can't get under budget. Inert (returns immediately) below the
         // trigger, so the existing loop behavior is unchanged for normal turns.
         await this.maybeCompact(model, lastInputTokens > 0 ? lastInputTokens : (this._contextUsedTokens ?? 0));
+        // Consume the prefix-moved flag into THIS request: everything above
+        // (compaction, a swap between turns) has had its say, and the request
+        // below is the one that pays for it. See the field's WHY.
+        if (this.prefixMoved) { turnUsage.expectedRebuild = true; this.prefixMoved = false; }
         // One step = one streamText consumption. withRetry wraps the whole
         // CONSUMPTION (not just the streamText call): the SDK surfaces provider
         // errors as {type:'error'} fullStream parts AND rejected promises, so
@@ -3017,7 +3038,8 @@ export class HarnessSession extends EventEmitter {
     const usage = await result.usage;
     // Sibling promise of result.usage. Carries OpenRouter's own dollar figure
     // for THIS request when the provider reported one; undefined otherwise.
-    const providerCostUsd = providerCostFromMetadata(await result.providerMetadata);
+    const providerMetadata = await result.providerMetadata;
+    const providerCostUsd = providerCostFromMetadata(providerMetadata);
     const finishReason = await result.finishReason;
     const reasoningTokens = usage?.outputTokenDetails?.reasoningTokens;
     // Acceptance is fenced separately from dispatch. If auth ownership moved
@@ -3055,9 +3077,10 @@ export class HarnessSession extends EventEmitter {
       usage: {
         inputTokens: usage?.inputTokens ?? 0,
         outputTokens: usage?.outputTokens ?? Math.ceil(outputChars / APPROX_CHARS_PER_TOKEN),
-        // v7 LanguageModelUsage exposes cache tokens under inputTokenDetails.
-        cacheReadTokens: usage?.inputTokenDetails?.cacheReadTokens ?? 0,
-        cacheCreationTokens: usage?.inputTokenDetails?.cacheWriteTokens ?? 0,
+        // v7 LanguageModelUsage exposes cache tokens under inputTokenDetails;
+        // llama.cpp's cache_n and OpenRouter's cache writes arrive as provider
+        // metadata instead (cache-usage.ts).
+        ...cacheTokensForStep(usage, providerMetadata),
       },
       finishReason,
       interrupted: false,

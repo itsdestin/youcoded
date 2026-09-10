@@ -298,6 +298,13 @@ export interface TranscriptEvent {
        *  last step's prompt plus its output. Distinct from inputTokens, which
        *  sums every step and therefore re-counts the history once per step. */
       contextUsedTokens?: number;
+      /** Native runtime only (cache follow-ups item 8, 2026-09-10): true when a
+       *  request in this turn followed something the harness itself did to the
+       *  prompt prefix — a prune commit, a summary compaction, a model swap — so
+       *  a low cache-read figure on this turn is the known price of that event,
+       *  not a regression. Low reads WITHOUT this flag are the thing to
+       *  investigate. */
+      expectedRebuild?: boolean;
       /** Native runtime only: USD for THIS turn, priced at the model that ran
        *  it. `null` means the model has no published price — distinct from
        *  absent, which means no pricing information at all (a Claude Code turn).
