@@ -20,12 +20,21 @@ export type TranscriptRow = HistoryMessage & { seq?: number; droppedToolCalls?: 
 // real header shows on success: the reader dropped these tools without reading
 // their results, so claiming they all completed would be asserting something
 // nobody checked.
-function toolGapCard(n: number) {
+// `fill`: inside a bubble the card spans it, exactly as the real one does —
+// CollapsedToolGroup is a plain block (`border border-edge rounded-lg`) whose
+// header row is `w-full … px-3 py-1.5`, so it takes whatever width the bubble
+// gives it. Destin, 2026-09-10: "call should be the full width of the message
+// bubble, as it is in real chat". On its OWN row it stays `w-fit`: that is the
+// case his 2026-08-27 ruling covered, where spanning the whole column left a
+// card with an empty right end that read as a stretched pill.
+function toolGapCard(n: number, fill?: boolean) {
   return (
-    <div className="w-fit max-w-full border border-edge rounded-lg px-3 py-1.5 flex items-center gap-1.5">
-      <TerminalIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
-      <span className="text-fg-faint text-xs select-none">|</span>
-      <span className="text-xs text-fg-dim">{COPY.toolsNotShown(n)}</span>
+    <div className={`border border-edge rounded-lg overflow-hidden ${fill ? '' : 'w-fit max-w-full'}`}>
+      <div className="w-full flex items-center gap-1.5 px-3 py-1.5">
+        <TerminalIcon className="w-3.5 h-3.5 shrink-0 text-fg-dim" />
+        <span className="text-fg-faint text-xs select-none">|</span>
+        <span className="text-xs text-fg-dim">{COPY.toolsNotShown(n)}</span>
+      </div>
     </div>
   );
 }
@@ -112,7 +121,7 @@ export default function ConversationTranscript({ messages, olderHint, scrollToEn
                 <MarkdownContent content={m.content} />
                 {/* mt-1.5: ToolGroupInline's own `afterText` spacing — "a group
                     right after the spoken text gets a little more room above it". */}
-                {gapInBubble && <div className="mt-1.5">{toolGapCard(gapAfter)}</div>}
+                {gapInBubble && <div className="mt-1.5">{toolGapCard(gapAfter, true)}</div>}
               </div>
             </div>
             {!!gapAfter && !gapInBubble && toolGapRow(gapAfter)}

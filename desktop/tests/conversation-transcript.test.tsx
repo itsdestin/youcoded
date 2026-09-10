@@ -90,6 +90,11 @@ describe('ConversationTranscript', () => {
     expect(bubble?.textContent).toContain('answer');
     expect(bubble?.textContent).toContain(COPY.toolsNotShown(3));
     expect(rows[2].textContent).not.toContain(COPY.toolsNotShown(3));
+    // "call should be the full width of the message bubble, as it is in real
+    // chat" (2026-09-10) — the real CollapsedToolGroup is a plain block, so a
+    // width class on the card would be it shrinking to its text again.
+    const card = bubble!.querySelector('.rounded-lg');
+    expect(card?.className).not.toMatch(/\bw-fit\b/);
   });
 
   // A tool card inside the accent-filled user bubble would read as something
