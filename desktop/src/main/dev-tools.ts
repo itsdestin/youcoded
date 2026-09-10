@@ -612,7 +612,15 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
     if (res.status === 201 && res.json?.html_url) {
       return { ok: true, url: String(res.json.html_url) };
     }
-    // A real refusal. Say what GitHub said; never guess why
+    // WHY 401/403 is the browser route and not an error (UX review U3): a tester
+    // was told "GitHub did not create the ticket (401): Bad credentials" — about
+    // credentials they had never set up. A rejected or expired token means the same
+    // thing to the user as having none: finish it in the browser. Reporting it as a
+    // failure blames them for a state they cannot see and hides the way forward.
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, needsBrowser: true, fallbackUrl, truncated };
+    }
+    // Any other refusal is real. Say what GitHub said; never guess why
     // (docs/error-message-standards.md).
     const detail = String(res.json?.message || '').trim();
     return {

@@ -112,10 +112,15 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
       if ('needsBrowser' in r) {
         // Not a failure: nobody is signed in, or this is the attachment route.
         setTruncated(r.truncated);
+        setUrl(r.fallbackUrl);
         // WHY openExternal and not window.open: React runs under file:// on Android
-        // and through the shim on remote, where window.open silently does nothing —
-        // the repo already documents that trap in tests/ipc-channels.test.ts.
-        void window.claude.shell.openExternal(r.fallbackUrl);
+        // and through the shim on remote, where window.open silently does nothing.
+        // WHY it is AWAITED (UX review U1): it used to be `void`, so the screen said
+        // "your ticket is open in your browser" without ever knowing whether a
+        // browser opened — word for word the same sentence when every operation was
+        // failing. A tester ran it with everything refusing and got the success
+        // message. Now a refusal is a failure, with the draft still there.
+        await window.claude.shell.openExternal(r.fallbackUrl);
         setPhase('opened');
         return;
       }
@@ -142,8 +147,11 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
       {phase === 'sent' && <>
         <p className="text-sm text-fg">Your ticket is submitted.</p>
         <p className="text-xs text-fg-2">Anyone can read it, and maintainers decide what happens next.</p>
-        <a className="text-xs underline text-accent break-all" href={url} target="_blank" rel="noreferrer">{url}</a>
-        <Button className="w-full py-2.5" onClick={onClose}>Done</Button>
+        {/* WHY a button and not the raw address (UX review U16): a bare
+            https://github.com/… line is something to squint at, not something to
+            press, and on Android a plain <a target=_blank> does nothing at all. */}
+        <Button className="w-full py-2.5" onClick={() => void window.claude.shell.openExternal(url)}>Open my ticket</Button>
+        <Button variant="secondary" className="w-full py-2.5" onClick={onClose}>Done</Button>
       </>}
 
       {phase === 'opened' && <>
@@ -156,6 +164,10 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
             the old code shortened the body to fit without telling anyone — evidence went
             missing between here and GitHub with nothing said. */}
         {truncated && <p className="text-xs text-fg-2">It was too long for a browser link, so part of the details was left out. Paste anything missing from your draft before you submit.</p>}
+        {/* WHY the link is here (UX review U1): the screen described something
+            happening somewhere the user cannot see, with nothing to press if it did
+            not. This is the way back in. */}
+        <Button variant="secondary" className="w-full py-2.5" onClick={() => void window.claude.shell.openExternal(url)}>Open it again</Button>
         <Button className="w-full py-2.5" onClick={onClose}>Done</Button>
       </>}
 
@@ -187,7 +199,12 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
             <SettingRow title="Error details and version" control={<Checkbox aria-label="Include error details and YouCoded version" checked={includeContext} onChange={setIncludeContext} />} accessory={<AnchorTip label="About error details">Only the originating error and app version, not your conversation. You’ll review these before sharing.</AnchorTip>} />
             <SettingRow title="Recent logs" control={<Checkbox aria-label="Include recent logs" checked={logs} onChange={chooseLogs} />} accessory={<AnchorTip label="About recent logs">Logs record app activity and errors. They may contain private information. Review and remove private details before sharing.</AnchorTip>} />
           </>}
-          <SettingRow title="Screenshots or files" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">Attach reviewed files yourself in GitHub.</AnchorTip>} />
+          {/* WHY the row says where it ends up (UX review U4): ticking it opened no
+              file picker, and quietly changed the send button from "Submit public
+              ticket" to "Continue in GitHub" — a tester could not tell what had
+              happened or why. Files cannot be attached here at all: GitHub uploads a
+              file the moment it is attached, so that step is theirs. */}
+          <SettingRow title="Screenshots or files" description="Finish this ticket in your browser, where you can attach them" control={<Checkbox aria-label="Finish with attachments in GitHub" checked={attachments} onChange={setAttachments} />} accessory={<AnchorTip label="About attachments">You attach files in GitHub, not here — GitHub uploads a file as soon as you attach it, so it has to happen where you can see it.</AnchorTip>} />
         </section> : <section className="space-y-3">
           {kind === 'bug' && includeContext && <div className="space-y-1">
             <h3 className="text-2xs uppercase tracking-wide text-fg-muted">Error details and version</h3>
@@ -235,7 +252,16 @@ export function ReportDesign({ open, onClose, context }: { open: boolean; onClos
             {!error && <Button className="w-full py-2.5" onClick={send}>{attachments ? 'Continue in GitHub' : 'Submit public ticket'}</Button>}
             <Button variant="secondary" className="w-full py-2.5" onClick={() => { setError(''); setPhase('draft'); }}>Back to draft</Button>
           </div>
-        </> : <Button className="w-full py-2.5" disabled={!title.trim() || !description.trim()} onClick={() => setPhase('review')}>Review ticket</Button>}
+        </> : <>
+          {/* WHY the reason is on screen (UX review U13): the button was simply
+              inactive, the grey-on-grey cue was easy to miss, and no field was marked
+              as needed — so pressing it appeared to do nothing at all. A control the
+              user cannot use has to say what would make it usable. */}
+          {(!title.trim() || !description.trim()) && (
+            <p className="text-xs text-fg-2">Add a title and a description to carry on.</p>
+          )}
+          <Button className="w-full py-2.5" disabled={!title.trim() || !description.trim()} onClick={() => setPhase('review')}>Review ticket</Button>
+        </>}
       </>}
 
     </div>

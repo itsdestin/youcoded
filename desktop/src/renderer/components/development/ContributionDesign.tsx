@@ -131,6 +131,11 @@ export function ContributionDesign({ open, onClose }: { open: boolean; onClose: 
       </>}
 
       {phase === 'failed' && <>
+        {/* WHY the purpose line stays (UX review U15): a failed setup used to replace
+            the entire screen with an error box, so the user lost what this was even
+            for — while the ticket flow, one screen away, keeps every word they typed
+            through the same kind of failure. */}
+        <p className="text-sm text-fg-2">You don’t need to know how to code. Describe a change to your assistant and try it in a separate project. Your installed app and existing folders stay untouched.</p>
         {/* WHY: the legacy screen offered only Done on failure, which throws away
             what already succeeded and gives no way forward (audit E-08). Retry
             resumes; what was downloaded is kept. */}

@@ -297,6 +297,27 @@ const CAPTION = /in this preview|prototype ·|prototype:|not connected|unavailab
     expect(screen.getByRole('button', { name: 'Improve wording with the assistant' })).toBeTruthy();
   });
 
+  it('does not claim the browser opened when it did not', async () => {
+    // UX review U1: this was `void openExternal(...)`, so the screen said "your
+    // ticket is open in your browser" without ever learning whether one opened —
+    // word for word the same sentence with every operation failing. The tester ran
+    // it that way and got the success message.
+    const submitIssue = vi.fn().mockResolvedValue({
+      ok: false, needsBrowser: true, truncated: false, fallbackUrl: 'https://github.com/x/y/issues/new',
+    });
+    const openExternal = vi.fn().mockRejectedValue(new Error('No browser is available.'));
+    Object.assign(window, { claude: { dev: { submitIssue }, shell: { openExternal } } });
+    render(<BugReportPopup open onClose={() => {}} />);
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+    await screen.findByText('No browser is available.');
+    expect(screen.queryByText(/Finish your ticket in GitHub/)).toBeNull();
+    // …and the report they wrote is still there.
+    expect((screen.getByLabelText('Title') as HTMLInputElement).value).toBe('The menu closes');
+  });
+
   it('says what remote access cannot do, not a channel name', async () => {
     // Audit E-14: over remote the bridge rejects with `remote-unsupported:
     // dev:submit-issue`. Showing that raw would be a channel id on screen. The

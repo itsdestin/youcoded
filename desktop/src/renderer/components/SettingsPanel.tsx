@@ -2159,7 +2159,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
             </svg>
           }
           title="Development"
-          description="Report a bug, contribute, or browse known issues"
+          description="Report a bug or help improve the app"
           onClick={() => setShowDevMenu(true)}
         />
         <DevelopmentPopup
@@ -2462,7 +2462,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             </svg>
           }
           title="Development"
-          description="Report a bug, contribute, or browse known issues"
+          description="Report a bug or help improve the app"
           onClick={() => setShowDevMenu(true)}
         />
         <DevelopmentPopup
