@@ -6630,17 +6630,36 @@ function SfxWarnCard({ windowLabel }: { windowLabel: string }) {
 /** Change 24. The app's own markdown renderer, inside the well the code blocks
  *  used. A SKILL.md and a CLAUDE.md ARE markdown, so showing them as raw source
  *  made the panel look like a developer tool for no gain. */
-function SfxMd({ text }: { text: string }) {
+const SFX_MD_SCALE = `text-2xs text-fg-2
+  [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-2xs [&_h4]:text-2xs
+  [&_h1]:mt-0 [&_h2]:mt-2 [&_h3]:mt-2
+  [&_p]:text-2xs [&_li]:text-2xs [&_code]:text-2xs [&_pre]:text-2xs`;
+
+/** `flush` drops the box's own edges because it is sitting INSIDE a card that
+ *  already has them (change 28) — a rounded, bordered well inside a rounded,
+ *  bordered card is two frames around one thing. */
+function SfxMd({ text, flush = false }: { text: string; flush?: boolean }) {
   // WHY the heading overrides: MarkdownContent is sized for a chat bubble, where a
   // level-1 heading is a real heading. Dropped unchanged into a 420px panel it
   // dwarfs everything around it and the quote stops reading as a detail of the
   // row above it. Sizes only — the renderer still owns lists, code and links.
   return (
-    <div className="max-h-64 overflow-y-auto rounded-lg bg-well p-3 border border-edge-dim text-2xs text-fg-2
-      [&_h1]:text-sm [&_h2]:text-xs [&_h3]:text-2xs [&_h4]:text-2xs
-      [&_h1]:mt-0 [&_h2]:mt-2 [&_h3]:mt-2
-      [&_p]:text-2xs [&_li]:text-2xs [&_code]:text-2xs [&_pre]:text-2xs">
+    <div className={`max-h-64 overflow-y-auto bg-well p-3 ${flush ? '' : 'rounded-lg border border-edge-dim'} ${SFX_MD_SCALE}`}>
       <MarkdownContent content={text} />
+    </div>
+  );
+}
+
+/** Change 28 (Destin, 2026-09-10): "the what it got/what got cut stuff should
+ *  share a container with the skill it's attached to." Before this, a cut skill
+ *  was four separate slabs down the page — the row, the switch, the count, the
+ *  text — with nothing tying them together and nothing separating one skill from
+ *  the next. One card per thing: its row is the head, its content is the body. */
+function SfxDetailCard({ header, children }: { header: React.ReactNode; children: React.ReactNode }) {
+  return (
+    <div className="rounded-lg border border-edge-dim bg-inset/50 overflow-hidden">
+      {header}
+      <div className="border-t border-edge-dim">{children}</div>
     </div>
   );
 }
@@ -6651,37 +6670,43 @@ const sfxLines = (s: string) => s.split('\n').filter((l) => l.trim() !== '').len
 function SfxCutBlockR5({ fullText, supplied, what, cutStyle = 'diff' }: { fullText?: string | null; supplied: string; what: string; cutStyle?: 'diff' | 'plain' }) {
   const [view, setView] = React.useState<'got' | 'cut'>('got');
   const diffable = !!fullText && fullText !== supplied;
-  if (!diffable) return <SfxMd text={supplied} />;
+  if (!diffable) return <SfxMd text={supplied} flush />;
   const cutCount = Math.max(0, sfxLines(fullText) - sfxLines(supplied));
+  // Three bands inside ONE card (change 28): the switch, then the text. No
+  // margins of its own — the card owns the edges.
   return (
-    <div className="space-y-2">
-      <SegmentedTabs
-        variant="contained"
-        aria-label={`${what}: what the assistant got, or what was cut`}
-        tabs={[{ id: 'got', label: 'What it got' }, { id: 'cut', label: 'What was cut' }]}
-        value={view}
-        onChange={(v) => setView(v as 'got' | 'cut')}
-      />
-      {/* Change 26: a rough size, so "some was cut" has a scale attached. Lines
-          rather than a count of characters — it is the unit a person can picture. */}
-      <p className="text-3xs text-fg-muted">
-        {view === 'got'
-          ? `${sfxLines(supplied)} lines the assistant read`
-          : `${cutCount} lines it never saw`}
-      </p>
-      {view === 'cut' && (
-        <p className="text-2xs text-fg-muted leading-snug">
-          {cutStyle === 'plain'
-            ? 'The assistant never saw this — it was cut to fit.'
-            : 'Red was cut — the assistant never saw it. Green is the shorter version it got instead.'}
+    <>
+      <div className="p-2.5 space-y-2">
+        <SegmentedTabs
+          variant="contained"
+          aria-label={`${what}: what the assistant got, or what was cut`}
+          tabs={[{ id: 'got', label: 'What it got' }, { id: 'cut', label: 'What was cut' }]}
+          value={view}
+          onChange={(v) => setView(v as 'got' | 'cut')}
+        />
+        {/* Change 26: a rough size, so "some was cut" has a scale attached. Lines
+            rather than a count of characters — it is the unit a person can picture. */}
+        <p className="text-3xs text-fg-muted">
+          {view === 'got'
+            ? `${sfxLines(supplied)} lines the assistant read`
+            : `${cutCount} lines it never saw`}
         </p>
-      )}
-      {view === 'cut'
-        ? (cutStyle === 'plain'
-          ? <pre className={SFX_CODE}>{sfxCutLines(fullText, supplied)}</pre>
-          : <UnifiedDiff oldStr={fullText} newStr={supplied} />)
-        : <SfxMd text={supplied} />}
-    </div>
+        {view === 'cut' && (
+          <p className="text-2xs text-fg-muted leading-snug">
+            {cutStyle === 'plain'
+              ? 'The assistant never saw this — it was cut to fit.'
+              : 'Red was cut — the assistant never saw it. Green is the shorter version it got instead.'}
+          </p>
+        )}
+      </div>
+      <div className="border-t border-edge-dim">
+        {view === 'cut'
+          ? (cutStyle === 'plain'
+            ? <pre className="max-h-64 overflow-y-auto whitespace-pre-wrap break-words font-mono text-2xs leading-relaxed text-fg-2 bg-well p-3">{sfxCutLines(fullText, supplied)}</pre>
+            : <div className="max-h-64 overflow-y-auto bg-well"><UnifiedDiff oldStr={fullText} newStr={supplied} /></div>)
+          : <SfxMd text={supplied} flush />}
+      </div>
+    </>
   );
 }
 
@@ -6786,18 +6811,22 @@ function SfxTabbedR5({ ctx, trimmed, cutStyle = 'diff' }: { ctx: CompleteSession
           <section>
             <h3 className={SFX_EYEBROW}>This project’s rules</h3>
             <p className="text-2xs text-fg-muted leading-snug mb-2">Written for this project and read once when the chat started.</p>
-            <div className="space-y-1.5 mb-2">
-              <SettingRow
-                variant="item"
-                icon={<SfxDot ok={!c.projectInstructions.truncated} />}
-                title={basename(c.projectInstructions.path)}
-                description={c.projectInstructions.truncated ? 'Shortened to headings only' : 'Read in full'}
-                accessory={<Button variant="secondary" size="sm">Open</Button>}
-              />
-            </div>
-            {c.projectInstructions.truncated
-              ? <SfxCutBlockR5 fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" cutStyle={cutStyle} />
-              : <SfxMd text={c.projectInstructions.text} />}
+            <SfxDetailCard
+              header={(
+                <SettingRow
+                  variant="item"
+                  className="rounded-none bg-transparent"
+                  icon={<SfxDot ok={!c.projectInstructions.truncated} />}
+                  title={basename(c.projectInstructions.path)}
+                  description={c.projectInstructions.truncated ? 'Shortened to headings only' : 'Read in full'}
+                  accessory={<Button variant="secondary" size="sm">Open</Button>}
+                />
+              )}
+            >
+              {c.projectInstructions.truncated
+                ? <SfxCutBlockR5 fullText={c.projectInstructions.fullText} supplied={c.projectInstructions.text} what="Project rules" cutStyle={cutStyle} />
+                : <SfxMd text={c.projectInstructions.text} flush />}
+            </SfxDetailCard>
           </section>
         )}
 
@@ -6805,16 +6834,23 @@ function SfxTabbedR5({ ctx, trimmed, cutStyle = 'diff' }: { ctx: CompleteSession
           <section>
             <h3 className={SFX_EYEBROW}>Skills</h3>
             <p className="text-2xs text-fg-muted leading-snug mb-2">Step-by-step guides the assistant follows when a task matches one.</p>
-            <div className="space-y-1.5">
+            {/* Change 28: one card per skill, so where a skill ends and the next
+                begins is visible — four floating slabs per skill were not. */}
+            <div className="space-y-2">
               {c.skills.map((sk) => (
-                <div key={sk.id} className="space-y-2">
-                  <SettingRow
-                    variant="item"
-                    icon={<SfxDot ok={!sk.truncated} />}
-                    title={sk.label}
-                    description={sk.truncated ? 'Cut short' : 'Loaded in full'}
-                    accessory={<Button variant="secondary" size="sm">Open</Button>}
-                  />
+                <SfxDetailCard
+                  key={sk.id}
+                  header={(
+                    <SettingRow
+                      variant="item"
+                      className="rounded-none bg-transparent"
+                      icon={<SfxDot ok={!sk.truncated} />}
+                      title={sk.label}
+                      description={sk.truncated ? 'Cut short' : 'Loaded in full'}
+                      accessory={<Button variant="secondary" size="sm">Open</Button>}
+                    />
+                  )}
+                >
                   {sk.truncated ? (
                     <SfxCutBlockR5
                       fullText={sk.fullText}
@@ -6823,9 +6859,9 @@ function SfxTabbedR5({ ctx, trimmed, cutStyle = 'diff' }: { ctx: CompleteSession
                       cutStyle={cutStyle}
                     />
                   ) : (
-                    sk.fullText && <SfxMd text={sk.fullText} />
+                    sk.fullText && <SfxMd text={sk.fullText} flush />
                   )}
-                </div>
+                </SfxDetailCard>
               ))}
             </div>
           </section>
