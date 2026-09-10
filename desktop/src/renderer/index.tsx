@@ -323,6 +323,19 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
         __mount.render(<ThemeProvider><SessionStatusPillsMockup /></ThemeProvider>);
         return;
       }
+      // The buddy floater's empty screen (dev/workbench/mockups/BuddySessionScreens.tsx)
+      // — its New Session form and Resume list at the floater's real 320x480, so
+      // both panes can be operated in every theme without launching a dev
+      // Electron instance. ThemeProvider so the themes are the real ones; no
+      // ChatProvider because nothing on that screen touches chat state.
+      if (__view === 'buddy-session') {
+        const [{ BuddySessionScreensMockup }, { ThemeProvider }] = await Promise.all([
+          import('./dev/workbench/mockups/BuddySessionScreens'),
+          import('./state/theme-context'),
+        ]);
+        __mount.render(<ThemeProvider><BuddySessionScreensMockup /></ThemeProvider>);
+        return;
+      }
       // App is already statically imported above (Root renders it).
       __mount.render(<App />);
       return;
