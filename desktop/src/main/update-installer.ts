@@ -358,10 +358,17 @@ export function cleanupStaleDownloads(cacheDir: string): void {
  * so `1.2.3` does not accidentally match `YouCoded-Setup-1.2.30.exe`, and `2.0`
  * does not match `1.2.0.exe`.
  *
- * Covers electron-builder patterns:
- *   Windows: YouCoded-Setup-{version}.exe
- *   macOS:   YouCoded-{version}[-arm64].dmg
+ * Covers the release names set in electron-builder.yml (nsis/dmg artifactName):
+ *   Windows: YouCoded-Installer-{version}.exe
+ *   macOS:   YouCoded-Installer-{version}-{arm64|x64}.dmg
  *   Linux:   YouCoded-{version}.AppImage | youcoded_{version}_amd64.deb
+ *
+ * WHY the Windows/macOS names carry a dash before the version: releases up to
+ * 1.3.0-beta.76 used electron-builder's default "YouCoded Setup 1.2.4.exe", which
+ * GitHub publishes as "YouCoded.Setup.1.2.4.exe" — a DOT before the version, so
+ * this regex never matched a real Windows download and every reopen of the
+ * update popup downloaded the installer again. tests/installer-artifact-names
+ * pins the dash in the config.
  */
 function buildVersionRegex(expectedVersion: string): RegExp {
   const escaped = expectedVersion.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');

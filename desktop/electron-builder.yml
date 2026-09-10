@@ -5,6 +5,23 @@ directories:
   buildResources: assets
 win:
   target: nsis
+# WHY: the downloaded installer used to be "YouCoded.Setup.1.2.4.exe" wearing the
+# app's own icon, and Windows users searching "youcoded" could not tell it from the
+# app. "Installer" in the name says what it is. Dashes, never spaces: GitHub turns a
+# space into a dot, and the in-app updater's "already downloaded?" check needs a
+# dash before the version (update-installer.ts buildVersionRegex). The website and
+# the updater pick files by extension, so neither cares about the rest of the name.
+# Pinned by tests/installer-artifact-names.test.ts.
+nsis:
+  artifactName: "${productName}-Installer-${version}.${ext}"
+dmg:
+  # Same reason on macOS. Setting any pattern also puts the arch on the Intel build
+  # ("-x64"; electron-builder drops it only from its OWN default name). The website
+  # and the updater tell Mac builds apart by "contains arm64 or not", so both resolve.
+  artifactName: "${productName}-Installer-${version}-${arch}.${ext}"
+  # The disk that appears in Finder's sidebar once the file is opened. It was
+  # "YouCoded 1.2.4", sitting beside an app also called YouCoded.
+  title: "Install ${productName}"
 mac:
   target:
     - target: dmg
