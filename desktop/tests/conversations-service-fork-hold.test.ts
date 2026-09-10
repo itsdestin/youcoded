@@ -26,8 +26,10 @@ const h = vi.hoisted(() => {
       root: vi.fn(() => ''),
     },
     reconcile: vi.fn((_opts: any) => new Promise<number>(() => {})),
-    mirrorIn: vi.fn((_o: any) => ({ copied: true })),
-    materializeOut: vi.fn((_o: any) => ({ copied: true })),
+    // async — mirrorIn/materializeOut are now Promise-returning; the real
+    // service code calls .catch()/await on these.
+    mirrorIn: vi.fn(async (_o: any) => ({ copied: true })),
+    materializeOut: vi.fn(async (_o: any) => ({ copied: true })),
     syncSpacesSyncNow: vi.fn(async (_spaceId?: string) => ({ ok: true })),
     syncSpacesSyncNowAwaited: vi.fn(async (_spaceId?: string, _timeoutMs?: number) => {}),
     syncListeners: new Set<(e: any) => void>(),
@@ -85,8 +87,8 @@ describe('conversations service — fork hold', () => {
     h.store.setNote.mockReset().mockResolvedValue(undefined as any);
     h.store.remove.mockReset().mockResolvedValue(true as any);
     h.reconcile.mockReset().mockImplementation(() => new Promise<number>(() => {}));
-    h.mirrorIn.mockReset().mockReturnValue({ copied: true } as any);
-    h.materializeOut.mockReset().mockReturnValue({ copied: true } as any);
+    h.mirrorIn.mockReset().mockResolvedValue({ copied: true } as any);
+    h.materializeOut.mockReset().mockResolvedValue({ copied: true } as any);
     h.syncSpacesSyncNow.mockReset().mockResolvedValue({ ok: true } as any);
     h.syncSpacesSyncNowAwaited.mockReset().mockResolvedValue(undefined as any);
     h.savedFolders = [];

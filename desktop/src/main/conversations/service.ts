@@ -424,19 +424,18 @@ export function noteTranscriptEvent(claudeSessionId: string, ev: TranscriptEvent
     upsertNow();
     if (ctx) {
       const key = path.basename(ctx.cwd);
-      try {
-        // Mirror the fresh local transcript into the durable space copy so it
-        // rides the personal-space sync. Best-effort — the reconciler re-mirrors.
-        mirrorIn({
-          localJsonlPath: localJsonlPath(ctx.cwd, claudeSessionId, sessionProvider),
-          spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, sessionProvider),
-        });
-      } catch { /* best-effort; the reconciler catches up */ }
-      // Prompt push (design §2): conversations move faster than the engine's
-      // quiet-window debounce, so nudge a sync now. syncSpace is single-flight —
-      // bursts coalesce. Wrapped in Promise.resolve so a sync/throwing stub
-      // can't produce an unhandled rejection either.
-      Promise.resolve(syncSpacesSyncNow('personal')).catch(() => { /* the poll covers a miss */ });
+      // Mirror the fresh local transcript into the durable space copy so it
+      // rides the personal-space sync, THEN nudge the sync — chained (not
+      // parallel) so the nudge can never fire while the copy is still in
+      // flight and push the space's PREVIOUS (pre-copy) size. Both halves are
+      // best-effort: the reconciler re-mirrors, and the 120s poll covers a
+      // missed nudge.
+      mirrorIn({
+        localJsonlPath: localJsonlPath(ctx.cwd, claudeSessionId, sessionProvider),
+        spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, sessionProvider),
+      }).catch(() => { /* best-effort; the reconciler catches up */ }).then(() => {
+        Promise.resolve(syncSpacesSyncNow('personal')).catch(() => { /* the poll covers a miss */ });
+      });
     }
     return;
   }
@@ -717,7 +716,7 @@ async function materializeSweep(): Promise<void> {
     const local = resolveLocalProject(rec, managed, saved);
     if (!local) continue;
     try {
-      materializeOut({
+      await materializeOut({
         spaceTranscriptPath: src,
         localJsonlPath: localJsonlPath(local, rec.id, sessionProvider),
       });
@@ -821,7 +820,7 @@ export async function materializeOne(id: string, cwd?: string): Promise<void> {
   // CC is now appending to (the sweep's live-session invariant).
   if (sessions.has(id)) return;
   try {
-    materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath });
+    await materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath });
   } catch { /* grow-only copy failed — startup sweep catches up */ }
 }
 
@@ -856,7 +855,10 @@ export async function flushSessionToSpace(claudeSessionId: string): Promise<void
   const key = path.basename(ctx.cwd);
   const localPath = localJsonlPath(ctx.cwd, claudeSessionId, ctx.provider);
   await waitForQuiescence(localPath); // best-effort wait; push regardless of the result
-  try { mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, ctx.provider) }); }
+  // MIRROR-BEFORE-RELEASE is load-bearing (see below): this copy must be
+  // AWAITED, not fire-and-forget, or the sync barrier just below could run
+  // before the transcript actually lands in the space.
+  try { await mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, ctx.provider) }); }
   catch { /* best-effort; the reconciler re-mirrors */ }
   // MIRROR-BEFORE-RELEASE is load-bearing: genuinely AWAIT the push so the final
   // turn is in the space before the requester pulls. syncSpacesSyncNow would be
@@ -892,12 +894,15 @@ function runReconcile(): void {
     // + the Conversations root. Best-effort — a throw here must not abort the scan.
     mirror: (localPath: string, projectKey: string, sessionId: string) => {
       if (heldForks.has(sessionId)) return; // fork hold — frozen until resolved
-      try {
-        // WHY hardcoded 'claude': the reconciler scans ~/.claude/projects only
-        // — it is CC-only by definition, not a stopgap (reconciler.ts:115,182,188
-        // are the same call, kept for the same reason).
-        mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(projectKey, sessionId, 'claude') });
-      } catch { /* best-effort */ }
+      // WHY hardcoded 'claude': the reconciler scans ~/.claude/projects only
+      // — it is CC-only by definition, not a stopgap (reconciler.ts:115,182,188
+      // are the same call, kept for the same reason).
+      // WHY .catch not try/catch: this closure's type is `=> void` (safeMirror
+      // in reconciler.ts wraps the call in a synchronous try/catch that can no
+      // longer see an async rejection) — the reconciler never depended on the
+      // copy's completion, so .catch is the fire-and-forget best-effort.
+      mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(projectKey, sessionId, 'claude') })
+        .catch(() => { /* best-effort */ });
     },
   }).catch(() => { /* reconciler failure must never break startup (carry-forward 2) */ });
 }

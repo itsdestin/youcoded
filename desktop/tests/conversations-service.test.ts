@@ -38,8 +38,11 @@ const h = vi.hoisted(() => {
     // (carry-forward 2) proves startConversationStore doesn't await it. Callers
     // attach .catch, so a never-resolving promise causes no unhandled rejection.
     reconcile: vi.fn((_opts: any) => new Promise<number>(() => {})),
-    mirrorIn: vi.fn((_o: any) => ({ copied: true })),
-    materializeOut: vi.fn((_o: any) => ({ copied: true })),
+    // async (mirrorIn/materializeOut are now Promise-returning) — the real
+    // service code calls .catch()/.then()/await on these, which a bare
+    // object return would break.
+    mirrorIn: vi.fn(async (_o: any) => ({ copied: true })),
+    materializeOut: vi.fn(async (_o: any) => ({ copied: true })),
     syncSpacesSyncNow: vi.fn(async (_spaceId?: string) => ({ ok: true })),
     // Awaitable variant (2026-07-18): flushSessionToSpace now pushes via this, not
     // the fire-and-forget syncSpacesSyncNow, so the handoff barrier is real.
@@ -113,8 +116,8 @@ describe('conversations service composition root', () => {
     h.store.setNote.mockReset().mockResolvedValue(undefined as any);
     h.store.remove.mockReset().mockResolvedValue(true as any);
     h.reconcile.mockReset().mockImplementation(() => new Promise<number>(() => {}));
-    h.mirrorIn.mockReset().mockReturnValue({ copied: true } as any);
-    h.materializeOut.mockReset().mockReturnValue({ copied: true } as any);
+    h.mirrorIn.mockReset().mockResolvedValue({ copied: true } as any);
+    h.materializeOut.mockReset().mockResolvedValue({ copied: true } as any);
     h.syncSpacesSyncNow.mockReset().mockResolvedValue({ ok: true } as any);
     h.syncSpacesSyncNowAwaited.mockReset().mockResolvedValue(undefined as any);
     h.savedFolders = [];
@@ -199,7 +202,10 @@ describe('conversations service composition root', () => {
     const arg = h.mirrorIn.mock.calls[0][0];
     expect(arg.localJsonlPath).toContain('claude-xyz.jsonl');
     expect(arg.localJsonlPath).toContain(startOpts().projectsDir);
-    expect(h.syncSpacesSyncNow).toHaveBeenCalledWith('personal');
+    // WHY vi.waitFor: the sync nudge is now CHAINED after mirrorIn resolves
+    // (not fired in parallel) — see service.ts noteTranscriptEvent's WHY — so
+    // it lands a promise-chain hop or two later than mirrorIn's own call.
+    await vi.waitFor(() => expect(h.syncSpacesSyncNow).toHaveBeenCalledWith('personal'));
   });
 
   // 4 — a personal 'synced'/updated event materializes records that resolve
@@ -819,7 +825,7 @@ describe('conversations service composition root', () => {
       const dir = path.join(tmpRoot, 'missing-source-proj');
       fs.mkdirSync(dir, { recursive: true }); // project dir exists; the TRANSCRIPT file does not
       const id = 'missing-source-1';
-      h.mirrorIn.mockReturnValueOnce({ copied: false }); // what the real mirrorIn returns for an absent local file
+      h.mirrorIn.mockResolvedValueOnce({ copied: false }); // what the real mirrorIn returns for an absent local file
       svc.noteSessionStarted(id, dir, 'native');
       const p = svc.flushSessionToSpace(id);
       // Absent local file reads size 0 on every probe → quiescent immediately

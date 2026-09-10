@@ -209,7 +209,7 @@ describe('accepted history privacy sentinels', () => {
     // reconciler's metadata comes from readSessionTranscriptMeta over the same
     // file. Both real functions, run over the real transcript this session left.
     const spaceCopy = path.join(space, 'native', 'transcripts', path.basename(cwd), `${sessionId}.jsonl`);
-    expect(mirrorIn({ localJsonlPath: transcriptPath, spaceTranscriptPath: spaceCopy })).toEqual({ copied: true });
+    expect(await mirrorIn({ localJsonlPath: transcriptPath, spaceTranscriptPath: spaceCopy })).toEqual({ copied: true });
     expect(fs.readFileSync(spaceCopy, 'utf8')).not.toContain(SENTINEL);
     const meta = await readSessionTranscriptMeta(transcriptPath, true);
     expect(JSON.stringify(meta)).not.toContain(SENTINEL);
