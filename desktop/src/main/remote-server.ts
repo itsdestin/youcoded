@@ -97,6 +97,18 @@ const COMPLETED_RING_MS = 10 * 60_000;
 // A half-open socket is invisible without this: the host keeps buffering for a client that
 // is gone, and the client waits the full request timeout to learn anything is wrong.
 const PING_INTERVAL_MS = 20_000;
+// Remote access batch 2 (design §1): a client that never says `client:ready` — an older
+// build of the phone page — gets the restore sequence after this long instead of never.
+const OLD_CLIENT_FALLBACK_MS = 5000;
+// Broadcasts queued for a client that is still restoring. Overflow drops the oldest and
+// marks that client's hydrate `degraded`, so the phone knows to offer Refresh.
+const RESTORE_QUEUE_MAX = 2000;
+
+/** Where a remote client stands between auth and the live stream (design §1 B).
+ *  `restoring`: queue every broadcast until the phone says it is ready.
+ *  `readying`: the restore sequence is running (the snapshot may be in flight).
+ *  `live`: broadcasts go straight to the socket. */
+type ClientPhase = 'restoring' | 'readying' | 'live';
 
 interface AuthenticatedClient {
   id: string;
@@ -105,6 +117,19 @@ interface AuthenticatedClient {
   ip: string;
   connectedAt: number;
   awaitingPong?: boolean;
+  // Optional because tests (and any record added straight to `clients`) predate the
+  // phases: a record with no phase is treated as live, which is what it always was.
+  phase?: ClientPhase;
+  /** Broadcasts held back while the client is not live, in arrival order. */
+  queue?: { type: string; payload: any }[];
+  /** True once the queue overflowed — the hydrate is then marked degraded. */
+  queueDegraded?: boolean;
+  /** Queue length at the moment the snapshot was requested: the cut line. */
+  snapshotIndex?: number;
+  /** Queue length when the hook buffer pass began (first connect only). */
+  hookPassIndex?: number;
+  /** Runs the restore for a client that never sends client:ready. */
+  fallbackTimer?: ReturnType<typeof setTimeout> | null;
 }
 
 export interface ClientInfo {
@@ -931,9 +956,7 @@ export class RemoteServer {
             // Same capability flag as the pairing path below — master's own note says the
             // two sites must stay in step, and a returning device paints the same UI.
             ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop', sessionNaming: true }));
-            this.replayBuffers(ws).catch((err) => {
-              console.error('[remote-server] replayBuffers failed:', err);
-            });
+            // The restore waits for client:ready (addClient armed the old-client fallback).
             return;
           }
           if (result.reason !== 'bad-secret') {
@@ -961,9 +984,7 @@ export class RemoteServer {
           // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
           // master while this branch was open. It rides on every auth:ok this host sends.
           ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop', sessionNaming: true }));
-          this.replayBuffers(ws).catch((err) => {
-            console.error('[remote-server] replayBuffers failed:', err);
-          });
+          // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
           this.recordFailedAttempt();
           ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' }));
@@ -998,101 +1019,162 @@ export class RemoteServer {
   private addClient(ws: WebSocket, deviceId: string, ip: string): void {
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
-    const client: AuthenticatedClient = { id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now() };
+    const client: AuthenticatedClient = {
+      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(),
+      phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
+    };
     this.clients.add(client);
+    // WHY a fallback and not an immediate replay (design §1): the restore used to start
+    // the moment auth succeeded, before the page had mounted App, and guessed with a
+    // 500 ms timer how long React would take. Now the client says when it is ready
+    // (client:ready) and the queue holds everything until then. A client that never says
+    // so — an older page — still gets the whole sequence, after this timer.
+    client.fallbackTimer = setTimeout(() => {
+      client.fallbackTimer = null;
+      if (client.phase !== 'restoring') return;
+      void this.restoreClient(client, { reconnect: false, replayBuffers: true }).catch((err) => {
+        console.error('[remote-server] restore (fallback) failed:', err);
+      });
+    }, OLD_CLIENT_FALLBACK_MS);
 
+    const drop = () => {
+      if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
+      this.clients.delete(client);
+    };
     ws.on('pong', () => { client.awaitingPong = false; });
     ws.on('message', (raw) => { client.awaitingPong = false; void this.handleMessage(client, raw as Buffer | string); });
-    ws.on('close', () => this.clients.delete(client));
-    ws.on('error', () => this.clients.delete(client));
+    ws.on('close', drop);
+    ws.on('error', drop);
   }
 
-  // --- Replay buffers on new connection ---
+  // --- The restore sequence (design §1 B, §6) ---
 
-  private async replayBuffers(ws: WebSocket): Promise<void> {
-    // Session list — sent immediately so client can initialize chat state
+  /**
+   * Run the restore for one client: the session list, the snapshot, the buffer replays,
+   * then everything that was broadcast meanwhile — and only then go live.
+   *
+   * Called from `client:ready` (the phone said it has its listeners), from the old-client
+   * fallback timer, and (batch 2 §6) from `remote:rehydrate`, which skips the buffer
+   * replay because the phone's terminal and cards are already in step.
+   */
+  private async restoreClient(
+    client: AuthenticatedClient,
+    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean },
+  ): Promise<void> {
+    const ws = client.ws;
+    client.phase = 'readying';
+    if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
+    client.queue ??= [];
+    const send = (msg: { type: string; payload: any }) => {
+      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
+    };
+
+    // Session list — sent so the client can initialize chat state. (The old
+    // `session:list:response` with id `_replay` is gone; nothing ever read it.)
     const sessions = this.sessionManager.listSessions();
-    ws.send(JSON.stringify({
-      type: 'session:list:response',
-      id: '_replay',
-      payload: sessions,
-    }));
+    for (const session of sessions) send({ type: 'session:created', payload: session });
 
-    for (const session of sessions) {
-      ws.send(JSON.stringify({ type: 'session:created', payload: session }));
-    }
-
-    // Send current topic names for all mapped sessions
+    // Current topic names for all mapped sessions.
     for (const [desktopId, name] of this.lastTopics) {
-      ws.send(JSON.stringify({ type: 'session:renamed', payload: { sessionId: desktopId, name } }));
+      send({ type: 'session:renamed', payload: { sessionId: desktopId, name } });
     }
 
-    // Replay the last status payload so a client connecting between the 10s polls
-    // renders a populated status bar immediately instead of waiting for the next tick.
-    // Same shape the poll broadcasts, so the renderer's existing status:data handler
-    // merges it with no special-casing.
-    if (this.lastStatusData) {
-      ws.send(JSON.stringify({ type: 'status:data', payload: this.lastStatusData }));
-    }
+    // The last status payload, so a client connecting between the 10s polls renders a
+    // populated status bar immediately. Same shape the poll broadcasts.
+    if (this.lastStatusData) send({ type: 'status:data', payload: this.lastStatusData });
 
-    // NEW: request a snapshot of the desktop's chat reducer state and push it
-    // to the connecting client so they see the full chat history immediately.
-    // Must happen before PTY/hook replay so the reducer has state to merge
-    // subsequent transcript events into.
+    // THE CUT LINE. Everything queued before this index reaches the desktop window
+    // before the export request does (same ordered IPC channel), and the exporter
+    // flushes its transcript batch before serializing (RemoteSnapshotExporter.tsx) —
+    // so every transcript-shaped entry below the index IS in the snapshot, and nothing
+    // above it is. flushRestoreQueue skips exactly those.
+    client.snapshotIndex = client.queue.length;
+    let snapshot: SerializedChatState;
     try {
-      const snapshot = await this.requestSnapshot();
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'chat:hydrate', payload: snapshot }));
-      }
+      snapshot = await this.requestSnapshot();
     } catch (err) {
-      console.error('[remote-server] chat:hydrate failed:', err);
+      console.error('[remote-server] snapshot request failed:', err);
+      snapshot = { sessions: [], degraded: true };
     }
+    if (ws.readyState !== WebSocket.OPEN) { client.phase = 'live'; return; }
+    // A queue that overflowed lost events the snapshot may not hold either — the phone
+    // must be told its copy may be behind (the strip offers Refresh).
+    if (client.queueDegraded) snapshot = { ...snapshot, degraded: true };
+    // `seq` echoes the client's request so the shim applies only the hydrate it last
+    // asked for; the old-client fallback has none to echo.
+    send({ type: 'chat:hydrate', payload: opts.seq === undefined ? snapshot : { ...snapshot, seq: opts.seq } });
 
-    // Delay PTY + hook replay to give the client time to process SESSION_INIT.
-    // Without this delay, hook events arrive before the chat reducer has
-    // initialized the session state, and all events are silently dropped.
-    // Note: the preceding `requestSnapshot()` await can take up to 2000ms
-    // (its internal timeout), so the worst-case total delay before PTY/hook
-    // replay starts is ~2500ms for a connect when the renderer is unresponsive.
-    setTimeout(() => {
-      if (ws.readyState !== WebSocket.OPEN) return;
-
-      // PTY buffers. Perf: join the chunks only HERE, at connect time — the buffer
-      // is stored chopped up precisely so that arriving output never re-copies the
-      // whole 4 MB (see PtyBuffer). The joined text is what the old single-string
-      // buffer held, apart from the head trim now landing on a chunk boundary.
+    if (opts.replayBuffers) {
+      // PTY buffers. Perf: join the chunks only HERE, at replay time — the buffer is
+      // stored chopped up precisely so that arriving output never re-copies the whole
+      // 4 MB (see PtyBuffer).
       for (const [sessionId, buf] of this.ptyBuffers) {
-        if (buf.length > 0) {
-          ws.send(JSON.stringify({ type: 'pty:output', payload: { sessionId, data: buf.chunks.join('') } }));
-        }
+        if (buf.length > 0) send({ type: 'pty:output', payload: { sessionId, data: buf.chunks.join('') } });
       }
 
-      // Hook event buffers (also carries buffered NATIVE hook events now —
-      // see bufferHookEvent's own comment for why those need to ride this
-      // same map instead of a parallel one).
+      // Hook event buffers (also carries buffered NATIVE hook events — see
+      // bufferHookEvent's own comment). On a first connect, a live hook event that
+      // arrived before this pass is already reflected here, so the flush skips those
+      // (hookPassIndex); from this point on they are queued and flushed.
+      client.hookPassIndex = client.queue.length;
       for (const [_sessionId, events] of this.hookBuffers) {
-        for (const event of events) {
-          ws.send(JSON.stringify({ type: 'hook:event', payload: event }));
-        }
+        for (const event of events) send({ type: 'hook:event', payload: event });
       }
 
-      // Task 9 (plan 1c): latest specialist run per helper, so a reconnecting
-      // client's card comes back with a status instead of blank. Same
-      // ordering position as the hook buffers just above — catch-up replay,
-      // then live events resume.
+      // Task 9 (plan 1c): latest specialist run per helper, so a reconnecting client's
+      // card comes back with a status instead of blank.
       for (const [_sessionId, byChild] of this.specialistRunBuffers) {
-        for (const event of byChild.values()) {
-          ws.send(JSON.stringify({ type: 'specialists:event', payload: event }));
-        }
+        for (const event of byChild.values()) send({ type: 'specialists:event', payload: event });
       }
       // G-1: latest shell run per command, same position as the specialist replay.
       for (const [_sessionId, byShell] of this.shellRunBuffers) {
-        for (const event of byShell.values()) {
-          ws.send(JSON.stringify({ type: 'native:shell-event', payload: event }));
-        }
+        for (const event of byShell.values()) send({ type: 'native:shell-event', payload: event });
       }
+    }
 
-    }, 500); // 500ms gives React time to render App and register SESSION_INIT
+    this.flushRestoreQueue(client, snapshot, sessions.map((s) => s.id), opts.reconnect);
+    client.phase = 'live';
+  }
+
+  /** Transcript-shaped broadcasts: in the snapshot when queued below the cut line. The
+   *  uuid dedup in the reducer does not cover the native harness's per-delta text, so
+   *  these must not be replayed on top of a snapshot that already holds them. */
+  private static isTranscriptShaped(type: string): boolean {
+    return type === 'transcript:event' || type === 'transcript:shrink'
+      || (type.startsWith('native:') && type !== 'native:shell-event');
+  }
+
+  /**
+   * Send what was broadcast while the client was restoring, in arrival order, minus what
+   * the snapshot already holds. Lifecycle entries (session:*, status:data, hook:event,
+   * specialists:event, native:shell-event) are flushed from the whole window. For a
+   * session the snapshot OMITTED (a window that did not answer, §2) nothing is skipped:
+   * the client's copy is its own, and lacks them.
+   */
+  private flushRestoreQueue(
+    client: AuthenticatedClient,
+    snapshot: SerializedChatState,
+    knownSessionIds: string[],
+    reconnect: boolean,
+  ): void {
+    const queue = client.queue ?? [];
+    client.queue = [];
+    const cutLine = client.snapshotIndex ?? 0;
+    const hookPass = client.hookPassIndex;
+    const held = new Set(snapshot.sessions.map(([id]) => id));
+    void knownSessionIds; // a session the list has and the snapshot lacks is simply not in `held`
+    for (let i = 0; i < queue.length; i++) {
+      const msg = queue[i];
+      if (i < cutLine && RemoteServer.isTranscriptShaped(msg.type)) {
+        const sid = msg.payload?.sessionId;
+        if (typeof sid === 'string' && held.has(sid)) continue;
+      }
+      // First connect only: a hook event that arrived before the hook buffer pass is
+      // already reflected by the pass (a resolved ask is purged from the buffer; an open
+      // one is in it). A reconnecting phone keeps its cards, so it needs every one.
+      if (!reconnect && hookPass !== undefined && i < hookPass && msg.type === 'hook:event') continue;
+      if (client.ws.readyState === WebSocket.OPEN) client.ws.send(JSON.stringify(msg));
+    }
   }
 
   // --- Message routing ---
@@ -1113,6 +1195,21 @@ export class RemoteServer {
     const { type, id, payload } = msg;
 
     switch (type) {
+      // --- Readiness (design §1 A) ---
+      case 'client:ready': {
+        // Push, no reply. Only a restoring client can start the sequence: a second
+        // client:ready (an effect re-run on the phone) while readying is ignored, and so is
+        // one after the old-client fallback already ran or the client went live (R2-7,
+        // R3-4). Awaited so a test can observe the whole sequence; messages are handled
+        // concurrently anyway (`void this.handleMessage` per frame).
+        if (client.phase !== 'restoring') {
+          console.log('[remote-server] client:ready ignored in phase', client.phase);
+          break;
+        }
+        const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
+        await this.restoreClient(client, { seq, reconnect: payload?.reconnect === true, replayBuffers: true });
+        break;
+      }
       // --- Request/response ---
       case 'session:create': {
         // This payload is passed to createSession unfiltered, so without this
@@ -3074,11 +3171,31 @@ export class RemoteServer {
     // observes broadcast() as a side effect (`this.clients` is the same set
     // getClientCount() reports, and it is empty here).
     if (this.clients.size === 0) return;
-    const data = JSON.stringify(msg);
+    let data: string | null = null;
     for (const client of this.clients) {
+      // A client that is not live yet gets this after its restore (design §1 B) — except
+      // pty:output, which the PTY buffer replay covers up to the moment it goes live.
+      if (client.phase && client.phase !== 'live') {
+        this.enqueueForRestoring(client, msg);
+        continue;
+      }
       if (client.ws.readyState === WebSocket.OPEN) {
+        data ??= JSON.stringify(msg);
         client.ws.send(data);
       }
+    }
+  }
+
+  private enqueueForRestoring(client: AuthenticatedClient, msg: { type: string; payload: any }): void {
+    if (msg.type === 'pty:output') return;
+    const queue = (client.queue ??= []);
+    queue.push(msg);
+    if (queue.length > RESTORE_QUEUE_MAX) {
+      queue.shift();
+      client.queueDegraded = true;
+      // The cut line and the hook-pass mark index into this queue; both move with it.
+      if (client.snapshotIndex !== undefined && client.snapshotIndex > 0) client.snapshotIndex--;
+      if (client.hookPassIndex !== undefined && client.hookPassIndex > 0) client.hookPassIndex--;
     }
   }
 

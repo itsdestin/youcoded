@@ -101,6 +101,16 @@ vi.mock('../src/main/session-browser', async (importOriginal) => ({
   ...mockSessionBrowser,
 }));
 
+/**
+ * Drive the restore sequence for a bare socket, the way the old-client fallback or a
+ * `client:ready` would: a restoring client record around the socket, then restoreClient.
+ * (Batch 2 replaced `replayBuffers(ws)` + its 500 ms timer with this.)
+ */
+async function restore(server: any, ws: any) {
+  const client = { id: 'test', ws, deviceId: 'd', ip: '', connectedAt: 0, phase: 'restoring', queue: [] };
+  await server.restoreClient(client, { reconnect: false, replayBuffers: true });
+}
+
 describe('RemoteServer', () => {
   let mockSessionManager: any;
   let mockHookRelay: any;
@@ -1069,7 +1079,7 @@ describe('RemoteServer account bridge', () => {
       const { frames, ws } = fakeWs();
 
       server.broadcastStatusData({ contextMap: { s1: 42 }, gitBranchMap: { s1: 'main' }, usage: { x: 1 } });
-      await server.replayBuffers(ws);
+      await restore(server, ws);
 
       const status = frames.filter((m) => m.type === 'status:data');
       expect(status).toHaveLength(1);
@@ -1084,7 +1094,7 @@ describe('RemoteServer account bridge', () => {
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
       const { frames, ws } = fakeWs();
 
-      await server.replayBuffers(ws);
+      await restore(server, ws);
 
       expect(frames.some((m) => m.type === 'status:data')).toBe(false);
     });
@@ -1112,12 +1122,10 @@ describe('RemoteServer specialist run + native hook replay (Task 9)', () => {
     return { frames, ws: { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)) } as any };
   }
 
-  // replayBuffers delays PTY/hook/run replay by 500ms (see its own comment —
-  // gives the client's reducer time to process SESSION_INIT first), so a
-  // test asserting on that replay has to wait past it, same as a real client.
+  // The restore replays PTY/hook/run buffers in the same pass as the hydrate
+  // (batch 2 removed the 500 ms guess — the phone says when it is ready).
   async function replayAndWait(server: any, ws: any) {
-    await server.replayBuffers(ws);
-    await new Promise((r) => setTimeout(r, 600));
+    await restore(server, ws);
   }
 
   it('a new client receives the latest specialists:event {kind:"run"} per child, not an append-only log', async () => {
@@ -1489,11 +1497,9 @@ describe('RemoteServer replay buffers stay bounded and replay the same tail', ()
     return { frames, ws: { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)) } as any };
   }
 
-  // replayBuffers delays the PTY/hook replay by 500ms — same wait the Task 9 suite
-  // above uses, and the same one a real client experiences.
+  // Same restore the Task 9 suite above drives.
   async function replayAndWait(server: any, ws: any) {
-    await server.replayBuffers(ws);
-    await new Promise((r) => setTimeout(r, 600));
+    await restore(server, ws);
   }
 
   async function newServer() {

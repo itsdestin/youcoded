@@ -69,6 +69,38 @@ const MAX_RECONNECT_ATTEMPTS = 10;
 
 /** Override WebSocket target — set by connectToHost(), cleared by disconnectFromHost() */
 let targetUrl: string | null = null;
+
+// Remote access batch 2 (design §1 A, §6): the readiness handshake.
+//
+// The host queues every broadcast for this client until it hears `client:ready`, then
+// restores in order (session list, snapshot, replays, the queue) and goes live. The shim
+// sends it the FIRST time App's chat:hydrate listener exists after auth:ok — that is the
+// moment the page can apply what the host sends — and never twice per connection: App
+// re-adds the listener on an effect re-run or a StrictMode double mount, and a second
+// client:ready must not restart the sequence.
+//
+// `clientReadySeq` is monotonic for the shim's LIFETIME, never per connection: the host
+// echoes it in chat:hydrate and the shim applies only the hydrate it last asked for, so a
+// slow answer to an earlier request (or an earlier connection) can never land on top of a
+// newer one. Refresh (remote:rehydrate, §6) draws from the same counter.
+let clientReadySeq = 0;
+let readySentThisGeneration = false;
+/** Whether this client held state before the current connection — true from the second
+ *  auth:ok on. The host uses it to decide what its restore may skip. */
+let readyReconnect = false;
+
+/** Per-session terminal offsets the host uses to send only what the phone has not drawn
+ *  (design §7). Filled in by the terminal backlog; empty until then. */
+function collectPtyOffsets(): Record<string, { epoch: string; units: number }> {
+  return {};
+}
+
+function maybeSendClientReady(): void {
+  if (connectionState !== 'connected' || readySentThisGeneration) return;
+  if (!listeners.get('chat:hydrate')?.size) return;   // App has not mounted its handler yet
+  readySentThisGeneration = true;
+  fire('client:ready', { seq: ++clientReadySeq, reconnect: readyReconnect, ptyOffsets: collectPtyOffsets() });
+}
 /** Whether to preserve __PLATFORM__ on next auth:ok (prevents desktop overwriting 'android') */
 let preservePlatform = false;
 
@@ -177,6 +209,9 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   'native:retry': 'user-action',
   'ui:action': 'user-action',
   'system:notify-stack-state': 'transport',
+  // Batch 2: the readiness handshake is the connection talking about itself. Sent only
+  // while connected (maybeSendClientReady checks), so it is never queued anyway.
+  'client:ready': 'transport',
 };
 
 /**
@@ -499,6 +534,8 @@ function addListener(channel: string, cb: Callback): Callback {
     listeners.set(channel, set);
   }
   set.add(cb);
+  // The hydrate handler is the last thing App mounts before it can apply a restore.
+  if (channel === 'chat:hydrate') maybeSendClientReady();
   return cb;
 }
 
@@ -523,7 +560,11 @@ function dispatchEvent(type: string, ...args: any[]): void {
   }
 }
 
-function handleMessage(data: string): void {
+function handleMessage(data: string, generation: number): void {
+  // WHY the stamp: the stale-socket guard used to cover auth:ok only. A late frame from a
+  // socket the connect timeout abandoned — or one replaced by a reconnect — was still
+  // dispatched into the page as if it came from the current host connection (R2-17).
+  if (generation !== connectionGeneration) return;
   let msg: any;
   try { msg = JSON.parse(data); } catch { return; }
 
@@ -647,6 +688,12 @@ function handleMessage(data: string): void {
       dispatchEvent('github:connect-done', payload);
       break;
     case 'chat:hydrate':
+      // Only the hydrate this client last asked for (see clientReadySeq). A host from
+      // before the handshake sends none — apply that as it always was.
+      if (payload?.seq !== undefined && payload.seq !== clientReadySeq) {
+        console.warn('[remote-shim] ignoring stale chat:hydrate seq', payload.seq, 'latest', clientReadySeq);
+        return;
+      }
       // Full chat state snapshot sent by the host when a remote client connects.
       // Dispatched into the chat reducer via window.claude.on.chatHydrate in App.tsx.
       dispatchEvent('chat:hydrate', payload);
@@ -813,6 +860,12 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.
           flushSendQueue();
           if (hasConnectedBefore) rehydrate();
+          // Readiness (batch 2): a new connection generation may send client:ready once.
+          // On a reconnect App's listener is still registered, so it goes out right here;
+          // on a first connect App mounts after this, and addListener sends it.
+          readySentThisGeneration = false;
+          readyReconnect = hasConnectedBefore;
+          maybeSendClientReady();
           hasConnectedBefore = true;
           reconcileUnknownOutcomes();
           // The secret comes back exactly once, at pairing; later connections answer with
@@ -836,7 +889,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           if (naming) naming.available = msg.sessionNaming === true;
           resolve(token);
           // Switch to normal message handling
-          ws!.onmessage = (e) => handleMessage(e.data as string);
+          ws!.onmessage = (e) => handleMessage(e.data as string, generation);
         } else if (msg.type === 'auth:failed') {
           authResolved = true;
           console.error('[remote-shim] auth:failed', msg.reason);
@@ -847,7 +900,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         return;
       }
 
-      handleMessage(event.data as string);
+      handleMessage(event.data as string, generation);
     };
 
     ws.onclose = (event) => {
