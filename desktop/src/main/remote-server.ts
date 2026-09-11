@@ -1614,7 +1614,11 @@ export class RemoteServer {
       case 'session:get-meta': {
         const { getConversationStore } = await import('./conversations/service');
         const store = getConversationStore();
-        let out = { tags: [] as string[], note: '', supported: true };
+        // WHY `unreadable` (error inventory 2026-09-10, false message 12): a missing store
+        // and a failed read used to answer blank tags and note, which the close prompt
+        // showed as "No note" and then used as the baseline for a note write. Same answer
+        // as main's session:get-meta; an absent record is still a real "none".
+        let out: { tags: string[]; note: string; supported: boolean; unreadable?: string } = { tags: [], note: '', supported: true };
         // Task 5: resolve through the same map set-tag/set-note use (a latent
         // gap here previously — this handler read the raw id straight through,
         // which only worked by accident for ids that never needed resolving)
@@ -1622,7 +1626,9 @@ export class RemoteServer {
         // to. No more up-front native refusal — native records are real.
         const rawId = String(payload?.sessionId ?? '');
         const resolved = this.sessionMetaWiring?.resolve(rawId) ?? rawId;
-        if (store) {
+        if (!store) {
+          out = { tags: [], note: '', supported: true, unreadable: "conversation storage isn't available" };
+        } else {
           try {
             const rec = await store.get(await this.sessionProviderFor(resolved), resolved);
             if (rec) {
@@ -1632,7 +1638,9 @@ export class RemoteServer {
               }
               out = { tags, note: rec.note || '', supported: true };
             }
-          } catch { /* fall through to empty */ }
+          } catch (e) {
+            out = { tags: [], note: '', supported: true, unreadable: e instanceof Error && e.message ? e.message : "the conversation's record could not be read" };
+          }
         }
         this.respond(client.ws, type, id, out);
         break;
