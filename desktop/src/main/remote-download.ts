@@ -100,8 +100,6 @@ export type MintResult =
 export interface RemoteDownloadsOptions {
   /** A device the computer removed keeps nothing: the GET checks the record, not only the mint. */
   isDeviceRevoked: (deviceId: string) => boolean;
-  /** Roots known beyond saved folders and the index: the host's live session folders. */
-  extraRoots?: () => readonly string[];
   /** Injectable clock, for the expiry tests. */
   now?: () => number;
   /** Open with O_NOFOLLOW where it exists (default). Tests force it off to prove the identity compare alone. */
@@ -113,6 +111,21 @@ export interface RemoteDownloadsOptions {
   openForServe?: (realPath: string, flags: number) => Promise<FileHandle>;
   /** Test seam between authorization and the identity pin, where a folder swap would land. */
   beforePinForTest?: (realPath: string) => Promise<void>;
+  /** Test seam right after the mint-time open, where a swap BACK would land. */
+  afterOpenForTest?: (realPath: string) => Promise<void>;
+}
+
+/**
+ * The path an open handle really refers to, where the platform can say
+ * (Linux: /proc/self/fd). WHY: a folder on the way swapped for a link and
+ * swapped BACK between the open and a re-resolve passes every path-string
+ * check (T7 re-review, finding 3); the kernel's answer does not move. Elsewhere
+ * null, and the identity compare plus the re-resolve remain the guard — that
+ * swap-and-swap-back window is the documented residue on macOS and Windows.
+ */
+async function openedPathOf(fh: FileHandle): Promise<string | null> {
+  if (process.platform !== 'linux') return null;
+  return fs.promises.readlink(`/proc/self/fd/${fh.fd}`).catch(() => null);
 }
 
 /** Lone UTF-16 surrogates (possible in a Windows file name) make encodeURIComponent throw. */
@@ -167,18 +180,22 @@ export class RemoteDownloads {
   private readonly statForMint: (fh: FileHandle) => Promise<fs.BigIntStats>;
   private readonly openForServe: (realPath: string, flags: number) => Promise<FileHandle>;
   private readonly beforePinForTest?: (realPath: string) => Promise<void>;
+  private readonly afterOpenForTest?: (realPath: string) => Promise<void>;
   private readonly isDeviceRevoked: (deviceId: string) => boolean;
-  private readonly extraRoots: () => readonly string[];
+  /** Streams open right now, per token — the link cap never drops one of these. */
+  private readonly liveByToken = new Map<string, number>();
+  /** Responses streaming right now, per device — removing a device ends them. */
+  private readonly liveResponses = new Map<string, Set<http.ServerResponse>>();
 
   constructor(opts: RemoteDownloadsOptions) {
     this.isDeviceRevoked = opts.isDeviceRevoked;
-    this.extraRoots = opts.extraRoots ?? (() => []);
     this.now = opts.now ?? Date.now;
     this.noFollow = opts.noFollow ?? true;
     this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
     this.statForMint = opts.statForMint ?? ((fh) => fh.stat({ bigint: true }));
     this.openForServe = opts.openForServe ?? ((p, flags) => fs.promises.open(p, flags));
     this.beforePinForTest = opts.beforePinForTest;
+    this.afterOpenForTest = opts.afterOpenForTest;
   }
 
   /**
@@ -197,11 +214,11 @@ export class RemoteDownloads {
   /**
    * Policy, in order (§10.1): resolve the real path; a sensitive real path is
    * refused first; then allowed when the bytes-read authorization says so
-   * (project roots, live session folders and tracked externals — the set
-   * read-binary uses), or — given a projectRoot and an artifactId — when the
-   * artifact read authorization passes for a record the sidecar actually holds.
-   * The caller (remote-server.ts) has already refused a projectRoot the
-   * computer does not show. No size gate: Download exists for the file the
+   * (saved folders, indexed projects and tracked externals — the set read-binary
+   * uses), or — given a projectRoot and an artifactId — when the artifact read
+   * authorization passes for a record the sidecar actually holds. The caller
+   * (remote-server.ts) passes the record only for a folder the computer shows
+   * or a live session runs in. No size gate: Download exists for the file the
    * phone will not preview.
    */
   async mint(req: MintRequest, who: { deviceId: string; socketId: string }): Promise<MintResult> {
@@ -217,7 +234,7 @@ export class RemoteDownloads {
     }
     if (isSensitivePath(canonicalize(realPath, null))) return { ok: false, error: 'sensitive' };
 
-    const bytes = await authorizeBytesRead(realPath, this.extraRoots());
+    const bytes = await authorizeBytesRead(realPath);
     let allowed = bytes.ok;
     if (!allowed && typeof req.projectRoot === 'string' && typeof req.artifactId === 'string') {
       allowed = await this.authorizedAsArtifact(req.projectRoot, req.artifactId, realPath);
@@ -244,19 +261,29 @@ export class RemoteDownloads {
     }
     let st: fs.BigIntStats;
     try {
+      await this.afterOpenForTest?.(realPath);
       st = await this.statForMint(fh);
       if (!st.isFile()) return { ok: false, error: 'not-a-file' };
       // Only a file with a real identity can be pinned to its inode.
       if (st.ino === 0n) return { ok: false, error: 'not-allowed' };
+      const opened = await openedPathOf(fh);
+      if (opened !== null && opened !== realPath) return { ok: false, error: 'not-allowed' };
       const again = await fs.promises.realpath(realPath).catch(() => null);
       if (again !== realPath) return { ok: false, error: 'not-allowed' };
     } finally {
       await fh.close().catch(() => { /* already closed */ });
     }
 
-    // Capacity: drop this device's oldest links first (Map order is mint order).
+    // Capacity: drop this device's oldest links first (Map order is mint order),
+    // but never one with a download streaming right now — its resume would get
+    // a permanent 404 (T7 re-review, finding 5). If every link is busy, say so.
     const mine = [...this.tokens.values()].filter((t) => t.deviceId === who.deviceId);
-    for (const old of mine.slice(0, Math.max(0, mine.length - (MAX_TOKENS_PER_DEVICE - 1)))) this.tokens.delete(old.token);
+    const excess = mine.length - (MAX_TOKENS_PER_DEVICE - 1);
+    if (excess > 0) {
+      const idleLinks = mine.filter((t) => !this.liveByToken.has(t.token));
+      if (idleLinks.length < excess) return { ok: false, error: 'busy' };
+      for (const old of idleLinks.slice(0, excess)) this.tokens.delete(old.token);
+    }
 
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
     const name = path.basename(realPath);
@@ -287,13 +314,20 @@ export class RemoteDownloads {
     return !!auth && auth.ok && auth.realPath === realPath;
   }
 
-  /** Every link a device held. Called on unpair (R10) and on a password change. */
+  /**
+   * Every link a device held AND every download it has streaming: removing a
+   * device ends its right to download at once, not after its current transfer
+   * finishes (R10; T7 re-review, finding 4). Called on unpair.
+   */
   revokeDevice(deviceId: string): void {
     for (const [token, entry] of this.tokens) if (entry.deviceId === deviceId) this.tokens.delete(token);
+    for (const res of [...(this.liveResponses.get(deviceId) ?? [])]) res.destroy();
   }
 
+  /** Every device at once — what a password change means. */
   revokeAll(): void {
     this.tokens.clear();
+    for (const set of [...this.liveResponses.values()]) for (const res of [...set]) res.destroy();
   }
 
   /** Streams open right now for one socket — the budget MAX_LIVE_STREAMS_PER_SOCKET counts. */
@@ -355,6 +389,11 @@ export class RemoteDownloads {
     // listener attached after the awaits never hears a hang-up that happened
     // during them — the slot and the file handle leaked for good (finding 1).
     this.live.set(socketId, inUse + 1);
+    this.liveByToken.set(token, (this.liveByToken.get(token) ?? 0) + 1);
+    const deviceId = entry.deviceId;
+    const deviceResponses = this.liveResponses.get(deviceId) ?? new Set<http.ServerResponse>();
+    deviceResponses.add(res);
+    this.liveResponses.set(deviceId, deviceResponses);
     let fh: FileHandle | null = null;
     let stream: fs.ReadStream | null = null;
     let closed = false;
@@ -363,22 +402,30 @@ export class RemoteDownloads {
       fh = null;
       if (h) void h.close().catch(() => { /* already closed */ });
     };
-    // The idle timer belongs to THIS transfer, not to the keep-alive socket, so
-    // it is set on the socket here and cleared again when the response closes.
-    const socket = req.socket;
-    const onIdle = () => res.destroy();
-    socket.setTimeout(this.idleTimeoutMs);
-    socket.on('timeout', onIdle);
+    // A per-transfer idle timer, refreshed by progress. WHY not the socket's own
+    // timeout (as before): clearing it when the response closed also cancelled
+    // the server's keep-alive timer, and a pipelined second request's transfer
+    // lost its timer to the first response's close (T7 re-review, finding 2).
+    const idle = setTimeout(() => res.destroy(), this.idleTimeoutMs);
+    idle.unref?.();
+    const progressed = () => { idle.refresh(); };
+    res.on('drain', progressed);
+    // Set once this request's file headers are sent: only a request that served
+    // the file renews its link (finding 7).
+    let served = false;
     res.on('close', () => {
       closed = true;
+      clearTimeout(idle);
       const n = (this.live.get(socketId) ?? 1) - 1;
       if (n <= 0) this.live.delete(socketId); else this.live.set(socketId, n);
-      socket.off('timeout', onIdle);
-      socket.setTimeout(0);
+      const t = (this.liveByToken.get(token) ?? 1) - 1;
+      if (t <= 0) this.liveByToken.delete(token); else this.liveByToken.set(token, t);
+      deviceResponses.delete(res);
+      if (deviceResponses.size === 0 && this.liveResponses.get(deviceId) === deviceResponses) this.liveResponses.delete(deviceId);
       // Sliding from the END of a transfer too: a long download that drops
       // after nearly five minutes must still be resumable (finding 6).
       const current = this.tokens.get(token);
-      if (current) current.expiresAt = this.now() + DOWNLOAD_TOKEN_TTL_MS;
+      if (served && current) current.expiresAt = this.now() + DOWNLOAD_TOKEN_TTL_MS;
       if (stream) stream.destroy(); else dropHandle();
     });
 
@@ -392,9 +439,11 @@ export class RemoteDownloads {
     if (closed) { dropHandle(); return; }
     let st: fs.BigIntStats;
     let realNow: string | null;
+    let opened: string | null;
     try {
       st = await fh.stat({ bigint: true });
       realNow = await fs.promises.realpath(entry.realPath).catch(() => null);
+      opened = await openedPathOf(fh);
     } catch {
       dropHandle();
       if (!closed) this.notFound(res);
@@ -405,14 +454,13 @@ export class RemoteDownloads {
     // resolving to itself: O_NOFOLLOW guards only the last component, so a
     // folder on the way swapped for a link must be caught here (finding 3).
     if (st.dev !== entry.dev || st.ino !== entry.ino || !st.isFile()
-        || realNow !== entry.realPath || isSensitivePath(canonicalize(realNow, null))) {
+        || realNow !== entry.realPath || (opened !== null && opened !== entry.realPath)
+        || isSensitivePath(canonicalize(realNow, null))) {
       this.tokens.delete(token);     // a link that can never succeed again
       dropHandle();
       this.notFound(res);
       return;
     }
-    // A successful GET renews the link (§10: sliding expiry).
-    entry.expiresAt = this.now() + DOWNLOAD_TOKEN_TTL_MS;
 
     const size = Number(st.size);
     const mtimeMs = Number(st.mtimeMs);
@@ -458,6 +506,12 @@ export class RemoteDownloads {
     };
     if (range) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
     res.writeHead(range ? 206 : 200, headers);
+    // A GET that serves the file renews its link (§10: sliding expiry); a HEAD,
+    // a refusal or a failure does not (finding 7).
+    if (req.method === 'GET') {
+      served = true;
+      entry.expiresAt = this.now() + DOWNLOAD_TOKEN_TTL_MS;
+    }
 
     if (req.method === 'HEAD' || expected === 0) {
       dropHandle();
@@ -472,7 +526,7 @@ export class RemoteDownloads {
     stream = s;
     fh = null;
     let sent = 0;
-    s.on('data', (chunk: string | Buffer) => { sent += chunk.length; });
+    s.on('data', (chunk: string | Buffer) => { sent += chunk.length; progressed(); });
     s.on('error', () => { res.destroy(); });
     s.on('end', () => { if (sent === expected) res.end(); else res.destroy(); });
     s.pipe(res, { end: false });

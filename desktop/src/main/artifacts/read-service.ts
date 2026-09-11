@@ -316,7 +316,7 @@ export type BytesAuthorization =
  * tracked artifacts, and well-known secret locations are refused even inside
  * those roots. Shared by read-binary on both transports and by Download.
  */
-export async function authorizeBytesRead(absolutePath: unknown, extraRoots: readonly string[] = []): Promise<BytesAuthorization> {
+export async function authorizeBytesRead(absolutePath: unknown): Promise<BytesAuthorization> {
   if (typeof absolutePath !== 'string' || absolutePath.length === 0) {
     return { ok: false, error: 'no path' };
   }
@@ -327,10 +327,10 @@ export async function authorizeBytesRead(absolutePath: unknown, extraRoots: read
     return { ok: false, error: e?.code === 'ENOENT' ? 'orphan' : String(e?.message ?? e) };
   }
   const canon = canonicalize(realPath, null);
-  // extraRoots: the remote host adds its live session folders, which every
-  // other remote read already counts as known (T7 review, finding 9). The
-  // desktop's own transport passes none and keeps its behaviour.
-  const roots = [...await knownRoots(), ...await withRealForms(extraRoots)];
+  // Saved folders and indexed projects only — never a folder known just because
+  // a session runs there. A phone can start a session in any folder, and a
+  // by-path read there handed out every file in it (T7 re-review, finding 1).
+  const roots = await knownRoots();
   let verdict = evaluateBinaryRead(canon, roots, new Set());
   if (verdict === 'outside-roots') {
     // Second pass (rare): the tracked externals and manual includes.
@@ -346,9 +346,9 @@ export async function authorizeBytesRead(absolutePath: unknown, extraRoots: read
  * bytes come through the bridge — which on remote-access setups is reachable
  * from a phone, hence the authorization above.
  */
-export async function readArtifactBytes(absolutePath: unknown, opts?: ReadCeiling & { extraRoots?: readonly string[] }) {
+export async function readArtifactBytes(absolutePath: unknown, opts?: ReadCeiling) {
   try {
-    const auth = await authorizeBytesRead(absolutePath, opts?.extraRoots);
+    const auth = await authorizeBytesRead(absolutePath);
     if (!auth.ok) return auth;
     // Size gate before reading — a huge file would freeze the renderer (and
     // the WS transport) long before the viewer could reject it. The phone's

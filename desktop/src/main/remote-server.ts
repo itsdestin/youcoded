@@ -11,6 +11,7 @@ import { listConversations, repoInfo, listContextFiles, readContext } from './pr
 import { watchProject, unwatchProject, dropSubscriber } from './artifacts/project-watcher';
 import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../shared/remote-file-limits';
 import { RemoteDownloads } from './remote-download';
+import { readSidecarShared } from './artifacts/artifact-store';
 import { readFileHead } from './fs-read-head';
 // Games arcade scores — remote browsers share the desktop's operations and
 // its stale-board cache (main/arcade-handlers.ts).
@@ -3046,15 +3047,18 @@ export class RemoteServer {
         // Refusals (`sensitive`, `outside-roots`, `busy`…) are data the card
         // shows, so this channel must never join REJECT_ON_NOT_OK.
         try {
-          // A named project goes through the same root gate as every read: a
-          // sidecar in a folder the computer never showed must not grant a
-          // download through its records (T7 review, finding 4).
-          if (payload?.projectRoot !== undefined) {
-            const refused = await this.refuseUnknownRoot(payload.projectRoot);
-            if (refused) { this.respond(client.ws, type, id, refused); break; }
-          }
+          // The record route (projectRoot + artifactId) is offered only for a
+          // folder the computer shows or a live session runs in; for any other
+          // folder the record is IGNORED and the path alone decides (T7 review,
+          // finding 4; re-review, finding 6). A session-only folder therefore
+          // reaches only files that session recorded (re-review, finding 1).
+          const recordRoot = typeof payload?.projectRoot === 'string' && typeof payload?.artifactId === 'string'
+            && await this.isKnownRootForRecords(payload.projectRoot);
+          const request = recordRoot
+            ? { absolutePath: payload.absolutePath, projectRoot: payload.projectRoot, artifactId: payload.artifactId }
+            : { absolutePath: payload?.absolutePath };
           this.respond(client.ws, type, id,
-            await this.downloads.mint(payload ?? {}, { deviceId: client.deviceId, socketId: client.id }));
+            await this.downloads.mint(request, { deviceId: client.deviceId, socketId: client.id }));
         } catch (err: any) {
           // The phone gets an answer instead of a request that never returns.
           this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
@@ -3145,25 +3149,43 @@ export class RemoteServer {
 
   /**
    * Every root a phone names is checked against the roots the desktop itself
-   * shows — saved folders, indexed projects, a live session's working folder —
-   * before any read (design §8 "same roots"; 2026-09-10 review of T6, finding
-   * 2). The desktop's renderer only ever asks about roots it was given; a
-   * phone's payload is the phone's, and without this every read channel
-   * answered for any directory on the computer. Remote-only by design: the
-   * desktop's own transport keeps its behaviour.
+   * shows (saved folders, indexed projects) before any read (design §8 "same
+   * roots"; 2026-09-10 review of T6, finding 2). The desktop's renderer only ever
+   * asks about roots it was given; a phone's payload is the phone's, and without
+   * this every read channel answered for any directory on the computer.
+   * Remote-only by design: the desktop's own transport keeps its behaviour.
+   *
+   * A folder a live session runs in counts ONLY for that session's recorded
+   * files (`records: true`): the drawer's list, the existence check, a record
+   * read by its id, and Download's record route. WHY: a phone can start a
+   * session in any folder — and "No folder" lands in the home folder — so a
+   * session folder counting as a full root handed out every file in it by path
+   * (T7 re-review, finding 1).
    */
   private sessionRoots(): string[] {
     return this.sessionManager.listSessions().map((s: any) => s?.cwd).filter((c: unknown): c is string => typeof c === 'string' && c.length > 0);
   }
 
-  private async refuseUnknownRoot(root: unknown): Promise<{ ok: false; error: string } | null> {
-    if (typeof root !== 'string' || root.length === 0) return { ok: false, error: 'bad-request' };
-    return (await isKnownRoot(root, this.sessionRoots())) ? null : { ok: false, error: 'not-allowed' };
+  private isKnownRootForRecords(root: string): Promise<boolean> {
+    return isKnownRoot(root, this.sessionRoots());
   }
 
-  private async refuseUnknownProject(projectId: unknown): Promise<{ ok: false; error: string } | null> {
+  private async refuseUnknownRoot(root: unknown, opts: { records?: boolean } = {}): Promise<{ ok: false; error: string } | null> {
+    if (typeof root !== 'string' || root.length === 0) return { ok: false, error: 'bad-request' };
+    const known = opts.records ? await this.isKnownRootForRecords(root) : await isKnownRoot(root);
+    return known ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  private async refuseUnknownProject(projectId: unknown, opts: { records?: boolean } = {}): Promise<{ ok: false; error: string } | null> {
     if (typeof projectId !== 'string' || projectId.length === 0) return { ok: false, error: 'bad-request' };
-    return (await isKnownProjectRef(projectId, this.sessionRoots())) ? null : { ok: false, error: 'not-allowed' };
+    return (await isKnownProjectRef(projectId, opts.records ? this.sessionRoots() : [])) ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  /** A record id the folder's sidecar actually holds. */
+  private async refuseUnlessRecorded(root: string, artifactId: string): Promise<{ ok: false; error: string } | null> {
+    const sidecar = await readSidecarShared(root).catch(() => null);
+    const recorded = !!sidecar && !('corrupted' in sidecar) && sidecar.artifacts.some((a) => a.id === artifactId);
+    return recorded ? null : { ok: false, error: 'not-allowed' };
   }
 
   /**
@@ -3181,23 +3203,29 @@ export class RemoteServer {
   private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
     'artifacts:list-session': async (p) => {
       if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
-      return (await this.refuseUnknownRoot(p.projectRoot)) ?? listSessionFiles(p.sessionId, p.projectRoot);
+      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot);
     },
     'artifacts:list-project': async (p) =>
-      (await this.refuseUnknownProject(p.projectId)) ?? listProjectFiles(p.projectId, p.opts),
+      (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),
     'artifacts:list-all-files': async (p) =>
       (await this.refuseUnknownProject(p.projectId)) ?? listAllFiles(p.projectId, p.opts),
     'artifacts:get': async (p) => {
       if (typeof p.artifactId !== 'string') return { ok: false, error: 'bad-request' };
-      return (await this.refuseUnknownRoot(p.projectRoot))
-        ?? readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES });
+      // By path inside a folder the computer shows; inside a session-only folder,
+      // only a file that session recorded, named by its record id.
+      if (await this.refuseUnknownRoot(p.projectRoot)) {
+        const refused = (await this.refuseUnknownRoot(p.projectRoot, { records: true }))
+          ?? (await this.refuseUnlessRecorded(p.projectRoot, p.artifactId));
+        if (refused) return refused;
+      }
+      return readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES });
     },
     // read-binary carries its own roots check (authorizeBytesRead), on the file itself.
-    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES, extraRoots: this.sessionRoots() }),
+    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
     'artifacts:search-content': async (p) =>
       (await this.refuseUnknownRoot(p.projectRoot)) ?? searchArtifactContent(p.projectRoot, p.query),
     'artifacts:check-existence': async (p) =>
-      (await this.refuseUnknownRoot(p.projectRoot)) ?? checkArtifactExistence(p.projectRoot, p.artifactIds),
+      (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? checkArtifactExistence(p.projectRoot, p.artifactIds),
     'project:list-context': async (p) =>
       (await this.refuseUnknownRoot(p.projectPath)) ?? listContextFiles(p.projectPath),
     'project:read-context-file': async (p) => {
@@ -3220,10 +3248,8 @@ export class RemoteServer {
 
   // Download links (§10). The revocation check reads the device store lazily,
   // at each GET, so a device unpaired while its link was alive is refused.
-  // Live session folders count as known roots here too, as for every read.
   readonly downloads = new RemoteDownloads({
     isDeviceRevoked: (deviceId) => this.devices.isRevoked(deviceId),
-    extraRoots: () => this.sessionRoots(),
   });
 
   /** This socket's project-watcher subscriber id, allocated on first use and released on close. */

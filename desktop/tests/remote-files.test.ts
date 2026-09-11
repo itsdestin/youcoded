@@ -42,6 +42,19 @@ import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { RemoteServer } from '../src/main/remote-server';
 import { __resetProjectWatchersForTest, __setWatchGraceMsForTest, __watchersStartedForTest } from '../src/main/artifacts/project-watcher';
 import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../src/shared/remote-file-limits';
+import { SIDECAR_SCHEMA_VERSION } from '../src/shared/artifacts/types';
+
+// Windows CI cannot always create symlinks (it needs a privilege); the cases
+// that need one are skipped there, the way native-home.test.ts does it.
+const canSymlink = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'yc-remote-files-symlink-probe-'));
+  try {
+    fs.writeFileSync(path.join(probeDir, 'target'), 'x');
+    fs.symlinkSync('target', path.join(probeDir, 'link'), 'file');
+    return true;
+  } catch { return false; }
+  finally { try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* best effort */ } }
+})();
 
 // chokidar's awaitWriteFinish is stabilityThreshold 500 ms + pollInterval 100 ms
 // (project-watcher.ts); a created file surfaces ~700 ms after the write.
@@ -110,21 +123,34 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(root, '.env'), 'SECRET=1\n');
   fs.mkdirSync(path.join(outside, '.ssh'));
   fs.writeFileSync(path.join(outside, '.ssh', 'id_rsa'), '-----BEGIN KEY-----\n');
-  fs.symlinkSync(path.join(outside, '.ssh', 'id_rsa'), path.join(root, 'innocent-link.txt'));
+  if (canSymlink) fs.symlinkSync(path.join(outside, '.ssh', 'id_rsa'), path.join(root, 'innocent-link.txt'));
 
   // A root recorded THROUGH A SYMLINK (macOS's /tmp → /private/tmp is the
   // everyday case): the reads compare a file's real path against the roots,
   // so the recorded form alone would never match its own files.
   aliasTarget = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-remote-alias-target-')));
   alias = path.join(os.tmpdir(), `yc-remote-alias-link-${process.pid}-${Date.now()}`);
-  fs.symlinkSync(aliasTarget, alias);
+  if (canSymlink) fs.symlinkSync(aliasTarget, alias);
   fs.writeFileSync(path.join(aliasTarget, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
   // A folder the host knows ONLY as a live session's working folder.
   sessionRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-remote-session-')));
   fs.writeFileSync(path.join(sessionRoot, 'todo.md'), '- ship it\n');
+  // One file the session recorded, one it never did.
+  fs.writeFileSync(path.join(sessionRoot, 'untracked.txt'), 'not recorded by any session\n');
+  fs.mkdirSync(path.join(sessionRoot, '.youcoded'));
+  fs.writeFileSync(path.join(sessionRoot, '.youcoded', 'artifacts.json'), JSON.stringify({
+    $schema: SIDECAR_SCHEMA_VERSION, projectId: 'session-only', name: 'session-only',
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    artifacts: [{
+      id: 'rec-todo', path: 'todo.md', kind: 'internal', absolutePath: null,
+      lastModified: new Date().toISOString(), status: 'active',
+      versions: [{ id: 'v1', kind: 'create', at: new Date().toISOString(), sessionId: 'sess-live' }],
+      comments: [], tags: [],
+    }],
+    manualExcludes: [], manualIncludes: [],
+  }));
   capRoots = Array.from({ length: 5 }, () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-remote-cap-'))));
   sessions.push({ id: 'sess-live', name: 'live', cwd: sessionRoot, status: 'active' });
-  for (const [i, cwd] of capRoots.entries()) sessions.push({ id: `sess-cap-${i}`, name: `cap ${i}`, cwd, status: 'active' });
 
   // The root is a saved folder — the roots list both transports authorize against.
   const home = process.env.HOME!;
@@ -133,6 +159,7 @@ beforeAll(async () => {
     JSON.stringify([
       { path: root, nickname: 'fixture', addedAt: Date.now() },
       { path: alias, nickname: 'through a symlink', addedAt: Date.now() },
+      ...capRoots.map((p) => ({ path: p, nickname: 'cap', addedAt: Date.now() })),
     ]));
 
   const sessionManager: any = Object.assign(new EventEmitter(), {
@@ -248,7 +275,7 @@ describe('reading a file: same answer, except the phone ceiling', () => {
 
   // THE HOLE ROUND 2 CLOSED (R2-1). The link's own path is inside the root and
   // matches nothing in the denylist; only the RESOLVED path is a secret.
-  it('a symlink under the root to a secret is refused on both transports', async () => {
+  it.skipIf(!canSymlink)('a symlink under the root to a secret is refused on both transports', async () => {
     const abs = path.join(root, 'innocent-link.txt');
     expect(await overIpc('artifacts:read-binary', abs)).toMatchObject({ ok: false, error: 'not-allowed' });
     expect(await overRemote('artifacts:read-binary', { absolutePath: abs })).toMatchObject({ ok: false, error: 'not-allowed' });
@@ -281,18 +308,30 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
     }
   });
 
-  it('a live session\'s working folder counts as known, even when nothing saved or indexed it', async () => {
-    const res = await overRemote('artifacts:list-all-files', { projectId: sessionRoot });
-    expect(res.ok).toBe(true);
-    expect((res.files as any[]).map((f) => f.path)).toContain('todo.md');
-    const text = await overRemote('artifacts:get', { projectRoot: sessionRoot, artifactId: 'todo.md' });
+  // A phone can start a session in any folder — and "No folder" lands in the
+  // home folder — so a folder known ONLY because a session runs there must not
+  // hand out files by path. It opens that session's recorded files, through
+  // their records, and nothing else (T7 re-review, finding 1).
+  it("a live session's folder, known only because a session runs there, opens that session's recorded files and nothing else", async () => {
+    const listed = await overRemote('artifacts:list-session', { sessionId: 'sess-live', projectRoot: sessionRoot });
+    expect(listed.ok).toBe(true);
+    expect((listed.artifacts as any[]).map((a) => a.id)).toEqual(['rec-todo']);
+    const text = await overRemote('artifacts:get', { projectRoot: sessionRoot, artifactId: 'rec-todo' });
     expect(text.content).toBe('- ship it\n');
-    // …and for bytes too: read-binary judged roots without the session folders,
-    // so an image there showed "outside your project folders" (T7 review, finding 9).
-    expect((await overRemote('artifacts:read-binary', { absolutePath: path.join(sessionRoot, 'todo.md') })).ok).toBe(true);
+    expect((await overRemote('artifacts:check-existence', { projectRoot: sessionRoot, artifactIds: ['rec-todo'] })).ok).toBe(true);
+    for (const [type, payload] of [
+      ['artifacts:get', { projectRoot: sessionRoot, artifactId: 'untracked.txt' }],
+      ['artifacts:list-all-files', { projectId: sessionRoot }],
+      ['artifacts:search-content', { projectRoot: sessionRoot, query: 'ship' }],
+      ['artifacts:read-binary', { absolutePath: path.join(sessionRoot, 'untracked.txt') }],
+      ['artifacts:watch-project', { projectRoot: sessionRoot }],
+      ['project:list-context', { projectPath: sessionRoot }],
+    ] as const) {
+      expect(await overRemote(type, payload), type).toMatchObject({ ok: false, error: 'not-allowed' });
+    }
   });
 
-  it('a root recorded through a symlink still reaches its own files, on both transports', async () => {
+  it.skipIf(!canSymlink)('a root recorded through a symlink still reaches its own files, on both transports', async () => {
     const viaLink = path.join(alias, 'pic.png');
     expect((await overIpc('artifacts:read-binary', viaLink)).ok).toBe(true);
     expect((await overRemote('artifacts:read-binary', { absolutePath: viaLink })).ok).toBe(true);
