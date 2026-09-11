@@ -1077,6 +1077,8 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   const handleSubmit = useCallback(async () => {
     if (!allAnswered || responding) return;
     setResponding(true);
+    // Cleared on the next try, like handleDeny and PermissionButtons (code review F8).
+    setUnconfirmed(false);
     // Build answers object: question text → "Label" or "Label1, Label2". When
     // Other is selected the typed text takes its place in the list (so a
     // multi-select can be "Charts, my own idea"); when it is NOT selected the

@@ -89,6 +89,16 @@ describe('question card — same rule', () => {
     expect(await screen.findByText(/couldn.t confirm/i)).toBeInTheDocument();
     expect(expiredWasBroadcast()).toBe(false);
   });
+  it('a second Submit clears the "couldn\'t confirm" line while it is in flight (code review F8)', async () => {
+    respond.mockRejectedValueOnce(TIMEOUT).mockReturnValueOnce(new Promise(() => {}));
+    renderCard(questionAsk());
+    fireEvent.click(screen.getByRole('button', { name: /^Blue/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+    expect(await screen.findByText(/couldn.t confirm/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Submit' }));
+    await waitFor(() => expect(screen.queryByText(/couldn.t confirm/i)).toBeNull());
+  });
 });
 
 describe("buddy's compact strip — same rule", () => {
