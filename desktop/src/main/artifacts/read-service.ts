@@ -234,34 +234,77 @@ export async function readArtifactText(
 }
 
 /**
+ * Each path in BOTH its recorded canonical form and its resolved (realpath)
+ * canonical form. WHY both: the reads compare a file's REAL path against these
+ * roots, and a root recorded through a symlink — macOS's /tmp → /private/tmp,
+ * a home directory on another volume — would otherwise never match its own
+ * files, which is exactly what turned every image and PDF refused in such a
+ * project the first time realpath was applied (2026-09-10 review of T6,
+ * finding 4). Unresolvable entries (a folder that is gone) keep their
+ * recorded form only.
+ */
+async function withRealForms(paths: readonly string[]): Promise<Set<string>> {
+  const out = new Set<string>();
+  await Promise.all(paths.map(async (p) => {
+    if (!p) return;
+    out.add(canonicalize(p, null));
+    const real = await fs.promises.realpath(p).catch(() => null);
+    if (real) out.add(canonicalize(real, null));
+  }));
+  return out;
+}
+
+/**
  * The user's known project roots (saved folders + central-index projects),
- * canonicalized, plus — on request — every tracked EXTERNAL artifact path and
- * manual include from each root's sidecar (a temp-dir xlsx the session drawer
- * legitimately shows lives outside every root).
+ * canonicalized in both forms, plus — on request — every tracked EXTERNAL
+ * artifact path and manual include from each root's sidecar (a temp-dir xlsx
+ * the session drawer legitimately shows lives outside every root).
  */
 async function knownRoots(): Promise<string[]> {
-  return [
-    ...readFolders().map((f) => canonicalize(f.path, null)),
-    ...(await listProjects(CLAUDE_DIR)).map((p) => canonicalize(p.path, null)),
-  ];
+  return [...await withRealForms([
+    ...readFolders().map((f) => f.path),
+    ...(await listProjects(CLAUDE_DIR)).map((p) => p.path),
+  ])];
 }
 
 async function trackedExternalPaths(roots: string[]): Promise<Set<string>> {
-  const tracked = new Set<string>();
+  const recorded: string[] = [];
   for (const root of roots) {
     const sidecar = await readSidecarShared(root).catch(() => null);
     if (!sidecar || 'corrupted' in sidecar) continue;
     for (const a of sidecar.artifacts) {
-      if (a.kind === 'external' && a.absolutePath) tracked.add(canonicalize(a.absolutePath, null));
+      if (a.kind === 'external' && a.absolutePath) recorded.push(a.absolutePath);
     }
-    for (const inc of sidecar.manualIncludes) tracked.add(canonicalize(inc.path, null));
+    for (const inc of sidecar.manualIncludes) recorded.push(inc.path);
   }
-  return tracked;
+  return withRealForms(recorded);
+}
+
+/**
+ * Is `root` one the desktop itself shows — a saved folder, an indexed project,
+ * or (the caller's `extraRoots`) a live session's working folder — in either
+ * its recorded or resolved form? The remote host gates every root a phone
+ * names on this (technical design §8 "same roots"): the desktop's renderer only
+ * ever asks about roots it was given, but a phone's payload is the phone's.
+ */
+export async function isKnownRoot(root: unknown, extraRoots: readonly string[] = []): Promise<boolean> {
+  if (typeof root !== 'string' || root.length === 0) return false;
+  const known = new Set([...await knownRoots(), ...await withRealForms(extraRoots)]);
+  for (const form of await withRealForms([root])) if (known.has(form)) return true;
+  return false;
+}
+
+/** A `projectId` is known when it names an indexed project, or is itself a known root (the synth-project convention). */
+export async function isKnownProjectRef(projectId: unknown, extraRoots: readonly string[] = []): Promise<boolean> {
+  if (typeof projectId !== 'string' || projectId.length === 0) return false;
+  if ((await listProjects(CLAUDE_DIR)).some((p) => p.id === projectId)) return true;
+  return isKnownRoot(projectId, extraRoots);
 }
 
 export type BytesAuthorization =
   | { ok: true; realPath: string }
-  | { ok: false; error: 'no path' | 'not-allowed' | 'orphan' | string };
+  // 'no path' | 'not-allowed' | 'orphan', or the I/O error's own text.
+  | { ok: false; error: string };
 
 /**
  * May `absolutePath` be handed out as raw bytes? Resolves the path FIRST —

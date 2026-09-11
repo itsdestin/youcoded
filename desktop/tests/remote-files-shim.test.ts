@@ -136,17 +136,22 @@ describe('useProjectWatch re-subscribes on a reconnect', () => {
   const saved = (window as any).claude;
   afterEach(() => { (window as any).claude = saved; });
 
-  it('issues watch-project again for the root it shows — a new socket is a new subscriber on the host', async () => {
+  it('issues watch-project again for the root it shows — a new socket is a new subscriber on the host — then reloads', async () => {
     const watchProject = vi.fn(async () => ({ ok: true }));
     const unwatchProject = vi.fn(async () => ({ ok: true }));
     (window as any).claude = { artifacts: { watchProject, unwatchProject } };
-    function Host() { useProjectWatch('/home/me/proj'); return null; }
+    const reloaded = vi.fn();
+    function Host() { useProjectWatch('/home/me/proj', reloaded); return null; }
     const view = render(React.createElement(Host));
     expect(watchProject).toHaveBeenCalledTimes(1);
+    // A first connect is not a reconnect: the screen's own mount fetch covers it.
+    expect(reloaded).not.toHaveBeenCalled();
 
     window.dispatchEvent(new CustomEvent(REMOTE_RECONNECTED_EVENT));
     expect(watchProject).toHaveBeenCalledTimes(2);
     expect(watchProject).toHaveBeenLastCalledWith('/home/me/proj');
+    // The events from during the drop never arrived, so the list is asked for again.
+    await vi.waitFor(() => expect(reloaded).toHaveBeenCalledTimes(1));
 
     // Gone from the screen: a later reconnect must not resurrect the subscription.
     view.unmount();

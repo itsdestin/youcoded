@@ -242,7 +242,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const previewResumeLabel = previewNative ? COPY.resumeNative : COPY.resume;
   // Live external-change events while the drawer is actually visible — the
   // watcher in main is refcounted, so open drawers on the same project share one.
-  useProjectWatch(drawerOpen && projectRoot ? projectRoot : null);
+  // (Subscribed below, after listRetry exists: a reconnect re-lists through it.)
   // Set when a pill click couldn't resolve; cleared on next click/selection/close.
   const pillError = state.pillError?.[sessionId] ?? null;
 
@@ -265,6 +265,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // never an empty state that claims to know.
   const [listError, setListError] = useState<string | null>(null);
   const [listRetry, setListRetry] = useState(0);
+  // Over remote access the files the assistant touched while the phone was
+  // disconnected never arrived as events — re-list once the watch is back
+  // (batch 3, R12). The desktop never fires the reconnect.
+  useProjectWatch(drawerOpen && projectRoot ? projectRoot : null, () => setListRetry((n) => n + 1));
   useEffect(() => {
     if (!drawerOpen || !projectRoot || !sessionId) return;
     let cancelled = false;

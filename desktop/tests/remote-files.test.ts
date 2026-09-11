@@ -40,7 +40,7 @@ vi.mock('electron', () => {
 
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { RemoteServer } from '../src/main/remote-server';
-import { __resetProjectWatchersForTest } from '../src/main/artifacts/project-watcher';
+import { __resetProjectWatchersForTest, __setWatchGraceMsForTest, __watchersStartedForTest } from '../src/main/artifacts/project-watcher';
 import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../src/shared/remote-file-limits';
 
 // chokidar's awaitWriteFinish is stabilityThreshold 500 ms + pollInterval 100 ms
@@ -51,6 +51,11 @@ const WATCH_EVENT_MS = 8_000;
 
 let root: string;
 let outside: string;
+let aliasTarget: string;   // a real folder…
+let alias: string;         // …recorded in the saved folders through a symlink
+let sessionRoot: string;   // known only as a live session's cwd
+let capRoots: string[];    // five more session cwds, for the per-socket watch cap
+const sessions: any[] = [];
 let server: RemoteServer;
 let handlers: Map<string, (...args: any[]) => Promise<any>>;
 let cleanup: () => Promise<void>;
@@ -67,10 +72,13 @@ function fakeClient(id: string) {
   return { frames, ws, client: { id, ws, deviceId: 'phone-1', ip: '127.0.0.1', connectedAt: Date.now() } };
 }
 
-/** Drive one channel over the remote transport and return its response payload. */
+/** Drive one channel over the remote transport and return ITS response payload
+ *  (matched by a unique id — one client may ask the same channel many times). */
+let nextRequest = 0;
 async function overRemote(type: string, payload: any, who = fakeClient('sock-a')) {
-  await (server as any).handleMessage(who.client, JSON.stringify({ type, id: `phone-1:1:${type}`, payload }));
-  const reply = who.frames.find((f) => f.type === `${type}:response`);
+  const id = `phone-1:1:${++nextRequest}`;
+  await (server as any).handleMessage(who.client, JSON.stringify({ type, id, payload }));
+  const reply = who.frames.find((f) => f.type === `${type}:response` && f.id === id);
   return reply?.payload;
 }
 
@@ -104,14 +112,31 @@ beforeAll(async () => {
   fs.writeFileSync(path.join(outside, '.ssh', 'id_rsa'), '-----BEGIN KEY-----\n');
   fs.symlinkSync(path.join(outside, '.ssh', 'id_rsa'), path.join(root, 'innocent-link.txt'));
 
+  // A root recorded THROUGH A SYMLINK (macOS's /tmp → /private/tmp is the
+  // everyday case): the reads compare a file's real path against the roots,
+  // so the recorded form alone would never match its own files.
+  aliasTarget = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-remote-alias-target-')));
+  alias = path.join(os.tmpdir(), `yc-remote-alias-link-${process.pid}-${Date.now()}`);
+  fs.symlinkSync(aliasTarget, alias);
+  fs.writeFileSync(path.join(aliasTarget, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47]));
+  // A folder the host knows ONLY as a live session's working folder.
+  sessionRoot = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-remote-session-')));
+  fs.writeFileSync(path.join(sessionRoot, 'todo.md'), '- ship it\n');
+  capRoots = Array.from({ length: 5 }, () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-remote-cap-'))));
+  sessions.push({ id: 'sess-live', name: 'live', cwd: sessionRoot, status: 'active' });
+  for (const [i, cwd] of capRoots.entries()) sessions.push({ id: `sess-cap-${i}`, name: `cap ${i}`, cwd, status: 'active' });
+
   // The root is a saved folder — the roots list both transports authorize against.
   const home = process.env.HOME!;
   fs.mkdirSync(path.join(home, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'youcoded-folders.json'),
-    JSON.stringify([{ path: root, nickname: 'fixture', addedAt: Date.now() }]));
+    JSON.stringify([
+      { path: root, nickname: 'fixture', addedAt: Date.now() },
+      { path: alias, nickname: 'through a symlink', addedAt: Date.now() },
+    ]));
 
   const sessionManager: any = Object.assign(new EventEmitter(), {
-    createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => []),
+    createSession: vi.fn(), destroySession: vi.fn(), listSessions: vi.fn(() => sessions),
     sendInput: vi.fn(), resizeSession: vi.fn(),
   });
   const hookRelay: any = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
@@ -133,7 +158,8 @@ beforeAll(async () => {
 afterAll(async () => {
   __resetProjectWatchersForTest();
   await cleanup?.();
-  for (const dir of [root, outside]) {
+  await fs.promises.unlink(alias).catch(() => {});
+  for (const dir of [root, outside, aliasTarget, sessionRoot, ...capRoots]) {
     await fs.promises.rm(dir, { recursive: true, force: true, maxRetries: 5 });
   }
 });
@@ -232,22 +258,99 @@ describe('reading a file: same answer, except the phone ceiling', () => {
   });
 });
 
+describe('the roots a phone may name are the ones the desktop shows (R7)', () => {
+  it('a root the desktop never showed is refused over remote, on every read; the desktop transport keeps its behaviour', async () => {
+    fs.writeFileSync(path.join(outside, 'plain.md'), 'not a secret, just not yours\n');
+    // The desktop's own transport is unchanged: its renderer only asks about roots it was given.
+    expect((await overIpc('artifacts:get', outside, 'plain.md')).ok).toBe(true);
+    for (const [type, payload] of [
+      ['artifacts:get', { projectRoot: outside, artifactId: 'plain.md' }],
+      ['artifacts:list-session', { sessionId: 's', projectRoot: outside }],
+      ['artifacts:list-project', { projectId: outside }],
+      ['artifacts:list-all-files', { projectId: outside }],
+      ['artifacts:search-content', { projectRoot: outside, query: 'secret' }],
+      ['artifacts:check-existence', { projectRoot: outside, artifactIds: ['x'] }],
+      ['project:list-context', { projectPath: outside }],
+      ['project:read-context-file', { projectPath: outside, absolutePath: path.join(outside, 'plain.md') }],
+      ['project:list-conversations', { projectPath: outside }],
+      ['project:repo-info', { projectPath: outside }],
+      ['artifacts:watch-project', { projectRoot: outside }],
+    ] as const) {
+      const res = await overRemote(type, payload);
+      expect(res, type).toMatchObject({ ok: false, error: 'not-allowed' });
+    }
+  });
+
+  it('a live session\'s working folder counts as known, even when nothing saved or indexed it', async () => {
+    const res = await overRemote('artifacts:list-all-files', { projectId: sessionRoot });
+    expect(res.ok).toBe(true);
+    expect((res.files as any[]).map((f) => f.path)).toContain('todo.md');
+    const text = await overRemote('artifacts:get', { projectRoot: sessionRoot, artifactId: 'todo.md' });
+    expect(text.content).toBe('- ship it\n');
+  });
+
+  it('a root recorded through a symlink still reaches its own files, on both transports', async () => {
+    const viaLink = path.join(alias, 'pic.png');
+    expect((await overIpc('artifacts:read-binary', viaLink)).ok).toBe(true);
+    expect((await overRemote('artifacts:read-binary', { absolutePath: viaLink })).ok).toBe(true);
+    // And the real path of the same file — recorded form and resolved form both count.
+    expect((await overRemote('artifacts:read-binary', { absolutePath: path.join(aliasTarget, 'pic.png') })).ok).toBe(true);
+  });
+
+  it('a malformed payload answers bad-request, never a Node error\'s text', async () => {
+    expect(await overRemote('artifacts:get', { projectRoot: root })).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(await overRemote('artifacts:list-all-files', {})).toMatchObject({ ok: false, error: 'bad-request' });
+    expect(await overRemote('artifacts:watch-project', { projectRoot: 42 })).toMatchObject({ ok: false, error: 'bad-request' });
+  });
+
+  it('one socket may watch four roots; the fifth is refused as too-many', async () => {
+    const who = fakeClient('sock-cap');
+    (server as any).clients.add(who.client);
+    try {
+      for (const cwd of capRoots.slice(0, 4)) {
+        expect((await overRemote('artifacts:watch-project', { projectRoot: cwd }, who)).ok).toBe(true);
+      }
+      expect(await overRemote('artifacts:watch-project', { projectRoot: capRoots[4] }, who)).toMatchObject({ ok: false, error: 'too-many' });
+      // Re-watching one it already holds is not a fifth.
+      expect((await overRemote('artifacts:watch-project', { projectRoot: capRoots[0] }, who)).ok).toBe(true);
+      // Letting one go frees the slot.
+      await overRemote('artifacts:unwatch-project', { projectRoot: capRoots[0] }, who);
+      expect((await overRemote('artifacts:watch-project', { projectRoot: capRoots[4] }, who)).ok).toBe(true);
+    } finally {
+      who.ws.emit('close');
+      (server as any).clients.delete(who.client);
+    }
+  });
+});
+
 describe('live refresh over remote (R12)', () => {
   it('a watcher event reaches the WS client that subscribed, and a socket that closed is dropped', async () => {
     const a = fakeClient('sock-watch-a');
     const b = fakeClient('sock-watch-b');
     (server as any).clients.add(a.client);
     (server as any).clients.add(b.client);
+    // The shipped grace is 60 s; short enough here that a dropped socket's
+    // watcher is CLOSED before the next subscriber arrives, so the proof below
+    // is a watcher count, not a frame count (a closed socket is out of
+    // `clients`, so "A received nothing" would be true whether or not its
+    // subscription was dropped).
+    __setWatchGraceMsForTest(50);
+    const started = __watchersStartedForTest();
 
     const subA = await overRemote('artifacts:watch-project', { projectRoot: root }, a);
     expect(subA?.ok).toBe(true);
+    expect(__watchersStartedForTest()).toBe(started + 1);
     // A drops (the phone lost its connection) — its subscription must go with it,
     // or a phone that never comes back pins the watcher forever.
     a.ws.emit('close');
     (server as any).clients.delete(a.client);
-    // B is the phone's NEW socket after the reconnect; it re-subscribes.
+    // With A's ref gone the watcher parks and, after the grace, closes; B's
+    // subscribe then starts a NEW one. Had dropSubscriber not run, A's ref
+    // would keep it alive and B would reuse it — no second start.
+    await new Promise((r) => setTimeout(r, 120));
     const subB = await overRemote('artifacts:watch-project', { projectRoot: root }, b);
     expect(subB?.ok).toBe(true);
+    expect(__watchersStartedForTest()).toBe(started + 2);
 
     fs.writeFileSync(path.join(root, 'made-by-the-assistant.md'), '# new\n');
     await vi.waitFor(() => {

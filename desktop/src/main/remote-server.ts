@@ -5,7 +5,7 @@ import { listProjectsIndex } from './artifacts/projects-index';
 // call, plus the phone's smaller preview ceilings.
 import {
   listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
-  searchArtifactContent, checkArtifactExistence,
+  searchArtifactContent, checkArtifactExistence, isKnownRoot, isKnownProjectRef,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 import { watchProject, unwatchProject, dropSubscriber } from './artifacts/project-watcher';
@@ -118,7 +118,14 @@ interface AuthenticatedClient {
   // on the first watch-project and dropped on close; negative so it can never
   // collide with a webContents id, which is what the desktop subscribes with.
   watchId?: number;
+  // Distinct roots this socket watches — capped (MAX_WATCHED_ROOTS_PER_SOCKET).
+  watchedRoots?: Set<string>;
 }
+
+// A phone shows one project's Files and one conversation's drawer at a time;
+// four leaves room for a switch mid-grace without letting a socket pin a
+// watcher per directory on the computer.
+const MAX_WATCHED_ROOTS_PER_SOCKET = 4;
 
 export interface ClientInfo {
   id: string;
@@ -3000,10 +3007,18 @@ export class RemoteServer {
         // the way a destroyed renderer loses its refs. A reconnect is a NEW
         // socket, so the phone re-subscribes (useProjectWatch).
         const projectRoot = payload?.projectRoot;
-        if (typeof projectRoot !== 'string' || projectRoot.length === 0) {
-          this.respond(client.ws, type, id, { ok: false });
+        // Same root gate as the reads: a watcher is a full tree walk on the
+        // main thread (project-watcher.ts measures 310-372 ms on a large
+        // folder) and holds OS watch handles, so a phone naming `/usr` or a
+        // hundred different roots must be refused (T6 review, finding 3).
+        const refused = await this.refuseUnknownRoot(projectRoot);
+        if (refused) { this.respond(client.ws, type, id, { ok: false, error: refused.error }); break; }
+        const watched = (client.watchedRoots ??= new Set<string>());
+        if (!watched.has(projectRoot) && watched.size >= MAX_WATCHED_ROOTS_PER_SOCKET) {
+          this.respond(client.ws, type, id, { ok: false, error: 'too-many' });
           break;
         }
+        watched.add(projectRoot);
         this.respond(client.ws, type, id, await watchProject(projectRoot, this.watchSubscriberId(client)));
         break;
       }
@@ -3011,6 +3026,7 @@ export class RemoteServer {
         const projectRoot = payload?.projectRoot;
         if (typeof projectRoot === 'string' && projectRoot.length > 0 && client.watchId !== undefined) {
           unwatchProject(projectRoot, client.watchId);
+          client.watchedRoots?.delete(projectRoot);
         }
         this.respond(client.ws, type, id, { ok: true });
         break;
@@ -3098,9 +3114,34 @@ export class RemoteServer {
   // --- Files over remote (batch 3) ---
 
   /**
+   * Every root a phone names is checked against the roots the desktop itself
+   * shows — saved folders, indexed projects, a live session's working folder —
+   * before any read (design §8 "same roots"; 2026-09-10 review of T6, finding
+   * 2). The desktop's renderer only ever asks about roots it was given; a
+   * phone's payload is the phone's, and without this every read channel
+   * answered for any directory on the computer. Remote-only by design: the
+   * desktop's own transport keeps its behaviour.
+   */
+  private sessionRoots(): string[] {
+    return this.sessionManager.listSessions().map((s: any) => s?.cwd).filter((c: unknown): c is string => typeof c === 'string' && c.length > 0);
+  }
+
+  private async refuseUnknownRoot(root: unknown): Promise<{ ok: false; error: string } | null> {
+    if (typeof root !== 'string' || root.length === 0) return { ok: false, error: 'bad-request' };
+    return (await isKnownRoot(root, this.sessionRoots())) ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  private async refuseUnknownProject(projectId: unknown): Promise<{ ok: false; error: string } | null> {
+    if (typeof projectId !== 'string' || projectId.length === 0) return { ok: false, error: 'bad-request' };
+    return (await isKnownProjectRef(projectId, this.sessionRoots())) ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  /**
    * The read channels, answered from the shared services with the phone's
-   * preview ceilings applied (design §9). Payloads are the shim's object form
-   * (`{ projectRoot, artifactId, full }`), never positional arguments.
+   * preview ceilings applied (design §9) after the root gate above. Payloads
+   * are the shim's object form (`{ projectRoot, artifactId, full }`), never
+   * positional arguments; a malformed one answers `bad-request`, never a Node
+   * error's text.
    *
    * A lookup table, not a second `switch`: tests/remote-channel-parity.test.ts
    * reads `case '<channel>':` out of this file to prove the handleMessage
@@ -3108,17 +3149,35 @@ export class RemoteServer {
    * channel the outer switch had dropped.
    */
   private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
-    'artifacts:list-session': (p) => listSessionFiles(p.sessionId, p.projectRoot),
-    'artifacts:list-project': (p) => listProjectFiles(p.projectId, p.opts),
-    'artifacts:list-all-files': (p) => listAllFiles(p.projectId, p.opts),
-    'artifacts:get': (p) => readArtifactText(p.projectRoot, p.artifactId, { full: p.full, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES }),
+    'artifacts:list-session': async (p) => {
+      if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownRoot(p.projectRoot)) ?? listSessionFiles(p.sessionId, p.projectRoot);
+    },
+    'artifacts:list-project': async (p) =>
+      (await this.refuseUnknownProject(p.projectId)) ?? listProjectFiles(p.projectId, p.opts),
+    'artifacts:list-all-files': async (p) =>
+      (await this.refuseUnknownProject(p.projectId)) ?? listAllFiles(p.projectId, p.opts),
+    'artifacts:get': async (p) => {
+      if (typeof p.artifactId !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownRoot(p.projectRoot))
+        ?? readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES });
+    },
+    // read-binary carries its own roots check (authorizeBytesRead), on the file itself.
     'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
-    'artifacts:search-content': (p) => searchArtifactContent(p.projectRoot, p.query),
-    'artifacts:check-existence': (p) => checkArtifactExistence(p.projectRoot, p.artifactIds),
-    'project:list-context': (p) => listContextFiles(p.projectPath),
-    'project:read-context-file': (p) => readContext(p.projectPath, p.absolutePath),
-    'project:list-conversations': (p) => listConversations(p.projectPath),
-    'project:repo-info': (p) => repoInfo(p.projectPath),
+    'artifacts:search-content': async (p) =>
+      (await this.refuseUnknownRoot(p.projectRoot)) ?? searchArtifactContent(p.projectRoot, p.query),
+    'artifacts:check-existence': async (p) =>
+      (await this.refuseUnknownRoot(p.projectRoot)) ?? checkArtifactExistence(p.projectRoot, p.artifactIds),
+    'project:list-context': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? listContextFiles(p.projectPath),
+    'project:read-context-file': async (p) => {
+      if (typeof p.absolutePath !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownRoot(p.projectPath)) ?? readContext(p.projectPath, p.absolutePath);
+    },
+    'project:list-conversations': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? listConversations(p.projectPath),
+    'project:repo-info': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? repoInfo(p.projectPath),
   };
 
   private readFileChannel(type: string, payload: any): Promise<unknown> {

@@ -342,7 +342,9 @@ export function FilesTab({
   // mounted, and refresh the list when files appear/disappear on disk. Debounced
   // — a git checkout emits hundreds of add/remove events in a burst, and each
   // uncoalesced refresh would re-run the (cache-invalidated) discovery scan.
-  useProjectWatch(project.path);
+  // Over remote access, the changes made while the phone was disconnected never
+  // arrived as events — reload the list once the watch is back (batch 3, R12).
+  useProjectWatch(project.path, () => refreshRef.current());
   // This tab now stays mounted while another tab shows, so the refresh has to
   // know that. Refreshing while hidden would be a full uncached disk walk in the
   // main process (main drops the discovery cache on every add/remove) for a list
