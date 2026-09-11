@@ -618,7 +618,15 @@ export default function SyncSetupWizard({ initialType, existingBackends, onCompl
             </div>
           )}
           {firstBackup?.kind === 'failed' && (
-            <Callout tone="warning" title="Your first backup didn't finish." className="mb-6 max-w-xs text-left">
+            <Callout
+              tone="warning"
+              title={
+                /* An empty reason means the upload never ran — another backup held the lock —
+                   so "didn't finish" would claim it started (code review 2026-09-11, F7). */
+                firstBackup.error ? "Your first backup didn't finish." : "Your first backup hasn't run yet."
+              }
+              className="mb-6 max-w-xs text-left"
+            >
               {firstBackup.error && <div className="mb-1">{firstBackup.error}</div>}
               YouCoded will try again automatically, or you can use Upload now in the Sync panel.
             </Callout>

@@ -121,6 +121,16 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
     expect(screen.queryByText("You're all set!")).toBeNull();
   });
 
+  it('a first backup that was skipped (another backup was running) says it has not run yet (code review F7)', async () => {
+    // pushBackend answers { success: false, error: '' } when a push is already in flight
+    // or the lock is held — nothing was attempted, so "didn't finish" would be false.
+    stub({ pushBackend: vi.fn(async () => ({ success: false, error: '' })) }, [SETUP_WARNING]);
+    fireEvent.click(await openSetup());
+
+    expect(await screen.findByText(/first backup hasn.t run yet/i)).toBeInTheDocument();
+    expect(screen.queryByText(/didn.t finish/i)).toBeNull();
+  });
+
   it('a first backup whose outcome never came back says it could not confirm', async () => {
     stub({
       pushBackend: vi.fn(async () => { throw new Error('Request sync:push-backend timed out'); }),
