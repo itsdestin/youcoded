@@ -67,7 +67,7 @@ function formatModelId(id: string): string {
 
 // ── The conversation preview panel (2026-09-10) ─────────────────────────────
 // Every decision below is an answered review-deck step, not a default. Five
-// rounds, in docs/active/design/2026-09-10-resume-preview-panel/:
+// rounds, in docs/archive/design/2026-09-10-resume-preview-panel/:
 //   R2  the list keeps its cards; it never collapses and never hides itself;
 //       the right half stays one line of text until a row is clicked.
 //   R3  the sheet: heading, conversation and actions on one inset surface with
