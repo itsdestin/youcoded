@@ -1,6 +1,7 @@
 // src/renderer/hooks/useSessionMeta.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { META_UNSUPPORTED_FALLBACK, type SessionFlagName, type SessionMetaResult } from '../../shared/types';
+import { plainMessage } from '../utils/ipc-error';
 
 export interface SessionMetaApi {
   tags: Set<string>;   // applied tag ids
@@ -10,8 +11,9 @@ export interface SessionMetaApi {
    *  error. Drives Priority-as-a-built-in-tag in the in-session chip. */
   flags: Partial<Record<SessionFlagName, boolean>>;
   /** False when the backend will REFUSE writes for this session (a desktop native
-   *  session, or an Android host where tags/notes aren't built yet). Render the
-   *  controls disabled. */
+   *  session, or an Android host where tags/notes aren't built yet) — and also when
+   *  the tags and note could not be READ, so nothing can overwrite what was never shown.
+   *  Render the controls disabled. */
   supported: boolean;
   /** Host-supplied explanation for `supported: false`, for the disabled tooltip.
    *  Falls back to META_UNSUPPORTED_FALLBACK when the host didn't say. */
@@ -46,8 +48,19 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
 
   const refetch = useCallback(() => {
     if (!sessionId) { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; setSupported(true); return; }
+    // WHY a failed read locks the editor (code review 2026-09-11, F1, on error inventory
+    // false message 12): this used to load a failed read as an empty note with writes
+    // still enabled — and setNote saves the WHOLE text, so typing replaced the stored note
+    // nobody was shown. The hosts now answer `unreadable`; that, or a rejected call, takes
+    // the same disabled state a refusing host does, with the reason in the tooltip.
+    const markUnreadable = (reason: string) => {
+      setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = '';
+      setSupported(false);
+      setUnsupportedReason(`Couldn't load this conversation's tags and note, so they can't be changed here: ${reason}`);
+    };
     Promise.resolve((window as any).claude.session.getMeta(sessionId))
       .then((m: SessionMetaResult) => {
+        if (m?.unreadable) { markUnreadable(m.unreadable); return; }
         setTags(new Set(m?.tags ?? []));
         // Missing is "none set" — an older peer omits the field entirely.
         setFlags(m?.flags ?? {});
@@ -60,7 +73,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
         setSupported(m?.supported !== false);
         setUnsupportedReason(m?.unsupportedReason || META_UNSUPPORTED_FALLBACK);
       })
-      .catch(() => { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; setSupported(true); });
+      .catch((err: unknown) => markUnreadable(plainMessage(err)));
   }, [sessionId]);
 
   useEffect(() => {
