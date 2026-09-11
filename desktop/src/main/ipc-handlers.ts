@@ -4926,6 +4926,15 @@ export function registerIpcHandlers(
   // Thin wrapper — the computation lives in ./artifacts/projects-index so the
   // remote WebSocket server returns byte-identical results (remote Project View
   // was empty because that transport had no handler at all).
+  // artifacts:download is a REMOTE channel (batch 3): a phone asks the host for
+  // a short-lived link and the host's HTTP route streams the file. On the
+  // desktop's own transport there is nothing to download to, so it refuses
+  // with a code the renderer never shows (Download is only offered in remote
+  // mode). A literal, not an ARTIFACT_IPC constant: the artifact parity test
+  // requires every constant there to have an Android handler, and the phone's
+  // own bridge answers this one through its catch-all `else` by design.
+  ipcMain.handle('artifacts:download', async () => ({ ok: false, code: 'not-remote' }));
+
   ipcMain.handle(ARTIFACT_IPC.LIST_PROJECTS_INDEX, async (_e, opts?: { withCounts?: boolean }) =>
     listProjectsIndex(opts)
   );

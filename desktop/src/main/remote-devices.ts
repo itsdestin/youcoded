@@ -129,6 +129,13 @@ export class RemoteDeviceStore {
     return true;
   }
 
+  /** A device the computer removed — or never knew. The download route checks
+   *  this per GET (batch 3, R10), so a link minted before an unpair dies with it. */
+  isRevoked(deviceId: string): boolean {
+    const device = this.devices.get(deviceId);
+    return !device || device.revokedAt !== null;
+  }
+
   /** Contract row R11: every device that has paired stays listed until it is unpaired. */
   list(onlineIds: ReadonlySet<string> = new Set()): RemoteDeviceView[] {
     return [...this.devices.values()]

@@ -270,6 +270,35 @@ function reconcileUnknownOutcomes(): void {
   }).catch(() => { /* still unknown; the entries stay marked */ });
 }
 
+/**
+ * A host-relative path made absolute on the host this client is paired to.
+ * WHY not always location.origin (design R2-10): the Android app's page is
+ * file:// and its host lives in the stored target (`ws://host:port/ws`); a
+ * phone browser has no stored target and the page's own origin IS the host.
+ */
+function absoluteHostUrl(hostRelative: string): string {
+  if (targetUrl) {
+    const u = new URL(targetUrl);
+    const proto = u.protocol === 'wss:' ? 'https:' : 'http:';
+    return `${proto}//${u.host}${hostRelative}`;
+  }
+  return `${location.origin}${hostRelative}`;
+}
+
+/** Open a link the way a "Save" would: an anchor with `download`, clicked, removed. */
+function openAsDownload(url: string, name: string): void {
+  const a = document.createElement('a');
+  a.href = url;
+  // The attribute is honoured same-origin (the phone browser); cross-origin
+  // (the Android app's file:// page) the host's Content-Disposition does the
+  // same job, and WebViewHost.kt routes /download/ to the download manager.
+  a.setAttribute('download', name);
+  a.rel = 'noopener';
+  a.style.display = 'none';
+  document.body.appendChild(a);
+  try { a.click(); } finally { a.remove(); }
+}
+
 /** Ask again for the state a fresh mount would have fetched. Reads only. */
 function rehydrate(): void {
   for (const channel of REHYDRATE_ON_RECONNECT) {
@@ -1735,12 +1764,22 @@ export function installShim(): void {
       // has to be spread in by name or it is dropped silently.
       get: (projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
         invoke('artifacts:get', { projectRoot, artifactId, full: opts?.full }),
-      // NOT bridged by remote-server.ts — this and artifacts:get both fall to
-      // its `default:` case and answer { unsupported: true }, so the artifact
-      // pane opens nothing at all from a remote browser against a desktop host.
-      // Kept wired for when that bridge lands (ROADMAP #remote).
+      // Bridged by remote-server.ts since batch 3 (with the phone's smaller
+      // preview ceiling — over it the host answers too-large with the size).
       readBinary: (absolutePath: string) =>
         invoke('artifacts:read-binary', { absolutePath }),
+      // Save a copy to this device (batch 3, §10). The host mints a short-lived
+      // link bound to this socket; the link is opened through an <a download>
+      // so the browser's own download UI shows progress and the finished file,
+      // and the file is saved, never displayed (R20). A refusal is data — the
+      // card shows it — so this channel is not in REJECT_ON_NOT_OK.
+      download: async (absolutePath: string, opts?: { projectRoot?: string; artifactId?: string }) => {
+        const res = await invoke('artifacts:download', { absolutePath, ...opts });
+        if (!res || res.ok !== true || typeof res.url !== 'string') return res;
+        const url = absoluteHostUrl(res.url);
+        openAsDownload(url, typeof res.name === 'string' ? res.name : '');
+        return { ...res, url };
+      },
       save: (projectRoot: string, projectId: string, projectName: string,
              artifactId: string, content: string, sessionId: string,
              opts?: { baseMtimeMs?: number; confirmed?: boolean }) =>

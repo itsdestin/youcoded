@@ -2074,12 +2074,14 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (filesRefused()) return refuseAsToday('artifacts:list-all-files');
       return { ok: true, files: withRemoteRows(studentSwitch ? studentAllFiles(projectId) : allFiles(projectId)), truncated: false };
     },
-    // Batch 3, Q-7 (yes): save a copy to the phone. The real channel mints a
-    // short-lived download link on the host and opens it; here it only records
-    // the ask, because a workbench has no bytes to hand over.
+    // Batch 3, Q-7 (yes): save a copy to the phone. The real channel
+    // (remote-download.ts) mints a short-lived link on the host and the shim
+    // opens it; here it only records the ask, because a workbench has no bytes
+    // to hand over. Same answer shape as the real one: { ok, url, name, sizeBytes }.
     download: async (absolutePath: string) => {
       console.log('[workbench] artifacts.download', absolutePath);
-      return { ok: true };
+      const name = absolutePath.split('/').pop() ?? absolutePath;
+      return { ok: true, url: `http://workbench.invalid/download/token/${encodeURIComponent(name)}`, name, sizeBytes: 0 };
     },
     get: async (_projectRoot: string, artifactId: string, opts?: { full?: boolean }) => {
       if (filesRefused()) return refuseAsToday('artifacts:get');

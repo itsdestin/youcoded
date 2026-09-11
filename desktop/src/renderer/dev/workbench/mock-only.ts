@@ -97,6 +97,9 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // phone can ask for a fresh copy.
   { channel: 'on.remoteConversationStatus', feature: 'Remote access batch 2 — conversation restoration status' },
   { channel: 'remote.rehydrate', feature: 'Remote access batch 2 — Refresh on the may-be-behind strip' },
-  // Batch 3: save a copy of a file to the phone (Q-7 yes).
-  { channel: 'artifacts.download', feature: 'Remote access batch 3 — Download a file to the phone' },
+  // Batch 3's `artifacts.download` (save a copy of a file to the phone, Q-7 yes) came off
+  // on 2026-09-10 when the real channel landed: main/remote-download.ts mints the link,
+  // remote-server.ts serves GET /download/<token>, preload declares it, the shim opens
+  // it, and Android's catch-all answers unsupported by design. The fake in mock-shim.ts
+  // stays so the too-large card and the toolbar button stay reviewable without a host.
 ];

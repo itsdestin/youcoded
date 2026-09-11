@@ -10,6 +10,7 @@ import {
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 import { watchProject, unwatchProject, dropSubscriber } from './artifacts/project-watcher';
 import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../shared/remote-file-limits';
+import { RemoteDownloads } from './remote-download';
 import { readFileHead } from './fs-read-head';
 // Games arcade scores — remote browsers share the desktop's operations and
 // its stale-board cache (main/arcade-handlers.ts).
@@ -417,6 +418,11 @@ export class RemoteServer {
         res.end(JSON.stringify({ needsSetup: !this.config.passwordHash }));
         return;
       }
+      // Download links (batch 3, §10) — matched before the static handler AND
+      // the Vite proxy: the SPA fallback would answer an expired link with
+      // index.html and a 200, and in dev the proxy would hand it to Vite. The
+      // 256-bit token in the path is the authorization; see remote-download.ts.
+      if (this.downloads.handleHttpRequest(req, res)) return;
       if (hasStaticBuild) {
         this.handleHttpRequest(req, res, staticDir);
       } else {
@@ -569,6 +575,7 @@ export class RemoteServer {
   /** Every device loses access — what a password change means. */
   invalidateTokens(): void {
     this.devices.revokeAll();
+    this.downloads.revokeAll();
     for (const client of this.clients) {
       client.ws.close(4001, 'Password changed');
     }
@@ -616,6 +623,8 @@ export class RemoteServer {
   unpairDevice(deviceId: string): boolean {
     const revoked = this.devices.revoke(deviceId);
     if (!revoked) return false;
+    // Contract R10 (batch 3): removing a device also ends its right to download.
+    this.downloads.revokeDevice(deviceId);
     for (const client of this.clients) {
       if (client.deviceId === deviceId) {
         client.ws.close(4003, 'Device unpaired');
@@ -3031,6 +3040,15 @@ export class RemoteServer {
         this.respond(client.ws, type, id, { ok: true });
         break;
       }
+      case 'artifacts:download': {
+        // Mint a short-lived link bound to THIS device and THIS socket (§10);
+        // the answer's `url` is host-relative and the shim makes it absolute.
+        // Refusals (`not-allowed`, `orphan`, `busy`) are data the card shows,
+        // so this channel must never join REJECT_ON_NOT_OK.
+        this.respond(client.ws, type, id,
+          await this.downloads.mint(payload ?? {}, { deviceId: client.deviceId, socketId: client.id }));
+        break;
+      }
 
       // --- Games arcade scores (spec §6.1) ---
       // The SAME operations the Electron IPC path runs, including the shared
@@ -3187,6 +3205,10 @@ export class RemoteServer {
 
   // Negative and descending: never a webContents id (those are positive).
   private nextWatchId = -1;
+
+  // Download links (§10). The revocation check reads the device store lazily,
+  // at each GET, so a device unpaired while its link was alive is refused.
+  readonly downloads = new RemoteDownloads({ isDeviceRevoked: (deviceId) => this.devices.isRevoked(deviceId) });
 
   /** This socket's project-watcher subscriber id, allocated on first use and released on close. */
   private watchSubscriberId(client: AuthenticatedClient): number {
