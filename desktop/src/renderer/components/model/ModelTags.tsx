@@ -27,7 +27,7 @@ export type ModelTagStyle = 'tinted' | 'dot' | 'compact';
 export const ModelTagStyleContext = createContext<ModelTagStyle>('tinted');
 
 /** `neutral` says something without judging it (a plan, a price level);
- *  `dim` is the absence of a score (Q-6: a dim "Not rated"). */
+ *  `dim` is the absence of a score (Q-6: "Not rated"). */
 type Tone = Band | 'neutral' | 'dim';
 
 export interface TagSpec {
@@ -39,6 +39,9 @@ export interface TagSpec {
   short: string;
   /** The exact figures behind the tag, where they came from and how old (S-3). */
   hint: string;
+  /** A figure the app worked out rather than measured (an estimated speed). Drawn
+   *  with a dashed edge; the hint says it is an estimate. */
+  estimated?: boolean;
 }
 
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
@@ -55,19 +58,38 @@ function dollars(n: number): string {
   return Number.isInteger(n) ? `$${n}` : `$${n.toFixed(2)}`;
 }
 
-/** Destin's wording on the deck (F-1 note): "hovering should show the real full
- *  listed in/out price". */
-function priceLine(p: { in: number; out: number }): string {
-  return `${dollars(p.in)} in · ${dollars(p.out)} out, per million`;
+/** The listed price, in and out (Destin, F-1 note: "hovering should show the real
+ *  full listed in/out price"). WHY these words (UX tester U13): "$3 in · $15 out, per
+ *  million" left a student asking per million WHAT, and what in and out are. Prices
+ *  are listed per token; about 750,000 English words make a million tokens. */
+function priceLines(p: { in: number; out: number }): string {
+  return `${dollars(p.in)} for what you send · ${dollars(p.out)} for what it writes\nper million tokens (about 750,000 words)`;
 }
 
 const pct = (x: number) => `${Math.round(x * 100)}%`;
-const cap = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
-/** Which intelligence level a value judgement was made within (F-1 "same-level"). */
-function levelWords(score: number): string {
-  return score >= 80 ? 'scoring 80 and up' : score >= 50 ? 'scoring 50 to 79' : 'scoring under 50';
+function ordinal(n: number): string {
+  const tens = n % 100;
+  const suffix = tens >= 11 && tens <= 13 ? 'th' : ({ 1: 'st', 2: 'nd', 3: 'rd' } as Record<number, string>)[n % 10] ?? 'th';
+  return `${n}${suffix}`;
 }
+
+// WHY comparisons instead of "Poor value among models scoring 50 to 79" (UX tester
+// U14: it needed a second read). Value is judged against models at the same
+// intelligence level, cheapest third great, priciest third poor (F-1), so "most
+// models this smart" is exactly what the level means.
+const VALUE_LINE = {
+  great: 'Cheaper than most models this smart',
+  fair: 'Priced like most models this smart',
+  poor: 'Costs more than most models this smart',
+} as const;
+
+// A price level is thirds of every priced model, with no score to judge value (F-3).
+const PRICE_LINE = {
+  low: 'Cheaper than most models',
+  mid: 'Priced like most models',
+  high: 'Costs more than most models',
+} as const;
 
 const SPEED_WORD: Record<Band, string> = { good: 'Fast', middling: 'Medium', poor: 'Slow' };
 
@@ -90,20 +112,20 @@ export function tagsFor(
 
   // ── Cost ──────────────────────────────────────────────────────────────────
   if (f.billing === 'subscription') {
-    out.push({ kind: 'cost', tone: 'neutral', label: 'SUBSCRIPTION PLAN', short: 'Plan', hint: `Included in your ${planName} plan: no per-use price` });
+    out.push({ kind: 'cost', tone: 'neutral', label: 'SUBSCRIPTION PLAN', short: 'Plan', hint: `Included in your ${planName} plan, no charge per use` });
   } else if (f.billing === 'local') {
-    out.push({ kind: 'cost', tone: 'good', label: 'FREE - LOCAL', short: 'Free', hint: 'Runs on this computer: no per-use price' });
+    out.push({ kind: 'cost', tone: 'good', label: 'FREE - LOCAL', short: 'Free', hint: 'Runs on this computer, no charge per use' });
   } else if (f.price && f.value && f.intelligence) {
-    const word = cap(f.value);
+    const word = { great: 'Great', fair: 'Fair', poor: 'Poor' }[f.value];
     out.push({
       kind: 'cost', tone: VALUE_BAND[f.value], label: `${word} value`, short: word,
-      hint: `${word} value among models ${levelWords(f.intelligence.score)}\n${priceLine(f.price)}`,
+      hint: `${VALUE_LINE[f.value]}\n${priceLines(f.price)}`,
     });
   } else if (f.price && f.priceLevel) {
     const word = { low: 'Low', mid: 'Mid', high: 'High' }[f.priceLevel];
     out.push({
       kind: 'cost', tone: 'neutral', label: `${word} price`, short: `${word} price`,
-      hint: `${word} price. No intelligence score, so value can't be judged\n${priceLine(f.price)}`,
+      hint: `${PRICE_LINE[f.priceLevel]}; no intelligence score to judge value\n${priceLines(f.price)}`,
     });
   }
   // No price found and no billing: nothing. Never "Free" (S-1).
@@ -111,20 +133,24 @@ export function tagsFor(
   // ── Intelligence ──────────────────────────────────────────────────────────
   if (f.intelligence) {
     const { score, scoredAs, borrowed, benchmarks: b } = f.intelligence;
-    const lines = [`Intelligence ${score} of 100 (100 is ${snapshot.topModel})`];
+    // WHY these lines (UX tester U11, U12): "100 is GPT-6 Astra" named a model that
+    // is not in the list, the bare percentages did not say percent of what, and a
+    // plan alias ("Sonnet") scored as a different name read as a second model.
+    const lines = [`Intelligence ${score} out of 100`, `100 is today's best model, ${snapshot.topModel}`];
     if (scoredAs) {
       lines.push(borrowed
-        ? `Score of the original, ${scoredAs}; this downloaded copy may do somewhat worse`
-        : `Scores for ${scoredAs}`);
+        ? `Score of the original ${scoredAs}; this downloaded copy may do a little worse`
+        : `Scores for ${scoredAs}, the model it runs today`);
     }
     const results = [
-      b?.coding != null ? `Coding ${pct(b.coding)}` : null,
-      b?.science != null ? `Science ${pct(b.science)}` : null,
-      b?.facts != null ? `Facts ${pct(b.facts)}` : null,
+      b?.coding != null ? `coding ${pct(b.coding)}` : null,
+      b?.science != null ? `science ${pct(b.science)}` : null,
+      b?.facts != null ? `facts ${pct(b.facts)}` : null,
     ].filter(Boolean);
-    if (results.length) lines.push(results.join(' · '));
-    if (b?.instructions) lines.push(`Following instructions: #${b.instructions.rank} of ${b.instructions.of}`);
-    lines.push(`Epoch AI${b?.instructions ? ', LMArena' : ''} · ${niceDate(snapshot.asOf)}`);
+    if (results.length) lines.push(`Tests passed: ${results.join(' · ')}`);
+    if (b?.instructions) lines.push(`${ordinal(b.instructions.rank)} of ${b.instructions.of} at following instructions`);
+    // The sources are named on purpose: both licences require credit (CC BY 4.0).
+    lines.push(`Sources: Epoch AI${b?.instructions ? ', LMArena' : ''} · ${niceDate(snapshot.asOf)}`);
     out.push({ kind: 'intelligence', tone: intelligenceBand(score), label: `Intelligence ${score}`, short: String(score), hint: lines.join('\n') });
   } else {
     out.push({ kind: 'intelligence', tone: 'dim', label: 'Not rated', short: 'Not rated', hint: 'No public intelligence score for this model yet' });
@@ -133,9 +159,11 @@ export function tagsFor(
   // ── Speed (this computer only, Q-9) ───────────────────────────────────────
   if (f.speed) {
     const word = SPEED_WORD[speedBand(f.speed.wordsPerSecond)];
-    const shown = f.speed.estimated ? `~${word}` : word;
+    // WHY no "~" (UX tester U15: "the tilde means nothing to most people"): an
+    // estimate is drawn with a dashed edge, and its hint says so in words.
     out.push({
-      kind: 'speed', tone: speedBand(f.speed.wordsPerSecond), label: shown, short: shown,
+      kind: 'speed', tone: speedBand(f.speed.wordsPerSecond), label: word, short: word,
+      estimated: f.speed.estimated,
       hint: f.speed.estimated
         ? `About ${f.speed.wordsPerSecond} words a second on this computer\nAn estimate until its first reply`
         : `${f.speed.wordsPerSecond} words a second on this computer, measured`,
@@ -165,37 +193,38 @@ function Dot({ tone }: { tone: Tone }) {
 
 export function ModelTags({ tags, selected = false, className = '' }: {
   tags: TagSpec[];
-  /** On the selected row's accent fill a tint could fail contrast, because the
-   *  accent is theme-authored; the tags follow the row's own text colour there. */
+  /** The row is the current model, drawn on the theme's accent fill. */
   selected?: boolean;
   className?: string;
 }) {
   const style = useContext(ModelTagStyleContext);
   if (!tags.length) return null;
-  const onAccent = { borderColor: 'color-mix(in srgb, currentColor 40%, transparent)' };
   return (
-    // Spacing is set so three tags ("FREE - LOCAL", "Intelligence 24", "~Medium")
+    // Spacing is set so three tags ("FREE - LOCAL", "Intelligence 24", "Medium")
     // fit on one line at the list's usual width; a narrower host still wraps
     // rather than cutting a tag off.
     <span className={`flex items-center ${style === 'dot' ? 'gap-x-1.5 gap-y-1' : 'gap-1'} ${style === 'compact' ? 'shrink-0' : 'flex-wrap'} ${className}`}>
       {tags.map((t) => (
-        <Tooltip key={t.kind} text={t.hint}>
+        // placement bottom (UX tester U6): above, the hint covered the row's own
+        // model name, so you could no longer see which model it described.
+        <Tooltip key={t.kind} text={t.hint} placement="bottom">
           {style === 'dot' ? (
             <span className={`inline-flex items-center gap-[3px] text-2xs leading-none whitespace-nowrap ${selected ? '' : 'text-fg-2'}`}>
               <Dot tone={t.tone} />
               {t.label}
             </span>
           ) : (
-            <span
-              className={`inline-flex items-center px-1 py-[2px] rounded-sm border text-2xs leading-none whitespace-nowrap ${
-                // WHY every tag's words are fg-2, "Not rated" included: fg-muted
-                // measured 4.06:1 on Halftone Dimension (needs 4.5), and "Not rated"
-                // is information, not decoration (G-6). The dashed edge is its cue.
-                selected ? '' : `${TINT[t.tone]} text-fg-2`
-              }`}
-              style={selected ? onAccent : undefined}
-            >
-              {style === 'compact' ? t.short : t.label}
+            // WHY a panel backing on the current row (UX tester U20): the chips used
+            // to drop their colour there, so the highest-scoring model's tag turned
+            // plain grey beside a lower green one. A tint over the theme's accent
+            // cannot promise readable text; a tint over `panel` is the same chip every
+            // other row draws, so its contrast is already known.
+            <span className={`inline-flex rounded-sm ${selected ? 'bg-panel' : ''}`}>
+              <span
+                className={`inline-flex items-center px-1 py-[2px] rounded-sm border text-2xs leading-none whitespace-nowrap text-fg-2 font-normal ${TINT[t.tone]} ${t.estimated ? 'border-dashed' : ''}`}
+              >
+                {style === 'compact' ? t.short : t.label}
+              </span>
             </span>
           )}
         </Tooltip>
