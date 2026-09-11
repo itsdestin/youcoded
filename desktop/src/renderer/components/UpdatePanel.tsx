@@ -9,6 +9,7 @@ import type { UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
 import { Button, Dialog, LoadingState, ProgressBar } from './ui';
+import { stripInvokeWrapper } from '../utils/ipc-error';
 
 // Error codes where a fresh download might succeed (transient or file-level).
 // The complement (dmg-corrupt, appimage-not-writable, unsupported-platform,
@@ -17,6 +18,25 @@ import { Button, Dialog, LoadingState, ProgressBar } from './ui';
 const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing']);
 function isRetriableErrorCode(code: string): boolean {
   return RETRIABLE_ERROR_CODES.has(code);
+}
+
+/**
+ * The installer's code from a rejected download. Main throws UpdateInstallError, whose
+ * message is `<code>: <detail>` (update-installer.ts).
+ *
+ * WHY strip the wrapper first (error inventory 2026-09-10, false message 17): on desktop
+ * the rejection arrives as "Error invoking remote method 'update:download': <code>: …",
+ * so the text before the first colon was "Error invoking remote method 'update". No code
+ * matched, every download failure lost its Retry, and the button called it a launch
+ * failure. Only the wrapper is removed — not plainMessage's full rewrite, which turns
+ * "remote-unsupported: …" into a sentence and would hide that code.
+ * Text with no code-shaped prefix (a remote timeout, say) keeps the old fallback of
+ * network-failed: a fresh download is the one attempt that cannot hurt.
+ */
+function downloadErrorCode(e: unknown): string {
+  const raw = (e as { message?: unknown } | null | undefined)?.message;
+  const match = /^([a-z][a-z-]*)(?::|$)/.exec(stripInvokeWrapper(typeof raw === 'string' ? raw : ''));
+  return match ? match[1] : 'network-failed';
 }
 
 interface UpdateStatus {
@@ -75,7 +95,10 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     | { kind: 'downloading'; jobId: string | null; percent: number }
     | { kind: 'ready'; jobId: string; filePath: string }
     | { kind: 'launching' }
-    | { kind: 'error'; code: string };
+    // `stage` is which step failed. WHY (error inventory 2026-09-10, false message 17):
+    // the label used to be chosen by retriability alone, so every failure retry could
+    // not fix — including a refused or busy DOWNLOAD — read "Launch failed".
+    | { kind: 'error'; code: string; stage: 'download' | 'launch' };
 
   const [installState, setInstallState] = useState<InstallState>({ kind: 'idle' });
   // Ref rather than state because the progress handler fires asynchronously and
@@ -146,7 +169,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     setInstallState({ kind: 'launching' });
     const result: UpdateLaunchResult = await window.claude.update.launch(jobId, filePath);
     if (!result.success) {
-      setInstallState({ kind: 'error', code: result.error });
+      setInstallState({ kind: 'error', code: result.error, stage: 'launch' });
       return;
     }
     if ('fallback' in result && result.fallback === 'browser') {
@@ -174,10 +197,9 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       if (abortedRef.current) return;
       activeJobIdRef.current = result.jobId;
       setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (abortedRef.current) return;
-      const code = typeof e?.message === 'string' ? (e.message.split(':')[0] || 'network-failed') : 'network-failed';
-      setInstallState({ kind: 'error', code });
+      setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'download' });
     }
   }, [installState, runLaunch]);
 
@@ -292,9 +314,13 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                 // a fresh download; the rest (dmg-corrupt, appimage-not-writable,
                 // unsupported-platform, remote-unsupported) can't — the user's
                 // best option is the browser fallback link below.
-                isRetriableErrorCode(installState.code)
-                  ? 'Download failed — Retry'
-                  : 'Launch failed'
+                // WHY the stage picks the WORD (error inventory 2026-09-10, false
+                // message 17): retriability alone chose between "Download failed —
+                // Retry" and "Launch failed", so a download that retry could not fix
+                // (busy, url-rejected) was reported as a launch that never happened.
+                installState.stage === 'launch'
+                  ? (isRetriableErrorCode(installState.code) ? 'Launch failed — Retry' : 'Launch failed')
+                  : (isRetriableErrorCode(installState.code) ? 'Download failed — Retry' : 'Download failed')
               )}
             </Button>
             {installState.kind === 'error' && (

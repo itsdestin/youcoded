@@ -29,6 +29,19 @@ function onPhone(): boolean {
   return typeof window !== 'undefined' && isAndroid() && !isRemoteMode();
 }
 
+/** Remove ONLY Electron's "Error invoking remote method '<channel>': Error: " prefix,
+ *  leaving the handler's own text exactly as it was — for callers that read a code
+ *  out of that text rather than show it.
+ *
+ *  WHY separate from plainMessage (error inventory 2026-09-10, false message 17):
+ *  plainMessage also rewrites `remote-unsupported: <channel>` into a sentence, which
+ *  is right on screen and wrong for UpdatePanel, whose retry decision needs that code.
+ *  UpdatePanel had parsed the raw text instead, so desktop's prefix hid every code.
+ *  One regex behind both, so they cannot disagree about what the wrapper is. */
+export function stripInvokeWrapper(text: string): string {
+  return text.replace(ELECTRON_WRAPPER, '');
+}
+
 /** The user-facing sentence inside a rejected `window.claude.*` call.
  *  `fallback` is used when the failure carries no message of its own — never
  *  guess a cause there; say only what is certainly true. */
