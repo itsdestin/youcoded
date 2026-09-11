@@ -120,6 +120,14 @@ const COMPLETED_RING_MS = 10 * 60_000;
 // A half-open socket is invisible without this: the host keeps buffering for a client that
 // is gone, and the client waits the full request timeout to learn anything is wrong.
 const PING_INTERVAL_MS = 20_000;
+// How many of those checks may go unanswered before the host gives up on a client.
+// WHY more than one (Destin, 2026-09-11: "still flashes the password screen at me on
+// refresh/reconnect and takes a while to load back in/sync up"; the dev log showed his phone
+// dropping every 55-90 s): one missed check closed the connection after as little as 20 s of
+// silence, and a phone that locks for half a minute — or whose radio pauses mid-tap — is not a
+// phone that has gone away. Each reconnect then cost a full catch-up. Three gives roughly a
+// minute of grace, still far inside the 30 s a request waits.
+const MAX_MISSED_PINGS = 3;
 // Remote access batch 2 (design §1): a client that never says `client:ready` — an older
 // build of the phone page — gets the restore sequence after this long instead of never.
 const OLD_CLIENT_FALLBACK_MS = 5000;
@@ -153,7 +161,10 @@ interface AuthenticatedClient {
   deviceId: string;
   ip: string;
   connectedAt: number;
-  awaitingPong?: boolean;
+  /** Checks sent since the client last said anything. Reset by any frame, pong or message. */
+  missedPings?: number;
+  /** When the client last said anything — reported on the drop, so a silent death is visible. */
+  lastHeardAt?: number;
   // Optional because tests (and any record added straight to `clients`) predate the
   // phases: a record with no phase is treated as live, which is what it always was.
   phase?: ClientPhase;
@@ -342,7 +353,9 @@ export class RemoteServer {
    *  project list and a flashing password screen could not be traced, because the host recorded
    *  no connects, drops or catch-ups. A short device id only: never a secret, address or name. */
   private logDevice(client: { deviceId: string }, event: string): void {
-    console.log(`[remote-server] device ${client.deviceId.slice(0, 8)}: ${event}`);
+    // WHY the time (2026-09-11): the log recorded seven drops in ten minutes with no way to
+    // tell which were the phone being locked or refreshed and which happened on their own.
+    console.log(`[remote-server] ${new Date().toISOString()} device ${client.deviceId.slice(0, 8)}: ${event}`);
   }
   // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
   // Rides session:destroyed so a phone whose conversation went away opens that one.
@@ -1247,13 +1260,20 @@ export class RemoteServer {
     if (this.pingTimer) return;
     this.pingTimer = setInterval(() => {
       for (const client of this.clients) {
-        if (client.awaitingPong) {
-          this.logDevice(client, 'no answer to the last ping; closing');
-          client.ws.close(4008, 'No response');
+        const missed = (client.missedPings ?? 0) + 1;
+        if (missed > MAX_MISSED_PINGS) {
+          this.logDevice(client, `no answer to ${MAX_MISSED_PINGS} checks; closing`);
+          // terminate(), not close(): a phone whose network vanished never completes a closing
+          // handshake, so close() waited out ws's own 30 s timer — the drop was logged, and the
+          // socket freed, half a minute after it actually happened. Test doubles without
+          // terminate() keep the old path.
+          const socket = client.ws as WebSocket & { terminate?: () => void };
+          if (typeof socket.terminate === 'function') socket.terminate();
+          else socket.close(4008, 'No response');
           this.clients.delete(client);
           continue;
         }
-        client.awaitingPong = true;
+        client.missedPings = missed;
         try { client.ws.ping(); } catch { /* closing anyway */ }
       }
     }, PING_INTERVAL_MS);
@@ -1263,7 +1283,7 @@ export class RemoteServer {
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
     const client: AuthenticatedClient = {
-      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(),
+      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(),
       phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
     };
     this.clients.add(client);
@@ -1286,11 +1306,14 @@ export class RemoteServer {
       if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
       this.clients.delete(client);
     };
-    ws.on('pong', () => { client.awaitingPong = false; });
-    ws.on('message', (raw) => { client.awaitingPong = false; void this.handleMessage(client, raw as Buffer | string); });
+    ws.on('pong', () => { client.missedPings = 0; client.lastHeardAt = Date.now(); });
+    ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); void this.handleMessage(client, raw as Buffer | string); });
     ws.on('close', (code: number, reason: Buffer) => {
       const why = reason && reason.length ? ` (${reason.toString()})` : '';
-      this.logDevice(client, `disconnected: code ${code}${why} after ${Math.round((Date.now() - client.connectedAt) / 1000)} s, phase ${client.phase}`);
+      // Silence before the drop separates "the phone went away" from "the phone was talking
+      // and the connection broke" — the two need different fixes.
+      const silent = Math.round((Date.now() - (client.lastHeardAt ?? client.connectedAt)) / 1000);
+      this.logDevice(client, `disconnected: code ${code}${why} after ${Math.round((Date.now() - client.connectedAt) / 1000)} s, phase ${client.phase}, silent for ${silent} s`);
       drop();
     });
     ws.on('error', (err: Error) => {

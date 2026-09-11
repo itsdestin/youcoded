@@ -77,7 +77,10 @@ describe('App wiring, anchored to each line that carries it', () => {
     // 13 on 2026-09-10: buddy focus, created (gated), destroyed (focus rule), hydrate
     // choice, a restore with no hydrate, mount list (gated), refocus-only, fresh window,
     // ownership lost, host switch reset + list (gated), local removal, header click.
-    expect(occurrences(/setSessionId\(/)).toBe(13);
+    // 14 on 2026-09-11: adoptCreatedSession — a session the person just asked for, opened from
+    // the computer's answer rather than waiting for the announcement (and NOT gated, because
+    // starting one is itself a decision about where to be).
+    expect(occurrences(/setSessionId\(/)).toBe(14);
   });
 
   it('the hydrate decides the place, wakes waiting first pages, and selects the choice — remote only', () => {
@@ -105,6 +108,8 @@ describe('App wiring, anchored to each line that carries it', () => {
   it('back on the device\'s own runtime the strip is cleared, and the welcome screen waits while catching up', () => {
     expect(app).toMatch(/if \(mode === 'local'\) setConversationStatus\(undefined\);/);
     expect(app).toMatch(/\{remoteCatchingUp \? \(\s*<StatusStrip tone="busy"/);
-    expect(app).toMatch(/w-64\$\{remoteCatchingUp \? ' hidden' : ''\}/);
+    // A start the person asked for hides them too, so a second tap cannot start a second
+    // session while the first is still being answered (2026-09-11 evening).
+    expect(app).toMatch(/w-64\$\{remoteCatchingUp \|\| startingSession \? ' hidden' : ''\}/);
   });
 });

@@ -16,7 +16,7 @@ import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import { AnchorTip, Button, Dialog, StatusStrip, Toast, Toggle } from './components/ui';
+import { AnchorTip, Button, Dialog, ErrorState, StatusStrip, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
@@ -37,6 +37,7 @@ import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker'
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
 import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
+import { showFirstRunWelcome } from './first-run-screen';
 // Central slash-command router — also used by the drawer so drawer-initiated
 // slash commands behave the same as typed ones (otherwise drawer bypasses InputBar's intercept).
 import { dispatchSlashCommand, type DispatcherResult } from './state/slash-command-dispatcher';
@@ -271,6 +272,22 @@ function AppInner() {
   // Sessions that have received their first hook event (Claude is initialized).
   // Until this fires, show an "Initializing" overlay to prevent premature input.
   const [initializedSessions, setInitializedSessions] = useState<Set<string>>(new Set());
+  // Has the list of open sessions arrived from this computer at least once? The welcome screen
+  // must not call anyone a first-time user before it has — see first-run-screen.ts.
+  const [sessionListLoaded, setSessionListLoaded] = useState(false);
+  // Past conversations to resume: true / false / null = unknown (not asked, or the question
+  // failed — which over remote access happens on every dropped connection).
+  const [hasResumable, setHasResumable] = useState<boolean | null>(null);
+  // Bumped to ask that question again, after a remote reconnect.
+  const [resumeProbe, setResumeProbe] = useState(0);
+  // A session start the person asked for that the computer has not answered yet. WHY (Destin,
+  // 2026-09-11, from his phone): "when i create a session, i don't see the initializing session
+  // screen. it just immediately resets to the create session/no active session screen" — the
+  // form closed on the tap and nothing else changed until the computer's announcement arrived,
+  // which over remote access waits behind a catch-up.
+  const [startingSession, setStartingSession] = useState(false);
+  const [startFailed, setStartFailed] = useState<string | null>(null);
+  const startArgsRef = useRef<unknown[] | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [drawerSearchMode, setDrawerSearchMode] = useState(false);
   const [drawerFilter, setDrawerFilter] = useState<string | undefined>(undefined);
@@ -2009,6 +2026,8 @@ function AppInner() {
       // Perf lab: boot-time session fetch has resolved (catches pre-existing
       // sessions on mount — see comment above this effect).
       performance.mark('yc:sessions-listed');
+      // Even an empty list is an answer: it is what tells the welcome screen it may decide.
+      setSessionListLoaded(true);
       if (!list || list.length === 0) return;
 
       // Fix: this per-session seeding used to run INSIDE the setSessions updater
@@ -2205,6 +2224,8 @@ function AppInner() {
       // Back on this device's own runtime there is no computer's copy to describe; a strip
       // left saying "reconnecting" would never clear (T4 review, 3).
       if (mode === 'local') setConversationStatus(undefined);
+      // Whatever the last computer said about past conversations was about THAT computer.
+      setHasResumable(null);
       setSessions([]);
       setSessionId(null);
       setViewModes(new Map());
@@ -2667,6 +2688,25 @@ function AppInner() {
     [sessionId, dispatch, viewModes, getUsageSnapshot, guardedPtySend, handleModelSwitchCommand],
   );
 
+  /** Put a just-created session on screen from the computer's ANSWER. session:created still
+   *  arrives and dedups against this; on a phone that announcement is queued behind a catch-up,
+   *  and a remote client would not auto-select it even then (mayAutoSelect). Starting one is a
+   *  decision about where to be, so it also settles the place a hydrate would otherwise pick. */
+  const adoptCreatedSession = useCallback((info: any) => {
+    placeDecidedRef.current = true;
+    dispatch({ type: 'SESSION_INIT', sessionId: info.id });
+    setSessions((prev) => (prev.some((s) => s.id === info.id) ? prev : [...prev, info]));
+    setViewModes((vm) => (vm.has(info.id) ? vm : new Map(vm).set(info.id, 'chat')));
+    setPermissionModes((pm) => (pm.has(info.id) ? pm : new Map(pm).set(info.id, matchPermissionMode(info.permissionMode))));
+    setSessionModels((sm) => (sm.has(info.id) ? sm : new Map(sm).set(info.id, matchModelAlias(info.model))));
+    // Same rule as the announcement handler: only Claude Code sessions wait for a first hook
+    // event, so anything else is ready as soon as it exists.
+    if (info.provider && info.provider !== 'claude') {
+      setInitializedSessions((prev) => (prev.has(info.id) ? prev : new Set(prev).add(info.id)));
+    }
+    setSessionId(info.id);
+  }, [dispatch]);
+
   const createSession = useCallback(async (cwd: string, dangerous: boolean, sessionModel?: string, provider?: 'claude' | 'native', launchInNewWindow?: boolean, binding?: { providerId: string; modelId: string }, preset?: string) => {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
@@ -2679,15 +2719,29 @@ function AppInner() {
     // force skipPermissions false, carry binding, carry preset) live in ONE
     // place now — shared/session-create-args.ts. They were hand-written at each
     // call site, and the buddy floater's copy remembered none of them.
-    const info = await (window.claude.session.create as any)(buildSessionCreateArgs({
-      name: 'New Session',
-      cwd,
-      runtime: provider === 'native' ? 'native' : 'claude',
-      model: m,
-      skipPermissions: dangerous,
-      binding,
-      preset,
-    }));
+    // The screen changes on the tap, not when the computer answers.
+    setStartingSession(true);
+    setStartFailed(null);
+    startArgsRef.current = [cwd, dangerous, sessionModel, provider, launchInNewWindow, binding, preset];
+    let info: any;
+    try {
+      info = await (window.claude.session.create as any)(buildSessionCreateArgs({
+        name: 'New Session',
+        cwd,
+        runtime: provider === 'native' ? 'native' : 'claude',
+        model: m,
+        skipPermissions: dangerous,
+        binding,
+        preset,
+      }));
+    } catch (err: any) {
+      // Never a silent return to the empty screen — that is the "it just reset" Destin saw.
+      setStartingSession(false);
+      setStartFailed(err?.message ? String(err.message) : '');
+      return;
+    }
+    if (info?.id) adoptCreatedSession(info);
+    setStartingSession(false);
     // I1 fix: deliver the RESOLVED harnessId to the live session pill. The
     // session:created event that seeds the sessions entry is emitted+sent
     // (process.nextTick) BEFORE the main handler finishes create/resume, so on a
@@ -3180,17 +3234,22 @@ function AppInner() {
   // nothing. `null` = not asked yet, which keeps Resume visible — a second,
   // synced device may have sessions this device has not pulled yet, so the
   // unknown state errs toward showing the button.
-  const [hasResumable, setHasResumable] = useState<boolean | null>(null);
+  useOnRemoteReconnect(() => setResumeProbe((n) => n + 1));
   useEffect(() => {
     if (isFirstRun !== false || sessions.length > 0) return;
     let alive = true;
     Promise.resolve()
       .then(() => (window as any).claude?.session?.browse?.() as Promise<unknown[]> | undefined)
-      .then((list) => { if (alive) setHasResumable(Array.isArray(list) && list.length > 0); })
-      .catch(() => { if (alive) setHasResumable(false); });
+      // Anything that is not a list is not an answer either: an older or remote host that
+      // replied with an object must not be read as "you have no past conversations".
+      .then((list) => { if (alive) setHasResumable(Array.isArray(list) ? list.length > 0 : null); })
+      // A failed question is unknown, never "none" (Destin, 2026-09-11: the phone sometimes
+      // opened on "Start your first session"). Unknown keeps the everyday screen AND keeps
+      // Resume offered; the reconnect above asks again.
+      .catch(() => { if (alive) setHasResumable(null); });
     return () => { alive = false; };
-  }, [isFirstRun, sessions.length, resumeRequested]);
-  const firstTimeWelcome = sessions.length === 0 && hasResumable === false;
+  }, [isFirstRun, sessions.length, resumeRequested, resumeProbe]);
+  const firstTimeWelcome = showFirstRunWelcome({ sessionCount: sessions.length, hasResumable, sessionListLoaded });
 
   // One opener for the welcome form, shared by the New Session button, the
   // first-time auto-open and the tour, so the defaults it loads cannot drift.
@@ -3208,8 +3267,11 @@ function AppInner() {
   }, [sessionDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
   const autoOpenedWelcome = useRef(false);
   useEffect(() => {
+    // Not while a phone is still catching up: the screen it would open over is about to fill
+    // with real conversations, and this effect only ever fires once.
+    if (remoteCatchingUp) return;
     if (firstTimeWelcome && !autoOpenedWelcome.current) { autoOpenedWelcome.current = true; openWelcomeForm(); }
-  }, [firstTimeWelcome, openWelcomeForm]);
+  }, [firstTimeWelcome, openWelcomeForm, remoteCatchingUp]);
 
   // What each tour stop's screen means in THIS app. The tour names screens
   // (guide-stops.ts); only App knows the state that opens them, so the mapping
@@ -3713,6 +3775,20 @@ function AppInner() {
                 has not received its first copy yet must not invite a new session. */}
             {remoteCatchingUp ? (
               <StatusStrip tone="busy" detail="Loading the newest messages…">Catching up with your computer…</StatusStrip>
+            ) : startingSession ? (
+              /* The wait between the tap and the session existing. The Initializing screen
+                 takes over the moment it does; on a phone this covers the round trip. */
+              <StatusStrip tone="busy" detail="Opening the folder and starting the assistant.">Starting your session…</StatusStrip>
+            ) : startFailed !== null ? (
+              <ErrorState
+                variant="inline"
+                message={startFailed ? `Couldn't start the session: ${startFailed}` : "Couldn't start the session."}
+                onRetry={() => {
+                  const args = startArgsRef.current;
+                  setStartFailed(null);
+                  if (args) void (createSession as any)(...args);
+                }}
+              />
             ) : firstTimeWelcome ? (
               <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
                 <p className="text-xl text-fg">Start your first session</p>
@@ -3728,7 +3804,7 @@ function AppInner() {
               <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
             </div>
             {/* Welcome screen: New Session (expandable) + Resume Session */}
-            <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp ? ' hidden' : ''}`}>
+            <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp || startingSession ? ' hidden' : ''}`}>
               {welcomeFormOpen ? (
                 /* Expanded new-session form with toggles.
                    data-guide-anchor: the tour's "sessions" stop rings the form. */

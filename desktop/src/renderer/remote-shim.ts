@@ -128,6 +128,8 @@ function noteRefusedAfterConnecting(reason: string): void {
 /** Messages received from the computer. The wake check reads it: anything arriving after its
  *  question proves the connection is alive, even when the reply itself is queued behind it. */
 let framesReceived = 0;
+/** When the last one arrived. The heartbeat below reads it: silence is what earns a question. */
+let lastFrameAt = 0;
 
 function signInError(message: string, failure: SignInFailure): Error {
   return Object.assign(new Error(message), { signInFailure: failure });
@@ -374,6 +376,8 @@ function setConnectionState(state: RemoteConnectionState) {
   // the strip says "reconnecting" and the phone keeps what it shows.
   if (was === 'connected' && state !== 'connected' && hasConnectedBefore && !suppressReconnectingPhase) setConversationPhase('reconnecting');
   if (was === 'connected' && state !== 'connected') failRequestsCutOffByDrop();
+  // The watch runs only while there is something to watch.
+  if (state === 'connected') startHeartbeat(); else stopHeartbeat();
   stateChangeCallback?.(state);
 }
 
@@ -862,6 +866,7 @@ function handleMessage(data: string, generation: number): void {
   // dispatched into the page as if it came from the current host connection (R2-17).
   if (generation !== connectionGeneration) return;
   framesReceived++;
+  lastFrameAt = Date.now();
   let msg: any;
   try { msg = JSON.parse(data); } catch { return; }
 
@@ -1453,7 +1458,20 @@ export function stopSavedKeySignIn(): void {
  *  dead. 10 s, not 5: right after waking a phone's radio and tunnel can take several seconds to
  *  come back, and a reply can queue behind a catch-up already on its way (review finding 3). */
 const WAKE_CHECK_TIMEOUT_MS = 10_000;
+/** How often the page looks at whether the computer is still talking, while it is in front. */
+const HEARTBEAT_INTERVAL_MS = 10_000;
+/** Silence that earns a question. Longer than the interval so a busy connection is never asked. */
+const HEARTBEAT_IDLE_MS = 12_000;
+/** How long that question may go unanswered before the connection is replaced. Shorter than the
+ *  wake check's: the page is in front, the radio is up, and a person may be waiting on a tap. */
+const HEARTBEAT_REPLY_MS = 5_000;
+/** Hidden for longer than the computer's own patience (its check runs every 20 s and it gives up
+ *  after three): its side is already gone, so the page reconnects on sight instead of asking. */
+const HIDDEN_TOO_LONG_MS = 60_000;
 let wakeCheckInFlight = false;
+/** When the page was last hidden, or 0 if it is showing. Read once, by the wake check. */
+let hiddenSince = 0;
+let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 /**
  * The phone just woke, came back to this tab, or regained its network: make sure the connection
@@ -1468,6 +1486,8 @@ let wakeCheckInFlight = false;
 export function checkConnectionAfterWake(): void {
   // The Android app's own bridge is on the same device; the first sign-in has its own screen.
   if (isAndroidLocal()) return;
+  const hiddenFor = hiddenSince ? Date.now() - hiddenSince : 0;
+  hiddenSince = 0;
   if (!hasConnectedBefore) {
     // Still on the sign-in screen, trying the saved key: the network coming back is the moment to
     // try again, not the end of a backoff of up to a minute (finding 6).
@@ -1480,8 +1500,25 @@ export function checkConnectionAfterWake(): void {
     if (token && !savedKeyStopped) reconnectNow(token);
     return;
   }
+  // Away longer than the computer waits: it has already closed its side, so a question here
+  // would only wait out its own deadline for an answer that can never come — ten seconds of a
+  // phone that looks connected and answers nothing. Replace the connection now.
+  if (hiddenFor >= HIDDEN_TOO_LONG_MS) {
+    if (ws) abandonSocket(ws);
+    if (token && !savedKeyStopped) reconnectNow(token);
+    return;
+  }
+  probeConnection(WAKE_CHECK_TIMEOUT_MS, 'after waking');
+}
+
+/**
+ * Ask the computer one cheap question and replace the connection if nothing at all comes back in
+ * time. Shared by the wake check and the heartbeat; only the deadline differs.
+ */
+function probeConnection(timeoutMs: number, why: string): void {
   const socket = ws;
   if (!socket || wakeCheckInFlight) return;
+  const token = localStorage.getItem('youcoded-remote-token');
   wakeCheckInFlight = true;
   const generation = connectionGeneration;
   const framesAtSend = framesReceived;
@@ -1491,10 +1528,10 @@ export function checkConnectionAfterWake(): void {
     settle();
     if (generation !== connectionGeneration || ws !== socket || connectionState !== 'connected') return;
     if (framesReceived > framesAtSend) return;   // the computer is talking: the connection is alive
-    console.warn('[remote-shim] no answer after waking; replacing the connection');
+    console.warn(`[remote-shim] no answer ${why}; replacing the connection`);
     abandonSocket(socket);
     if (token) reconnectNow(token);
-  }, WAKE_CHECK_TIMEOUT_MS);
+  }, timeoutMs);
   // Any answer proves the socket is alive, including an older computer's "unsupported" — so
   // both outcomes settle the same way. Not invoke(): a check that timed out must not be kept
   // and asked about after the reconnect like a request the person made.
@@ -1506,6 +1543,35 @@ export function checkConnectionAfterWake(): void {
     abandonSocket(socket);
     if (token) reconnectNow(token);
   }
+}
+
+/**
+ * While the page is in front, watch for a connection that stopped answering.
+ *
+ * WHY (Destin, 2026-09-11: buttons "feel unresponsive", and the dev log showed his phone's
+ * socket dying every 55-90 s): the computer notices a dead connection within about a minute, but
+ * the page noticed nothing at all until the person switched away and back. A tap meanwhile went
+ * into a socket that no longer existed and said nothing for the full 30 s request timeout. The
+ * page cannot send a protocol ping from a browser, so it asks the same cheap question the wake
+ * check does — and only when the computer has gone quiet, so a busy connection costs nothing.
+ */
+function startHeartbeat(): void {
+  if (heartbeatTimer || isAndroidLocal() || typeof setInterval !== 'function') return;
+  lastFrameAt = Date.now();
+  heartbeatTimer = setInterval(() => {
+    if (connectionState !== 'connected' || !ws) return;
+    // A hidden page is the wake check's business: browsers freeze its timers anyway, and a
+    // phone in a pocket has nothing to feel slow about.
+    if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
+    if (Date.now() - lastFrameAt < HEARTBEAT_IDLE_MS) return;
+    probeConnection(HEARTBEAT_REPLY_MS, 'from the computer');
+  }, HEARTBEAT_INTERVAL_MS);
+}
+
+function stopHeartbeat(): void {
+  if (!heartbeatTimer) return;
+  clearInterval(heartbeatTimer);
+  heartbeatTimer = null;
 }
 
 /** Stop listening to a socket that is dead or about to be, and report the drop. Its handlers go
@@ -1764,6 +1830,8 @@ export function installShim(): void {
   if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
     document.addEventListener('visibilitychange', () => {
       if (document.visibilityState === 'visible') checkConnectionAfterWake();
+      // Remembered so the wake check knows whether the computer can still be there at all.
+      else hiddenSince = Date.now();
     });
   }
   if (typeof window !== 'undefined' && typeof window.addEventListener === 'function') {

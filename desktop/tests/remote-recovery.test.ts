@@ -39,8 +39,17 @@ describe('recovery never repeats an action and never loses a pairing', () => {
 
   it('a half-open connection is noticed instead of waiting out the request timeout', () => {
     expect(server).toContain('PING_INTERVAL_MS');
-    expect(server).toContain("client.ws.close(4008, 'No response');");
+    expect(server).toContain('MAX_MISSED_PINGS');
+    // And it tolerates a phone that locks or changes network for a moment: one missed check
+    // closed the connection after as little as 20 s, and every reconnect cost a full catch-up.
+    expect(server).toMatch(/if \(missed > MAX_MISSED_PINGS\)/);
+    // terminate(), so the drop is noticed when it happens rather than after ws's own 30 s wait.
+    expect(server).toContain('socket.terminate();');
     expect(server).toContain("ws.on('pong'");
+    // And the log can tell a phone that was locked from a connection that broke mid-use: the
+    // 2026-09-11 log recorded seven drops in ten minutes with no times and no way to tell.
+    expect(server).toContain('new Date().toISOString()');
+    expect(server).toMatch(/silent for \$\{silent\} s/);
   });
 
   it('a browser keeps its pairing through a long outage', () => {

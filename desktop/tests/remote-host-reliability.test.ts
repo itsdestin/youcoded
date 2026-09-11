@@ -136,8 +136,12 @@ describe('the host log says what happened to each phone connection', () => {
     const ws = await signIn(server, { readyHandshake: true });
     await send(ws, { type: 'client:ready', payload: { seq: 1, reconnect: false, ptyOffsets: {} } });
     ws.close(1006);
-    const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('[remote-server] device'));
+    const lines = log.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('[remote-server] ') && l.includes(' device '));
     expect(lines.some((l) => /connected/.test(l))).toBe(true);
+    // Every line is stamped, and the drop says how long the phone had been silent: without both,
+    // seven drops in ten minutes (2026-09-11) could not be told apart from seven screen locks.
+    expect(lines.every((l) => /^\[remote-server\] \d{4}-\d{2}-\d{2}T[\d:.]+Z device /.test(l))).toBe(true);
+    expect(lines.some((l) => /silent for \d+ s/.test(l))).toBe(true);
     expect(lines.some((l) => /catch-up started \(page ready\)/.test(l))).toBe(true);
     expect(lines.some((l) => /caught up in \d+ ms/.test(l))).toBe(true);
     expect(lines.some((l) => /disconnected: code 1006/.test(l))).toBe(true);
