@@ -69,13 +69,32 @@ export function signManifest(manifestBytes, privateKeyPem) {
   return crypto.sign(null, manifestBytes, key);
 }
 
+/** Pull a PEM public key out of text: a .pem file, or the app's
+ *  src/main/update-signing-key.ts, which embeds one in a string. */
+export function publicKeyPemFrom(text) {
+  const m = String(text).match(/-----BEGIN PUBLIC KEY-----[\s\S]+?-----END PUBLIC KEY-----/);
+  if (!m) throw new Error('no PUBLIC KEY block found');
+  return `${m[0]}\n`;
+}
+
+/** Whether `sig` is a valid ed25519 signature of `manifestBytes` for this public key. */
+export function signatureMatches(manifestBytes, sig, publicKeyPem) {
+  try {
+    return crypto.verify(null, manifestBytes, crypto.createPublicKey(publicKeyPem), sig);
+  } catch {
+    return false;
+  }
+}
+
+const USAGE = 'usage: generate-release-manifest.mjs --dir <assets> --version <v> [--key <pemfile>] [--verify-with <file holding the public key>]';
+
 function main(argv) {
   const args = {};
   for (let i = 0; i < argv.length; i += 2) args[argv[i].replace(/^--/, '')] = argv[i + 1];
   const dir = args.dir;
   const version = args.version || process.env.GITHUB_REF_NAME;
   if (!dir || !version) {
-    console.error('usage: generate-release-manifest.mjs --dir <assets> --version <v> [--key <pemfile>]');
+    console.error(USAGE);
     process.exit(2);
   }
   const privateKeyPem = args.key ? fs.readFileSync(args.key, 'utf8') : process.env.UPDATE_SIGNING_KEY;
@@ -86,6 +105,19 @@ function main(argv) {
   const manifest = buildManifest(dir, version);
   const bytes = serializeManifest(manifest);
   const sig = signManifest(bytes, privateKeyPem);
+  // WHY --verify-with (2026-09-11): a WRONG private key signs just as happily as
+  // the right one; only the public key built into the app can tell them apart,
+  // and without this check the first sign of a bad UPDATE_SIGNING_KEY secret
+  // would be every user's Update button refusing the release. Nothing is
+  // written unless the signature verifies.
+  if (args['verify-with']) {
+    const publicKeyPem = publicKeyPemFrom(fs.readFileSync(args['verify-with'], 'utf8'));
+    if (!signatureMatches(bytes, sig, publicKeyPem)) {
+      console.error(`the signing key does not match the public key in ${args['verify-with']}: the app would refuse this manifest, so nothing was written`);
+      process.exit(1);
+    }
+    console.log(`signature verifies against ${args['verify-with']}`);
+  }
   const manifestPath = path.join(dir, 'youcoded-release.json');
   fs.writeFileSync(manifestPath, bytes);
   fs.writeFileSync(manifestPath + '.sig', sig);

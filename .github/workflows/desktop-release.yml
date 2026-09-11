@@ -148,12 +148,17 @@ jobs:
       # with the ed25519 release key so the in-app updater can prove a download is
       # genuine before running it.
       #
-      # NON-FATAL if the key isn't configured yet: the release still ships, just
-      # WITHOUT a manifest — and the updater (which requires one) will refuse to
-      # install this release until it's signed. Set the repository/environment
+      # NON-FATAL on purpose: a signing problem must not hold back the installers
+      # the website hands out. The release then ships WITHOUT a manifest, the
+      # in-app Update button refuses it, and the fix is signing it by hand
+      # (docs/build-and-release.md in youcoded-dev → Release flows). The repository
       # secret UPDATE_SIGNING_KEY (the PKCS8 PEM private key from
-      # ~/system/youcoded-release-signing/) to activate signing. Ideally scope it
-      # to a protected `release` environment.
+      # ~/system/youcoded-release-signing/) has been set since 2026-09-11, and every
+      # master beta build signs with it first (desktop-test-build.yml `sign`), so a
+      # warning here should never be the first news of a bad key.
+      # --verify-with writes nothing unless the signature verifies against the
+      # public key built into the app: a manifest signed with the wrong key would
+      # be refused exactly like a missing one, just more confusingly.
       - name: Sign release manifest
         if: startsWith(github.ref, 'refs/tags/v')
         working-directory: desktop
@@ -164,7 +169,9 @@ jobs:
             echo "::warning::UPDATE_SIGNING_KEY is not set — shipping WITHOUT a signed manifest. The in-app updater will refuse this release until it is signed."
             exit 0
           fi
-          node scripts/generate-release-manifest.mjs --dir "$GITHUB_WORKSPACE/artifacts" --version "$GITHUB_REF_NAME"
+          if ! node scripts/generate-release-manifest.mjs --dir "$GITHUB_WORKSPACE/artifacts" --version "$GITHUB_REF_NAME" --verify-with src/main/update-signing-key.ts; then
+            echo "::warning::The manifest did not verify against the app's built-in public key — shipping WITHOUT a signed manifest. The in-app updater will refuse this release until it is signed."
+          fi
 
       - name: Upload installers to release
         uses: softprops/action-gh-release@v3

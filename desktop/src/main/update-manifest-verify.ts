@@ -92,15 +92,42 @@ export function normalizeVersion(v: string): string {
   return v.trim().replace(/^v/i, '');
 }
 
-/** Compare dotted numeric versions. >0 if a>b, <0 if a<b, 0 if equal on the
- *  numeric X.Y.Z parts. A pre-release suffix (e.g. `-beta`) is ignored for the
- *  ordering; exact-tag equality is checked separately. */
+/** Compare two versions the semver way: 1 if a>b, -1 if a<b, 0 if equal.
+ *  The X.Y.Z numbers decide first. On a tie, a full release outranks any
+ *  pre-release of it (`1.3.0` > `1.3.0-beta.77`), and two pre-releases compare
+ *  part by part, numbers as numbers (`beta.100` > `beta.99`).
+ *
+ *  WHY (2026-09-11): this used to drop the `-beta…` suffix, so `1.3.0` and
+ *  `1.3.0-beta.77` compared EQUAL and the gate below refused the full release as
+ *  a "downgrade"; the update check in ipc-handlers.ts had its own copy that read
+ *  the beta as [1,3,0,77], HIGHER than 1.3.0, so a beta was never even told the
+ *  release existed. Everyone testing a 1.3 beta would have been stranded on it.
+ *  One compare now serves both, and the tests pin beta → release. */
 export function compareVersions(a: string, b: string): number {
-  const parts = (v: string) => normalizeVersion(v).split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
-  const pa = parts(a), pb = parts(b);
-  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-    const d = (pa[i] ?? 0) - (pb[i] ?? 0);
+  const split = (v: string) => {
+    const s = normalizeVersion(v).split('+')[0]; // build metadata never orders
+    const dash = s.indexOf('-');
+    const core = (dash === -1 ? s : s.slice(0, dash)).split('.').map((n) => parseInt(n, 10) || 0);
+    const pre = dash === -1 ? [] : s.slice(dash + 1).split('.');
+    return { core, pre };
+  };
+  const A = split(a), B = split(b);
+  for (let i = 0; i < Math.max(A.core.length, B.core.length); i++) {
+    const d = (A.core[i] ?? 0) - (B.core[i] ?? 0);
     if (d !== 0) return d > 0 ? 1 : -1;
+  }
+  if (A.pre.length === 0 || B.pre.length === 0) {
+    return A.pre.length === B.pre.length ? 0 : A.pre.length === 0 ? 1 : -1;
+  }
+  const isNum = (p: string) => /^\d+$/.test(p);
+  for (let i = 0; i < Math.max(A.pre.length, B.pre.length); i++) {
+    const pa = A.pre[i], pb = B.pre[i];
+    if (pa === undefined) return -1; // `beta` < `beta.71`
+    if (pb === undefined) return 1;
+    if (pa === pb) continue;
+    if (isNum(pa) && isNum(pb)) return Number(pa) > Number(pb) ? 1 : -1;
+    if (isNum(pa) !== isNum(pb)) return isNum(pa) ? -1 : 1; // semver: numbers sort below words
+    return pa > pb ? 1 : -1;
   }
   return 0;
 }
