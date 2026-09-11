@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { OverlayPanel } from '../overlays/Overlay';
+import { OverlayPanel, TOOLTIP_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import { placeBubble } from './anchor-position';
 
@@ -319,7 +319,7 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
             // "\n" (the model list's tags list a price, then the scores behind a
             // number). Every existing hint is one line, so this changes none of them.
             className="tooltip-in fixed pointer-events-none px-2 py-1 max-w-[min(20rem,calc(100vw-1.5rem))] text-2xs text-fg-2 leading-snug whitespace-pre-line"
-            style={{ left: pos.left, top: pos.top }}
+            style={{ left: pos.left, top: pos.top, zIndex: TOOLTIP_Z }}
           >
             {text}
           </OverlayPanel>,

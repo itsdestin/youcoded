@@ -31,6 +31,15 @@ export const CONTENT_Z: Record<OverlayLayer, number> = { 1: 50, 2: 61, 3: 71, 4:
 // always clears its host without re-magic-numbering at each call site.
 export const POPOVER_Z = 9001;
 
+// Hover hints (`ui/Tooltip`). WHY above the popover tier rather than at L4: a hint
+// describes the control under the pointer, wherever that control lives — and the
+// busiest hint hosts ARE popovers. At L4 (z-100) every hint inside a POPOVER_Z panel
+// opened BEHIND it: the model list's favourite star and its value / intelligence
+// tags showed nothing, or a sliver past the panel's edge (found 2026-09-11 building
+// the model-list tags). A hint is pointer-events-none, so sitting above everything
+// can never swallow a click.
+export const TOOLTIP_Z = POPOVER_Z + 2;
+
 type ScrimProps = {
   layer: OverlayLayer;
   onClick?: (e: React.MouseEvent) => void;

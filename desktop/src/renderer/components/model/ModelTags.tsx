@@ -174,17 +174,20 @@ export function ModelTags({ tags, selected = false, className = '' }: {
   if (!tags.length) return null;
   const onAccent = { borderColor: 'color-mix(in srgb, currentColor 40%, transparent)' };
   return (
-    <span className={`flex items-center ${style === 'dot' ? 'gap-2.5' : 'gap-1'} ${style === 'compact' ? 'shrink-0' : 'flex-wrap'} ${className}`}>
+    // Spacing is set so three tags ("FREE - LOCAL", "Intelligence 24", "~Medium")
+    // fit on one line at the list's usual width; a narrower host still wraps
+    // rather than cutting a tag off.
+    <span className={`flex items-center ${style === 'dot' ? 'gap-x-1.5 gap-y-1' : 'gap-1'} ${style === 'compact' ? 'shrink-0' : 'flex-wrap'} ${className}`}>
       {tags.map((t) => (
         <Tooltip key={t.kind} text={t.hint}>
           {style === 'dot' ? (
-            <span className={`inline-flex items-center gap-1 text-2xs leading-none whitespace-nowrap ${selected ? '' : t.tone === 'dim' ? 'text-fg-muted' : 'text-fg-2'}`}>
+            <span className={`inline-flex items-center gap-[3px] text-2xs leading-none whitespace-nowrap ${selected ? '' : t.tone === 'dim' ? 'text-fg-muted' : 'text-fg-2'}`}>
               <Dot tone={t.tone} />
               {t.label}
             </span>
           ) : (
             <span
-              className={`inline-flex items-center px-1.5 py-[2px] rounded-sm border text-2xs leading-none whitespace-nowrap ${
+              className={`inline-flex items-center px-1 py-[2px] rounded-sm border text-2xs leading-none whitespace-nowrap ${
                 selected ? '' : `${TINT[t.tone]} ${t.tone === 'dim' ? 'text-fg-muted' : 'text-fg-2'}`
               }`}
               style={selected ? onAccent : undefined}
