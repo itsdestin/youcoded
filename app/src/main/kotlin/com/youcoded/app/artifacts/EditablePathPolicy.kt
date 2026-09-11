@@ -156,6 +156,23 @@ object EditablePathPolicy {
         FileRead.Unreadable(e.message?.takeIf { it.isNotBlank() } ?: "the file could not be read")
     }
 
+    /**
+     * True when reading these bytes as UTF-8 loses information: the file is text
+     * in an older encoding (Latin-1 / Windows-1252), so every byte the decoder
+     * cannot read becomes U+FFFD and SAVING IT BACK would write that damage to
+     * disk permanently. Mirrors desktop losesBytesAsUtf8() in
+     * editable-path-policy.ts; both platforms hide Edit for such a file.
+     */
+    fun losesBytesAsUtf8(bytes: ByteArray): Boolean = try {
+        java.nio.charset.StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            .decode(java.nio.ByteBuffer.wrap(bytes))
+        false
+    } catch (_: java.nio.charset.CharacterCodingException) {
+        true
+    }
+
     /** git-style sniff: NUL byte in the head slice means not-text. */
     fun looksBinary(head: ByteArray): Boolean {
         val n = minOf(head.size, 8192)

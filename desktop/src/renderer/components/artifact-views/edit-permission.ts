@@ -26,7 +26,11 @@ export function canEditArtifact(
 ): boolean {
   // content === null is the loading transient, an orphan, or a binary file —
   // nothing valid to save in any of those cases.
-  if (content === null || tier === 'denied' || info?.binary) return false;
+  // notUtf8: the file is text in an older encoding, so what the pane holds is
+  // already lossy — every byte the UTF-8 decoder could not read became U+FFFD.
+  // Saving would write those replacements over the originals for good, so the
+  // file is show-only (2026-09-11). Main refuses it too; this only hides Edit.
+  if (content === null || tier === 'denied' || info?.binary || info?.notUtf8) return false;
   // Unknown size (legacy callers, workbench fixtures) keeps today's behaviour.
   return (info?.sizeBytes ?? 0) <= EDIT_MAX_BYTES;
 }

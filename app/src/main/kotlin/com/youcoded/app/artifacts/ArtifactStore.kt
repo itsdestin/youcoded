@@ -205,7 +205,20 @@ fun appendVersion(
             is ReadResult.Ok -> Triple(current.sidecar, current.sidecar.updatedAt, false)
         }
 
-        val existing = sidecar.artifacts.find { it.path == input.path && it.kind == input.kind }
+        // WHY an external is matched on its absolutePath (2026-09-11, desktop parity):
+        // `path` holds only the BASENAME for an external record, so two different files
+        // with the same name outside the project — /tmp/a/plan.md and ~/notes/plan.md —
+        // collapsed into ONE record, and the second session's edits were appended to the
+        // first file's record. Internals still match by path (unique inside the project).
+        // Both sides canonicalized, per the "canonicalize BOTH sides" path-equality rule.
+        val existing = sidecar.artifacts.find { a ->
+            if (a.kind != input.kind) return@find false
+            if (input.kind == "internal") return@find a.path == input.path
+            val recordedAbs = a.absolutePath
+            val incomingAbs = input.absolutePath
+            recordedAbs != null && incomingAbs != null &&
+                canonicalize(recordedAbs, null) == canonicalize(incomingAbs, null)
+        }
         // Replay dedupe (mirror of artifact-store.ts appendVersionsDirect): the
         // same tool call recorded once already ⇒ nothing to add, nothing to
         // write. Same sessionId AND same toolUseId — never toolUseId alone.

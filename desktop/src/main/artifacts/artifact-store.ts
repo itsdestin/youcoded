@@ -385,9 +385,20 @@ export async function appendVersionsDirect(
     const results: AppendVersionResult[] = [];
     let changed = false;
     for (const input of inputs) {
-      const existing = sidecar.artifacts.find(
-        (a) => a.path === input.path && a.kind === input.kind
-      );
+      // WHY an external is matched on its absolutePath (2026-09-11): `path` holds
+      // only the BASENAME for an external record, so two different files with the
+      // same name outside the project — /tmp/a/plan.md and ~/notes/plan.md —
+      // collapsed into ONE record. The second session's edits were appended to the
+      // first file's record, so that session's drawer row opened the wrong file and
+      // its own file never appeared at all. Internals still compare by path (their
+      // path IS unique inside the project). Both sides canonicalized, per the
+      // "canonicalize BOTH sides" rule for path equality.
+      const existing = sidecar.artifacts.find((a) => a.kind === input.kind && (
+        input.kind === 'internal'
+          ? a.path === input.path
+          : a.absolutePath != null && input.absolutePath != null
+            && canonicalize(a.absolutePath, null) === canonicalize(input.absolutePath, null)
+      ));
       // Replay dedupe: the same tool call recorded once already ⇒ nothing to
       // add. Same sessionId AND same toolUseId — never toolUseId alone.
       if (

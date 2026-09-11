@@ -29,8 +29,26 @@ function confirmMessage(canonPath: string): string {
 
 // Surface the REAL save failure (error-message-standards): specific when we
 // know the cause, the raw error string when we do not — never a guessed cause.
+// Nothing is known about WHY, so it names no cause and says the work is safe.
+const SAVE_FAILED_MSG = 'YouCoded couldn’t save this file. Your changes are still here — try again.';
+
 function saveErrorMessage(res: any): string {
   const err = res?.error;
+  if (err === 'write-failed') {
+    // Only codes whose meaning is unambiguous are named (error-message-standards:
+    // specific and accurate, or general and non-committal — never a guess).
+    switch (res?.code) {
+      case 'EACCES':
+      case 'EPERM': return 'YouCoded doesn’t have permission to change this file. Your changes are still here.';
+      case 'EROFS': return 'This file is on a read-only disk, so it can’t be changed. Your changes are still here.';
+      case 'ENOSPC': return 'There isn’t enough free space to save this file. Your changes are still here.';
+      case 'EBUSY': return 'Another program is holding this file open, so it couldn’t be saved. Your changes are still here.';
+      default: return SAVE_FAILED_MSG;
+    }
+  }
+  if (err === 'not-utf8') {
+    return 'This file uses an older text format. Saving it from YouCoded would replace the characters it can’t read, so it is show-only.';
+  }
   if (err === 'protected-path') {
     return 'This file is protected and cannot be edited in YouCoded — paths under .git, .youcoded, and credential folders can change what runs on your machine.';
   }
@@ -73,6 +91,10 @@ export interface ArtifactContentInfo {
    *  partial-view banner. Does NOT gate saving; size does (Stage 2B). */
   truncated?: boolean;
   sizeBytes?: number;
+  /** The file is text, but NOT valid UTF-8 (Latin-1 / Windows-1252 accents).
+   *  It is shown with replacement characters; saving would write those over the
+   *  originals, so editing is refused and the pane says why (2026-09-11). */
+  notUtf8?: boolean;
 }
 
 /** Read-lifecycle state for the active artifact's content. Fix for the
@@ -374,9 +396,17 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     const saveOpts: { baseMtimeMs?: number; confirmed?: boolean } = {};
     if (!opts?.force && mtimeRef.current !== null) saveOpts.baseMtimeMs = mtimeRef.current;
     if (tier === 'needs-confirm') saveOpts.confirmed = true; // dialog shown at startEdit
-    const res = await (window.claude as any).artifacts.save(
-      projectRoot, projectId, projectName, artifact.id, draft, sessionId, saveOpts
-    );
+    let res: any;
+    try {
+      res = await (window.claude as any).artifacts.save(
+        projectRoot, projectId, projectName, artifact.id, draft, sessionId, saveOpts
+      );
+    } catch {
+      // The call itself failed (the bridge dropped, main threw). Nothing is known
+      // about the file, so never let this pass as a successful save.
+      setSaveError(SAVE_FAILED_MSG);
+      return false;
+    }
     if (res && res.ok) {
       if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
       clearDraft(draftKey(projectRoot, artifact.id));
@@ -604,6 +634,15 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
           <button className="underline hover:no-underline whitespace-nowrap" onClick={() => setSaveError(null)}>
             Dismiss
           </button>
+        </div>
+      )}
+      {/* Older-text-format notice. The Edit affordance is simply absent for these
+          files, which on its own looks like a bug — say what the file is and why
+          saving is off, in place of a silent missing button. */}
+      {!editing && contentInfo?.notUtf8 && (
+        <div className="p-3 text-xs text-fg-muted bg-well border-b border-edge shrink-0">
+          This file uses an older text format. YouCoded can show it, but saving would replace
+          the characters it can’t read — so editing is turned off for this file.
         </div>
       )}
       {/* Real unified diff (jsdiff via the shared UnifiedDiff — same renderer as

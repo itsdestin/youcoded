@@ -3655,6 +3655,10 @@ class SessionService : Service() {
                     .put("content",  if (binary) org.json.JSONObject.NULL else String(bytes, Charsets.UTF_8))
                     .put("orphan",   false)
                     .put("binary",   binary)
+                    // Text in an older encoding decodes with replacement characters;
+                    // the renderer hides Edit and says so rather than letting a save
+                    // write that damage back (desktop parity, 2026-09-11).
+                    .put("notUtf8",  !binary && EditablePathPolicy.losesBytesAsUtf8(bytes))
                     // sizeBytes and truncated ride EVERY response: the renderer
                     // derives editability from the size, not from a separate flag.
                     .put("truncated", false)
@@ -3819,6 +3823,21 @@ class SessionService : Service() {
                     }
                     EditablePathPolicy.EditTier.FREE -> { /* no friction */ }
                 }
+                // A file that is text in an older encoding was shown with replacement
+                // characters, so writing the draft back would destroy every character
+                // the decoder could not read. Refuse in the handler, not only in the
+                // renderer (desktop ipc-handlers.ts does the same).
+                if (resolvedSave.exists() && resolvedSave.length() <= EditablePathPolicy.EDIT_MAX_BYTES) {
+                    val existing = EditablePathPolicy.readWhole(resolvedSave)
+                    if (existing is EditablePathPolicy.FileRead.Bytes
+                        && !EditablePathPolicy.looksBinary(existing.bytes)
+                        && EditablePathPolicy.losesBytesAsUtf8(existing.bytes)
+                    ) {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                            org.json.JSONObject().put("ok", false).put("error", "not-utf8")) }
+                        return@handleBridgeMessage
+                    }
+                }
                 // Concurrency token: GET returns lastModified().toDouble(), the
                 // renderer round-trips it verbatim, so Double equality is exact.
                 // A missing file falls through — the save recreates it (delete-
@@ -3829,14 +3848,25 @@ class SessionService : Service() {
                         org.json.JSONObject().put("ok", false).put("error", "conflict")) }
                     return@handleBridgeMessage
                 }
-                // Atomic write: temp file + rename, matching desktop behaviour
+                // Atomic write: temp file + rename, matching desktop behaviour.
+                // A failed write answers { ok: false, error } (parity with desktop,
+                // 2026-09-11): an exception escaping here left the renderer's save
+                // promise to time out, so a save that could not happen looked to the
+                // user exactly like a save that did nothing.
                 val tmpPath = java.io.File(resolvedSave.path + ".tmp")
-                tmpPath.writeText(newContent, Charsets.UTF_8)
-                java.nio.file.Files.move(
-                    tmpPath.toPath(),
-                    resolvedSave.toPath(),
-                    java.nio.file.StandardCopyOption.REPLACE_EXISTING,
-                )
+                try {
+                    tmpPath.writeText(newContent, Charsets.UTF_8)
+                    java.nio.file.Files.move(
+                        tmpPath.toPath(),
+                        resolvedSave.toPath(),
+                        java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                    )
+                } catch (e: Exception) {
+                    try { tmpPath.delete() } catch (_: Exception) { }
+                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                        .put("ok", false).put("error", "write-failed")) }
+                    return@handleBridgeMessage
+                }
                 appendVersion(
                     projectRoot = projectRoot,
                     projectId   = projectId,

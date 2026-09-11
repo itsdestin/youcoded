@@ -142,7 +142,7 @@ import { evaluateBinaryRead } from './artifacts/read-binary-access';
 import { readFileHead } from './fs-read-head';
 import { initProjectWatchers, watchProject, unwatchProject, dropSubscriber, noteOwnWrite, invalidateSidecarIdCache } from './artifacts/project-watcher';
 import { searchProjectContent } from './artifacts/content-search';
-import { looksBinary, EDIT_MAX_BYTES, FULL_READ_MAX_BYTES, READ_BINARY_MAX_BYTES } from '../shared/artifacts/editable-path-policy';
+import { looksBinary, losesBytesAsUtf8, EDIT_MAX_BYTES, FULL_READ_MAX_BYTES, READ_BINARY_MAX_BYTES } from '../shared/artifacts/editable-path-policy';
 import { decideOverCapRead } from '../shared/artifacts/over-cap-read';
 import { authorizeArtifactRead, authorizeArtifactWrite, isAbsoluteRecorded } from './artifacts/write-authorization';
 import { trackedArtifacts } from './artifacts/visible-artifacts';
@@ -4858,13 +4858,20 @@ export function registerIpcHandlers(
 
     let content: string | null = null;
     let binary = false;
+    // Text in an older encoding (Latin-1 accents) decodes with replacement
+    // characters. The renderer shows it, says so, and refuses to save it —
+    // writing the draft back would destroy every unreadable byte for good.
+    let notUtf8 = false;
     try {
       const buf = await fs.promises.readFile(realPath);
       // Head-slice NUL sniff: binary bytes decoded as utf8 turn into U+FFFD
       // soup — return binary:true + null content so the renderer routes to the
       // binary fallback instead of a garbage text view (D4 routing).
       binary = looksBinary(buf.subarray(0, 8192));
-      if (!binary) content = buf.toString('utf8');
+      if (!binary) {
+        content = buf.toString('utf8');
+        notUtf8 = losesBytesAsUtf8(buf);
+      }
     } catch (e: any) {
       if (e.code !== 'ENOENT') throw e;
       return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
@@ -4875,7 +4882,7 @@ export function registerIpcHandlers(
     // sizeBytes and truncated ride EVERY response: the renderer derives
     // editability from the size, and a `full` read must clear the partial bar.
     return { ok: true, artifact: artifact ?? null, content, orphan: false, binary,
-             truncated: false, sizeBytes: st.size, mtimeMs: st.mtimeMs };
+             truncated: false, notUtf8, sizeBytes: st.size, mtimeMs: st.mtimeMs };
   });
 
   // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image). The
@@ -4990,6 +4997,16 @@ export function registerIpcHandlers(
     if (!auth.ok) return auth;
     const realPath = auth.realPath;
 
+    // A file that is text in an older encoding was SHOWN with replacement
+    // characters, so writing the draft back destroys every byte the UTF-8
+    // decoder could not read — even if the user changed an unrelated line. The
+    // renderer hides Edit for these; this is the boundary that makes it true.
+    const existing = await fs.promises.readFile(realPath).catch(() => null);
+    if (existing && existing.length <= EDIT_MAX_BYTES
+        && !looksBinary(existing.subarray(0, 8192)) && losesBytesAsUtf8(existing)) {
+      return { ok: false, error: 'not-utf8' };
+    }
+
     // Suppress the watcher echo of our own write (spec §8.4), then atomic
     // write: .tmp + rename so the original is never half-written.
     // pid+time-suffixed temp name: two processes (dev + built app) writing the
@@ -5004,22 +5021,34 @@ export function registerIpcHandlers(
     try {
       await fs.promises.writeFile(tmpPath, newContent, 'utf8');
       await fs.promises.rename(tmpPath, realPath);
-    } catch (e) {
+    } catch (e: any) {
       try { await fs.promises.unlink(tmpPath); } catch { /* already gone */ }
-      throw e;
+      // WHY a coded answer, not a throw (2026-09-11): a thrown error rejects the
+      // renderer's invoke, and the editor had no catch there — a save blocked by
+      // permissions, a read-only disk or a full disk looked exactly like nothing
+      // happening. The renderer maps the code to copy; unknown codes stay
+      // non-committal rather than guessing.
+      return { ok: false, error: 'write-failed', code: typeof e?.code === 'string' ? e.code : undefined };
     }
     const st = await fs.promises.stat(realPath).catch(() => null);
 
     if (artifact) {
       invalidateSidecarIdCache(projectRoot);
-      await appendVersion(projectRoot, projectId, projectName, {
-        path: artifact.path,
-        kind: artifact.kind,
-        absolutePath: artifact.absolutePath,
-        sessionId,
-        type: 'edit',
-        author: 'user',
-      });
+      // The file IS written by here. A failure to RECORD the edit must not be
+      // reported as a failed save — that would send the user back to re-save a
+      // file that is already correct on disk.
+      try {
+        await appendVersion(projectRoot, projectId, projectName, {
+          path: artifact.path,
+          kind: artifact.kind,
+          absolutePath: artifact.absolutePath,
+          sessionId,
+          type: 'edit',
+          author: 'user',
+        });
+      } catch (e) {
+        console.error('[artifacts:save] file saved but recording the version failed', e);
+      }
     } else {
       // NO sidecar mutation for discovered files, so editing a doc never
       // silently creates a .youcoded/ tracking dir.

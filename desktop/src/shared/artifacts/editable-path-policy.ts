@@ -112,6 +112,26 @@ export const FULL_READ_MAX_BYTES = 4 * EDIT_MAX_BYTES;
  * the pane refuse a 2.3 MB PNG (spec §1.1). */
 export const READ_BINARY_MAX_BYTES = 50 * 1024 * 1024;
 
+/**
+ * True when reading these bytes as UTF-8 loses information: the file is text in
+ * an older encoding (Latin-1 / Windows-1252 — an accented word is the common
+ * case), so every byte the decoder cannot read comes back as U+FFFD.
+ *
+ * WHY it gates editing (2026-09-11): the pane already shows those replacements,
+ * and saving writes them over the originals — a file loses every accent for
+ * good even when the user changed an unrelated line. The NUL sniff above does
+ * not catch this (such a file has no NUL bytes), which is why it needs its own
+ * question. Mirrored in Kotlin EditablePathPolicy.losesBytesAsUtf8.
+ */
+export function losesBytesAsUtf8(bytes: Uint8Array): boolean {
+  try {
+    new TextDecoder('utf-8', { fatal: true }).decode(bytes);
+    return false;
+  } catch {
+    return true;
+  }
+}
+
 /** git-style binary sniff: a NUL byte in the head slice means not-text. The
  * caller passes at most the first 8KB — do not read whole files to decide. */
 export function looksBinary(head: Uint8Array): boolean {

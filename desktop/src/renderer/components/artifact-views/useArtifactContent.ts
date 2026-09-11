@@ -90,7 +90,7 @@ export function useArtifactContent(
       if (cancelled) return;
       if (res && res.ok) {
         setContent(res.content ?? null);
-        setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes });
+        setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes, notUtf8: res.notUtf8 });
         // orphan:true is the handler's genuine not-found signal (ENOENT /
         // orphaned record) — the ONLY thing allowed to render "no longer on
         // disk". Everything else that resolved ok is ready.
@@ -136,7 +136,7 @@ export function useArtifactContent(
   const applyDiskRead = useCallback((res: any) => {
     if (!res || !res.ok || res.orphan) return;
     setContent(res.content ?? null);
-    setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes });
+    setContentInfo({ binary: res.binary, truncated: res.truncated, sizeBytes: res.sizeBytes, notUtf8: res.notUtf8 });
     setContentState({ phase: 'ready' });
   }, []);
 
