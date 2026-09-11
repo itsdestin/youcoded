@@ -64,6 +64,9 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
     textWhenMissing: 'Once you have a session, the tag button in its side panel holds tags and a note to your future self. Both show under All Sessions, so old conversations are easy to find.',
     screen: 'drawer',
     anchor: 'tags-notes',
+    // The one stop with a "Do it now" (deck Q-3): opens the editor the stop is
+    // about. Offered only while that button is on screen.
+    action: { kind: 'click-anchor', anchor: 'tags-notes', label: 'Open them' },
     pose: 'inquisitive',
   },
   {

@@ -98,6 +98,17 @@ const STOPS: GuideStop[] = [
   { id: 'b', text: 'Second stop.', screen: 'projects', anchor: 'nothing-here', pose: 'inquisitive' },
 ];
 
+describe('the eight stops', () => {
+  it('walk forward through the app in the order Destin approved (S-1, reordered under U6)', async () => {
+    const { GUIDE_STOPS } = await import('../src/renderer/components/guide/guide-stops');
+    expect(GUIDE_STOPS.map((s) => s.id)).toEqual(['buddy', 'sessions', 'tags', 'projects', 'files', 'models', 'themes', 'help']);
+    expect(GUIDE_STOPS.map((s) => s.screen)).toEqual([
+      'welcome', 'welcome-form', 'drawer', 'projects', 'projects', 'settings:cloud', 'settings:appearance', 'settings:help',
+    ]);
+    for (const s of GUIDE_STOPS) expect(s.text.split(' ').length).toBeLessThan(45);
+  });
+});
+
 describe('GuideTour', () => {
   it('opens each stop\'s screen, walks Next/Back, and tells Skip from Done', () => {
     const onOpenScreen = vi.fn();

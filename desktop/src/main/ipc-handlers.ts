@@ -2,6 +2,7 @@ import { app, IpcMain, BrowserWindow, dialog, clipboard, nativeImage, shell, pow
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { resolveNoFolderCwd } from './no-folder';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -785,7 +786,11 @@ export function registerIpcHandlers(
   };
 
   // Session CRUD
-  ipcMain.handle(IPC.SESSION_CREATE, async (event, opts) => {
+  ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
+    // "No folder" (shared/no-folder.ts): the renderer's sentinel becomes the
+    // app-owned empty folder here, before the session manager or the native
+    // host sees a cwd.
+    const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     const info = sessionManager.createSession(opts);
     // Assign the new session to the calling window so per-session events (transcript,
     // pty output, permission prompts) route here once Task 1.4 migrates the emits.

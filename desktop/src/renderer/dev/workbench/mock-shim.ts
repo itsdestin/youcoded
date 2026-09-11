@@ -38,6 +38,7 @@ import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
 import { buildCatalog } from './fixtures/marketplace/catalog';
 // `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
 import { triggerTip } from '../../components/guide/tips';
+import { isNoFolderCwd } from '../../../shared/no-folder';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
 // states (partial-view banner, handoff) against the fake backend.
@@ -799,7 +800,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const created = {
         id,
         name: resumedRow?.name || opts.name || 'new session',
-        cwd: opts.cwd || '',
+        // "No folder": main swaps the sentinel for <userData>/No folder; the
+        // workbench shows the same shape of path so headers read "No folder".
+        cwd: isNoFolderCwd(opts.cwd) ? '/home/destin/.config/YouCoded/No folder' : (opts.cwd || ''),
         permissionMode: opts.skipPermissions ? 'bypass' : 'normal',
         skipPermissions: !!opts.skipPermissions,
         status: 'active',

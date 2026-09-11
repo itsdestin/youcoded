@@ -12,6 +12,8 @@ import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { syncDotFor, findSpaceFor, type SyncStatusData } from './sync-dot-state';
 import { fieldClasses, Tooltip } from './ui';
+import { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } from '../../shared/no-folder';
+import { isAndroid } from '../platform';
 import { POPOVER_Z } from './overlays/Overlay';
 
 interface SavedFolder {
@@ -176,9 +178,11 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
   const currentFolder = folders.find(f => f.path === value);
   const displayLabel = currentFolder
     ? currentFolder.nickname
-    : value
-      ? value.replace(/\\/g, '/').split('/').pop() || value
-      : 'Select folder...';
+    : value === NO_FOLDER_CWD
+      ? NO_FOLDER_DIR_NAME
+      : value
+        ? value.replace(/\\/g, '/').split('/').pop() || value
+        : 'Select folder...';
 
   return (
     <div ref={wrapperRef} className="relative">
@@ -227,6 +231,32 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
           className="layer-surface fixed overflow-hidden flex flex-col"
           style={{ top: panelPos.top, left: panelPos.left, width: panelPos.width, maxHeight: panelPos.maxHeight, zIndex: POPOVER_Z, animation: 'dropdown-in 120ms cubic-bezier(0.16, 1, 0.3, 1) both' }}
         >
+          {/* "No folder" — a session with no project at all (Destin, first-run
+              guide round 2, N-6). Always the first row, above the saved list,
+              even when there are no saved folders yet. Same row shape as a
+              folder; the sentinel is swapped for the app-owned empty folder in
+              main (shared/no-folder.ts). */}
+          {/* Desktop and remote only: the phone's own runtime creates sessions
+              from the cwd it is handed and knows nothing of the sentinel. */}
+          {!isAndroid() && (
+          <div className="py-1 border-b border-edge-dim">
+            <div
+              onClick={() => handleSelect(NO_FOLDER_CWD)}
+              data-no-folder-row=""
+              className={`flex items-center gap-1.5 px-2.5 py-1.5 cursor-pointer transition-colors ${
+                value === NO_FOLDER_CWD ? 'bg-accent/10 text-fg' : 'text-fg-2 hover:bg-inset hover:text-fg'
+              }`}
+            >
+              <svg className="w-3 h-3 shrink-0 text-fg-muted" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h8M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+              <div className="flex-1 min-w-0">
+                <div className="text-xs truncate">{NO_FOLDER_DIR_NAME}</div>
+                <div className="text-3xs text-fg-muted truncate">Just chat — no files, no instructions</div>
+              </div>
+            </div>
+          </div>
+          )}
           {/* Saved folders list — min-h-0 lets flexbox shrink the list first
               when the viewport-clamped panel height is tight. */}
           {folders.length > 0 && (
