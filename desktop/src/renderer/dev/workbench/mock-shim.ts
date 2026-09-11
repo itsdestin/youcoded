@@ -1591,6 +1591,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // catch-all rather than hand-written for no behavioural gain.
   const shell: Ns<'shell'> = {
     openPath: async () => '',
+    // Real open so workbench clicks visibly do something: mirror the remote
+    // shim's browser behaviour (window.open in a new tab) instead of silently
+    // resolving [] through the catch-all. Only called on a user click (never
+    // by the model), so the new tab/popup is not a surprise.
+    openExternal: async (url: string) => { window.open(url, '_blank', 'noopener'); },
   };
 
   // Specialists 1c — roster, model tiers, and the two card actions. Real

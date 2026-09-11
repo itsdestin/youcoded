@@ -14,6 +14,7 @@ import { modelChipFor, supportsAliasCycling } from './components/model-chip';
 import FolderSwitcher from './components/FolderSwitcher';
 import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
+import { CHATGPT_UPGRADE_URL } from '../shared/chatgpt-types';
 
 import ErrorBoundary from './components/ErrorBoundary';
 import { AnchorTip, Button, Dialog, Toast, Toggle } from './components/ui';
@@ -3400,6 +3401,10 @@ function AppInner() {
                       // Plan-limit card (review round 2, P-9): Switch Providers
                       // opens the same picker the status-bar chip opens.
                       onSwitchProviders={() => setModelPickerOpen(true)}
+                      // Plan-limit card: the Upgrade plan button opens OpenAI's
+                      // own upgrade page (the URL the Codex CLI's limit error
+                      // names) in the system browser, like My Account does.
+                      onUpgradePlan={() => void window.claude.shell.openExternal(CHATGPT_UPGRADE_URL)}
                       onCancelQueued={handleCancelQueued}
                       onEditQueued={handleEditQueued}
                     />
