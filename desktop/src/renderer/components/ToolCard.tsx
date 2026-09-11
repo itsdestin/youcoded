@@ -591,11 +591,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   const [focusIdx, setFocusIdx] = useState(fullAutoStop ? 0 : canAlwaysAllow ? 1 : 0);
   const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
 
+  // Set when an answer got NO reply (the call rejected); cleared on the next try.
+  const [unconfirmed, setUnconfirmed] = useState(false);
   const handleRespond = useCallback(async (decision: object) => {
     setResponding(true);
+    setUnconfirmed(false);
     try {
       const delivered = await (window as any).claude.session.respondToPermission(requestId, decision);
       if (delivered === false) {
+        // The host confirmed the request is already closed — that one IS expired.
         console.warn('Permission response not delivered — socket already closed');
         setResponding(false);
         if (onFailed) onFailed();
@@ -605,9 +609,22 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     } catch (err) {
       console.error('Failed to respond to permission:', err);
       setResponding(false);
-      if (onFailed) onFailed();
+      // WHY no onFailed here (error inventory 2026-09-10, false message 3): a
+      // rejected respond is an UNANSWERED one — over remote access the 30-second
+      // timeout, which remote-shim.ts documents as a request that MAY have run.
+      // onFailed marks the card failed as "expired" and broadcasts that to every
+      // device, asserting the answer was lost when it may have arrived. The card
+      // stays answerable instead, and says what is actually known.
+      setUnconfirmed(true);
     }
   }, [requestId, onResponded, onFailed]);
+  // Same sentence in every button layout below (and in the question card and the
+  // buddy's compact strip): the answer's fate is unknown, so it says only that.
+  const unconfirmedNote = unconfirmed ? (
+    <p role="alert" className="text-3xs text-fg-muted leading-relaxed">
+      YouCoded couldn&apos;t confirm your answer reached the session. If this is still waiting for you, answer again.
+    </p>
+  ) : null;
 
   // The "Always allow" decision: CC sends its first real suggestion; native sends
   // the synthetic marker the broker reads as always.
@@ -771,6 +788,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             Always allow
           </button>
         </div>
+        {unconfirmedNote}
       </div>
     );
   }
@@ -823,6 +841,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
             Always Allow
           </button>
         </div>
+        {unconfirmedNote}
       </div>
     );
   }
@@ -875,6 +894,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
       {canAlwaysAllow && alwaysAllowNote && (
         <p className="text-3xs text-fg-muted leading-relaxed">{alwaysAllowNote}</p>
       )}
+      {unconfirmedNote}
     </div>
   );
 }
@@ -1017,6 +1037,9 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   const [text, setText] = useState<Record<string, string>>({});
   const textRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const [responding, setResponding] = useState(false);
+  // Set when an answer got NO reply (the call rejected); cleared on the next try.
+  // Same rule and sentence as PermissionButtons above (error inventory 2026-09-10, #3).
+  const [unconfirmed, setUnconfirmed] = useState(false);
   // Track which question is "active" for keyboard nav, and which option is focused
   const [focusedOption, setFocusedOption] = useState(0);
 
@@ -1054,6 +1077,8 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   const handleSubmit = useCallback(async () => {
     if (!allAnswered || responding) return;
     setResponding(true);
+    // Cleared on the next try, like handleDeny and PermissionButtons (code review F8).
+    setUnconfirmed(false);
     // Build answers object: question text → "Label" or "Label1, Label2". When
     // Other is selected the typed text takes its place in the list (so a
     // multi-select can be "Charts, my own idea"); when it is NOT selected the
@@ -1096,12 +1121,16 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
     } catch (err) {
       console.error('Failed to respond to AskUserQuestion:', err);
       setResponding(false);
-      if (onFailed) onFailed();
+      // WHY not onFailed (error inventory 2026-09-10, false message 3): a rejection got
+      // NO reply and may still have run — the same reasoning as PermissionButtons above.
+      // The card stays answerable and says the answer could not be confirmed.
+      setUnconfirmed(true);
     }
   }, [allAnswered, responding, questions, answers, text, requestId, onResponded, onFailed]);
 
   const handleDeny = useCallback(async () => {
     setResponding(true);
+    setUnconfirmed(false);
     try {
       const delivered = await (window as any).claude.session.respondToPermission(requestId, {
         decision: { behavior: 'deny' },
@@ -1114,7 +1143,8 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
       if (onResponded) onResponded();
     } catch {
       setResponding(false);
-      if (onFailed) onFailed();
+      // Same as Submit: unanswered, not expired.
+      setUnconfirmed(true);
     }
   }, [requestId, onResponded, onFailed]);
 
@@ -1256,6 +1286,11 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
           Dismiss
         </Button>
       </div>
+      {unconfirmed && (
+        <p role="alert" className="text-3xs text-fg-muted leading-relaxed">
+          YouCoded couldn&apos;t confirm your answer reached the session. If this is still waiting for you, answer again.
+        </p>
+      )}
     </div>
   );
 }

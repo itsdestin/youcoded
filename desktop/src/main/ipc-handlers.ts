@@ -177,7 +177,7 @@ import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
-import { getTagRegistry } from './conversations/tag-registry-service';
+import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { getRepoInfo } from './project-repo';
 import { listContext, readContextFile, writeContextFile } from './project-context';
@@ -4032,11 +4032,8 @@ export function registerIpcHandlers(
   });
 
   // --- Tag registry CRUD ---
-  ipcMain.handle(IPC.TAGS_LIST, async () => {
-    const reg = getTagRegistry();
-    if (!reg) return [];
-    try { return await reg.list(); } catch { return []; }
-  });
+  // A failed read answers { ok: false, error }, never [] — see listTagsForHost for why.
+  ipcMain.handle(IPC.TAGS_LIST, () => listTagsForHost());
 
   ipcMain.handle(IPC.TAGS_CREATE, async (_e, label: string, color: string) => {
     const reg = getTagRegistry();
@@ -4247,7 +4244,12 @@ export function registerIpcHandlers(
     // Task 5: read from whichever provider bucket this session actually writes
     // to — native records are real now, so there's no more up-front refusal.
     // `supported` stays in the result shape (Android still answers false).
-    if (!store) return { tags: [], note: '', supported: true };
+    // WHY `unreadable` (error inventory 2026-09-10, false message 12): a missing store
+    // and a failed read both used to answer blank tags and note — indistinguishable
+    // from a conversation that has none. The close prompt showed "No note" for a
+    // conversation that had one and used that blank as the baseline for a note
+    // write. A record that is simply absent (`!rec`) is still a real "none".
+    if (!store) return { tags: [], note: '', supported: true, unreadable: "conversation storage isn't available" };
     try {
       const rec = await store.get(await sessionProviderFor(resolved), resolved);
       if (!rec) return { tags: [], note: '', supported: true };
@@ -4262,7 +4264,7 @@ export function registerIpcHandlers(
         else if (v.value && (SESSION_FLAG_NAMES as string[]).includes(k)) reserved[k] = true;
       }
       return { tags, note: rec.note || '', supported: true, flags: reserved };
-    } catch { return { tags: [], note: '', supported: true }; }
+    } catch (e) { return { tags: [], note: '', supported: true, unreadable: e instanceof Error && e.message ? e.message : "the conversation's record could not be read" }; }
   });
 
   // --- Sync management ---

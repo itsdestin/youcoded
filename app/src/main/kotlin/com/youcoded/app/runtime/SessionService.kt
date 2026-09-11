@@ -2077,7 +2077,7 @@ class SessionService : Service() {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                             .put("success", result.success)
                             .put("output", result.backends.joinToString(", ").ifEmpty { "No backends configured" })
-                            .put("error", if (result.errors > 0) "${result.errors} backend(s) had errors" else "")) }
+                            .put("error", if (result.errors > 0) "Some backups didn't finish." else "")) } // user-facing, mirrors sync-state.ts
                     } catch (e: Exception) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                             .put("success", false).put("output", "").put("error", e.message ?: "SyncService push failed")) }
@@ -2184,7 +2184,7 @@ class SessionService : Service() {
                     try {
                         val result = sync.push(force = true, backendId = id)
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
-                            .put("success", result.success).put("error", if (result.errors > 0) "Push had errors" else "")) }
+                            .put("success", result.success).put("error", if (result.errors > 0) "Some files didn't upload." else "")) } // user-facing, mirrors sync-state.ts
                     } catch (e: Exception) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", false).put("error", e.message ?: "Push failed")) }
                     }
@@ -3600,31 +3600,51 @@ class SessionService : Service() {
                 val wantsFull = wantsFullFlag &&
                     resolved.length() <= EditablePathPolicy.FULL_READ_MAX_BYTES
                 if (resolved.length() > EditablePathPolicy.EDIT_MAX_BYTES && !wantsFull) {
-                    val head = ByteArray(8192)
-                    val headLen = EditablePathPolicy.readFully(resolved, head)
+                    // Both reads go through readPrefix, the guarded twin of readWhole below:
+                    // an unreadable file answers { ok: false, error } here too, instead of
+                    // throwing out of the handler (code review 2026-09-11, F6).
+                    val head = when (val read = EditablePathPolicy.readPrefix(resolved, 8192)) {
+                        is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                        is EditablePathPolicy.FileRead.Unreadable -> {
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                                .put("ok", false).put("error", read.reason)) }
+                            return@handleBridgeMessage
+                        }
+                    }
                     val out = org.json.JSONObject()
                         .put("ok", true).put("artifact", artifact.toJson()).put("orphan", false)
                         .put("sizeBytes", resolved.length())
                         .put("mtimeMs", resolved.lastModified().toDouble())
-                    if (EditablePathPolicy.looksBinary(head.copyOf(headLen))) {
+                    if (EditablePathPolicy.looksBinary(head)) {
                         out.put("content", org.json.JSONObject.NULL)
                            .put("binary", true).put("truncated", false)
                     } else {
                         val cap = EditablePathPolicy.EDIT_MAX_BYTES.toInt()
-                        val win = ByteArray(cap)
-                        val winLen = EditablePathPolicy.readFully(resolved, win)
-                        out.put("content", EditablePathPolicy.textPrefix(win, winLen, cap))
+                        val win = when (val read = EditablePathPolicy.readPrefix(resolved, cap)) {
+                            is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                            is EditablePathPolicy.FileRead.Unreadable -> {
+                                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                                    .put("ok", false).put("error", read.reason)) }
+                                return@handleBridgeMessage
+                            }
+                        }
+                        out.put("content", EditablePathPolicy.textPrefix(win, win.size, cap))
                            .put("binary", false).put("truncated", true)
                     }
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, out) }
                     return@handleBridgeMessage
                 }
-                val bytes = try { resolved.readBytes() } catch (_: java.io.IOException) { null }
-                if (bytes == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", true).put("artifact", artifact.toJson())
-                        .put("content", org.json.JSONObject.NULL).put("orphan", true)) }
-                    return@handleBridgeMessage
+                // A file that passed exists() but cannot be read is a read FAILURE:
+                // answer { ok: false, error } — the viewer shows "Couldn't read this
+                // file" with Retry — never orphan, which reads "no longer on disk".
+                // See EditablePathPolicy.readWhole (error inventory 2026-09-10, #13).
+                val bytes = when (val read = EditablePathPolicy.readWhole(resolved)) {
+                    is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                    is EditablePathPolicy.FileRead.Unreadable -> {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                            .put("ok", false).put("error", read.reason)) }
+                        return@handleBridgeMessage
+                    }
                 }
                 // NUL-sniff: binary bytes as UTF-8 turn into U+FFFD soup — return
                 // binary:true + null content so the renderer routes to its fallback.

@@ -10,6 +10,7 @@ import type { TagRecord } from '../../shared/tags';
 import { TagManagerPopup } from './tags/TagManagerPopup';
 import { Button, Dialog, SettingRow, Toggle } from './ui';
 import { META_UNSUPPORTED_FALLBACK, type SessionMetaResult } from '../../shared/types';
+import { plainMessage } from '../utils/ipc-error';
 import { isTypingTarget } from '../utils/is-typing-target';
 
 // The two reserved flags no longer share a control here (2026-07-31). Complete
@@ -155,9 +156,22 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
     const blank = { tags: new Set<string>(), note: '', flags: { ...EMPTY_FLAGS } };
     if (!sessionId) { setTagIds(new Set()); setNote(''); setOriginal(blank); setMetaLoaded(true); return; }
     let cancelled = false;
+    // WHY a failed read is shown as one (error inventory 2026-09-10, false message 12):
+    // both hosts and this catch used to answer blanks, so the prompt showed "No note"
+    // for a conversation that had one — and that blank was the delta's baseline, so
+    // typing a note REPLACED the stored one nobody was shown. A failed read now takes
+    // the existing "can't be changed here" state: the reason shows, the controls do
+    // not, and the blank baseline means confirming writes no note and no tags.
+    const unreadable = (reason: string) => {
+      setTagIds(new Set()); setNote(''); setOriginal(blank);
+      setMetaSupported(false);
+      setMetaReason(`Couldn't load this conversation's tags and note, so they can't be changed here: ${reason}`);
+      setMetaLoaded(true);
+    };
     Promise.resolve((window as any).claude.session.getMeta(sessionId))
       .then((m: SessionMetaResult) => {
         if (cancelled) return;
+        if (m?.unreadable) { unreadable(m.unreadable); return; }
         const tags = new Set(m?.tags ?? []);
         // Missing `flags` = Android or an older remote peer. Absent reads as
         // "none set", never as an error.
@@ -174,7 +188,7 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
         setMetaReason(m?.unsupportedReason || META_UNSUPPORTED_FALLBACK);
         setMetaLoaded(true);
       })
-      .catch(() => { if (!cancelled) { setTagIds(new Set()); setNote(''); setOriginal(blank); setMetaLoaded(true); } });
+      .catch((err: unknown) => { if (!cancelled) unreadable(plainMessage(err)); });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, sessionId]);

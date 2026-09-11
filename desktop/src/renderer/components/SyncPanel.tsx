@@ -10,12 +10,14 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Dialog, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { Button, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
 import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
-import SyncSetupWizard from './SyncSetupWizard';
+import SyncSetupWizard, { type FirstBackup } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import ConnectGithubModal from './ConnectGithubModal';
@@ -481,6 +483,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const logScrollRef = useScrollFade<HTMLDivElement>();
   // Per-backend action feedback
   const [actionFeedback, setActionFeedback] = useState<Record<string, string>>({});
+  // A failed upload per backend: the sentence to show, and whether Report bug applies (it does
+  // not for a skipped upload — nothing went wrong, it simply hasn't run).
+  const [uploadFailure, setUploadFailure] = useState<Record<string, { message: string; reportable: boolean }>>({});
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Confirmation dialog state
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   // Cross-device sync spaces (spec 2026-07-03) — separate from the backend backups
@@ -598,16 +604,39 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   }, [claude]);
 
   // Per-backend actions
+  // WHY (Destin, batch 1 deck E-1 then E-1b): a bare "Error" that vanished after two seconds
+  // told the user nothing, and every error state must offer an action. A failure is now a full
+  // error block under its row — Retry always, Report bug whenever the cause is not known — and
+  // stays until the next upload; only a success clears itself. An empty reason means the upload
+  // was skipped (another backup held the lock), and no answer at all is "couldn't confirm",
+  // never a guessed failure.
   const handlePushBackend = useCallback(async (id: string) => {
+    setUploadFailure(prev => { if (!prev[id]) return prev; const n = { ...prev }; delete n[id]; return n; });
     setActionFeedback(prev => ({ ...prev, [id]: 'uploading' }));
+    let failure: { message: string; reportable: boolean } | null = null;
     try {
       const result = await claude.sync.pushBackend(id);
-      setActionFeedback(prev => ({ ...prev, [id]: result.success ? 'uploaded' : 'error' }));
-      await refreshStatus();
+      if (!result.success) {
+        failure = result.error
+          ? { message: `Upload failed: ${plainMessage(result.error)}`, reportable: true }
+          : { message: "Upload hasn't run yet — try again in a moment.", reportable: false };
+      }
     } catch {
-      setActionFeedback(prev => ({ ...prev, [id]: 'error' }));
+      failure = { message: "Couldn't confirm the upload finished.", reportable: true };
     }
-    setTimeout(() => setActionFeedback(prev => { const n = { ...prev }; delete n[id]; return n; }), 2000);
+    // Refreshed separately, so a failed refresh can't turn a finished upload into a failure.
+    try { await refreshStatus(); } catch { /* the row keeps its last status */ }
+    if (failure) {
+      const f = failure;
+      setActionFeedback(prev => { const n = { ...prev }; delete n[id]; return n; });
+      setUploadFailure(prev => ({ ...prev, [id]: f }));
+      return;
+    }
+    setActionFeedback(prev => ({ ...prev, [id]: 'uploaded' }));
+    setTimeout(() => setActionFeedback(prev => {
+      if (prev[id] !== 'uploaded') return prev;
+      const n = { ...prev }; delete n[id]; return n;
+    }), 2000);
   }, [claude, refreshStatus]);
 
   // handlePullBackend ("Download now") was removed in sync-legacy-demolition —
@@ -650,22 +679,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       case 'open-external':
         await (window as any).claude.shell.openExternal(action.payload.url);
         break;
-      case 'retry': {
-        setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'uploading' }));
-        try {
-          await claude.sync.pushBackend(action.payload.backendId);
-          setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'uploaded' }));
-        } catch {
-          setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'error' }));
-        }
-        await refreshStatus();
+      case 'retry':
+        // WHY the shared handler (error inventory 2026-09-10, false message 1): this
+        // case ran its own copy of the upload and set 'uploaded' without reading the
+        // answer — pushBackend never throws, it RETURNS { success: false } — so a failed
+        // upload read "Uploaded!". handlePushBackend reads it. One path, so the warning's
+        // Retry and the menu's "Upload now" cannot drift apart again.
+        await handlePushBackend(action.payload.backendId);
         break;
-      }
       case 'dismiss':
         await handleDismiss(w.code);
         break;
     }
-  }, [status, claude, refreshStatus, handleDismiss]);
+  }, [status, claude, handleDismiss, handlePushBackend]);
 
   // Close overflow menu on outside click
   useEffect(() => {
@@ -950,13 +976,36 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           <SyncSetupWizard
             initialType={addType ?? undefined}
             existingBackends={(status?.backends ?? []).map(b => ({ type: b.type, config: b.config }))}
-            onComplete={async (instance) => {
-              try {
-                await claude.sync.addBackend(instance);
-                // Trigger first sync immediately
-                await claude.sync.force();
-                await refreshStatus();
-              } catch {}
+            onComplete={async (instance): Promise<FirstBackup> => {
+              // WHY no catch (error inventory 2026-09-10, false message 2): a `catch {}`
+              // here swallowed a failed save, and the wizard shows its error box ONLY when
+              // this rejects — so it announced "You're all set!" for a backup never written.
+              const added = await claude.sync.addBackend(instance);
+              let first: FirstBackup;
+              if (!instance.syncEnabled) {
+                // Auto-backup is off. The old force() skipped this destination entirely,
+                // yet the done step said its first backup was syncing. Attempt nothing,
+                // claim nothing.
+                first = { kind: 'paused' };
+              } else if (typeof added?.id !== 'string') {
+                // Saved, but with no id there is no way to back up THIS destination.
+                first = { kind: 'unknown' };
+              } else {
+                // WHY pushBackend(id), not force(): force() re-uploads EVERY enabled
+                // destination, so a failure in an older one was reported as this one
+                // failing. pushBackend never throws on a failed upload — it answers
+                // { success: false } — so the answer is read, not assumed.
+                try {
+                  const r = await claude.sync.pushBackend(added.id);
+                  first = r?.success ? { kind: 'finished' } : { kind: 'failed', error: r?.error ?? '' };
+                } catch {
+                  // No answer is not a failure: over remote access a timed-out request
+                  // may still have run.
+                  first = { kind: 'unknown' };
+                }
+              }
+              await refreshStatus();
+              return first;
             }}
             onClose={() => { setView('main'); setAddType(null); setWizardPreselect(undefined); }}
             preselectedBackendId={wizardPreselect?.id}
@@ -1311,9 +1360,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           : b.lastError ? 'bg-red-500 ring-2 ring-red-500/25'
                           : (b.syncEnabled && b.connected) ? 'bg-green-500 ring-2 ring-green-500/25'
                           : 'bg-fg-muted/40';
+                        const failure = uploadFailure[b.id];
                         return (
+                          <React.Fragment key={b.id}>
                           <div
-                            key={b.id}
                             className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
                               b.lastError ? 'border-red-500/20 bg-red-500/5' :
                               b.syncEnabled && b.connected ? 'border-green-500/20 bg-green-500/5' :
@@ -1338,13 +1388,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               )}
                               {actionFeedback[b.id] && (
                                 <span className={`text-4xs font-medium ${
-                                  actionFeedback[b.id] === 'error' ? 'text-destructive-fg' :
-                                  actionFeedback[b.id]?.includes('ing') ? 'text-blue-400' :
-                                  'text-green-400'
+                                  actionFeedback[b.id] === 'uploading' ? 'text-blue-400' : 'text-green-400'
                                 }`}>
-                                  {actionFeedback[b.id] === 'uploading' ? 'Uploading...' :
-                                   actionFeedback[b.id] === 'uploaded' ? 'Uploaded!' :
-                                   'Error'}
+                                  {actionFeedback[b.id] === 'uploading' ? 'Uploading...' : 'Uploaded!'}
                                 </span>
                               )}
                             </div>
@@ -1378,6 +1424,17 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               )}
                             </div>
                           </div>
+                          {failure && (
+                            <ErrorState
+                              variant="inline"
+                              message={failure.message}
+                              onRetry={() => handlePushBackend(b.id)}
+                              onReportBug={failure.reportable
+                                ? () => setReportContext({ surface: `Backup & Sync → ${b.label}`, error: failure.message })
+                                : undefined}
+                            />
+                          )}
+                          </React.Fragment>
                         );
                       })}
                     </div>
@@ -1597,6 +1654,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
       {/* The "Download from backup" confirmation dialog was removed in
           sync-legacy-demolition — there is no pull/restore path anymore. */}
+
+      {/* Report bug from a failed upload's error block. */}
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </>
   );
 }

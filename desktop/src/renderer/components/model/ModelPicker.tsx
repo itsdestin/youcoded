@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, fieldClasses, Tooltip } from '../ui';
+import { Button, ErrorState, fieldClasses, Tooltip } from '../ui';
+import { plainMessage } from '../../utils/ipc-error';
 import { triggerTip } from '../guide/tips';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
@@ -341,6 +342,8 @@ export default function ModelPicker({
    */
   const [reload, setReload] = useState(0);
   const everLoadedRef = useRef(false);
+  // Why the last provider/catalog load failed, in plain words; null once one works.
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   useEffect(() => {
     const off = window.claude?.models?.onDownloadProgress?.((p: { state?: string }) => {
@@ -357,15 +360,22 @@ export default function ModelPicker({
     if (everLoadedRef.current && !open) return;
     everLoadedRef.current = true;
     let cancelled = false;
+    // WHY no per-call `.catch(() => [])` (error inventory 2026-09-10, false message 9):
+    // each call turned a failure into an empty list, so a failed load left no native
+    // rows and a native-only picker said "You have not set up any model providers." —
+    // with "Add provider" — to someone who had them. A failure now reaches the catch
+    // below and is shown as one. Rows from an earlier load are left in place (they are
+    // real), so the error replaces the list only when nothing has loaded.
     Promise.all([
-      window.claude.providers.list().catch(() => []),
-      window.claude.providers.catalog().catch(() => []),
+      window.claude.providers.list(),
+      window.claude.providers.catalog(),
     ]).then(([list, cat]: [any, any]) => {
       if (cancelled) return;
       const providerRows: ProviderRow[] = Array.isArray(list) ? list : [];
       const catalogRows: CatalogRow[] = Array.isArray(cat) ? cat : [];
       setProviders(providerRows);
       setCatalog(catalogRows);
+      setLoadError(null);
       setLoaded(true);
 
       if (prefill && !prefillAppliedRef.current && !value) {
@@ -382,7 +392,12 @@ export default function ModelPicker({
           );
         }
       }
-    }).catch(() => setLoaded(true));
+    }).catch((e: unknown) => {
+      // See the WHY above the Promise.all: the reason is kept so the panel can say
+      // it could not load, instead of saying no providers are set up.
+      if (!cancelled) setLoadError(plainMessage(e));
+      setLoaded(true);
+    });
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, reload]);
@@ -753,7 +768,16 @@ export default function ModelPicker({
                       a provider nobody chose — his words, and a way out that
                       lands in Assistant settings. Sits between the search field
                       and "Manage models…", where he asked for it. */}
-                  {!anyPickable && (
+                  {/* WHY the load error comes first (error inventory 2026-09-10, false
+                      message 9): with nothing pickable, a failed load and "none set up"
+                      looked identical, and both said the second. A failed load says so,
+                      with Retry; only a load that WORKED may say none are set up. */}
+                  {!anyPickable && loadError && (
+                    <div className="px-4 py-3">
+                      <ErrorState variant="inline" message={`Couldn't load your models: ${loadError}`} onRetry={() => setReload((n) => n + 1)} />
+                    </div>
+                  )}
+                  {!anyPickable && !loadError && (
                     <div className="px-4 py-4 text-center space-y-2.5">
                       <p className="text-xs text-fg-muted leading-relaxed">You have not set up any model providers.</p>
                       <Button

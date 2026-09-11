@@ -33,7 +33,7 @@ import { fileTypeGroup } from '../../shared/artifacts/categorization';
 import type { FileTypeGroup } from '../../shared/artifacts/categorization';
 import { getPlatform } from '../platform';
 import { formatRelativeTime } from '../utils/format-time';
-import { Button, CloseButton, EmptyState, FieldError, SearchFilterPill, Tooltip } from './ui';
+import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
 import { useResolvedConversations } from '../hooks/useResolvedConversations';
 import { useTagRegistry } from '../hooks/useTagRegistry';
@@ -936,13 +936,24 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                   role="dialog"
                   aria-label={COPY.tagsAndNoteLabel}
                 >
-                  <TagNoteEditor
-                    appliedIds={new Set(previewMeta.tags)}
-                    onToggleTag={previewMeta.toggleTag}
-                    registry={previewTagRegistry}
-                    note={previewMeta.note}
-                    onNote={previewMeta.saveNote}
-                  />
+                  {/* An unreadable note is reported, never opened as an empty editor — a
+                      save writes the whole note, so typing would replace the one nobody
+                      was shown (code review 2026-09-11, F1). */}
+                  {previewMeta.unreadable ? (
+                    <ErrorState
+                      variant="inline"
+                      message={`Couldn't load this conversation's tags and note: ${previewMeta.unreadable}`}
+                      onRetry={previewMeta.reload}
+                    />
+                  ) : (
+                    <TagNoteEditor
+                      appliedIds={new Set(previewMeta.tags)}
+                      onToggleTag={previewMeta.toggleTag}
+                      registry={previewTagRegistry}
+                      note={previewMeta.note}
+                      onNote={previewMeta.saveNote}
+                    />
+                  )}
                 </div>
               )}
             </div>

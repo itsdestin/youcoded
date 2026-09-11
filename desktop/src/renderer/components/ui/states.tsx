@@ -151,19 +151,15 @@ export function ErrorState(props: ErrorStateProps) {
 
   // WHY this exact order and emphasis: five existing general-mode sites render
   // "Report bug" secondary then "Diagnose with the assistant" primary, and must not
-  // shift. So the order is fixed at Retry, Report bug, Diagnose, and the primary is
-  // the first of Retry → Diagnose → Report bug that was actually supplied. With no
-  // Retry that reproduces today's pairing exactly; with one, Retry leads.
+  // shift. Retry, when supplied, sits LAST — at the right-hand end, where the row's
+  // primary action belongs (Destin, error-states batch 1 deck E-1c, 2026-09-11:
+  // "switch retry/bug positions"; it had led the row). The primary is the first of
+  // Retry → Diagnose → Report bug that was actually supplied.
   // Fixed, not per-caller: three-button errors that each ordered themselves would
   // look like three different apps.
   const primary = props.onRetry ? 'retry' : props.onDiagnose ? 'diagnose' : 'report';
   const actions = (
     <>
-      {props.onRetry && (
-        <Button variant={primary === 'retry' ? 'primary' : 'secondary'} size="sm" onClick={props.onRetry}>
-          Retry
-        </Button>
-      )}
       {props.onReportBug && (
         <Button variant={primary === 'report' ? 'primary' : 'secondary'} size="sm" onClick={props.onReportBug}>
           Report bug
@@ -172,6 +168,11 @@ export function ErrorState(props: ErrorStateProps) {
       {props.onDiagnose && (
         <Button variant={primary === 'diagnose' ? 'primary' : 'secondary'} size="sm" onClick={props.onDiagnose}>
           Diagnose with the assistant
+        </Button>
+      )}
+      {props.onRetry && (
+        <Button variant={primary === 'retry' ? 'primary' : 'secondary'} size="sm" onClick={props.onRetry}>
+          Retry
         </Button>
       )}
     </>

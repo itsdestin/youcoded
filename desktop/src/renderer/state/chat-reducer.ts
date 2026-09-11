@@ -2311,7 +2311,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...seg,
           status: 'failed',
           requestId: undefined,
-          error: 'Permission request expired — socket closed before a response was sent',
+          error: 'This request closed before an answer reached it.', // was transport jargon that also claimed no answer was sent — tests/permission-expired-wording.test.ts
         }));
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
@@ -2323,7 +2323,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             ...tool,
             status: 'failed',
             requestId: undefined,
-            error: 'Permission request expired — socket closed before a response was sent',
+            error: 'This request closed before an answer reached it.', // was transport jargon that also claimed no answer was sent — tests/permission-expired-wording.test.ts
           });
           break;
         }
