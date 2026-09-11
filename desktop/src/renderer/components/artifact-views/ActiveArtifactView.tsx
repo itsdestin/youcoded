@@ -321,6 +321,32 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       setSaveError(`YouCoded is only showing part of this file (it is over ${(EDIT_MAX_BYTES / (1024 * 1024)).toFixed(1)} MB), so saving would overwrite the rest. Copy your changes out before closing.`);
       return false;
     }
+    // WHY a save never goes out without a token (error inventory 2026-09-10, false
+    // message 11): the token normally comes from startEdit's read, and if that read
+    // failed or had not landed, the save sent no baseMtimeMs — and main's
+    // write-authorization skips the "changed on disk" check when none arrives. Another
+    // writer's newer version was silently overwritten behind a normal, successful save.
+    // So with no token, read the file NOW and let what is on disk decide:
+    //   · same text the editor loaded → nobody changed it; save guarded by THIS read's token.
+    //   · different text              → it did change; raise the conflict banner, write nothing.
+    //   · no longer there (orphan)    → there is no newer version to lose; save as before.
+    //   · unreadable                  → the check cannot be made; refuse, and say so.
+    // "Keep mine" (opts.force) skips all of this on purpose: it means overwrite.
+    if (!opts?.force && mtimeRef.current === null) {
+      let disk: any = null;
+      try { disk = await (window.claude as any).artifacts.get(projectRoot, artifact.id); } catch { disk = null; }
+      if (!(disk && disk.ok && disk.orphan)) {
+        if (!disk || !disk.ok || typeof disk.mtimeMs !== 'number') {
+          setSaveError("YouCoded couldn't check whether this file changed since you opened it, so nothing was saved. Try saving again.");
+          return false;
+        }
+        mtimeRef.current = disk.mtimeMs;
+        if ((disk.content ?? '') !== content) {
+          setConflict({ disk: disk.content ?? '' });
+          return false;
+        }
+      }
+    }
     const saveOpts: { baseMtimeMs?: number; confirmed?: boolean } = {};
     if (!opts?.force && mtimeRef.current !== null) saveOpts.baseMtimeMs = mtimeRef.current;
     if (tier === 'needs-confirm') saveOpts.confirmed = true; // dialog shown at startEdit
