@@ -299,7 +299,9 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         // falls back to execCommand, and answers whether anything was copied.
         // The dispatcher stays synchronous; the toast arrives when the write settles.
         void copyText(payload.content).then((copied) => {
-          input.callbacks.onToast?.(copied ? 'Copied to clipboard' : "Couldn't copy — select the text and copy it yourself");
+          // Failure wording is Destin's (batch 1 deck, E-4): the old "select the text and copy it
+          // yourself" was unclear, since copying is what the user had just asked for.
+          input.callbacks.onToast?.(copied ? 'Copied to clipboard' : "Couldn't copy — please try again.");
         });
         return { handled: true };
       }

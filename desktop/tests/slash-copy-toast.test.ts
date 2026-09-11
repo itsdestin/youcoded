@@ -56,7 +56,9 @@ describe('/copy reports what actually happened', () => {
     const onToast = vi.fn();
     copy(onToast);
 
-    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith(expect.stringMatching(/couldn.t copy/i)));
+    // Wording from Destin's batch 1 deck answer (E-4): the old "select the text and copy it
+    // yourself" was unclear, since that is what /copy was for.
+    await vi.waitFor(() => expect(onToast).toHaveBeenCalledWith("Couldn't copy — please try again."));
     expect(onToast).not.toHaveBeenCalledWith('Copied to clipboard');
   });
 
