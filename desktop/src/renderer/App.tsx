@@ -1607,16 +1607,10 @@ function AppInner() {
     // UI action sync — receive actions broadcast from other devices
     const uiActionHandler = (window.claude.on as any).uiAction?.((action: any) => {
       if (!action) return;
-      // Handle view switching from native side (e.g. Chat button in TerminalKeyboardRow)
-      if (action.action === 'switch-view' && action.mode) {
-        setSessionId((currentSid) => {
-          if (currentSid) {
-            setViewModes((prev) => new Map(prev).set(currentSid, action.mode));
-          }
-          return currentSid;
-        });
-        return;
-      }
+      // Remote access batch 2 (§5, contract R4): the chat/terminal switch is each
+      // screen's own. A `switch-view` used to be applied here, so the Android
+      // app's toggle moved the desktop and every other phone; it is ignored now,
+      // like any other action without a reducer type.
       if (!action.type) return;
       // Handle session initialization sync (not a chat reducer action)
       if (action.type === '_SESSION_INITIALIZED' && action.sessionId) {
@@ -2783,16 +2777,12 @@ function AppInner() {
     (mode: ViewMode) => {
       if (!sessionId) return;
       // A shell session is terminal-only. The header hides its toggle, but Ctrl+`
-      // still lands here, so refuse rather than trust the callers. (A remote or
-      // Android `switch-view` does NOT come through here — it writes viewModes
-      // directly, up in the uiAction handler — and is neutralised instead by
-      // currentViewMode forcing the terminal for a shell session.)
+      // still lands here, so refuse rather than trust the callers.
       if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;
       setViewModes((prev) => new Map(prev).set(sessionId, mode));
-      // On Android, tell the native side to switch views
-      if (getPlatform() === 'android') {
-        (window as any).claude?.remote?.broadcastAction?.({ action: 'switch-view', mode });
-      }
+      // Batch 2 (§5): no broadcast. This screen's switch is this screen's own —
+      // the Android-only `switch-view` broadcast moved the desktop and every
+      // other phone along with it (contract R4).
     },
     [sessionId],
   );

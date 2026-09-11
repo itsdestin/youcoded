@@ -54,7 +54,7 @@ describe('a shell session in the renderer', () => {
     });
 
     it('the toggle handler refuses a shell session', () => {
-      // Ctrl+` and a remote client's switch-view both land in handleToggleView.
+      // Ctrl+` lands in handleToggleView (a remote switch-view no longer reaches App — batch 2 §5).
       expect(appSrc).toContain(
         "if (sessionsRef.current.find((x) => x.id === sessionId)?.provider === 'shell') return;"
       );
