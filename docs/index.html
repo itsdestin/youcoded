@@ -288,6 +288,15 @@ footer{padding:0 0 46px}
    3px border + background-clip is what INSETS it: the thumb never reaches the
    panel's rounded edge, so the corners stay corners. Firefox gets the same
    through the two standard properties. */
+/* WHY dvh (Destin 2026-09-11: "the download buttons get cut off the bottom of
+   our download links popup pages when visiting the site on a phone browser").
+   On a phone, `vh` is the screen height with the address bar HIDDEN. While the
+   bar is showing, a panel sized in vh is taller than what is visible, so its
+   bottom — the sticky footer holding the Download button — sits below the
+   screen, and the panel cannot scroll it into view because the panel itself
+   believes it fits. `dvh` is the height actually visible right now. Each dvh
+   rule repeats a vh one, which stays as the fallback for browsers without dvh. */
+.install-modal-panel{margin:6dvh auto;max-height:88dvh}
 .install-modal-panel{scrollbar-width:thin;
   scrollbar-color:rgba(var(--fg-rgb),.30) transparent}
 .install-modal-panel::-webkit-scrollbar{width:12px}
@@ -354,8 +363,11 @@ footer{padding:0 0 46px}
    no band where it is neither a centred card nor a full sheet, and `0 auto`
    keeps it centred even if that maths ever drifts. */
 @media(max-width:660px){
+  /* A fixed height, not min-height: min-height let the sheet grow past the
+     screen with a long step list, which is the same cut-off by another route.
+     dvh after vh: see the note on .install-modal-panel above. */
   .install-modal-panel{margin:0 auto;max-width:none;width:100%;
-    max-height:100vh;min-height:100vh;border-radius:0;padding:26px 20px 0}
+    height:100vh;height:100dvh;max-height:none;min-height:0;border-radius:0;padding:26px 20px 0}
   .install-modal-footer{margin:20px -20px 0;padding:14px 20px;border-radius:0}
 }
 

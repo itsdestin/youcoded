@@ -81,6 +81,21 @@ describe('version comparison', () => {
     expect(compareVersions('v1.2.4', '1.2.4')).toBe(0);
     expect(compareVersions('1.10.0', '1.9.9')).toBe(1); // numeric, not lexical
   });
+
+  // 2026-09-11: the suffix used to be dropped, so 1.3.0 == 1.3.0-beta.77 and the
+  // gate refused the full release to everyone on a beta.
+  it('puts a pre-release below its own release, and orders betas by number', () => {
+    expect(compareVersions('1.3.0', '1.3.0-beta.77')).toBe(1);
+    expect(compareVersions('1.3.0-beta.77', '1.3.0')).toBe(-1);
+    expect(compareVersions('1.3.0-beta.78', '1.3.0-beta.77')).toBe(1);
+    expect(compareVersions('1.3.0-beta.100', '1.3.0-beta.99')).toBe(1); // numeric, not lexical
+    expect(compareVersions('1.3.0-beta', '1.3.0-beta.71')).toBe(-1);
+    expect(compareVersions('v1.3.0-beta.76', '1.3.0-beta.76')).toBe(0);
+    expect(compareVersions('1.3.0-beta.77', '1.2.4')).toBe(1);
+    expect(compareVersions('1.3.1-beta.2', '1.3.0')).toBe(1);
+    // Why a beta base must never patch-suffix the current release:
+    expect(compareVersions('1.2.4-beta.9', '1.2.4')).toBe(-1);
+  });
 });
 
 describe('hashFileSha256', () => {
@@ -117,6 +132,20 @@ describe('verifyDownloadedUpdate — the full gate', () => {
     const bytes = bytesOf(manifestFor('1.2.0')); // older than running 1.2.4
     await expect(verifyDownloadedUpdate({
       ...base, filePath: installerPath, tag: 'v1.2.0', manifestBytes: bytes, signatureBytes: sign(bytes),
+    })).rejects.toMatchObject({ code: 'verify-failed' });
+  });
+
+  it('installs the full release over a beta of the same version', async () => {
+    const bytes = bytesOf(manifestFor('1.3.0'));
+    await expect(verifyDownloadedUpdate({
+      ...base, filePath: installerPath, currentVersion: '1.3.0-beta.77', manifestBytes: bytes, signatureBytes: sign(bytes),
+    })).resolves.toMatchObject({ version: '1.3.0' });
+  });
+
+  it('refuses a beta over the full release it leads up to', async () => {
+    const bytes = bytesOf(manifestFor('1.3.0-beta.80'));
+    await expect(verifyDownloadedUpdate({
+      ...base, filePath: installerPath, tag: '1.3.0-beta.80', currentVersion: '1.3.0', manifestBytes: bytes, signatureBytes: sign(bytes),
     })).rejects.toMatchObject({ code: 'verify-failed' });
   });
 

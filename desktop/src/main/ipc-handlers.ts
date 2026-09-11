@@ -110,6 +110,7 @@ import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWor
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
 import { verifyDownloadedUpdate } from './update-manifest-verify';
+import { readReleaseStatus, type UpdateStatus } from './update-release-status';
 import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
 // Analytics opt-out — Phase 6. The two exported functions read/write
@@ -2019,10 +2020,7 @@ export function registerIpcHandlers(
   // verification (#7): the app fetches the signed manifest + signature at launch
   // time and refuses any installer that doesn't match. tag is the FULL tag
   // (e.g. `v1.3.0`) the manifest's version must equal.
-  let cachedUpdateStatus: {
-    current: string; latest: string; update_available: boolean; download_url: string | null;
-    manifest_url: string | null; signature_url: string | null; tag: string | null;
-  } | null = null;
+  let cachedUpdateStatus: UpdateStatus | null = null;
   let lastReleaseCheck = 0;
   const RELEASE_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
@@ -2050,72 +2048,26 @@ export function registerIpcHandlers(
     });
   }
 
+  function currentOnlyStatus(): UpdateStatus {
+    return { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null, manifest_url: null, signature_url: null, tag: null };
+  }
+
   function parseReleaseResponse(body: string) {
     try {
-      const release = JSON.parse(body);
-      const tagName: string = release.tag_name || '';
-      const latestVersion = tagName.replace(/^v/, '');
-      const currentVersion = app.getVersion();
-      const isNewer = compareVersions(latestVersion, currentVersion) > 0;
-
-      // Find the right installer asset for the current platform
-      const assets: Array<{ name: string; browser_download_url: string }> = release.assets || [];
-      let downloadUrl: string | null = null;
-      const platform = process.platform;
-      if (platform === 'win32') {
-        // Prefer .exe installer
-        const exe = assets.find(a => a.name.endsWith('.exe'));
-        downloadUrl = exe?.browser_download_url || null;
-      } else if (platform === 'darwin') {
-        // Prefer .dmg matching the current arch. electron-builder produces both
-        // `YouCoded-<ver>-arm64.dmg` and `YouCoded-<ver>.dmg` (x64, no suffix),
-        // and GitHub returns them in non-deterministic order — so a plain
-        // `.endsWith('.dmg')` would hand Intel Macs the arm64 DMG (or vice
-        // versa), which Gatekeeper refuses to mount. Match by arch first, then
-        // fall back to any .dmg if a matching one isn't in the release.
-        const wantArm = process.arch === 'arm64';
-        const archDmg = assets.find(a => a.name.endsWith('.dmg') && a.name.includes('arm64') === wantArm);
-        const anyDmg = assets.find(a => a.name.endsWith('.dmg'));
-        downloadUrl = archDmg?.browser_download_url || anyDmg?.browser_download_url || null;
-      } else {
-        // Linux — prefer .AppImage, fallback to .deb
-        const appImage = assets.find(a => a.name.endsWith('.AppImage'));
-        const deb = assets.find(a => a.name.endsWith('.deb'));
-        downloadUrl = appImage?.browser_download_url || deb?.browser_download_url || null;
-      }
-      // Fallback to release page if no matching asset found
-      if (!downloadUrl) downloadUrl = release.html_url || null;
-
-      // Signed-manifest assets (2026-09-10 security review #7). A release built
-      // through the new pipeline publishes these two alongside the installers;
-      // an older/unsigned release won't have them, and the app then refuses to
-      // launch an unverifiable installer.
-      const manifestUrl = assets.find(a => a.name === 'youcoded-release.json')?.browser_download_url || null;
-      const signatureUrl = assets.find(a => a.name === 'youcoded-release.json.sig')?.browser_download_url || null;
-
-      cachedUpdateStatus = {
-        current: currentVersion, latest: latestVersion, update_available: isNewer, download_url: downloadUrl,
-        manifest_url: manifestUrl, signature_url: signatureUrl, tag: tagName || null,
-      };
+      // WHY the decision moved out (2026-09-11): the private compare that lived
+      // here read `1.3.0-beta.76` as HIGHER than `1.3.0`, so a beta was never told
+      // the full release existed. update-release-status.ts decides newer / which
+      // file / signed, with tests that walk a beta through to the full release.
+      const next = readReleaseStatus(JSON.parse(body), app.getVersion(), process.platform, process.arch);
+      if (next) cachedUpdateStatus = next;
+      else if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
+      // Stamped even for a reply that is not a release (GitHub's rate-limit body),
+      // as before, so a rate limit is not re-asked on every status poll.
       lastReleaseCheck = Date.now();
     } catch {
       // Parse failed — keep previous cache or set current version only
-      if (!cachedUpdateStatus) {
-        cachedUpdateStatus = { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null, manifest_url: null, signature_url: null, tag: null };
-      }
+      if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
     }
-  }
-
-  /** Simple semver compare: returns >0 if a > b, <0 if a < b, 0 if equal */
-  function compareVersions(a: string, b: string): number {
-    const pa = a.split('.').map(Number);
-    const pb = b.split('.').map(Number);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      const na = pa[i] || 0;
-      const nb = pb[i] || 0;
-      if (na !== nb) return na - nb;
-    }
-    return 0;
   }
 
   function getUpdateStatus() {
