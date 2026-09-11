@@ -89,7 +89,7 @@ afterEach(() => {
 });
 
 function renderDrawer() {
-  return render(<SessionDrawer sessionId={SESSION} projectRoot={ROOT} projectId="p" projectName="alpha" />);
+  return render(<SessionDrawer sessionId={SESSION} cwd={ROOT} projectRoot={ROOT} projectId="p" projectName="alpha" />);
 }
 
 describe('SessionDrawer while a tapped file is being looked up', () => {
