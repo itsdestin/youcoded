@@ -212,6 +212,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'remote.getConfig', 'remote.setConfig', 'remote.setPassword', 'remote.detectTailscale',
   'remote.getClientCount', 'remote.getClientList', 'remote.devices', 'remote.getStatus', 'remote.onStatus',
   'syncSpaces.leaseQuery', 'syncSpaces.leaseTakeover', 'syncSpaces.leaseForce',
+  // ?update=available (error-state review, 2026-09-11) — the real update:* channels, so the
+  // Update panel can be opened and its download made to fail. onProgress is left to the
+  // catch-all on purpose: it must return its unsubscribe synchronously.
+  'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
 ];
 
 const warned = new Set<string>();
@@ -440,6 +444,42 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 
+/** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
+ *
+ *  WHY (error-state review, 2026-09-11): a read the app makes when it starts (the skills
+ *  list, the installed plugins, the tag registry) cannot be failed by a shot's `eval`, which
+ *  runs after boot — so its "couldn't load" state was unreachable in the workbench. Applied
+ *  to the hand-written table BEFORE withCatchAll wraps it, so a failing member replaces the
+ *  fixture (or the catch-all's `[]`) and every sibling keeps answering. Nested paths work:
+ *  `theme.marketplace.list`. The copies along the path keep the store-backed originals intact. */
+function applyFailSwitch(impls: Record<string, Record<string, unknown>>): void {
+  const raw = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('fail') : null;
+  if (!raw) return;
+  for (const path of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const parts = path.split('.');
+    if (parts.length < 2) continue;
+    let parent: Record<string, unknown> = impls;
+    for (const key of parts.slice(0, -1)) {
+      const current = parent[key];
+      const copy = current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+      parent[key] = copy;
+      parent = copy;
+    }
+    parent[parts[parts.length - 1]] = async () => { throw new Error(`Mock failure (${path})`); };
+  }
+}
+
+/** `?update=available` — the status pill's update, which no scenario otherwise sends. */
+function updateStatusSwitch(): { current: string; latest: string; update_available: true; download_url: string } | null {
+  if (typeof location === 'undefined' || new URLSearchParams(location.search).get('update') !== 'available') return null;
+  return {
+    current: '1.2.4',
+    latest: '1.3.0',
+    update_available: true,
+    download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.3.0',
+  };
+}
+
 export function createMockShim(store: MockStore): Window['claude'] {
   const impls = handWritten(store);
 
@@ -485,6 +525,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
   // hand-written syncSpaces.status still crashed Project View with
   // "Cannot read properties of undefined (reading 'find')". Driving the impl
   // keys means a new namespace works the moment it is written.
+  applyFailSwitch(impls);
   for (const ns of new Set([...NAMESPACES, ...Object.keys(impls)])) {
     bridge[ns] = withCatchAll(ns, impls[ns] ?? {});
   }
@@ -2441,7 +2482,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           usage: fixture.usage,
           chatgptUsage: chatgptUsageFixture(),
           announcement: null,
-          updateStatus: null,
+          updateStatus: updateStatusSwitch(),
           syncWarnings: [],
           contextMap: {},
           gitBranchMap: {},
@@ -2723,6 +2764,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // The app's own update flow (UpdatePanel). Only reachable with ?update=available — without
+  // it no pill renders. WHY hand-written: the catch-all's `[]` from getCachedDownload is
+  // TRUTHY, so the panel jumped straight to "Launch Installer" and never downloaded.
+  const update = {
+    changelog: async () => ({
+      markdown: '## 1.3.0\n\n- Clearer messages when something goes wrong.',
+      entries: [{ version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' }],
+      fromCache: false,
+    }),
+    getCachedDownload: async () => null,
+    download: async () => ({ jobId: 'wb-update-1', filePath: '/home/destin/Downloads/YouCoded-1.3.0.AppImage' }),
+    cancel: async () => undefined,
+    launch: async () => ({ success: true as const, quitPending: false as const, fallback: 'browser' as const }),
+  };
+
   return {
     // Marketplace feedback (overhaul §1.7). PARTIAL on purpose: only these three
     // are hand-written; `install`, `rate`, `deleteRating`, `likeTheme` and
@@ -2755,7 +2811,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search,
-    dev: devMock, ...(remote ? { remote } : {}),
+    update, dev: devMock, ...(remote ? { remote } : {}),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 
