@@ -71,6 +71,28 @@ describe('pairing over the wire', () => {
     expect(second.last()!.secret).toBeUndefined();
   });
 
+  it('the same browser signing in with the password again keeps its one row', async () => {
+    // Destin, 2026-09-11: "each sign in seems to create a new device entry … even though all the
+    // same device". The browser names its own row; the host still never matches devices by name.
+    const { server } = await makeServer();
+    const first = await connect(server, { password: 'correct-horse', deviceName: 'Chrome on Android' });
+    const deviceId = first.last()!.deviceId as string;
+    const again = await connect(server, { password: 'correct-horse', deviceName: 'Chrome on Android', previousDeviceId: deviceId });
+    expect(again.last()).toMatchObject({ type: 'auth:ok', deviceId });
+    expect(again.last()!.secret).toBeTruthy();
+    expect((server as unknown as { devices: { list(): unknown[] } }).devices.list()).toHaveLength(1);
+  });
+
+  it('a device that was unpaired gets a new row when it pairs again', async () => {
+    const { server } = await makeServer();
+    const first = await connect(server, { password: 'correct-horse', deviceName: 'My phone' });
+    const deviceId = first.last()!.deviceId as string;
+    (server as unknown as { devices: { revoke(id: string): boolean } }).devices.revoke(deviceId);
+    const again = await connect(server, { password: 'correct-horse', deviceName: 'My phone', previousDeviceId: deviceId });
+    expect(again.last()!.type).toBe('auth:ok');
+    expect(again.last()!.deviceId).not.toBe(deviceId);
+  });
+
   it('refuses the wrong password and does not create a device', async () => {
     const { server } = await makeServer();
     const ws = await connect(server, { password: 'wrong' });

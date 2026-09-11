@@ -86,6 +86,25 @@ export type SavedKeySignInEvent =
  *  one: remote access is switched off on the computer, and the key works again once it is on. */
 const KEY_IS_DEAD = new Set(['revoked', 'unknown', 'invalid-credentials']);
 
+/** Which row this browser has on each computer, kept apart from the key. WHY (Destin, 2026-09-11:
+ *  "each sign in seems to create a new device entry in the remote access menu? even though all
+ *  the same device"): the row id lived only inside the key, so losing the key lost the row, and
+ *  the next password sign-in paired a new one. Keyed by computer, so no other computer is told. */
+const DEVICE_ROWS_KEY = 'youcoded-remote-device-rows';
+function readDeviceRows(): Record<string, string> {
+  try {
+    const rows = JSON.parse(localStorage.getItem(DEVICE_ROWS_KEY) ?? '{}');
+    return rows && typeof rows === 'object' ? rows : {};
+  } catch { return {}; }
+}
+function rememberDeviceRow(host: string, deviceId: string): void {
+  try { localStorage.setItem(DEVICE_ROWS_KEY, JSON.stringify({ ...readDeviceRows(), [host]: deviceId })); } catch { /* storage blocked */ }
+}
+function deviceRowFor(host: string): string | undefined {
+  const id = readDeviceRows()[host];
+  return typeof id === 'string' && id ? id : undefined;
+}
+
 /** The sign-in screen, told how the saved key's attempts go until one succeeds. */
 let savedKeyListener: ((e: SavedKeySignInEvent) => void) | null = null;
 /** Set by "Enter password instead": no more automatic attempts with the saved key. */
@@ -1148,7 +1167,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         ? { type: 'auth', token: bridgeToken }
         : isToken
           ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true }
-          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true };
+          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true, previousDeviceId: deviceRowFor(getWsUrl()) };
       socket.send(JSON.stringify(authMsg));
     };
 
@@ -1168,6 +1187,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // rebinds the CURRENT connection's handlers to the dead one.
           if (!isCurrent()) return;
           myDeviceId = msg.deviceId ?? myDeviceId;
+          if (typeof msg.deviceId === 'string' && msg.deviceId) rememberDeviceRow(getWsUrl(), msg.deviceId);
           authResolved = true;
           reconnectDelay = 1000; // Reset backoff on success
           reconnectAttempts = 0;

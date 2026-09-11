@@ -1189,14 +1189,14 @@ export class RemoteServer {
 
         if (msg.password && await this.config.verifyPassword(msg.password)) {
           this.clearFailedAttempts();
-          // The secret is returned exactly once, at pairing. A device that still HOLDS its
-          // credential re-authenticates with it above and keeps its row; arriving here
-          // with only the password means the credential is gone, and the host has no way
-          // to know which earlier row this is — matching on a name would merge two people
-          // with the same phone. So this is a new pairing, and the old row stays until it
-          // is unpaired, going cold in the Last seen column. Do not "deduplicate" it: that
-          // would be the host guessing about identity, which is what the password is for.
-          const paired = this.devices.pair(msg.deviceName);
+          // The secret is returned once per pairing. A device that still HOLDS its credential
+          // re-authenticates with it above. Arriving here with only the password means that
+          // credential is gone. The host still never guesses which row this is (matching on a
+          // name would merge two people with the same phone); the browser names its own row,
+          // remembered apart from its key, and the password proves it may have it back with a
+          // new key (Destin, 2026-09-11: "each sign in seems to create a new device entry …
+          // even though all the same device"). An unpaired or unknown row is a new pairing.
+          const paired = this.devices.pairAgain(msg.previousDeviceId) ?? this.devices.pair(msg.deviceName);
           this.config.markPaired();
           this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true });
           // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on

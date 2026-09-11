@@ -89,6 +89,38 @@ describe('paired device store', () => {
     expect(listed[0].lastSeenAt).toBe(5000);
   });
 
+  // Destin, 2026-09-11: "each sign in seems to create a new device entry in the remote access
+  // menu? even though all the same device". A password sign-in always paired a NEW row, so one
+  // phone that lost its key a few times was listed four times.
+  it('a password sign-in from a device that still has a row reuses it, with a new key', () => {
+    const store = new RemoteDeviceStore(storePath);
+    const phone = store.pair('Chrome on Android');
+    const again = store.pairAgain(phone.deviceId)!;
+    expect(again.deviceId).toBe(phone.deviceId);
+    expect(again.secret).not.toBe(phone.secret);
+    // The old key stops working: whoever held it is not this sign-in.
+    expect(store.authenticate(phone.deviceId, phone.secret)).toEqual({ ok: false, reason: 'bad-secret' });
+    expect(store.authenticate(again.deviceId, again.secret).ok).toBe(true);
+    expect(reopen().list()).toHaveLength(1);
+  });
+
+  it('an unpaired or unknown device gets no row back', () => {
+    const store = new RemoteDeviceStore(storePath);
+    const phone = store.pair('My phone');
+    store.revoke(phone.deviceId);
+    expect(store.pairAgain(phone.deviceId)).toBeNull();
+    expect(store.pairAgain('not-a-device')).toBeNull();
+    expect(store.pairAgain(undefined)).toBeNull();
+  });
+
+  it('a name the owner gave the row survives signing in again', () => {
+    const store = new RemoteDeviceStore(storePath);
+    const phone = store.pair('Chrome on Android');
+    store.rename(phone.deviceId, "Destin's Pixel");
+    store.pairAgain(phone.deviceId);
+    expect(store.list().map((d) => d.name)).toEqual(["Destin's Pixel"]);
+  });
+
   it('never exposes the hash to the panel', () => {
     const store = new RemoteDeviceStore(storePath);
     store.pair('My phone');
