@@ -1,8 +1,10 @@
 // Remote access batch 2, T2 review finding 1: the device that answers a permission
-// must not show "Answered on the computer" on its own answer. The host announces the
-// resolution before it replies to the answer, so the resolution always reaches the
-// answering phone first; the shim knows which answers it has in flight and keeps that
-// one resolution from the page. Every other device still gets it.
+// must not show "Answered on the computer" on its own answer. For a NATIVE ask the host
+// announces the resolution before it replies to the answer, so the resolution reaches
+// the answering phone first; the shim knows which answers it has in flight and keeps
+// that one resolution from the page. (A Claude Code ask replies first — the relay
+// announces on a microtask — and the card is already answered when the resolution
+// lands, so the reducer ignores it.) Every other device still gets it.
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { join } from 'node:path';
 import { readStripped, assertPatternMatches } from './helpers/guard-scope';
@@ -58,7 +60,7 @@ describe('a permission answered from this phone', () => {
     const answer = (window as any).claude.session.respondToPermission('mine', { decision: { behavior: 'allow' } });
     const req = ws.sentOf('permission:respond')[0];
 
-    ws.receive(resolved('mine'));      // arrives BEFORE the reply — the host's real order
+    ws.receive(resolved('mine'));      // arrives BEFORE the reply — a native ask's order
     ws.receive(resolved('theirs'));
     expect(seen).toEqual(['PermissionResolved:theirs']);
 
@@ -69,14 +71,14 @@ describe('a permission answered from this phone', () => {
   });
 });
 
-describe('the desktop window ignores resolutions', () => {
-  it('App dispatches PermissionResolved only in remote mode', () => {
-    // A desktop window learns of a phone's answer from the phone's broadcast
-    // PERMISSION_RESPONDED; acting on the host's resolution as well would name the
-    // wrong device ("Answered on the computer") on the computer itself.
+describe('a desktop window clears resolutions quietly', () => {
+  it('App marks a resolution silent outside remote mode — cleared, never "Answered on the computer"', () => {
+    // Ignoring the resolution on the desktop left a card with live buttons whenever a
+    // phone's answer broadcast was lost (T2 re-review, 4); showing the note there would
+    // name the wrong device. The desktop clears the card and says nothing.
     const app = readStripped(join(__dirname, '..', 'src', 'renderer', 'App.tsx'));
-    const gate = /event\.type === 'PermissionResolved' && !isRemoteMode\(\)\) return;/;
-    assertPatternMatches(gate, "if (event.type === 'PermissionResolved' && !isRemoteMode()) return;", 'the remote-only gate');
+    const gate = /action\?\.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode\(\)\) action\.silent = true;/;
+    assertPatternMatches(gate, "if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;", 'the desktop marker');
     expect(app).toMatch(gate);
   });
 });

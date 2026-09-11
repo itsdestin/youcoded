@@ -1252,12 +1252,11 @@ function AppInner() {
     });
 
     const hookHandler = window.claude.on.hookEvent((event) => {
-      // T2 review (1): a desktop window learns of a phone's answer from the phone's own
-      // broadcast PERMISSION_RESPONDED. Acting on the host's resolution too would put
-      // "Answered on the computer" on the computer — about a phone's answer, or its own.
-      // Only a remote client needs the resolution.
-      if (event.type === 'PermissionResolved' && !isRemoteMode()) return;
       const action = hookEventToAction(event);
+      // T2 re-review (4): a desktop window must not say "Answered on the computer" — the
+      // note would name the wrong device — but ignoring the resolution left live buttons
+      // whenever a phone's answer broadcast was lost. Clear the card quietly instead.
+      if (action?.type === 'PERMISSION_RESOLVED_ELSEWHERE' && !isRemoteMode()) action.silent = true;
       if (action) {
         dispatch(action);
       }

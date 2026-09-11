@@ -88,12 +88,55 @@ describe('answered elsewhere, against the events that follow it', () => {
     expect(tool(s).answeredElsewhere).toBeUndefined();
   });
 
-  it('this device\'s own answer landing after the resolution clears the note', () => {
+  it('a watching device keeps its note when the answering device\'s broadcast arrives after the resolution', () => {
+    // Every answering device broadcasts PERMISSION_RESPONDED, and the host's resolution
+    // always reaches a watcher first. The note is true for the watcher; the broadcast must
+    // not erase it (T2 re-review, 2).
     let s = withAsk('r1');
     s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1' });
     s = chatReducer(s, { type: 'PERMISSION_RESPONDED', sessionId: 's1', requestId: 'r1' });
+    expect(tool(s)).toMatchObject({ status: 'running', answeredElsewhere: true });
+  });
+
+  it('a desktop window clears a resolved card without the note, and a later expiry still fails it', () => {
+    // A desktop window never says "Answered on the computer" (T2 re-review, 4), but must
+    // not keep live buttons for an answer a phone gave either.
+    let s = withAsk('r1');
+    s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1', silent: true } as any);
     expect(tool(s).status).toBe('running');
+    expect(tool(s).requestId).toBeUndefined();
     expect(tool(s).answeredElsewhere).toBeUndefined();
+    s = chatReducer(s, { type: 'PERMISSION_EXPIRED', sessionId: 's1', requestId: 'r1' });
+    expect(tool(s)).toMatchObject({ status: 'failed', error: EXPIRED });
+  });
+
+  it('a nested specialist ask cancelled from its parent (Resolved, then Expired) ends expired', () => {
+    let s = withAsk('r1', 'Task');
+    s = chatReducer(s, { type: 'PERMISSION_RESPONDED', sessionId: 's1', requestId: 'r1' });
+    const session = s.get('s1')!;
+    const toolCalls = new Map(session.toolCalls);
+    toolCalls.set('t1', { ...toolCalls.get('t1')!, subagentSegments: [
+      { type: 'tool', id: 'n1', toolUseId: 'n1', toolName: 'Bash', input: {}, status: 'awaiting-approval', requestId: 'nested' },
+    ] as any });
+    s = new Map(s).set('s1', { ...session, toolCalls });
+    s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'nested' });
+    expect((tool(s).subagentSegments as any[])[0].status).toBe('running');
+    s = chatReducer(s, { type: 'PERMISSION_EXPIRED', sessionId: 's1', requestId: 'nested' });
+    expect((tool(s).subagentSegments as any[])[0]).toMatchObject({ status: 'failed', error: EXPIRED });
+  });
+
+  it('the note and the resolved id survive the real tool-use reclaiming a synthetic card', () => {
+    // On a phone the ask usually arrives before the transcript, so it binds a synthetic
+    // card; the tool-use that replaces it must keep what the resolution recorded (T2 re-review, 6).
+    let s = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: 's1' });
+    s = chatReducer(s, { type: 'TRANSCRIPT_USER_MESSAGE', sessionId: 's1', uuid: 'm1', text: 'go', timestamp: 1 });
+    s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, requestId: 'early' });
+    s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'early' });
+    s = chatReducer(s, { type: 'TRANSCRIPT_TOOL_USE', sessionId: 's1', uuid: 'u1', toolUseId: 'real', toolName: 'Bash', toolInput: { command: 'ls' } });
+    const real = s.get('s1')!.toolCalls.get('real')!;
+    expect(real).toMatchObject({ answeredElsewhere: true, resolvedRequestId: 'early' });
+    s = chatReducer(s, { type: 'PERMISSION_EXPIRED', sessionId: 's1', requestId: 'early' });
+    expect(s.get('s1')!.toolCalls.get('real')).toMatchObject({ status: 'failed', error: EXPIRED });
   });
 
   it('a running card that still carries a stale request id is left alone', () => {

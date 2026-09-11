@@ -824,7 +824,11 @@ export class RemoteServer {
    *  relay, "socket closed before a response was sent" is literally what happened. */
   private onPermissionExpired = (sessionId: string, requestId: string) => {
     this.bufferHookEvent({ type: 'PermissionResolved', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent);
-    this.broadcast({ type: 'hook:event', payload: { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } });
+    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent;
+    // Buffered too, so a phone that was away hears "expired" on reconnect instead of a
+    // replay-complete that would clear the card as answered (T2 re-review, 7).
+    this.bufferHookEvent(expired);
+    this.broadcast({ type: 'hook:event', payload: expired });
   };
 
   private onHookEvent = (event: any) => {
@@ -1331,7 +1335,13 @@ export class RemoteServer {
         // Plus what the snapshot shows awaiting (T2 review, 6): an ask raised before
         // remote access was switched on, or trimmed from the buffer, is open on the
         // desktop and must not be cleared on the phone.
-        const pendingRequestIds = [...new Set([...fromBuffer, ...RemoteServer.awaitingInSnapshot(snapshot, session.id)])];
+        // Minus any ask whose resolution or expiry is already waiting in the queue: the
+        // snapshot was taken before it closed (T2 re-review, 1).
+        const closedInQueue = new Set(queue
+          .filter((m) => m.type === 'hook:event' && (m.payload?.type === 'PermissionResolved' || m.payload?.type === 'PermissionExpired'))
+          .map((m) => m.payload?.payload?._requestId));
+        const pendingRequestIds = [...new Set([...fromBuffer, ...RemoteServer.awaitingInSnapshot(snapshot, session.id)])]
+          .filter((rid) => !closedInQueue.has(rid));
         if (!(await send({ type: 'hook:replay-complete', payload: { sessionId: session.id, pendingRequestIds } }))) return;
       }
 
@@ -1421,7 +1431,11 @@ export class RemoteServer {
         // already reflected by the pass (a resolved ask is purged from the buffer; an
         // open one is in it). A reconnecting phone keeps its cards, so it needs every
         // one — except an ask this restore's pass already replayed.
-        if (!reconnect && hookPass !== undefined && i < hookPass) continue;
+        // Never a resolution or an expiry (T2 re-review, 1): the snapshot can still show an
+        // ask that closed while it was being taken, and dropping the closure left live
+        // buttons for a dead question. Both are idempotent on a card that is not awaiting.
+        const closes = msg.payload?.type === 'PermissionResolved' || msg.payload?.type === 'PermissionExpired';
+        if (!reconnect && hookPass !== undefined && i < hookPass && !closes) continue;
         const requestId = msg.payload?.payload?._requestId;
         if (msg.payload?.type === 'PermissionRequest' && typeof requestId === 'string' && replayedAsks.has(requestId)) continue;
         const asks = msg.payload?.type === 'PermissionRequest' || msg.payload?.type === 'PermissionHeld';

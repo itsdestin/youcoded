@@ -735,11 +735,15 @@ function patchNestedAsk(
   toolCalls: Map<string, ToolCallState>,
   requestId: string,
   patch: (seg: Extract<SubagentSegment, { type: 'tool' }>) => Extract<SubagentSegment, { type: 'tool' }>,
+  // Also match a running row a resolution already cleared of this id (batch 2: an expiry
+  // that follows the resolution must still reach it).
+  matchResolved = false,
 ): Map<string, ToolCallState> | null {
   for (const [id, tool] of toolCalls) {
     const segs = tool.subagentSegments;
     if (!segs) continue;
-    const idx = segs.findIndex(s => s.type === 'tool' && s.requestId === requestId);
+    const idx = segs.findIndex(s => s.type === 'tool'
+      && (s.requestId === requestId || (matchResolved && s.status === 'running' && s.resolvedRequestId === requestId)));
     if (idx < 0) continue;
     const seg = segs[idx] as Extract<SubagentSegment, { type: 'tool' }>;
     const nextSegs = [...segs];
@@ -1672,6 +1676,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             input: action.toolInput,
             status: synTool.status,
             requestId: synTool.requestId,
+            // Batch 2: a resolution recorded on the synthetic card survives the real
+            // tool-use replacing it — the note, and the id a later expiry needs.
+            answeredElsewhere: synTool.answeredElsewhere,
+            resolvedRequestId: synTool.resolvedRequestId,
             permissionSuggestions: synTool.permissionSuggestions,
             denyListed: synTool.denyListed,
             // Carried for the same reason as denyListed: ToolCard gates the
@@ -1750,7 +1758,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             external: superseded.external,
             permissionMode: superseded.permissionMode,
           }
-        : { status: 'running' as const };
+        : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
       toolCalls.set(action.toolUseId, {
         toolUseId: action.toolUseId,
         toolName: action.toolName,
@@ -2351,14 +2359,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
 
       const toolCalls = new Map(session.toolCalls);
-      // T2 review (1): if the host's resolution beat this device's own answer back, the
-      // card already reads "Answered on the computer" — about an answer given HERE.
-      // This device's confirmation removes that note.
-      for (const [id, tool] of toolCalls) {
-        if (tool.answeredElsewhere && tool.resolvedRequestId === action.requestId) {
-          toolCalls.set(id, { ...tool, answeredElsewhere: undefined, resolvedRequestId: undefined });
-        }
-      }
+      // Deliberately NO clearing of an "answered elsewhere" note here (T2 re-review, 2):
+      // every answering device BROADCASTS this action, and on a watching device it lands
+      // after the host's resolution — the note is true there. The answering device never
+      // gets the note in the first place: a native ask's resolution is hidden by the shim
+      // while the answer is in flight, and a Claude Code ask replies first.
       for (const [id, tool] of toolCalls) {
         if (tool.status === 'awaiting-approval' && tool.requestId === action.requestId) {
           // Fix: native budget gates (max_steps / doom_loop) are synthetic asks
@@ -2394,8 +2399,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...seg,
           status: 'failed',
           requestId: undefined,
+          resolvedRequestId: undefined,
           error: 'Permission request expired — socket closed before a response was sent',
-        }));
+        }), /* matchResolved */ true);
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
 
@@ -2405,8 +2411,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // T2 review (2): a cancelled native ask arrives as Resolved THEN Expired, and the
         // resolution has already moved the card to running with the "answered" note. The
         // expiry is the truth — nobody answered — so it must still reach that card.
-        const clearedByResolution = tool.status === 'running' && !!tool.answeredElsewhere
-          && tool.resolvedRequestId === action.requestId;
+        // Matched by the kept id alone: a desktop window clears a resolution silently (no
+        // note), and the expiry must reach that card too.
+        const clearedByResolution = tool.status === 'running' && tool.resolvedRequestId === action.requestId;
         if (heldHere || clearedByResolution) {
           toolCalls.set(id, {
             ...tool,
@@ -2435,6 +2442,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const session = next.get(action.sessionId);
       if (!session) return state;
       const single = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' ? action.requestId : null;
+      const silent = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' && action.silent === true;
       const pending = action.type === 'PERMISSION_REPLAY_COMPLETE' ? new Set(action.pendingRequestIds) : null;
       const isResolved = (requestId: string | undefined) =>
         !!requestId && (single !== null ? requestId === single : !pending!.has(requestId));
@@ -2443,7 +2451,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Nested (specialist) asks first — same clearing PERMISSION_RESPONDED does.
       if (single !== null) {
         const nested = patchNestedAsk(session.toolCalls, single, (seg) => ({
-          ...seg, status: 'running', requestId: undefined, askHeld: undefined,
+          ...seg, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: seg.requestId,
         }));
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
@@ -2457,7 +2465,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...tool,
           status: isBudgetGate ? 'complete' : 'running',
           requestId: undefined,
-          answeredElsewhere: isBudgetGate ? undefined : true,
+          answeredElsewhere: isBudgetGate || silent ? undefined : true,
           resolvedRequestId: isBudgetGate ? undefined : tool.requestId,
         });
       }
@@ -2468,7 +2476,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           for (const seg of tool.subagentSegments ?? []) {
             if (seg.type !== 'tool' || seg.status !== 'awaiting-approval' || !seg.requestId || pending.has(seg.requestId)) continue;
             const patched = patchNestedAsk(toolCalls ?? session.toolCalls, seg.requestId, (s) => ({
-              ...s, status: 'running', requestId: undefined, askHeld: undefined,
+              ...s, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: s.requestId,
             }));
             if (patched) toolCalls = patched;
           }

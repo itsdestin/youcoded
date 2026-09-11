@@ -167,6 +167,9 @@ function collectPtyOffsets(): Record<string, { epoch: string; units: number }> {
 // in UTF-16 units; overflow drops the oldest, so a long-idle tab still draws the tail.
 // `pty:raw-bytes` is deliberately not here: no desktop host emits it.
 const PTY_BACKLOG_MAX_UNITS = 256 * 1024;
+/** How far past the cut the trim looks for a line break before cutting where it is. An
+ *  Ink redraw can run hundreds of KB without one (T2 re-review, 10). */
+const LINE_BREAK_SEARCH_UNITS = 4096;
 /** Permission answers sent from this page and not yet replied to (T2 review, 1). */
 const answersInFlight = new Set<string>();
 type PtyBacklogEntry = { kind: 'output'; data: string } | { kind: 'reset' };
@@ -194,7 +197,7 @@ function backlogPty(sessionId: string, entry: PtyBacklogEntry): void {
     }
     let cut = excess;
     const nl = oldest.data.indexOf('\n', cut);
-    if (nl >= 0 && nl + 1 < oldest.data.length) cut = nl + 1;
+    if (nl >= 0 && nl - cut <= LINE_BREAK_SEARCH_UNITS && nl + 1 < oldest.data.length) cut = nl + 1;
     b.entries[idx] = { kind: 'output', data: oldest.data.slice(cut) };
     b.units -= cut;
   }
@@ -770,10 +773,12 @@ function handleMessage(data: string, generation: number): void {
       dispatchEvent(`pty:raw-bytes:${payload.sessionId}`, payload.data);
       break;
     case 'hook:event':
-      // T2 review (1): the host announces a resolution BEFORE it replies to the answer
-      // that caused it, so the answering phone always hears "resolved" first and would
-      // mark its own answer "Answered on the computer". An answer this shim has in
-      // flight is ours — hide that one resolution; every other device still gets it.
+      // T2 review (1): for a NATIVE ask the host announces a resolution BEFORE it replies
+      // to the answer that caused it, so the answering phone would hear "resolved" first
+      // and mark its own answer "Answered on the computer". An answer this shim has in
+      // flight is ours — hide that one resolution; every other device still gets it. (A
+      // Claude Code ask replies first — the relay announces on a microtask — and the card
+      // is already answered when the resolution lands, so the reducer ignores it.)
       if (payload?.type === 'PermissionResolved' && answersInFlight.has(payload?.payload?._requestId)) break;
       dispatchEvent('hook:event', payload);
       break;

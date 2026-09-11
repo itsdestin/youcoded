@@ -381,14 +381,40 @@ describe('which asks are still open', () => {
     expect(ws.ofType('hook:replay-complete')[0].payload).toEqual({ sessionId: 's1', pendingRequestIds: ['pre-remote'] });
   });
 
-  it('a Claude Code ask whose socket closed is purged and the phone is told it expired', async () => {
+  it('a Claude Code ask whose socket closed is purged, the phone is told it expired, and a phone that was away is replayed that', async () => {
     const { server } = await makeServer();
     const { ws, client } = connect(server);
     await server.handleMessage(client, ready(1, false));
     server.bufferHookEvent({ type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'cc-dead', tool_name: 'Bash' }, timestamp: 1 });
     server.onPermissionExpired('s1', 'cc-dead');
-    expect(server.hookBuffers.get('s1')).toEqual([]);
+    expect(server.hookBuffers.get('s1').map((e: any) => e.type)).toEqual(['PermissionExpired']);
     expect(ws.ofType('hook:event').map((f) => [f.payload.type, f.payload.payload._requestId])).toEqual([['PermissionExpired', 'cc-dead']]);
+
+    // A phone that was away reconnects: it hears "expired", not a replay-complete that
+    // would clear its card as "Answered on the computer" (T2 re-review, 7).
+    const away = connect(server);
+    await server.handleMessage(away.client, ready(2, true));
+    const types = away.ws.types();
+    expect(away.ws.ofType('hook:event').map((f) => f.payload.type)).toEqual(['PermissionExpired']);
+    expect(types.indexOf('hook:event')).toBeLessThan(types.indexOf('hook:replay-complete'));
+    expect(away.ws.ofType('hook:replay-complete')[0].payload.pendingRequestIds).toEqual([]);
+  });
+
+  it('first connect: an ask the snapshot shows awaiting but answered during the snapshot wait is not listed open, and its resolution still reaches the phone', async () => {
+    // The snapshot is exported while r1 is open; r1 is answered before the hook pass.
+    // Listing it pending from the snapshot while skipping its queued resolution left live
+    // buttons for a dead question (T2 re-review, 1).
+    let resolveSnap: (v: any) => void = () => {};
+    const { server } = await makeServer({ snapshot: () => new Promise((r) => { resolveSnap = r; }) });
+    server.onHookEvent({ type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'r1', tool_name: 'Bash' }, timestamp: 1 });
+    const { ws, client } = connect(server);
+    const restoring = server.handleMessage(client, ready(1, false));
+    await Promise.resolve();
+    server.onHookEvent({ type: 'PermissionResolved', sessionId: 's1', payload: { _requestId: 'r1' }, timestamp: 2 });
+    resolveSnap({ sessions: [['s1', { timeline: [], toolGroups: [], assistantTurns: [], toolCalls: [['t1', { toolUseId: 't1', toolName: 'Bash', input: {}, status: 'awaiting-approval', requestId: 'r1' }]] }]] });
+    await restoring;
+    expect(ws.ofType('hook:replay-complete')[0].payload.pendingRequestIds).toEqual([]);
+    expect(ws.ofType('hook:event').map((f) => f.payload.type)).toContain('PermissionResolved');
   });
 
   it('the relay announces a resolution only after every listener has seen the request', async () => {

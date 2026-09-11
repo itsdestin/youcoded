@@ -677,6 +677,9 @@ export type ChatAction =
       type: 'PERMISSION_RESOLVED_ELSEWHERE';
       sessionId: string;
       requestId: string;
+      // A desktop window clears the card without the "answered elsewhere" note — the
+      // note would name the wrong device there (T2 re-review, 4).
+      silent?: boolean;
     }
   | {
       // Remote access batch 2 (§7): the host finished replaying open asks on a

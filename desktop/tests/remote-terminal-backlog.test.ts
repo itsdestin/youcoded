@@ -135,6 +135,18 @@ describe('remote-shim terminal backlog and offsets', () => {
     expect(ws2.sentOf('client:ready')[0].payload.ptyOffsets).toEqual({});
   });
 
+  it('the line-break search is bounded: a replay with no nearby line break keeps its full tail', () => {
+    // An Ink redraw can run hundreds of KB without a newline; an unbounded search kept
+    // only what followed a far-off break — a handful of units of a 4M replay (T2 re-review, 10).
+    const replay = 'x'.repeat(300 * 1024) + '\n' + 'y'.repeat(10);
+    output('s1', replay, 0);
+    const seen: string[] = [];
+    (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+    const total = seen.reduce((n, d) => n + d.length, 0);
+    expect(total).toBeGreaterThan(250 * 1024);
+    expect(total).toBeLessThanOrEqual(256 * 1024);
+  });
+
   it('a live frame from a NEW buffer (another epoch) resets the terminal before drawing', () => {
     // A host restart or a recreated session: no restore pass saw it, so the first frame of
     // the new stream is the only signal. Appending it to the old screen was the bug (T2 review, 12).

@@ -148,7 +148,10 @@ describe('RemoteServer', () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
     await server.start();
+    // Batch 2 (T2 re-review): a relay expiry must reach the host buffer while it runs.
+    expect(mockHookRelay.listenerCount('permission-expired')).toBe(1);
     server.stop();
+    expect(mockHookRelay.listenerCount('permission-expired')).toBe(0);
   });
 
   it('does not start when config.enabled is false', async () => {
