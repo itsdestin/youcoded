@@ -69,59 +69,83 @@ export interface MergedSnapshotDeps {
  * The chat state a remote client hydrates from, built from EVERY main window
  * (remote access batch 2, design §2, contract R1).
  *
- * WHY every window and merge by owner: this used to ask the first window only. A
- * session dragged into a second window reached the phone stale or empty — every
- * window seeds a key for every session, but only the owner receives its events — and
- * once the first window closed the answer was `{ sessions: [] }` with no sign
- * anything was missing. Now all windows are asked in parallel (one shared budget:
- * every request starts together), and each session is taken from the window its
- * events are routed to: the owner; for an unowned session the first window while it
- * lives (where main.ts routes those events), else the leader.
+ * WHY every window: this used to ask the first window only. A session dragged into a
+ * second window reached the phone stale or empty — every window seeds a key for every
+ * session, but only the window its messages are routed to has them — and once the first
+ * window closed the answer was `{ sessions: [] }` with no sign anything was missing.
  *
- * A session is OMITTED and the snapshot marked `degraded` when that window did not
- * answer, when a transfer into it has not been read yet (registry.isPendingTransfer),
- * or when the window reports its history still loading. The phone keeps its own copy
- * of an omitted session (the reducer's per-session apply) and the strip offers
- * Refresh, which is honest; a stale copy presented as current is not.
+ * WHICH window's copy (T3 review, 1 and 2): exactly the window main routes the
+ * session's messages to — ipc-handlers.ts `sendForSession`: the owner; for an unowned
+ * session with subscribers, only those subscribers (buddies, never asked here); else the
+ * first window while it lives. Anything else holds a copy the messages never reached, and
+ * the host's restore skips queued transcript events below its cut line for every session
+ * in this snapshot (remote-server.ts restoreClient) — so a copy from a window that is not
+ * the recipient would silently lose them. Such a session is OMITTED and the snapshot
+ * marked `degraded`: the phone keeps its own copy, receives every queued event, and the
+ * strip offers Refresh. (The design's "else the leader" branch is not taken for that
+ * reason: with the first window gone, an unowned session's messages reach no window.)
+ *
+ * Also omitted and degraded: a session whose recipient did not answer, reported its own
+ * export failed, is mid-transfer, is still loading that session's history, or answered
+ * without a copy of a session the host runs; and a session whose recipient or pending
+ * state changed while the windows were answering — both are read when the requests go
+ * out (T3 review, 4), because a drag during the wait means the copy came from a window
+ * that answered before it acquired the session.
  *
  * `focus` names the session the desktop is showing, so a first connect opens it.
  */
 export async function requestMergedChatSnapshot(deps: MergedSnapshotDeps): Promise<SerializedChatState> {
   const timeoutMs = deps.timeoutMs ?? TIMEOUT_MS;
   const windowIds = deps.registry.getMainWindowIds();
+  const live = new Set(windowIds);
+  const known = deps.knownSessionIds();
+  const knownSet = new Set(known);
+
+  const recipientOf = (sid: string): number | undefined => {
+    const owner = deps.registry.getOwner(sid);
+    if (owner !== undefined) return live.has(owner) ? owner : undefined;
+    if (deps.registry.getSubscribers(sid).size > 0) return undefined;
+    const fallback = deps.fallbackWindowId();
+    return fallback !== undefined && live.has(fallback) ? fallback : undefined;
+  };
+  const atRequest = new Map(known.map((sid) => [sid, {
+    recipient: recipientOf(sid),
+    pending: deps.registry.isPendingTransfer(sid),
+  }]));
+
   const answers = new Map<number, WindowAnswer>();
   await Promise.all(windowIds.map(async (id) => {
     const target = deps.webContentsFor(id);
     answers.set(id, target && !target.isDestroyed() ? await askWindow(target, timeoutMs) : UNANSWERED);
   }));
 
-  const order: string[] = [];
-  const seen = new Set<string>();
-  const note = (sid: string) => { if (!seen.has(sid)) { seen.add(sid); order.push(sid); } };
-  for (const sid of deps.knownSessionIds()) note(sid);
+  const order: string[] = [...known];
+  const seen = new Set(known);
   for (const id of windowIds) {
     const a = answers.get(id);
-    if (a?.answered) for (const [sid] of a.snapshot.sessions) note(sid);
+    if (!a?.answered) continue;
+    for (const [sid] of a.snapshot.sessions) if (!seen.has(sid)) { seen.add(sid); order.push(sid); }
   }
 
-  const live = new Set(windowIds);
-  const fallback = deps.fallbackWindowId();
-  const leader = deps.registry.getLeaderId();
   // No window at all means no copy of anything could be taken: say so.
   let degraded = windowIds.length === 0;
   const sessions: SerializedChatState['sessions'] = [];
   for (const sid of order) {
-    const owner = deps.registry.getOwner(sid);
-    const responsible = owner !== undefined && live.has(owner) ? owner
-      : fallback !== undefined && live.has(fallback) ? fallback
-      : leader;
-    const answer = responsible !== undefined ? answers.get(responsible) : undefined;
-    if (!answer?.answered) { degraded = true; continue; }
-    if (deps.registry.isPendingTransfer(sid) || answer.loadingSessionIds.includes(sid)) { degraded = true; continue; }
-    // A window that answered but holds no key for the session has never seen it (it
-    // was created a moment ago): nothing to omit, nothing missing.
+    // A key only some window holds, for a session the host no longer runs (every running
+    // session — native ones too — is created through the session manager): a leftover
+    // slot, not a missing conversation. Skip it quietly.
+    const isKnown = knownSet.has(sid);
+    const before = atRequest.get(sid);
+    const recipient = recipientOf(sid);
+    if (before && before.recipient !== recipient) { degraded = true; continue; }
+    if (recipient === undefined) { if (isKnown) degraded = true; continue; }
+    const answer = answers.get(recipient);
+    if (!answer?.answered) { if (isKnown) degraded = true; continue; }
+    const pending = !!before?.pending || deps.registry.isPendingTransfer(sid) || answer.loadingSessionIds.includes(sid);
+    if (pending) { degraded = true; continue; }
     const copy = answer.snapshot.sessions.find(([id]) => id === sid);
     if (copy) sessions.push(copy);
+    else if (isKnown) degraded = true;
   }
   const focus = { sessionId: deps.registry.getFocusSessionId() };
   return degraded ? { sessions, degraded: true, focus } : { sessions, focus };

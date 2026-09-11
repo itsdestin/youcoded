@@ -230,9 +230,37 @@ describe('WindowRegistry — transfer gaps and focus for the remote snapshot', (
     expect(reg.getFocusSessionId()).toBeNull();
   });
 
-  it('a selection reported by an unknown window is ignored', () => {
+  it('a selection reported by an unknown window is ignored, and so is a value no session id could be', () => {
     reg.setSelectedSession(404, 'x');
     reg.noteFocused(404);
     expect(reg.getFocusSessionId()).toBeNull();
+    reg.setSelectedSession(1, 'x'.repeat(10_000));
+    expect(reg.getFocusSessionId()).toBeNull();
+  });
+
+  it('focus: a last-focused window with no selection falls back to the leader\'s', () => {
+    reg.setSelectedSession(1, 'leader-sel');
+    reg.noteFocused(2);
+    expect(reg.getFocusSessionId()).toBe('leader-sel');
+  });
+
+  it('a transfer gap counts as pending only for a bounded time — the window\'s own loading flag covers the rest', () => {
+    // A session whose first page can never resolve (a shell, an exited session with no
+    // transcript) re-marks and gives up; an unbounded mark degraded every snapshot for
+    // the life of that window (T3 review, 3).
+    reg.assignSession('s', 1);
+    const t0 = 1_000_000;
+    reg.transferSession('s', 1, 2, t0);
+    expect(reg.isPendingTransfer('s', t0 + 1_000)).toBe(true);
+    expect(reg.isPendingTransfer('s', t0 + 60_000)).toBe(false);
+    // The one-shot read-to-EOF mark itself is untouched by the bound.
+    expect(reg.consumeInheritedByTransfer('s', 2)).toBe(true);
+  });
+
+  it('a session that exits takes its gap with it', () => {
+    reg.assignSession('s', 1);
+    reg.transferSession('s', 1, 2);
+    reg.releaseSession('s');
+    expect(reg.isPendingTransfer('s')).toBe(false);
   });
 });

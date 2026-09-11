@@ -276,6 +276,9 @@ export class RemoteServer {
   }
   // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
   // Rides session:destroyed so a phone whose conversation went away opens that one.
+  // It can name the destroyed session itself — session-exit fires before any window
+  // changes its selection — and the design puts that fallback on the phone (first
+  // remaining session), so the host reports the cache as it is.
   private getFocusSessionId: () => string | null;
 
   /** Injected by main.ts. Read-only access to the marketplace auth session so

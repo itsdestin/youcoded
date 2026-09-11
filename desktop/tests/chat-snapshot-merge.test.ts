@@ -32,6 +32,19 @@ function fakeWindow(copies: Record<string, Copy> | null, loadingSessionIds: stri
   };
 }
 
+/** A window that answers only when the test says so. */
+function deferredWindow() {
+  let pendingId: string | null = null;
+  return {
+    isDestroyed: () => false,
+    send(channel: string, requestId: string) { if (channel === 'chat:export-snapshot') pendingId = requestId; },
+    answer(copies: Record<string, Copy>) {
+      const snapshot = { sessions: Object.entries(copies).map(([id, c]) => [id, { timeline: [c] }]) };
+      (ipcMain as any).emit('chat:snapshot-response', {}, { requestId: pendingId, snapshot, loadingSessionIds: [] });
+    },
+  };
+}
+
 const W1 = 101;
 const W2 = 102;
 let registry: WindowRegistry;
@@ -94,22 +107,86 @@ describe('the snapshot comes from every window, and a session from its owner', (
     expect(snap.degraded).toBeUndefined();
   });
 
-  it('an unowned session comes from the first window while it lives, then from the leader', async () => {
+  it('an unowned session comes from the first window while it lives — the window its messages go to', async () => {
     windows.set(W1, fakeWindow({ s9: { marker: 'w1-s9' } }));
     windows.set(W2, fakeWindow({ s9: { marker: 'w2-s9' } }));
-    expect(markers(await ask(['s9']))).toEqual({ s9: 'w1-s9' });
+    const snap = await ask(['s9']);
+    expect(markers(snap)).toEqual({ s9: 'w1-s9' });
+    expect(snap.degraded).toBeUndefined();
+  });
 
-    mainWindowId = undefined;               // the first window's BrowserWindow is destroyed
+  it('an unowned session once the first window is gone reaches no window at all: omitted, degraded — never the leader\'s stale copy', async () => {
+    // main routes an unowned session's events to the first window only; with it gone they
+    // reach nobody, so the leader's copy is not past the cut line (T3 review, 1).
+    windows.set(W2, fakeWindow({ s9: { marker: 'w2-stale-s9' } }));
+    mainWindowId = undefined;
     registry.unregisterWindow(W1);
-    expect(markers(await ask(['s9']))).toEqual({ s9: 'w2-s9' });
+    const snap = await ask(['s9']);
+    expect(snap.sessions).toEqual([]);
+    expect(snap.degraded).toBe(true);
+  });
+
+  it('an unowned session with a subscriber gets its messages only there: the first window\'s copy is not trusted', async () => {
+    registry.registerWindow(900, 9, 'buddy');
+    registry.subscribe('s9', 900);
+    windows.set(W1, fakeWindow({ s9: { marker: 'w1-stale-s9' } }));
+    windows.set(W2, fakeWindow({}));
+    const snap = await ask(['s9']);
+    expect(snap.sessions).toEqual([]);
+    expect(snap.degraded).toBe(true);
+  });
+
+  it('a session that changes window while the windows are answering is omitted, degraded', async () => {
+    registry.assignSession('s2', W2);
+    const w1 = deferredWindow();
+    windows.set(W1, w1 as any);
+    windows.set(W2, fakeWindow({ s2: { marker: 'w2-s2-before-drag' } }));
+    const pending = ask(['s2']);
+    // The drag lands after window 2 answered and before window 1 did.
+    registry.transferSession('s2', W2, W1);
+    registry.consumeInheritedByTransfer('s2', W1);          // even with the gap already read
+    w1.answer({ s2: { marker: 'w1-s2-before-acquire' } });
+    const snap = await pending;
+    expect(snap.sessions).toEqual([]);
+    expect(snap.degraded).toBe(true);
+  });
+
+  it('a known session whose window answers without a copy is omitted, degraded', async () => {
+    registry.assignSession('s1', W1);
+    windows.set(W1, fakeWindow({}));
+    windows.set(W2, fakeWindow({}));
+    const snap = await ask(['s1']);
+    expect(snap.sessions).toEqual([]);
+    expect(snap.degraded).toBe(true);
+  });
+
+  it('the only holder times out and no other window has the session: degraded, not an empty-and-fine snapshot', async () => {
+    registry.assignSession('s1', W1);
+    windows.set(W1, fakeWindow(null));
+    windows.set(W2, fakeWindow({}));
+    const pending = ask(['s1']);
+    await vi.advanceTimersByTimeAsync(2000);
+    const snap = await pending;
+    expect(snap.sessions).toEqual([]);
+    expect(snap.degraded).toBe(true);
+  });
+
+  it('no main window at all: degraded', async () => {
+    registry.unregisterWindow(W1);
+    registry.unregisterWindow(W2);
+    mainWindowId = undefined;
+    const snap = await ask(['s1']);
+    expect(snap).toMatchObject({ sessions: [], degraded: true });
   });
 
   it('a transfer gap created by moving a session and closing the emptied window makes it pending: omitted, degraded', async () => {
     registry.assignSession('s1', W1);
     registry.assignSession('s2', W2);
-    // Re-dock: drag session 2's pill into window 1, and the emptied window 2 closes.
+    // Re-dock: drag session 2's pill into window 1, and the emptied window 2 closes —
+    // closing the SOURCE must not close the gap in the window that inherited it.
     expect(registry.transferSession('s2', W2, W1)).toBe(true);
     registry.unregisterWindow(W2);
+    expect(registry.isPendingTransfer('s2')).toBe(true);
     windows.set(W1, fakeWindow({ s1: { marker: 'w1-s1' }, s2: { marker: 'w1-partial-s2' } }));
 
     const during = await ask();

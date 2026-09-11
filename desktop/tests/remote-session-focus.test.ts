@@ -26,6 +26,14 @@ async function makeServer(focus: string | null) {
 }
 
 describe('session:destroyed carries the desktop\'s focus', () => {
+  it('reports the cache as it is, even when it still names the session going away — the phone falls back', async () => {
+    // session-exit fires before any window changes its selection, so focus usually names
+    // the destroyed session itself. Design §3 puts the fallback on the phone (T4).
+    const { server, frames } = await makeServer('s1');
+    server.onSessionExit('s1', 0);
+    expect(frames[0].payload.focus).toEqual({ sessionId: 's1' });
+  });
+
   it('when the process exits', async () => {
     const { server, frames } = await makeServer('s2');
     server.onSessionExit('s1', 0);
@@ -40,10 +48,11 @@ describe('session:destroyed carries the desktop\'s focus', () => {
 });
 
 describe('a remote client never reports a selection', () => {
-  it('session:selected from the socket is ignored — no reply, no cache write', async () => {
-    const { server, frames, client, getFocusSessionId } = await makeServer('s2');
+  it('session:selected from the socket is ignored — no reply', async () => {
+    // RemoteServer holds no handle that could write main's selection cache; the guard here
+    // is that the case exists at all (without it the default answers "unsupported").
+    const { server, frames, client } = await makeServer('s2');
     await server.handleMessage(client, JSON.stringify({ type: 'session:selected', id: 'x1', payload: { sessionId: 'evil' } }));
     expect(frames).toEqual([]);
-    expect(getFocusSessionId).not.toHaveBeenCalled();
   });
 });
