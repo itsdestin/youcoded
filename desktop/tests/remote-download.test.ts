@@ -237,7 +237,7 @@ describe('GET /download/<token>', () => {
     // Nothing that could break out of the quoted fallback or the header line.
     expect(cd).not.toMatch(/[\r\n]/);
     const fallback = /filename="([^"]*)"/.exec(cd)![1];
-    expect(fallback).not.toMatch(/["\\ --￿]/);
+    expect(fallback).not.toMatch(/["\\\u0000-\u001f\u007f-\uffff]/);
     // The real name rides RFC 5987, percent-encoded.
     expect(cd).toContain(`filename*=UTF-8''${encodeURIComponent('odd"; \r\nname 🎉.txt')}`);
     expect(await res.text()).toBe('odd name');
