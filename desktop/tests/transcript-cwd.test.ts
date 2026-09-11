@@ -1,5 +1,5 @@
 // desktop/tests/transcript-cwd.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs'; import os from 'os'; import path from 'path';
 import { isForeignCwd, firstCwd, r1CwdForDir } from '../src/main/transcript-cwd';
 import { ccProjectSlug } from '../src/main/slug-encoding';
@@ -61,5 +61,38 @@ describe('R1 vs R2 — the shape that broke the earlier draft (spec §5.4/§7)',
     expect(isForeignCwd('/home/u', 'linux')).toBe(false);
     expect(isForeignCwd('/home/u', 'win32')).toBe(true);
     expect(isForeignCwd('C:\\Users\\x', 'win32')).toBe(false);
+  });
+});
+
+describe('a failing file close never costs the read', () => {
+  // WHY: a rejection inside `finally` replaces the return value. Uncaught, a
+  // failed close would turn a good read into a throw that climbs
+  // firstCwd -> r1CwdForDir -> resolveSlugToPath, which the Resume Browser
+  // awaits outside any try — so the whole listing would come back empty.
+  it('firstCwd still returns the cwd it read when close() rejects', async () => {
+    const PROJ = '/home/u/proj';
+    const f = path.join(tmp, 'close-fails.jsonl');
+    fs.writeFileSync(f, line({ type: 'user', uuid: 'u1', cwd: PROJ }));
+
+    const realOpen = fs.promises.open.bind(fs.promises);
+    let closeRejections = 0;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+      const fh = await realOpen(...args);
+      const realClose = fh.close.bind(fh);
+      // Close the real descriptor (no leak), THEN report failure, like an EIO on close.
+      fh.close = async () => {
+        await realClose();
+        closeRejections++;
+        throw Object.assign(new Error('EIO: i/o error, close'), { code: 'EIO' });
+      };
+      return fh;
+    });
+    try {
+      await expect(firstCwd(f, 'linux')).resolves.toBe(PROJ);
+      // Non-vacuity: the failing close really ran on this path.
+      expect(closeRejections).toBe(1);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 });

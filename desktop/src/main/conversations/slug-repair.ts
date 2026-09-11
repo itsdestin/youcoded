@@ -210,10 +210,10 @@ function isLive(file: string, liveMs: number, now: () => number): boolean {
 const sameDir = (a: string, b: string) => path.resolve(a) === path.resolve(b);
 
 // WHY async (perf/main-thread-async-reads, Task 2): firstCwd (transcript-cwd.ts)
-// moved off fs.*Sync, so its one call below needs an await — which forces this
-// whole function async. Its ONLY caller, runSlugRepair, is already async and
-// now awaits it (see the ~27 other synchronous fs calls in this file are
-// UNCHANGED — this task converts only firstCwd's call sites, per scope).
+// now reads asynchronously, so this function awaits it and became async, and its
+// only caller, runSlugRepair, awaits this function in turn. Every other
+// synchronous fs call in this file deliberately stays synchronous — that task
+// converted only firstCwd's call sites.
 export async function repairHomeForks(opts: RepairOpts): Promise<RepairFinding[]> {
   const { projectsDir, homeDir, knownFolders, quarantine: q } = opts;
   const liveMs = opts.liveMs ?? LIVE_MTIME_MS;
@@ -228,6 +228,11 @@ export async function repairHomeForks(opts: RepairOpts): Promise<RepairFinding[]
       findings.push({ sessionId, homeFolder: '', kind: 'deferred-live', paths: [file] });
       continue;
     }
+    // WHY safe to yield here: this await now sits between the isLive check above
+    // and the rename below, which the synchronous version never allowed — but the
+    // app's own reconcile/materialize sweeps cannot touch these files meanwhile,
+    // because main.ts runs the whole repair inside the paused chain
+    // `startConversationStore({ pauseSweeps: true }).then(() => runSlugRepair()).finally(() => resumeSweeps())`.
     const cwd = await firstCwd(file, platform);        // R2 — NOT R1 (§6.1: R1 would
     if (!cwd || isForeignCwd(cwd, platform)) continue; // call the fork a resident and no-op)
     const P = knownFolders.find(p => sameDir(p, cwd));

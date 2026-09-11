@@ -45,7 +45,13 @@ async function headText(filePath: string): Promise<string | null> {
     const { bytesRead } = await fh.read(buf, 0, HEAD_BYTES, 0);
     return buf.toString('utf8', 0, bytesRead);
   } catch { return null; }
-  finally { await fh?.close(); }
+  // WHY .catch on close: a rejection thrown inside `finally` REPLACES the
+  // function's return value. An uncaught close failure would turn a successful
+  // read into a throw that climbs firstCwd -> r1CwdForDir -> resolveSlugToPath,
+  // which session-browser.ts awaits outside any try — so the whole Resume
+  // Browser listing would reject and show nothing. The old sync code returned
+  // null here; a failed close must stay invisible, never cost the listing.
+  finally { await fh?.close().catch(() => {}); }
 }
 
 /** R2 — session origin.
