@@ -152,8 +152,11 @@ export function FileFilterPopover({
           Only render Visibility when it still has a control to show. */}
       {showDeletedAvailable && (
         <Group label="Visibility" multi>
+          {/* "Show missing", not "Show deleted" (2026-09-11): most rows it reveals
+              are files not at their saved location, which the app cannot call
+              deleted. The underlying flag keeps its old name (synced preference). */}
           <Chip multi active={!!showDeleted} onClick={() => onShowDeleted?.(!showDeleted)}>
-            Show deleted
+            Show missing
           </Chip>
         </Group>
       )}

@@ -18,7 +18,8 @@ import { Button } from '../ui';
 export function describeBytesError(error: string, noun: string): string {
   switch (error) {
     case 'orphan':
-      return `This ${noun} no longer exists on disk.`;
+      // What the read knows is only that nothing is at this path — not why.
+      return `This ${noun} isn’t where it was saved. It may have been moved, renamed or deleted.`;
     case 'too-large':
       // Was: "…use “Open externally”" — a control this component never rendered.
       // The button below is that control, finally present.

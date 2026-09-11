@@ -175,8 +175,25 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   const pendingRestoreRef = useRef<ReturnType<typeof takeDraft>>(undefined);
   const firstRunRef = useRef(true);
 
+  // The content the current draft was started from, and which file it belongs to.
+  const draftBaseRef = useRef<{ id: string; content: string | null }>({ id: artifact.id, content });
+
   // Reset draft when content reloads from disk (e.g. artifact selection changes)
   useEffect(() => {
+    const base = draftBaseRef.current;
+    draftBaseRef.current = { id: artifact.id, content };
+    // WHY (2026-09-11): this reset used to run on EVERY content change. When the
+    // same file changed on disk mid-edit — the assistant edited it, or edit
+    // mode's own refresh read landed after the user started typing — the host
+    // swapped the disk text in, this reset the draft to it AND cleared the
+    // conflict banner the watcher had just raised: the user's unsaved typing
+    // vanished with no warning. Unsaved changes to the same file are kept, and
+    // a different disk version raises the banner instead.
+    const { editing: isEditing, draft: currentDraft } = stateRef.current;
+    if (base.id === artifact.id && isEditing && currentDraft !== (base.content ?? '')) {
+      if (content !== null && content !== currentDraft) setConflict({ disk: content });
+      return;
+    }
     setDraft(content ?? '');
     setConflict(null);
     setShowDiff(false);
@@ -256,7 +273,10 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
       if (rendersFromBytesOnly(artifact.path)) return;
       (window.claude as any).artifacts.get(projectRoot, artifact.id).then((res: any) => {
         if (!res || !res.ok || res.orphan) return;
-        if (typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
+        // The token must keep describing the version the DRAFT was based on:
+        // advancing it while dirty would let a plain Save pass the "changed on
+        // disk" check and silently overwrite the newer version.
+        if (!dirty && typeof res.mtimeMs === 'number') mtimeRef.current = res.mtimeMs;
         // Metadata ALWAYS travels with the read, even when the visible text is
         // unchanged and even mid-conflict — an append past the cap leaves the
         // prefix byte-identical while the file's size, and therefore whether it
@@ -312,6 +332,10 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // write here would truncate the file to the placeholder draft. This is the
     // single highest-risk regression in the workstream; keep it hard-blocked.
     if (content === null) return false;
+    // While the "changed on disk" banner is up, a plain Save would pick one side
+    // silently. The banner's own buttons (Keep mine = force, Use disk version)
+    // are the ways out; the banner stays visible, so this is not a silent no-op.
+    if (conflict && !opts?.force) return false;
     // Saving a PREFIX would write 2 MB over the whole 8 MB file. Hard-blocked
     // here as well as at the affordance — main cannot detect truncation itself
     // (a shrinking file is legitimate), so this is a renderer-side guarantee.
@@ -524,7 +548,9 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
   }
   if (!editing && readState.phase === 'missing') {
     // ONLY shown when artifacts:get genuinely returned orphan:true.
-    return <div className="text-fg-muted text-sm p-4">This file is no longer on disk.</div>;
+    // Worded for what the read actually knows: nothing is at the saved path.
+    // It may have moved or been renamed, so "no longer on disk" was a guess.
+    return <div className="text-fg-muted text-sm p-4">This file isn’t where it was saved. It may have been moved, renamed or deleted.</div>;
   }
   if (!editing && readState.phase === 'error') {
     // The REAL failure with a Retry — never mapped to "no longer on disk"

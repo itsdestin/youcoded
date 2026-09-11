@@ -7,10 +7,11 @@
 //   1. While the read is pending: NO missing-file message — a quiet
 //      loading placeholder instead.
 //   2. A read that resolves orphan:true (the handler's genuine not-found
-//      signal) shows "This file is no longer on disk."
+//      signal) shows "This file isn't where it was saved…" (worded 2026-09-11:
+//      the read only knows the path is empty, so it no longer claims deletion).
 //   3. A read that resolves with content shows the content.
 //   4. A read ERROR is surfaced as the real error with Retry — never mapped
-//      to "no longer on disk" (a permissions failure is not a deleted file).
+//      to the not-found message (a permissions failure is not a missing file).
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, act, fireEvent, cleanup, renderHook, waitFor } from '@testing-library/react';
@@ -20,7 +21,7 @@ import { useArtifactContent } from '../src/renderer/components/artifact-views/us
 const get = vi.fn();
 const save = vi.fn();
 
-const MISSING_MSG = /no longer on disk/i;
+const MISSING_MSG = /isn.t where it was saved/i;
 const LOADING_MSG = /Loading file/i;
 
 // Minimal real host: the same wiring SessionDrawer and FilesTab use —

@@ -129,6 +129,7 @@ import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 // project however many callers ask at once. Only the manual include/exclude
 // handlers, which mutate and write back, keep the private readSidecar.
 import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord, runSidecarMigration } from './artifacts/artifact-store';
+import { relocateMissingRecords } from './artifacts/relocate-missing';
 import { listProjects, removeProject } from './artifacts/central-index';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
@@ -4633,6 +4634,11 @@ export function registerIpcHandlers(
     // is where the false "no longer on disk" actually renders. Memoized per
     // project per process — this handler also fires after every tracked write.
     const migration = await runSidecarMigration(projectRoot);
+    // Repoint this session's records whose file moved (a removed worktree copy
+    // whose file lives on in the main checkout) BEFORE listing, so the drawer,
+    // the viewer and chat file chips all see the real location instead of a
+    // false "not found". Never throws; see artifacts/relocate-missing.ts.
+    const relocation = await relocateMissingRecords(projectRoot, sessionId);
     // Fix: every other sidecar writer here calls invalidateSidecarIdCache after
     // committing (see APPEND_VERSION/RENAME/REMOVE_RECORD above) so the
     // watcher's path-to-id map doesn't go stale. runSidecarMigration writes too
@@ -4641,7 +4647,7 @@ export function registerIpcHandlers(
     // which already imports artifact-store.ts's readSidecar — a cycle — so it's
     // done here at each of the three call sites instead, and only when a write
     // actually happened.
-    if (migration.migrated) invalidateSidecarIdCache(projectRoot);
+    if (migration.migrated || relocation.relocated > 0) invalidateSidecarIdCache(projectRoot);
     const sidecar = await readSidecarShared(projectRoot);
     if (!sidecar || 'corrupted' in sidecar) return { ok: true, artifacts: [] };
     // Filter to artifacts touched by this session

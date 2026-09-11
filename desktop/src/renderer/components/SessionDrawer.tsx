@@ -56,7 +56,7 @@ function renameErrorCopy(code: unknown): string {
   switch (code) {
     case 'name-taken': return 'A file with that name already exists.';
     case 'invalid-name': return 'That name has characters that aren’t allowed.';
-    case 'file-missing': return 'The original file is no longer on disk.';
+    case 'file-missing': return 'This file isn’t where it was saved, so it can’t be renamed.';
     case 'artifact-not-found': return 'This file is no longer tracked.';
     // Fix: the default copy below tells the user to "try a different name",
     // which cannot work here — 'no-path' means the record's saved location
@@ -273,8 +273,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Multi-select type filter; EMPTY set = all types. Matches Project View
   // (Destin, 2026-07-23 — the drawer gained the Type group).
   const [types, setTypes] = useState<ReadonlySet<FileTypeGroup>>(() => new Set());
-  // Orphans — artifacts whose file is gone from disk, folded into the same
-  // "deleted" UI state as explicit delete versions.
+  // Orphans — artifacts whose file is not at its saved location. They share the
+  // hidden-by-default state with explicit delete versions but are labelled
+  // "not found", never "deleted" (see goneReason).
   //
   // Fix (2026-08-30, the deleted-rows flash): this used to be component-local
   // state that reset to EMPTY on every close, so each open rendered the whole
@@ -317,7 +318,18 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
       return true;
     });
   }, [allArtifacts, showDeletedArtifacts, orphanIds, types]);
-  const hiddenCount = allArtifacts.length - artifacts.length;
+  // Hidden rows counted BY REASON. WHY (2026-09-11): one combined count served
+  // the empty state, so a chat whose files had all gone missing said "Nothing
+  // here yet" — untrue — or blamed the type filter for rows it did not hide.
+  const { hiddenByType, hiddenMissing } = useMemo(() => {
+    const typeOk = (a: ArtifactRecord) => types.size === 0 || types.has(fileTypeGroup(a.path));
+    return {
+      hiddenByType: allArtifacts.filter((a) => !typeOk(a)).length,
+      hiddenMissing: showDeletedArtifacts
+        ? 0
+        : allArtifacts.filter((a) => typeOk(a) && goneReason(a, orphanIds) !== null).length,
+    };
+  }, [allArtifacts, showDeletedArtifacts, orphanIds, types]);
   // Look up the open document in the UNFILTERED list — toggling "Hide code" /
   // "Show deleted" while viewing a now-filtered-out file must not blank the
   // content pane (the file is still open; only the LIST hides it).
@@ -684,16 +696,22 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               message={
                 searchQuery.trim()
                   ? <>No files match “{searchQuery.trim()}”.</>
-                  : types.size > 0 && hiddenCount > 0
-                    ? <>No files of the selected type{types.size === 1 ? '' : 's'} — {hiddenCount} hidden by the filter.</>
-                    : <>Nothing here yet. Files Claude writes or edits in this chat will appear here.</>
+                  : hiddenByType > 0
+                    ? <>No files of the selected type{types.size === 1 ? '' : 's'} — {hiddenByType} hidden by the filter.</>
+                    : hiddenMissing > 0
+                      ? <>{hiddenMissing === 1
+                          ? '1 file from this chat isn’t where it was saved.'
+                          : `${hiddenMissing} files from this chat aren’t where they were saved.`}</>
+                      : <>Nothing here yet. Files Claude writes or edits in this chat will appear here.</>
               }
               action={
                 searchQuery.trim()
                   ? { label: 'Clear search', onClick: () => setSearchQuery('') }
-                  : types.size > 0 && hiddenCount > 0
+                  : hiddenByType > 0
                     ? { label: 'Show all types', onClick: () => setTypes(new Set()) }
-                    : undefined
+                    : hiddenMissing > 0
+                      ? { label: 'Show them', onClick: () => setShowDeletedArtifacts(true) }
+                      : undefined
               }
             />
           )
@@ -703,7 +721,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
               key={a.id}
               artifact={a}
               isActive={activeArtifactId === a.id}
-              isDeleted={a.status === 'deleted' || orphanIds.has(a.id)}
+              gone={goneReason(a, orphanIds)}
               sessionId={sessionId}
               onSelect={() => {
                 // Preview-on-click: set the active artifact but KEEP the list open
@@ -821,7 +839,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // THIS session did with the open file, not its whole history.
   // Both are `active &&` guarded (rather than assuming active is set) because
   // this line also runs while `activePreview` is showing and `active` is null.
-  const statusWord = active ? statusInfo(active, active.status === 'deleted' || orphanIds.has(active.id), sessionId) : '';
+  const statusWord = active ? statusInfo(active, goneReason(active, orphanIds), sessionId) : '';
   const fileName = active ? (active.path.split('/').pop() ?? active.path) : '';
 
   return (
@@ -1202,7 +1220,7 @@ export function GitFooterEntry({
 interface ListItemProps {
   artifact: ArtifactRecord;
   isActive: boolean;
-  isDeleted: boolean;
+  gone: GoneReason;
   // WHY: the row's word/timestamp describe what THIS session did to the file,
   // not the record's whole history — see statusInfo/lastModifiedInSession.
   sessionId: string;
@@ -1212,8 +1230,9 @@ interface ListItemProps {
   onRemove?: () => void;
 }
 
-function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, onRemove }: ListItemProps) {
-  const statusWord = statusInfo(artifact, isDeleted, sessionId);
+function ArtifactListItem({ artifact, isActive, gone, sessionId, onSelect, onRemove }: ListItemProps) {
+  const statusWord = statusInfo(artifact, gone, sessionId);
+  const isDeleted = gone !== null;
   const relTime = formatRelativeTime(lastModifiedInSession(artifact, sessionId));
   const fileName = artifact.path.split('/').pop() ?? artifact.path;
 
@@ -1221,7 +1240,7 @@ function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, 
     // group/relative wrapper hosts the hover-revealed remove × (a button can't
     // nest inside the select button) — same pattern as ProjectSwitcher rows.
     <div className="group relative">
-      <Tooltip text={isDeleted ? 'Deleted (file is no longer on disk)' : ''}>
+      <Tooltip text={gone === 'deleted' ? 'Deleted' : gone === 'not found' ? 'Not where it was saved — it may have been moved, renamed or deleted' : ''}>
       <button
         className={`w-full text-left px-2 py-2 ${onRemove ? 'pr-8' : ''} hover:bg-inset border-b border-edge-dim transition-colors ${
           isActive ? 'bg-inset' : ''
@@ -1259,6 +1278,16 @@ function ArtifactListItem({ artifact, isActive, isDeleted, sessionId, onSelect, 
 // neither the word nor the date described what this session actually did.
 // This helper scopes version lookups to `sessionId` so callers can compute
 // both the status word and the timestamp from only this session's events.
+// Why a row's file cannot be shown. WHY two words (2026-09-11): every missing
+// file used to read "deleted", but the on-disk check only knows the file is not
+// at its saved location — it may have moved, been renamed, or lived in a
+// temporary copy. "deleted" is kept for records whose last event IS a delete.
+type GoneReason = 'deleted' | 'not found' | null;
+function goneReason(a: ArtifactRecord, orphanIds: ReadonlySet<string>): GoneReason {
+  if (a.status === 'deleted') return 'deleted';
+  return orphanIds.has(a.id) ? 'not found' : null;
+}
+
 function versionsInSession(artifact: ArtifactRecord, sessionId: string): VersionEvent[] {
   return artifact.versions.filter((v) => v.sessionId === sessionId);
 }
@@ -1271,8 +1300,8 @@ function versionsInSession(artifact: ArtifactRecord, sessionId: string): Version
 // for the artifact — that shouldn't happen (the artifact wouldn't be in this
 // session's list at all), but an empty label would be worse than the old
 // (still-wrong) global word.
-function statusInfo(artifact: ArtifactRecord, isDeleted: boolean, sessionId: string): string {
-  if (isDeleted) return 'deleted';
+function statusInfo(artifact: ArtifactRecord, gone: GoneReason, sessionId: string): string {
+  if (gone) return gone;
   const sessionVersions = versionsInSession(artifact, sessionId);
   const versions = sessionVersions.length > 0 ? sessionVersions : artifact.versions;
   // 'read' and 'delivered' are not modifications. A delivered-only file says
