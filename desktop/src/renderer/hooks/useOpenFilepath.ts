@@ -14,6 +14,7 @@ import type { ArtifactState } from '../state/artifact-tracker';
 import type { ArtifactAction } from '../state/artifact-actions';
 import type { ArtifactRecord } from '../../shared/artifacts/types';
 import { findBestMatch, buildArtifactifyArgs } from '../components/filepath-match';
+import { plainMessage } from '../utils/ipc-error';
 
 export interface OpenFilepathCtx {
   state: ArtifactState;
@@ -53,12 +54,18 @@ export async function openFilepath(
     dispatch({ type: 'DRAWER_OPENED', sessionId });
     dispatch({ type: 'PILL_ERROR_CLEARED', sessionId });
   }
-  const failed = () => {
+  // `why` is what is actually known about the failure, or nothing.
+  // WHY each call site passes its own (error inventory 2026-09-10, false message 8):
+  // every failure used to read "Couldn't open X — the file wasn't found in this
+  // project." — for an unknown folder, a ~ path, a record that did not list back and
+  // a bridge call that threw. None of those four checks whether the file exists, so
+  // "wasn't found" was a guess at a cause. Each now says only what it knows.
+  const failed = (why?: string) => {
     if (!drawerOpensImmediately) return; // deferred mode: silent no-op, nothing was ever shown
     dispatch({
       type: 'PILL_RESOLVE_FAILED',
       sessionId,
-      message: `Couldn’t open ${name} — the file wasn’t found in this project.`,
+      message: why ? `Couldn’t open ${name} — ${why}` : `Couldn’t open ${name}.`,
     });
   };
 
@@ -76,7 +83,8 @@ export async function openFilepath(
   //    artifact (any session, including deleted) plus on-disk files, and
   //    inject the match into the session list so the drawer can show it.
   const cwd = state.sessionCwd?.[sessionId];
-  if (!cwd) { failed(); return; } // nothing to resolve without a root — say so
+  // nothing to resolve without a root — say so
+  if (!cwd) { failed('YouCoded doesn’t know which folder this conversation is in.'); return; }
   try {
     // Ask the cheap question first: listProject reads the sidecar (already in
     // memory / a fast IPC round trip) and is checked BEFORE the expensive
@@ -128,7 +136,9 @@ export async function openFilepath(
     //    appendVersion records it (author 'user', type 'read'); this is the
     //    only path that PERSISTS a brand-new artifact.
     const args = buildArtifactifyArgs(path, cwd);
-    if (!args) { failed(); return; } // e.g. a ~/ path the renderer can't expand
+    // buildArtifactifyArgs returns null for exactly one case: a path starting with ~,
+    // which the renderer has no home directory to expand against.
+    if (!args) { failed('paths that start with ~ can’t be opened from chat yet.'); return; }
     await (window.claude as any).artifacts.appendVersion(cwd, sessionId, args);
     const refreshed = await (window.claude as any).artifacts.listSession(sessionId, cwd);
     let selected = false;
@@ -146,8 +156,12 @@ export async function openFilepath(
         dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: refreshed.artifacts });
       }
     }
+    // Recorded, but it did not come back in the list: nothing more is known.
     if (!selected) failed();
-  } catch { failed(); }
+  } catch (e) {
+    // A bridge call failed, so no search result exists at all — name the reason.
+    failed(plainMessage(e, 'something went wrong while looking for it.'));
+  }
 }
 
 export function useOpenFilepath(sessionId: string): (path: string) => Promise<void> {
