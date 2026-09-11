@@ -3,6 +3,7 @@
 // refetches whenever a tags:changed push arrives (any window/device mutation).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { TagRecord, TagColor } from '../../shared/tags';
+import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 
 export interface TagRegistryApi {
   tags: TagRecord[];                 // non-deleted; includes archived
@@ -26,7 +27,8 @@ export function useTagRegistry(): TagRegistryApi {
     // SessionDrawer became the first component to call this hook.
     Promise.resolve((window as any).claude?.tags?.list?.() ?? [])
       .then((list: TagRecord[]) => setTags(Array.isArray(list) ? list : []))
-      .catch(() => setTags([]))
+      // Keep what is shown: a failed re-read is not an empty registry (2026-09-11 phone pass).
+      .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
 
@@ -35,6 +37,7 @@ export function useTagRegistry(): TagRegistryApi {
     const off = (window as any).claude.on?.tagsChanged?.(() => reload());
     return () => { if (typeof off === 'function') off(); };
   }, [reload]);
+  useOnRemoteReconnect(reload);
 
   const create = useCallback(async (label: string, color: TagColor) => {
     const res: any = await (window as any).claude.tags.create(label, color);

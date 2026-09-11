@@ -1,6 +1,7 @@
 // src/renderer/hooks/useSessionMeta.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { META_UNSUPPORTED_FALLBACK, type SessionFlagName, type SessionMetaResult } from '../../shared/types';
+import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 
 export interface SessionMetaApi {
   tags: Set<string>;   // applied tag ids
@@ -62,6 +63,10 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
       })
       .catch(() => { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; setSupported(true); });
   }, [sessionId]);
+
+  // A tag or note changed on the computer while the phone was away sent no event this phone
+  // heard; read again after a reconnect (2026-09-11 phone pass sweep).
+  useOnRemoteReconnect(refetch);
 
   useEffect(() => {
     refetch();

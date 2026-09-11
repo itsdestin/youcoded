@@ -1,5 +1,6 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import type { SkillEntry, ChipConfig, MetadataOverride, CommandEntry } from '../../shared/types';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 interface SkillState {
   installed: SkillEntry[];
@@ -41,18 +42,17 @@ export function SkillProvider({ children }: { children: ReactNode }) {
   // Fetch slash commands separately from skills — the remote-shim exposes
   // window.claude.commands only when the server supports it, so guard the
   // call and tolerate fetch failures (drawer falls back to skills only).
-  useEffect(() => {
-    let cancelled = false;
+  const loadCommands = useCallback(() => {
     const api = (window as any).claude?.commands;
     if (!api?.list) return;
     api.list()
-      .then((list: CommandEntry[]) => { if (!cancelled) setDrawerCommands(list ?? []); })
+      .then((list: CommandEntry[]) => setDrawerCommands(list ?? []))
       .catch(() => { /* non-fatal — drawer works without commands */ });
-    return () => { cancelled = true; };
   }, []);
+  useEffect(() => { loadCommands(); }, [loadCommands]);
 
   // Load initial state
-  useEffect(() => {
+  const loadAll = useCallback(() => {
     Promise.all([
       window.claude.skills.list(),
       window.claude.skills.getFavorites(),
@@ -86,6 +86,11 @@ export function SkillProvider({ children }: { children: ReactNode }) {
       console.error('[SkillContext] Failed to load:', err);
     });
   }, []);
+  useEffect(() => { loadAll(); }, [loadAll]);
+  // Both again after a remote reconnect: a read lost during a drop left "No skills installed
+  // yet" and a / menu with no commands until the page reloaded (2026-09-11 phone pass sweep).
+  // Re-running the seeding is safe: it skips every id already recorded in SEEDED_KEY.
+  useOnRemoteReconnect(() => { loadCommands(); loadAll(); });
 
   const refreshInstalled = useCallback(async () => {
     const inst = await window.claude.skills.list();

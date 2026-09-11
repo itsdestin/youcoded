@@ -36,6 +36,7 @@ import { ArtifactProvider } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
 import { createDeliverableAutoOpen } from './state/deliverable-auto-open';
 import { openFilepath } from './hooks/useOpenFilepath';
+import { useOnRemoteReconnect } from './hooks/useOnRemoteReconnect';
 // Central slash-command router — also used by the drawer so drawer-initiated
 // slash commands behave the same as typed ones (otherwise drawer bypasses InputBar's intercept).
 import { dispatchSlashCommand, type DispatcherResult } from './state/slash-command-dispatcher';
@@ -581,12 +582,16 @@ function AppInner() {
     return () => clearTimeout(timeout);
   }, []);
 
-  // Load session defaults on mount and whenever settings panel closes
-  useEffect(() => {
+  // Load session defaults on mount and whenever settings panel closes, and after a remote
+  // reconnect: one read lost during a drop left the new-session forms without the default
+  // project and model until Settings was opened and closed (2026-09-11 phone pass sweep).
+  const loadSessionDefaults = useCallback(() => {
     (window as any).claude?.defaults?.get?.().then((defs: any) => {
       if (defs) setSessionDefaults(defs);
     }).catch(() => {});
-  }, [settingsOpen]);
+  }, []);
+  useEffect(() => { loadSessionDefaults(); }, [settingsOpen, loadSessionDefaults]);
+  useOnRemoteReconnect(loadSessionDefaults);
 
   usePromptDetector();
   // Recovers chat→PTY submits that get lost on Windows ConPTY when Claude is
