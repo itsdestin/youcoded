@@ -27,6 +27,29 @@ describe('artifactReducer', () => {
     expect(next.sessionArtifacts['s1']).toEqual([sampleArtifact]);
   });
 
+  // The loading state for a tapped file (2026-09-11): while the lookup runs the
+  // drawer said "Nothing here yet", contradicting the file just tapped. The
+  // pending name lives here; every way a lookup can end clears it.
+  it('PILL_RESOLVE_STARTED records the tapped name per session; every ending clears it', () => {
+    const started = artifactReducer(initialArtifactState, { type: 'PILL_RESOLVE_STARTED', sessionId: 's1', name: 'CLAUDE.md' });
+    expect(started.pillPending['s1']).toBe('CLAUDE.md');
+    expect(started.pillPending['s2']).toBeUndefined();
+    for (const end of [
+      { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'a1' },
+      { type: 'PILL_RESOLVE_FAILED', sessionId: 's1', message: 'Couldn’t open CLAUDE.md' },
+      { type: 'DRAWER_CLOSED', sessionId: 's1' },
+      { type: 'PILL_ERROR_CLEARED', sessionId: 's1' },
+    ] as const) {
+      expect(artifactReducer(started, end).pillPending['s1'], end.type).toBeNull();
+    }
+  });
+
+  it('PILL_RESOLVE_STARTED clears nothing else about the drawer', () => {
+    const before = artifactReducer(initialArtifactState, { type: 'ACTIVE_ARTIFACT_SET', sessionId: 's1', artifactId: 'a1' });
+    const after = artifactReducer(before, { type: 'PILL_RESOLVE_STARTED', sessionId: 's1', name: 'x.md' });
+    expect(after.activeArtifactBySession['s1']).toBe('a1');
+  });
+
   it('PILL_RESOLVE_FAILED stores a per-session note; cleared on selection', () => {
     let s = artifactReducer(initialArtifactState, {
       type: 'PILL_RESOLVE_FAILED',

@@ -249,6 +249,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // (Subscribed below, after listRetry exists: a reconnect re-lists through it.)
   // Set when a pill click couldn't resolve; cleared on next click/selection/close.
   const pillError = state.pillError?.[sessionId] ?? null;
+  // Set while a tapped file is still being looked up (the file's name). WHY:
+  // the drawer used to open onto "Nothing here yet" for the whole lookup — up
+  // to seconds on a phone — contradicting the file just tapped (2026-09-11).
+  const pillPending = state.pillPending?.[sessionId] ?? null;
 
   // Re-list this session's files whenever the drawer opens against a resolved
   // project root.
@@ -704,7 +708,19 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             {pillError}
           </div>
         )}
-        {listSettling ? null : listError !== null && listedArtifacts.length === 0 ? (
+        {/* A tapped file still being looked up — the same place and box as the
+            note above, so the drawer never says "Nothing here yet" while it is
+            fetching the file the person just tapped. Only while no file is
+            showing: a file already open stays open until the new one lands. */}
+        {!pillError && pillPending && !active && (
+          <div aria-live="polite" className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well">
+            {`Opening ${pillPending}…`}
+          </div>
+        )}
+        {/* While a tap is pending, neither the load-error state nor the empty
+            state renders underneath the note: both would describe the LIST,
+            and the person is waiting on a FILE. */}
+        {listSettling ? null : listError !== null && listedArtifacts.length === 0 && !pillPending ? (
           <div className="px-3 pt-2">
             <ErrorState
               mode="recoverable"
@@ -713,7 +729,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             />
           </div>
         ) : listedArtifacts.length === 0 ? (
-          pillError ? null /* the note above already explains the state */ : (
+          pillError || pillPending ? null /* the note above already explains the state */ : (
             /* Same EmptyState + way-out pattern as the Project View files tab and
                the Resume browser (change 32). A search that matched nothing gets a
                Clear search button; the filtered-empty case points at the filter
