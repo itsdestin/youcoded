@@ -359,39 +359,50 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       // never enqueue its delete ahead of this write.
       const slot = reserveFileSlot(sessionId);
 
-      let res: LeaseResult | null = null;
-      try { res = await opts.hubRequest('acquire', sessionId, opts.deviceId); }
-      catch { res = null; } // never throw from acquire
+      // WHY try/finally: the reserved slot blocks every LATER file op for this
+      // session until it is settled. If anything between here and the settle
+      // below threw, that session's queue would hang forever — a later release()
+      // would await its delete and never reach the hub. The finally always
+      // settles; settle is a promise resolver, so when the write was already
+      // handed over this second call is a no-op, and otherwise it releases the
+      // slot with no write.
+      try {
+        let res: LeaseResult | null = null;
+        try { res = await opts.hubRequest('acquire', sessionId, opts.deviceId); }
+        catch { res = null; } // never throw from acquire
 
-      if (res && !res.ok) {
-        // Someone else holds it. Don't start a timer, don't write a file — the
-        // caller inspects res.holder to decide whether to request a takeover.
-        slot.settle(null); // release our reserved slot — no write
-        return res;
+        if (res && !res.ok) {
+          // Someone else holds it. Don't start a timer, don't write a file — the
+          // caller inspects res.holder to decide whether to request a takeover.
+          // The finally below releases our reserved slot — no write.
+          return res;
+        }
+
+        // res.ok OR res === null (hub down). On the disconnected path we hold
+        // OPTIMISTICALLY: sync must never block on the hub, so we take a local hold
+        // and let the next renew reconcile once the hub is back.
+        const expiresAt = res?.holder?.expiresAt ?? Date.now() + LEASE_TTL_MS;
+        // Genuinely idempotent re-acquire: stopTimer clears the old timer, and
+        // startRenewTimer bumps the generation so any PRIOR renew tick still
+        // awaiting hubRequest becomes a no-op when it resumes (no leaked 2nd loop).
+        stopTimer(sessionId);
+        held.delete(sessionId);
+        slot.settle(() => writeLeaseFileBody(sessionId, expiresAt));
+        // WHY start the timer BEFORE awaiting the write (review round 1): if the
+        // disk stalls inside writeLeaseFileBody, the heartbeat must still fire on
+        // schedule — otherwise the hub lease lapses at 300s while the session is
+        // genuinely live and held. startRenewTimer only touches in-memory state
+        // (`held`/`gen`) and arms a setTimeout; it does no I/O of its own.
+        startRenewTimer(sessionId);
+        // Still awaited: the existing "writes the lease file" test and the
+        // hub-down fallback both assert the file exists right after acquire()
+        // resolves — awaiting a promise here does not block the event loop, only
+        // the caller.
+        await slot.done;
+        return res ?? { ok: true, op: 'acquire', sessionId, holder: { deviceId: opts.deviceId, device: opts.deviceName, expiresAt } };
+      } finally {
+        slot.settle(null);
       }
-
-      // res.ok OR res === null (hub down). On the disconnected path we hold
-      // OPTIMISTICALLY: sync must never block on the hub, so we take a local hold
-      // and let the next renew reconcile once the hub is back.
-      const expiresAt = res?.holder?.expiresAt ?? Date.now() + LEASE_TTL_MS;
-      // Genuinely idempotent re-acquire: stopTimer clears the old timer, and
-      // startRenewTimer bumps the generation so any PRIOR renew tick still
-      // awaiting hubRequest becomes a no-op when it resumes (no leaked 2nd loop).
-      stopTimer(sessionId);
-      held.delete(sessionId);
-      slot.settle(() => writeLeaseFileBody(sessionId, expiresAt));
-      // WHY start the timer BEFORE awaiting the write (review round 1): if the
-      // disk stalls inside writeLeaseFileBody, the heartbeat must still fire on
-      // schedule — otherwise the hub lease lapses at 300s while the session is
-      // genuinely live and held. startRenewTimer only touches in-memory state
-      // (`held`/`gen`) and arms a setTimeout; it does no I/O of its own.
-      startRenewTimer(sessionId);
-      // Still awaited: the existing "writes the lease file" test and the
-      // hub-down fallback both assert the file exists right after acquire()
-      // resolves — awaiting a promise here does not block the event loop, only
-      // the caller.
-      await slot.done;
-      return res ?? { ok: true, op: 'acquire', sessionId, holder: { deviceId: opts.deviceId, device: opts.deviceName, expiresAt } };
     },
 
     async release(sessionId) {

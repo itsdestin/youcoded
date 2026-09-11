@@ -878,6 +878,17 @@ export async function flushSessionToSpace(claudeSessionId: string): Promise<void
   try { await syncSpacesSyncNowAwaited('personal', HANDOFF_SYNC_TIMEOUT_MS); } catch { /* the poll covers a miss */ }
 }
 
+// WHY one chain for every reconciler-driven mirror (2026-09-10): the reconciler
+// calls mirror() for EVERY transcript it scans, at startup and on each interval
+// tick. When mirrorIn was synchronous those copies ran one after another; now
+// async, fire-and-forget would start them all at once, and on a first run or a
+// long offline catch-up a few large copies fill all 4 libuv threads for seconds —
+// queueing live chat updates (tailer reads), Resume Browser reads, lease writes
+// and dns lookups behind them. Chaining restores one-at-a-time. Module-level (not
+// per run) so a new 30-minute pass also queues behind an unfinished earlier one.
+// Turn-complete and flush mirrors do NOT use this chain — they stay independent.
+let reconcileMirrorTail: Promise<unknown> = Promise.resolve();
+
 function runReconcile(): void {
   // Fix: quiesced for the slug repair — see pauseSweeps' WHY. resumeSweeps()
   // re-fires this exact call once the pause lifts.
@@ -911,7 +922,14 @@ function runReconcile(): void {
       // in reconciler.ts wraps the call in a synchronous try/catch that can no
       // longer see an async rejection) — the reconciler never depended on the
       // copy's completion, so .catch is the fire-and-forget best-effort.
-      mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spaceTranscriptPath(projectKey, sessionId, 'claude') })
+      // WHY queued on reconcileMirrorTail: see its declaration above — reconciler
+      // copies run one at a time. The .catch sits on the chain itself, so one
+      // failed copy never stops the copies queued after it. The destination is
+      // resolved NOW (not inside .then) so a bad path still throws synchronously
+      // into safeMirror's try/catch, exactly as before.
+      const dest = spaceTranscriptPath(projectKey, sessionId, 'claude');
+      reconcileMirrorTail = reconcileMirrorTail
+        .then(() => mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: dest }))
         .catch(() => { /* best-effort */ });
     },
   }).catch(() => { /* reconciler failure must never break startup (carry-forward 2) */ });

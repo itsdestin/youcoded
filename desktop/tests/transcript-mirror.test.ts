@@ -5,7 +5,7 @@
 // disk behavior: size-gated whole-file copy, on-demand dir creation, and the
 // LOAD-BEARING invariant that a missing/shrunk local file NEVER mutates the
 // durable space copy (CC's cleanupPeriodDays deletes local transcripts).
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -123,16 +123,55 @@ describe('mirrorIn (local → space, add/update-only)', () => {
     expect(read(spacePath)).toBe(before); // fuller durable copy preserved exactly
   });
 
-  // New (2026-09-10): two callers racing to mirror the SAME dest at once must
-  // never collide on the tmp filename — each copy gets its own unique tmp
-  // (pid + timestamp + a per-process counter), and both renames land cleanly.
-  it('two overlapping mirrors of the same dest never collide on the tmp name', async () => {
+  // New (2026-09-10): two mirrors of the SAME dest started together both settle,
+  // the dest ends up matching local, and no tmp file is left behind. (This does
+  // NOT prove they ran one after another — the next test pins that.)
+  it('two concurrent mirrors of the same dest both settle with dest == local and no .tmp left', async () => {
     put(localPath, 'line-1\nline-2\n');
     const a = mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spacePath });
     const b = mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spacePath });
     await Promise.all([a, b]);
     expect(fs.readFileSync(spacePath, 'utf8')).toBe(fs.readFileSync(localPath, 'utf8'));
     expect(fs.readdirSync(path.dirname(spacePath)).filter((n) => n.endsWith('.tmp'))).toEqual([]);
+  });
+
+  // Pins the per-destination lock (runSerialized). WHY: each mirror is several
+  // awaits (size checks, copy, rename); two on the same dest that interleave can
+  // let the one that read an OLDER, shorter file rename last — briefly shrinking
+  // the durable copy the grow-only rule protects. The second mirror must not even
+  // start its size check until the first has finished.
+  it('a second mirror of the same dest waits for the first to finish before its size check', async () => {
+    put(localPath, 'line-1\n');
+    const realCopyFile = fs.promises.copyFile.bind(fs.promises);
+    let releaseFirstCopy!: () => void;
+    const firstCopyGate = new Promise<void>((resolve) => { releaseFirstCopy = resolve; });
+    const copySpy = vi.spyOn(fs.promises, 'copyFile').mockImplementation(async (src, dst, mode) => {
+      if (copySpy.mock.calls.length === 1) await firstCopyGate; // hold ONLY the first copy
+      return realCopyFile(src, dst, mode);
+    });
+    const statSpy = vi.spyOn(fs.promises, 'stat');
+    // Only stats of this test's own files count — nothing else in the process.
+    const ourStats = () => statSpy.mock.calls.filter((c) => String(c[0]).startsWith(tmp)).length;
+    try {
+      const a = mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spacePath });
+      await vi.waitFor(() => expect(copySpy).toHaveBeenCalledTimes(1)); // A is now stuck mid-copy
+
+      put(localPath, 'line-1\nline-2\n'); // local grows while A's copy is held
+      const statsBeforeB = ourStats();
+      const b = mirrorIn({ localJsonlPath: localPath, spaceTranscriptPath: spacePath });
+      // Fixed settle before a NEGATIVE assertion only: an unserialized B would
+      // stat both files within a few ms.
+      await new Promise((r) => setTimeout(r, 100));
+      expect(ourStats()).toBe(statsBeforeB); // B's size check has not run
+      expect(copySpy).toHaveBeenCalledTimes(1); // nor its copy
+
+      releaseFirstCopy();
+      await Promise.all([a, b]);
+      expect(read(spacePath)).toBe(read(localPath));
+    } finally {
+      copySpy.mockRestore();
+      statSpy.mockRestore();
+    }
   });
 });
 
@@ -200,11 +239,24 @@ describe('materializeOut (space → local, add/update-only)', () => {
     put(spacePath, 'from-other-device\n');
     // localPath's parent dir does not exist yet — shouldCommit must abort
     // BEFORE the rename, but the mkdir/copy-into-tmp steps still ran.
+    let checked = false;
     const res = await materializeOut({
       spaceTranscriptPath: spacePath,
       localJsonlPath: localPath,
-      shouldCommit: () => false, // simulates a session that resumed mid-copy
+      // Simulates a session that resumed mid-copy. WHY look for the tmp HERE:
+      // the liveness re-check is only worth anything if it runs as LATE as
+      // possible — after the copy has landed in tmp, right before the rename. A
+      // check moved up front would see no tmp yet, and this assertion fails.
+      shouldCommit: () => {
+        const destBase = path.basename(localPath);
+        const tmps = fs.readdirSync(path.dirname(localPath))
+          .filter((n) => n.startsWith(`${destBase}.`) && n.endsWith('.tmp'));
+        expect(tmps).toHaveLength(1);
+        checked = true;
+        return false;
+      },
     });
+    expect(checked).toBe(true);
     expect(res).toEqual({ copied: false });
     expect(fs.existsSync(localPath)).toBe(false); // never renamed into place
     // The tmp file the copy created must be cleaned up, not orphaned.

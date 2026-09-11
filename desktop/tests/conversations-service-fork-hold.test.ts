@@ -164,10 +164,15 @@ describe('conversations service — fork hold', () => {
     expect(typeof opts.mirror).toBe('function');
 
     opts.mirror(path.join(tmpRoot, 'held-proj', 'held-session-id.jsonl'), 'held-proj', 'held-session-id');
-    expect(h.mirrorIn).not.toHaveBeenCalled();
-
     opts.mirror(path.join(tmpRoot, 'free-proj', 'free-session-id.jsonl'), 'free-proj', 'free-session-id');
-    expect(h.mirrorIn).toHaveBeenCalledTimes(1);
+
+    // WHY waitFor: reconciler mirrors now queue on one serial chain (service.ts
+    // reconcileMirrorTail), so mirrorIn runs a microtask after mirror() returns
+    // and a synchronous "not called" check would pass vacuously. A held session
+    // that leaked through would be queued FIRST, so the first call being the
+    // free session — and the only call — proves the hold.
+    await vi.waitFor(() => expect(h.mirrorIn).toHaveBeenCalled());
     expect(h.mirrorIn.mock.calls[0][0].localJsonlPath).toContain('free-session-id.jsonl');
+    expect(h.mirrorIn).toHaveBeenCalledTimes(1);
   });
 });

@@ -156,6 +156,32 @@ describe('conversations service composition root', () => {
     expect(typeof opts.mirror).toBe('function');
   });
 
+  // 1a — reconciler-driven mirrors run ONE AT A TIME. WHY: the reconciler mirrors
+  // every transcript it scans; started all at once, large copies fill libuv's 4
+  // threads and queue live chat reads, lease writes and dns lookups behind them.
+  it('reconciler mirrors never overlap: the next copy starts only after the previous settles', async () => {
+    let failFirst!: (err: Error) => void;
+    h.mirrorIn
+      .mockImplementationOnce(() => new Promise((_resolve, reject) => { failFirst = reject; }))
+      .mockResolvedValue({ copied: true } as any);
+    await freshService(startOpts());
+    const opts = h.reconcile.mock.calls[0][0];
+
+    opts.mirror(path.join(tmpRoot, 'projects', 'alpha', 'sess-1.jsonl'), 'alpha', 'sess-1');
+    opts.mirror(path.join(tmpRoot, 'projects', 'beta', 'sess-2.jsonl'), 'beta', 'sess-2');
+
+    await vi.waitFor(() => expect(h.mirrorIn).toHaveBeenCalledTimes(1));
+    // Fixed settle before a NEGATIVE assertion only: gives an overlapping second
+    // copy time to start (it would start within a microtask) before we say it didn't.
+    await new Promise((r) => setTimeout(r, 50));
+    expect(h.mirrorIn).toHaveBeenCalledTimes(1);
+
+    // Release the first by FAILING it — a failed copy must not stop later ones.
+    failFirst(new Error('EBUSY'));
+    await vi.waitFor(() => expect(h.mirrorIn).toHaveBeenCalledTimes(2));
+    expect(h.mirrorIn.mock.calls[1][0].localJsonlPath).toContain('sess-2.jsonl');
+  });
+
   // 1b — the reconciler is handed this device's known folders (managed projects
   // + saved folders) so it can recover exact projectKeys (whole-branch review
   // Finding 1). Without this wiring the reconciler truncates hyphenated names.
