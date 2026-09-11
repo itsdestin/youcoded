@@ -1481,10 +1481,10 @@ export class RemoteServer {
         break;
       }
       case 'tags:list': {
-        const { getTagRegistry } = await import('./conversations/tag-registry-service');
-        const reg = getTagRegistry();
-        const list = reg ? await reg.list().catch(() => []) : [];
-        this.respond(client.ws, type, id, list);
+        // Same answer as main's handler: a failed read is { ok: false, error }, never [] —
+        // see listTagsForHost for why.
+        const { listTagsForHost } = await import('./conversations/tag-registry-service');
+        this.respond(client.ws, type, id, await listTagsForHost());
         break;
       }
       case 'tags:create': {

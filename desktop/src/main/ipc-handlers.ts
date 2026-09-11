@@ -175,7 +175,7 @@ import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
-import { getTagRegistry } from './conversations/tag-registry-service';
+import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { getRepoInfo } from './project-repo';
 import { listContext, readContextFile, writeContextFile } from './project-context';
@@ -3927,11 +3927,8 @@ export function registerIpcHandlers(
   });
 
   // --- Tag registry CRUD ---
-  ipcMain.handle(IPC.TAGS_LIST, async () => {
-    const reg = getTagRegistry();
-    if (!reg) return [];
-    try { return await reg.list(); } catch { return []; }
-  });
+  // A failed read answers { ok: false, error }, never [] — see listTagsForHost for why.
+  ipcMain.handle(IPC.TAGS_LIST, () => listTagsForHost());
 
   ipcMain.handle(IPC.TAGS_CREATE, async (_e, label: string, color: string) => {
     const reg = getTagRegistry();
