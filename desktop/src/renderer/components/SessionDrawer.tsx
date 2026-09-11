@@ -501,9 +501,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Remote access batch 3 (questions deck 2026-09-10, Q-7 yes): a phone cannot
   // reveal or open a file that lives on another computer, so it gets Download —
   // the file lands in the phone's own downloads folder without blocking the chat.
+  // The project and record go along so the host can authorize a tracked file
+  // through its record (T7 review, finding 9).
   const handleDownload = useCallback(() => {
-    if (absolutePath) void downloadFile(absolutePath);
-  }, [absolutePath]);
+    if (absolutePath) void downloadFile(absolutePath, active ? { projectRoot, artifactId: active.id } : undefined);
+  }, [absolutePath, active, projectRoot]);
 
   // Rows to render: the filtered set, narrowed by the search box and sorted.
   // Search/sort affect ONLY the rendered list — not `artifacts`, which still

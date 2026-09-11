@@ -53,7 +53,7 @@ const SNIPPET_MAX_CHARS = 200;
  * anchored with `**`, and dotenv is the same trio isDotenvBasename accepts.
  * Built from the shared sets so the search cannot drift from the reads.
  */
-export const SENSITIVE_GLOBS: readonly string[] = [
+const SENSITIVE_GLOBS: readonly string[] = [
   ...[...SENSITIVE_SEGMENTS].map((seg) => `!${seg}`),
   ...[...SENSITIVE_BASENAMES].map((base) => `!${base}`),
   '!.env', '!.env.*', '!.envrc',

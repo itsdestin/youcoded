@@ -10,14 +10,20 @@ import { announce } from '../../utils/announce';
 // and the finished file. The toast is the acknowledgement the tester missed
 // (2026-09-10, U1/U2): without it a tap on Download looked like nothing.
 /**
- * The host's refusal codes (remote-download.ts), in words. Only codes the host
- * actually answers with are named here — anything else is shown as the host
- * gave it, never guessed at (docs/error-message-standards.md).
+ * The host's refusal codes (remote-download.ts, remote-server.ts), in words.
+ * Each code is ONE decision the host made, so each sentence says only that —
+ * 'not-allowed' covers several and names none (T7 review, finding 8: it used
+ * to say "outside the folders" for a private file inside a project). Anything
+ * else is shown as the host gave it, never guessed at
+ * (docs/error-message-standards.md).
  */
 const REFUSALS: Record<string, string> = {
-  'busy': 'two downloads are already running from this device. Wait for one to finish.',
-  'not-allowed': 'this file is outside the folders remote access can read.',
+  'busy': 'two downloads are already running on this connection. Wait for one to finish.',
+  'sensitive': 'it’s in a private location (like keys, passwords or .env files) that remote access never sends.',
+  'outside-roots': 'this file is outside the folders remote access can read.',
+  'not-a-file': 'that isn’t a file.',
   'orphan': 'the file is no longer on the computer.',
+  'not-allowed': 'the computer won’t send this file.',
   'no path': 'the file has no path.',
 };
 

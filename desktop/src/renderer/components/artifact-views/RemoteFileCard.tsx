@@ -24,19 +24,24 @@ function describeKind(path: string): string {
   return 'File';
 }
 
-export function RemoteFileCard({ path, sizeBytes, reason }: {
+export function RemoteFileCard({ path, sizeBytes, reason, projectRoot, artifactId }: {
   /** Absolute path of the file — what Download asks the host for. */
   path: string;
   sizeBytes?: number;
   /** Why there is no preview. `too-large` is the only reason today. */
   reason: 'too-large';
+  /** The project folder and tracked record id, when the viewer knows them. */
+  projectRoot?: string;
+  artifactId?: string;
 }) {
   const name = path.split('/').pop() ?? path;
   const kind = describeKind(path);
   const limit = kind === 'Text'
     ? formatFileSize(REMOTE_TEXT_PREVIEW_MAX_BYTES)
     : formatFileSize(REMOTE_BINARY_PREVIEW_MAX_BYTES);
-  const download = () => { void downloadFile(path); };
+  // The project and record, when the host of this card has them, let the host
+  // authorize a tracked file through its record (T7 review, finding 9).
+  const download = () => { void downloadFile(path, projectRoot && artifactId ? { projectRoot, artifactId } : undefined); };
   return (
     <div className="h-full flex items-center justify-center p-6">
       <div className="w-full max-w-xs rounded-lg bg-inset px-4 py-5 flex flex-col items-center text-center gap-1.5">

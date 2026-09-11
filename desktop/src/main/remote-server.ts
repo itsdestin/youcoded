@@ -3043,10 +3043,22 @@ export class RemoteServer {
       case 'artifacts:download': {
         // Mint a short-lived link bound to THIS device and THIS socket (§10);
         // the answer's `url` is host-relative and the shim makes it absolute.
-        // Refusals (`not-allowed`, `orphan`, `busy`) are data the card shows,
-        // so this channel must never join REJECT_ON_NOT_OK.
-        this.respond(client.ws, type, id,
-          await this.downloads.mint(payload ?? {}, { deviceId: client.deviceId, socketId: client.id }));
+        // Refusals (`sensitive`, `outside-roots`, `busy`…) are data the card
+        // shows, so this channel must never join REJECT_ON_NOT_OK.
+        try {
+          // A named project goes through the same root gate as every read: a
+          // sidecar in a folder the computer never showed must not grant a
+          // download through its records (T7 review, finding 4).
+          if (payload?.projectRoot !== undefined) {
+            const refused = await this.refuseUnknownRoot(payload.projectRoot);
+            if (refused) { this.respond(client.ws, type, id, refused); break; }
+          }
+          this.respond(client.ws, type, id,
+            await this.downloads.mint(payload ?? {}, { deviceId: client.deviceId, socketId: client.id }));
+        } catch (err: any) {
+          // The phone gets an answer instead of a request that never returns.
+          this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
+        }
         break;
       }
 
@@ -3181,7 +3193,7 @@ export class RemoteServer {
         ?? readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES });
     },
     // read-binary carries its own roots check (authorizeBytesRead), on the file itself.
-    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
+    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES, extraRoots: this.sessionRoots() }),
     'artifacts:search-content': async (p) =>
       (await this.refuseUnknownRoot(p.projectRoot)) ?? searchArtifactContent(p.projectRoot, p.query),
     'artifacts:check-existence': async (p) =>
@@ -3208,7 +3220,11 @@ export class RemoteServer {
 
   // Download links (§10). The revocation check reads the device store lazily,
   // at each GET, so a device unpaired while its link was alive is refused.
-  readonly downloads = new RemoteDownloads({ isDeviceRevoked: (deviceId) => this.devices.isRevoked(deviceId) });
+  // Live session folders count as known roots here too, as for every read.
+  readonly downloads = new RemoteDownloads({
+    isDeviceRevoked: (deviceId) => this.devices.isRevoked(deviceId),
+    extraRoots: () => this.sessionRoots(),
+  });
 
   /** This socket's project-watcher subscriber id, allocated on first use and released on close. */
   private watchSubscriberId(client: AuthenticatedClient): number {

@@ -979,7 +979,8 @@ function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed 
   // the right action for formats the in-app viewer can't render (html) or only
   // renders partially (docx/xlsx). Desktop-only (shell.openPath); no-op on remote.
   const handleOpenExternal = () => (window.claude as any).shell?.openPath?.(absPath);
-  const handleDownload = () => { void downloadFile(absPath); };
+  // Project and record along with the path (T7 review, finding 9).
+  const handleDownload = () => { void downloadFile(absPath, { projectRoot: project.path, artifactId: artifact.id }); };
   const narrowViewport = useNarrowViewport();
   const handleCopyPath = () => {
     navigator.clipboard?.writeText(absPath).then(() => {

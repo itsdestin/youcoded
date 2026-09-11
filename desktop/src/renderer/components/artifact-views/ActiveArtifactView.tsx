@@ -518,7 +518,7 @@ export const ActiveArtifactView = forwardRef<ActiveArtifactHandle, ActiveArtifac
     // A phone asked for a file over its preview ceiling. Not an error to retry —
     // the host answered honestly with the size — so the card offers Download
     // (questions deck 2026-09-10, Q-6/Q-8).
-    return <RemoteFileCard path={absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" />;
+    return <RemoteFileCard path={absoluteArtifactPath(projectRoot, artifact)} sizeBytes={readState.sizeBytes} reason="too-large" projectRoot={projectRoot} artifactId={artifact.id} />;
   }
   if (!editing && readState.phase === 'error') {
     // The REAL failure with a Retry — never mapped to "no longer on disk"

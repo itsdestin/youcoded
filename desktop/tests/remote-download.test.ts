@@ -15,6 +15,7 @@ import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { execFileSync } from 'node:child_process';
 import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
 vi.mock('electron', () => ({
@@ -25,7 +26,7 @@ vi.mock('electron', () => ({
   webContents: { getAllWebContents: vi.fn(() => []) },
 }));
 
-import { RemoteDownloads, DOWNLOAD_TOKEN_TTL_MS, MAX_LIVE_STREAMS_PER_SOCKET } from '../src/main/remote-download';
+import { RemoteDownloads, DOWNLOAD_TOKEN_TTL_MS, MAX_LIVE_STREAMS_PER_SOCKET, MAX_TOKENS_PER_DEVICE } from '../src/main/remote-download';
 import { RemoteServer } from '../src/main/remote-server';
 import { INDEX_SCHEMA_VERSION, SIDECAR_SCHEMA_VERSION } from '../src/shared/artifacts/types';
 
@@ -142,9 +143,11 @@ describe('minting a link', () => {
     expect(res.sizeBytes).toBe(5000);
   });
 
-  it('refuses a file outside every root (not-allowed), a secret, and a missing file', async () => {
-    expect(await mint(path.join(stray, 'unlisted.md'))).toMatchObject({ ok: false, error: 'not-allowed' });
-    expect(await mint(path.join(secretDir, '.ssh', 'id_rsa'))).toMatchObject({ ok: false, error: 'not-allowed' });
+  // Each refusal names its real cause, so the phone's notice never guesses one
+  // (T7 review, finding 8: "outside the folders" was shown for a private file).
+  it('refuses a file outside every root, a secret, and a missing file, each with its own code', async () => {
+    expect(await mint(path.join(stray, 'unlisted.md'))).toMatchObject({ ok: false, error: 'outside-roots' });
+    expect(await mint(path.join(secretDir, '.ssh', 'id_rsa'))).toMatchObject({ ok: false, error: 'sensitive' });
     expect(await mint(path.join(root, 'gone.md'))).toMatchObject({ ok: false, error: 'orphan' });
     expect(await mint('' as any)).toMatchObject({ ok: false });
   });
@@ -153,7 +156,7 @@ describe('minting a link', () => {
     const link = path.join(root, 'looks-fine.txt');
     fs.symlinkSync(path.join(secretDir, '.ssh', 'id_rsa'), link);
     try {
-      expect(await mint(link)).toMatchObject({ ok: false, error: 'not-allowed' });
+      expect(await mint(link)).toMatchObject({ ok: false, error: 'sensitive' });
     } finally { fs.unlinkSync(link); }
   });
 
@@ -165,14 +168,14 @@ describe('minting a link', () => {
     expect(got.status).toBe(200);
     expect(await got.text()).toBe('tracked by a session');
     // The same folder's UNLISTED file gets no such pass.
-    expect(await mint(path.join(stray, 'unlisted.md'), { projectRoot: stray, artifactId: 'art-1' })).toMatchObject({ ok: false, error: 'not-allowed' });
+    expect(await mint(path.join(stray, 'unlisted.md'), { projectRoot: stray, artifactId: 'art-1' })).toMatchObject({ ok: false, error: 'outside-roots' });
   });
 
   it('a file whose inode is 0 is refused as not-allowed rather than accepted unpinnable', async () => {
     const dl = makeDownloads({
       // A real BigIntStats (isFile() and all) with its inode zeroed, as a
       // filesystem without stable ids would report it.
-      statForMint: async (p) => Object.assign(await fs.promises.stat(p, { bigint: true }), { ino: 0n }),
+      statForMint: async (fh) => Object.assign(await fh.stat({ bigint: true }), { ino: 0n }),
     });
     expect(await mint(path.join(root, 'notes.md'), {}, dl)).toMatchObject({ ok: false, error: 'not-allowed' });
   });
@@ -357,7 +360,10 @@ describe('at most two live streams per socket (R3-7)', () => {
     expect(third).toMatchObject({ ok: false, error: 'busy' });
     // A third GET on a still-valid token is refused too — the cap is on streams, not on mints.
     const overCap = await fetch(a.url);
-    expect(overCap.status).toBe(429);
+    // 503 + Retry-After, not 429: download managers retry a 503 and give up on
+    // other 4xx (T7 review, finding 5).
+    expect(overCap.status).toBe(503);
+    expect(overCap.headers.get('retry-after')).toBe('5');
 
     // The phone gives up on one: the slot comes back and the count is exact.
     s1.req.destroy();
@@ -416,5 +422,279 @@ describe('through the WS host', () => {
     expect(routeAt).toBeGreaterThan(0);
     expect(staticAt).toBeGreaterThan(routeAt);
     expect(proxyAt).toBeGreaterThan(routeAt);
+  });
+});
+
+// ── Hardening from the T7 review (2026-09-10) ──────────────────────────────────
+// Each case is the regression its finding named; each was watched go red first.
+describe('download hardening', () => {
+  const closeServer = (srv: http.Server) => new Promise<void>((r) => { srv.closeAllConnections(); srv.close(() => r()); });
+
+  it('a burst of GETs cannot beat the stream cap, and a hang-up while the file is opening releases its slot and handle (findings 1, 2)', async () => {
+    let releaseOpen!: () => void;
+    const gate = new Promise<void>((r) => { releaseOpen = r; });
+    const opened: fs.promises.FileHandle[] = [];
+    let openCalls = 0;
+    const dl = makeDownloads({
+      openForServe: async (p, flags) => {
+        openCalls++;
+        await gate;
+        const fh = await fs.promises.open(p, flags);
+        opened.push(fh);
+        return fh;
+      },
+    });
+    const { server: srv, origin: o } = await serveWith(dl);
+    const who = { deviceId: 'phone-burst', socketId: 'sock-burst' };
+    const minted: any = await dl.mint({ absolutePath: path.join(root, 'notes.md') }, who);
+    const reqs = Array.from({ length: 5 }, () => {
+      const entry: { req: http.ClientRequest; status: number | null } = { req: null as any, status: null };
+      entry.req = http.get(o + minted.url, { agent: false }, (res) => { entry.status = res.statusCode!; res.resume(); });
+      entry.req.on('error', () => { /* the hang-up below */ });
+      return entry;
+    });
+    try {
+      // Only two may reach the file; the other three are told to retry.
+      await vi.waitFor(() => {
+        expect(reqs.filter((r) => r.status === 503)).toHaveLength(3);
+        expect(openCalls).toBe(2);
+      });
+      expect(dl.liveStreams(who.socketId)).toBe(2);
+      // One phone hangs up while its file is still opening.
+      const waiting = reqs.filter((r) => r.status === null);
+      expect(waiting).toHaveLength(2);
+      waiting[0].req.destroy();
+      await vi.waitFor(() => expect(dl.liveStreams(who.socketId)).toBe(1));
+      // The open finishes after the hang-up: its handle must still be closed.
+      releaseOpen();
+      await vi.waitFor(() => {
+        expect(opened).toHaveLength(2);
+        expect(opened.every((h) => h.fd === -1)).toBe(true);
+        expect(dl.liveStreams(who.socketId)).toBe(0);
+      });
+      expect(waiting[1].status).toBe(200);
+    } finally {
+      releaseOpen();
+      for (const r of reqs) r.req.destroy();
+      await closeServer(srv);
+    }
+  });
+
+  it('a stream the phone stops reading is ended after the idle timeout, freeing its slot (finding 5)', async () => {
+    const dl = makeDownloads({ idleTimeoutMs: 300 });
+    const { server: srv, origin: o } = await serveWith(dl);
+    const who = { deviceId: 'phone-idle', socketId: 'sock-idle' };
+    try {
+      const minted: any = await dl.mint({ absolutePath: path.join(root, 'big.bin') }, who);
+      const s = await openStream(o + minted.url);
+      expect(s.res.statusCode).toBe(200);
+      expect(dl.liveStreams(who.socketId)).toBe(1);
+      // Nothing reads: the socket buffers fill and the transfer goes idle.
+      await vi.waitFor(() => expect(dl.liveStreams(who.socketId)).toBe(0));
+      s.req.destroy();
+    } finally {
+      await closeServer(srv);
+    }
+  });
+
+  it('a link stays alive for five minutes after a transfer ENDS, so a long download that drops can resume (finding 6)', async () => {
+    const dl = makeDownloads();
+    const { server: srv, origin: o } = await serveWith(dl);
+    const who = { deviceId: 'phone-long', socketId: 'sock-long' };
+    try {
+      const minted: any = await dl.mint({ absolutePath: path.join(root, 'big.bin') }, who);
+      const s = await openStream(o + minted.url);
+      expect(dl.liveStreams(who.socketId)).toBe(1);
+      clock += DOWNLOAD_TOKEN_TTL_MS - 1000;   // a slow transfer, nearly five minutes in
+      s.req.destroy();                          // …and the network drops
+      await vi.waitFor(() => expect(dl.liveStreams(who.socketId)).toBe(0));
+      clock += 2000;                            // past five minutes since the GET started
+      const resume = await fetch(o + minted.url, { headers: { Range: 'bytes=0-9' } });
+      expect(resume.status).toBe(206);
+      await resume.arrayBuffer();
+    } finally {
+      await closeServer(srv);
+    }
+  });
+
+  it('a resume whose If-Match no longer matches answers 412, never a stitched file (finding 7)', async () => {
+    const { url } = await mint(path.join(root, 'notes.md'));
+    const first = await fetch(url, { headers: { Range: 'bytes=0-9' } });
+    const etag = first.headers.get('etag')!;
+    await first.arrayBuffer();
+    const stale = await fetch(url, { headers: { Range: 'bytes=10-', 'If-Match': '"an-older-version"' } });
+    expect(stale.status).toBe(412);
+    expect(await stale.text()).toBe('');
+    const fresh = await fetch(url, { headers: { Range: 'bytes=10-', 'If-Match': etag } });
+    expect(fresh.status).toBe(206);
+    await fresh.arrayBuffer();
+  });
+
+  it('one device holds at most MAX_TOKENS_PER_DEVICE links; the oldest goes first (finding 10)', async () => {
+    const who = { deviceId: 'phone-cap', socketId: 'sock-cap' };
+    const urls: string[] = [];
+    for (let i = 0; i <= MAX_TOKENS_PER_DEVICE; i++) urls.push((await mint(path.join(root, 'notes.md'), {}, downloads, who)).url);
+    const oldest = await fetch(urls[0]);
+    expect(oldest.status).toBe(404);
+    for (const u of [urls[1], urls[MAX_TOKENS_PER_DEVICE]]) {
+      const res = await fetch(u, { headers: { Range: 'bytes=0-0' } });
+      expect(res.status).toBe(206);
+      await res.arrayBuffer();
+    }
+  });
+
+  it('a folder or a pipe is refused at mint as not-a-file', async () => {
+    fs.mkdirSync(path.join(root, 'a-folder'), { recursive: true });
+    expect(await mint(path.join(root, 'a-folder'))).toMatchObject({ ok: false, error: 'not-a-file' });
+    const fifo = path.join(root, 'a-pipe');
+    execFileSync('mkfifo', [fifo]);
+    try {
+      expect(await mint(fifo)).toMatchObject({ ok: false, error: 'not-a-file' });
+    } finally { fs.unlinkSync(fifo); }
+  });
+
+  it('a pipe swapped in after mint answers 404 at once instead of freezing a file thread (finding 11)', async () => {
+    const file = path.join(root, 'pipe-swap.txt');
+    fs.writeFileSync(file, 'ordinary');
+    const { url } = await mint(file);
+    fs.unlinkSync(file);
+    execFileSync('mkfifo', [file]);
+    let status: number | null = null;
+    const pending = fetch(url).then(async (r) => { status = r.status; await r.arrayBuffer(); }).catch(() => {});
+    try {
+      await vi.waitFor(() => expect(status).toBe(404));
+    } finally {
+      // If the open did block, give it a writer so the thread comes back.
+      try { fs.closeSync(fs.openSync(file, fs.constants.O_WRONLY | fs.constants.O_NONBLOCK)); } catch { /* no reader waiting */ }
+      await pending;
+      fs.unlinkSync(file);
+    }
+  });
+
+  it('a file cut short during a download ends the connection instead of leaving the phone waiting (finding 12)', async () => {
+    const file = path.join(root, 'shrinks.bin');
+    const fd = fs.openSync(file, 'w');
+    fs.ftruncateSync(fd, 32 * 1024 * 1024);
+    fs.closeSync(fd);
+    const { url } = await mint(file);
+    const s = await openStream(url);
+    expect(s.res.statusCode).toBe(200);
+    fs.truncateSync(file, 10);
+    let ended: 'complete' | 'cut-off' | null = null;
+    s.res.on('end', () => { ended = 'complete'; });
+    s.res.on('close', () => { if (!s.res.complete) ended = 'cut-off'; });
+    s.res.on('error', () => { ended = 'cut-off'; });
+    s.res.resume();
+    try {
+      await vi.waitFor(() => expect(ended).toBe('cut-off'));
+    } finally {
+      s.req.destroy();
+      fs.unlinkSync(file);
+    }
+  });
+
+  it('a folder on the path swapped for a link to a secret while the mint is authorizing is refused (finding 3, mint)', async () => {
+    const dir = path.join(root, 'swapdir');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'id_rsa'), 'a harmless file that shares a name');
+    const dl = makeDownloads({
+      beforePinForTest: async () => {
+        fs.renameSync(dir, `${dir}-gone`);
+        fs.symlinkSync(path.join(secretDir, '.ssh'), dir);
+      },
+    });
+    try {
+      expect(await dl.mint({ absolutePath: path.join(dir, 'id_rsa') }, phone)).toMatchObject({ ok: false, error: 'not-allowed' });
+    } finally {
+      fs.unlinkSync(dir);
+      fs.rmSync(`${dir}-gone`, { recursive: true, force: true });
+    }
+  });
+
+  it('a folder on the path swapped for a link after mint answers 404, even to the same inode (finding 3, GET)', async () => {
+    // Two targets, because the private-path check alone already refuses the
+    // secret folder: the re-resolved path must equal the minted one even when
+    // the link leads somewhere merely unlisted.
+    const elsewhere = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-dl-elsewhere-')));
+    try {
+      for (const [i, target] of [path.join(secretDir, '.ssh'), elsewhere].entries()) {
+        const dir = path.join(root, `hl-${i}`);
+        fs.mkdirSync(dir, { recursive: true });
+        const file = path.join(dir, 'data.txt');
+        fs.writeFileSync(file, 'data');
+        const { url } = await mint(file);
+        const twin = path.join(target, 'data.txt');
+        fs.linkSync(file, twin);                  // the same inode, in the other folder
+        fs.renameSync(dir, `${dir}-gone`);
+        fs.symlinkSync(target, dir);
+        try {
+          const res = await fetch(url);
+          expect(res.status, target).toBe(404);
+          expect(await res.text()).toBe('');
+        } finally {
+          fs.unlinkSync(dir);
+          fs.unlinkSync(twin);
+          fs.rmSync(`${dir}-gone`, { recursive: true, force: true });
+        }
+      }
+    } finally {
+      await fs.promises.rm(elsewhere, { recursive: true, force: true, maxRetries: 5 });
+    }
+  });
+
+  it('HTTP details: a malformed download path is 404 not the app; an inverted range is ignored; a dated If-Range restarts; filename* encodes quote-like characters (finding 14)', async () => {
+    const odd = await fetch(`${origin}/download/${'A'.repeat(43)}/a/b`);
+    expect(odd.status).toBe(404);
+    expect(await odd.text()).toBe('');
+
+    const { url } = await mint(path.join(root, 'notes.md'));
+    const inverted = await fetch(url, { headers: { Range: 'bytes=5-3' } });
+    expect(inverted.status).toBe(200);
+    expect((await inverted.arrayBuffer()).byteLength).toBe(5000);
+
+    const first = await fetch(url);
+    const lastModified = first.headers.get('last-modified')!;
+    await first.arrayBuffer();
+    const dated = await fetch(url, { headers: { Range: 'bytes=2000-', 'If-Range': lastModified } });
+    expect(dated.status).toBe(200);
+    expect((await dated.arrayBuffer()).byteLength).toBe(5000);
+
+    const quoted = path.join(root, "Destin's (1)*.txt");
+    fs.writeFileSync(quoted, 'q');
+    const minted = await mint(quoted);
+    const res = await fetch(minted.url);
+    expect(res.headers.get('content-disposition')).toContain("filename*=UTF-8''Destin%27s%20%281%29%2A.txt");
+    await res.arrayBuffer();
+  });
+
+  it('over the WS host: a named project the computer never showed is refused; a live session folder is known (findings 4, 9)', async () => {
+    const sessionOnly = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-dl-session-')));
+    fs.writeFileSync(path.join(sessionOnly, 'todo.md'), 'from a live session');
+    try {
+      const sessionManager: any = Object.assign(new EventEmitter(), {
+        listSessions: vi.fn(() => [{ id: 's-live', name: 'live', cwd: sessionOnly, status: 'active' }]),
+        createSession: vi.fn(), destroySession: vi.fn(), sendInput: vi.fn(), resizeSession: vi.fn(),
+      });
+      const hookRelay: any = Object.assign(new EventEmitter(), { respond: vi.fn(() => true) });
+      const config: any = { enabled: false, port: 9900, passwordHash: null, toSafeObject: () => ({}) };
+      const host: any = new RemoteServer(sessionManager, hookRelay, config);
+      const paired = host.devices.pair('Gate phone');
+      const frames: any[] = [];
+      const ws: any = Object.assign(new EventEmitter(), { readyState: 1, send: (raw: string) => frames.push(JSON.parse(raw)), close: vi.fn() });
+      const client = { id: 'sock-gate', ws, deviceId: paired.deviceId, ip: '127.0.0.1', connectedAt: Date.now() };
+      let n = 0;
+      const ask = async (payload: any) => {
+        const id = `g${++n}`;
+        await host.handleMessage(client, JSON.stringify({ type: 'artifacts:download', id, payload }));
+        return frames.find((f) => f.id === id)?.payload;
+      };
+      // A sidecar in a folder the computer never showed does not grant a download.
+      expect(await ask({ absolutePath: path.join(stray, 'notes', 'tracked.md'), projectRoot: stray, artifactId: 'art-1' }))
+        .toMatchObject({ ok: false, error: 'not-allowed' });
+      // The folder a live conversation runs in counts, as it does for every read.
+      expect(await ask({ absolutePath: path.join(sessionOnly, 'todo.md') })).toMatchObject({ ok: true, name: 'todo.md' });
+    } finally {
+      await fs.promises.rm(sessionOnly, { recursive: true, force: true, maxRetries: 5 });
+    }
   });
 });

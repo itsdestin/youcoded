@@ -17,9 +17,20 @@
 // WHY the identity compare and not the flag: between mint and GET the file at
 // that path can be swapped for a symlink to a secret. O_NOFOLLOW refuses that
 // where it exists (not Windows, R3-6); comparing the opened handle's dev/ino
-// against the mint-time stat refuses it everywhere, so the compare is the
+// against the mint-time identity refuses it everywhere, so the compare is the
 // guard and the flag is a courtesy (R2-1). A filesystem that reports inode 0
 // has no stable identity to compare, so a mint there is refused outright.
+//
+// Hardened after the T7 review (2026-09-10): the stream slot is reserved before
+// the first await and released from a close listener attached at once, so a
+// burst cannot beat the cap and a hang-up mid-open cannot leak a slot or a file
+// handle (findings 1, 2); identity is pinned through an OPEN handle at mint and
+// the path re-resolved on both sides, so a folder swapped for a link on the way
+// is caught (3); a stalled transfer is ended after an idle timeout and "busy"
+// answers 503 (5); the link is renewed when a transfer ends (6); If-Match is
+// honoured (7); refusals carry their real cause (8); links per device are
+// capped (10); a pipe cannot block a file thread (11); a file cut short ends
+// the connection (12).
 import fs from 'fs';
 import http from 'http';
 import path from 'path';
@@ -30,13 +41,30 @@ import { authorizeBytesRead } from './artifacts/read-service';
 import { readSidecarShared } from './artifacts/artifact-store';
 import { authorizeArtifactRead } from './artifacts/write-authorization';
 
-/** Sliding: every successful GET renews it, so a download being retried stays alive. */
+type FileHandle = fs.promises.FileHandle;
+
+/** Sliding: renewed by every GET and again when a transfer ends. */
 export const DOWNLOAD_TOKEN_TTL_MS = 5 * 60_000;
 /** Per SOCKET (R3-7): two tabs are two sockets, two budgets. */
 export const MAX_LIVE_STREAMS_PER_SOCKET = 2;
+/**
+ * Links one device may hold at once. WHY a cap: every mint reads the project
+ * index and sidecars and keeps an entry for five minutes, so a loop of mints
+ * would otherwise grow the map without bound (T7 review, finding 10). Sixteen
+ * is far more than a person tapping Download can use; the oldest goes first.
+ */
+export const MAX_TOKENS_PER_DEVICE = 16;
+/**
+ * How long a transfer may make no progress before the host ends it. WHY: a
+ * phone that changes networks mid-download without a clean disconnect leaves
+ * the connection open until TCP gives up (~15 min on Linux), holding a stream
+ * slot the whole time (T7 review, finding 5).
+ */
+const DEFAULT_IDLE_TIMEOUT_MS = 60_000;
 
 const TOKEN_BYTES = 32;
-// base64url of 32 bytes is 43 characters, no padding.
+const ROUTE_PREFIX = '/download/';
+// base64url of 32 bytes is 43 characters, no padding; an optional file name after it.
 const ROUTE = /^\/download\/([A-Za-z0-9_-]{43})(?:\/[^/]*)?$/;
 
 interface DownloadToken {
@@ -56,19 +84,45 @@ export interface MintRequest {
   artifactId?: unknown;
 }
 
+/**
+ * Refusal codes, each naming what the host actually decided. The phone's
+ * notice puts them into words and must never guess (download-file.ts):
+ *   sensitive      the real path is in the private set (keys, credentials, .env)
+ *   outside-roots  not under any folder the computer shows, nor a tracked file
+ *   not-a-file     a folder, a pipe, a device
+ *   not-allowed    no stable identity (inode 0), or the path changed under us
+ *   busy, orphan, no path — as named; anything else is an I/O error's own text
+ */
 export type MintResult =
   | { ok: true; url: string; name: string; sizeBytes: number }
-  | { ok: false; error: 'no path' | 'orphan' | 'not-allowed' | 'busy' | string };
+  | { ok: false; error: string };
 
 export interface RemoteDownloadsOptions {
   /** A device the computer removed keeps nothing: the GET checks the record, not only the mint. */
   isDeviceRevoked: (deviceId: string) => boolean;
+  /** Roots known beyond saved folders and the index: the host's live session folders. */
+  extraRoots?: () => readonly string[];
   /** Injectable clock, for the expiry tests. */
   now?: () => number;
   /** Open with O_NOFOLLOW where it exists (default). Tests force it off to prove the identity compare alone. */
   noFollow?: boolean;
-  /** The mint-time stat, injectable so a test can present an inode of 0. */
-  statForMint?: (realPath: string) => Promise<fs.BigIntStats>;
+  idleTimeoutMs?: number;
+  /** The mint-time stat of the OPENED handle, injectable so a test can present an inode of 0. */
+  statForMint?: (fh: FileHandle) => Promise<fs.BigIntStats>;
+  /** The GET-time open, injectable so a test can hold it open while the phone hangs up. */
+  openForServe?: (realPath: string, flags: number) => Promise<FileHandle>;
+  /** Test seam between authorization and the identity pin, where a folder swap would land. */
+  beforePinForTest?: (realPath: string) => Promise<void>;
+}
+
+/** Lone UTF-16 surrogates (possible in a Windows file name) make encodeURIComponent throw. */
+function wellFormed(s: string): string {
+  return s.replace(/[\uD800-\uDBFF](?![\uDC00-\uDFFF])|(?<![\uD800-\uDBFF])[\uDC00-\uDFFF]/g, '\uFFFD');
+}
+
+/** RFC 5987 value: encodeURIComponent leaves ' ( ) * alone, which that syntax does not allow. */
+function rfc5987(name: string): string {
+  return encodeURIComponent(wellFormed(name)).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`);
 }
 
 /** ASCII-only, quote-safe, control-free: what fits inside `filename="…"`. */
@@ -95,6 +149,9 @@ function parseRange(header: string | undefined, size: number): { start: number; 
     end = size - 1;
   } else {
     start = Number(a);
+    // An inverted range-spec is invalid, and an invalid Range is ignored
+    // (RFC 9110 section 14.2), not refused (T7 review, finding 14).
+    if (b !== '' && Number(b) < start) return null;
     end = b === '' ? size - 1 : Math.min(Number(b), size - 1);
   }
   if (!Number.isFinite(start) || !Number.isFinite(end) || start >= size || start > end) return 'unsatisfiable';
@@ -106,51 +163,100 @@ export class RemoteDownloads {
   private readonly live = new Map<string, number>();
   private readonly now: () => number;
   private readonly noFollow: boolean;
-  private readonly statForMint: (realPath: string) => Promise<fs.BigIntStats>;
+  private readonly idleTimeoutMs: number;
+  private readonly statForMint: (fh: FileHandle) => Promise<fs.BigIntStats>;
+  private readonly openForServe: (realPath: string, flags: number) => Promise<FileHandle>;
+  private readonly beforePinForTest?: (realPath: string) => Promise<void>;
   private readonly isDeviceRevoked: (deviceId: string) => boolean;
+  private readonly extraRoots: () => readonly string[];
 
   constructor(opts: RemoteDownloadsOptions) {
     this.isDeviceRevoked = opts.isDeviceRevoked;
+    this.extraRoots = opts.extraRoots ?? (() => []);
     this.now = opts.now ?? Date.now;
     this.noFollow = opts.noFollow ?? true;
-    this.statForMint = opts.statForMint ?? ((p) => fs.promises.stat(p, { bigint: true }));
+    this.idleTimeoutMs = opts.idleTimeoutMs ?? DEFAULT_IDLE_TIMEOUT_MS;
+    this.statForMint = opts.statForMint ?? ((fh) => fh.stat({ bigint: true }));
+    this.openForServe = opts.openForServe ?? ((p, flags) => fs.promises.open(p, flags));
+    this.beforePinForTest = opts.beforePinForTest;
+  }
+
+  /**
+   * Read-only; no final-component symlink where the platform can refuse one;
+   * never block on a pipe or device. A regular file ignores O_NONBLOCK, and a
+   * FIFO opened without it waits for a writer on a shared libuv thread — four
+   * such opens would stall every file read in the main process (finding 11).
+   * Both optional flags are undefined on Windows.
+   */
+  private openFlags(): number {
+    return fs.constants.O_RDONLY
+      | (fs.constants.O_NONBLOCK ?? 0)
+      | (this.noFollow ? (fs.constants.O_NOFOLLOW ?? 0) : 0);
   }
 
   /**
    * Policy, in order (§10.1): resolve the real path; a sensitive real path is
    * refused first; then allowed when the bytes-read authorization says so
-   * (project roots + tracked externals, the same set read-binary uses), or —
-   * given a projectRoot and an artifactId — when the artifact read
-   * authorization passes for a record the sidecar actually holds. No size gate:
-   * the whole point of Download is the file the phone will not preview.
+   * (project roots, live session folders and tracked externals — the set
+   * read-binary uses), or — given a projectRoot and an artifactId — when the
+   * artifact read authorization passes for a record the sidecar actually holds.
+   * The caller (remote-server.ts) has already refused a projectRoot the
+   * computer does not show. No size gate: Download exists for the file the
+   * phone will not preview.
    */
   async mint(req: MintRequest, who: { deviceId: string; socketId: string }): Promise<MintResult> {
     this.sweepExpired();
     const { absolutePath } = req;
     if (typeof absolutePath !== 'string' || absolutePath.length === 0) return { ok: false, error: 'no path' };
+    if (this.liveStreams(who.socketId) >= MAX_LIVE_STREAMS_PER_SOCKET) return { ok: false, error: 'busy' };
     let realPath: string;
     try {
       realPath = await fs.promises.realpath(absolutePath);
     } catch (e: any) {
       return { ok: false, error: e?.code === 'ENOENT' ? 'orphan' : String(e?.message ?? e) };
     }
-    if (isSensitivePath(canonicalize(realPath, null))) return { ok: false, error: 'not-allowed' };
+    if (isSensitivePath(canonicalize(realPath, null))) return { ok: false, error: 'sensitive' };
 
-    let allowed = (await authorizeBytesRead(realPath)).ok;
+    const bytes = await authorizeBytesRead(realPath, this.extraRoots());
+    let allowed = bytes.ok;
     if (!allowed && typeof req.projectRoot === 'string' && typeof req.artifactId === 'string') {
       allowed = await this.authorizedAsArtifact(req.projectRoot, req.artifactId, realPath);
     }
-    if (!allowed) return { ok: false, error: 'not-allowed' };
+    if (!allowed) {
+      // Only the roots verdict is "outside"; a vanished file or an I/O error keeps its own cause.
+      if (!bytes.ok && bytes.error !== 'not-allowed') return { ok: false, error: bytes.error };
+      return { ok: false, error: 'outside-roots' };
+    }
 
+    // Pin the identity through an OPEN handle, then confirm the path still
+    // leads where it did. WHY not stat(realPath): stat follows symlinks, so a
+    // folder on the way swapped for a link during the (slow) authorization
+    // above would pin the secret's identity under a harmless-looking path, and
+    // the GET's identity compare would then agree with it (finding 3).
+    await this.beforePinForTest?.(realPath);
+    let fh: FileHandle;
+    try {
+      fh = await fs.promises.open(realPath, this.openFlags());
+    } catch (e: any) {
+      if (e?.code === 'ENOENT') return { ok: false, error: 'orphan' };
+      if (e?.code === 'ELOOP') return { ok: false, error: 'not-allowed' };
+      return { ok: false, error: String(e?.message ?? e) };
+    }
     let st: fs.BigIntStats;
     try {
-      st = await this.statForMint(realPath);
-    } catch (e: any) {
-      return { ok: false, error: e?.code === 'ENOENT' ? 'orphan' : String(e?.message ?? e) };
+      st = await this.statForMint(fh);
+      if (!st.isFile()) return { ok: false, error: 'not-a-file' };
+      // Only a file with a real identity can be pinned to its inode.
+      if (st.ino === 0n) return { ok: false, error: 'not-allowed' };
+      const again = await fs.promises.realpath(realPath).catch(() => null);
+      if (again !== realPath) return { ok: false, error: 'not-allowed' };
+    } finally {
+      await fh.close().catch(() => { /* already closed */ });
     }
-    // Only a regular file with a real identity can be pinned to its inode.
-    if (!st.isFile() || st.ino === 0n) return { ok: false, error: 'not-allowed' };
-    if ((this.live.get(who.socketId) ?? 0) >= MAX_LIVE_STREAMS_PER_SOCKET) return { ok: false, error: 'busy' };
+
+    // Capacity: drop this device's oldest links first (Map order is mint order).
+    const mine = [...this.tokens.values()].filter((t) => t.deviceId === who.deviceId);
+    for (const old of mine.slice(0, Math.max(0, mine.length - (MAX_TOKENS_PER_DEVICE - 1)))) this.tokens.delete(old.token);
 
     const token = randomBytes(TOKEN_BYTES).toString('base64url');
     const name = path.basename(realPath);
@@ -158,19 +264,17 @@ export class RemoteDownloads {
       token, deviceId: who.deviceId, socketId: who.socketId, realPath, name,
       dev: st.dev, ino: st.ino, expiresAt: this.now() + DOWNLOAD_TOKEN_TTL_MS,
     });
-    // The name rides the URL so the Android download manager — which sees no
-    // header at the moment it decides where to save — has a filename; the
-    // host never reads it back (the token is the only thing looked up).
-    return { ok: true, url: `/download/${token}/${encodeURIComponent(name)}`, name, sizeBytes: Number(st.size) };
+    // The name rides the URL so the Android download manager — which picks a
+    // file name before it sees a header — has one; the host never reads it
+    // back (the token is the only thing looked up).
+    return { ok: true, url: `${ROUTE_PREFIX}${token}/${encodeURIComponent(wellFormed(name))}`, name, sizeBytes: Number(st.size) };
   }
 
   /**
    * The artifact route: a record the project's sidecar holds, resolved and
    * authorized the way artifacts:get does (symlinks resolved, in-root for
    * internals, protected paths refused), and it must resolve to the SAME real
-   * file the phone named. A discovered file (id = relative path, no record)
-   * gets no pass here — a phone chooses projectRoot freely, and the roots
-   * check above is what keeps that honest.
+   * file the phone named.
    */
   private async authorizedAsArtifact(projectRoot: string, artifactId: string, realPath: string): Promise<boolean> {
     const sidecar = await readSidecarShared(projectRoot).catch(() => null);
@@ -198,18 +302,21 @@ export class RemoteDownloads {
   }
 
   /**
-   * Route `GET /download/<token>[/<name>]`. Returns false for any other path so
-   * the caller falls through to the app; true means the response is owned here.
-   * Matched BEFORE the static handler and the Vite proxy, or the SPA fallback
-   * would answer an expired link with index.html and a 200.
+   * Route anything under `/download/`. Returns false for any other path so the
+   * caller falls through to the app; true means the response is owned here —
+   * including a malformed download path, which gets 404 rather than the app
+   * page (finding 14). Matched BEFORE the static handler and the Vite proxy, or
+   * the SPA fallback would answer an expired link with index.html and a 200.
    */
   handleHttpRequest(req: http.IncomingMessage, res: http.ServerResponse): boolean {
-    const m = ROUTE.exec((req.url ?? '').split('?')[0]);
-    if (!m) return false;
+    const pathname = (req.url ?? '').split('?')[0];
+    if (pathname !== '/download' && !pathname.startsWith(ROUTE_PREFIX)) return false;
+    const m = ROUTE.exec(pathname);
+    if (!m) { this.notFound(res); return true; }
     void this.serve(m[1], req, res).catch(() => {
       // Anything unexpected mid-response: end it without a body. The client's
       // download manager shows a failed transfer and retries the same URL.
-      if (!res.headersSent) res.writeHead(500, { 'Cache-Control': 'no-store' });
+      if (!res.headersSent) res.writeHead(500, { 'Content-Length': '0', 'Cache-Control': 'no-store' });
       res.end();
     });
     return true;
@@ -230,100 +337,145 @@ export class RemoteDownloads {
       this.notFound(res);
       return;
     }
-    // The cap is on STREAMS, keyed by the minting socket: a resume after a
-    // drop counts against the dead socket's budget, never the new one, by
-    // intent (§10). A GET over the cap is refused, not queued — the download
-    // manager retries on its own.
-    if ((this.live.get(entry.socketId) ?? 0) >= MAX_LIVE_STREAMS_PER_SOCKET) {
-      res.writeHead(429, { 'Content-Length': '0', 'Cache-Control': 'no-store', 'Retry-After': '5' });
+    // The cap is on STREAMS, keyed by the minting socket: a resume after a drop
+    // counts against the dead socket's budget, never the new one, by intent
+    // (§10). Over the cap: 503 + Retry-After, which download managers retry
+    // (a 429 is a permanent failure to Android's; finding 5).
+    const socketId = entry.socketId;
+    const inUse = this.live.get(socketId) ?? 0;
+    if (inUse >= MAX_LIVE_STREAMS_PER_SOCKET) {
+      res.writeHead(503, { 'Content-Length': '0', 'Cache-Control': 'no-store', 'Retry-After': '5' });
       res.end();
       return;
     }
 
-    let fh: fs.promises.FileHandle;
+    // Reserve the slot NOW, before the first await, and release it from a
+    // close listener attached NOW. WHY both: a check here and a count after the
+    // awaits let a burst of GETs all pass before any counted (finding 2), and a
+    // listener attached after the awaits never hears a hang-up that happened
+    // during them — the slot and the file handle leaked for good (finding 1).
+    this.live.set(socketId, inUse + 1);
+    let fh: FileHandle | null = null;
+    let stream: fs.ReadStream | null = null;
+    let closed = false;
+    const dropHandle = () => {
+      const h = fh;
+      fh = null;
+      if (h) void h.close().catch(() => { /* already closed */ });
+    };
+    // The idle timer belongs to THIS transfer, not to the keep-alive socket, so
+    // it is set on the socket here and cleared again when the response closes.
+    const socket = req.socket;
+    const onIdle = () => res.destroy();
+    socket.setTimeout(this.idleTimeoutMs);
+    socket.on('timeout', onIdle);
+    res.on('close', () => {
+      closed = true;
+      const n = (this.live.get(socketId) ?? 1) - 1;
+      if (n <= 0) this.live.delete(socketId); else this.live.set(socketId, n);
+      socket.off('timeout', onIdle);
+      socket.setTimeout(0);
+      // Sliding from the END of a transfer too: a long download that drops
+      // after nearly five minutes must still be resumable (finding 6).
+      const current = this.tokens.get(token);
+      if (current) current.expiresAt = this.now() + DOWNLOAD_TOKEN_TTL_MS;
+      if (stream) stream.destroy(); else dropHandle();
+    });
+
     try {
-      const flags = fs.constants.O_RDONLY | (this.noFollow ? (fs.constants.O_NOFOLLOW ?? 0) : 0);
-      fh = await fs.promises.open(entry.realPath, flags);
+      fh = await this.openForServe(entry.realPath, this.openFlags());
     } catch {
       // ELOOP (a symlink where a file was), ENOENT, EACCES: all the same answer.
-      this.notFound(res);
+      if (!closed) this.notFound(res);
       return;
     }
+    if (closed) { dropHandle(); return; }
     let st: fs.BigIntStats;
+    let realNow: string | null;
     try {
       st = await fh.stat({ bigint: true });
+      realNow = await fs.promises.realpath(entry.realPath).catch(() => null);
     } catch {
-      await fh.close().catch(() => {});
+      dropHandle();
+      if (!closed) this.notFound(res);
+      return;
+    }
+    if (closed) { dropHandle(); return; }
+    // The identity compare — the guard on every platform — plus the path still
+    // resolving to itself: O_NOFOLLOW guards only the last component, so a
+    // folder on the way swapped for a link must be caught here (finding 3).
+    if (st.dev !== entry.dev || st.ino !== entry.ino || !st.isFile()
+        || realNow !== entry.realPath || isSensitivePath(canonicalize(realNow, null))) {
+      this.tokens.delete(token);     // a link that can never succeed again
+      dropHandle();
       this.notFound(res);
       return;
     }
-    // The identity compare — the guard on every platform. A different inode at
-    // the same path is a different file, whatever its name says.
-    if (st.dev !== entry.dev || st.ino !== entry.ino || !st.isFile() || isSensitivePath(canonicalize(entry.realPath, null))) {
-      await fh.close().catch(() => {});
-      this.notFound(res);
-      return;
-    }
+    // A successful GET renews the link (§10: sliding expiry).
+    entry.expiresAt = this.now() + DOWNLOAD_TOKEN_TTL_MS;
 
     const size = Number(st.size);
     const mtimeMs = Number(st.mtimeMs);
     const etag = `"${st.dev}-${st.ino}-${size}-${Math.floor(mtimeMs)}"`;
     const lastModified = new Date(mtimeMs).toUTCString();
 
+    // If-Match: Android's download manager resumes with it. A file edited in
+    // place keeps its inode, so without this a resume would stitch the new
+    // version's tail onto the old half (finding 7). Strong comparison only.
+    const ifMatch = typeof req.headers['if-match'] === 'string' ? req.headers['if-match'].trim() : undefined;
+    if (ifMatch !== undefined && ifMatch !== '*' && !ifMatch.split(',').map((t) => t.trim()).includes(etag)) {
+      dropHandle();
+      res.writeHead(412, { 'Content-Length': '0', 'Cache-Control': 'no-store', 'ETag': etag });
+      res.end();
+      return;
+    }
     // If-Range: a resume is only a resume when the file is the one the client
-    // has half of. A validator that no longer matches answers 200 from byte 0.
+    // has half of. Only the ETag counts — Last-Modified has one-second
+    // resolution, so an edit within that second would pass a date — and any
+    // mismatch answers 200 from byte 0 (finding 14).
     const ifRange = typeof req.headers['if-range'] === 'string' ? req.headers['if-range'].trim() : undefined;
-    const rangeAllowed = !ifRange || ifRange === etag || ifRange === lastModified;
+    const rangeAllowed = !ifRange || ifRange === etag;
     const range = rangeAllowed ? parseRange(typeof req.headers.range === 'string' ? req.headers.range : undefined, size) : null;
     if (range === 'unsatisfiable') {
-      await fh.close().catch(() => {});
+      dropHandle();
       res.writeHead(416, { 'Content-Range': `bytes */${size}`, 'Content-Length': '0', 'Cache-Control': 'no-store', 'Accept-Ranges': 'bytes' });
       res.end();
       return;
     }
 
-    // A successful GET renews the link — sliding expiry, so a paused download
-    // that keeps retrying stays alive; five idle minutes and it is dead.
-    entry.expiresAt = this.now() + DOWNLOAD_TOKEN_TTL_MS;
-
     const start = range ? range.start : 0;
     const end = range ? range.end : size - 1;
+    const expected = size === 0 ? 0 : end - start + 1;
     const headers: http.OutgoingHttpHeaders = {
       'Content-Type': 'application/octet-stream',
-      'Content-Disposition': `attachment; filename="${asciiFallback(entry.name)}"; filename*=UTF-8''${encodeURIComponent(entry.name)}`,
+      'Content-Disposition': `attachment; filename="${asciiFallback(entry.name)}"; filename*=UTF-8''${rfc5987(entry.name)}`,
       'X-Content-Type-Options': 'nosniff',
       'Cache-Control': 'no-store',
       'Accept-Ranges': 'bytes',
       'ETag': etag,
       'Last-Modified': lastModified,
-      'Content-Length': String(size === 0 ? 0 : end - start + 1),
+      'Content-Length': String(expected),
     };
     if (range) headers['Content-Range'] = `bytes ${start}-${end}/${size}`;
     res.writeHead(range ? 206 : 200, headers);
 
-    if (req.method === 'HEAD' || size === 0) {
-      await fh.close().catch(() => {});
+    if (req.method === 'HEAD' || expected === 0) {
+      dropHandle();
       res.end();
       return;
     }
 
-    // Counted up on open, down on the response's close — whichever way it
-    // closes — and deleted at zero, so the map never holds a dead socket.
-    const socketId = entry.socketId;
-    this.live.set(socketId, (this.live.get(socketId) ?? 0) + 1);
-    const stream = fh.createReadStream({ start, end, autoClose: true });
-    let released = false;
-    const release = () => {
-      if (released) return;
-      released = true;
-      const n = (this.live.get(socketId) ?? 1) - 1;
-      if (n <= 0) this.live.delete(socketId); else this.live.set(socketId, n);
-      // A client abort mid-file: stop reading, close the handle.
-      stream.destroy();
-    };
-    res.on('close', release);
-    stream.on('error', () => { res.destroy(); });
-    stream.pipe(res);
+    // The stream owns the handle from here (autoClose). A file cut short while
+    // it is read ends the CONNECTION, never a response shorter than its
+    // Content-Length that a client could keep waiting on (finding 12).
+    const s = fh.createReadStream({ start, end, autoClose: true });
+    stream = s;
+    fh = null;
+    let sent = 0;
+    s.on('data', (chunk: string | Buffer) => { sent += chunk.length; });
+    s.on('error', () => { res.destroy(); });
+    s.on('end', () => { if (sent === expected) res.end(); else res.destroy(); });
+    s.pipe(res, { end: false });
   }
 
   private sweepExpired(): void {

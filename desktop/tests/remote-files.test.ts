@@ -287,6 +287,9 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
     expect((res.files as any[]).map((f) => f.path)).toContain('todo.md');
     const text = await overRemote('artifacts:get', { projectRoot: sessionRoot, artifactId: 'todo.md' });
     expect(text.content).toBe('- ship it\n');
+    // …and for bytes too: read-binary judged roots without the session folders,
+    // so an image there showed "outside your project folders" (T7 review, finding 9).
+    expect((await overRemote('artifacts:read-binary', { absolutePath: path.join(sessionRoot, 'todo.md') })).ok).toBe(true);
   });
 
   it('a root recorded through a symlink still reaches its own files, on both transports', async () => {
