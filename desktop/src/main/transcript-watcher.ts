@@ -61,6 +61,18 @@ export function parseTranscriptLine(
     return [];
   }
 
+  // A message typed while Claude is still working. Claude Code records it ONLY as a queued_command
+  // attachment (no ordinary user line follows), and skipping it with every other non-user line left
+  // the typing device's bubble unconfirmed at the bottom of its chat while every other device never
+  // showed the message (Destin, 2026-09-11: "messages not always appearing in the same order on the
+  // desktop and the remote client"). Measured on the 400 newest local transcripts: 84 typed, 1,218
+  // background-task notices, and no ordinary user line repeating a queued message.
+  const queuedText = queuedPromptText(parsed);
+  if (queuedText !== null) {
+    if (!queuedText) return [];
+    return [{ type: 'user-message', sessionId, uuid: parsed.uuid || '', timestamp: Date.now(), data: { text: queuedText } }];
+  }
+
   // Only process user / assistant message lines
   if (parsed.type !== 'user' && parsed.type !== 'assistant') {
     return [];
@@ -148,8 +160,16 @@ export function parseTranscriptLine(
         ? content
         : extractTextFromBlocks(content);
       const text = stripSystemTags(raw);
-      // Skip empty messages (e.g. interrupted tool use placeholders)
-      if (!text) return [];
+      if (!text) {
+        // A slash command: Claude Code wraps it in command tags, which strip to nothing, so its
+        // bubble never confirmed (2026-09-11 order investigation). Read as the command typed and
+        // marked, so the chat starts no turn for it: many commands get no reply, which is the
+        // "stuck thinking" trap described on STRIP_ENTIRELY_RE below.
+        const command = slashCommandText(raw);
+        if (!command) return []; // e.g. interrupted tool use placeholders
+        events.push({ type: 'user-message', sessionId, uuid, timestamp, data: { text: command, slashCommand: true } });
+        return events;
+      }
 
       // Claude Code writes these exact strings as user messages when the user
       // presses ESC mid-turn. Emit a dedicated user-interrupt event (consumed
@@ -311,6 +331,31 @@ export function parseTranscriptLine(
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
+
+/**
+ * The text of a queued message a person typed; '' for a queued line that must stay hidden; null for
+ * any other line. Background-task notices (commandMode 'task-notification') and messages another
+ * Claude Code session sent in (origin.kind 'peer') are not something the person typed. A queued
+ * line with no origin at all is read as typed: all 84 measured on 2026-09-11 carried one, so this
+ * only matters for a Claude Code build this was not measured on. Mirrored in TranscriptWatcher.kt.
+ */
+function queuedPromptText(parsed: any): string | null {
+  const a = parsed?.type === 'attachment' ? parsed.attachment : null;
+  if (!a || a.type !== 'queued_command' || a.commandMode !== 'prompt') return null;
+  if (a.origin !== undefined && a.origin?.kind !== 'human') return '';
+  const raw = typeof a.prompt === 'string' ? a.prompt : extractTextFromBlocks(a.prompt);
+  return stripSystemTags(raw);
+}
+
+/** "/name args" from a slash-command line, or null when the line is not one. Mirrored in
+ *  TranscriptWatcher.kt. */
+function slashCommandText(raw: string): string | null {
+  const name = /<command-name>([\s\S]*?)<\/command-name>/.exec(raw)?.[1]?.replace(ANSI_RE, '').trim();
+  if (!name) return null;
+  const args = /<command-args>([\s\S]*?)<\/command-args>/.exec(raw)?.[1]?.replace(ANSI_RE, '').trim() ?? '';
+  const command = name.startsWith('/') ? name : `/${name}`;
+  return args ? `${command} ${args}` : command;
+}
 
 function extractTextFromBlocks(content: any): string {
   if (typeof content === 'string') return content;

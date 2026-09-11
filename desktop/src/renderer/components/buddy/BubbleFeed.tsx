@@ -105,6 +105,8 @@ export function BubbleFeed({ sessionId }: Props) {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            // A slash command read from its command tags — MUST mirror App.tsx.
+            slashCommand: event.data.slashCommand,
             // Host-injected turn marker + header — MUST mirror App.tsx.
             injected: event.data.injected,
             injectedMeta: event.data.injectedMeta,

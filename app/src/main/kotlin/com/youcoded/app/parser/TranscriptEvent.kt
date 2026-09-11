@@ -23,6 +23,9 @@ sealed class TranscriptEvent {
         override val uuid: String,
         override val timestamp: Long,
         val text: String,
+        /** A slash command read from its command tags; the chat starts no turn for it
+         *  (desktop transcript-watcher.ts, 2026-09-11). */
+        val slashCommand: Boolean = false,
     ) : TranscriptEvent()
 
     /** Assistant produced text output */

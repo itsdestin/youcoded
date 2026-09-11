@@ -1317,6 +1317,9 @@ function AppInner() {
             uuid: event.uuid,
             text: event.data.text,
             timestamp: event.timestamp,
+            // A slash command read from its command tags — MUST mirror BubbleFeed.tsx and
+            // transcript-page-actions.ts. It starts no turn (chat-reducer).
+            slashCommand: event.data.slashCommand,
             // Host-injected turn marker (a delivered specialist report) + its
             // structured header — MUST mirror BubbleFeed.tsx. See TimelineEntry.injected.
             injected: event.data.injected,

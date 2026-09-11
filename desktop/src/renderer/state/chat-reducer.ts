@@ -52,6 +52,25 @@ function isCompactCommandEcho(text: string): boolean {
   return /^\/compact(\s|$)/.test(text.trim());
 }
 
+/**
+ * Whether a transcript user line is the message a pending bubble drew: the exact text, or, for a
+ * message sent with attachments, the same words once the bubble's attachment paths and Claude
+ * Code's `[Image #N]` placeholders are set aside. WHY (2026-09-11 order investigation): the bubble
+ * reads "<path> what is this" while Claude Code records "[Image #1] what is this", so it never
+ * confirmed and stayed pinned at the bottom beside the recorded copy.
+ */
+function sameUserMessage(message: { content: string; attachments?: string[] }, recorded: string): boolean {
+  if (message.content === recorded) return true;
+  const paths = message.attachments;
+  if (!paths?.length) return false;
+  const words = (s: string) => {
+    let out = s;
+    for (const p of paths) out = out.split(p).join(' ');
+    return out.replace(/\[Image #\d+\]/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+  return words(message.content) === words(recorded);
+}
+
 let turnCounter = 0;
 function nextTurnId(): string {
   // WHY: turns are Map keys too; counter-only ids replace hydrated history.
@@ -1318,7 +1337,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         if (
           entry.kind === 'user' &&
           entry.pending === true &&
-          entry.message.content === action.text
+          sameUserMessage(entry.message, action.text)
         ) {
           confirmedIdx = i;
           break;
@@ -1351,10 +1370,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           timeline,
           seenUuids,
           queuedMessages,
-          isThinking: true,
-          currentGroupId: null,
-          currentTurnId: null,
-          attentionState: 'ok',
+          // A confirmed slash command leaves the turn state as the send left it (see below).
+          ...(action.slashCommand ? {} : {
+            isThinking: true,
+            currentGroupId: null,
+            currentTurnId: null,
+            attentionState: 'ok' as const,
+          }),
         });
         return next;
       }
@@ -1440,7 +1462,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // This sits BELOW the confirm arm on purpose: a bubble that already
       // exists optimistically must still be confirmed, or it stays `pending`
       // forever and useSubmitConfirmation fires a stray recovery keystroke.
-      const suppressBubble = isCompactCommandEcho(action.text);
+      // The /clear echo too, when read from its command tags: the clear draws its own marker.
+      const suppressBubble = isCompactCommandEcho(action.text)
+        || (action.slashCommand === true && /^\/clear(\s|$)/.test(action.text.trim()));
 
       // No pending match — a queued message being drained (Task 12's true-
       // position confirm: this is the ONLY place its timeline entry gets
@@ -1465,12 +1489,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         }),
         seenUuids,
         queuedMessages,
-        isThinking: true,
-        currentGroupId: null,
-        currentTurnId: null,
-        // Fresh activity from the transcript → chat view is back in sync,
-        // so any stale attention banner should disappear.
-        attentionState: 'ok',
+        // A slash command starts no turn: many commands get no reply, and a device that did not
+        // send it would stay "thinking" with nothing to end it (2026-09-11 order investigation).
+        ...(action.slashCommand ? {} : {
+          isThinking: true,
+          currentGroupId: null,
+          currentTurnId: null,
+          // Fresh activity from the transcript → chat view is back in sync,
+          // so any stale attention banner should disappear.
+          attentionState: 'ok' as const,
+        }),
       });
       return next;
     }

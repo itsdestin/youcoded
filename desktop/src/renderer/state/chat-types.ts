@@ -698,6 +698,9 @@ export type ChatAction =
       uuid: string;
       text: string;
       timestamp: number;
+      // A slash command read from its command tags (TranscriptEvent.data.slashCommand). It starts
+      // no turn: many commands get no reply, and a watching device would stay "thinking".
+      slashCommand?: boolean;
       // Host-injected user-role turn (TranscriptEvent.data.injected, e.g.
       // 'specialist-report') + its structured header. Carried onto the
       // timeline entry so the renderer draws a compact report card, not a bubble.

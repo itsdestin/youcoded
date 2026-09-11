@@ -1142,3 +1142,53 @@ describe('parseTranscriptLine — a turn is summed across all its requests', () 
     expect(usageOf(events)!.inputTokens).toBe(1_000);
   });
 });
+
+// Destin, 2026-09-11, phone pass: "still having issues with messages not always appearing in the
+// same order on the desktop and the remote client". Two kinds of message Claude Code records
+// outside an ordinary user line were dropped here, so the device that typed them kept an
+// unconfirmed bubble pinned to the bottom while every other device never showed them. Measured
+// on the 400 newest transcripts on this machine: 84 queued typed messages (82 from a person, 2
+// sent in by another Claude Code session), 1,218 queued background-task notices, and no
+// ordinary user line repeating a queued message within three lines.
+describe('messages recorded outside an ordinary user line', () => {
+  const queued = (prompt: string, commandMode: string, origin?: unknown) => JSON.stringify({
+    type: 'attachment', uuid: 'q1', timestamp: '2026-09-11T10:00:00.000Z',
+    attachment: { type: 'queued_command', prompt, commandMode, ...(origin === undefined ? {} : { origin }), timestamp: '2026-09-11T10:00:00.000Z' },
+  });
+  const commandLine = (content: string) => JSON.stringify({
+    type: 'user', uuid: 'c1', promptId: 'p1', timestamp: '2026-09-11T10:00:00.000Z', message: { role: 'user', content },
+  });
+
+  it('a message typed while Claude is working is a user message', () => {
+    expect(parseTranscriptLine(queued('second', 'prompt', { kind: 'human' }), 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', sessionId: 's1', uuid: 'q1', data: { text: 'second' } }),
+    ]);
+  });
+
+  it('a background task notice stays hidden', () => {
+    expect(parseTranscriptLine(queued('<task-notification><task-id>b1</task-id></task-notification>', 'task-notification'), 's1')).toEqual([]);
+  });
+
+  it('a message another Claude Code session sent in is not shown as something the person typed', () => {
+    expect(parseTranscriptLine(queued('Heads-up from the Plan C session', 'prompt', { kind: 'peer', from: 'uds:/run/x.sock' }), 's1')).toEqual([]);
+  });
+
+  it('a slash command is a user message, marked as a command', () => {
+    const line = commandLine('<command-name>/reload-plugins</command-name>\n            <command-message>reload-plugins</command-message>\n            <command-args></command-args>');
+    expect(parseTranscriptLine(line, 's1')).toEqual([
+      expect.objectContaining({ type: 'user-message', uuid: 'c1', data: { text: '/reload-plugins', slashCommand: true } }),
+    ]);
+  });
+
+  it('a slash command keeps its arguments', () => {
+    const line = commandLine('<command-name>/compact</command-name>\n            <command-message>compact</command-message>\n            <command-args>we are going to prepare the plan.</command-args>');
+    expect(parseTranscriptLine(line, 's1')).toEqual([
+      expect.objectContaining({ data: { text: '/compact we are going to prepare the plan.', slashCommand: true } }),
+    ]);
+  });
+
+  it("the dimmed echo of a command's output stays hidden", () => {
+    const esc = String.fromCharCode(27);
+    expect(parseTranscriptLine(commandLine(`<local-command-stdout>${esc}[2mCompacted${esc}[22m</local-command-stdout>`), 's1')).toEqual([]);
+  });
+});

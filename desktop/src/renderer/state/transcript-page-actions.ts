@@ -33,6 +33,8 @@ export function pageEventToAction(event: TranscriptEvent): ChatAction | null {
         uuid: event.uuid,
         text: d.text ?? '',
         timestamp: event.timestamp,
+        // Mirrors App.tsx: a slash command read from its command tags starts no turn.
+        slashCommand: d.slashCommand,
         injected: d.injected,
         injectedMeta: d.injectedMeta,
         parentAgentToolUseId: d.parentAgentToolUseId,

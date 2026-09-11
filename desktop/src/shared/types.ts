@@ -248,6 +248,9 @@ export interface TranscriptEvent {
   timestamp: number;
   data: {
     text?: string;
+    /** user-message only: a slash command read from its command tags. The chat starts no turn for
+     *  it, because many commands get no reply (2026-09-11). */
+    slashCommand?: boolean;
     toolUseId?: string;
     toolName?: string;
     toolInput?: Record<string, unknown>;

@@ -78,3 +78,71 @@ describe('rapid messages: the sending device and a watching device show the same
     expect(order(settled)).toEqual(order(run([recordedUser('from terminal', 'u1', 1), recordedUser('from phone', 'u2', 2)])));
   });
 });
+
+// The same complaint, later the same day ("still having issues with messages not always appearing
+// in the same order"): messages the transcript never confirmed stayed pinned to the bottom of the
+// sending device's chat. See the parser half in tests/transcript-watcher.test.ts.
+describe('messages that used to stay unconfirmed', () => {
+  const recordedCommand = (text: string, uuid: string, t: number): ChatAction =>
+    ({ type: 'TRANSCRIPT_USER_MESSAGE', sessionId: SID, uuid, text, timestamp: t, slashCommand: true } as ChatAction);
+  const noPending = (state: ChatState) => state.get(SID)!.timeline.every((e: any) => e.kind !== 'user' || e.pending === false);
+
+  it('a message sent while Claude is working lands where Claude Code recorded it, on both devices', () => {
+    const transcript: ChatAction[] = [
+      recordedUser('first', 'u1', 1),
+      reply('Working on first', 'a1', 2),
+      recordedUser('second', 'q1', 3),          // the queued record, now read as a user message
+      reply('Also answering second', 'a2', 4),
+      turnDone('t1', 5),
+      recordedUser('third', 'u3', 6),
+      reply('Reply to third', 'a3', 7),
+      turnDone('t3', 8),
+    ];
+    const watcher = run(transcript);
+    const sender = run([sent('first', 0), transcript[0], transcript[1], sent('second', 2.5), ...transcript.slice(2, 5), sent('third', 5.5), ...transcript.slice(5)]);
+    expect(order(sender)).toEqual(order(watcher));
+    expect(noPending(sender)).toBe(true);
+  });
+
+  it('a slash command is confirmed where it was recorded, and does not leave a watching device thinking', () => {
+    const transcript: ChatAction[] = [
+      recordedUser('hello', 'u1', 1),
+      reply('hi', 'a1', 2),
+      turnDone('t1', 3),
+      recordedCommand('/reload-plugins', 'c1', 4),
+    ];
+    const watcher = run(transcript);
+    const sender = run([sent('hello', 0), ...transcript.slice(0, 3), sent('/reload-plugins', 3.5), transcript[3]]);
+    expect(order(sender)).toEqual(order(watcher));
+    expect(order(watcher).at(-1)).toBe('user:/reload-plugins');
+    expect(noPending(sender)).toBe(true);
+    expect(watcher.get(SID)!.isThinking).toBe(false);
+  });
+
+  it('the /compact and /clear echoes add no bubble on a watching device', () => {
+    const watcher = run([recordedCommand('/compact keep going', 'c1', 1), recordedCommand('/clear', 'c2', 2)]);
+    expect(order(watcher)).toEqual([]);
+  });
+
+  it('a message with a picture is confirmed, not drawn twice on the device that sent it', () => {
+    const transcript: ChatAction[] = [
+      recordedUser('[Image #1] what is this', 'u1', 1),
+      reply('It is a cat', 'a1', 2),
+      turnDone('t1', 3),
+      recordedUser('thanks', 'u2', 4),
+    ];
+    const watcher = run(transcript);
+    const withPicture = { type: 'USER_PROMPT', sessionId: SID, content: '/home/d/shot.png what is this', timestamp: 0, attachments: ['/home/d/shot.png'] } as ChatAction;
+    const sender = run([withPicture, ...transcript.slice(0, 3), sent('thanks', 3.5), transcript[3]]);
+    const kinds = (s: ChatState) => s.get(SID)!.timeline.map((e: any) => e.kind);
+    expect(kinds(sender)).toEqual(kinds(watcher));
+    expect(noPending(sender)).toBe(true);
+  });
+
+  it('a picture sent with no text is confirmed too', () => {
+    const picture = { type: 'USER_PROMPT', sessionId: SID, content: '/home/d/a.png /home/d/b.png', timestamp: 0, attachments: ['/home/d/a.png', '/home/d/b.png'] } as ChatAction;
+    const sender = run([picture, recordedUser('[Image #1] [Image #2]', 'u1', 1)]);
+    expect(sender.get(SID)!.timeline.filter((e: any) => e.kind === 'user')).toHaveLength(1);
+    expect(noPending(sender)).toBe(true);
+  });
+});
