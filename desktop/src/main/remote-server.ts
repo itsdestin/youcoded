@@ -1217,7 +1217,7 @@ export class RemoteServer {
    */
   private async restoreClient(
     client: AuthenticatedClient,
-    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean },
+    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean; ptyPasses?: boolean },
   ): Promise<void> {
     const ws = client.ws;
     client.phase = 'readying';
@@ -1252,12 +1252,16 @@ export class RemoteServer {
     client.queueDegraded = false;
     client.snapshotIndex = undefined;
     client.hookPassIndex = undefined;
-    await this.restoreClient(client, { seq, reconnect: true, replayBuffers: false });
+    // The phone has every terminal unit up to now (it was live), so the cursor starts at the
+    // buffers' current ends — but output produced DURING the Refresh is not broadcast to a
+    // restoring client, so the terminal passes must still run to send it (T4 review, 2).
+    client.ptyCursor = new Map([...this.ptyBuffers].map(([sid, buf]) => [sid, { epoch: buf.epoch, pos: buf.base + buf.length }]));
+    await this.restoreClient(client, { seq, reconnect: true, replayBuffers: false, ptyPasses: true });
   }
 
   private async runRestore(
     client: AuthenticatedClient,
-    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean },
+    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean; ptyPasses?: boolean },
   ): Promise<void> {
     const ws = client.ws;
     const queue = (client.queue ??= []);
@@ -1374,7 +1378,7 @@ export class RemoteServer {
       }
       // Entries queued from here on are all above the cut line.
       firstRound = false;
-      if (!opts.replayBuffers) break;
+      if (!opts.replayBuffers && !opts.ptyPasses) break;
       const sent = await this.ptyPass(client);
       if (ws.readyState !== WebSocket.OPEN) return;
       if (!sent && queue.length === 0) break;

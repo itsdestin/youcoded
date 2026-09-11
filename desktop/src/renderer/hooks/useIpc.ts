@@ -54,7 +54,7 @@ declare global {
       };
       on: {
         sessionCreated: (cb: (info: any) => void) => (...args: any[]) => void;
-        sessionDestroyed: (cb: (id: string) => void) => (...args: any[]) => void;
+        sessionDestroyed: (cb: (id: string, exitCode?: number, focusSessionId?: string | null) => void) => (...args: any[]) => void;
         ptyOutput: (cb: (sessionId: string, data: string) => void) => (...args: any[]) => void;
         hookEvent: (cb: (event: any) => void) => (...args: any[]) => void;
         statusData: (cb: (data: any) => void) => (...args: any[]) => void;

@@ -26,7 +26,7 @@ describe('renderer perf marks (read by youcoded-dev/scripts/perf-lab)', () => {
   // judgment call so a future edit can't silently move the mark to the reload.
   it('sessions-listed marks the MOUNT-time session.list, not the connection-mode reload', () => {
     const mark = app.indexOf(`performance.mark('yc:sessions-listed')`);
-    const modeChangeHandler = app.indexOf('onConnectionModeChange(()');
+    const modeChangeHandler = app.indexOf('onConnectionModeChange(');
     expect(mark).toBeGreaterThan(-1);
     expect(modeChangeHandler).toBeGreaterThan(mark);
     // ...and it really is inside a session.list() .then(), not floating loose.

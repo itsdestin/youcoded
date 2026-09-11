@@ -99,6 +99,9 @@ let lastReadyHost: string | null = null;
 // apply kept any session of the phone's own. App only renders the strip.
 type ConversationPhase = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
 let conversationPhase: ConversationPhase | null = null;
+/** Set around a close that is not a drop: leaving a paired computer, or a host that refused
+ *  this device for good. Neither is "reconnecting" (T4 review, 3 and 13). */
+let suppressReconnectingPhase = false;
 /** The hydrate most recently handed to the page, waiting for App's report. */
 let lastHydrate: { seq: number | undefined; degraded: boolean } | null = null;
 let noHydrateTimer: ReturnType<typeof setTimeout> | null = null;
@@ -111,6 +114,14 @@ function setConversationPhase(phase: ConversationPhase): void {
   if (isAndroidLocal()) return;
   conversationPhase = phase;
   dispatchEvent('remote:conversation-status', { phase });
+}
+
+/** This page no longer describes a computer's copy (it left the host): forget the phase so a
+ *  late subscriber is not told a stale one. */
+function forgetConversationPhase(): void {
+  conversationPhase = null;
+  lastHydrate = null;
+  if (noHydrateTimer) { clearTimeout(noHydrateTimer); noHydrateTimer = null; }
 }
 
 function armNoHydrateTimer(): void {
@@ -139,7 +150,11 @@ function requestRehydrate(): Promise<{ ok: boolean }> {
   const seq = ++clientReadySeq;
   setConversationPhase('restoring');
   armNoHydrateTimer();
-  return invoke('remote:rehydrate', { seq }).catch(() => {
+  return invoke('remote:rehydrate', { seq }).then((r: { ok?: boolean } | undefined) => {
+    // A host that answers without refreshing (T4 review, 1): the strip must not stay busy.
+    if (!r?.ok && clientReadySeq === seq) setConversationPhase('incomplete');
+    return { ok: !!r?.ok };
+  }).catch(() => {
     // A host that cannot refresh (an older desktop, the Android runtime): say the copy
     // may still be behind, which is true, rather than stay busy.
     if (clientReadySeq === seq) setConversationPhase('incomplete');
@@ -287,7 +302,7 @@ function setConnectionState(state: RemoteConnectionState) {
   connectionState = state;
   // Batch 2 (§6): leaving `connected` after a first successful connect is a drop —
   // the strip says "reconnecting" and the phone keeps what it shows.
-  if (was === 'connected' && state !== 'connected' && hasConnectedBefore) setConversationPhase('reconnecting');
+  if (was === 'connected' && state !== 'connected' && hasConnectedBefore && !suppressReconnectingPhase) setConversationPhase('reconnecting');
   stateChangeCallback?.(state);
 }
 
@@ -1106,7 +1121,9 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         return;
       }
 
+      if (isTerminalClose(event.code)) suppressReconnectingPhase = true;
       setConnectionState('disconnected');
+      suppressReconnectingPhase = false;
       // Attempt reconnection — local bridge uses its own retry (token comes
       // from the URL each time), remote connections use stored session tokens.
       const isLocalBridge = location.protocol === 'file:' && !targetUrl;
@@ -1167,6 +1184,7 @@ function scheduleReconnect(token: string): void {
     localStorage.removeItem('youcoded-remote-target');
     localStorage.removeItem('youcoded-remote-token');
     // Reconnect to local bridge
+    forgetConversationPhase();
     connect('android-local', false).catch(() => {});
     import('./platform').then(({ setConnectionMode }) => setConnectionMode('local'));
     return;
@@ -1223,8 +1241,11 @@ function disconnect(): void {
   // A new generation, so a frame still buffered from the socket being closed is dropped by
   // handleMessage's stamp instead of landing in the page between here and the next connect.
   connectionGeneration++;
+  suppressReconnectingPhase = true;
   if (ws) { ws.close(); ws = null; }
   setConnectionState('disconnected');
+  suppressReconnectingPhase = false;
+  forgetConversationPhase();
   localStorage.removeItem('youcoded-remote-token');
   // Drop any pre-auth queued messages on every disconnect() path. Covered
   // paths: explicit disconnect() calls, connectToHost (calls disconnect

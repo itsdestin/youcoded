@@ -228,7 +228,10 @@ export type TimelineEntry =
   // (Destin, 1b hands-on: "these reports just shouldn't be rendering at all
   // in chat … should only register as a task completion toolcard").
   // `injectedMeta` is the structured header (who/what/status/steps).
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta }
+  // `uuid` (remote access batch 2): the transcript line this entry was confirmed or
+  // created from. A hydrate uses it to tell an echo the phone has not applied yet from
+  // older history the two copies simply loaded to different depths.
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).

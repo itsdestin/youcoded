@@ -124,3 +124,74 @@ describe('one source for history', () => {
     expect(new Set(messageIds).size).toBe(messageIds.length);
   });
 });
+
+
+// Review of T4 (2026-09-10): the two copies rarely hold the same amount of older history.
+describe('unsent actions when the phone and the computer loaded different history', () => {
+  it('the phone scrolled further back: a message the copy already echoed is still not shown twice', () => {
+    // Counting per text saw one "yes" on each side and kept the pending bubble — a second
+    // "yes" that never clears, because the copy has already seen its echo (T4 review, 4).
+    const phone = run([init('s1'), said('s1', 'u0', 'yes'), said('s1', 'u-mid', 'ok'), typed('s1', 'yes')]);
+    const copy = hostCopy([init('s1'), said('s1', 'u-mid', 'ok'), said('s1', 'u1', 'yes')]);
+    const after = chatReducer(phone, { type: 'HYDRATE_CHAT_STATE', sessions: copy });
+    expect(userTexts(after, 's1')).toEqual(['ok', 'yes']);
+  });
+
+  it('the computer scrolled further back: an unsent message with common words is kept', () => {
+    // An older "continue" only the copy holds is not an echo of what the phone just typed.
+    const phone = run([init('s1'), said('s1', 'u5', 'later'), typed('s1', 'continue'), queued('s1', 'go on')]);
+    const copy = hostCopy([init('s1'), said('s1', 'u0', 'continue'), said('s1', 'u0b', 'go on'), said('s1', 'u5', 'later')]);
+    const after = chatReducer(phone, { type: 'HYDRATE_CHAT_STATE', sessions: copy });
+    expect(userTexts(after, 's1')).toEqual(['continue', 'go on', 'later', 'continue (pending)']);
+    expect(after.get('s1')!.queuedMessages.map((q) => q.content)).toEqual(['go on']);
+  });
+
+  it('a phone with nothing confirmed yet: every echo in the copy counts', () => {
+    const phone = run([init('s1'), typed('s1', 'first')]);
+    const copy = hostCopy([init('s1'), said('s1', 'u1', 'first')]);
+    const after = chatReducer(phone, { type: 'HYDRATE_CHAT_STATE', sessions: copy });
+    expect(userTexts(after, 's1')).toEqual(['first']);
+  });
+});
+
+describe('what a copy delivers', () => {
+  it('a complete copy does not mark a blank conversation delivered, so the phone loads its own page', () => {
+    const copy = hostCopy([init('blank'), init('s1'), said('s1', 'u1', 'hi')]);
+    const after = chatReducer(new Map(), { type: 'HYDRATE_CHAT_STATE', sessions: copy });
+    expect(after.get('s1')!.history.hydrated).toBe(true);
+    expect(after.get('blank')!.history.hydrated).toBeFalsy();
+  });
+
+  it.each([['complete', {}], ['incomplete', { degraded: true as const }]])(
+    'a %s first copy does not adopt the computer\'s own queued messages',
+    (_label, extra) => {
+      const copy = hostCopy([init('s1'), said('s1', 'u1', 'hi'), queued('s1', 'the computer queued this')], extra);
+      const after = chatReducer(new Map(), { type: 'HYDRATE_CHAT_STATE', sessions: copy });
+      expect(after.get('s1')!.queuedMessages).toEqual([]);
+    },
+  );
+
+  it('an older page with tool steps after the hydrate adds no duplicate tool group or turn', () => {
+    const toolUse = (sid: string, uuid: string, id: string): ChatAction => ({ type: 'TRANSCRIPT_TOOL_USE', sessionId: sid, uuid, toolUseId: id, toolName: 'Bash', toolInput: { command: id } });
+    const toolResult = (sid: string, uuid: string, id: string): ChatAction => ({ type: 'TRANSCRIPT_TOOL_RESULT', sessionId: sid, uuid, toolUseId: id, result: 'ok', isError: false } as any);
+    const copy = hostCopy([init('s1'), said('s1', 'n-u', 'new'), toolUse('s1', 'n-t', 'tool-new'), toolResult('s1', 'n-r', 'tool-new'), answered('s1', 'n-a', 'done')]);
+    let phone = chatReducer(run([init('s1')]), { type: 'HYDRATE_CHAT_STATE', sessions: copy });
+    phone = chatReducer(phone, { type: 'HISTORY_PAGE_REQUESTED', sessionId: 's1' });
+    phone = chatReducer(phone, {
+      type: 'HISTORY_PAGE_LOADED', sessionId: 's1', cursor: null, hasMore: false,
+      events: [
+        { type: 'user-message', sessionId: 's1', uuid: 'o-u', timestamp: 0, data: { text: 'old' } },
+        { type: 'tool-use', sessionId: 's1', uuid: 'o-t', timestamp: 0, data: { toolUseId: 'tool-old', toolName: 'Bash', toolInput: { command: 'old' } } },
+        { type: 'tool-result', sessionId: 's1', uuid: 'o-r', timestamp: 0, data: { toolUseId: 'tool-old', toolResult: 'ok' } },
+        { type: 'turn-complete', sessionId: 's1', uuid: 'o-c', timestamp: 0, data: { stopReason: 'end_turn' } },
+      ] as any,
+    });
+    const s = phone.get('s1')!;
+    const groupIds = [...s.assistantTurns.values()].flatMap((t) => t.segments.filter((seg: any) => seg.type === 'tool-group').map((seg: any) => seg.groupId));
+    expect(groupIds.length).toBe(2);
+    expect(new Set(groupIds).size).toBe(2);
+    expect([...s.toolCalls.keys()].sort()).toEqual(['tool-new', 'tool-old']);
+    const turnIds = s.timeline.filter((e) => e.kind === 'assistant-turn').map((e: any) => e.turnId);
+    expect(new Set(turnIds).size).toBe(turnIds.length);
+  });
+});

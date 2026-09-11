@@ -779,26 +779,33 @@ export function keptByHydrate(prev: ChatState, snapshot: SerializedChatState): s
  * bubbles and queued messages. Only the ones the computer's copy has NOT already echoed
  * — an echo the copy holds would otherwise show twice, because the reducer drops a
  * transcript message whose uuid the copy has already seen, so that pending bubble would
- * never clear. Unapplied echoes are counted per text (the copy's user messages with that
- * text minus the phone's), and consumed oldest-first by pending bubbles, then queued
- * rows — the same text matching TRANSCRIPT_USER_MESSAGE uses to confirm a bubble.
+ * never clear.
+ *
+ * WHICH copy entries are unapplied echoes (T4 review, 4): user entries the phone never
+ * saw (by transcript uuid) that come AFTER the last user entry it did see. Counting all
+ * entries with the same text broke whenever the two copies had loaded older history to
+ * different depths — a phone that scrolled further showed an echoed "yes" twice, and a
+ * computer that scrolled further swallowed a freshly typed "continue". Unapplied echoes
+ * are consumed oldest-first by pending bubbles, then queued rows, matching text the way
+ * TRANSCRIPT_USER_MESSAGE confirms a bubble. A copy from a host that predates the uuid
+ * counts every entry, as the phone had nothing better to go on.
+ *
+ * A first copy (no phone copy yet) adopts NO queued rows: the computer's queue is the
+ * computer's own, not an action this phone took (T4 review, 12).
  */
 function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState): SessionChatState {
-  if (!prev) return copy;
-  const confirmedTexts = (s: SessionChatState) => {
-    const counts = new Map<string, number>();
-    for (const e of s.timeline) {
-      if (e.kind === 'user' && !e.pending && !e.injected) counts.set(e.message.content, (counts.get(e.message.content) ?? 0) + 1);
-    }
-    return counts;
-  };
-  const inCopy = confirmedTexts(copy);
-  const onPhone = confirmedTexts(prev);
+  if (!prev) return { ...copy, queuedMessages: [] };
+  const seen = prev.seenUuids;
+  let lastKnown = -1;
+  copy.timeline.forEach((e, i) => {
+    if (e.kind === 'user' && !e.pending && e.uuid && seen.has(e.uuid)) lastKnown = i;
+  });
   const unapplied = new Map<string, number>();
-  for (const [text, n] of inCopy) {
-    const extra = n - (onPhone.get(text) ?? 0);
-    if (extra > 0) unapplied.set(text, extra);
-  }
+  copy.timeline.forEach((e, i) => {
+    if (i <= lastKnown || e.kind !== 'user' || e.pending || e.injected) return;
+    if (e.uuid && seen.has(e.uuid)) return;
+    unapplied.set(e.message.content, (unapplied.get(e.message.content) ?? 0) + 1);
+  });
   const consume = (text: string) => {
     const n = unapplied.get(text) ?? 0;
     if (n <= 0) return false;
@@ -839,7 +846,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // delivered session is marked so the phone never loads a first page on top of it.
         if (!action.sessions.degraded) {
           const out: ChatState = new Map();
-          for (const [id, copy] of copies) out.set(id, hydrated(carryUnsent(state.get(id), copy)));
+          for (const [id, ser] of action.sessions.sessions) {
+            const merged = carryUnsent(state.get(id), copies.get(id)!);
+            // A blank copy is not a delivery (T4 review, 5): a window that gave up loading
+            // that conversation's first page sends it empty, and marking it would stop the
+            // phone from loading its own.
+            out.set(id, isEmptyCopy(ser) ? merged : hydrated(merged));
+          }
           return out;
         }
         const out: ChatState = new Map(state);
@@ -1298,6 +1311,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           kind: 'user',
           message: entry.message,
           pending: false,
+          uuid: action.uuid,
         };
         const timeline = [
           ...session.timeline.slice(0, confirmedIdx),
@@ -1417,7 +1431,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // turn never has an optimistic pending bubble to confirm (nobody typed
         // it), so it can only ever land here.
         timeline: suppressBubble ? session.timeline : [...session.timeline, {
-          kind: 'user', message, pending: false,
+          kind: 'user', message, pending: false, uuid: action.uuid,
           ...(action.injected ? { injected: action.injected } : {}),
           ...(action.injectedMeta ? { injectedMeta: action.injectedMeta } : {}),
         }],

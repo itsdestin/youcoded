@@ -217,6 +217,17 @@ describe('the phone flushes ITS pending batch before applying a hydrate', () => 
   });
 });
 
+describe('the phone reports what its apply kept', () => {
+  it('applyChatHydrate returns the sessions an incomplete copy left as the phone\'s own', () => {
+    const { store } = mount();
+    act(() => { store.dispatch({ type: 'SESSION_INIT', sessionId: 's2' }); });
+    const copy = { ...snapshotFrom([{ type: 'SESSION_INIT', sessionId: 's1' }, delta('u1', 'hi')]), degraded: true as const };
+    let kept: string[] = [];
+    act(() => { kept = applyChatHydrate(store.dispatch, copy, store.getState); });
+    expect(kept).toEqual(['s2']);
+  });
+});
+
 // Build a serialized snapshot by running actions through a real store.
 function snapshotFrom(actions: Parameters<ChatStore['dispatch']>[0][]): SerializedChatState {
   let captured: ChatStore | null = null;

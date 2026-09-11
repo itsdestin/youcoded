@@ -553,7 +553,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.SESSION_CREATED, handler);
       return handler;
     },
-    sessionDestroyed: (cb: (id: string, exitCode: number) => void) => {
+    // The third argument (the desktop's focus, batch 2 §3) only ever comes from the remote
+    // shim; a desktop window never receives it.
+    sessionDestroyed: (cb: (id: string, exitCode: number, focusSessionId?: string | null) => void) => {
       // exitCode piped in so the chat reducer can classify this as a clean
       // exit vs. 'session-died'. Default to 0 when absent (older bridges).
       const handler = (_e: IpcRendererEvent, id: string, exitCode: number = 0) => cb(id, exitCode);

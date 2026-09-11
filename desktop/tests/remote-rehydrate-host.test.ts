@@ -108,4 +108,38 @@ describe('remote:rehydrate on the host', () => {
     expect(ws.ofType('chat:hydrate').map((f) => f.payload.seq)).toEqual([1, 2]);
     expect(client.phase).toBe('live');
   });
+
+  // Review of T4 (2026-09-10): a Refresh skips the full terminal replay, but output that
+  // arrives WHILE it runs is not broadcast to a restoring client — it must still arrive.
+  it('terminal output produced during a Refresh reaches the phone once, with no reset', async () => {
+    let resolveSnap: (v: any) => void = () => {};
+    let calls = 0;
+    const server = await makeServer(() => {
+      calls++;
+      return calls === 1 ? Promise.resolve(snapshotOf(['s1'])) : new Promise((r) => { resolveSnap = r; });
+    });
+    const { ws, client } = await liveClient(server);
+    server.onPtyOutput('s1', 'before ');                   // live, straight through
+    const refreshing = server.handleMessage(client, rehydrate(2));
+    await tick();
+    server.onPtyOutput('s1', 'during');
+    resolveSnap(snapshotOf(['s1']));
+    await refreshing;
+    for (let i = 0; i < 20 && client.phase !== 'live'; i++) await tick();
+    const drawn = ws.frames.filter((f) => f.type === 'pty:output').map((f) => f.payload.data).join('');
+    expect(drawn).toBe('before during');
+    expect(ws.types()).not.toContain('pty:reset');
+  });
+
+  it('a restore that throws still delivers what was queued and goes live', async () => {
+    const server = await makeServer();
+    const { ws, client } = await liveClient(server);
+    server.sessionManager.listSessions = () => { throw new Error('boom'); };
+    const refreshing = server.handleMessage(client, rehydrate(3));
+    server.broadcast({ type: 'tags:changed', payload: { queued: true } });
+    await refreshing;
+    for (let i = 0; i < 20 && client.phase !== 'live'; i++) await tick();
+    expect(client.phase).toBe('live');
+    expect(ws.ofType('tags:changed')).toHaveLength(1);
+  });
 });

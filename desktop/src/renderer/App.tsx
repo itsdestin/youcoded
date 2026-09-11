@@ -16,7 +16,7 @@ import { isTypingTarget } from './utils/is-typing-target';
 import { isPlaceholderModelId } from '../shared/model-ids';
 
 import ErrorBoundary from './components/ErrorBoundary';
-import { AnchorTip, Button, Dialog, Toast, Toggle } from './components/ui';
+import { AnchorTip, Button, Dialog, StatusStrip, Toast, Toggle } from './components/ui';
 import ViewToggleHint from './components/ViewToggleHint';
 import { takeoverDialogCopy } from './components/takeover-dialog-copy';
 import { runLeaseTakeoverGate } from './state/resume-lease-gate';
@@ -277,6 +277,9 @@ function AppInner() {
   const mayAutoSelect = () => !isRemoteMode() || placeDecidedRef.current;
   // Bumped when a hydrate lands, so sessions waiting on it load their first page.
   const [hydrateTick, setHydrateTick] = useState(0);
+  // Batch 2 (§3): before the computer's copy arrives, the no-conversation screen says it is
+  // catching up instead of offering New Session — a tap there created a stray conversation.
+  const remoteCatchingUp = isRemoteMode() && (conversationStatus === 'restoring' || conversationStatus === 'reconnecting');
   const handleRefreshConversation = useCallback(() => {
     void (window.claude as any).remote?.rehydrate?.();
   }, []);
@@ -1728,7 +1731,9 @@ function AppInner() {
       // still exists, else what the desktop is showing, else the first.
       if (isRemoteMode()) {
         const choice = choosePlaceOnHydrate({
-          stored: readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
+          // The conversation on screen first (T4 review, 6): one picked while catching up, or
+          // any place in a browser that blocks storage, must not be undone by the hydrate.
+          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
           existingSessionIds: [...chatStore.getState().keys()],
           focusSessionId: payload?.focus?.sessionId ?? null,
         });
@@ -1741,13 +1746,26 @@ function AppInner() {
     });
     // Remote access batch 2 (2026-09-10): where the phone's copy of the
     // conversation stands — reconnecting, restoring, incomplete, complete. Only
-    // a remote client ever receives it; ChatView renders the strip. Typed
-    // `any` until the technical design lands the channel on every surface.
+    // a remote client ever receives it; ChatView renders the strip (preload
+    // declares it and never fires).
     const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
       setConversationStatus(s?.phase);
       // A restore is starting (connect, reconnect or Refresh): the place is decided again
       // when its hydrate lands, so nothing jumps the phone meanwhile.
       if (s?.phase === 'restoring') placeDecidedRef.current = false;
+      // A restore that ended WITHOUT a hydrate — a refused Refresh, a host restore that
+      // failed, a copy that never came (T4 review, 1): decide the place with what the phone
+      // has, so it is never left with nothing selected and no history loading.
+      if ((s?.phase === 'incomplete' || s?.phase === 'complete') && isRemoteMode() && !placeDecidedRef.current) {
+        placeDecidedRef.current = true;
+        setHydrateTick((t) => t + 1);
+        const choice = choosePlaceOnHydrate({
+          stored: focusedSessionIdRef.current ?? readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
+          existingSessionIds: [...chatStore.getState().keys()],
+          focusSessionId: null,
+        });
+        if (choice) setSessionId((prev) => prev ?? choice);
+      }
     });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
@@ -2155,10 +2173,13 @@ function AppInner() {
   // On Android, switching to remote means the WebSocket now talks to the desktop server —
   // all local session state is stale and must be replaced with the desktop's sessions.
   useEffect(() => {
-    const unsub = onConnectionModeChange(() => {
+    const unsub = onConnectionModeChange((mode) => {
       // Flush all session state
       // Batch 2 (§3): a new host means a new place, decided by its hydrate.
       placeDecidedRef.current = false;
+      // Back on this device's own runtime there is no computer's copy to describe; a strip
+      // left saying "reconnecting" would never clear (T4 review, 3).
+      if (mode === 'local') setConversationStatus(undefined);
       setSessions([]);
       setSessionId(null);
       setViewModes(new Map());
@@ -2179,7 +2200,9 @@ function AppInner() {
           setPermissionModes((pm) => new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
           setSessionModels((sm) => new Map(sm).set(s.id, matchModelAlias(s.model)));
         }
-        if (mayAutoSelect()) setSessionId(list[0].id);
+        // Never over a place already on screen: this reply can land after the hydrate chose
+        // one (T4 review, 7).
+        setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
         // Mark existing sessions as initialized (already running)
         setInitializedSessions(new Set(list.map((s) => s.id)));
       }).catch(() => {});
@@ -3520,12 +3543,16 @@ function AppInner() {
             // still centres in the open middle instead of drifting downward.
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
-            <p className="text-xl text-fg-muted">No Active Session</p>
+            {remoteCatchingUp ? (
+              <StatusStrip tone="busy" detail="Loading the newest messages…">Catching up with your computer…</StatusStrip>
+            ) : (
+              <p className="text-xl text-fg-muted">No Active Session</p>
+            )}
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping. */}
             <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
             {/* Welcome screen: New Session (expandable) + Resume Session */}
-            <div className="flex flex-col items-center gap-2 mt-1 w-64">
+            <div className={`flex flex-col items-center gap-2 mt-1 w-64${remoteCatchingUp ? ' hidden' : ''}`}>
               {welcomeFormOpen ? (
                 /* Expanded new-session form with toggles */
                 <div className="layer-surface w-full p-3 flex flex-col gap-2">

@@ -15,7 +15,7 @@ class FakeWebSocket {
   onerror: (() => void) | null = null;
   constructor(public url: string) { FakeWebSocket.instances.push(this); }
   send(data: string) { if (this.readyState !== FakeWebSocket.OPEN) throw new Error('not open'); this.sent.push(data); }
-  close() { this.readyState = 3; this.onclose?.({ code: 1000, reason: '' }); }
+  close(code = 1000) { this.readyState = 3; this.onclose?.({ code, reason: '' }); }
   open() { this.readyState = FakeWebSocket.OPEN; this.onopen?.(); }
   receive(msg: any) { this.onmessage?.({ data: JSON.stringify(msg) }); }
   sentOf(type: string) { return this.sent.map((s) => JSON.parse(s)).filter((m) => m.type === type); }
@@ -158,5 +158,85 @@ describe('remote:conversation-status', () => {
     off();
     ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
     expect(phases).toEqual(['restoring']);
+  });
+
+  // Review of T4 (2026-09-10).
+  it('a Refresh the host refuses ends "may be out of date", never a busy strip forever', async () => {
+    const ws = await firstConnect();
+    mountApp();
+    ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+    const refreshing = claude().remote.rehydrate();
+    const req = ws.sentOf('remote:rehydrate')[0];
+    ws.receive({ type: 'remote:rehydrate:response', id: req.id, payload: { ok: false } });
+    await expect(refreshing).resolves.toEqual({ ok: false });
+    expect(phases[phases.length - 1]).toBe('incomplete');
+  });
+
+  it('a Refresh while disconnected sends nothing and leaves the strip saying reconnecting', async () => {
+    const ws = await firstConnect();
+    mountApp();
+    ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+    ws.close();
+    const before = [...phases];
+    await expect(claude().remote.rehydrate()).resolves.toEqual({ ok: false });
+    expect(phases).toEqual(before);
+    expect(ws.sentOf('remote:rehydrate')).toEqual([]);
+  });
+
+  it('a host that refuses this device for good is not shown as reconnecting', async () => {
+    const ws = await firstConnect();
+    mountApp();
+    ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+    ws.close(4003);
+    expect(phases).not.toContain('reconnecting');
+  });
+
+  it('leaving a paired computer forgets the phase instead of showing "reconnecting"', async () => {
+    const ws = await firstConnect();
+    mountApp();
+    ws.receive({ type: 'chat:hydrate', payload: { sessions: [['s1', {}]], seq: 1 } });
+    void shim.disconnectFromHost().catch(() => {});
+    // Wait on the signal itself: disconnectFromHost opens the local-bridge socket right
+    // after it disconnects (it first awaits a module import, so one microtask is not enough).
+    for (let i = 0; i < 50 && FakeWebSocket.instances.length < 2; i++) await new Promise((r) => setImmediate(r));
+    expect(FakeWebSocket.instances.length).toBe(2);
+    expect(phases).not.toContain('reconnecting');
+    const late: string[] = [];
+    claude().on.remoteConversationStatus((s: { phase: string }) => late.push(s.phase));
+    expect(late).toEqual([]);                     // no stale phase replayed to a new subscriber
+  });
+
+  it('the desktop\'s focus reaches session:destroyed listeners', async () => {
+    const ws = await firstConnect();
+    const got: any[] = [];
+    claude().on.sessionDestroyed((...args: any[]) => got.push(args));
+    ws.receive({ type: 'session:destroyed', payload: { sessionId: 's1', exitCode: 0, focus: { sessionId: 's2' } } });
+    ws.receive({ type: 'session:destroyed', payload: { sessionId: 's3', exitCode: 1 } });
+    expect(got).toEqual([['s1', 0, 's2'], ['s3', 1, null]]);
+  });
+});
+
+describe('remote:conversation-status on the Android app\'s own bridge', () => {
+  it('pushes nothing — that bridge never hydrates, so there is no copy to describe', async () => {
+    vi.resetModules();
+    FakeWebSocket.instances = [];
+    (globalThis as any).WebSocket = FakeWebSocket;
+    (globalThis as any).window = globalThis;
+    (globalThis as any).location = { protocol: 'file:', host: '', search: '?bridgeToken=t&bridgePort=9901' };
+    (globalThis as any).localStorage = { _s: {} as Record<string, string>, getItem(k: string) { return this._s[k] ?? null; }, setItem(k: string, v: string) { this._s[k] = v; }, removeItem(k: string) { delete this._s[k]; } };
+    const local = await import('../src/renderer/remote-shim');
+    local.installShim();
+    const p = local.connect('android-local', false);
+    const ws = FakeWebSocket.instances[0];
+    ws.open();
+    ws.receive({ type: 'auth:ok', platform: 'android' });
+    await p;
+    const seen: string[] = [];
+    (window as any).claude.on.remoteConversationStatus((s: { phase: string }) => seen.push(s.phase));
+    (window as any).claude.on.chatHydrate(() => {});
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    vi.advanceTimersByTime(20_000);
+    expect(seen).toEqual([]);
+    vi.useRealTimers();
   });
 });
