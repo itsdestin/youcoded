@@ -703,8 +703,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
       <div className="flex-1 overflow-y-auto">
         {/* A pill click that couldn't resolve — shown INSTEAD of letting the
             generic empty state contradict the file the user just clicked. */}
+        {/* break-words on both notes: a long unbroken file name otherwise forces
+            the drawer to scroll sideways on a phone (review 2026-09-11). */}
         {pillError && (
-          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well">
+          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words">
             {pillError}
           </div>
         )}
@@ -713,7 +715,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
             fetching the file the person just tapped. Only while no file is
             showing: a file already open stays open until the new one lands. */}
         {!pillError && pillPending && !active && (
-          <div aria-live="polite" className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well">
+          <div aria-live="polite" className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words">
             {`Opening ${pillPending}…`}
           </div>
         )}

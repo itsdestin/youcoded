@@ -44,6 +44,7 @@ beforeAll(() => {
   outside = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'yc-resolve-outside-')));
 
   fs.writeFileSync(path.join(root, 'notes.md'), '# tracked\n');
+  fs.writeFileSync(path.join(root, 'twice.md'), 'recorded twice: once deleted, once live\n');
   fs.writeFileSync(path.join(root, 'plain.txt'), 'untracked, discovery lists it\n');
   // A nested git repo: discovery stops here, so its files are never listed —
   // the exact case (wecoded-themes/CLAUDE.md inside youcoded-dev) that fell
@@ -65,6 +66,12 @@ beforeAll(() => {
       record({ id: 'rec-notes', path: 'notes.md' }),
       record({ id: 'rec-gone', path: 'gone.md' }),
       record({ id: 'rec-ext', kind: 'external', path: 'tracked-ext.xlsx', absolutePath: path.join(outside, 'tracked-ext.xlsx') }),
+      // The deleted record comes FIRST, so "the live one wins" is not an accident of order.
+      record({ id: 'rec-twice-deleted', path: 'twice.md', status: 'deleted' }),
+      record({ id: 'rec-twice-live', path: 'twice.md' }),
+      // A legacy record holding a RELATIVE absolutePath (pre-2026-08-12). It
+      // would resolve against the process cwd, so it must never match anything.
+      record({ id: 'rec-relative-ext', kind: 'external', path: 'loose.md', absolutePath: 'loose.md' }),
     ],
     manualExcludes: [], manualIncludes: [],
   }));
@@ -112,6 +119,15 @@ describe('a tracked file resolves to its record', () => {
   it('an external record, by its absolute path outside the folder', async () => {
     expect(await resolveArtifactPath(root, path.join(outside, 'tracked-ext.xlsx'))).toMatchObject({ ok: true, artifact: { id: 'rec-ext' } });
   });
+
+  it('two records for one path: the live one wins over the deleted one', async () => {
+    expect(await resolveArtifactPath(root, path.join(root, 'twice.md'))).toMatchObject({ ok: true, artifact: { id: 'rec-twice-live' } });
+  });
+
+  it('a legacy record with a relative absolutePath never matches', async () => {
+    const res = await resolveArtifactPath(root, path.join(root, 'loose.md'));
+    expect(res).toEqual({ ok: false, error: 'not-found' });
+  });
 });
 
 describe('an untracked file inside the folder resolves to a discovered record', () => {
@@ -140,6 +156,10 @@ describe('an untracked file inside the folder resolves to a discovered record', 
 describe('every refusal names what is actually true', () => {
   it('a missing file inside the folder → not-found', async () => {
     expect(await resolveArtifactPath(root, path.join(root, 'nope.md'))).toEqual({ ok: false, error: 'not-found' });
+  });
+
+  it('a path THROUGH a file (notes.md/x) → not-found', async () => {
+    expect(await resolveArtifactPath(root, path.join(root, 'notes.md', 'x'))).toEqual({ ok: false, error: 'not-found' });
   });
 
   it('a folder → not-a-file', async () => {
@@ -173,19 +193,33 @@ describe('no existence oracle', () => {
     expect(touched.filter((p) => p.startsWith(outside))).toEqual([]);
   });
 
-  it('the spy does see the target when the lookup legitimately checks it (so the check above is not vacuous)', async () => {
+  // Review 2026-09-11, finding 1: canonicalize() treats `\` as a separator and
+  // collapses `..` again, but on Linux/macOS the filesystem treats `\` as an
+  // ordinary character. A path that canonicalizes to "inside the folder" must
+  // not send realpath somewhere else — that told "exists but locked" (EACCES)
+  // apart from "missing" (ENOENT) for folders a phone may not open.
+  it.skipIf(process.platform === 'win32')('a backslash path that only LOOKS inside the folder is outside, and never looked at', async () => {
+    const decoy = `/nonexistent-yc-resolve-${process.pid}`;
+    const clicked = `${decoy}/x\\..\\..${root}/y.md`;
+    let res: unknown;
+    const touched = await fsPathsTouchedBy(async () => { res = await resolveArtifactPath(root, clicked); });
+    expect(res).toEqual({ ok: false, error: 'outside-project' });
+    expect(touched.filter((p) => p.startsWith(decoy))).toEqual([]);
+  });
+
+  it('the spy does see the target when the lookup legitimately checks it (so the checks above are not vacuous)', async () => {
     const target = path.join(root, 'nope.md');
     const touched = await fsPathsTouchedBy(() => resolveArtifactPath(root, target));
     expect(touched).toContain(target);
   });
 
-  it('trackedOnly: a tracked file still resolves; anything else is not-allowed without looking at it', async () => {
+  it('trackedOnly: a tracked file still resolves; anything else is not-tracked without looking at it', async () => {
     expect(await resolveArtifactPath(root, path.join(root, 'notes.md'), { trackedOnly: true }))
       .toMatchObject({ ok: true, artifact: { id: 'rec-notes' } });
     for (const target of [path.join(root, 'plain.txt'), path.join(root, 'nope.md'), path.join(root, '.ssh', 'id_rsa'), path.join(outside, 'secret.txt')]) {
       let res: unknown;
       const touched = await fsPathsTouchedBy(async () => { res = await resolveArtifactPath(root, target, { trackedOnly: true }); });
-      expect(res, target).toEqual({ ok: false, error: 'not-allowed' });
+      expect(res, target).toEqual({ ok: false, error: 'not-tracked' });
       expect(touched, target).not.toContain(target);
     }
   });

@@ -127,13 +127,16 @@ export async function listAllFiles(projectId: string, opts?: { force?: boolean }
   return { ok: true, files: r.files, truncated: r.truncated };
 }
 
-export type ResolvePathError =
+type ResolvePathError =
   | 'bad-request'      // the call itself was malformed
   | 'not-found'        // inside the folder, nothing exists at that path
   | 'not-a-file'       // inside the folder, but a folder (or other non-file)
   | 'protected-path'   // a credential location refused for reads (editable-path-policy.ts)
   | 'outside-project'  // not inside the folder and not a tracked file
-  | 'not-allowed';     // trackedOnly: not a file this folder's records name
+  | 'not-tracked';     // trackedOnly: not a file this folder's records name. Its own
+                       // code, not the remote gate's not-allowed (which means NOTHING
+                       // in the folder is shared), so the phone can say truthfully
+                       // that recorded files do open (review 2026-09-11, finding 4).
 
 export type ResolvePathResult =
   | { ok: true; artifact: ArtifactRecord }
@@ -195,10 +198,18 @@ export async function resolveArtifactPath(
     const hit = matches.find((a) => a.status !== 'deleted') ?? matches[0];
     if (hit) return { ok: true, artifact: hit };
   }
-  if (opts?.trackedOnly) return { ok: false, error: 'not-allowed' };
+  if (opts?.trackedOnly) return { ok: false, error: 'not-tracked' };
 
-  const root = canonicalize(path.resolve(projectRoot), null);
-  const inside = target === root || target.startsWith(root.endsWith('/') ? root : `${root}/`);
+  // Inside the folder? Decided with path.relative on the SAME string every disk
+  // call below uses. WHY not canonicalize() (review 2026-09-11, finding 1): it
+  // treats `\` as a separator and collapses `..` a second time, while Linux and
+  // macOS treat `\` as an ordinary character — "/x\..\../<folder>/y" read as
+  // inside the folder while realpath ran OUTSIDE it, and EACCES vs ENOENT there
+  // answered "does that folder exist?" about folders a phone may not open.
+  // (path.relative is also case-insensitive on Windows, so a folder typed in a
+  // different case is not wrongly called outside there.)
+  const rel = path.relative(path.resolve(projectRoot), absolute);
+  const inside = rel === '' || (rel !== '..' && !rel.startsWith(`..${path.sep}`) && !path.isAbsolute(rel));
   if (!inside) return { ok: false, error: 'outside-project' };
 
   let auth: Awaited<ReturnType<typeof authorizeArtifactRead>>;

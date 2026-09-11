@@ -40,13 +40,32 @@ export function findBestMatch(
   // form and demand an exact match: a same-named file elsewhere is simply not
   // the file that was tapped. Relative clicks keep the suffix pass, because
   // "desktop/src/x.ts" really is ambiguous about where it starts.
-  if (cwd && isAbsoluteClick(norm)) {
+  if (cwd) {
     const root = cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
-    return list.find((a) => {
+    const absOf = (a: ArtifactRecord): string => {
       const p = artifactPath(a);
-      if (!p) return false;
-      const abs = a.kind === 'internal' ? `${root}/${p}` : p;
-      return abs === norm;
+      if (!p) return '';
+      return a.kind === 'internal' ? `${root}/${p}` : p;
+    };
+    if (isAbsoluteClick(norm)) return list.find((a) => absOf(a) === norm);
+    // Relative and `~/` clicks (review 2026-09-11, finding 2): the old suffix
+    // pass let "wecoded-themes/CLAUDE.md" and "~/youcoded-dev/wecoded-themes/
+    // CLAUDE.md" select the ROOT CLAUDE.md, because the clicked text ended with
+    // that record's short path. Compare against each record's FULL path
+    // instead, in one direction only — the record's full path must end with
+    // what was clicked — so "desktop/src/x.ts" still finds
+    // youcoded/desktop/src/x.ts, but a same-named file in another folder never
+    // matches. A relative click tries folder + path exactly first; a `~` click
+    // has no folder to anchor to (the renderer can't expand it).
+    const tail = norm.replace(/^~\//, '').replace(/^\.\//, '');
+    if (!tail || tail === '~') return undefined;
+    if (!norm.startsWith('~')) {
+      const exact = list.find((a) => absOf(a) === `${root}/${tail}`);
+      if (exact) return exact;
+    }
+    return list.find((a) => {
+      const abs = absOf(a);
+      return abs !== '' && abs.endsWith(`/${tail}`);
     });
   }
   return (

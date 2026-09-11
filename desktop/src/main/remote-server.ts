@@ -3624,7 +3624,8 @@ export class RemoteServer {
     // the computer never showed; and a folder known only because a chat runs
     // there (a phone can start one anywhere, "No folder" lands in home) answers
     // only files that chat recorded — the rule artifacts:get applies — with the
-    // same not-allowed whether or not any other path exists (trackedOnly).
+    // same not-tracked whether or not any other path exists (trackedOnly).
+    // An unknown folder answers the gate's not-allowed: nothing in it is shared.
     'artifacts:resolve-path': async (p) => {
       if (typeof p.path !== 'string' || p.path.length === 0) return { ok: false, error: 'bad-request' };
       const refused = await this.refuseUnknownRoot(p.projectRoot, { records: true });

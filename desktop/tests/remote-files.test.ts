@@ -400,12 +400,14 @@ describe('artifacts:resolve-path over remote', () => {
     expect(resolveSpy()).not.toHaveBeenCalled();
   });
 
-  it("a chat-only folder: that chat's recorded file resolves; an untracked or missing path is not-allowed alike", async () => {
+  it("a chat-only folder: that chat's recorded file resolves; an untracked or missing path is not-tracked alike", async () => {
     expect(await overRemote('artifacts:resolve-path', { projectRoot: sessionRoot, path: path.join(sessionRoot, 'todo.md') }))
       .toMatchObject({ ok: true, artifact: { id: 'rec-todo' } });
     // Same answer whether or not the file exists — no existence oracle in a folder that was never shared.
+    // Its own code (not not-allowed, which means the folder is not shared at
+    // all), so the phone can say truthfully that recorded files DO open here.
     for (const p of [path.join(sessionRoot, 'untracked.txt'), path.join(sessionRoot, 'nope.md')]) {
-      expect(await overRemote('artifacts:resolve-path', { projectRoot: sessionRoot, path: p }), p).toEqual({ ok: false, error: 'not-allowed' });
+      expect(await overRemote('artifacts:resolve-path', { projectRoot: sessionRoot, path: p }), p).toEqual({ ok: false, error: 'not-tracked' });
     }
   });
 

@@ -90,6 +90,26 @@ describe('findBestMatch with the session folder (exact absolute matching)', () =
     const list = [art({ id: 'a', path: 'youcoded/desktop/src/x.ts' })];
     expect(findBestMatch(list, 'desktop/src/x.ts', cwd)?.id).toBe('a');
   });
+
+  // Review 2026-09-11, finding 2: the same wrong-file bug through a relative
+  // or `~/` click — "wecoded-themes/CLAUDE.md" ended with the root record's
+  // "CLAUDE.md" and step 1 selected it before the host was ever asked.
+  it('a relative click never lands on a same-named file in another folder', () => {
+    const list = [art({ id: 'root-claude', path: 'CLAUDE.md' })];
+    expect(findBestMatch(list, 'wecoded-themes/CLAUDE.md', cwd)).toBeUndefined();
+  });
+
+  it('a relative click prefers the file at exactly folder + path', () => {
+    const list = [art({ id: 'deep', path: 'x/CLAUDE.md' }), art({ id: 'top', path: 'CLAUDE.md' })];
+    expect(findBestMatch(list, 'CLAUDE.md', cwd)?.id).toBe('top');
+  });
+
+  it('a ~ click matches only a record whose FULL path ends with it', () => {
+    const tapped = '~/youcoded-dev/wecoded-themes/CLAUDE.md';
+    expect(findBestMatch([art({ id: 'root-claude', path: 'CLAUDE.md' })], tapped, cwd)).toBeUndefined();
+    const both = [art({ id: 'root-claude', path: 'CLAUDE.md' }), art({ id: 'themes', path: 'wecoded-themes/CLAUDE.md' })];
+    expect(findBestMatch(both, tapped, cwd)?.id).toBe('themes');
+  });
 });
 
 describe('buildArtifactifyArgs', () => {

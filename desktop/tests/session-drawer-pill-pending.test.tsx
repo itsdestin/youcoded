@@ -130,6 +130,23 @@ describe('SessionDrawer while a tapped file is being looked up', () => {
     expect(screen.queryByText(/^Opening /)).toBeNull();
   });
 
+  it('a file already open stays open with no note over it while the next tap is looked up', async () => {
+    setViewport(false);
+    const tracked = {
+      id: 'a1', path: 'notes.md', kind: 'internal', absolutePath: null, lastModified: '', status: 'active',
+      versions: [{ id: 'v1', kind: 'create', at: '', sessionId: SESSION }], comments: [], tags: [],
+    };
+    Object.assign((window as any).claude.artifacts, {
+      get: vi.fn().mockResolvedValue({ ok: true, content: '# notes', orphan: false, binary: false, truncated: false, sizeBytes: 7, mtimeMs: 1 }),
+      onChanged: () => () => {},
+    });
+    listSession.mockResolvedValue({ ok: true, artifacts: [tracked] });
+    mocks.state = { ...baseState('CLAUDE.md'), sessionArtifacts: { [SESSION]: [tracked] }, activeArtifactBySession: { [SESSION]: 'a1' } };
+    renderDrawer();
+    await waitFor(() => expect(listSession).toHaveBeenCalled());
+    expect(screen.queryByText('Opening CLAUDE.md…')).toBeNull();
+  });
+
   it('shows the note on a phone-width screen as well', async () => {
     setViewport(true);
     mocks.state = baseState('report.xlsx');

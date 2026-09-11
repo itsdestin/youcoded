@@ -345,7 +345,11 @@ describe('openFilepath — one host lookup replaces listing the project', () => 
       ['local', 'not-found', /no file exists at that path/],
       ['local', 'not-a-file', /isn’t a file/],
       ['local', 'protected-path', /protected location/],
-      ['remote', 'not-allowed', /isn’t saved as a project on the computer/],
+      // Two different gates, two different truths (review 2026-09-11, finding 4):
+      // a folder the computer does not share at all, vs a chat-only folder that
+      // shares only its recorded files.
+      ['remote', 'not-allowed', /isn’t available to remote devices/],
+      ['remote', 'not-tracked', /already worked with/],
       ['remote', 'outside-project', /outside this chat’s project folder/],
       // A code this client does not know is shown as the host said it — never replaced with a guess.
       ['remote', 'EACCES: permission denied', /EACCES: permission denied/],
@@ -508,5 +512,73 @@ describe('openFilepath — deferred mode with the host lookup', () => {
     const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
     await openFilepath(ctx, 's1', '/proj/gone.md', { drawerOpensImmediately: false });
     expect(dispatched).toEqual([]);
+  });
+});
+
+// Review 2026-09-11, findings 3, 5 and 6.
+describe('openFilepath — a tap and an auto-open in the same chat', () => {
+  function gatedResolve() {
+    const release: Record<string, (v: any) => void> = {};
+    const resolvePath = (_cwd: string, p: string) => new Promise((r) => { release[p] = r; });
+    return { release, resolvePath };
+  }
+
+  it('an auto-open that arrives while a tap is still looking up yields: the tap lands, the auto-open does nothing', async () => {
+    const gate = gatedResolve();
+    const stubs = installClaudeArtifacts({ resolvePath: gate.resolvePath });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+
+    const tap = openFilepath(ctx, 's1', '/proj/tapped.md');
+    const auto = openFilepath(ctx, 's1', '/proj/deliverable.md', { drawerOpensImmediately: false });
+    await auto;
+    expect(stubs.resolvePath).toHaveBeenCalledTimes(1); // the auto-open never even asked
+    gate.release['/proj/tapped.md']({ ok: true, artifact: discoveredRecord('tapped.md') });
+    await tap;
+
+    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['tapped.md']);
+  });
+
+  it('a tap during an auto-open wins; the auto-open answering late changes nothing', async () => {
+    const gate = gatedResolve();
+    installClaudeArtifacts({ resolvePath: gate.resolvePath });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+
+    const auto = openFilepath(ctx, 's1', '/proj/deliverable.md', { drawerOpensImmediately: false });
+    const tap = openFilepath(ctx, 's1', '/proj/tapped.md');
+    gate.release['/proj/tapped.md']({ ok: true, artifact: discoveredRecord('tapped.md') });
+    await tap;
+    const afterTap = dispatched.length;
+    gate.release['/proj/deliverable.md']({ ok: true, artifact: { ...discoveredRecord('deliverable.md'), discovered: undefined } });
+    await auto;
+
+    expect(dispatched.length).toBe(afterTap);
+    expect(dispatched.filter((a) => a.type === 'ACTIVE_ARTIFACT_SET').map((a) => (a as any).artifactId)).toEqual(['tapped.md']);
+  });
+});
+
+describe('openFilepath — a failed lookup is not a missing file', () => {
+  it('a timeout shows what happened, and does NOT fall back to downloading the project list', async () => {
+    setConnectionMode('remote');
+    const stubs = installClaudeArtifacts({
+      resolvePath: async () => { throw new Error('Request artifacts:resolve-path timed out'); },
+    });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+    await openFilepath(ctx, 's1', '/proj/a.md');
+    const last = dispatched[dispatched.length - 1] as any;
+    expect(last.type).toBe('PILL_RESOLVE_FAILED');
+    expect(last.message).toContain('timed out');
+    expect(last.message).not.toMatch(/wasn’t found/);
+    expect(stubs.listProject).not.toHaveBeenCalled();
+    expect(stubs.listAllFiles).not.toHaveBeenCalled();
+  });
+
+  it('on the desktop, a ~ path outside the folder says it is outside — not "not found"', async () => {
+    const stubs = installClaudeArtifacts({ resolvePath: async () => ({ ok: false, error: 'outside-project' }) });
+    const { ctx, dispatched } = makeCtx(makeState({ sessionCwd: { s1: '/proj' } }));
+    await openFilepath(ctx, 's1', '~/Downloads/report.md');
+    const last = dispatched[dispatched.length - 1] as any;
+    expect(last.type).toBe('PILL_RESOLVE_FAILED');
+    expect(last.message).toMatch(/outside this chat’s project folder/);
+    expect(stubs.appendVersion).not.toHaveBeenCalled();
   });
 });
