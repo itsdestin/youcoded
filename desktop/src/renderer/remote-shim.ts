@@ -93,6 +93,60 @@ let readySentThisGeneration = false;
 let readyReconnect = false;
 let lastReadyHost: string | null = null;
 
+// Remote access batch 2 (design §6, contract R13–R15): where this page's copy of the
+// conversation stands. The shim alone knows it — the connection state, which hydrate it
+// asked for last, whether that hydrate was degraded, and (from App's report) whether the
+// apply kept any session of the phone's own. App only renders the strip.
+type ConversationPhase = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
+let conversationPhase: ConversationPhase | null = null;
+/** The hydrate most recently handed to the page, waiting for App's report. */
+let lastHydrate: { seq: number | undefined; degraded: boolean } | null = null;
+let noHydrateTimer: ReturnType<typeof setTimeout> | null = null;
+/** A restore that never answers must not leave the strip busy forever. */
+const NO_HYDRATE_MS = 10_000;
+
+function setConversationPhase(phase: ConversationPhase): void {
+  // The Android app on its own local bridge never hydrates from a computer: a phase there
+  // would end as "may be out of date" with a Refresh that has nothing to refresh.
+  if (isAndroidLocal()) return;
+  conversationPhase = phase;
+  dispatchEvent('remote:conversation-status', { phase });
+}
+
+function armNoHydrateTimer(): void {
+  if (noHydrateTimer) clearTimeout(noHydrateTimer);
+  const seqAtArm = clientReadySeq;
+  noHydrateTimer = setTimeout(() => {
+    noHydrateTimer = null;
+    if (conversationPhase === 'restoring' && clientReadySeq === seqAtArm) setConversationPhase('incomplete');
+  }, NO_HYDRATE_MS);
+}
+
+/** App's report after it applied a hydrate: which sessions the apply kept. */
+function reportHydrate(report: { seq?: number; kept?: string[] } | undefined): void {
+  if (!lastHydrate || report?.seq !== lastHydrate.seq) return;
+  if (report?.seq !== undefined && report.seq !== clientReadySeq) return;   // an older ask
+  if (noHydrateTimer) { clearTimeout(noHydrateTimer); noHydrateTimer = null; }
+  const kept = Array.isArray(report?.kept) ? report!.kept : [];
+  setConversationPhase(lastHydrate.degraded || kept.length > 0 ? 'incomplete' : 'complete');
+}
+
+/** Refresh (§6): ask the host for a fresh copy under the next seq. */
+function requestRehydrate(): Promise<{ ok: boolean }> {
+  // Not while the socket is down: the reconnect's own restore brings a fresh copy, and a
+  // queued Refresh would run a second one right behind it.
+  if (connectionState !== 'connected') return Promise.resolve({ ok: false });
+  const seq = ++clientReadySeq;
+  setConversationPhase('restoring');
+  armNoHydrateTimer();
+  return invoke('remote:rehydrate', { seq }).catch(() => {
+    // A host that cannot refresh (an older desktop, the Android runtime): say the copy
+    // may still be behind, which is true, rather than stay busy.
+    if (clientReadySeq === seq) setConversationPhase('incomplete');
+    return { ok: false };
+  });
+}
+
 // Remote access batch 2 (design §7): how much of each session's terminal this page has
 // drawn, as the host's own stream positions. Every pty:output from a batch-2 host carries
 // the buffer's `epoch` and the chunk's `offset`; the end of the last chunk is what a
@@ -167,6 +221,7 @@ function maybeSendClientReady(): void {
   if (!listeners.get('chat:hydrate')?.size) return;   // App has not mounted its handler yet
   readySentThisGeneration = true;
   fire('client:ready', { seq: ++clientReadySeq, reconnect: readyReconnect, ptyOffsets: collectPtyOffsets() });
+  armNoHydrateTimer();
 }
 /** Whether to preserve __PLATFORM__ on next auth:ok (prevents desktop overwriting 'android') */
 let preservePlatform = false;
@@ -225,7 +280,11 @@ const REQUEST_TIMEOUT_MS = 30_000;
 let pendingSendQueue: { data: string; at: number }[] = [];
 
 function setConnectionState(state: RemoteConnectionState) {
+  const was = connectionState;
   connectionState = state;
+  // Batch 2 (§6): leaving `connected` after a first successful connect is a drop —
+  // the strip says "reconnecting" and the phone keeps what it shows.
+  if (was === 'connected' && state !== 'connected' && hasConnectedBefore) setConversationPhase('reconnecting');
   stateChangeCallback?.(state);
 }
 
@@ -729,6 +788,9 @@ function handleMessage(data: string, generation: number): void {
         'session:destroyed',
         payload.sessionId || payload,
         typeof payload?.exitCode === 'number' ? payload.exitCode : 0,
+        // Batch 2 (§3): what the desktop is showing, so a phone whose conversation went
+        // away can open it. Null from a host that does not send it.
+        typeof payload?.focus?.sessionId === 'string' ? payload.focus.sessionId : null,
       );
       break;
     case 'session:renamed':
@@ -796,6 +858,8 @@ function handleMessage(data: string, generation: number): void {
         console.warn('[remote-shim] ignoring stale chat:hydrate seq', payload.seq, 'latest', clientReadySeq);
         return;
       }
+      // Remembered BEFORE the page applies it: App's handler reports synchronously.
+      lastHydrate = { seq: payload?.seq, degraded: payload?.degraded === true };
       // Full chat state snapshot sent by the host when a remote client connects.
       // Dispatched into the chat reducer via window.claude.on.chatHydrate in App.tsx.
       dispatchEvent('chat:hydrate', payload);
@@ -966,6 +1030,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // On a reconnect App's listener is still registered, so it goes out right here;
           // on a first connect App mounts after this, and addListener sends it.
           readySentThisGeneration = false;
+          // Batch 2 (§6): until the hydrate this connection asks for is applied.
+          setConversationPhase('restoring');
           readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
           // Terminal positions are the OLD host's stream positions — meaningless to a
           // different host, which would only answer them with a reset anyway.
@@ -1446,6 +1512,13 @@ export function installShim(): void {
         const handler = addListener(channel, cb);
         return () => removeListener(channel, handler);
       },
+      // Batch 2 (§6): where this page's copy stands. A late subscriber (App mounts after
+      // auth:ok) is told the current phase at once — it missed the push.
+      remoteConversationStatus: (cb: Callback) => {
+        const handler = addListener('remote:conversation-status', cb);
+        if (conversationPhase) cb({ phase: conversationPhase });
+        return () => removeListener('remote:conversation-status', handler);
+      },
       // Batch 2 (§7): the asks still open after a reconnect's hook replay.
       hookReplayComplete: (cb: Callback) => {
         const handler = addListener('hook:replay-complete', cb);
@@ -1742,6 +1815,10 @@ export function installShim(): void {
         unpair: (deviceId: string) => invoke('remote:devices:unpair', { deviceId }),
       },
       broadcastAction: (action: any) => fire('ui:action', action),
+      // Batch 2 (§6): Refresh on the may-be-behind strip, and App's report of what its
+      // hydrate kept (the shim derives incomplete/complete from it).
+      rehydrate: () => requestRehydrate(),
+      reportHydrate: (report: { seq?: number; kept?: string[] }) => reportHydrate(report),
     },
     model: {
       getPreference: () => invoke('model:get-preference'),

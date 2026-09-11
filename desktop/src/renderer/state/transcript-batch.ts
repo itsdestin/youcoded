@@ -22,7 +22,8 @@
 // Pinned by tests/remote-snapshot-cut-line.test.tsx, which drives THIS batcher
 // and the real exporter under jsdom — a test that fakes either cannot see the
 // ordering it exists to guarantee.
-import type { ChatAction, SerializedChatState } from './chat-types';
+import type { ChatAction, ChatState, SerializedChatState } from './chat-types';
+import { keptByHydrate } from './chat-reducer';
 
 type Dispatch = (action: ChatAction) => void;
 
@@ -116,11 +117,16 @@ export function flushTranscriptActions(): void {
  * serializing), so applying them after the replace would apply them twice —
  * and a stale turn-complete would end the turn the snapshot shows in flight.
  */
-export function applyChatHydrate(dispatch: Dispatch, snapshot: SerializedChatState): void {
+export function applyChatHydrate(dispatch: Dispatch, snapshot: SerializedChatState, getState?: () => ChatState): string[] {
   // Presumes the host's per-client queue (remote-server.ts restoreClient): nothing
   // ABOVE the cut line reaches the phone before its hydrate, so flushing first can
   // only apply what the snapshot already holds — never drop something newer.
 
   flushTranscriptActions();
+  // Which sessions this apply leaves as the phone's own copy, read from the state the
+  // reducer is about to apply to — after the flush — with the reducer's own rule
+  // (batch 2 §6: the shim shows "may be out of date" while any session is kept).
+  const kept = getState ? keptByHydrate(getState(), snapshot) : [];
   dispatch({ type: 'HYDRATE_CHAT_STATE', sessions: snapshot });
+  return kept;
 }

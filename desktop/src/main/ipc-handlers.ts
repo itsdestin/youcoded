@@ -1850,6 +1850,10 @@ export function registerIpcHandlers(
       return remoteServer?.getStatus() ?? { state: 'stopped', port: 0 };
     });
 
+    // Remote access batch 2 (§6): Refresh belongs to a remote client's copy of the
+    // conversation. A desktop window IS the copy; say so rather than pretend to refresh.
+    ipcMain.handle(IPC.REMOTE_REHYDRATE, async () => ({ ok: false, code: 'not-remote' }));
+
     ipcMain.handle(IPC.REMOTE_DEVICES_LIST, async () => {
       return remoteServer?.getDeviceList() ?? [];
     });

@@ -365,7 +365,7 @@ export interface SessionChatState {
    * screen; `loading` is the one-in-flight-page guard that makes paging
    * idempotent (a second request for the same page can never start).
    */
-  history: { cursor: PageCursor | null; hasMore: boolean; loading: boolean };
+  history: { cursor: PageCursor | null; hasMore: boolean; loading: boolean; hydrated?: boolean };
   seenUuids: Set<string>;
   /**
    * Task 12: messages the native host FIFO'd behind an in-flight turn

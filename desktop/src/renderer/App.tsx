@@ -27,6 +27,10 @@ import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore } from './state/chat-context';
 import type { ChatAction } from './state/chat-types';
 import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
+import {
+  remotePlaceHost, remotePlaceStorages, readRemotePlace, writeRemotePlace,
+  choosePlaceOnHydrate, chooseAfterDestroyed, shouldLoadFirstPage,
+} from './state/remote-place';
 import { artifactReducer, initialArtifactState } from './state/artifact-tracker';
 import { ArtifactProvider } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
@@ -220,6 +224,12 @@ function AppInner() {
   useEffect(() => {
     (window.claude as any).session?.noteSelected?.(sessionId);
   }, [sessionId]);
+  // Remote access batch 2 (§3): remember this tab's place once it has been decided, so a
+  // reconnect or a reload opens where the phone was.
+  useEffect(() => {
+    if (!sessionId || !isRemoteMode() || !placeDecidedRef.current) return;
+    writeRemotePlace(remotePlaceStorages(), remotePlaceHost(), sessionId);
+  }, [sessionId]);
   // Multi-window detach state (desktop-only; remote-shim stubs these as no-ops).
   // `myWindowId` identifies this renderer's BrowserWindow so the switcher can
   // distinguish local sessions from sessions owned by peer windows. `directory`
@@ -259,6 +269,14 @@ function AppInner() {
   // Remote access batch 2: the phone's copy of the conversation (see the
   // remoteConversationStatus subscription below). Undefined on the desktop.
   const [conversationStatus, setConversationStatus] = useState<ConversationStatus | undefined>(undefined);
+  // Remote access batch 2 (§3): on a remote client nothing picks a conversation until the
+  // computer's copy has arrived — the hydrate handler (or a destroyed conversation's
+  // focus) decides the place. Every automatic selection asks mayAutoSelect() first; the
+  // desktop is unaffected. Reset whenever a restore starts (the strip's "restoring").
+  const placeDecidedRef = useRef(false);
+  const mayAutoSelect = () => !isRemoteMode() || placeDecidedRef.current;
+  // Bumped when a hydrate lands, so sessions waiting on it load their first page.
+  const [hydrateTick, setHydrateTick] = useState(0);
   const handleRefreshConversation = useCallback(() => {
     void (window.claude as any).remote?.rehydrate?.();
   }, []);
@@ -1091,8 +1109,10 @@ function AppInner() {
         // Deduplicate — replay buffers resend session:created for existing sessions
         if (prev.some((s) => s.id === info.id)) return prev;
         dispatch({ type: 'SESSION_INIT', sessionId: info.id });
-        // Only auto-focus genuinely new sessions (not replayed ones)
-        setSessionId(info.id);
+        // Only auto-focus genuinely new sessions (not replayed ones) — and on a remote
+        // client not before its place is decided: the restore sends every session as
+        // session:created ahead of the hydrate.
+        if (mayAutoSelect()) setSessionId(info.id);
         return [...prev, info];
       });
       // Native harness sessions (roadmap Phase 1+) are chat-first — they have
@@ -1146,7 +1166,7 @@ function AppInner() {
       }
     });
 
-    const destroyedHandler = window.claude.on.sessionDestroyed((id: string, exitCode: number = 0) => {
+    const destroyedHandler = window.claude.on.sessionDestroyed((id: string, exitCode: number = 0, focusSessionId?: string | null) => {
       // Plan 2b Moved Gate: this session was TAKEN OVER, not closed. Keep its pill
       // (so clicking it hits the gate), skip the "session died" banner
       // (SESSION_PROCESS_EXITED), and DON'T wipe chat state (SESSION_REMOVE) — the
@@ -1171,6 +1191,12 @@ function AppInner() {
         const remaining = prev.filter((s) => s.id !== id);
         // Auto-switch to another session when closing the active one
         setSessionId((curr) => {
+          if (isRemoteMode()) {
+            // Batch 2 (§3): open what the desktop is showing, or the first remaining when
+            // that IS the one that went away. A decided place, like the hydrate's.
+            if (curr === id) placeDecidedRef.current = true;
+            return chooseAfterDestroyed({ destroyedId: id, currentId: curr, remainingIds: remaining.map((s) => s.id), focusSessionId });
+          }
           if (curr !== id) return curr;
           return remaining.length > 0 ? remaining[remaining.length - 1].id : null;
         });
@@ -1698,7 +1724,21 @@ function AppInner() {
     // applyChatHydrate flushes this client's pending transcript batch FIRST —
     // the phone's half of the cut line (state/transcript-batch.ts).
     const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
-      applyChatHydrate(dispatch, payload);
+      const kept = applyChatHydrate(dispatch, payload, chatStore.getState);
+      // Batch 2 (§3): the place is decided here — the stored place if that conversation
+      // still exists, else what the desktop is showing, else the first.
+      if (isRemoteMode()) {
+        const choice = choosePlaceOnHydrate({
+          stored: readRemotePlace(remotePlaceStorages(), remotePlaceHost()),
+          existingSessionIds: [...chatStore.getState().keys()],
+          focusSessionId: payload?.focus?.sessionId ?? null,
+        });
+        placeDecidedRef.current = true;
+        setHydrateTick((t) => t + 1);
+        if (choice) setSessionId(choice);
+      }
+      // §6: the shim shows "may be out of date" while any session was kept.
+      (window.claude as any).remote?.reportHydrate?.({ seq: payload?.seq, kept });
     });
     // Remote access batch 2 (2026-09-10): where the phone's copy of the
     // conversation stands — reconnecting, restoring, incomplete, complete. Only
@@ -1706,6 +1746,9 @@ function AppInner() {
     // `any` until the technical design lands the channel on every surface.
     const conversationStatusOff = (window.claude as any).on.remoteConversationStatus?.((s: { phase: ConversationStatus }) => {
       setConversationStatus(s?.phase);
+      // A restore is starting (connect, reconnect or Refresh): the place is decided again
+      // when its hydrate lands, so nothing jumps the phone meanwhile.
+      if (s?.phase === 'restoring') placeDecidedRef.current = false;
     });
 
     // Artifact tracker: when Claude writes/edits a file inside the active project
@@ -1865,6 +1908,10 @@ function AppInner() {
 
   const loadFirstPage = useCallback(async (sid: string, locator?: { claudeSessionId: string; projectSlug: string }) => {
     if (firstPageAsked.current.has(sid)) return;
+    // Batch 2 (§4): the computer's copy is the only source on a remote client — wait for
+    // it, and never load a page on top of a session it delivered. Not recorded as asked,
+    // so the sessions effect retries when the hydrate lands (hydrateTick).
+    if (!shouldLoadFirstPage({ remote: isRemoteMode(), placeDecided: placeDecidedRef.current, hydrated: !!chatStore.getState().get(sid)?.history.hydrated })) return;
     firstPageAsked.current.add(sid);
     dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: sid });
     for (let attempt = 0; ; attempt++) {
@@ -1897,7 +1944,7 @@ function AppInner() {
       }
       await new Promise((r) => setTimeout(r, FIRST_PAGE_RETRY_MS));
     }
-  }, [dispatch]);
+  }, [dispatch, chatStore]);
 
   // Every session this window knows about gets its most recent page — not just
   // the paths that happen to create one. History used to arrive as a side effect
@@ -1913,7 +1960,7 @@ function AppInner() {
     const live = new Set(sessions.map((s) => s.id));
     for (const id of firstPageAsked.current) if (!live.has(id)) firstPageAsked.current.delete(id);
     for (const s of sessions) void loadFirstPage(s.id);
-  }, [sessions, loadFirstPage]);
+  }, [sessions, loadFirstPage, hydrateTick]);
 
   useEffect(() => {
     window.claude.session.list().then((list: any[]) => {
@@ -1948,7 +1995,7 @@ function AppInner() {
         if (newSessions.length === 0) return prev;
         return [...prev, ...newSessions];
       });
-      setSessionId((prev) => prev ?? list[0].id);
+      setSessionId((prev) => prev ?? (mayAutoSelect() ? list[0].id : null));
       // Mark all existing sessions as initialized — they're already running,
       // so skip the "Initializing" overlay (which waits for first hook event)
       setInitializedSessions((prev) => {
@@ -2111,6 +2158,8 @@ function AppInner() {
   useEffect(() => {
     const unsub = onConnectionModeChange(() => {
       // Flush all session state
+      // Batch 2 (§3): a new host means a new place, decided by its hydrate.
+      placeDecidedRef.current = false;
       setSessions([]);
       setSessionId(null);
       setViewModes(new Map());
@@ -2131,7 +2180,7 @@ function AppInner() {
           setPermissionModes((pm) => new Map(pm).set(s.id, matchPermissionMode(s.permissionMode)));
           setSessionModels((sm) => new Map(sm).set(s.id, matchModelAlias(s.model)));
         }
-        setSessionId(list[0].id);
+        if (mayAutoSelect()) setSessionId(list[0].id);
         // Mark existing sessions as initialized (already running)
         setInitializedSessions(new Set(list.map((s) => s.id)));
       }).catch(() => {});

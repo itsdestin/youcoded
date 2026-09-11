@@ -106,6 +106,8 @@ const IPC = {
   REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
   REMOTE_INSTALL_TAILSCALE: 'remote:install-tailscale',
   REMOTE_AUTH_TAILSCALE: 'remote:auth-tailscale',
+  // Remote access batch 2 (§6): Refresh on a phone. The desktop answers not-remote.
+  REMOTE_REHYDRATE: 'remote:rehydrate',
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
   UI_ACTION_RECEIVED: 'ui:action:received',
   TRANSCRIPT_EVENT: 'transcript:event',
@@ -587,6 +589,9 @@ contextBridge.exposeInMainWorld('claude', {
     hookReplayComplete: (_cb: (payload: { sessionId: string; pendingRequestIds: string[] }) => void) => {
       return () => {};
     },
+    // Remote access batch 2 (§6): where a phone's copy of the conversation stands. Only
+    // the remote shim ever pushes it — declared, never fires here.
+    remoteConversationStatus: (_cb: unknown) => () => {},
     hookEvent: (cb: (event: any) => void) => {
       const handler = (_e: IpcRendererEvent, event: any) => cb(event);
       ipcRenderer.on(IPC.HOOK_EVENT, handler);
@@ -921,6 +926,10 @@ contextBridge.exposeInMainWorld('claude', {
     installTailscale: () => ipcRenderer.invoke(IPC.REMOTE_INSTALL_TAILSCALE),
     authTailscale: () => ipcRenderer.invoke(IPC.REMOTE_AUTH_TAILSCALE),
     broadcastAction: (action: any) => ipcRenderer.send(IPC.UI_ACTION_BROADCAST, action),
+    // Batch 2 (§6): shape parity with the remote shim. The strip that calls these only
+    // shows on a remote client; the desktop has no remote copy to refresh or report.
+    rehydrate: () => ipcRenderer.invoke(IPC.REMOTE_REHYDRATE),
+    reportHydrate: (_report: { seq?: number; kept: string[] }) => {},
   },
   model: {
     getPreference: (): Promise<string> => ipcRenderer.invoke(IPC.MODEL_GET_PREFERENCE),

@@ -9,6 +9,7 @@ import {
   deserializeChatState,
   HISTORY_EXPAND_PROMPT_ID,
   abnormalStopReason,
+  SerializedChatState,
 } from './chat-types';
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
@@ -750,6 +751,61 @@ function patchNestedAsk(
   return null;
 }
 
+/** A hydrated copy counts as empty when it carries no conversation at all — the blank
+ *  slot a window seeds for every session it has heard of. */
+function isEmptyCopy(ser: SerializedChatState['sessions'][number][1]): boolean {
+  return (ser.timeline?.length ?? 0) === 0 && (ser.assistantTurns?.length ?? 0) === 0;
+}
+
+/**
+ * Which of the phone's sessions a hydrate leaves as the phone's own copy (remote access
+ * batch 2, design §6). The shim turns a non-empty answer into "may be out of date",
+ * because a kept session's turn state is only as current as the phone's last event.
+ * The ONE definition, used by HYDRATE_CHAT_STATE and by App's report to the shim.
+ */
+export function keptByHydrate(prev: ChatState, snapshot: SerializedChatState): string[] {
+  if (snapshot.sessions.length === 0) return [...prev.keys()];
+  if (!snapshot.degraded) return [];
+  const replaced = new Set(snapshot.sessions.filter(([, ser]) => !isEmptyCopy(ser)).map(([id]) => id));
+  return [...prev.keys()].filter((id) => !replaced.has(id));
+}
+
+/**
+ * The phone's own unsent actions survive a hydrate (design §6, R2-13): pending user
+ * bubbles and queued messages. Only the ones the computer's copy has NOT already echoed
+ * — an echo the copy holds would otherwise show twice, because the reducer drops a
+ * transcript message whose uuid the copy has already seen, so that pending bubble would
+ * never clear. Unapplied echoes are counted per text (the copy's user messages with that
+ * text minus the phone's), and consumed oldest-first by pending bubbles, then queued
+ * rows — the same text matching TRANSCRIPT_USER_MESSAGE uses to confirm a bubble.
+ */
+function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState): SessionChatState {
+  if (!prev) return copy;
+  const confirmedTexts = (s: SessionChatState) => {
+    const counts = new Map<string, number>();
+    for (const e of s.timeline) {
+      if (e.kind === 'user' && !e.pending && !e.injected) counts.set(e.message.content, (counts.get(e.message.content) ?? 0) + 1);
+    }
+    return counts;
+  };
+  const inCopy = confirmedTexts(copy);
+  const onPhone = confirmedTexts(prev);
+  const unapplied = new Map<string, number>();
+  for (const [text, n] of inCopy) {
+    const extra = n - (onPhone.get(text) ?? 0);
+    if (extra > 0) unapplied.set(text, extra);
+  }
+  const consume = (text: string) => {
+    const n = unapplied.get(text) ?? 0;
+    if (n <= 0) return false;
+    unapplied.set(text, n - 1);
+    return true;
+  };
+  const carried = prev.timeline.filter((e) => e.kind === 'user' && e.pending && !consume(e.message.content));
+  const queuedMessages = prev.queuedMessages.filter((q) => !consume(q.content));
+  return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
+}
+
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   const next = new Map(state);
 
@@ -769,11 +825,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         return state;
       }
       try {
-        // Replace the entire ChatState with a deserialized snapshot from the
-        // desktop renderer. Fired once per remote-access connect so browser
-        // clients see the full chat history immediately instead of rebuilding
-        // it from replayed transcript events.
-        return deserializeChatState(action.sessions);
+        const copies = deserializeChatState(action.sessions);
+        const hydrated = (s: SessionChatState): SessionChatState => ({ ...s, history: { ...s.history, hydrated: true } });
+        // Remote access batch 2 (design §6, R1-1): a COMPLETE copy replaces the whole
+        // state — the computer's copy is the only source (§4). An INCOMPLETE one replaces
+        // only the sessions it holds with a non-empty copy, keeps the phone's copy of
+        // every other and deletes nothing: a window that did not answer must not empty
+        // the phone (contract R3). Both keep the phone's own unsent actions, and every
+        // delivered session is marked so the phone never loads a first page on top of it.
+        if (!action.sessions.degraded) {
+          const out: ChatState = new Map();
+          for (const [id, copy] of copies) out.set(id, hydrated(carryUnsent(state.get(id), copy)));
+          return out;
+        }
+        const out: ChatState = new Map(state);
+        for (const [id, ser] of action.sessions.sessions) {
+          const copy = copies.get(id)!;
+          if (!isEmptyCopy(ser)) out.set(id, hydrated(carryUnsent(state.get(id), copy)));
+          else if (!out.has(id)) out.set(id, copy);   // a blank slot, not a delivered copy
+        }
+        return out;
       } catch (err) {
         console.error('[chat-reducer] HYDRATE_CHAT_STATE deserialize failed:', err);
         return state;

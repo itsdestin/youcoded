@@ -148,6 +148,8 @@ interface AuthenticatedClient {
   hookPassIndex?: number;
   /** Runs the restore for a client that never sends client:ready. */
   fallbackTimer?: ReturnType<typeof setTimeout> | null;
+  /** A Refresh asked for while a restore was already running; it runs right after. */
+  pendingRehydrate?: { seq?: number };
   /** What the phone said it had drawn per session, from client:ready (§7). */
   ptyOffsets?: Record<string, { epoch: string; units: number }>;
   /** Stream position sent so far per session during THIS restore — the replay cursor.
@@ -1227,7 +1229,26 @@ export class RemoteServer {
       await this.flushRestoreQueue(client, { sessions: [] }, [], true).catch(() => { /* the socket is gone */ });
     } finally {
       client.phase = 'live';
+      // A Refresh that arrived while this restore ran: its seq is the one the phone is
+      // waiting for, so it runs now instead of being dropped (§6).
+      const next = client.pendingRehydrate;
+      if (next && client.ws.readyState === WebSocket.OPEN) {
+        client.pendingRehydrate = undefined;
+        void this.rehydrateClient(client, next.seq).catch((err) => console.error('[remote-server] rehydrate failed:', err));
+      }
     }
+  }
+
+  /** Refresh (design §6): back to restoring with a fresh queue and cut line, the
+   *  snapshot, chat:hydrate { seq }, the flush — §1's sequence minus the terminal and
+   *  permission replays, which a connected phone already has in step. */
+  private async rehydrateClient(client: AuthenticatedClient, seq: number | undefined): Promise<void> {
+    client.phase = 'restoring';
+    client.queue = [];
+    client.queueDegraded = false;
+    client.snapshotIndex = undefined;
+    client.hookPassIndex = undefined;
+    await this.restoreClient(client, { seq, reconnect: true, replayBuffers: false });
   }
 
   private async runRestore(
@@ -1444,6 +1465,18 @@ export class RemoteServer {
         client.ptyOffsets = payload?.ptyOffsets && typeof payload.ptyOffsets === 'object' ? payload.ptyOffsets : {};
         client.ptyCursor = new Map();
         await this.restoreClient(client, { seq, reconnect: payload?.reconnect === true, replayBuffers: true });
+        break;
+      }
+      case 'remote:rehydrate': {
+        // Answered at once — the phone follows the result through chat:hydrate and its
+        // strip, not through this reply. Mid-restore, the Refresh runs right after.
+        const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
+        this.respond(client.ws, type, id, { ok: true });
+        if (client.phase && client.phase !== 'live') {
+          client.pendingRehydrate = { seq };
+          break;
+        }
+        await this.rehydrateClient(client, seq);
         break;
       }
       case 'session:selected':
