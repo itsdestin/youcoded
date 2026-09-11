@@ -31,8 +31,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import org.json.JSONObject
 import java.io.File
 import java.util.concurrent.ConcurrentHashMap
-import androidx.security.crypto.EncryptedSharedPreferences
-import androidx.security.crypto.MasterKeys
 import com.youcoded.app.marketplace.ApiResult
 import com.youcoded.app.marketplace.MarketplaceApiClient
 import com.youcoded.app.marketplace.MarketplaceAuthStore
@@ -100,21 +98,10 @@ class SessionService : Service() {
      * passwords are encrypted at rest. Falls back to regular SharedPreferences
      * if the Android Keystore is unavailable (e.g. corrupted key on some devices).
      */
-    private fun getEncryptedPrefs(): android.content.SharedPreferences {
-        return try {
-            val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
-            EncryptedSharedPreferences.create(
-                "remote_devices_encrypted",
-                masterKeyAlias,
-                applicationContext,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
-        } catch (e: Exception) {
-            android.util.Log.w("SessionService", "EncryptedSharedPreferences unavailable, using fallback: ${e.message}")
-            applicationContext.getSharedPreferences("remote_devices", android.content.Context.MODE_PRIVATE)
-        }
-    }
+    // One definition of the paired-device store, shared with WebViewHost, which
+    // now downloads only from a paired computer (remote access batch 3, T8 review).
+    private fun getEncryptedPrefs(): android.content.SharedPreferences =
+        PairedDeviceStore.prefs(applicationContext)
     private val serviceScope = CoroutineScope(Dispatchers.IO + SupervisorJob())
 
     /** Layout insets reported by React UI (header and bottom bar pixel heights). */

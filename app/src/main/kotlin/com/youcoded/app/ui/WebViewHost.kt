@@ -72,21 +72,31 @@ fun WebViewHost(
                 // and until now every non-local URL went to ACTION_VIEW, so the file
                 // opened in Chrome as a page instead of saving to Downloads. The
                 // decision is WebViewUrlPolicy (pure, unit-tested in
-                // WebViewUrlRouterTest); these are only the framework calls it drives.
+                // WebViewUrlRouterTest); a link is a download only from a computer
+                // in the paired list (PairedDeviceStore). These are only the
+                // framework calls it drives.
                 val urlRouter = WebViewUrlRouter(object : WebViewUrlRouter.Actions {
                     override fun download(url: String, fileName: String) {
                         try {
                             val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
                                 .setTitle(fileName)
                                 .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                            // The computer always answers application/octet-stream (so a
+                            // browser saves rather than displays it). Recorded as that,
+                            // the finished download would have no app to open it with,
+                            // so the type comes from the name (T8 review, finding 3).
+                            val extension = fileName.substringAfterLast('.', "").lowercase()
+                            android.webkit.MimeTypeMap.getSingleton().getMimeTypeFromExtension(extension)
+                                ?.let { request.setMimeType(it) }
                             if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
                                 // Android 10+: the shared Downloads folder needs no permission.
                                 request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
                             } else {
-                                // Android 9 (minSdk 28) would need WRITE_EXTERNAL_STORAGE and a
-                                // permission prompt for the shared folder; the app's own
-                                // Downloads folder needs none, and the completed-download
-                                // notification still opens the file.
+                                // Android 9 (minSdk 28): the shared folder needs the
+                                // WRITE_EXTERNAL_STORAGE runtime permission, so the file goes
+                                // to the app's own Downloads folder, which needs none. It is
+                                // not visible in a file manager's Downloads and is removed
+                                // with the app: a decision recorded for Destin.
                                 request.setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
                             }
                             val manager = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
@@ -102,12 +112,14 @@ fun WebViewHost(
                     override fun openExternally(url: String) {
                         try {
                             context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
-                        } catch (_: android.content.ActivityNotFoundException) {
-                            // Nothing on this phone opens that kind of link. Before the
-                            // router this threw out of the WebView callback.
+                        } catch (e: Exception) {
+                            // No app for that kind of link, or the system refused it
+                            // (ActivityNotFoundException, SecurityException). Before the
+                            // router either one threw out of the WebView callback.
+                            android.util.Log.w("WebViewHost", "could not open link externally: ${e.message}")
                         }
                     }
-                })
+                }, isPairedHost = { host, port -> com.youcoded.app.runtime.PairedDeviceStore.isPaired(context, host, port) })
                 // The route a same-origin click, or a response that turns out to be an
                 // attachment, takes, so a download can never go dark on this path.
                 setDownloadListener { url, _, _, _, _ -> urlRouter.onDownloadRequested(url) }
