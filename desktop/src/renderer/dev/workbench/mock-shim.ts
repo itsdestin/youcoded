@@ -1755,12 +1755,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       `[${new Date(SYNC_NOW - 120_000).toISOString()}] INFO  pushed project:youcoded (1 file)`,
       `[${new Date(SYNC_NOW - 300_000).toISOString()}] INFO  backup -> Google Drive complete`,
     ].slice(0, n),
-    force: async () => ({ ok: true }),
+    // WHY the real shapes (sync-state.ts forceSync/pushBackend/addBackend): since error
+    // inventory 2026-09-10 Backup & Sync READS these answers instead of assuming success —
+    // `success` on an upload, the saved instance's `id` after an add. The old `{ ok: true }`
+    // carried neither, so the workbench would have shown "didn't finish" / "couldn't
+    // confirm" for a backup that worked — a fake that lies the other way.
+    force: async () => ({ success: true, output: 'Google Drive', error: '' }),
     dismissWarning: async () => ({ ok: true }),
-    pushBackend: async () => ({ ok: true }),
+    pushBackend: async () => ({ success: true, error: '' }),
     updateBackend: async () => ({ ok: true }),
     removeBackend: async () => ({ ok: true }),
-    addBackend: async () => ({ ok: true }),
+    addBackend: async (instance: { type: string; label: string }) => ({ ...instance, id: `${instance.type}-new` }),
   };
 
   // Real channel (folders:set-description) — the LOCAL-folder half of the same

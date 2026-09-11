@@ -15,7 +15,7 @@ import type { SyncWarning } from '../../main/sync-state';
 import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
 import SettingsExplainer, { InfoIconButton, type ExplainerSection } from './SettingsExplainer';
-import SyncSetupWizard from './SyncSetupWizard';
+import SyncSetupWizard, { type FirstBackup } from './SyncSetupWizard';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import ConnectGithubModal from './ConnectGithubModal';
@@ -650,22 +650,19 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
       case 'open-external':
         await (window as any).claude.shell.openExternal(action.payload.url);
         break;
-      case 'retry': {
-        setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'uploading' }));
-        try {
-          await claude.sync.pushBackend(action.payload.backendId);
-          setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'uploaded' }));
-        } catch {
-          setActionFeedback(prev => ({ ...prev, [action.payload.backendId]: 'error' }));
-        }
-        await refreshStatus();
+      case 'retry':
+        // WHY the shared handler (error inventory 2026-09-10, false message 1): this
+        // case ran its own copy of the upload and set 'uploaded' without reading the
+        // answer — pushBackend never throws, it RETURNS { success: false } — so a failed
+        // upload read "Uploaded!". handlePushBackend reads it. One path, so the warning's
+        // Retry and the menu's "Upload now" cannot drift apart again.
+        await handlePushBackend(action.payload.backendId);
         break;
-      }
       case 'dismiss':
         await handleDismiss(w.code);
         break;
     }
-  }, [status, claude, refreshStatus, handleDismiss]);
+  }, [status, claude, handleDismiss, handlePushBackend]);
 
   // Close overflow menu on outside click
   useEffect(() => {
@@ -950,13 +947,36 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
           <SyncSetupWizard
             initialType={addType ?? undefined}
             existingBackends={(status?.backends ?? []).map(b => ({ type: b.type, config: b.config }))}
-            onComplete={async (instance) => {
-              try {
-                await claude.sync.addBackend(instance);
-                // Trigger first sync immediately
-                await claude.sync.force();
-                await refreshStatus();
-              } catch {}
+            onComplete={async (instance): Promise<FirstBackup> => {
+              // WHY no catch (error inventory 2026-09-10, false message 2): a `catch {}`
+              // here swallowed a failed save, and the wizard shows its error box ONLY when
+              // this rejects — so it announced "You're all set!" for a backup never written.
+              const added = await claude.sync.addBackend(instance);
+              let first: FirstBackup;
+              if (!instance.syncEnabled) {
+                // Auto-backup is off. The old force() skipped this destination entirely,
+                // yet the done step said its first backup was syncing. Attempt nothing,
+                // claim nothing.
+                first = { kind: 'paused' };
+              } else if (typeof added?.id !== 'string') {
+                // Saved, but with no id there is no way to back up THIS destination.
+                first = { kind: 'unknown' };
+              } else {
+                // WHY pushBackend(id), not force(): force() re-uploads EVERY enabled
+                // destination, so a failure in an older one was reported as this one
+                // failing. pushBackend never throws on a failed upload — it answers
+                // { success: false } — so the answer is read, not assumed.
+                try {
+                  const r = await claude.sync.pushBackend(added.id);
+                  first = r?.success ? { kind: 'finished' } : { kind: 'failed', error: r?.error ?? '' };
+                } catch {
+                  // No answer is not a failure: over remote access a timed-out request
+                  // may still have run.
+                  first = { kind: 'unknown' };
+                }
+              }
+              await refreshStatus();
+              return first;
             }}
             onClose={() => { setView('main'); setAddType(null); setWizardPreselect(undefined); }}
             preselectedBackendId={wizardPreselect?.id}
