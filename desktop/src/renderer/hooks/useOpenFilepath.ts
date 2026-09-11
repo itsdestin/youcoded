@@ -65,7 +65,12 @@ export async function openFilepath(
   // 1. Already in this session's live list? Select it. findBestMatch prefers
   //    an exact path match over the suffix-tolerant fallback so a same-named
   //    file elsewhere can't shadow it.
-  const sessMatch = findBestMatch(state.sessionArtifacts[sessionId] ?? [], path);
+  //    WHY cwd is passed to every findBestMatch below: with the session's
+  //    folder known, an absolute tapped path is matched only as a full
+  //    absolute path, so a same-named file in another folder can never be
+  //    opened in its place (the wrong-CLAUDE.md bug, 2026-09-11).
+  const cwd = state.sessionCwd?.[sessionId];
+  const sessMatch = findBestMatch(state.sessionArtifacts[sessionId] ?? [], path, cwd);
   if (sessMatch) {
     if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', sessionId });
     dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: sessMatch.id });
@@ -75,7 +80,6 @@ export async function openFilepath(
   // 2. Not in this session — resolve against the WHOLE project: every tracked
   //    artifact (any session, including deleted) plus on-disk files, and
   //    inject the match into the session list so the drawer can show it.
-  const cwd = state.sessionCwd?.[sessionId];
   if (!cwd) { failed(); return; } // nothing to resolve without a root — say so
   try {
     // Ask the cheap question first: listProject reads the sidecar (already in
@@ -87,7 +91,7 @@ export async function openFilepath(
     // extra round trip only on a miss, which is the uncommon case.
     const projRes = await (window.claude as any).artifacts.listProject(cwd);
     const trackedList: ArtifactRecord[] = projRes?.ok ? (projRes.artifacts ?? []) : [];
-    let projMatch: ArtifactRecord | undefined = findBestMatch(trackedList, path);
+    let projMatch: ArtifactRecord | undefined = findBestMatch(trackedList, path, cwd);
     // WHY (deferred mode only): an auto-open must never select an EPHEMERAL
     // record. listAllFiles (project-file-discovery.ts) returns a DISCOVERED
     // record whose `id` is a relative path, not a persisted sidecar ULID. In
@@ -114,7 +118,7 @@ export async function openFilepath(
     if (!projMatch && drawerOpensImmediately) {
       const filesRes = await (window.claude as any).artifacts.listAllFiles(cwd);
       const filesList: ArtifactRecord[] = filesRes?.ok ? (filesRes.files ?? []) : [];
-      projMatch = findBestMatch(filesList, path);
+      projMatch = findBestMatch(filesList, path, cwd);
     }
     if (projMatch) {
       if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', sessionId });
@@ -133,7 +137,7 @@ export async function openFilepath(
     const refreshed = await (window.claude as any).artifacts.listSession(sessionId, cwd);
     let selected = false;
     if (refreshed?.ok && Array.isArray(refreshed.artifacts)) {
-      const added = findBestMatch(refreshed.artifacts as ArtifactRecord[], path);
+      const added = findBestMatch(refreshed.artifacts as ArtifactRecord[], path, cwd);
       if (added) {
         // Deferred mode: hold SESSION_ARTIFACTS_LOADED back too — dispatching
         // it without a match still reveals the panel via the drawer's list

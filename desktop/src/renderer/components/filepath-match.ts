@@ -10,6 +10,11 @@ function artifactPath(a: ArtifactRecord): string {
   return p.replace(/\\/g, '/').toLowerCase();
 }
 
+/** POSIX `/…` or a Windows drive path `x:/…` (already slash-normalised). */
+function isAbsoluteClick(normalised: string): boolean {
+  return normalised.startsWith('/') || /^[a-z]:\//.test(normalised);
+}
+
 /**
  * Find the best artifact match for a clicked path.
  *
@@ -23,9 +28,27 @@ function artifactPath(a: ArtifactRecord): string {
  */
 export function findBestMatch(
   list: ArtifactRecord[],
-  clickedPath: string
+  clickedPath: string,
+  cwd?: string
 ): ArtifactRecord | undefined {
   const norm = clickedPath.replace(/\\/g, '/').toLowerCase();
+  // WHY (wrong-file bug, 2026-09-11): tapping
+  // /home/destin/youcoded-dev/wecoded-themes/CLAUDE.md opened the workspace
+  // ROOT CLAUDE.md — the suffix pass below saw `.../CLAUDE.md` end with the
+  // root record's `CLAUDE.md`. An ABSOLUTE path names one place, so when we
+  // know the session's folder we can turn every record into its full absolute
+  // form and demand an exact match: a same-named file elsewhere is simply not
+  // the file that was tapped. Relative clicks keep the suffix pass, because
+  // "desktop/src/x.ts" really is ambiguous about where it starts.
+  if (cwd && isAbsoluteClick(norm)) {
+    const root = cwd.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+    return list.find((a) => {
+      const p = artifactPath(a);
+      if (!p) return false;
+      const abs = a.kind === 'internal' ? `${root}/${p}` : p;
+      return abs === norm;
+    });
+  }
   return (
     list.find((a) => artifactPath(a) === norm) ??
     list.find((a) => {
