@@ -107,6 +107,19 @@ describe('LibraryScreen — a load that did not finish is not "nothing installed
     expect(screen.queryByText('No themes installed yet.')).toBeNull();
   });
 
+  it('a THEME list that failed on its own does not say "No themes installed yet." (code review F4)', async () => {
+    setupWindowClaude(() => Promise.resolve([]));
+    (window as any).claude.theme.marketplace.list = vi.fn().mockRejectedValue(new Error('theme registry unreachable'));
+    await renderLibrary();
+
+    // The plugins half loaded fine, so its true empty state still shows.
+    expect(await screen.findByText('Nothing installed yet.')).toBeInTheDocument();
+    await act(async () => { fireEvent.click(screen.getByRole('tab', { name: /themes/i })); });
+
+    expect(await screen.findByText(/couldn.t load your installed themes/i)).toBeInTheDocument();
+    expect(screen.queryByText('No themes installed yet.')).toBeNull();
+  });
+
   it('a load still running says it is loading, not "Nothing installed yet."', async () => {
     setupWindowClaude(() => new Promise(() => {}));
     await renderLibrary();

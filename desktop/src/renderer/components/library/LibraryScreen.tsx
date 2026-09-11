@@ -42,10 +42,12 @@ export default function LibraryScreen({
   // swapping them for an error would hide things the user can see are installed.
   const loadGate = (hasRows: boolean, what: 'plugins' | 'themes'): React.ReactNode | null => {
     if (hasRows) return null;
-    if (mp.error) {
+    // The theme list can fail on its own without failing the whole load (code review F4).
+    const failure = what === 'themes' ? (mp.error ?? mp.themesError) : mp.error;
+    if (failure) {
       return (
         <ErrorState
-          message={`Couldn't load your installed ${what}: ${plainMessage(mp.error)}`}
+          message={`Couldn't load your installed ${what}: ${plainMessage(failure)}`}
           onRetry={() => { void mp.refresh(); }}
         />
       );

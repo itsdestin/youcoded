@@ -65,6 +65,9 @@ interface MarketplaceState {
   // Loading/error state
   loading: boolean;
   error: string | null;
+  /** Why the installed-theme list alone failed to load, or null. Only the Library's
+   *  Themes tab reports it — the rest of the marketplace loaded fine. */
+  themesError: string | null;
 }
 
 interface MarketplaceActions {
@@ -158,6 +161,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
   // mutator below.
   const { refreshInstalled: refreshDrawerSkills } = useSkills();
 
+  // Why the theme list alone failed to load, or null. WHY separate from `error` (code review
+  // 2026-09-11, F4): the theme list is deliberately non-blocking — a failure must not blank
+  // the plugins — so it was caught to [] and the Library's Themes tab said "No themes
+  // installed yet." to someone with themes. Kept apart so only the Themes tab reports it.
+  const [themesError, setThemesError] = useState<string | null>(null);
+
   // Fetch all marketplace data in parallel on mount
   const fetchAll = useCallback(async () => {
     const gen = ++fetchGeneration.current;
@@ -182,7 +191,12 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
         feat,
       ] = await Promise.all([
         window.claude.skills.listMarketplace(),
-        claude().theme.marketplace.list().catch(() => []),
+        claude().theme.marketplace.list()
+          .then((list: unknown) => { if (gen === fetchGeneration.current) setThemesError(null); return list; })
+          .catch((err: any) => {
+            if (gen === fetchGeneration.current) setThemesError(err?.message || 'the theme list could not be read');
+            return [];
+          }),
         window.claude.skills.list(),
         window.claude.skills.getFavorites(),
         claude().appearance.getFavoriteThemes().catch(() => []),
@@ -542,6 +556,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     installError,
     loading,
     error,
+    themesError,
     installSkill,
     uninstallSkill,
     installTheme,
@@ -553,7 +568,7 @@ export function MarketplaceProvider({ children }: { children: React.ReactNode })
     publishSkill,
   }), [
     skillEntries, themeEntries, featured, packages, updateAvailable, installedSkills,
-    favorites, themeFavorites, installingIds, installError, loading, error,
+    favorites, themeFavorites, installingIds, installError, loading, error, themesError,
     installSkill, uninstallSkill, installTheme, uninstallTheme, update,
     setFavorite, favoriteTheme, fetchAll, publishSkill,
   ]);
