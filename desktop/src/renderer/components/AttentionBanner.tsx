@@ -46,7 +46,7 @@ function isProviderConfigError(message: string | null | undefined): boolean {
 }
 
 const COPY: Record<Props['state'], string> = {
-  'stuck': 'Still waiting on Claude — check Terminal view if this persists.',
+  'stuck': 'Still waiting on your assistant — check Terminal view if this persists.',
   'session-died': 'Session ended unexpectedly.',
   // 'error' is native-runtime only (dispatcher: NATIVE_SESSION_ERROR, added in
   // Phase 1 Plan A). The detailed provider message rides the 'session-error'

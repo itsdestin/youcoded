@@ -24,7 +24,7 @@ import { SkipPermissionsCaption } from './components/SkipPermissionsCaption';
 import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
-import { ChatProvider, useChatDispatch, useChatStore } from './state/chat-context';
+import { ChatProvider, useChatDispatch, useChatStore, useChatState } from './state/chat-context';
 import { artifactReducer, initialArtifactState } from './state/artifact-tracker';
 import { ArtifactProvider } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
@@ -122,6 +122,18 @@ const buddyMode = new URLSearchParams(
 
 // --- Sound notifications (shared engine) ---
 import { playSound } from './utils/sounds';
+// --- First-run guide: the buddy's tour and the tips after it ---
+import GuideTour from './components/guide/GuideTour';
+import GuideTipHost from './components/guide/GuideTipHost';
+import { findGuideAnchor } from './components/guide/GuideRing';
+import { requestGuideAdvance, requestGuideReset } from './components/guide/guide-events';
+import { armGuideForFreshInstall, bumpCounter, guideDoneAt, isGuidePending, markGuideDone } from './components/guide/guide-state';
+import { triggerTip } from './components/guide/tips';
+// --- First-time warnings: Skip Permissions, Full auto, a small model ---
+import { useFirstTimeGate } from './components/FirstTimeWarning';
+import { isSmallModel } from './components/first-time-warnings';
+import { SkipPermissionsInfoTooltip } from './components/SkipPermissionsInfoTooltip';
+import type { GuideScreen } from './components/guide/guide-stops';
 
 interface SessionStats {
   costUsd: number | null;
@@ -417,7 +429,12 @@ function AppInner() {
   const [shareSkillId, setShareSkillId] = useState<string | null>(null);
 
   const [isFirstRun, setIsFirstRun] = useState<boolean | null>(null); // null = loading
-  const handleFirstRunComplete = useCallback(() => setIsFirstRun(false), []);
+  // The wizard handing off is the ONE moment that owes a tour and arms tips —
+  // an install that was already set up never sees either uninvited (deck
+  // 2026-09-10, Q-11: fresh installs only). See guide-state.ts.
+  const handleFirstRunComplete = useCallback(() => { armGuideForFreshInstall(); setIsFirstRun(false); }, []);
+  const [tourOpen, setTourOpen] = useState(false);
+  useEffect(() => { if (isFirstRun === false && isGuidePending()) setTourOpen(true); }, [isFirstRun]);
 
   // Welcome screen "New Session" expansion form state
   const [welcomeFormOpen, setWelcomeFormOpen] = useState(false);
@@ -586,7 +603,7 @@ function AppInner() {
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
     const session = chatStateMapRef.current.get(sid);
     if (session && hasPendingInteraction(session)) {
-      setToast('Claude is waiting for your response — answer the prompt first.');
+      setToast('Your assistant is waiting for your response — answer the prompt first.');
       return true;
     }
     return false;
@@ -2571,6 +2588,10 @@ function AppInner() {
     // Use the explicitly chosen model; fall back to the current session's model.
     // realModelAlias guards against sending the literal 'unknown' sentinel to CC.
     const m = sessionModel || realModelAlias(currentModel);
+    // The projects tip's moment: the fifth session ever started (tips.ts).
+    if (bumpCounter('sessions-started') === 5) triggerTip('projects');
+    // A session started while the tour's form stop is up moves the tour on.
+    requestGuideAdvance();
     // The four native/claude conditionals this payload needs (drop the alias,
     // force skipPermissions false, carry binding, carry preset) live in ONE
     // place now — shared/session-create-args.ts. They were hand-written at each
@@ -2937,6 +2958,16 @@ function AppInner() {
   // Task 12 IPC (NOT a PTY Shift+Tab — native sessions have no PTY). The IPC
   // returns the APPLIED mode, which is authoritative — state updates from the
   // return value, not the optimistic `next` (no screen-scrape correction path).
+  // First-time warnings (Destin, 2026-09-10): the first time Skip Permissions
+  // or Full auto is switched on, and the first session on a small model, a
+  // plain explainer with an "I understand" checkbox for the two dangerous
+  // ones. `gate(proceed)` runs proceed at once when already acknowledged.
+  // The session strip and the Resume browser carry their own gates; these
+  // three cover the welcome form and the status-bar chip.
+  const { gate: gateSkip, dialog: skipWarning } = useFirstTimeGate('skip-permissions');
+  const { gate: gateSmallModel, dialog: smallModelWarning } = useFirstTimeGate('small-model');
+  const { gate: gateFullAuto, dialog: fullAutoWarning } = useFirstTimeGate('full-auto');
+
   const cycleNativePermission = useCallback(async () => {
     if (!sessionId) return;
     const cycle: NativePermissionMode[] = ['ask', 'auto-edit', 'full-auto'];
@@ -2944,6 +2975,7 @@ function AppInner() {
     // which wraps to index 0 below, so cycling from an unknown state starts fresh.
     const idx = cycle.indexOf(currentNativeMode as NativePermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
+    const apply = async () => {
     try {
       const applied = await window.claude.native.setPermissionMode(sessionId, next);
       // Validate before storing: the normal path returns a bare mode string, but
@@ -2961,7 +2993,11 @@ function AppInner() {
       // the chip on its current (unchanged) mode rather than lying about state.
       console.error('Failed to set native permission mode:', err);
     }
-  }, [sessionId, currentNativeMode]);
+    };
+    // Cycling INTO Full auto is switching it on: the first time, the warning.
+    if (next === 'full-auto') { gateFullAuto(() => { void apply(); }); return; }
+    await apply();
+  }, [sessionId, currentNativeMode, gateFullAuto]);
 
   // Shift+Tab cycles permission mode in chat view
   // (In terminal view, the raw escape code reaches the PTY directly)
@@ -2995,10 +3031,16 @@ function AppInner() {
     // -1, which wraps to index 0 below, so cycling from an unknown state starts fresh.
     const idx = cycle.indexOf(currentPermissionMode as PermissionMode);
     const next = cycle[(idx + 1) % cycle.length];
-    setPermissionModes((prev) => new Map(prev).set(sessionId, next));
-    // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
-    window.claude.session.sendInput(sessionId, '\x1b[Z');
-  }, [sessionId, canBypass, currentPermissionMode, currentModel]);
+    const apply = () => {
+      setPermissionModes((prev) => new Map(prev).set(sessionId, next));
+      // Send Shift+Tab to the PTY to cycle Claude Code's permission mode
+      window.claude.session.sendInput(sessionId, '\x1b[Z');
+    };
+    // 'bypass' IS Skip Permissions, reached by cycling: the first time, the
+    // same warning the form's toggle shows.
+    if (next === 'bypass') { gateSkip(apply); return; }
+    apply();
+  }, [sessionId, canBypass, currentPermissionMode, currentModel, gateSkip]);
   cyclePermissionRef.current = cyclePermission;
 
   useEffect(() => {
@@ -3051,6 +3093,114 @@ function AppInner() {
     const t = setTimeout(() => setInitSlowWarning(true), 15000);
     return () => clearTimeout(t);
   }, [sessionId, sessionInitialized]);
+
+  // ── First-run guide ──────────────────────────────────────────────────────
+  // The welcome screen's first-time version (deck 2026-09-10, Q-8): with no
+  // session open AND nothing to resume, the screen says "Start your first
+  // session" and opens the form itself; Resume is hidden because it would list
+  // nothing. `null` = not asked yet, which keeps Resume visible — a second,
+  // synced device may have sessions this device has not pulled yet, so the
+  // unknown state errs toward showing the button.
+  const [hasResumable, setHasResumable] = useState<boolean | null>(null);
+  useEffect(() => {
+    if (isFirstRun !== false || sessions.length > 0) return;
+    let alive = true;
+    Promise.resolve()
+      .then(() => (window as any).claude?.session?.browse?.() as Promise<unknown[]> | undefined)
+      .then((list) => { if (alive) setHasResumable(Array.isArray(list) && list.length > 0); })
+      .catch(() => { if (alive) setHasResumable(false); });
+    return () => { alive = false; };
+  }, [isFirstRun, sessions.length, resumeRequested]);
+  const firstTimeWelcome = sessions.length === 0 && hasResumable === false;
+
+  // One opener for the welcome form, shared by the New Session button, the
+  // first-time auto-open and the tour, so the defaults it loads cannot drift.
+  const openWelcomeForm = useCallback(() => {
+    setWelcomeCwd(sessionDefaults.projectFolder || '');
+    setWelcomeDangerous(sessionDefaults.skipPermissions || false);
+    setWelcomeModel(sessionDefaults.model || 'sonnet');
+    // The saved default, whatever provider it names. Routed through the
+    // picker's own setter so a ChatGPT or local default moves the engine with
+    // it — setWelcomeModel alone only ever moved the Claude alias (contract R5).
+    if (sessionDefaults.startModel) applyWelcomeModelChoice(sessionDefaults.startModel);
+    // usePreset re-arms the heuristic itself on the welcomeFormOpen false→true
+    // edge — no manual touched reset needed here.
+    setWelcomeFormOpen(true);
+  }, [sessionDefaults]); // eslint-disable-line react-hooks/exhaustive-deps
+  const autoOpenedWelcome = useRef(false);
+  useEffect(() => {
+    if (firstTimeWelcome && !autoOpenedWelcome.current) { autoOpenedWelcome.current = true; openWelcomeForm(); }
+  }, [firstTimeWelcome, openWelcomeForm]);
+
+  // What each tour stop's screen means in THIS app. The tour names screens
+  // (guide-stops.ts); only App knows the state that opens them, so the mapping
+  // lives here and reuses the exact setters every button already uses.
+  const lastGuideScreen = useRef<GuideScreen | null>(null);
+  const openGuideScreen = useCallback((screen: GuideScreen) => {
+    // Two stops in a row on the same screen (Projects, then Files) keep it
+    // open instead of closing and reopening it between them (UX tester, U6).
+    const previous = lastGuideScreen.current;
+    lastGuideScreen.current = screen;
+    if (previous === screen) return;
+    const closeAll = () => {
+      setSettingsOpen(false); setProvidersAutoOpen(false); setResumeRequested(false);
+      dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+      setActiveView('chat');
+      // The drawer's own dialogs (Assistant settings, Appearance, Help) keep
+      // their open state across the drawer closing; tell them to close too.
+      requestGuideReset();
+    };
+    switch (screen) {
+      case 'welcome': closeAll(); break;
+      case 'welcome-form': closeAll(); if (sessions.length === 0 && !welcomeFormOpen) openWelcomeForm(); break;
+      case 'projects': closeAll(); dispatchArtifact({ type: 'PROJECT_VIEW_OPENED' }); break;
+      case 'settings:cloud': closeAll(); setProvidersAutoOpen(true); setSettingsOpen(true); break;
+      // Appearance and Help are dialogs the settings drawer opens from a row,
+      // with no auto-open prop of their own. The tour presses the real row
+      // once the drawer has slid in (its transition is ~300ms), so what opens
+      // is exactly what a person's own press opens.
+      case 'settings:appearance':
+      case 'settings:help': {
+        closeAll(); setSettingsOpen(true);
+        const row = screen === 'settings:help' ? 'help' : 'appearance';
+        setTimeout(() => findGuideAnchor(row)?.querySelector('button')?.click(), 350);
+        break;
+      }
+    }
+  }, [sessions.length, welcomeFormOpen, openWelcomeForm]);
+  // Three tip moments App itself owns (the rest fire from the screen they are
+  // about — SessionDrawer, CloseSessionPrompt, ModelPicker, ErrorState):
+  // Resume, when there is a session to pick up and none is open; the floater,
+  // on the third launch of a desktop; themes, the first time Settings opens a
+  // day or more after the tour. triggerTip refuses anything not yet earned.
+  useEffect(() => {
+    if (isFirstRun !== false || tourOpen) return;
+    if (sessions.length === 0 && hasResumable === true) triggerTip('resume');
+  }, [isFirstRun, tourOpen, sessions.length, hasResumable]);
+  useEffect(() => {
+    if (isFirstRun !== false) return;
+    if (bumpCounter('launches') === 3 && getPlatform() === 'electron') triggerTip('floater');
+  }, [isFirstRun]);
+  useEffect(() => {
+    if (!settingsOpen || tourOpen) return;
+    const done = guideDoneAt();
+    if (done !== null && Date.now() - done >= 24 * 60 * 60 * 1000) triggerTip('themes');
+  }, [settingsOpen, tourOpen]);
+
+  // A tip waits while the assistant is answering (GuideTipHost). One session's
+  // state through the cached per-session selector, never the whole map.
+  const guideChatState = useChatState(sessionId ?? '');
+  const guideBusy = !!sessionId && !!guideChatState?.isThinking;
+  const exitTour = useCallback(() => {
+    markGuideDone();
+    setTourOpen(false);
+    lastGuideScreen.current = null;
+    // Leave the person on the welcome screen, or their session — never inside
+    // a settings page the tour opened for its own reasons.
+    setSettingsOpen(false); setProvidersAutoOpen(false);
+    dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+    requestGuideReset();
+  }, []);
 
   // Terminal mode on touch/remote platforms — show minimal input with special keys
   const isTerminalTouch = currentViewMode === 'terminal' && getPlatform() !== 'electron';
@@ -3286,7 +3436,9 @@ function AppInner() {
               {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
                   <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  <p className="text-sm text-fg-dim font-medium">Initializing session...</p>
+                  {/* select-none: a status line, not content. Ctrl+A must not
+                      paint it (Destin, 2026-09-10). */}
+                  <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
                   {initSlowWarning && (
                     <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
                       <p>Something may be wrong. The terminal may show what it is waiting on.</p>
@@ -3364,7 +3516,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Claude is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={{
                     usage: onChatGptPlan ? statusData.chatgptUsage : statusData.usage,
@@ -3470,15 +3622,32 @@ function AppInner() {
             // still centres in the open middle instead of drifting downward.
             style={{ paddingTop: 'var(--top-chrome-bottom, 2.5rem)', paddingBottom: 'var(--top-chrome-height, 2.5rem)' }}
           >
-            <p className="text-xl text-fg-muted">No Active Session</p>
+            {/* First-time version (deck 2026-09-10, Q-8): "No Active Session"
+                reads like an error to someone who has never had one. Once a
+                session exists to resume, this is the everyday screen again.
+                select-none: a screen title, not content. Ctrl+A must not paint
+                it (Destin, 2026-09-10); the buttons below are covered by
+                globals.css. */}
+            {firstTimeWelcome ? (
+              <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
+                <p className="text-xl text-fg">Start your first session</p>
+                <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
+              </div>
+            ) : (
+              <p className="text-xl text-fg-muted select-none">No Active Session</p>
+            )}
             {/* scene: the hero surface renders the theme's companions (sun,
-                motes, sparkles) orbiting the mascot — big canvas, no clipping. */}
-            <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+                motes, sparkles) orbiting the mascot — big canvas, no clipping.
+                data-guide-anchor: the tour's first stop rings the buddy. */}
+            <div data-guide-anchor="welcome-mascot" className="flex">
+              <ThemeMascot small={false} variant="welcome" fallback={WelcomeAppIcon} className="w-36 h-36 text-fg-dim" scene />
+            </div>
             {/* Welcome screen: New Session (expandable) + Resume Session */}
             <div className="flex flex-col items-center gap-2 mt-1 w-64">
               {welcomeFormOpen ? (
-                /* Expanded new-session form with toggles */
-                <div className="layer-surface w-full p-3 flex flex-col gap-2">
+                /* Expanded new-session form with toggles.
+                   data-guide-anchor: the tour's "sessions" stop rings the form. */
+                <div className="layer-surface w-full p-3 flex flex-col gap-2" data-guide-anchor="new-session-form">
                   <div>
                     <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Project Folder</label>
                     {/* Match SessionStrip: the picker's "Manage projects…"
@@ -3518,14 +3687,20 @@ function AppInner() {
                   {welcomeRuntime !== 'native' && (
                     <>
                       <div className="flex items-center justify-between">
-                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase">Skip Permissions</label>
+                        {/* The same (i) explainer the strip form carries — the
+                            welcome form had none (UX tester run 1, U10). */}
+                        <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase inline-flex items-center">
+                          Skip Permissions
+                          <SkipPermissionsInfoTooltip />
+                        </label>
                         {/* Was a hand-rolled 32x18 track with a raw #DD4444 on-state; now
                             the shared Toggle on the danger tone, so theme packs can restyle
                             it (changes 15/17). The <label> beside it isn't bound to this
                             control, so it carries its own aria-label. */}
                         <Toggle
                           checked={welcomeDangerous}
-                          onChange={setWelcomeDangerous}
+                          // On goes through the first-time warning; off never does.
+                          onChange={(next) => (next ? gateSkip(() => setWelcomeDangerous(true)) : setWelcomeDangerous(false))}
                           tone="danger"
                           aria-label="Skip Permissions"
                         />
@@ -3560,10 +3735,21 @@ function AppInner() {
                         // Native runtime carries a provider/model binding; persist
                         // the choice so it sticks. The disabled guard already blocks
                         // a missing binding, but bail defensively.
-                        if (welcomeRuntime === 'native') {
-                          if (!welcomeNb.effectiveBinding) return;
-                          persistLastBinding(welcomeNb.effectiveBinding);
-                        }
+                        const binding = welcomeRuntime === 'native' ? welcomeNb.effectiveBinding : null;
+                        if (welcomeRuntime === 'native' && !binding) return;
+                        // The first session on a small model gets the explainer
+                        // first (first-time-warnings.ts); everything below is
+                        // what Create did before, run after Got it.
+                        const row = binding
+                          ? welcomeNb.modelCatalog.find((m) => m.providerId === binding.providerId && m.id === binding.modelId)
+                          : undefined;
+                        const small = isSmallModel({
+                          modelId: binding ? binding.modelId : welcomeModel,
+                          modelLabel: row?.label,
+                          localSizeBytes: (row as { local?: { sizeBytes?: number } } | undefined)?.local?.sizeBytes,
+                        });
+                        const proceed = () => {
+                        if (binding) persistLastBinding(binding);
                         createSession(
                           welcomeCwd,
                           // Hidden for native (see the gate above), so a value left
@@ -3582,6 +3768,8 @@ function AppInner() {
                         // top, or it too would survive exactly one conversation.
                         setWelcomeRuntime(defaultRuntime());
                         if (sessionDefaults.startModel) applyWelcomeModelChoice(sessionDefaults.startModel);
+                        };
+                        if (small) gateSmallModel(proceed); else proceed();
                       }}
                       disabled={welcomeNb.nativeCreateBlocked}
                       variant={welcomeDangerous && welcomeRuntime !== 'native' ? 'danger' : 'primary'}
@@ -3605,36 +3793,29 @@ function AppInner() {
                     variant="primary"
                     size="lg"
                     className="panel-glass w-full px-8 text-base"
-                    onClick={() => {
-                      setWelcomeCwd(sessionDefaults.projectFolder || '');
-                      setWelcomeDangerous(sessionDefaults.skipPermissions || false);
-                      setWelcomeModel(sessionDefaults.model || 'sonnet');
-                      // The saved default, whatever provider it names. Routed
-                      // through the picker's own setter so a ChatGPT or local
-                      // default moves the engine with it — setWelcomeModel alone
-                      // only ever moved the Claude alias, which is why this form
-                      // fell back to the last-used memory instead (contract R5).
-                      if (sessionDefaults.startModel) applyWelcomeModelChoice(sessionDefaults.startModel);
-                      // usePreset re-arms the heuristic itself on the welcomeFormOpen
-                      // false→true edge — no manual touched reset needed here.
-                      setWelcomeFormOpen(true);
-                    }}
+                    // data-guide-anchor: the tour's "sessions" stop rings this
+                    // button, and its "Open the form" presses it.
+                    data-guide-anchor="new-session"
+                    onClick={openWelcomeForm}
                   >
                     New Session
                   </Button>
                   {/* Same decision-69 rationale as above: panel-glass is preserved
-                      as a className override so wallpaper themes still re-tier it. */}
-                  <Button
-                    variant="secondary"
-                    size="lg"
-                    className="panel-glass w-full px-6"
-                    onClick={() => setResumeRequested(true)}
-                  >
-                    <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                      <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                    </svg>
-                    <span className="text-sm font-medium">Resume Session</span>
-                  </Button>
+                      as a className override so wallpaper themes still re-tier it.
+                      Hidden on the first-time screen: it would list nothing. */}
+                  {!firstTimeWelcome && (
+                    <Button
+                      variant="secondary"
+                      size="lg"
+                      className="panel-glass w-full px-6"
+                      onClick={() => setResumeRequested(true)}
+                    >
+                      <svg className="w-4 h-4 shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="text-sm font-medium">Resume Session</span>
+                    </Button>
+                  )}
                 </>
               )}
             </div>
@@ -3693,7 +3874,22 @@ function AppInner() {
         onSyncAutoOpenHandled={() => setSyncAutoOpen(false)}
         providersAutoOpen={providersAutoOpen}
         onProvidersAutoOpenHandled={() => setProvidersAutoOpen(false)}
+        // Help & feedback → Show me around: replays the tour from stop one.
+        onShowMeAround={() => { setSettingsOpen(false); setTourOpen(true); }}
       />
+
+      {/* The buddy's tour, then its tips — one bubble at a time, so the tip
+          host stays out while the tour is up. Design:
+          docs/active/specs/2026-09-10-first-run-guide-design.md */}
+      {tourOpen ? (
+        <GuideTour onOpenScreen={openGuideScreen} onExit={exitTour} onMarketplace={() => { setSettingsOpen(false); openMarketplace('themes'); }} />
+      ) : (
+        <GuideTipHost busy={guideBusy} />
+      )}
+      {/* The first-time warnings the welcome form and the status-bar chip raise. */}
+      {skipWarning}
+      {smallModelWarning}
+      {fullAutoWarning}
       <ResumeBrowser
         open={resumeRequested}
         onClose={() => setResumeRequested(false)}

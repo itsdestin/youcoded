@@ -4,6 +4,7 @@
 // picks up theme tokens automatically — no hardcoded colors, blur, or z-indexes
 // (PITFALLS overlay invariant).
 import { Dialog, SettingRow } from '../ui';
+
 import { useEscClose } from '../../hooks/use-esc-close';
 
 interface Props {
@@ -23,35 +24,45 @@ const KNOWN_ISSUES_URL = 'https://github.com/itsdestin/youcoded/issues';
 export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }: Props) {
   useEscClose(open, onClose);
   if (!open) return null;
+  // WHY the workbench gate is gone (2026-09-10, grader): this list kept TWO copies
+  // of itself, and users only ever saw the older one — different sub-labels, a
+  // longer "Known Issues and Planned Features" title, no introduction, and no
+  // Roadmap row at all. So a row that was designed, reviewed and approved was
+  // invisible in the shipped app, exactly like the ticket screen behind its own
+  // gate. Both screens this list opens are now the approved ones, so the list is
+  // too — one copy, the reviewed one.
   // P-15: the shared Dialog header supplies the title and the ✕ — the old
   // hand-rolled uppercase <h3> gave this popup a label but no close button.
   // Dialog already portals itself, so the createPortal wrapper is gone too.
   return (
-    <Dialog open onClose={onClose} size="prompt" title="Development" scrollBody={false}>
+    <Dialog open onClose={onClose} size="panel" title="Development" scrollBody>
       <div className="p-4">
         {/* K2: these are nav rows — each one opens something — so they take the
             nav density (text-sm/text-2xs) rather than the smaller in-menu size
             they used to hand-roll. A row that navigates now looks the same here
             as it does in the settings drawer, which is the whole point. */}
+        <p className="text-sm text-fg-2 mb-4">Help make YouCoded better. Share a problem, suggest an idea, or work on a change with your assistant.</p>
         <div className="space-y-2">
           <SettingRow
             icon={<BugIcon />}
             title="Report a Bug or Request a Feature"
-            description="Send it to the maintainers"
+            description="Send it to the YouCoded team"
             onClick={() => { onOpenBug(); }}
           />
           <SettingRow
             icon={<CodeBracketsIcon />}
             title="Contribute to YouCoded"
-            description="Set up the dev workspace"
+            description="Start with a conversation, not code"
             onClick={() => { onOpenContribute(); }}
           />
           <SettingRow
             icon={<ClipboardListIcon />}
-            title="Known Issues and Planned Features"
+            title="Known issues"
             description="Browse open issues on GitHub"
             onClick={() => { window.open(KNOWN_ISSUES_URL, '_blank'); onClose(); }}
           />
+          {/* WHY: navigating public pages is not submission; these normal links stay usable. */}
+          <SettingRow icon={<ClipboardListIcon />} title="Roadmap" description="See what’s planned on GitHub" onClick={() => window.open('https://github.com/itsdestin/youcoded-dev/blob/master/ROADMAP.md', '_blank', 'noopener,noreferrer')} />
         </div>
       </div>
     </Dialog>

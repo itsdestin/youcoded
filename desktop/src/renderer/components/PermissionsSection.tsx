@@ -10,6 +10,7 @@ import {
   SETTING_ROW_BASE,
 } from './ui';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import {
   describeRule,
   broadNote,
@@ -209,7 +210,9 @@ const MODES: readonly { id: NativePermissionMode; label: string; line: string }[
  *  These four items STAY in the body: they are the only place in the app that
  *  says what the app itself will not wave through, and a user cannot go find
  *  them anywhere else. Only the prose around them moved to the explainer. */
-const ALWAYS_ASKS: readonly string[] = [
+// Exported for the first-time Full auto warning (first-time-warnings.ts), which
+// repeats this list verbatim so the two never disagree.
+export const ALWAYS_ASKS: readonly string[] = [
   'Deleting files or folders',
   'Sending your work to a shared code repository',
   "Throwing away changes you haven't saved anywhere else",
@@ -336,9 +339,9 @@ export default function PermissionsSection() {
   const [loadFailed, setLoadFailed] = useState(false);
   // Both of the general ErrorState's actions land on the app's existing
   // bug-report surface, exactly as Remote Access does: "Report bug" files it and
-  // "Diagnose with Claude" is the same popup's summarize path. One destination,
+  // "Diagnose with the assistant" is the same popup's summarize path. One destination,
   // no invented flow. It portals, so nesting it here is safe.
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -489,9 +492,9 @@ export default function PermissionsSection() {
               <ErrorState
                 mode="general"
                 title="Unable to show what you've approved."
-                explainer="Nothing was changed. Diagnosing will collect the app's logs so Claude can look at what happened."
-                onReportBug={() => setShowBugReport(true)}
-                onDiagnose={() => setShowBugReport(true)}
+                explainer="Nothing was changed. Diagnosing will collect the app's logs so the assistant can look at what happened."
+                onReportBug={() => setReportContext({ surface: 'Settings → Permissions' })}
+                onDiagnose={() => setReportContext({ surface: 'Settings → Permissions', diagnose: true })}
               />
             ) : withRules.length === 0 ? (
               <EmptyState
@@ -526,7 +529,7 @@ export default function PermissionsSection() {
           "Approvals you gave Claude Code", so the body was printing a second
           copy of explainer content. */}
 
-      <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </section>
   );
 }

@@ -18,7 +18,9 @@ import { Scrim } from './overlays/Overlay';
 import { useEscClose } from '../hooks/use-esc-close';
 import AboutPopup from './AboutPopup';
 import { DevelopmentPopup } from './development/DevelopmentPopup';
+import { HelpPopup } from './HelpPopup';
 import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import { ContributePopup } from './development/ContributePopup';
 import PerformanceButton from './PerformanceButton';
 import AccountSection from './AccountSection';
@@ -32,6 +34,7 @@ import type { BuddyHelperStatus } from '../../shared/types';
 // UiToggle is aliased because this file still exports its own `Toggle` (the
 // compat wrapper below) that AboutPopup imports by that name.
 import { Button, CloseButton, Toggle as UiToggle, TextInput, InputGroup, LoadingState, RadioGroup, SegmentedTabs, Dialog, SettingRow, Callout, StatusStrip, ErrorState, FieldError } from './ui';
+import { useGuideReset } from './guide/guide-events';
 
 // Both are Vite `define` substitutions, so they're constants at module scope.
 // The typeof guard covers paths where the define isn't applied (unit tests).
@@ -164,6 +167,11 @@ interface Props {
   // Providers section isn't mounted in AndroidSettings).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
+  // Help & feedback → "Show me around" replays the buddy's tour (first-run
+  // guide design 2026-09-10 §1.6). Desktop-only: the tour does not ship on the
+  // phone or in the browser, so those variants leave it undefined and the row
+  // just closes the popup.
+  onShowMeAround?: () => void;
 }
 
 function timeAgo(timestamp: number): string {
@@ -220,7 +228,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
   );
 }
 
-export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled }: Props) {
+export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, onShowMeAround }: Props) {
   useEscClose(open, onClose);
   // Slide polish: track animation window so CSS can reduce backdrop-filter cost
   // and suppress scrollbar-thumb while the 300ms transform is running. Also
@@ -329,6 +337,7 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
                 onSyncAutoOpenHandled={onSyncAutoOpenHandled}
                 providersAutoOpen={providersAutoOpen}
                 onProvidersAutoOpenHandled={onProvidersAutoOpenHandled}
+                onShowMeAround={onShowMeAround}
               />
             )}
           </div>
@@ -705,6 +714,8 @@ function SoundButton() {
 function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTheme }: { onSendInput?: (text: string) => void; onRunCommand?: (command: string) => void; onOpenMarketplace?: () => void; onPublishTheme?: (slug: string) => void }) {
   const { activeTheme, allThemes } = useTheme();
   const [open, setOpen] = useState(false);
+  // The first-run tour moving on closes this dialog (guide-events.ts).
+  useGuideReset(useCallback(() => setOpen(false), []));
   // ThemeScreen fills this Dialog but does not own it, so it cannot reach the
   // shell's header. Both view flags live here and drive title/onBack; the
   // component gets them back as props. Same lift K12 did for `showInfo`,
@@ -727,6 +738,7 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
 
   return (
     <>
+      <div data-guide-anchor="appearance">
       <SettingRow
         icon={
           <div className="flex rounded-sm overflow-hidden w-full h-full">
@@ -739,7 +751,10 @@ function ThemeButton({ onSendInput, onRunCommand, onOpenMarketplace, onPublishTh
         title="Appearance"
         description={activeTheme.name}
         onClick={() => setOpen(true)}
+        // data-guide-anchor (wrapper): the tour's "make it yours" stop presses
+        // this row so the theme grid it rings is really open.
       />
+      </div>
 
       {/* D1: one header for all three of ThemeScreen's views. */}
       <Dialog
@@ -1495,11 +1510,11 @@ interface RemoteButtonProps {
   /**
    * Opens the app's existing bug-report surface (BugReportPopup, which wraps
    * dev:summarize-issue + dev:submit-issue). Both actions on a general
-   * ErrorState land here: "Report bug" files it, "Diagnose with Claude" is the
+   * ErrorState land here: "Report bug" files it, "Diagnose with the assistant" is the
    * same popup's summarize path, which collects the logs. One destination, no
    * invented flow.
    */
-  onReportIssue: () => void;
+  onReportIssue: (context?: ReportContext) => void;
 }
 
 function RemoteButton(props: RemoteButtonProps) {
@@ -2502,7 +2517,10 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
   const [showAbout, setShowAbout] = useState(false);
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
   const [showDevMenu, setShowDevMenu] = useState(false);
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  // WHY the context object doubles as the open flag: two states that must agree
+  // (is it open / what is it about) drift; one cannot.
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
 
   const claude = (window as any).claude;
@@ -2588,6 +2606,35 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
             the pages the phone can serve today — General. */}
         <AssistantSettingsRow platform="android" defaults={defaults} onDefaultsChange={handleDefaultsChange} />
 
+        {/* Help & feedback — the tour, tips, the community, bug reports, the
+            version (first-run guide design 2026-09-10 §1.6). Sits above
+            Development on purpose: a new user's help is this row; Development
+            stays for contributors. */}
+        <div data-guide-anchor="help">
+        <SettingRow
+          icon={
+            <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.2 9.2 a2.8 2.8 0 1 1 4 2.6 c-.9 .5 -1.2 1 -1.2 2" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          }
+          title="Help & feedback"
+          description="Tour, tips, community, bug reports"
+          onClick={() => setShowHelp(true)}
+          // data-guide-anchor (on the wrapper below): the tour's last stop
+          // presses this row to open the page it talks about. SettingRow
+          // forwards no data attributes, hence the wrapper.
+        />
+        </div>
+        <HelpPopup
+          open={showHelp}
+          onClose={() => setShowHelp(false)}
+          onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
+          version={aboutInfo?.version}
+          build={aboutInfo?.build}
+        />
+
         {/* Development — bug reports, contributions, known issues */}
         <SettingRow
           icon={
@@ -2600,16 +2647,16 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
             </svg>
           }
           title="Development"
-          description="Report a bug, contribute, or browse known issues"
+          description="Report a bug or help improve the app"
           onClick={() => setShowDevMenu(true)}
         />
         <DevelopmentPopup
           open={showDevMenu}
           onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
           onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
         />
-        <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
         {/* Keyboard shortcuts intentionally omitted on Android — no physical keyboard. */}
@@ -2657,7 +2704,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
 
 // ─── Desktop Settings (existing, unchanged) ─────────────────────────────────
 
-function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled }: {
+function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, onShowMeAround }: {
   open: boolean;
   onClose: () => void;
   onSendInput: (text: string) => void;
@@ -2675,6 +2722,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // Deep-link the Model Providers popup open (provider-error bubble jump).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
+  // Help & feedback → Show me around (see Props above).
+  onShowMeAround?: () => void;
 }) {
   const [config, setConfig] = useState<RemoteConfig | null>(null);
   const [tailscale, setTailscale] = useState<TailscaleInfo | null>(null);
@@ -2696,7 +2745,10 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [showShortcuts, setShowShortcuts] = useState(false);
   const [showAbout, setShowAbout] = useState(false);
   const [showDevMenu, setShowDevMenu] = useState(false);
-  const [showBugReport, setShowBugReport] = useState(false);
+  const [showHelp, setShowHelp] = useState(false);
+  // WHY the context object doubles as the open flag: two states that must agree
+  // (is it open / what is it about) drift; one cannot.
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   const [showContribute, setShowContribute] = useState(false);
 
   useEffect(() => {
@@ -2947,11 +2999,41 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onCopyLink={handleCopyLink}
           onSetShowSetupQR={setShowSetupQR}
           onSetShowAddDevice={setShowAddDevice}
-          onReportIssue={() => setShowBugReport(true)}
+          onReportIssue={(c) => setReportContext(c ?? {})}
         />
 
 
 
+
+        {/* Help & feedback — the tour, tips, the community, bug reports, the
+            version (first-run guide design 2026-09-10 §1.6). Sits above
+            Development on purpose: a new user's help is this row; Development
+            stays for contributors. */}
+        <div data-guide-anchor="help">
+        <SettingRow
+          icon={
+            <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <path d="M9.2 9.2 a2.8 2.8 0 1 1 4 2.6 c-.9 .5 -1.2 1 -1.2 2" />
+              <line x1="12" y1="17" x2="12.01" y2="17" />
+            </svg>
+          }
+          title="Help & feedback"
+          description="Tour, tips, community, bug reports"
+          onClick={() => setShowHelp(true)}
+          // data-guide-anchor (on the wrapper below): the tour's last stop
+          // presses this row to open the page it talks about. SettingRow
+          // forwards no data attributes, hence the wrapper.
+        />
+        </div>
+        <HelpPopup
+          open={showHelp}
+          onClose={() => setShowHelp(false)}
+          onShowMeAround={onShowMeAround}
+          onOpenBug={() => { setShowHelp(false); setReportContext({}); }}
+          version={desktopVersion}
+          channel={desktopChannel}
+        />
 
         {/* Development — bug reports, contributions, known issues */}
         <SettingRow
@@ -2965,16 +3047,16 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             </svg>
           }
           title="Development"
-          description="Report a bug, contribute, or browse known issues"
+          description="Report a bug or help improve the app"
           onClick={() => setShowDevMenu(true)}
         />
         <DevelopmentPopup
           open={showDevMenu}
           onClose={() => setShowDevMenu(false)}
-          onOpenBug={() => { setShowDevMenu(false); setShowBugReport(true); }}
+          onOpenBug={() => { setShowDevMenu(false); setReportContext({}); }}
           onOpenContribute={() => { setShowDevMenu(false); setShowContribute(true); }}
         />
-        <BugReportPopup open={showBugReport} onClose={() => setShowBugReport(false)} />
+        <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
         <ContributePopup open={showContribute} onClose={() => setShowContribute(false)} />
 
         {/* Keyboard Shortcuts */}

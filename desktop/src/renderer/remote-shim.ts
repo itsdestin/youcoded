@@ -1907,6 +1907,21 @@ export function installShim(): void {
       },
       openSessionIn: (args: { cwd: string; initialInput?: string }) =>
         invoke('dev:open-session-in', args),
+      // WHY these are here even though the server has no handler for them
+      // (code review C6): this namespace is HAND-BUILT, so a member that is
+      // merely absent is `undefined`, and calling it throws
+      // "window.claude.dev.setupWorkspace is not a function" — a raw JavaScript
+      // error shown to a phone user as the explanation for why setup failed.
+      // Routing them through invoke() means the server answers `unsupported`,
+      // the shim rejects with `remote-unsupported: dev:setup-workspace`, and
+      // plainMessage turns that into "Developer tools isn't available via remote
+      // access yet." Desktop-only has to be a REFUSAL, not an omission.
+      setupWorkspace: () =>
+        invoke('dev:setup-workspace'),
+      setupStatus: () =>
+        invoke('dev:setup-status'),
+      clearSetupStatus: () =>
+        invoke('dev:setup-clear'),
     },
     // First-run is desktop-only — return COMPLETE so the renderer never enters first-run mode
     firstRun: {

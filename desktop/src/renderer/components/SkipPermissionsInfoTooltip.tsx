@@ -27,7 +27,7 @@ export function SkipPermissionsInfoTooltip() {
       widthClass="w-80"
       className="ml-1"
     >
-      <p className="text-xs font-semibold text-fg mb-1.5">Normally, Claude asks first</p>
+      <p className="text-xs font-semibold text-fg mb-1.5">Normally, your assistant asks first</p>
       <p>
         Before Claude does anything that could change your computer — like editing a file, running a command, or going online — a little box pops up asking you to approve it. Reading files in your project is safe and doesn't need approval.
       </p>
@@ -51,7 +51,7 @@ export function SkipPermissionsInfoTooltip() {
           must not be advertised (docs/error-message-standards.md). */}
       <p className="text-xs font-semibold text-fg mt-2.5 mb-1.5">What still gets stopped</p>
       <p>
-        Almost nothing. The only refusal we have measured is a command that would delete your whole project folder or a system folder. Everything else we tested went through without asking — reading private files, changing files outside your project, and editing your project's saved history or Claude's own settings.
+        Almost nothing. The only refusal we have measured is a command that would delete your whole project folder or a system folder. Everything else we tested went through without asking — reading private files, changing files outside your project, and editing your project's saved history or your assistant's own settings.
       </p>
 
       {/* Was a raw text-[#DD4444] hex. Same change-17 reasoning as the
@@ -62,11 +62,11 @@ export function SkipPermissionsInfoTooltip() {
       <div className="space-y-1">
         <div className="flex items-start gap-1.5">
           <span className="shrink-0 mt-px">·</span>
-          <span>Claude can make mistakes, just like anyone. Normally the approval box gives you a chance to catch one. Without it, a wrong command could delete or overwrite your work before you see it happen.</span>
+          <span>Your assistant can make mistakes, just like anyone. Normally the approval box gives you a chance to catch one. Without it, a wrong command could delete or overwrite your work before you see it happen.</span>
         </div>
         <div className="flex items-start gap-1.5">
           <span className="shrink-0 mt-px">·</span>
-          <span>Claude reads a lot of outside stuff — websites, documents, the output of commands. Sometimes that content contains sneaky instructions trying to trick Claude into doing something you didn't ask for. The approval box is what normally stops that.</span>
+          <span>Your assistant reads a lot of outside stuff — websites, documents, the output of commands. Sometimes that content contains sneaky instructions trying to trick it into doing something you didn't ask for. The approval box is what normally stops that.</span>
         </div>
         <div className="flex items-start gap-1.5">
           <span className="shrink-0 mt-px">·</span>

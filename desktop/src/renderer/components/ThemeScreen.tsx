@@ -188,7 +188,8 @@ export default function ThemeScreen({ onClose, onSendInput, onRunCommand, onOpen
             Cycle membership moved to the status bar widget editor. */}
         <div>
           <p className="text-4xs text-fg-muted uppercase tracking-wider mb-2">Favorited Themes</p>
-          <div className="grid grid-cols-2 gap-2">
+          {/* data-guide-anchor: the first-run tour's "make it yours" stop rings the grid. */}
+          <div className="grid grid-cols-2 gap-2" data-guide-anchor="theme-grid">
             {gridThemes.map(t => {
               const isActive = t.slug === activeSlug;
               const isFav = themeFavSet.has(t.slug);

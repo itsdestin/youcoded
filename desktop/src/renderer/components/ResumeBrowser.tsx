@@ -1,13 +1,16 @@
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, useCallback } from 'react';
 import { createPortal } from 'react-dom';
 import { Scrim, OverlayPanel, CONTENT_Z } from './overlays/Overlay';
-import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill } from './ui';
+import { Button, Toggle, LoadingState, EmptyState, ErrorState, FilterChip, FilterMenuChip, CheckboxMark, SearchFilterPill, SettingRow } from './ui';
 import SessionRenameDialog from './SessionRenameDialog';
 import { namingApi } from './assistant-settings/naming-api';
 import { useRenamedSessions } from './assistant-settings/use-renamed-sessions';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { isAndroid } from '../platform';
+import SessionPreviewPane from './SessionPreviewPane';
+import type { ChatsearchProvider } from '../../shared/chatsearch-refs';
 import { ResumeFilterPopover } from './ResumeFilterPopover';
 import { SkipPermissionsInfoTooltip } from './SkipPermissionsInfoTooltip';
 import {
@@ -32,6 +35,7 @@ import { ProviderIcon } from './ProviderIcon';
 import { claudeAliasForModelId } from '../../shared/model-ids';
 import type { ModelBinding } from '../../shared/provider-types';
 import { SkipPermissionsCaption } from './SkipPermissionsCaption';
+import { useFirstTimeGate } from './FirstTimeWarning';
 
 function formatRelativeTime(epochMs: number): string {
   const diff = Date.now() - epochMs;
@@ -62,6 +66,20 @@ function formatModelId(id: string): string {
   return id.replace(/-\d{8}$/, '');
 }
 
+// ── The conversation preview panel (2026-09-10) ─────────────────────────────
+// Every decision below is an answered review-deck step, not a default. Five
+// rounds, in docs/archive/design/2026-09-10-resume-preview-panel/:
+//   R2  the list keeps its cards; it never collapses and never hides itself;
+//       the right half stays one line of text until a row is clicked.
+//   R3  the sheet: heading, conversation and actions on one inset surface with
+//       the window showing all round it.
+//   R4  the header IS the list's card, drawn again, floating at the top of the
+//       sheet; the action card sits at its foot, vertically stacked, and its
+//       switches are the existing resume block rather than a restyled copy.
+//   R5  the whole sheet arrives on a jump (not just the card); the action card
+//       stays open while you read; no folder chip on it — the header card
+//       already says which folder this is.
+
 // Filter menu rows and footer (design guide G-21: 28px rows of mark · label ·
 // right-aligned count at text-xs; actions in a footer under a hairline, where
 // FolderSwitcher and ModelPicker put theirs). One recipe shared by the Projects
@@ -87,8 +105,7 @@ function SortArrow({ muted, up }: { muted: boolean; up: boolean }) {
       viewBox="0 0 24 24"
       stroke="currentColor"
       strokeWidth={2}
-      aria-hidden="true"
-    >
+      aria-hidden="true"    >
       <path
         strokeLinecap="round"
         strokeLinejoin="round"
@@ -285,6 +302,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const previewNames = useRenamedSessions(sourceNames);
   const sessions = useMemo(() => sourceSessions.map((s) => previewNames[s.sessionId] === undefined
     ? s : { ...s, name: previewNames[s.sessionId] }), [sourceSessions, previewNames]);
+  // Read by the settle effect below, which must not re-run every time the list
+  // re-renders — only when the row it is about to show changes.
+  const sessionsRef = useRef<PastSession[]>([]);
+  sessionsRef.current = sessions;
   const [renameSession, setRenameSession] = useState<PastSession | null>(null);
   const [loading, setLoading] = useState(false);
   const [search, setSearch] = useState('');
@@ -304,8 +325,86 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const projectsDropdownRef = useRef<HTMLDivElement | null>(null);
   const tagsDropdownRef = useRef<HTMLDivElement | null>(null);
   const [expandedId, setExpandedId] = useState<string | null>(null);
+  // The row whose transcript the right panel is showing. Distinct
+  // from expandedId because in variants b/c nothing expands in the list at all.
+  const [previewId, setPreviewId] = useState<string | null>(null);
+  const [previewSheetOpen, setPreviewSheetOpen] = useState(false); // the Resume options sheet
+  // The header clone's own tags/note sheet (see renderSessionRow).
+  const [cloneOrganizeId, setCloneOrganizeId] = useState<string | null>(null);
+  // ── One arrival, not three ──────────────────────────────────────────────
+  // Everything in the sheet — the header card, the conversation, the action
+  // card — changes at ONE moment, and that moment is after the new transcript
+  // is both read and painted. Three separate moments is what this replaced:
+  // the header and action card swapped on the click (local data), the
+  // transcript blanked and came back a second later (a disk read), and its
+  // bubbles painted a beat after that again (forty markdown blocks take longer
+  // than a frame to build, so the arrival — running on the compositor —
+  // started before they were drawn). Destin, 2026-09-10: "the header/footer
+  // cards switch, THEN the animation happens, THEN the messages pop in."
+  //
+  // So the sheet renders `shownId`, which LAGS `previewId` until the read
+  // settles. The click's acknowledgement is the row lighting up in the list,
+  // which is instant; the pane holds the previous conversation meanwhile
+  // (holdWhileLoading) rather than blanking under a name that already changed.
+  //
+  // `staged` is the frame in between: the new content is committed and laid
+  // out while the sheet is still transparent, so the expensive paint happens
+  // invisibly. Only then does `.switch-arrival` go on. Without it the bubbles
+  // paint after the animation has begun, which is the third beat above.
+  const [shownId, setShownId] = useState<string | null>(null);
+  const [arrival, setArrival] = useState<'staged' | 'run' | null>(null);
+  const onPreviewSettled = useCallback((id: string) => {
+    setShownId(id);
+    setArrival('staged');
+  }, []);
+  useEffect(() => {
+    if (arrival !== 'staged') return;
+    // Two frames: the first lets React's commit lay the new bubbles out, the
+    // second is the one the animation can start on with them already painted.
+    let inner = 0;
+    const outer = requestAnimationFrame(() => { inner = requestAnimationFrame(() => setArrival('run')); });
+    return () => { cancelAnimationFrame(outer); cancelAnimationFrame(inner); };
+  }, [arrival]);
+  // The resume controls belong to the row the action card is about to show, so
+  // they are derived here rather than on the click — otherwise the card spent
+  // the read showing the OLD conversation's name over the NEW one's model.
+  useEffect(() => {
+    if (!shownId) return;
+    const s = sessionsRef.current.find((r) => r.sessionId === shownId);
+    if (!s) return;
+    setResumeModel(claudeModelForRow(s));
+    setResumeDangerous(defaultSkipPermissions || false);
+    setResumeLaunchInNewWindow(false);
+    setNativeResumeBinding(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- claudeModelForRow
+    // is redefined every render; the row id is what actually changes here.
+  }, [shownId, defaultSkipPermissions]);
+
+  useEffect(() => {
+    if (arrival !== 'run') return;
+    // Just past --dur-switch (380ms). Dropping the class afterwards keeps a
+    // stale animation off the element the next time it re-renders.
+    const t = setTimeout(() => setArrival(null), 420);
+    return () => clearTimeout(t);
+  }, [arrival]);
+
+  const narrowViewport = useNarrowViewport();
+  // Two reasons the browser stays single-column, and they are different:
+  //  · narrow — a 390px screen cannot hold a list AND a transcript. 640px is
+  //    the app's one breakpoint (.claude/rules/narrow-viewport.md); do not
+  //    invent a second.
+  //  · Android — `chatsearch:read` answers not-implemented-on-mobile there
+  //    (SessionService.kt), so the panel could only ever show an error. Phones
+  //    are already excluded by the width test; this is for a tablet wide enough
+  //    to pass it. The list is fully usable without the panel, which is what
+  //    makes hiding it legitimate rather than a narrow "fix" that removes the
+  //    only route to something.
+  const previewOn = !narrowViewport && !isAndroid();
   const [resumeModel, setResumeModel] = useState<string>(defaultModel || 'sonnet');
   const [resumeDangerous, setResumeDangerous] = useState(defaultSkipPermissions || false);
+  // First-time Skip Permissions warning (spec §5). This browser is an L1
+  // modal, so the L2 warning simply sits on top of it — no yielding needed.
+  const { gate: gateSkipPermissions, dialog: skipPermissionsDialog } = useFirstTimeGate('skip-permissions');
   // Task 6 — native resume ALWAYS offers the provider-scoped model selector
   // (Destin's ruling: never auto-launch a binding). null until the user picks
   // a row OR ModelPicker auto-selects a prefill match; the Resume button
@@ -523,6 +622,36 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     };
     return applyFilters(sessions, state);
   }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
+
+  // Two different rows, deliberately: `selectedSession` is what the user just
+  // clicked (it drives the list's highlight and the read); `previewSession` is
+  // what the sheet is currently showing, which lags it until that read settles.
+  const selectedSession = previewOn && previewId
+    ? filtered.find((r) => r.sessionId === previewId) ?? null
+    : null;
+  const previewSession = previewOn && shownId
+    ? filtered.find((r) => r.sessionId === shownId) ?? null
+    : null;
+
+  // PERF: the transcript pane is memoised on the three values that actually
+  // address it. Without this, EVERY state change in this component — a
+  // keystroke in the search box, a filter pill, a hover — re-rendered the pane
+  // and with it one MarkdownContent per message. MarkdownContent is React.memo'd
+  // on its own content, so each one bailed out, but React still walked the whole
+  // subtree on every keypress. Nothing below the memo depends on this
+  // component's state, so there is no correctness cost.
+  const previewPane = useMemo(
+    () => (selectedSession ? (
+      <SessionPreviewPane
+        provider={(selectedSession.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
+        id={selectedSession.sessionId}
+        title={selectedSession.name}
+        onSettled={onPreviewSettled}
+        holdWhileLoading
+      />
+    ) : null),
+    [selectedSession?.provider, selectedSession?.sessionId, selectedSession?.name, onPreviewSettled],
+  );
 
   // Group by project path ONLY when the user has narrowed via the Projects
   // pill — the default view is pure chronological (each row carries its own
@@ -822,6 +951,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // starts on the model THIS conversation last ran on, which only the row
   // knows. See claudeModelForRow.
   const handleSelectSession = (s: PastSession) => {
+    // With the panel open, clicking a row PREVIEWS it (and
+    // re-clicking the same row does nothing, because collapsing the panel would
+    // leave the right half empty for no reason the user asked for). The resume
+    // controls live in the transcript pane, so the card itself never expands.
+    if (previewOn) {
+      setPreviewId(s.sessionId);
+      setPreviewSheetOpen(false);
+      setCloneOrganizeId(null);
+      setOrganizeId(null);
+      // NOT the resume state — the action card still belongs to the
+      // conversation on screen until this one has loaded. It is reset in the
+      // settle effect below, with the row the card is about to show.
+      return;
+    }
     if (expandedId === s.sessionId) {
       setExpandedId(null);
     } else {
@@ -904,7 +1047,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           appliedIds={new Set(s.tags ?? [])}
           onToggle={(tagId, next) => toggleTag(s.sessionId, tagId, next)}
           registry={registry}
-          onManageTags={() => { setOrganizeId(null); setTagManagerOpen(true); }}
+          onManageTags={() => { setOrganizeId(null); setCloneOrganizeId(null); setTagManagerOpen(true); }}
           fieldClassName="bg-well border-edge"
           builtIns={[{
             tag: PRIORITY_TAG,
@@ -931,9 +1074,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // the two launch toggles, Resume. Flags/tags/note used to be stacked in here
   // too, which is what made an open card a seven-field form with its primary
   // action at the bottom.
-  const renderExpandedOptions = (s: PastSession) => {
+  const renderExpandedOptions = (s: PastSession, opts?: { flush?: boolean }) => {
   return (
-    <div className="border-t border-edge-dim">
+    // `flush`: the action card at the foot of the preview draws
+    // its own border, and this block's top hairline would double up against it.
+    <div className={opts?.flush ? '' : 'border-t border-edge-dim'}>
       <div className="p-3 flex flex-col gap-2">
         {/* ONE model control for both runtimes. Was two: a Claude alias button
             row here and a separate native picker below, which is the duplication this
@@ -968,7 +1113,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                   associated with the control — screen readers announced nothing. */}
               <Toggle
                 checked={resumeDangerous}
-                onChange={setResumeDangerous}
+                // Turning ON goes through the first-time warning; Cancel there
+                // leaves it off. Turning off never asks.
+                onChange={(next) => (next ? gateSkipPermissions(() => setResumeDangerous(true)) : setResumeDangerous(false))}
                 tone="danger"
                 aria-label="Skip Permissions"
               />
@@ -1024,11 +1171,28 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   );
   };
 
-  const renderSessionRow = (s: PastSession, showPath?: boolean) => {
+  // `clone`: the preview's header is this same card drawn a
+  // second time. Both copies are on screen at once, so the tag/note sheet needs
+  // its own open-id per copy — sharing one made pressing Tag in the header also
+  // expand the card in the list and shove the rest of the list down.
+  const renderSessionRow = (s: PastSession, showPath?: boolean, clone?: boolean) => {
+    const orgId = clone ? cloneOrganizeId : organizeId;
+    const setOrg = clone ? setCloneOrganizeId : setOrganizeId;
     const isExpanded = expandedId === s.sessionId;
+    // With the resume controls out of the card, the accent border
+    // is the ONLY thing left saying which row the right panel is showing, so
+    // the previewed row has to claim it whether or not anything expanded.
+    const isSelected = isExpanded || (previewOn && previewId === s.sessionId);
     // Unresumable rows are inert: no card hover, no expand. See the note on the
     // click handler below for the two reasons a row lands here.
-    const inert = !!(s.missingProject || s.notSyncedYet);
+    // Resume needs the project folder AND the transcript; a PREVIEW needs only
+    // the transcript. So `missingProject` (synced in from another device, folder
+    // not here) is readable and is no longer inert once the panel is open —
+    // reading a conversation you cannot resume on this machine is most of why
+    // the panel exists. `notSyncedYet` stays inert either way: the transcript
+    // itself has not arrived, so there is nothing to show.
+    const canResume = !s.missingProject && !s.notSyncedYet;
+    const inert = previewOn ? !!s.notSyncedYet : !canResume;
     // px-4 matches the search bar and the project group headers above, so the
     // card's outer edge lines up with the rest of the panel.
     return (
@@ -1071,7 +1235,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // trigger, never nested — a button inside a button is invalid HTML and
         // the inner one would never receive its own click.
         className={`relative rounded-lg border bg-inset overflow-hidden transition-colors ${
-          isExpanded ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
+          isSelected ? 'border-accent' : inert ? 'border-edge-dim' : 'border-edge-dim hover:border-edge'
         }`}
       >
       {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
@@ -1116,7 +1280,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // resume control announces nothing but its metadata line.
         aria-label={s.name}
         className={`w-full text-left px-3 pb-3 focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          inert ? 'text-fg-dim cursor-default' : isExpanded ? 'text-fg' : 'text-fg-dim'
+          inert ? 'text-fg-dim cursor-default' : isSelected ? 'text-fg' : 'text-fg-dim'
         }`}
       >
         <div className="min-w-0">
@@ -1243,20 +1407,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         type="button"
         onClick={(e) => {
           e.stopPropagation();
-          if (organizeId === s.sessionId) { setOrganizeId(null); return; }
+          if (orgId === s.sessionId) { setOrg(null); return; }
           organizeTriggerRef.current = e.currentTarget;
           // The two panes are mutually exclusive: a card shows EITHER how to
           // relaunch it or how to organize it, never both stacked. Without this
           // an open card could grow two panels deep and the Resume button would
           // slide down the screen as you tagged.
           setExpandedId(null);
-          setOrganizeId(s.sessionId);
+          setOrg(s.sessionId);
         }}
         aria-label={`Organize ${s.name}`}
         aria-haspopup="dialog"
-        aria-expanded={organizeId === s.sessionId}
+        aria-expanded={orgId === s.sessionId}
         className={`px-1 py-1.5 rounded-sm focus:outline-none focus-visible:ring-2 focus-visible:ring-accent ${
-          organizeId === s.sessionId ? 'text-fg' : 'text-fg-faint hover:text-fg-2'
+          orgId === s.sessionId ? 'text-fg' : 'text-fg-faint hover:text-fg-2'
         }`}
       >
         {/* A tag, not a generic dots menu — it names what the sheet holds.
@@ -1303,8 +1467,8 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           It shares organizePopRef with the floating variants: only one of the
           two is ever mounted, and the outside-click handler checks that ref to
           know "the click landed inside the open organize UI". */}
-      {organizeId === s.sessionId && (
-        <div ref={organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
+      {orgId === s.sessionId && (
+        <div ref={clone ? undefined : organizePopRef} className="border-t border-edge-dim p-2.5 flex flex-col gap-2" onClick={(e) => e.stopPropagation()}>
           {renderOrganizeControls(s)}
         </div>
       )}
@@ -1313,6 +1477,35 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     </div>
     );
   };
+
+
+  // The action card at the FOOT of the sheet, in the place a real
+  // conversation puts its message box: this is where you act on what you just
+  // read. Its contents are `renderExpandedOptions` verbatim — the same block the
+  // expanded card in the list and ResumeOptionsPopover already draw — because
+  // Destin's ruling on the switches was "this should look like it does in our
+  // other existing new/resume surfaces", and re-styling them here is exactly how
+  // three surfaces drift apart. `flush` only drops the top hairline, which would
+  // otherwise double up against the card's own border.
+  const renderActionCard = (s: PastSession) => (
+    <div className="shrink-0 p-3 pt-0">
+      <div className="rounded-lg border border-edge bg-panel shadow-[0_4px_16px_rgba(0,0,0,0.18)]">
+        {/* Readable but not resumable here. The row's own card carries the same
+            sentence; repeating it at the foot is the answer to "so why is there
+            no Resume button?", asked at the moment it is asked. */}
+        {s.missingProject ? (
+          <div className="px-3 py-2.5 text-2xs text-fg-muted">
+            Project folder not on this device — you can read this conversation, but it has to be resumed where its folder lives.
+          </div>
+        ) : (<>
+        {/* No folder chip here. It was above the model picker until Destin
+            pointed out the header card at the top of the sheet already says
+            which folder this is — the same fact twice, 300px apart. */}
+        {renderExpandedOptions(s, { flush: true })}
+        </>)}
+      </div>
+    </div>
+  );
 
   // The filter row: three chips. Rendered under the search box at desktop width
   // and INSIDE the phone popover below 640px (deck round 1 S-7, round 2 S-9 —
@@ -1478,23 +1671,44 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             </span>
             <SortArrow muted={sortDir === 'desc'} up={sortDir === 'asc'} />
           </FilterChip>
-        </div>
-  );
+        </div>  );
 
   return (
     <>
       {renameSession && <SessionRenameDialog id={renameSession.sessionId} name={renameSession.name} onClose={() => setRenameSession(null)} />}
+      {skipPermissionsDialog}
       {/* L1 drawer-style modal — theme-driven via Scrim/OverlayPanel. */}
       <Scrim layer={1} onClick={onClose} />
       <div className="fixed inset-0 flex items-center justify-center p-4 pointer-events-none" style={{ zIndex: CONTENT_Z[1] }}>
         <OverlayPanel
           layer={1}
-          className="w-full max-w-md max-h-[70vh] flex flex-col pointer-events-auto"
+          // Preview mode swaps max-h for a DEFINITE height. The
+          // note on the list below explains why: with only a max-height, a
+          // flex-1 child does not grow in Chromium, and the transcript column
+          // needs a real height to scroll inside.
+          className={`w-full pointer-events-auto flex flex-col ${previewOn
+            ? 'max-w-[1000px] h-[76vh]'
+            : 'max-w-md max-h-[70vh]'}`}
           style={{ position: 'relative', zIndex: 'auto' }}
           onClick={(e) => e.stopPropagation()}
         >
+        {/* The body row. `contents` when there is no preview so the header and
+            list stay DIRECT flex children of the panel, and the single-column
+            browser (narrow, or Android) renders exactly as it always has. */}
+        <div className={previewOn ? 'flex-1 min-h-0 flex' : 'contents'}>
+        {/* List column. */}
+        <div className={previewOn
+          ? 'w-[420px] shrink-0 min-w-0 flex flex-col min-h-0 border-r border-edge overflow-hidden'
+          : 'contents'}>
+          <div className={previewOn ? 'w-[420px] flex flex-col h-full min-h-0' : 'contents'}>
           {/* Header */}
-          <div className="px-4 pt-4 pb-3 border-b border-edge">
+          {/* No `border-b`: Destin, 2026-09-10, "there should be gaps
+              on the left/right side of the divider line where it doesn't
+              connect to the outer container but tapers off". A border cannot
+              fade, so the rule is a 1px gradient row instead — the same idiom
+              SessionStrip already uses for the divider between Resume and
+              + New Session. */}
+          <div className="px-4 pt-4 pb-3 shrink-0 relative">
             <div className="flex items-center justify-between mb-3">
               <h2 className="text-sm font-bold text-fg">Resume Session</h2>
               {/* Show Complete — same toggle pattern as Skip Permissions
@@ -1559,6 +1773,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               document.body,
             )}
             {!narrow && chipsRow}
+            {/* Inset both ends so the line stops short of the panel edge and
+                fades out rather than butting into it. */}
+            <div
+              aria-hidden
+              className="absolute inset-x-0 bottom-0 h-px"
+              style={{ background: 'linear-gradient(to right, transparent, var(--edge) 14%, var(--edge) 86%, transparent)' }}
+            />
           </div>
 
           {/* Session list */}
@@ -1570,7 +1791,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               no padding. Sticky fade pseudos then sit flush with the scroll-fade's
               outer edge, and the `overflow: hidden` on .layer-surface clips them to
               the OverlayPanel's rounded corners. */}
-          <div ref={listRef} className="scroll-fade">
+          <div ref={listRef} className={previewOn ? 'scroll-fade flex-1' : 'scroll-fade'}>
             <div className="py-2">
               {loading ? (
                 <LoadingState what="sessions" />
@@ -1613,6 +1834,61 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               )}
             </div>
           </div>
+          </div>
+        </div>
+        {/* The transcript column. */}
+        {previewOn && (() => {
+          if (!selectedSession && !previewSession) {
+            return (
+              <div className="flex-1 min-w-0 flex items-center justify-center px-8">
+                {/* Plain words, no invented benefit: the panel is empty because
+                    nothing is picked, and that is the whole message. */}
+                <EmptyState message="Pick a conversation to read it here before you resume." />
+              </div>
+            );
+          }
+          // `s` is what the sheet SHOWS; null while the first conversation of
+          // the session is still being read. The sheet is mounted either way —
+          // the pane inside it is what does the reading, so it cannot be
+          // withheld until the read finishes. It just stays invisible, with the
+          // empty state over it, until there is something to show.
+          const s = previewSession;
+          return (
+            <div className="relative flex-1 min-w-0 flex flex-col min-h-0 p-3">
+              {!s && (
+                <div className="absolute inset-0 flex items-center justify-center px-8">
+                  <EmptyState message="Pick a conversation to read it here before you resume." />
+                </div>
+              )}
+              <div className={`relative flex-1 min-h-0 flex flex-col overflow-hidden rounded-lg border border-edge-dim bg-canvas${
+                !s || arrival === 'staged' ? ' opacity-0' : arrival === 'run' ? ' switch-arrival' : ''
+              }`}>
+                {s && (
+                  <>
+                    {/* The header IS the list's card, drawn again — Destin, round
+                        four: "a clone of the card on the lefthand side ... floats at
+                        the top of the window inside the container". Floating, not
+                        welded: older messages pass under it as you scroll back.
+                        pointer-events-none on the strip, auto on the card, so the
+                        gutter beside it does not swallow scroll wheels. */}
+                    <div className="absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none">
+                      {/* PERF: box-shadow, not `drop-shadow-[…]`. drop-shadow is a CSS
+                          FILTER — it traces the alpha of the whole subtree and re-runs
+                          on every paint, and this card floats over a scrolling
+                          transcript, so it repaints constantly. */}
+                      <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
+                        {renderSessionRow(s, true, true)}
+                      </div>
+                    </div>
+                  </>
+                )}
+                <div className="flex-1 min-h-0 flex flex-col">{previewPane}</div>
+                {s && renderActionCard(s)}
+              </div>
+            </div>
+          );
+        })()}
+        </div>
         </OverlayPanel>
       </div>
 

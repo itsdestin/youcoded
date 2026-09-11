@@ -1,4 +1,5 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useGuideReset } from '../guide/guide-events';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import SettingsExplainer, { InfoIconButton } from '../SettingsExplainer';
 import { AnchorTip, Dialog, SettingRow } from '../ui';
@@ -127,6 +128,8 @@ export default function AssistantSettingsRow({
   platform = 'desktop',
 }: AssistantSettingsRowProps) {
   const [open, setOpen] = useState(false);
+  // The first-run tour moving on closes this panel (guide-events.ts).
+  useGuideReset(useCallback(() => setOpen(false), []));
   const [page, setPage] = useState<PageId>('general');
   // Phone fold: `null` page means "showing the list".
   const [narrowPage, setNarrowPage] = useState<PageId | null>(null);

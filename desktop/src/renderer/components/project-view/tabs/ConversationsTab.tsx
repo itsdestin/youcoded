@@ -17,6 +17,11 @@ interface ConversationSummary extends PastSession {
 
 // Chat glyph for the row avatar — shared with the segmented control (../icons).
 import { ChatIcon } from '../icons';
+// The shared empty-state primitive (design guide G-18): every empty list goes
+// through it rather than a bare muted paragraph. No action here on purpose —
+// this tab has no "new conversation" callback (ProjectView passes only the
+// list and the preview opener; New Conversation lives on the hero above).
+import { EmptyState } from '../../ui';
 
 interface ConversationsTabProps {
   // Lifted, cached list from ProjectView. null = still loading for this project.
@@ -33,7 +38,7 @@ export function ConversationsTab({ conversations, onOpenPreview }: Conversations
       {loading ? (
         <p className="text-sm text-fg-muted">Loading…</p>
       ) : rows.length === 0 ? (
-        <p className="text-sm text-fg-muted">No conversations in this project yet.</p>
+        <EmptyState message="No conversations in this project yet." />
       ) : (
         <div
           // p-2 -m-2 matches FilesTab's scroll box exactly. Without it the

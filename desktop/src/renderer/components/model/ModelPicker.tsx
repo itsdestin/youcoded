@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Button, fieldClasses, Tooltip } from '../ui';
+import { triggerTip } from '../guide/tips';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -492,6 +493,12 @@ export default function ModelPicker({
   const searching = q.length > 0;
 
   // THE view rule: favourites until you type, then the whole catalogue.
+  // The local-models tip's moment: the picker opens and nothing in it runs on
+  // this computer (guide/tips.ts). `loaded` so an empty catalog mid-fetch does
+  // not pass for "no local model".
+  const hasLocal = entries.some((e) => e.local);
+  useEffect(() => { if (open && loaded && !hasLocal) triggerTip('local-models'); }, [open, loaded, hasLocal]);
+
   const rows = useMemo(() => {
     const pool = searching ? entries : entries.filter((e) => favorites.has(e.key));
     const filtered = pool.filter((e) => {

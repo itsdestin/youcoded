@@ -397,6 +397,12 @@ export interface SummaryResult {
   title: string;
   summary: string;
   flagged_strings: string[];
+  /** False when nothing rewrote the text — the fields above are the user's own
+   *  words, unchanged. The caller MUST say so rather than present them as a
+   *  result (design review F17). */
+  assisted?: boolean;
+  /** Why it did not run, when it did not. Only ever the reason we actually have. */
+  unavailable?: string;
 }
 
 /**
@@ -407,6 +413,18 @@ export interface SummaryResult {
  * log excerpt is large. On any failure (CLI missing, not authenticated,
  * JSON parse error) we degrade gracefully to a fallback envelope built
  * from the user's description — submission still works.
+ */
+/**
+ * WHY this reports whether it ran (design review F17, and Destin 2026-09-10 on
+ * native sessions): it used to `catch { return fallbackSummary(...) }`, and the
+ * fallback is the user's OWN text with the title sliced off the front. So when
+ * nothing was available to ask — no Claude Code CLI on the machine, which is the
+ * normal state for someone using YouCoded's own assistant — pressing "improve this
+ * with the assistant" handed back what the user already wrote and said it had
+ * worked. A button that silently does nothing is the defect this feature exists to
+ * remove, and it was in the feature's own screen.
+ *
+ * `assisted: false` means the text is unchanged and the caller must say so.
  */
 export async function summarizeIssue(args: SummarizeArgs): Promise<SummaryResult> {
   const prompt = buildSummarizerPrompt(args);
@@ -428,9 +446,19 @@ export async function summarizeIssue(args: SummarizeArgs): Promise<SummaryResult
       child.stdin.write(prompt);
       child.stdin.end();
     });
+    // NOT `{...parseSummary(), assisted: true}`: parseSummary falls back to the
+    // user's own text when the reply will not parse, and spreading true over that
+    // would restore the exact lie this change removes. It sets the flag itself.
     return parseSummary(stdout, args.description);
-  } catch {
-    return fallbackSummary(args.description);
+  } catch (e: any) {
+    return {
+      ...fallbackSummary(args.description),
+      assisted: false,
+      // Say which thing was not there. Never a guessed cause.
+      unavailable: String(e?.message || e).includes('ENOENT')
+        ? 'No assistant is set up on this computer to rewrite it.'
+        : `The assistant could not be reached: ${String(e?.message || e).slice(0, 200)}`,
+    };
   }
 }
 
@@ -466,17 +494,24 @@ function parseSummary(stdout: string, fallbackText: string): SummaryResult {
       flagged_strings: Array.isArray(parsed.flagged_strings)
         ? parsed.flagged_strings.map(String)
         : [],
+      assisted: true,
     };
   } catch {
-    return fallbackSummary(fallbackText);
+    return {
+      ...fallbackSummary(fallbackText),
+      unavailable: 'The assistant replied with something this screen could not read, so your wording is unchanged.',
+    };
   }
 }
 
 function fallbackSummary(description: string): SummaryResult {
+  // Deliberately the user's own words: there is nothing better to say, and
+  // inventing a summary would be worse. `assisted` is what tells the caller so.
   return {
     title: description.slice(0, 80),
     summary: description,
     flagged_strings: [],
+    assisted: false,
   };
 }
 
@@ -487,15 +522,40 @@ function fallbackSummary(description: string): SummaryResult {
 export interface SubmitArgs {
   kind: 'bug' | 'feature';
   title: string;
-  summary: string;
+  /** Optional: AI help is a separate choice, so a ticket can be sent without one (R12). */
+  summary?: string;
   description: string;
   log?: string;   // optional; bug-only
   label: 'bug' | 'enhancement';
+  /**
+   * The attachment route (R13/R14). GitHub uploads a file the moment it is attached,
+   * so that ticket has to be finished in the browser — creating it here first would
+   * file it before the user attached anything. Signed in or not, this returns the
+   * prefilled URL and creates nothing.
+   */
+  browserOnly?: boolean;
 }
 
+/**
+ * WHY three outcomes and not two (audit E-02/E-07, contract R23): every failure
+ * used to return the same `{ ok:false, fallbackUrl }`, and the catch swallowed the
+ * reason entirely. So "you are not signed in to GitHub" — an ordinary, expected
+ * branch — was indistinguishable from "GitHub refused this" and from "the network
+ * is down", and the screen answered all three by opening a browser tab and saying
+ * "Opening GitHub in your browser…". A failure dressed as a normal outcome.
+ *
+ *  - sent            the issue exists; the url is the user's copy of it
+ *  - needs-browser   NOT an error: no credential, so the ticket is finished in the
+ *                    browser. `truncated` says whether the prefilled URL had to drop
+ *                    part of the body to fit GitHub's cap, so the screen can disclose
+ *                    it rather than silently lose the evidence.
+ *  - failed          a real failure, with the reason the operation gave. The draft is
+ *                    kept and the user can retry.
+ */
 export type SubmitResult =
   | { ok: true; url: string }
-  | { ok: false; fallbackUrl: string };
+  | { ok: false; needsBrowser: true; fallbackUrl: string; truncated: boolean }
+  | { ok: false; error: string; fallbackUrl: string };
 
 /**
  * Submit a GitHub issue via the shared github-client (REST — app token or gh
@@ -513,7 +573,8 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
   // Build body in the main process where app.getVersion() and os info are available.
   const body = buildIssueBody({
     kind: args.kind,
-    summary: args.summary,
+    // No AI summary is the normal case now (R12), not a missing field.
+    summary: args.summary ?? '',
     description: args.description,
     log: args.log ?? '',
     version: app.getVersion(),
@@ -521,13 +582,26 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
     os: `${os.platform()} ${os.release()}`,
   });
   const fallbackUrl = buildPrefillUrl({ title: args.title, body, label: args.label });
+  // The prefill drops body when the URL would exceed GitHub's cap; buildPrefillUrl
+  // marks what it cut. Report it so the screen can say so (E-07) — the full draft
+  // is still in the renderer either way.
+  const truncated = fallbackUrl.includes('%5Btruncated%5D') || fallbackUrl.includes('[truncated]');
+
+  if (args.browserOnly) return { ok: false, needsBrowser: true, fallbackUrl, truncated };
+
+  let client: Awaited<ReturnType<typeof import('./github-client')['getGithubClient']>> | null = null;
+  try {
+    const mod = await import('./github-client');
+    client = mod.getGithubClient();
+  } catch (e: any) {
+    return { ok: false, error: `Could not load the GitHub connection: ${String(e?.message || e)}`, fallbackUrl };
+  }
+
+  const token = client ? await client.getToken().catch(() => null) : null;
+  // Not an error: nobody is signed in, so the ticket is finished in the browser.
+  if (!client || !token) return { ok: false, needsBrowser: true, fallbackUrl, truncated };
 
   try {
-    const { getGithubClient } = await import('./github-client');
-    const client = getGithubClient();
-    const token = client ? await client.getToken().catch(() => null) : null;
-    if (!client || !token) return { ok: false, fallbackUrl };
-
     // Labels must exist on itsdestin/youcoded (ipc-bridge rule) — the REST
     // create applies them in the same call the old `gh issue create` did.
     const res = await client.api('POST', '/repos/itsdestin/youcoded/issues', {
@@ -538,11 +612,26 @@ export async function submitIssue(args: SubmitArgs): Promise<SubmitResult> {
     if (res.status === 201 && res.json?.html_url) {
       return { ok: true, url: String(res.json.html_url) };
     }
-    return { ok: false, fallbackUrl };
-  } catch {
-    // Any failure (expired token, offline, rate limit) degrades to the
-    // browser prefill — issue reporting must never dead-end.
-    return { ok: false, fallbackUrl };
+    // WHY 401/403 is the browser route and not an error (UX review U3): a tester
+    // was told "GitHub did not create the ticket (401): Bad credentials" — about
+    // credentials they had never set up. A rejected or expired token means the same
+    // thing to the user as having none: finish it in the browser. Reporting it as a
+    // failure blames them for a state they cannot see and hides the way forward.
+    if (res.status === 401 || res.status === 403) {
+      return { ok: false, needsBrowser: true, fallbackUrl, truncated };
+    }
+    // Any other refusal is real. Say what GitHub said; never guess why
+    // (docs/error-message-standards.md).
+    const detail = String(res.json?.message || '').trim();
+    return {
+      ok: false,
+      error: detail
+        ? `GitHub did not create the ticket (${res.status}): ${detail}`
+        : `GitHub did not create the ticket (${res.status}).`,
+      fallbackUrl,
+    };
+  } catch (e: any) {
+    return { ok: false, error: String(e?.message || e), fallbackUrl };
   }
 }
 
@@ -711,4 +800,110 @@ export function openDevSessionIn(
     model,
     initialInput: args.initialInput,
   });
+}
+
+// --- Managed development workspace (contract R9/R10) -------------------------
+//
+// Deliberately NOT installWorkspace() above. That one clones into a fixed
+// ~/youcoded-dev, PULLS into it when it recognises the remote, and throws when it
+// does not — all three ruled out by R9 ("an existing development folder is left
+// untouched and the screen explains the new project is separate").
+//
+// WHERE it goes, and why not under Projects/: `sync-spaces/managed-roots.ts`
+// turns EVERY directory under ~/YouCoded/Projects into a synced space, and the
+// transport stages with `git add -A` (git-transport.ts). This workspace is ~1GB
+// with five nested .git directories, so putting it there would silently push a
+// gigabyte of source to the user's backup — while the approved screen says nothing
+// about backup at all. ~/YouCoded/Development is inside the app's own folder (so it
+// reads as app-managed) and outside both sync roots, so nothing is uploaded.
+//
+// State lives HERE, in main, not in the dialog: the screen tells the user "you can
+// close this — setup keeps going". That is only true if closing the dialog cannot
+// cancel it and reopening can ask where it got to.
+
+export type WorkspaceSetupStatus = {
+  state: 'idle' | 'running' | 'ready' | 'failed';
+  path?: string;
+  error?: string;
+};
+
+let setupStatusState: WorkspaceSetupStatus = { state: 'idle' };
+let setupInFlight: Promise<{ ok: true; path: string } | { ok: false; error: string }> | null = null;
+
+export function workspaceSetupStatus(): WorkspaceSetupStatus {
+  return setupStatusState;
+}
+
+/**
+ * WHY this exists (code review C12): the status was never cleared, so after one
+ * failure every later open of the Contribute screen showed that same old failure and
+ * the "Set up development workspace" button became unreachable for the rest of the
+ * session. A 'ready' state outlived the folder the same way. The screen clears it
+ * when the user acknowledges the outcome.
+ */
+export function clearWorkspaceSetupStatus(): void {
+  if (setupInFlight) return;   // never lose sight of a run still going
+  setupStatusState = { state: 'idle' };
+}
+
+/** A folder under ~/YouCoded/Development that does not exist yet. Never reuses one. */
+function freeWorkspacePath(): string {
+  const root = path.join(os.homedir(), 'YouCoded', 'Development');
+  const base = 'youcoded-workspace';
+  for (let n = 0; n < 100; n++) {
+    const candidate = path.join(root, n === 0 ? base : `${base}-${n + 1}`);
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+  throw new Error('Too many development workspaces already exist in YouCoded/Development.');
+}
+
+export function setupManagedWorkspace(
+  registerFolder: (absPath: string) => void,
+): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+  // A second press joins the first run rather than starting a rival clone or
+  // failing with "already exists" (design review F16).
+  if (setupInFlight) return setupInFlight;
+  setupInFlight = (async () => {
+    setupStatusState = { state: 'running' };
+    let target = '';
+    // WHY the output is kept (code review C10): both steps used to stream into a
+    // no-op, so a failure surfaced as "git exited with code 128" — the ONE number
+    // that says nothing — while git's actual sentence ("could not resolve host",
+    // "Permission denied") was captured and thrown away. The tail is what the user
+    // is shown, so keep the last lines and nothing more.
+    const output: string[] = [];
+    const keep = (line: string) => { output.push(line); if (output.length > 40) output.shift(); };
+    const withOutput = (e: unknown) => {
+      const base = String((e as { message?: unknown })?.message ?? e);
+      const tail = output.filter(l => l.trim()).slice(-3).join(' ').trim();
+      return tail ? `${base} — ${tail}` : base;
+    };
+    try {
+      target = freeWorkspacePath();
+      fs.mkdirSync(path.dirname(target), { recursive: true });
+      await runStreamed('git', ['clone', '--depth', '50', WORKSPACE_REPO, target], keep);
+      await runStreamed('bash', ['setup.sh'], keep, { cwd: target });
+      registerFolder(target);
+      setupStatusState = { state: 'ready', path: target };
+      return { ok: true as const, path: target };
+    } catch (e: unknown) {
+      // The reason is the one the failing step gave. Never a guessed cause
+      // (docs/error-message-standards.md).
+      const error = withOutput(e);
+      // WHY the partial tree goes (code review C11): a half-finished clone used to
+      // stay on disk, so the next attempt walked past it to a NEW name and the user
+      // silently accumulated broken copies — up to 100 of them. The screen tells them
+      // "nothing was left behind, so trying again starts cleanly"; this is what makes
+      // that true. Only ever the folder THIS run created.
+      if (target) {
+        try { fs.rmSync(target, { recursive: true, force: true }); }
+        catch { /* a tree we cannot remove is not worth failing the report over */ }
+      }
+      setupStatusState = { state: 'failed', error };
+      return { ok: false as const, error };
+    } finally {
+      setupInFlight = null;
+    }
+  })();
+  return setupInFlight;
 }

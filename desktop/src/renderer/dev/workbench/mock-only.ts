@@ -83,6 +83,14 @@
 // show the trimmed and everything-fit states without a local model. Only the
 // "no real backend" claim goes.
 //
+// The two contribution-workspace rows (`dev.setupWorkspace`, `dev.setupStatus`) were listed
+// here on 2026-09-10 while the Contribute screen was designed ahead of its backend, and came
+// off the same day when it landed. Exactly the lifecycle this registry is for — the UI was
+// built against a fake, and the fake said what to build. Their fakes in mock-shim.ts STAY:
+// the workbench has no git, no network and no ~/YouCoded. Only the "no real backend" claim
+// goes. They are deliberately desktop-only, which ipc-channels.test.ts's DESKTOP_ONLY set
+// enforces rather than leaving implicit.
+//
 // Add a row the moment you design a channel ahead of its backend; delete the row, never the
 // guard, when it ships. An empty list is the healthy state.
 export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [

@@ -125,6 +125,15 @@ function AuthScreen({
       <p className="text-sm text-fg-dim text-center leading-relaxed">
         Sign in with the plan you already pay for — no API key or credit card needed.
       </p>
+      {/* First-run guide design 2026-09-10 §1.1: the one warning nobody can
+          skip. It lives on the sign-in step because every install passes
+          through here; the app's own dialogs only warn the first time a
+          permission switch flips. */}
+      {/* Wording is Destin's (review deck 2026-09-10, Z-1). */}
+      <p className="text-sm text-fg-dim text-center leading-relaxed">
+        With your permission, the assistant may create, change, or delete files on your device.
+        Create backups for anything you cannot replace.
+      </p>
 
       {/* Documented pill exception: first-run hero CTAs keep rounded-full and
           their own larger padding. Only the hover and the focus ring normalize —
@@ -220,21 +229,10 @@ function CompletionCard() {
   return (
     <div className="w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col gap-4">
       <h2 className="text-lg font-semibold text-fg text-center">You're all set.</h2>
-      <p className="text-sm text-fg-dim text-center">Here's what to try first:</p>
-      <ul className="flex flex-col gap-2 text-sm text-fg-dim">
-        <li className="flex gap-2">
-          <span className="text-accent">•</span>
-          <span><span className="text-fg">Pick a theme</span> — Settings &rarr; Appearance</span>
-        </li>
-        <li className="flex gap-2">
-          <span className="text-accent">•</span>
-          <span><span className="text-fg">Install a skill</span> — the marketplace is one click away</span>
-        </li>
-        <li className="flex gap-2">
-          <span className="text-accent">•</span>
-          <span><span className="text-fg">Sync across devices</span> — optional, but handy</span>
-        </li>
-      </ul>
+      {/* First-run guide design 2026-09-10 §1.2: the three "try this first"
+          bullets are gone — the buddy's tour covers them once the app opens,
+          so listing them here would say everything twice. */}
+      <p className="text-sm text-fg-dim text-center">Your assistant will show you around once the app opens.</p>
       <div className="flex items-center justify-center gap-2 text-xs text-fg-muted pt-1">
         <BrailleSpinner size="sm" />
         <span>Opening YouCoded…</span>

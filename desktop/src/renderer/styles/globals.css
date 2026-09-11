@@ -409,6 +409,35 @@ html {
   background-color: var(--canvas);
 }
 
+/* App chrome is not highlightable or copyable (Destin, 2026-09-10): Ctrl+A or a
+   drag painted status bar chips, quick chips, tool card titles and the
+   composer's placeholder as selected text, and Copy carried them along.
+   Every <button> is chrome; chrome AREAS (header, status bar, quick chips,
+   composer, empty-chat hints) carry `select-none` in their own component.
+   Message words stay selectable, and `select-text` opts a button back in where
+   its label IS content (a clickable file name inside a message).
+   In @layer base, NOT unlayered: Tailwind v4 emits utilities inside
+   @layer utilities, and unlayered CSS beats every layer regardless of
+   specificity — unlayered, this rule would silently defeat that opt-in.
+   Text fields re-enable ONLY while focused. Measured in headless Chromium
+   2026-09-10: a field inside an unselectable area still drag-selects its own
+   text with no rule at all, but an always-on `user-select: text` made a
+   page-wide Ctrl+A paint the composer's EMPTY placeholder as selected, one of
+   the exact things this change exists to stop. The focused re-enable is for
+   engines that do not give fields that exemption (unverified here). */
+@layer base {
+  button {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input:focus,
+  textarea:focus,
+  [contenteditable]:not([contenteditable="false"]):focus {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
 /* Prevent iOS Safari auto-zoom on input focus (triggers at font-size < 16px) */
 @media screen and (max-width: 768px) {
   textarea, input[type="text"], input {
