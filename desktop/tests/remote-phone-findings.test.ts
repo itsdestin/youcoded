@@ -11,7 +11,8 @@ const server = read('../src/main/remote-server.ts');
 const shim = read('../src/renderer/remote-shim.ts');
 const classifier = read('../src/renderer/hooks/useAttentionClassifier.ts');
 const themeCtx = read('../src/renderer/state/theme-context.tsx');
-const index = read('../src/renderer/index.tsx');
+// The sign-in screen moved out of index.tsx into remote-gate.tsx (2026-09-11) so it could be tested.
+const index = read('../src/renderer/remote-gate.tsx');
 
 /**
  * Three things Destin hit the first time a phone actually connected to a computer through

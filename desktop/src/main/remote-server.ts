@@ -123,6 +123,12 @@ const PING_INTERVAL_MS = 20_000;
 // Remote access batch 2 (design §1): a client that never says `client:ready` — an older
 // build of the phone page — gets the restore sequence after this long instead of never.
 const OLD_CLIENT_FALLBACK_MS = 5000;
+// The same fallback for a page that said at sign-in that it sends `client:ready`. WHY longer
+// (2026-09-11 phone pass, dev log "client:ready ignored in phase live"): a phone's page can take
+// more than 5 s from sign-in to listening, and the 5 s timer then ran the catch-up into a page
+// that could not hear it, so the phone said "may be out of date". A page that will announce
+// readiness is waited on; this timer only covers one that breaks before it can.
+const READY_CLIENT_FALLBACK_MS = 30_000;
 // Broadcasts queued for a client that is still restoring. Overflow drops the oldest and
 // marks that client's hydrate `degraded`, so the phone knows to offer Refresh.
 const RESTORE_QUEUE_MAX = 2000;
@@ -292,7 +298,15 @@ export class RemoteServer {
     private hookRelay: HookRelay,
     private config: RemoteConfig,
     private skillProvider?: LocalSkillProvider,
-    opts?: { requestSnapshot?: () => Promise<SerializedChatState>; getFocusSessionId?: () => string | null; onAppearanceBroadcast?: (prefs: Record<string, unknown>) => void },
+    opts?: {
+      requestSnapshot?: () => Promise<SerializedChatState>;
+      getFocusSessionId?: () => string | null;
+      onAppearanceBroadcast?: (prefs: Record<string, unknown>) => void;
+      /** The desktop's commands:list (CommandProvider.getCommands), for the phone's / menu. */
+      listCommands?: () => Promise<unknown[]>;
+      /** The desktop's theme:list. Injectable for tests; defaults to the same function. */
+      listThemes?: () => string[];
+    },
   ) {
     this.devices = new RemoteDeviceStore();
     // Default is a no-op that returns an empty snapshot — allows the server to
@@ -300,6 +314,17 @@ export class RemoteServer {
     this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
     this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
+    this.listCommands = opts?.listCommands ?? null;
+    this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
+  }
+  private listCommands: (() => Promise<unknown[]>) | null;
+  private listThemes: () => string[];
+
+  /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
+   *  project list and a flashing password screen could not be traced, because the host recorded
+   *  no connects, drops or catch-ups. A short device id only: never a secret, address or name. */
+  private logDevice(client: { deviceId: string }, event: string): void {
+    console.log(`[remote-server] device ${client.deviceId.slice(0, 8)}: ${event}`);
   }
   // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
   // Rides session:destroyed so a phone whose conversation went away opens that one.
@@ -1145,7 +1170,7 @@ export class RemoteServer {
           if (result.ok) {
             this.clearFailedAttempts();
             this.config.markPaired();
-            this.addClient(ws, result.device.id, ip);
+            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true });
             // Same capability flag as the pairing path below — master's own note says the
             // two sites must stay in step, and a returning device paints the same UI.
             ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop', sessionNaming: true }));
@@ -1173,7 +1198,7 @@ export class RemoteServer {
           // would be the host guessing about identity, which is what the password is for.
           const paired = this.devices.pair(msg.deviceName);
           this.config.markPaired();
-          this.addClient(ws, paired.deviceId, ip);
+          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true });
           // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
           // master while this branch was open. It rides on every auth:ok this host sends.
           ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop', sessionNaming: true }));
@@ -1199,6 +1224,7 @@ export class RemoteServer {
     this.pingTimer = setInterval(() => {
       for (const client of this.clients) {
         if (client.awaitingPong) {
+          this.logDevice(client, 'no answer to the last ping; closing');
           client.ws.close(4008, 'No response');
           this.clients.delete(client);
           continue;
@@ -1209,7 +1235,7 @@ export class RemoteServer {
     }, PING_INTERVAL_MS);
   }
 
-  private addClient(ws: WebSocket, deviceId: string, ip: string): void {
+  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean } = {}): void {
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
     const client: AuthenticatedClient = {
@@ -1217,6 +1243,7 @@ export class RemoteServer {
       phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
     };
     this.clients.add(client);
+    this.logDevice(client, `connected (${opts.sendsReady ? 'page announces readiness' : 'older page'})`);
     // WHY a fallback and not an immediate replay (design §1): the restore used to start
     // the moment auth succeeded, before the page had mounted App, and guessed with a
     // 500 ms timer how long React would take. Now the client says when it is ready
@@ -1225,10 +1252,11 @@ export class RemoteServer {
     client.fallbackTimer = setTimeout(() => {
       client.fallbackTimer = null;
       if (client.phase !== 'restoring') return;
+      this.logDevice(client, 'catch-up started by the fallback timer (no client:ready)');
       void this.restoreClient(client, { reconnect: false, replayBuffers: true }).catch((err) => {
         console.error('[remote-server] restore (fallback) failed:', err);
       });
-    }, OLD_CLIENT_FALLBACK_MS);
+    }, opts.sendsReady ? READY_CLIENT_FALLBACK_MS : OLD_CLIENT_FALLBACK_MS);
 
     const drop = () => {
       if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
@@ -1236,8 +1264,15 @@ export class RemoteServer {
     };
     ws.on('pong', () => { client.awaitingPong = false; });
     ws.on('message', (raw) => { client.awaitingPong = false; void this.handleMessage(client, raw as Buffer | string); });
-    ws.on('close', drop);
-    ws.on('error', drop);
+    ws.on('close', (code: number, reason: Buffer) => {
+      const why = reason && reason.length ? ` (${reason.toString()})` : '';
+      this.logDevice(client, `disconnected: code ${code}${why} after ${Math.round((Date.now() - client.connectedAt) / 1000)} s, phase ${client.phase}`);
+      drop();
+    });
+    ws.on('error', (err: Error) => {
+      this.logDevice(client, `socket error: ${err?.message ?? err}`);
+      drop();
+    });
   }
 
   // --- The restore sequence (design §1 B, §6) ---
@@ -1255,6 +1290,7 @@ export class RemoteServer {
     opts: { seq?: number; reconnect: boolean; replayBuffers: boolean; ptyPasses?: boolean },
   ): Promise<void> {
     const ws = client.ws;
+    const startedAt = Date.now();
     client.phase = 'readying';
     if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
     client.queue ??= [];
@@ -1268,6 +1304,7 @@ export class RemoteServer {
       await this.flushRestoreQueue(client, { sessions: [] }, [], true).catch(() => { /* the socket is gone */ });
     } finally {
       client.phase = 'live';
+      this.logDevice(client, `caught up in ${Date.now() - startedAt} ms`);
       // A Refresh that arrived while this restore ran: its seq is the one the phone is
       // waiting for, so it runs now instead of being dropped (§6).
       const next = client.pendingRehydrate;
@@ -1282,6 +1319,7 @@ export class RemoteServer {
    *  snapshot, chat:hydrate { seq }, the flush — §1's sequence minus the terminal and
    *  permission replays, which a connected phone already has in step. */
   private async rehydrateClient(client: AuthenticatedClient, seq: number | undefined): Promise<void> {
+    this.logDevice(client, 'catch-up started (Refresh)');
     client.phase = 'restoring';
     client.queue = [];
     client.queueDegraded = false;
@@ -1515,11 +1553,18 @@ export class RemoteServer {
           break;
         }
         const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
+        this.logDevice(client, 'catch-up started (page ready)');
         client.ptyOffsets = payload?.ptyOffsets && typeof payload.ptyOffsets === 'object' ? payload.ptyOffsets : {};
         client.ptyCursor = new Map();
         await this.restoreClient(client, { seq, reconnect: payload?.reconnect === true, replayBuffers: true });
         break;
       }
+      case 'remote:ping':
+        // The phone's wake check (remote-shim checkConnectionAfterWake): any answer proves the
+        // connection is alive. Answered at once and in every phase — a phone that is catching
+        // up is exactly the one most likely to be asking.
+        this.respond(client.ws, type, id, { ok: true });
+        break;
       case 'remote:rehydrate': {
         // Answered at once — the phone follows the result through chat:hydrate and its
         // strip, not through this reply. Mid-restore, the Refresh runs right after.
@@ -2429,6 +2474,30 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
+      // Read-only lists a phone's screens load at start. Each was "unhandled channel" in the
+      // 2026-09-11 phone pass log and its screen fell back to empty. The same functions the
+      // desktop handlers call, so the two cannot drift; a failure is answered as a failure
+      // (REJECT_ON_NOT_OK in the shim), never as an empty list.
+      case 'theme:list': {
+        try { this.respond(client.ws, type, id, this.listThemes()); }
+        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
+        break;
+      }
+      case 'commands:list': {
+        try { this.respond(client.ws, type, id, this.listCommands ? await this.listCommands() : []); }
+        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
+        break;
+      }
+      case 'appearance:get-favorite-themes': {
+        try { this.respond(client.ws, type, id, this.skillProvider ? this.skillProvider.configStore.getThemeFavorites() : []); }
+        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
+        break;
+      }
+      case 'platform:get':
+        // The COMPUTER's platform. The screens that ask are about what can be installed or run
+        // there (Marketplace integrations; the Linux helper, which is also gated to a desktop).
+        this.respond(client.ws, type, id, process.platform);
+        break;
       case 'skills:list': {
         const skills = this.skillProvider ? await this.skillProvider.getInstalled() : [];
         this.respond(client.ws, type, id, skills);
@@ -3680,6 +3749,7 @@ export class RemoteServer {
         // A live client that has stopped reading gets closed rather than buffered
         // without bound (§7); the shim reconnects and the strip says so.
         if (client.ws.bufferedAmount > BACKPRESSURE_CLOSE_BYTES) {
+          this.logDevice(client, 'not reading fast enough; closing');
           client.ws.close(CLOSE_TOO_SLOW, 'Too slow');
           continue;
         }

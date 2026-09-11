@@ -2,11 +2,11 @@
 // so module-level isAndroid()/isRemoteMode() reads in imported files see the
 // right value. See platform-bootstrap.ts for why.
 import './platform-bootstrap';
-import React, { useState, useEffect, useCallback } from 'react';
+import React from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles/globals.css';
 import App from './App';
-import { Button, TextInput } from './components/ui';
+import { RemoteGate } from './remote-gate';
 
 // Perf lab startup mark (read over CDP by youcoded-dev/scripts/perf-lab). Free.
 // WHY the name says "modules-evaluated" and not "start": ESM hoists EVERY import
@@ -89,99 +89,6 @@ if (navigator.platform === 'MacIntel' || navigator.platform === 'MacPPC') {
   }
 }
 
-/** Minimal login screen for remote browser access. */
-function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>; }) {
-  const [password, setPassword] = useState('');
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  // WHY the screen asks the host before drawing: a computer with no password set cannot
-  // accept ANY password, and this screen used to show the box anyway — you typed a guess,
-  // pressed Connect, and only then were told it was never configured. null = we have not
-  // heard back yet, and until we do the box behaves exactly as it always has.
-  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
-  useEffect(() => {
-    let live = true;
-    fetch('/remote-state', { cache: 'no-store' })
-      .then(r => (r.ok ? r.json() : null))
-      .then(state => { if (live && state && typeof state.needsSetup === 'boolean') setNeedsSetup(state.needsSetup); })
-      // An older host has no such endpoint. Staying on the password box is the right
-      // fallback: it is what this screen did before, not a guess about the host.
-      .catch(() => {});
-    return () => { live = false; };
-  }, []);
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!password.trim()) return;
-    setLoading(true);
-    setError(null);
-    try {
-      await onLogin(password);
-    } catch (err: any) {
-      setError(
-        err.message === 'no-password-configured'
-          ? 'This computer has no remote access password yet. Set one on the computer itself, in Settings \u2192 Remote Access.'
-          : 'Invalid password'
-      );
-      setLoading(false);
-    }
-  };
-
-  if (needsSetup) {
-    // No password on the host: there is nothing to type, so nothing is offered to type
-    // into. The one thing that moves this forward happens on the other computer.
-    return (
-      <div className="flex items-center justify-center h-full bg-panel text-fg">
-        <div className="flex flex-col gap-3 w-72 text-center">
-          <h1 className="text-xl font-bold mb-2">YouCoded Remote</h1>
-          <p className="text-sm text-fg-2">This computer has no remote access password yet.</p>
-          <p className="text-xs text-fg-muted">
-            On the computer itself, open Settings &rarr; Remote Access and set a password.
-            Then reload this page.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex items-center justify-center h-full bg-panel text-fg">
-      <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-72">
-        <h1 className="text-xl font-bold text-center mb-2">YouCoded Remote</h1>
-        {/* Was a hand-rolled field with gray focus (`focus:border-fg-muted`) — the
-            exact paradigm change 20 retires. Fields focus by accent border now. */}
-        <TextInput
-          type="password"
-          placeholder="Password"
-          value={password}
-          onChange={(e) => setPassword(e.target.value)}
-          autoFocus
-          disabled={loading}
-        />
-        {/* Was `bg-blue-600 hover:bg-blue-500` — a hardcoded blue that ignored the
-            theme entirely. The button sweep missed this file because the remote
-            login screen lives in index.tsx, not components/. The button stays
-            BELOW the field rather than inside it (change 77): this is a stacked
-            submit form, not a field with an inline action. */}
-        <Button type="submit" disabled={loading} size="lg" className="justify-center">
-          {loading ? 'Connecting...' : 'Connect'}
-        </Button>
-        {/* Error text was `text-red-400`. Same pixel today (the app remaps
-            red-400 to #DD4444), but the token is what community packs can
-            restyle. */}
-        {error && (
-          <p className="text-destructive-fg text-xs text-center">{error}</p>
-        )}
-      </form>
-    </div>
-  );
-}
-
-/**
- * Wrapper that owns all connection logic. LoginScreen is pure-presentational.
- * This eliminates the race condition where LoginScreen and Root both
- * independently manage connection state.
- */
 // Capture before any shim can modify window.claude
 const isElectron = !!(window as any).claude;
 // Android WebView loads from file:// — always auto-connects, never needs a password screen
@@ -190,71 +97,14 @@ const isAndroid = location.protocol === 'file:';
 // __PLATFORM__ is already set by platform-bootstrap.ts for electron/android;
 // browser/remote path leaves it undefined until remote-shim auth:ok fills it in.
 
+/**
+ * Electron has its bridge already. Every other page reaches its computer (or the Android
+ * app's own runtime) through the shim, and RemoteGate owns what shows until it connects —
+ * including when the password box is shown at all (remote-gate.tsx says why).
+ */
 function Root() {
-  const [connected, setConnected] = useState(isElectron);
-  const [hasConnectedOnce, setHasConnectedOnce] = useState(isElectron);
-  const [shimReady, setShimReady] = useState(isElectron);
-
-  // In browser mode: install shim once, attempt token auto-login, listen for state changes
-  useEffect(() => {
-    if (isElectron) return;
-    import('./remote-shim').then(({ installShim, connect, onConnectionStateChange, retryLocalBridge }) => {
-      installShim();
-      setShimReady(true);
-
-      onConnectionStateChange((state) => {
-        const isConnected = state === 'connected';
-        setConnected(isConnected);
-        if (isConnected) setHasConnectedOnce(true);
-      });
-
-      // Android WebView: auto-connect to LocalBridgeServer. If the bridge
-      // server isn't listening yet (startup race), retry with backoff.
-      if (location.protocol === 'file:') {
-        connect('android-local', false).catch((err) => {
-          console.error('Android auto-connect failed:', err);
-          retryLocalBridge();
-        });
-        return;
-      }
-
-      // Auto-login with stored token
-      const storedToken = localStorage.getItem('youcoded-remote-token');
-      if (storedToken) {
-        connect(storedToken, true).catch(() => {
-          localStorage.removeItem('youcoded-remote-token');
-        });
-      }
-    });
-  }, [isElectron]);
-
-  const handleLogin = useCallback(async (password: string) => {
-    const { connect } = await import('./remote-shim');
-    await connect(password);
-  }, []);
-
-  // Once connected, keep showing App even during transient disconnections
-  if (isElectron || connected || hasConnectedOnce) {
-    return <App />;
-  }
-
-  if (!shimReady) {
-    return <div className="flex items-center justify-center h-full bg-panel text-fg text-sm">Loading...</div>;
-  }
-
-  // Android always auto-connects to local bridge — never show the password screen.
-  // Fix: wait for connection/auth to complete BEFORE mounting App. shimReady only
-  // guarantees window.claude exists, not that auth:ok has fired. IPC calls made
-  // during the pre-auth window (theme:list, skills:list, etc.) are dropped by
-  // LocalBridgeServer's unauthenticated-client guard (LocalBridgeServer.kt:116),
-  // then time out silently after 30s — causing install'd themes/skills to never
-  // appear in the UI. The first branch above renders App once `connected` flips;
-  // keep this path on a Loading state until then so we never ship IPC pre-auth.
-  if (isAndroid) {
-    return <div className="flex items-center justify-center h-full bg-panel text-fg text-sm">Connecting...</div>;
-  }
-
-  return <LoginScreen onLogin={handleLogin} />;
+  if (isElectron) return <App />;
+  return <RemoteGate isAndroid={isAndroid} loadShim={() => import('./remote-shim')} renderApp={() => <App />} />;
 }
 
 // Workbench boot. `import.meta.env.DEV` is statically replaced with `false` in

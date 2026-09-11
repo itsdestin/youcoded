@@ -51,6 +51,8 @@ describe('the shim rejects a failure instead of resolving it', () => {
   // when someone tidies an entry away, which is the failure mode this guards.
   it('lists every channel of this feature whose success shape is a plain object', () => {
     expect([...REJECT_ON_NOT_OK].sort()).toEqual([
+      'appearance:get-favorite-themes',
+      'commands:list',
       'engine:prereqs',
       'engine:run-in-terminal',
       'engine:set-config',
@@ -68,6 +70,10 @@ describe('the shim rejects a failure instead of resolving it', () => {
       // happened — the false success this whole file exists to prevent.
       'remote:set-config',
       'remote:set-password',
+      // Reads a phone loads at start, answered by the host since 2026-09-11 (with the two at the
+      // top of this list). Success is an ARRAY, which can never be { ok:false } either, so a
+      // failure must reach the caller's catch; resolved, it would render as an empty list.
+      'theme:list',
     ]);
   });
 
