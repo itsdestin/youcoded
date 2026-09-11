@@ -16,6 +16,14 @@ on:
           1.3.0-beta, rather than patching the current version.
         required: false
         default: '1.3.0-beta'
+      skip_windows_tests:
+        description: >-
+          Skip `npm test` on the Windows leg only, so a Windows installer still gets built while
+          master's Windows tests are red for a reason that is not this build's. macOS and Linux
+          always run the tests. Leave it off for any build someone will rely on.
+        type: boolean
+        required: false
+        default: false
 
 jobs:
   build:
@@ -104,7 +112,11 @@ jobs:
             "@vscode/ripgrep-darwin-x64@$RG" \
             "@napi-rs/canvas-darwin-x64@$CANVAS"
 
+      # WHY the opt-out (2026-09-10): a failed step skips every step after it, so one red Windows
+      # test on master meant NO Windows installer at all, and an installer-icon test had to push a
+      # throwaway branch with this step deleted. Windows-only, off unless someone asks for it.
       - name: Run tests
+        if: ${{ !(inputs.skip_windows_tests && matrix.name == 'windows') }}
         run: npm test
 
       # Must run BEFORE the build — electron-builder's deb/rpm/pacman packagers

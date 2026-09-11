@@ -292,6 +292,30 @@ describe('findCachedDownload', () => {
     expect(hit).toEqual({ filePath, version: '1.2.3' });
   });
 
+  // WHY: the two tests above use invented names. These use the names releases
+  // actually publish, which is how the dotted-name miss below went unnoticed.
+  it('finds the renamed Windows installer, beta version included', () => {
+    const filePath = path.join(tmpDir, 'YouCoded-Installer-1.3.0-beta.77.exe');
+    fs.writeFileSync(filePath, 'x');
+    const hit = findCachedDownload(tmpDir, '1.3.0-beta.77', 'win32');
+    expect(hit).toEqual({ filePath, version: '1.3.0-beta.77' });
+  });
+
+  it('finds the renamed macOS installer for both chips', () => {
+    const arm = path.join(tmpDir, 'YouCoded-Installer-1.2.3-arm64.dmg');
+    fs.writeFileSync(arm, 'x');
+    expect(findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: arm, version: '1.2.3' });
+    fs.rmSync(arm);
+    const intel = path.join(tmpDir, 'YouCoded-Installer-1.2.3-x64.dmg');
+    fs.writeFileSync(intel, 'x');
+    expect(findCachedDownload(tmpDir, '1.2.3', 'darwin')).toEqual({ filePath: intel, version: '1.2.3' });
+  });
+
+  it('never matched the old dotted Windows name GitHub published (why the rename puts a dash there)', () => {
+    fs.writeFileSync(path.join(tmpDir, 'YouCoded.Setup.1.2.3.exe'), 'x');
+    expect(findCachedDownload(tmpDir, '1.2.3', 'win32')).toBeNull();
+  });
+
   it('finds a matching .dmg by version substring on macOS', () => {
     const filePath = path.join(tmpDir, 'YouCoded-1.2.3-arm64.dmg');
     fs.writeFileSync(filePath, 'x');

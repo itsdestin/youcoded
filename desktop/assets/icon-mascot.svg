@@ -1,4 +1,12 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="48" height="48" viewBox="0 0 48 48"><rect x="0.3" y="0.3" width="47.4" height="47.4" rx="15.3" fill="#E7D4EF" stroke="#D6C0E2" stroke-width="0.6"/><path d="M16.5 1.3 H31.5" stroke="#F7F1FA" stroke-width="0.6" stroke-opacity="0.7" stroke-linecap="round"/><g transform="translate(5.40 5.28) scale(1.55)"><defs>
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3 -5 30 30">
+  <!-- The app icon's mascot, picked by Destin 2026-09-10 over four review rounds
+       (youcoded-dev docs/archive/design/2026-09-10-app-icon/, generator in its generate/ folder).
+       Made once from the rig library's sticker skin (wecoded-themes mascots/skins/sticker.svg) and
+       the face kit (theme-builder mascot-faces.mjs), in the app's "welcome" pose (the wave):
+       body #8B47B8, white sparkle eyes, deep purple #4A1F66 die-cut edge.
+       Every app, installer and Android icon is built from this file by scripts/build-icons.mjs.
+       Change the drawing here, rerun the script, and never hand-edit the PNG/ICO/ICNS it writes. -->
+<defs>
     <radialGradient id="g-hi" cx="33%" cy="20%" r="80%">
       <stop offset="0%" stop-color="#B98AD6" stop-opacity="0.45"/>
       <stop offset="55%" stop-color="#B98AD6" stop-opacity="0"/>
@@ -49,4 +57,5 @@
     <g id="slot-hat"/>
     
     
-  </g></g></svg>
+  </g>
+</svg>
