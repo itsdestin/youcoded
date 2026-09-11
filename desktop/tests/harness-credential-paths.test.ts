@@ -2,8 +2,10 @@ import { describe, it, expect } from 'vitest';
 import * as os from 'os';
 import * as path from 'path';
 import { isCredentialPath, CREDENTIAL_EXCLUDE_GLOBS } from '../src/main/harness/tools/credential-paths';
+import * as fs from 'fs';
 import { checkPathGuard, canonicalize } from '../src/main/harness/tools/guards';
-import { readStripped } from './helpers/guard-scope';
+import { GrepTool } from '../src/main/harness/tools/grep';
+import type { ToolContext } from '../src/main/harness/tools/types';
 
 const CWD = path.join(os.tmpdir(), 'cred-test-workspace');
 const HOME = os.homedir();
@@ -36,9 +38,11 @@ describe('isCredentialPath — pure-credential files, home-anchored', () => {
     expect(isCredentialPath(canon(rel), canonHome)).toBe(true);
   });
 
-  it('denies YouCoded\'s own encrypted stores by basename, anywhere', () => {
-    expect(isCredentialPath(canonicalize('/opt/youcoded/native-secrets.json', CWD), canonHome)).toBe(true);
+  it('denies YouCoded\'s own encrypted stores under home, but not a same-named project file', () => {
+    expect(isCredentialPath(canon('.config/youcoded/native-secrets.json'), canonHome)).toBe(true);
     expect(isCredentialPath(canon('.config/youcoded/chatgpt-account.json'), canonHome)).toBe(true);
+    // A project fixture that merely shares the name (outside home) stays readable (F3).
+    expect(isCredentialPath(canonicalize('/opt/other/native-secrets.json', CWD), canonHome)).toBe(false);
   });
 
   it.each([
@@ -86,18 +90,32 @@ describe('Grep does not descend into credential directories (--hidden gap)', () 
     expect(CREDENTIAL_EXCLUDE_GLOBS).toContain('!**/.config/gcloud/**');
   });
 
-  it('grep.ts pushes the exclusions AFTER the caller glob — so exclusion wins', () => {
-    // ripgrep applies globs in order, last match wins. If a caller sends
-    // `--glob **/.aws/credentials` (include) our exclusion must come later to
-    // still win. Pin the source ordering: the CREDENTIAL_EXCLUDE_GLOBS push must
-    // appear after the args.glob push.
-    const src = readStripped(path.join(__dirname, '../src/main/harness/tools/grep.ts'));
-    const callerGlob = src.indexOf("rgArgs.push('--glob', args.glob)");
-    const exclude = src.indexOf('CREDENTIAL_EXCLUDE_GLOBS');
-    // the import mention is first; find the push, which is the LAST mention.
-    const excludePush = src.lastIndexOf('CREDENTIAL_EXCLUDE_GLOBS');
-    expect(callerGlob).toBeGreaterThan(-1);
-    expect(exclude).toBeGreaterThan(-1);
-    expect(excludePush).toBeGreaterThan(callerGlob);
+  // A REAL ripgrep run (F2 review): the source-ordering check alone would not
+  // catch a ripgrep whose glob precedence changed. Build a workspace holding a
+  // secret under .aws/, then search WITH a caller include-glob that tries to pull
+  // it back in, and confirm the secret never appears.
+  it('never returns a hit from a credential dir, even when a caller glob targets it', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'grep-cred-'));
+    try {
+      fs.mkdirSync(path.join(root, '.aws'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.aws', 'credentials'), 'aws_secret_access_key = SECRETVAL\n');
+      fs.writeFileSync(path.join(root, 'notes.txt'), 'ordinary SECRETVAL note\n');
+      const ctx: ToolContext = {
+        sessionId: 'grep-cred-test', cwd: root,
+        signal: new AbortController().signal, readRegistry: new Map(), todos: [],
+      };
+      // The caller tries to include the credential file explicitly.
+      const r = await GrepTool.execute(
+        { pattern: 'SECRETVAL', output_mode: 'files_with_matches', glob: '**/.aws/credentials' } as any,
+        ctx,
+      );
+      const text = JSON.stringify(r);
+      expect(text).not.toContain('.aws/credentials');
+      // and an ordinary search still finds the ordinary file
+      const r2 = await GrepTool.execute({ pattern: 'SECRETVAL', output_mode: 'files_with_matches' } as any, ctx);
+      expect(JSON.stringify(r2)).toContain('notes.txt');
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true, maxRetries: 10, retryDelay: 25 });
+    }
   });
 });

@@ -61,9 +61,12 @@ const BROWSER_CRED_BASENAMES = new Set([
   'cookies.sqlite', 'signons.sqlite',
 ]);
 
-/** Distinctive basenames refused anywhere — no legitimate project file shares
- *  these names (YouCoded's own encrypted stores). */
-const CREDENTIAL_BASENAMES = new Set(['native-secrets.json', 'chatgpt-account.json']);
+/** YouCoded's own encrypted stores, matched by basename but only UNDER HOME — the
+ *  userData dir is under home on every platform (~/.config/youcoded,
+ *  ~/Library/Application Support/youcoded, ~/AppData/Roaming/youcoded), so
+ *  anchoring to home keeps them covered while a project fixture that happened to
+ *  share the name stays readable (2026-09-10 review, F3). */
+const HOME_BASENAMES = new Set(['native-secrets.json', 'chatgpt-account.json']);
 
 /**
  * True when `canonical` (a canonicalize()'d absolute path — forward slashes,
@@ -75,10 +78,10 @@ export function isCredentialPath(canonical: string, home: string): boolean {
   const h = home.toLowerCase().replace(/\/$/, '');
   const base = c.slice(c.lastIndexOf('/') + 1);
 
-  if (CREDENTIAL_BASENAMES.has(base)) return true;
   if (!c.startsWith(h + '/')) return false;
   const rel = c.slice(h.length + 1);
 
+  if (HOME_BASENAMES.has(base)) return true;
   if (HOME_FILES.includes(rel)) return true;
   if (HOME_DIR_PREFIXES.some((p) => rel.startsWith(p))) return true;
   if (BROWSER_CRED_BASENAMES.has(base) && BROWSER_ROOTS.some((r) => rel.startsWith(r))) return true;

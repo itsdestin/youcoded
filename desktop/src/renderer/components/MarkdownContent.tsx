@@ -305,9 +305,22 @@ function CopyButton({ text }: { text: string }) {
  *  can carry stolen text (`https://x/?d=<secret>`), so a prompt-injected model
  *  could exfiltrate with no tool call and no click. A picture from a WEBSITE now
  *  waits behind a Show button (the request only leaves once the person taps it);
- *  data:, blob: and app-local pictures have no network fetch and render inline. */
+ *  a relative/app-local src has no network fetch and renders inline. (data:/blob:
+ *  never reach here — react-markdown's urlTransform drops them before this.)
+ *
+ *  Parsed with the URL constructor, NOT a `https://` prefix regex: `https:evil/x`
+ *  (one slash, or none) is normalised by the browser to `https://evil/x` and
+ *  fetched all the same, but a strict-prefix check read it as local — a
+ *  one-character bypass of the whole gate (2026-09-10 review). */
 function isNetworkImageSrc(src: string): boolean {
-  return /^https?:\/\//i.test(src) || src.startsWith('//');
+  const s = src.trim();
+  if (s.startsWith('//')) return true; // protocol-relative → the page's scheme
+  try {
+    const proto = new URL(s).protocol;
+    return proto === 'http:' || proto === 'https:' || proto === 'ftp:' || proto === 'ws:' || proto === 'wss:';
+  } catch {
+    return false; // no scheme → relative / app-local, no network request
+  }
 }
 
 function ChatImage({ src, alt, ...props }: any) {

