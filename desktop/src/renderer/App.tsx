@@ -3166,9 +3166,8 @@ function AppInner() {
         setTimeout(() => findGuideAnchor(row)?.querySelector('button')?.click(), 350);
         break;
       }
-      case 'drawer': closeAll(); if (sessionId) handleOpenDrawer(false); break;
     }
-  }, [sessions.length, welcomeFormOpen, openWelcomeForm, sessionId, handleOpenDrawer]);
+  }, [sessions.length, welcomeFormOpen, openWelcomeForm]);
   // Three tip moments App itself owns (the rest fire from the screen they are
   // about — SessionDrawer, CloseSessionPrompt, ModelPicker, ErrorState):
   // Resume, when there is a session to pick up and none is open; the floater,

@@ -912,9 +912,6 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 type="button"
                 onClick={() => setPreviewSheetOpen((v) => !v)}
                 aria-label={`Organize ${activePreview.title || COPY.untitled}`}
-                // The first-run tour's "tags and notes" stop rings this button:
-                // it is what opens the editor the stop talks about.
-                data-guide-anchor="tags-notes"
                 aria-haspopup="dialog"
                 aria-expanded={previewSheetOpen}
                 className={`w-7 h-7 rounded-md inline-flex items-center justify-center shrink-0 border transition-colors ${

@@ -103,7 +103,7 @@ describe('the eight stops', () => {
     const { GUIDE_STOPS } = await import('../src/renderer/components/guide/guide-stops');
     expect(GUIDE_STOPS.map((s) => s.id)).toEqual(['buddy', 'sessions', 'tags', 'projects', 'files', 'models', 'themes', 'help']);
     expect(GUIDE_STOPS.map((s) => s.screen)).toEqual([
-      'welcome', 'welcome-form', 'drawer', 'projects', 'projects', 'settings:cloud', 'settings:appearance', 'settings:help',
+      'welcome', 'welcome-form', 'welcome-form', 'projects', 'projects', 'settings:cloud', 'settings:appearance', 'settings:help',
     ]);
     for (const s of GUIDE_STOPS) expect(s.text.split(' ').length).toBeLessThan(45);
   });

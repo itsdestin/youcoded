@@ -18,8 +18,7 @@ export type GuideScreen =
   | 'projects'             // the Projects screen
   | 'settings:cloud'       // Settings → Assistant settings → Cloud providers
   | 'settings:appearance'  // Settings → Appearance
-  | 'settings:help'        // Settings → Help & feedback
-  | 'drawer';              // the open session's drawer, if there is one
+  | 'settings:help';       // Settings → Help & feedback
 
 export type GuideAction =
   | { kind: 'click-anchor'; anchor: string; label: string }
@@ -60,12 +59,14 @@ export const GUIDE_STOPS: readonly GuideStop[] = [
   },
   {
     id: 'tags',
-    text: 'This button holds a session’s tags and a note to your future self. Both show under All Sessions, so a conversation from last month is easy to find again.',
-    textWhenMissing: 'Once you have a session, the tag button in its side panel holds tags and a note to your future self. Both show under All Sessions, so old conversations are easy to find.',
-    screen: 'drawer',
+    // The anchor is the status bar's tags chip (Destin, 2026-09-11: the drawer's
+    // button belongs to previews and the old sentence was "not entirely correct").
+    text: 'Down here you can give a session tags, or leave yourself a note about it. Both show under All Sessions, so a conversation from last month is easy to find.',
+    textWhenMissing: 'Once a session is open, a tags button sits in the bar at the bottom. Tags and a note to yourself both show under All Sessions, so old conversations are easy to find.',
+    screen: 'welcome-form',
     anchor: 'tags-notes',
-    // The one stop with a "Do it now" (deck Q-3): opens the editor the stop is
-    // about. Offered only while that button is on screen.
+    // The one stop with a "Do it now" (deck Q-3): opens the tags popup.
+    // Offered only while the chip is on screen.
     action: { kind: 'click-anchor', anchor: 'tags-notes', label: 'Open them' },
     pose: 'inquisitive',
   },
