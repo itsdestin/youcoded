@@ -598,16 +598,36 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   }, [claude]);
 
   // Per-backend actions
+  // A row's feedback is 'uploading', 'uploaded', or the failure sentence itself.
+  // WHY (Destin, batch 1 deck E-1): a bare "Error" that vanished after two seconds told the
+  // user nothing. A failure now says what happened and stays until the next upload; only a
+  // success clears itself. An empty reason means the upload was skipped (another backup held
+  // the lock), and no answer at all is "couldn't confirm", never a guessed failure.
   const handlePushBackend = useCallback(async (id: string) => {
     setActionFeedback(prev => ({ ...prev, [id]: 'uploading' }));
+    let failure: string | null = null;
     try {
       const result = await claude.sync.pushBackend(id);
-      setActionFeedback(prev => ({ ...prev, [id]: result.success ? 'uploaded' : 'error' }));
-      await refreshStatus();
+      if (!result.success) {
+        failure = result.error
+          ? `Upload failed: ${plainMessage(result.error)}`
+          : "Upload hasn't run yet — try again in a moment.";
+      }
     } catch {
-      setActionFeedback(prev => ({ ...prev, [id]: 'error' }));
+      failure = "Couldn't confirm the upload finished.";
     }
-    setTimeout(() => setActionFeedback(prev => { const n = { ...prev }; delete n[id]; return n; }), 2000);
+    // Refreshed separately, so a failed refresh can't turn a finished upload into a failure.
+    try { await refreshStatus(); } catch { /* the row keeps its last status */ }
+    if (failure) {
+      const text = failure;
+      setActionFeedback(prev => ({ ...prev, [id]: text }));
+      return;
+    }
+    setActionFeedback(prev => ({ ...prev, [id]: 'uploaded' }));
+    setTimeout(() => setActionFeedback(prev => {
+      if (prev[id] !== 'uploaded') return prev;
+      const n = { ...prev }; delete n[id]; return n;
+    }), 2000);
   }, [claude, refreshStatus]);
 
   // handlePullBackend ("Download now") was removed in sync-legacy-demolition —
@@ -1357,14 +1377,14 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                 <span className="text-4xs font-medium text-amber-400">Changes pending upload</span>
                               )}
                               {actionFeedback[b.id] && (
-                                <span className={`text-4xs font-medium ${
-                                  actionFeedback[b.id] === 'error' ? 'text-destructive-fg' :
-                                  actionFeedback[b.id]?.includes('ing') ? 'text-blue-400' :
-                                  'text-green-400'
+                                <span className={`text-4xs font-medium break-words ${
+                                  actionFeedback[b.id] === 'uploading' ? 'text-blue-400' :
+                                  actionFeedback[b.id] === 'uploaded' ? 'text-green-400' :
+                                  'text-destructive-fg'
                                 }`}>
                                   {actionFeedback[b.id] === 'uploading' ? 'Uploading...' :
                                    actionFeedback[b.id] === 'uploaded' ? 'Uploaded!' :
-                                   'Error'}
+                                   actionFeedback[b.id]}
                                 </span>
                               )}
                             </div>

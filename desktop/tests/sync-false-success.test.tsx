@@ -80,15 +80,41 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
 
   it('a warning Retry whose upload failed does not say "Uploaded!"', async () => {
     const api = stub(
-      { pushBackend: vi.fn(async () => ({ success: false, error: 'Push to drive-1 had errors' })) },
+      { pushBackend: vi.fn(async () => ({ success: false, error: "Some files didn't upload." })) },
       [RETRY_WARNING],
     );
     render(<SyncSection autoOpen />);
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
 
     await waitFor(() => expect(api.pushBackend).toHaveBeenCalledWith('drive-1'));
-    await waitFor(() => expect(screen.getByText('Error')).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByText("Upload failed: Some files didn't upload.")).toBeInTheDocument());
     expect(screen.queryByText('Uploaded!')).toBeNull();
+  });
+
+  // Destin, batch 1 deck (E-1): a bare "Error" is unhelpful. The row says what happened, and a
+  // failure stays until the next upload instead of vanishing after two seconds.
+  it('a failed upload stays on the row with its reason', async () => {
+    stub({ pushBackend: vi.fn(async () => ({ success: false, error: "Some files didn't upload." })) }, [RETRY_WARNING]);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    const label = await screen.findByText("Upload failed: Some files didn't upload.");
+    await new Promise((r) => setTimeout(r, 2300));
+    expect(label).toBeInTheDocument();
+    expect(screen.queryByText('Error')).toBeNull();
+  });
+
+  it('an upload that was skipped says it has not run yet', async () => {
+    stub({ pushBackend: vi.fn(async () => ({ success: false, error: '' })) }, [RETRY_WARNING]);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/upload hasn.t run yet/i)).toBeInTheDocument();
+  });
+
+  it('an upload with no answer says it could not confirm', async () => {
+    stub({ pushBackend: vi.fn(async () => { throw new Error('Request sync:push-backend timed out'); }) }, [RETRY_WARNING]);
+    render(<SyncSection autoOpen />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
+    expect(await screen.findByText(/couldn.t confirm the upload finished/i)).toBeInTheDocument();
   });
 
   it('a backup that could not be saved keeps the wizard open and says why', async () => {
@@ -108,14 +134,14 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
 
   it('a first backup that failed is reported as failed, for the new destination only', async () => {
     const api = stub({
-      pushBackend: vi.fn(async () => ({ success: false, error: 'Push to icloud-new had errors' })),
+      pushBackend: vi.fn(async () => ({ success: false, error: "Some files didn't upload." })),
       // A failure in some OTHER destination must not be blamed on the new one.
-      force: vi.fn(async () => ({ success: false, output: '', error: '1 backend(s) had errors' })),
+      force: vi.fn(async () => ({ success: false, output: '', error: "Some backups didn't finish." })),
     }, [SETUP_WARNING]);
     fireEvent.click(await openSetup());
 
     expect(await screen.findByText(/first backup didn.t finish/i)).toBeInTheDocument();
-    expect(screen.getByText(/Push to icloud-new had errors/)).toBeInTheDocument();
+    expect(screen.getByText(/Some files didn.t upload/)).toBeInTheDocument();
     expect(api.pushBackend).toHaveBeenCalledWith('icloud-new');
     expect(api.force).not.toHaveBeenCalled();
     expect(screen.queryByText("You're all set!")).toBeNull();

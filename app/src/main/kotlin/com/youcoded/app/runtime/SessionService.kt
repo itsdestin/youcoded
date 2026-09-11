@@ -2077,7 +2077,7 @@ class SessionService : Service() {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                             .put("success", result.success)
                             .put("output", result.backends.joinToString(", ").ifEmpty { "No backends configured" })
-                            .put("error", if (result.errors > 0) "${result.errors} backend(s) had errors" else "")) }
+                            .put("error", if (result.errors > 0) "Some backups didn't finish." else "")) } // user-facing, mirrors sync-state.ts
                     } catch (e: Exception) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
                             .put("success", false).put("output", "").put("error", e.message ?: "SyncService push failed")) }
@@ -2184,7 +2184,7 @@ class SessionService : Service() {
                     try {
                         val result = sync.push(force = true, backendId = id)
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject()
-                            .put("success", result.success).put("error", if (result.errors > 0) "Push had errors" else "")) }
+                            .put("success", result.success).put("error", if (result.errors > 0) "Some files didn't upload." else "")) } // user-facing, mirrors sync-state.ts
                     } catch (e: Exception) {
                         msg.id?.let { bridgeServer.respond(ws, msg.type, it, JSONObject().put("success", false).put("error", e.message ?: "Push failed")) }
                     }
