@@ -23,7 +23,7 @@ import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useStreamingGate } from '../hooks/useStreamingGate';
+import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
 
 // WHY: the composer auto-focus listener must leave controls and composite widgets
@@ -289,6 +289,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // `attentionState === 'ok'`, which used to hide the button for the whole
   // stall countdown (see useStreamingGate.ts).
   const showStop = useStreamingGate(sessionId);
+  // WHY a second gate: `showStop` keeps the button reachable through stalls and
+  // permission asks; `stopLive` only animates it while the turn is really working
+  // (stop-button-alive questions deck Q-1/Q-2, 2026-09-10). Same cheap selector.
+  const stopLive = useTurnIsWorking(sessionId);
 
   // Per-session draft store — keeps input text and attachments separate
   // across sessions so switching away and back preserves your draft.
@@ -366,6 +370,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     },
   }));
 
+  // True when the user's last press was a finger or pen. Shared by the
+  // auto-focus handler below and the idle unfocus timer after it.
+  const lastPointerWasTouch = useRef(false);
+
   // Auto-focus input when user starts typing anywhere in the app.
   // When Enter is pressed while the textarea is blurred, we must also
   // preventDefault and send — otherwise the browser inserts a newline
@@ -388,6 +396,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'Backspace' && e.key !== 'Enter' && e.key.length !== 1) return;
+      // WHY: a key arriving while no text field has focus came from a physical
+      // keyboard — an on-screen keyboard only exists while a field is focused.
+      // So the user has switched to real keys: let the idle unfocus run again.
+      lastPointerWasTouch.current = false;
       inputRef.current?.focus();
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -419,12 +431,27 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // platform string: it's the actual question being asked, and it correctly
   // keeps idle-blur ON for a desktop browser connecting remotely (real
   // keyboard, shortcuts useful, no soft keyboard to dismiss).
+  //
+  // Fix (2026-09-10): the coarse-pointer check still misses a touchscreen
+  // laptop. "pointer" describes the PRIMARY pointer, which Chromium reports as
+  // "fine" whenever any touchpad or mouse-like device is attached — on the ROG
+  // Flow Z13 it stayed "fine" with the keyboard cover detached, most likely
+  // because a ydotool virtual mouse counts. It was also read once at mount, so docking or
+  // undocking never changed it. So the per-pause decision follows how the user
+  // last pointed: a finger or pen tap keeps focus (that is what raises the
+  // on-screen keyboard), a touchpad/mouse click or physical typing restores
+  // the unfocus (see lastPointerWasTouch in the auto-focus handler above).
   const idleBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const el = inputRef.current;
     const hasSoftKeyboard = isAndroid()
       || window.matchMedia?.('(pointer: coarse)')?.matches === true;
     if (!el || hasSoftKeyboard) return;
+    // Capture phase on window, so no component's stopPropagation can hide a tap.
+    const notePointer = (e: PointerEvent) => {
+      lastPointerWasTouch.current = e.pointerType === 'touch' || e.pointerType === 'pen';
+    };
+    window.addEventListener('pointerdown', notePointer, true);
     const resetTimer = () => {
       if (idleBlurTimer.current) clearTimeout(idleBlurTimer.current);
       idleBlurTimer.current = setTimeout(() => {
@@ -435,6 +462,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         // a machine a walkie-talkie dictation would have been cut off silently,
         // three-quarters of a second in. Found reviewing T9, 2026-09-05.
         if (spaceHeld.current || spaceHoldTimer.current !== null) return;
+        if (lastPointerWasTouch.current) return;
         if (document.activeElement === el) el.blur();
       }, 750);
     };
@@ -442,6 +470,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     el.addEventListener('input', resetTimer);
     el.addEventListener('paste', resetTimer);
     return () => {
+      window.removeEventListener('pointerdown', notePointer, true);
       el.removeEventListener('keydown', resetTimer);
       el.removeEventListener('input', resetTimer);
       el.removeEventListener('paste', resetTimer);
@@ -529,7 +558,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               sendRef.current(true);
             });
           } else {
-            onToast?.('Claude is waiting for your response — answer the prompt first.');
+            onToast?.('Your assistant is waiting for your response — answer the prompt first.');
           }
           return false;
         }
@@ -850,7 +879,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
 
   return (
     <div
-      className="input-bar-container shrink-0"
+      // select-none: the composer's chrome (buttons, the placeholder/mirror
+      // layer, attachment chips) is not highlightable or copyable (Destin,
+      // 2026-09-10). The textarea itself stays selectable: globals.css
+      // re-enables text fields.
+      className="input-bar-container shrink-0 select-none"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
     >
@@ -1052,10 +1085,13 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
             // a held key repeats, and every repeat resets that timer.)
             onBlur={releaseSpaceHold}
             onPaste={handlePaste}
-            // Native-provider sessions may run a local/non-Claude model, so the
-            // placeholder can't claim it's Claude; PTY (provider 'claude') sessions
-            // really are talking to Claude Code, so they keep the specific name.
-            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : provider === 'native' ? 'Message your assistant...' : 'Message Claude...'}
+            // WHY unconditional (Destin, 2026-09-10): "replace any direct references to
+            // 'claude' with 'the assistant' … and make sure they work with native
+            // sessions". This was provider-conditional — "Message Claude…" on a PTY
+            // session, "your assistant" on a native one — which was right under the older
+            // policy and is superseded: the app is the product, and which model is behind
+            // it is a setting. Product names still stay (utils/assistant-name.ts).
+            placeholder={disabled ? 'Waiting for approval...' : voiceListening ? (voiceStyle.feedback === 'placeholder' ? '' : 'Listening…') : 'Message your assistant...'}
             disabled={disabled}
             // Text color is transparent so the mirror div behind it shows
             // through (with animated keyword spans). caret-color keeps the
@@ -1091,6 +1127,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           {/* Voice prompting: the mic sits where the eye already goes to
               send. Hidden entirely when the host has no speech engine
               (remote browser, older builds) and in terminal view. */}
+          {/* WHY a group: Destin asked for the mic "a smidge closer to the stop button"
+              (live deck L-2, 2026-09-10). gap-1 inside the pair tightens only that
+              space; Send keeps the form's own gap. Rendered only when one of them shows,
+              because an empty flex child would still claim a gap in the row. */}
+          {((!minimal && voice.supported) || showStop) && (
+          <div className="flex items-center gap-1 shrink-0">
           {!minimal && voice.supported && (
             <VoiceButton
               phase={voice.phase}
@@ -1107,7 +1149,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               onReady={() => onToast?.('Voice is ready — tap the mic to talk.')}
             />
           )}
-          <StopButton sessionId={sessionId} provider={provider} visible={showStop} />
+          <StopButton sessionId={sessionId} provider={provider} visible={showStop} live={stopLive} />
+          </div>
+          )}
           {/* The app's most-used control. Geometry is unchanged — 28x28 is exactly
               what size="icon" emits — and it keeps `bg-accent`, which matters:
               community packs style the send button through `.bg-accent` (Halftone's

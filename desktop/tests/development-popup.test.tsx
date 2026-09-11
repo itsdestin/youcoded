@@ -12,18 +12,22 @@ import { ContributePopup } from '../src/renderer/components/development/Contribu
 afterEach(cleanup);
 
 describe('DevelopmentPopup', () => {
-  it('renders all three rows', () => {
+  it('renders all four rows', () => {
     render(<DevelopmentPopup open={true} onClose={() => undefined} onOpenBug={() => undefined} onOpenContribute={() => undefined} />);
     expect(screen.getByText(/Report a Bug or Request a Feature/i)).toBeInTheDocument();
     expect(screen.getByText(/Contribute to YouCoded/i)).toBeInTheDocument();
-    expect(screen.getByText(/Known Issues and Planned Features/i)).toBeInTheDocument();
+    expect(screen.getByText(/Known issues/i)).toBeInTheDocument();
+    // Roadmap was designed and approved, then shipped invisible: this list kept two
+    // copies of itself and users only ever saw the older one (grader, 2026-09-10).
+    expect(screen.getByText(/^Roadmap$/)).toBeInTheDocument();
+    expect(screen.getByText(/Share a problem, suggest an idea/i)).toBeInTheDocument();
   });
 
   it('opens the GitHub issues URL when Known Issues is clicked', () => {
     const openSpy = vi.spyOn(window, 'open').mockImplementation(() => null);
     const onClose = vi.fn();
     render(<DevelopmentPopup open={true} onClose={onClose} onOpenBug={() => undefined} onOpenContribute={() => undefined} />);
-    fireEvent.click(screen.getByText(/Known Issues and Planned Features/i));
+    fireEvent.click(screen.getByText(/Known issues/i));
     expect(openSpy).toHaveBeenCalledWith('https://github.com/itsdestin/youcoded/issues', '_blank');
     expect(onClose).toHaveBeenCalled();
     openSpy.mockRestore();
@@ -60,98 +64,106 @@ describe('BugReportPopup', () => {
     };
   });
 
-  // P-15: titleless before, so no ✕. The title follows the Bug/Feature switch.
-  it('titles itself after the selected report kind and offers a ✕', () => {
+  // Rewritten 2026-09-10, when the gate came off and the legacy screen was deleted.
+  // The promises below are real and kept; only the screen carrying them changed.
+  // The one that did NOT survive is "the title follows the Bug/Feature switch" —
+  // R2-10 replaced it with a single "Submit a ticket" heading for both tabs, which
+  // Destin approved, so asserting the old behaviour would pin a reverted decision.
+  it('keeps one heading for both kinds, and offers a ✕', () => {
     const onClose = vi.fn();
     render(<BugReportPopup open={true} onClose={onClose} />);
-    expect(screen.getByRole('heading', { name: 'Report a bug' })).toBeInTheDocument();
-    fireEvent.click(screen.getByText(/^Feature$/));
-    expect(screen.getByRole('heading', { name: 'Request a feature' })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole('button', { name: 'Close Request a feature' }));
+    expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Feature' }));
+    expect(screen.getByRole('heading', { name: 'Submit a ticket' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /Close/ }));
     expect(onClose).toHaveBeenCalled();
   });
 
-  it('disables Continue until description is at least 10 chars', () => {
+  it('will not move on until there is something to send', () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    const cont = screen.getByText(/^Continue$/) as HTMLButtonElement;
-    expect(cont).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'short' } });
-    expect(cont).toBeDisabled();
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'this is long enough' } });
-    expect(cont).not.toBeDisabled();
+    const review = screen.getByRole('button', { name: 'Review ticket' }) as HTMLButtonElement;
+    expect(review).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    expect(review).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    expect(review).not.toBeDisabled();
   });
 
-  it('passes the bug label when submitting from Bug toggle', async () => {
+  const fill = (kind?: 'Feature') => {
+    if (kind) fireEvent.click(screen.getByRole('tab', { name: kind }));
+    fireEvent.change(screen.getByLabelText('Title'), { target: { value: 'The menu closes' } });
+    fireEvent.change(screen.getByLabelText('Description'), { target: { value: 'Opening the menu closes the window.' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review ticket' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Submit public ticket' }));
+  };
+
+  it('passes the bug label when submitting from the Bug tab', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'a real bug description' } });
-    fireEvent.click(screen.getByText(/^Continue$/));
-    // Wait for summarize to resolve and Submit button to render.
-    await screen.findByText(/Submit as GitHub Issue/i);
-    fireEvent.click(screen.getByText(/Submit as GitHub Issue/i));
-    await screen.findByText(/Issue created/i);
+    fill();
+    await screen.findByText(/Your ticket is submitted/i);
     expect((window as any).claude.dev.submitIssue).toHaveBeenCalledWith(
       expect.objectContaining({ label: 'bug' }),
     );
   });
 
-  it('passes the enhancement label when Feature toggle is selected', async () => {
+  it('passes the enhancement label when the Feature tab is selected', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    fireEvent.click(screen.getByText(/^Feature$/));
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'a real feature description' } });
-    fireEvent.click(screen.getByText(/^Continue$/));
-    await screen.findByText(/Submit as GitHub Issue/i);
-    fireEvent.click(screen.getByText(/Submit as GitHub Issue/i));
-    await screen.findByText(/Issue created/i);
+    fill('Feature');
+    await screen.findByText(/Your ticket is submitted/i);
     expect((window as any).claude.dev.submitIssue).toHaveBeenCalledWith(
       expect.objectContaining({ label: 'enhancement' }),
     );
   });
 
-  it('passes raw fields (kind, summary, description) instead of a pre-built body', async () => {
+  it('passes raw fields instead of a pre-built body', async () => {
     render(<BugReportPopup open={true} onClose={() => undefined} />);
-    fireEvent.change(screen.getByPlaceholderText(/What's happening/i), { target: { value: 'a real bug description' } });
-    fireEvent.click(screen.getByText(/^Continue$/));
-    await screen.findByText(/Submit as GitHub Issue/i);
-    fireEvent.click(screen.getByText(/Submit as GitHub Issue/i));
-    await screen.findByText(/Issue created/i);
+    fill();
+    await screen.findByText(/Your ticket is submitted/i);
     const callArgs = (window as any).claude.dev.submitIssue.mock.calls[0][0];
-    // New contract: renderer passes raw fields, not a pre-assembled body string.
+    // The body is assembled in main, where the real app version and OS live.
     expect(callArgs).toHaveProperty('kind', 'bug');
-    expect(callArgs).toHaveProperty('summary');
     expect(callArgs).toHaveProperty('description');
     expect(callArgs).not.toHaveProperty('body');
+    // And no AI summary was produced, because none was asked for (R12).
+    expect((window as any).claude.dev.summarizeIssue).not.toHaveBeenCalled();
   });
 });
 
 describe('ContributePopup', () => {
+  // Rewritten 2026-09-10. These two tests protected real behaviour — setup runs,
+  // then you can open the project — but against the legacy screen's fixed-folder
+  // installer, which was deleted. Same promises, current mechanism: contract R9
+  // (never touch an existing folder) is why dev:setup-workspace exists, and R10
+  // ("setup finishes and the project opens") is why "Open it" must actually open it.
   beforeEach(() => {
     (window as any).claude = {
       dev: {
-        installWorkspace: vi.fn().mockResolvedValue({ path: '/h/youcoded-dev', alreadyInstalled: false }),
-        onInstallProgress: vi.fn(() => () => undefined),
+        setupWorkspace: vi.fn().mockResolvedValue({ ok: true, path: '/h/YouCoded/Development/youcoded-workspace' }),
+        setupStatus: vi.fn().mockResolvedValue({ state: 'idle' }),
         openSessionIn: vi.fn().mockResolvedValue({ id: 's1' }),
+        // Present so a wrong call is a FAILED ASSERTION rather than a TypeError that
+        // could be mistaken for an unrelated crash.
+        installWorkspace: vi.fn(),
       },
     };
   });
 
-  it('shows install button initially and triggers install on click', async () => {
+  it('sets the workspace up and never uses the fixed-folder installer', async () => {
     render(<ContributePopup open={true} onClose={() => undefined} />);
-    expect(screen.getByText(/Install Workspace/i)).toBeInTheDocument();
-    fireEvent.click(screen.getByText(/Install Workspace/i));
-    await screen.findByText(/Workspace installed at/i);
-    expect((window as any).claude.dev.installWorkspace).toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up development workspace' }));
+    await screen.findByText(/Your development workspace is ready/i);
+    expect((window as any).claude.dev.setupWorkspace).toHaveBeenCalled();
+    expect((window as any).claude.dev.installWorkspace).not.toHaveBeenCalled();
   });
 
-  it('opens new session when "Open in New Session" is clicked', async () => {
+  it('opens the finished project in a session', async () => {
     const onClose = vi.fn();
     render(<ContributePopup open={true} onClose={onClose} />);
-    fireEvent.click(screen.getByText(/Install Workspace/i));
-    await screen.findByText(/Open in New Session/i);
-    fireEvent.click(screen.getByText(/Open in New Session/i));
-    await new Promise((r) => setTimeout(r, 0)); // let async settle
-    expect((window as any).claude.dev.openSessionIn).toHaveBeenCalledWith(
-      expect.objectContaining({ cwd: '/h/youcoded-dev' })
-    );
-    expect(onClose).toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: 'Set up development workspace' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Open it' }));
+    await vi.waitFor(() => expect((window as any).claude.dev.openSessionIn).toHaveBeenCalledWith(
+      expect.objectContaining({ cwd: '/h/YouCoded/Development/youcoded-workspace' }),
+    ));
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
   });
 });

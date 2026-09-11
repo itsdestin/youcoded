@@ -65,7 +65,9 @@ export default function QuickChips({ onChipTap }: Props) {
   const pencilSize = android ? 'w-8 h-8' : 'w-6 h-6';
 
   return (
-    <div className="relative">
+    // select-none: quick chips are chrome, not highlightable or copyable
+    // (Destin, 2026-09-10). The chip editor is a portaled Dialog, unaffected.
+    <div className="relative select-none">
       <div className="flex gap-1 px-3 py-1 overflow-x-auto scrollbar-none items-center">
         {displayChips.map((chip, i) => (
           <button

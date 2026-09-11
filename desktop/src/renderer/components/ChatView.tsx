@@ -1016,10 +1016,12 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               h-full centering it replaces) so it clears a FLOATING header pill,
               which sits below --top-chrome-height by its own margin; otherwise
               the text tucked slightly behind the pill. Provider-aware: native
-              (local/cloud) sessions shouldn't be told to talk to "Claude". */}
+              sessions must not be told to talk to a vendor's name. */}
           {state.timeline.length === 0 && !state.isThinking && (
             <div
-              className="absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none"
+              // select-none: a hint, not content. Ctrl+A must not paint it
+              // (Destin, 2026-09-10).
+              className="absolute inset-x-0 flex items-center justify-center text-fg-muted text-sm pointer-events-none select-none"
               style={{ top: 'var(--top-chrome-bottom, 3rem)', bottom: 'var(--bottom-chrome-height, 5rem)' }}
             >
               Start a conversation with {assistantName(provider)}

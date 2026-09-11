@@ -99,7 +99,7 @@ export const COPY = {
   // page; both are the same operation (reading this transcript) so the same
   // wording is honest for either.
   errReadUnknownTitle: 'Unable to read this transcript.',
-  errReadUnknownExplainer: "The read didn't report a reason. Diagnosing will collect the app's logs so Claude can look at what happened.",
+  errReadUnknownExplainer: "The read didn't report a reason. Diagnosing will collect the app's logs so the assistant can look at what happened.",
   // The tag/note popover's dialog role needs an accessible name (a
   // screen-reader user hears it) — every user-facing sentence for this
   // feature lives in COPY, aria-label included.

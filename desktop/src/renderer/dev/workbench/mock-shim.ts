@@ -39,6 +39,9 @@ import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
 import { buildCatalog } from './fixtures/marketplace/catalog';
+// `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
+import { triggerTip } from '../../components/guide/tips';
+import { isNoFolderCwd } from '../../../shared/no-folder';
 import { createRemoteAccessPreview } from './fixtures/remote-access';
 
 // artifactId -> pretend on-disk size, for exercising the over-cap artifact
@@ -137,6 +140,14 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // mock-only.ts. Listed so the contract test covers the fake.
   'voice.status', 'voice.download', 'voice.start', 'voice.stop', 'voice.cancel', 'voice.onEvent',
   'voice.sendAudio', 'voice.micAccess',
+  // Development tickets and contribution setup (design 2026-09-08). The first four
+  // are real channels (dev:* in preload.ts) faked so the workbench has evidence and
+  // a submission result; the last two have NO real backend and are registered in
+  // mock-only.ts. `dev` was in NAMESPACES with no impl, so all six used to answer
+  // `[]` from the catch-all — which is a submit button that can never report an
+  // outcome.
+  'dev.logTail', 'dev.diagnostics', 'dev.summarizeIssue', 'dev.submitIssue',
+  'dev.setupWorkspace', 'dev.setupStatus', 'dev.clearSetupStatus',
   'shell.openPath',
   // Chatsearch session references — real backend too, same reason for the fake:
   // the tool gallery needs an index that shows every row state on demand.
@@ -801,7 +812,9 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const created = {
         id,
         name: resumedRow?.name || opts.name || 'new session',
-        cwd: opts.cwd || '',
+        // "No folder": main swaps the sentinel for <userData>/No folder; the
+        // workbench shows the same shape of path so headers read "No folder".
+        cwd: isNoFolderCwd(opts.cwd) ? '/home/destin/.config/YouCoded/No folder' : (opts.cwd || ''),
         permissionMode: opts.skipPermissions ? 'bypass' : 'normal',
         skipPermissions: !!opts.skipPermissions,
         status: 'active',
@@ -1358,6 +1371,93 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     onModelsChanged: () => () => {},
   };
 
+  // Development: tickets and the contribution workspace (design
+  // 2026-09-08-error-states-development). `dev` was in NAMESPACES but had no
+  // hand-written impl, so every call fell through to the catch-all and answered
+  // `[]` — which is why the approved screens have no working buttons and no
+  // outcome states at all. A ticket screen whose Submit resolves to `[]` can
+  // never show sent, failed or opened-in-browser.
+  //
+  // The `refused` scenario drives the FAILURE side of each flow, so the deck can
+  // capture it from the toolbar rather than from a bespoke query parameter.
+  // Long enough that the setting-up state is a state you can look at, short
+  // enough not to stall a capture run.
+  const SETUP_MS = 2500;
+  // Main-process state in the real thing: setup is not owned by the dialog, so
+  // closing it cannot cancel setup and reopening can ask where it got to.
+  let setupState: 'idle' | 'running' | 'ready' | 'failed' = 'idle';
+  let setupPath = '';
+  let setupError = '';
+  const devMock = {
+    // Real channels (dev:log-tail, dev:diagnostics, dev:summarize-issue,
+    // dev:submit-issue in preload.ts) — faked so the workbench has evidence text
+    // and a submission result without a log file, a provider or a GitHub token.
+    logTail: async (_n?: number) =>
+      [
+        '[14:22:07] session 7f3a started · model opus-5',
+        '[14:22:09] transcript watcher attached',
+        '[14:31:44] artifacts: write refused, no modification token',
+        '[14:31:44]   at write-authorization.ts:143',
+      ].join('\n'),
+    diagnostics: async () => 'git 2.47.1 · claude 2.1.94 · ~/.claude writable · marketplace cache warm',
+    summarizeIssue: async (input: { description?: string }) => ({
+      title: 'Saving an edited file fails after the refresh times out',
+      summary: input?.description ?? '',
+      flagged_strings: [] as string[],
+    }),
+    submitIssue: async (a?: { browserOnly?: boolean }) => {
+      // The attachment route finishes in the browser whatever the scenario — that is
+      // the point of it, not a degraded outcome.
+      if (a?.browserOnly) {
+        return { ok: false as const, needsBrowser: true as const, truncated: false,
+          fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new?title=Settings+text+is+cut+off' };
+      }
+      return activeScenario === 'refused'
+        // A failure the user can act on, and one this flow can actually produce:
+        // GitHub refusing the credential. Never a guessed cause.
+        ? { ok: false as const, error: 'GitHub did not create the ticket (401): Bad credentials.',
+            fallbackUrl: 'https://github.com/itsdestin/youcoded/issues/new' }
+        : { ok: true as const, url: 'https://github.com/itsdestin/youcoded/issues/471' };
+    },
+
+    // Real since 2026-09-10 (dev-tools.ts's setupManagedWorkspace). Kept fake here
+    // because the workbench has no git, no network and no ~/YouCoded — it still
+    // needs a setup that "runs" for 2.5s and a status it can answer.
+    //
+    // The path MATTERS and is not decoration: ~/YouCoded/Development, never
+    // ~/YouCoded/Projects. Every folder under Projects becomes a synced space and
+    // the transport stages with `git add -A`, so the real code refuses that folder
+    // to avoid pushing ~1GB to the user's backup. A fixture that shows the forbidden
+    // path teaches the wrong thing to everyone who reads the screen (code review C14).
+    // WHY the fixed wait, rather than the latency knob: this clones five
+    // repositories and installs their dependencies. It takes MINUTES in reality,
+    // and a mock that resolves in 150ms means the setting-up state — progress
+    // lines and all — flashes past and is never actually reviewed. That is the
+    // exact failure the latency knob exists to prevent, one size too small.
+    setupWorkspace: () => {
+      setupState = 'running';
+      return new Promise(resolve => setTimeout(() => {
+        if (activeScenario === 'refused') {
+          setupState = 'failed';
+          setupError = 'Could not reach github.com to download the project.';
+          resolve({ ok: false as const, error: setupError });
+        } else {
+          setupState = 'ready';
+          setupPath = '/home/destin/YouCoded/Development/youcoded-workspace';
+          resolve({ ok: true as const, path: setupPath });
+        }
+      }, SETUP_MS));
+    },
+    // Real since 2026-09-10 too. WHY a status read rather than a progress stream
+    // (Destin, R6-24 2026-09-10):
+    // he asked for one line plus "you can close this and setup carries on in the
+    // background". That sentence is only true if setup is owned by the main process
+    // and the screen can ASK what it is doing when it reopens. A per-step progress
+    // feed cannot answer that question — reopening would show nothing.
+    setupStatus: async () => ({ state: setupState, path: setupPath, error: setupError }),
+    clearSetupStatus: async () => { if (setupState !== 'running') { setupState = 'idle'; setupPath = ''; setupError = ''; } },
+  };
+
   // Voice prompting (deck 2026-09-05) — NO real backend yet (mock-only.ts).
   // `?voice=<state>` picks the readiness the mic starts in: ready (default),
   // needs-download, downloading, unavailable. The fake "hears" one scripted
@@ -1734,27 +1834,65 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // fake transcript tail rather than reading anything real; CS_ERR_READ is
   // the one id wired to fail, so the "transcript unreadable" card state has
   // something to point at.
+  // [user, assistant] pairs the fake transcript above cycles through.
+  // [user, assistant] — and an optional THIRD entry, the sentence the assistant
+  // said BEFORE it went off and ran tools. A turn that has one is emitted as
+  // three messages (user, lead-in, answer) with the tool gap recorded on the
+  // answer, which is the shape a real transcript actually has: the reader
+  // counts an assistant's tool calls toward the gap before its NEXT message
+  // (transcript-reader.ts), so a gap almost always sits between two things the
+  // assistant said. Without a lead-in every gap here followed a USER message,
+  // where the card cannot nest into a bubble — which made a fixed tool-gap
+  // render look identical to the broken one (2026-09-10).
+  const CHAT_TURNS: [string, string, string?][] = [
+    ['the chat jumps to the bottom while I am reading older messages',
+     'Reproduced. The scroll container re-pins to the end on every transcript event, not just on a new turn.\n\n```ts\nif (atBottomRef.current) scrollToEnd();\n```\n\nThe flag is read before the new rows are measured, so a tall row lands after the check and the view snaps.',
+     'Let me reproduce that before I guess at it.'],
+    ['so the fix is to measure after paint?',
+     'Yes — move the read into a layout effect that runs after the rows exist, and only re-pin when the user was genuinely within a few pixels of the end.'],
+    ['does that break the "new message" jump when I AM at the bottom?',
+     'No. That path still fires; it just fires with a correct measurement. I added a test that scrolls up 400px, appends a tall message and asserts the offset did not move.',
+     'Checking the other direction now.'],
+    ['what about the terminal view, same container?',
+     'Different one, and it already measures after paint. I checked the other three scrolling surfaces too — the drawer list and the file view use the shared hook, so they inherit the fix.'],
+    ['ok. anything else you noticed while you were in there',
+     'One thing worth knowing: the fade at the top and bottom of the list is painted by the scroll container itself, so any surface that adds its own padding loses it. Nothing is broken today; it is just a trap for the next change.',
+     'Nothing that changes the fix. One thing worth writing down, though.'],
+    ['fine, leave it. run the tests',
+     'All 41 in that file pass, plus the new one. Types and lint are clean.'],
+  ];
+
   const chatsearch = {
     resolve: async (shortIds: string[]) => ({ ok: true as const, results: shortIds.map(resolveFixture) }),
     read: async (req: { provider: string; id: string; tail: number; before?: number }) => {
       if (req.id === CS_ERR_READ) return { ok: false as const, error: "EACCES: permission denied, open '/home/destin/YouCoded/Personal/Conversations/claude/transcripts/youcoded/ee0011aa.jsonl'" };
       // 60 fake messages; every 4th assistant message follows a "tool gap".
-      const total = 60;
+      //
+      // The turns cycle through CHAT_TURNS rather than printing "step 57" /
+      // "User question number 58". WHY (2026-09-10): the resume-browser preview
+      // panel puts this text in front of a human who is deciding whether the
+      // panel earns its half of the screen, and filler that says nothing makes
+      // that judgement impossible — "does reading this tell me which
+      // conversation it is?" is the entire question the panel exists to answer.
+      // The words are still invented; nothing here is read off disk.
+      const all: { role: string; content: string; timestamp: number; seq: number; droppedToolCalls: number }[] = [];
+      const push = (role: string, content: string, droppedToolCalls = 0) =>
+        all.push({ role, content, timestamp: 0, seq: all.length, droppedToolCalls });
+      while (all.length < 60) {
+        const turn = CHAT_TURNS[Math.floor(all.length / 2.5) % CHAT_TURNS.length];
+        push('user', turn[0]);
+        if (turn[2]) {
+          push('assistant', turn[2]);
+          push('assistant', turn[1], 3);   // the gap those three tools left
+        } else {
+          push('assistant', turn[1]);
+        }
+      }
+      const total = all.length;
+      for (const m of all) m.timestamp = Date.now() - (total - m.seq) * 60_000;
       const end = Math.min(req.before ?? total, total);
       const start = Math.max(0, end - Math.min(req.tail, 200));
-      const messages = [];
-      for (let seq = start; seq < end; seq++) {
-        const assistant = seq % 2 === 1;
-        messages.push({
-          role: assistant ? 'assistant' : 'user',
-          content: assistant
-            ? `Here is what I found for step ${seq}:\n\n\`\`\`ts\nconst x = ${seq};\n\`\`\`\n\n- one\n- two`
-            : `User question number ${seq}`,
-          timestamp: Date.now() - (total - seq) * 60_000,
-          seq,
-          droppedToolCalls: assistant && seq % 4 === 3 ? 3 : 0,
-        });
-      }
+      const messages = all.slice(start, end);
       return { ok: true as const, messages, hasMore: start > 0 };
     },
   };
@@ -1772,6 +1910,13 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // YouCoded repo's own files behind a student's conversation.
   const studentSwitch = typeof location !== 'undefined'
     && new URLSearchParams(location.search).get('student') === '1';
+  // `&projects=none`: the project index answers with NO projects, so the
+  // Projects screen's first-run explainer (ProjectsEmptyCard) is reachable.
+  // WHY a switch and not a scenario: the `empty` scenario has no sessions, so
+  // the header — and its Projects button — never renders there (same trap the
+  // arcade switch above documents). This composes with any scenario.
+  const noProjectsSwitch = typeof location !== 'undefined'
+    && new URLSearchParams(location.search).get('projects') === 'none';
 
   // Promo (model beat): the model picker shows ONLY favourites until you type
   // (components/model/ModelPicker.tsx), and it keeps them in localStorage under
@@ -2056,7 +2201,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       ok: true,
       // MOCKUP: descriptions edited in-session override the seeded ones, so the
       // inline editor behaves like the real thing instead of snapping back.
-      projects: (studentSwitch
+      projects: noProjectsSwitch ? [] : (studentSwitch
         ? (opts?.withCounts ? studentProjectsWithCounts((path) => conversationsIn(path).length) : studentProjects())
         : (opts?.withCounts ? projectsWithCounts() : artifactProjects()))
         .map((p) => ({ ...p, description: descriptionFor(p.path, p.description) })),
@@ -2218,6 +2363,29 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // sees and, until 2026-08-25, the only surface no review rig could reach —
   // the mock always answered COMPLETE, so App routed straight past it.
   const firstRunStep = (typeof location !== 'undefined' && new URLSearchParams(location.search).get('firstRun')) || 'COMPLETE';
+  // `?guide=tour` stands in for "the wizard just finished on this install":
+  // it owes the tour and arms tips, exactly what App's first-run hand-off
+  // writes. `?guide=tips` arms tips alone and forgets which were read, so a
+  // trigger fires again. (The real app sets these flags from FirstRunView's
+  // hand-off; the workbench routes past the wizard, so nothing else would.)
+  // `?guide=tip:<id>` fires that one tip a moment after boot, so a tip can be
+  // photographed without walking to its real moment.
+  // With no flag the tour debt is CLEARED: the workbench routes past the wizard,
+  // so the only way the flag exists here is a previous `?guide=tour` load in
+  // the same browser profile, and a review shot taken after one came back with
+  // the tour over the surface it meant to photograph (2026-09-10).
+  const guideFlag = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('guide') : null;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      if (guideFlag === 'tour') localStorage.setItem('youcoded-guide-pending', '1');
+      else localStorage.removeItem('youcoded-guide-pending');
+      if (guideFlag) {
+        localStorage.removeItem('youcoded-tips-seen');
+        localStorage.setItem('youcoded-tips-armed', '1');
+        if (guideFlag.startsWith('tip:')) setTimeout(() => triggerTip(guideFlag.slice(4)), 1500);
+      }
+    } catch { /* the workbench can live without it */ }
+  }
   const firstRun = {
     getState: async () => ({
       currentStep: firstRunStep,
@@ -2669,7 +2837,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
-    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search, ...(remote ? { remote } : {}),
+    skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search,
+    dev: devMock, ...(remote ? { remote } : {}),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 

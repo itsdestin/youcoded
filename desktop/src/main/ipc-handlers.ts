@@ -2,6 +2,7 @@ import { app, IpcMain, BrowserWindow, dialog, clipboard, nativeImage, shell, pow
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { resolveNoFolderCwd } from './no-folder';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
@@ -105,7 +106,7 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
-import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn } from './dev-tools';
+import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
 import type { UpdateProgressEvent } from '../shared/update-install-types';
 import { getChangelog } from './changelog-service';
@@ -787,7 +788,11 @@ export function registerIpcHandlers(
   };
 
   // Session CRUD
-  ipcMain.handle(IPC.SESSION_CREATE, async (event, opts) => {
+  ipcMain.handle(IPC.SESSION_CREATE, async (event, rawOpts) => {
+    // "No folder" (shared/no-folder.ts): the renderer's sentinel becomes the
+    // app-owned empty folder here, before the session manager or the native
+    // host sees a cwd.
+    const opts = resolveNoFolderCwd(rawOpts, app.getPath('userData'));
     const info = sessionManager.createSession(opts);
     // Assign the new session to the calling window so per-session events (transcript,
     // pty output, permission prompts) route here once Task 1.4 migrates the emits.
@@ -4394,6 +4399,31 @@ export function registerIpcHandlers(
       return { error: String(e?.message || e) };
     }
   });
+
+  // Managed development workspace (contract R9/R10). Setup lives in the main
+  // process on purpose: the screen tells the user "you can close this — setup
+  // keeps going", which is only true if closing the dialog cannot cancel it.
+  ipcMain.handle(IPC.DEV_SETUP_WORKSPACE, async () =>
+    setupManagedWorkspace((absPath) => {
+      // Register it the same way the legacy install does — as a saved project
+      // folder, NOT a sync space. A space under ~/YouCoded/Projects would push
+      // this ~1GB tree to the user's backup with `git add -A`, unannounced.
+      try {
+        const normalized = path.resolve(absPath);
+        const folders = readFolders();
+        if (!folders.some((f) => path.resolve(f.path) === normalized)) {
+          folders.unshift({ path: normalized, nickname: path.basename(normalized), addedAt: Date.now() } as SavedFolder);
+          writeFolders(folders);
+        }
+      } catch (e) {
+        log('WARN', 'dev', 'folders.add post-setup failed', { error: String(e) });
+      }
+    }),
+  );
+
+  ipcMain.handle(IPC.DEV_SETUP_STATUS, async () => workspaceSetupStatus());
+
+  ipcMain.handle(IPC.DEV_SETUP_CLEAR, async () => { clearWorkspaceSetupStatus(); });
 
   ipcMain.handle(IPC.DEV_OPEN_SESSION_IN, async (_event, args: { cwd: string; initialInput?: string }) => {
     // Delegate to the exported helper so the logic is independently testable.

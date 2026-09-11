@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="-3 -5 30 30">
+  <!-- The app icon's mascot, picked by Destin 2026-09-10 over four review rounds
+       (youcoded-dev docs/archive/design/2026-09-10-app-icon/, generator in its generate/ folder).
+       Made once from the rig library's sticker skin (wecoded-themes mascots/skins/sticker.svg) and
+       the face kit (theme-builder mascot-faces.mjs), in the app's "welcome" pose (the wave):
+       body #8B47B8, white sparkle eyes, deep purple #4A1F66 die-cut edge.
+       Every app, installer and Android icon is built from this file by scripts/build-icons.mjs.
+       Change the drawing here, rerun the script, and never hand-edit the PNG/ICO/ICNS it writes. -->
+<defs>
+    <radialGradient id="g-hi" cx="33%" cy="20%" r="80%">
+      <stop offset="0%" stop-color="#B98AD6" stop-opacity="0.45"/>
+      <stop offset="55%" stop-color="#B98AD6" stop-opacity="0"/>
+    </radialGradient>
+    <linearGradient id="g-lo" x1="0" y1="0" x2="0.22" y2="1">
+      <stop offset="52%" stop-color="#5E2A82" stop-opacity="0"/>
+      <stop offset="100%" stop-color="#5E2A82" stop-opacity="0.4"/>
+    </linearGradient>
+    <radialGradient id="g-spec" cx="30%" cy="16%" r="26%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.3"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <g id="rig-root">
+    <g id="rig-arm-left" data-pivot="2.5 9">
+      <path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" fill="#4A1F66" stroke="#4A1F66" stroke-width="0.75" stroke-linejoin="round"/>
+      <path d="M1.8 9 L3.2 9 A0.8 0.8 0 0 1 4 9.8 L4 12.2 A0.8 0.8 0 0 1 3.2 13 L1.8 13 A0.8 0.8 0 0 1 1 12.2 L1 9.8 A0.8 0.8 0 0 1 1.8 9 Z" fill="#8B47B8"/>
+    </g>
+    <g id="rig-arm-right" data-pivot="21.5 9" transform="rotate(-160 21.5 9)">
+      <path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" fill="#4A1F66" stroke="#4A1F66" stroke-width="0.75" stroke-linejoin="round"/>
+      <path d="M20.8 9 L22.2 9 A0.8 0.8 0 0 1 23 9.8 L23 12.2 A0.8 0.8 0 0 1 22.2 13 L20.8 13 A0.8 0.8 0 0 1 20 12.2 L20 9.8 A0.8 0.8 0 0 1 20.8 9 Z" fill="#8B47B8"/>
+      <g id="slot-item"/>
+    </g>
+    <g id="rig-leg-left" data-pivot="8.95 17">
+      <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" fill="#4A1F66" stroke="#4A1F66" stroke-width="0.75" stroke-linejoin="round"/>
+      <rect x="7.2" y="17" width="3.5" height="4" rx="1.2" fill="#8B47B8"/>
+    </g>
+    <g id="rig-leg-right" data-pivot="15.05 17">
+      <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" fill="#4A1F66" stroke="#4A1F66" stroke-width="0.75" stroke-linejoin="round"/>
+      <rect x="13.3" y="17" width="3.5" height="4" rx="1.2" fill="#8B47B8"/>
+    </g>
+    <g id="rig-body">
+      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="#4A1F66" stroke="#4A1F66" stroke-width="0.8" stroke-linejoin="round"/>
+      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="#8B47B8"/>
+      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="url(#g-lo)"/>
+      <path d="M9 4 L15 4 A4 4 0 0 1 19 8 L19 12 A4 4 0 0 1 15 16 L9 16 A4 4 0 0 1 5 12 L5 8 A4 4 0 0 1 9 4 Z" fill="url(#g-hi)"/>
+      <ellipse cx="9.6" cy="6.4" rx="3.4" ry="1.9" fill="url(#g-spec)" transform="rotate(-14 9.6 6.4)"/>
+      
+      
+      
+      
+      
+      
+      
+      
+      <g id="rig-face-welcome"><ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="#2c173b"/><g class="pupil"><circle cx="10" cy="10.25" r="0.3" fill="#FFFFFF"/><circle cx="9.35" cy="10.85" r="0.2" fill="#FFFFFF" fill-opacity="0.8"/><circle cx="10.3" cy="10.85" r="0.14" fill="#FFFFFF" fill-opacity="0.65"/></g><ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="#2c173b"/><g class="pupil"><circle cx="15.4" cy="9.95" r="0.3" fill="#FFFFFF"/><circle cx="14.75" cy="10.55" r="0.2" fill="#FFFFFF" fill-opacity="0.8"/><circle cx="15.7" cy="10.55" r="0.14" fill="#FFFFFF" fill-opacity="0.65"/></g><g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="#2c173b"/></g></g><g id="slot-eyewear"/>
+    </g>
+    <g id="slot-hat"/>
+    
+    
+  </g>
+</svg>

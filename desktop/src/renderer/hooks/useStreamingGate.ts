@@ -70,3 +70,32 @@ export function useStreamingGate(sessionId: string): boolean {
 
   return useSyncExternalStore(subscribe, getSnapshot);
 }
+
+// Whether the in-flight turn is actually WORKING, as opposed to merely not over.
+// Drives the stop button's motion, never its visibility (questions deck
+// stop-button-alive-questions, 2026-09-10): motion says "busy", so it must stop
+// while the turn is stuck or parked (Q-1 — any non-'ok' attention state; the
+// chat swaps its thinking bubble for the warning at the same moment) and while
+// a permission card waits on the user (Q-2 — the reply is paused on THEM, and a
+// moving button pulls the eye away from the card that needs answering).
+// Same cached-boolean selector idiom as useStreamingGate above. The loop walks
+// activeTurnToolIds (a handful at most), never the never-cleared toolCalls Map.
+export function useTurnIsWorking(sessionId: string): boolean {
+  const store = useChatStore();
+
+  const getSnapshot = useCallback((): boolean => {
+    const session = store.getSession(sessionId);
+    if (!session.isThinking || session.attentionState !== 'ok') return false;
+    for (const id of session.activeTurnToolIds) {
+      if (session.toolCalls.get(id)?.status === 'awaiting-approval') return false;
+    }
+    return true;
+  }, [store, sessionId]);
+
+  const subscribe = useCallback(
+    (cb: () => void) => store.subscribeSession(sessionId, cb),
+    [store, sessionId],
+  );
+
+  return useSyncExternalStore(subscribe, getSnapshot);
+}

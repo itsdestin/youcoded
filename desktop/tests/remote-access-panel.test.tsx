@@ -104,5 +104,5 @@ it('reports a failed check without inventing a cause', () => {
   cleanup();
   mount('error');
   expect(screen.getByRole('button', { name: 'Report bug' })).toBeTruthy();
-  expect(screen.getByRole('button', { name: 'Diagnose with Claude' })).toBeTruthy();
+  expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeTruthy();
 });

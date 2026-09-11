@@ -9,7 +9,6 @@ import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyl
 import { isRemoteMode } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
-import { buildDefaultIconSvg, rasterizeSvgToPngDataUrl } from '../themes/theme-default-icon';
 import { clampDrawerWidth, applyDrawerWidthVar, DRAWER_WIDTH_KEY, DEFAULT_DRAWER_WIDTH,
          applyGameWidthVar, GAME_WIDTH_KEY, DEFAULT_GAME_WIDTH, gameWidthForOpen } from './drawer-width';
 
@@ -562,25 +561,16 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     // Hot-swap the Electron window + dock icon. Guarded via optional chaining —
     // the Android WebView shim deliberately omits window.* (launcher icons can't
     // be swapped at runtime), so this is a no-op there.
-    // If the theme declares its own appIcon we use it directly; otherwise we
-    // synthesize a theme-tinted variant of the default YouCoded glyph so every
-    // theme (built-in, community, user, marketplace) gets a matching icon without
-    // shipping per-theme artwork.
-    let iconCancelled = false;
+    // A theme that declares its own appIcon gets it; every other theme sends null,
+    // which main resets to the bundled assets/icon.png.
+    // WHY no theme tint (2026-09-10): the tint redrew the retired "YC" terminal
+    // square, so once the mascot icon shipped the taskbar would swap from the new
+    // icon back to the old one the moment the app opened. Theme-matched icons drawn
+    // from the mascot are a parked item in the workspace's themes roadmap.
     const anyWin = window as unknown as { claude?: { window?: { setIcon?: (u: string | null) => Promise<void> } } };
     const setIconFn = anyWin.claude?.window?.setIcon;
     if (setIconFn) {
-      if (activeTheme.appIcon) {
-        setIconFn(activeTheme.appIcon).catch(() => {});
-      } else {
-        const svg = buildDefaultIconSvg(activeTheme.tokens);
-        rasterizeSvgToPngDataUrl(svg).then(dataUrl => {
-          if (iconCancelled) return;
-          // Null on rasterizer failure — main resets to bundled default, which
-          // is the right fallback.
-          setIconFn(dataUrl).catch(() => {});
-        });
-      }
+      setIconFn(activeTheme.appIcon ?? null).catch(() => {});
     }
 
     // Sync font state: use theme's declared font, or fall back to default.
@@ -596,7 +586,6 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       applyThemeFont(undefined); // clears any previously injected Google Font link
       applyFont(DEFAULT_FONT_FAMILY);
     }
-    return () => { iconCancelled = true; };
   }, [activeTheme, reducedEffects]);
 
   const setTheme = useCallback((slug: string) => {

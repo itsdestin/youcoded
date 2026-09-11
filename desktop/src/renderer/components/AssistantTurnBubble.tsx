@@ -34,11 +34,11 @@ interface Props {
 // reaches the reducer but is filtered at the render gate below, because it
 // carries no abnormal signal worth surfacing. The keys below are the
 // ones that ARE worth surfacing (truncation / refusal / etc.).
-// Provider-aware: native (local/cloud) sessions must not be labelled "Claude".
 // The two subject-carrying lines swap in the assistant's display name; the rest
-// are provider-neutral.
+// are provider-neutral. That name is now "Your assistant" for every provider
+// (Destin, 2026-09-10) — see utils/assistant-name.ts.
 function stopReasonCopy(reason: string, provider: SessionProvider | undefined): string {
-  const name = assistantName(provider, { capitalized: true }); // "Claude" | "Your Assistant"
+  const name = assistantName(provider, { capitalized: true }); // "Your assistant"
   const map: Record<string, string> = {
     max_tokens: `Response truncated — ${name} hit the output token limit.`,
     stop_sequence: 'Response stopped at a configured stop sequence.',

@@ -32,6 +32,8 @@ const GATED_SELECTORS = [
   '.flowing-word',
   '.model-load-track::after',
   '.model-load-finalize::after',
+  // The stop button's glow runs for the whole of every reply (stop-button-alive, 2026-09-10).
+  '.stop-live',
 ];
 
 describe('Reduced Effects stops perpetual CSS animations', () => {
@@ -63,5 +65,25 @@ describe('Reduced Effects stops perpetual CSS animations', () => {
     // Effects deliberately leaves them alone. Pins the decision so a later
     // "stop everything" sweep has to argue with it.
     expect(code).not.toMatch(/\[data-reduced-effects\][^{]*\.animate-spin\s*\{[^}]*animation:\s*none/);
+  });
+});
+
+// WHY: this guard was CSS-only until 2026-09-10 — it says nothing about
+// theme-injected animation (custom_css), which globals.css cannot see at all.
+// theme-engine.ts's applyThemeToDom now reads a theme's own animated selectors
+// and cancels them under Reduced Effects (buildReducedOverrides, sheet id
+// theme-custom-reduced). Pinning both names here means a refactor of that
+// mechanism that silently drops it fails a test even though this file never
+// touches theme-engine.ts's logic.
+describe('Reduced Effects also cancels theme-injected animation (theme-engine.ts)', () => {
+  const THEME_ENGINE = join(__dirname, '..', 'src', 'renderer', 'themes', 'theme-engine.ts');
+  const engineCode = readFileSync(THEME_ENGINE, 'utf8').replace(/\/\*[\s\S]*?\*\//g, '');
+
+  it('applies the theme-custom-reduced override sheet', () => {
+    expect(engineCode).toContain('theme-custom-reduced');
+  });
+
+  it('via buildReducedOverrides', () => {
+    expect(engineCode).toContain('buildReducedOverrides');
   });
 });

@@ -501,7 +501,10 @@ export default function HeaderBar({
     );
 
   return (
-    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+    // select-none: the header is chrome, not highlightable or copyable (Destin,
+    // 2026-09-10). A session rename box inside stays editable: globals.css
+    // re-enables text fields.
+    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       {/* Mac-only decorative pill under the native traffic lights. Mirrors the
           bg-inset rounded-md look of <CaptionButtons> on Windows/Linux. */}
       <MacTrafficLights headerRef={headerRef} />
@@ -662,7 +665,10 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
   // MacTrafficLights measures the .header-bar element it sits in.
   const headerRef = useRef<HTMLDivElement>(null);
   return (
-    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+    // select-none: the header is chrome, not highlightable or copyable (Destin,
+    // 2026-09-10). A session rename box inside stays editable: globals.css
+    // re-enables text fields.
+    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <MacTrafficLights headerRef={headerRef} />
       <div className="flex items-center gap-1 sm:gap-2">
         <SettingsGearButton

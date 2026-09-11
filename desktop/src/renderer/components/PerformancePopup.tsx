@@ -34,7 +34,7 @@ const PERFORMANCE_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       heading: 'Other places to look for power savings',
       bullets: [
         { term: 'Themes', text: "Pick a theme without glassmorphism / blur, or enable Reduced Effects in Appearance — biggest GPU savings after this toggle." },
-        { term: 'Close unused sessions', text: 'Each Claude session uses memory and a terminal, even when idle.' },
+        { term: 'Close unused sessions', text: 'Each session uses memory and a terminal, even when idle.' },
         { term: 'Windows', text: 'Settings → System → Display → Graphics → add YouCoded.exe → set "High performance" or "Power saving" per app. The OS setting overrides this toggle.' },
         { term: 'macOS', text: 'Apple Silicon switches automatically. On Intel Macs, System Settings → Battery → "Automatic graphics switching" controls this globally.' },
         { term: 'Linux (NVIDIA Optimus)', text: "Use prime-run or set __NV_PRIME_RENDER_OFFLOAD=1 when launching YouCoded. Chromium's switch alone doesn't reach the NVIDIA driver." },

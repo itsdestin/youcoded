@@ -22,6 +22,9 @@ const CONVERSATION_INDEX_PATH = path.join(CLAUDE_DIR, 'conversation-index.json')
 // call (see session-browser.test.ts).
 const NATIVE_SESSIONS_DIR = path.join(os.homedir(), '.youcoded', 'sessions');
 
+// WHY: fs.existsSync blocks the main thread; access() answers the same question off it.
+const exists = (p: string) => fs.promises.access(p).then(() => true, () => false);
+
 /** The on-disk path for a native session's transcript on THIS device — the
  *  probe listPastSessions uses to decide notSyncedYet for a native row. */
 function nativeJsonlPath(cwd: string, sessionId: string): string {
@@ -40,14 +43,16 @@ function nativeJsonlPath(cwd: string, sessionId: string): string {
  *  synced. The Resume Browser reads the topic file first and falls back to this
  *  frozen index here when the file is gone (see readTopic), then the store
  *  overlay in listPastSessions wins over both for store-backed rows. */
-function readIndexMeta(): {
+// WHY (perf/main-thread-async-reads, Task 2): this ran on fs.readFileSync,
+// blocking main once per browse. listPastSessions already awaits it below.
+async function readIndexMeta(): Promise<{
   flags: Record<string, Record<string, boolean>>;
   topics: Record<string, string>;
-} {
+}> {
   const flags: Record<string, Record<string, boolean>> = {};
   const topics: Record<string, string> = {};
   try {
-    const raw = fs.readFileSync(CONVERSATION_INDEX_PATH, 'utf8');
+    const raw = await fs.promises.readFile(CONVERSATION_INDEX_PATH, 'utf8');
     const index = JSON.parse(raw);
     for (const [sid, entry] of Object.entries<any>(index?.sessions || {})) {
       if (!entry) continue;
@@ -115,11 +120,15 @@ async function withRetry<T>(fn: () => Promise<T>, attempts: number = 3, delayMs:
  *   3. walkSlugParts — legacy longest-first split, kept last so folders that
  *      already resolved correctly keep resolving identically.
  */
-function resolveSlugToPath(slug: string): string {
-  const recorded = r1CwdForDir(path.join(PROJECTS_DIR, slug));
+// WHY (perf/main-thread-async-reads, Task 2): resolveSlugToPath and its three
+// helpers below ran on fs.*Sync — called ONCE PER PROJECT SLUG on every
+// Resume Browser open, so a big ~/.claude/projects tree froze the main
+// thread for the whole scan. listPastSessions's one call site now awaits.
+async function resolveSlugToPath(slug: string): Promise<string> {
+  const recorded = await r1CwdForDir(path.join(PROJECTS_DIR, slug));
   if (recorded) return recorded;
 
-  const forward = forwardResolveSlug(slug);
+  const forward = await forwardResolveSlug(slug);
   if (forward) return forward;
 
   let root: string;
@@ -136,7 +145,7 @@ function resolveSlugToPath(slug: string): string {
   }
 
   if (parts.length === 0) return root;
-  return walkSlugParts(root, parts);
+  return await walkSlugParts(root, parts);
 }
 
 /**
@@ -153,12 +162,15 @@ function resolveSlugToPath(slug: string): string {
  * Trying the longest existing segment first picks the real hyphenated folder.
  * Exported for unit testing. Fix 2026-07-12 (two-device dogfood).
  */
-export function walkSlugParts(base: string, parts: string[]): string {
+export async function walkSlugParts(base: string, parts: string[]): Promise<string> {
   for (let len = parts.length; len >= 1; len--) {
     const segment = parts.slice(0, len).join('-');
     const candidate = path.join(base, segment);
-    let isDir = false;
-    try { isDir = fs.existsSync(candidate) && fs.statSync(candidate).isDirectory(); } catch {}
+    // WHY: a single stat() replaces the existsSync+statSync pair — one fewer
+    // disk round trip, and the "not there" case (ENOENT) is indistinguishable
+    // from "not a directory" for this walk's purposes, so both collapse to null.
+    const st = await fs.promises.stat(candidate).catch(() => null);
+    const isDir = !!st && st.isDirectory();
     if (isDir) {
       return len === parts.length ? candidate : walkSlugParts(candidate, parts.slice(len));
     }
@@ -175,10 +187,10 @@ export function walkSlugParts(base: string, parts: string[]): string {
  *  DECLINES (null) on a capped slug: past 200 chars the slug carries ZERO
  *  path information, and "search every descendant and hash each" is not a
  *  confirmation step. Capped slugs are option 1's (recorded cwd) or nothing. */
-export function forwardResolveSlug(
+export async function forwardResolveSlug(
   slug: string,
   rootsOverride?: { posixRoot?: string; winRoot?: string },
-): string | null {
+): Promise<string | null> {
   if (slug.length > CC_SLUG_MAX && slug[CC_SLUG_MAX] === '-') return null; // capped — decline
   let base: string; let rest: string;
   if (/^[A-Z]--/.test(slug)) {
@@ -188,17 +200,17 @@ export function forwardResolveSlug(
     base = rootsOverride?.posixRoot ?? '/';
     rest = slug.slice(1);
   } else return null;
-  const found = walkForward(base, rest);
+  const found = await walkForward(base, rest);
   if (!found) return null;
   // Terminal confirmation: the WHOLE candidate must re-slug to the WHOLE slug
   // (lowercased — Windows folder-case drift tolerance, same as buildSlugToName).
   return ccProjectSlug(found).toLowerCase() === slug.toLowerCase() ? found : null;
 }
 
-function walkForward(dir: string, rest: string): string | null {
+async function walkForward(dir: string, rest: string): Promise<string | null> {
   if (rest === '') return dir;
   let entries: fs.Dirent[] = [];
-  try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return null; }
+  try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return null; }
   const candidates = entries
     .filter(e => e.isDirectory())
     .map(e => ({ name: e.name, enc: e.name.replace(/[^a-zA-Z0-9]/g, '-') }))
@@ -206,7 +218,7 @@ function walkForward(dir: string, rest: string): string | null {
     .sort((a, b) => b.enc.length - a.enc.length);   // longest-first, then backtrack
   for (const c of candidates) {
     const remaining = rest === c.enc ? '' : rest.slice(c.enc.length + 1);
-    const hit = walkForward(path.join(dir, c.name), remaining);
+    const hit = await walkForward(path.join(dir, c.name), remaining);
     if (hit) return hit;
   }
   return null;
@@ -415,7 +427,7 @@ export async function listPastSessions(
   }
 
   // Join flag + topic metadata from the synced conversation index
-  const indexMeta = readIndexMeta();
+  const indexMeta = await readIndexMeta();
 
   const allSessions: PastSession[] = [];
 
@@ -435,7 +447,7 @@ export async function listPastSessions(
     // top-level transcript in the dir — invoking it per-file inside
     // files.map turned that into an N×N full-file-read multiplier on
     // foreign-heavy directories, on the Resume Browser's hot path.
-    const projectPath = resolveSlugToPath(slug);
+    const projectPath = await resolveSlugToPath(slug);
 
     const sessionPromises = files.map(async (file) => {
       const sessionId = file.replace('.jsonl', '');
@@ -619,11 +631,11 @@ export async function listPastSessions(
           // harness/session-store.ts).
           const storeLocal = resolveLocal(rec);
           if (isNative) {
-            if (storeLocal && fs.existsSync(nativeJsonlPath(storeLocal, rec.id))) {
+            if (storeLocal && await exists(nativeJsonlPath(storeLocal, rec.id))) {
               legacy.projectPath = storeLocal;
               legacy.projectSlug = nativeStoreSlug(storeLocal);
             }
-          } else if (storeLocal && fs.existsSync(path.join(PROJECTS_DIR, ccProjectSlug(storeLocal), `${rec.id}.jsonl`))) {
+          } else if (storeLocal && await exists(path.join(PROJECTS_DIR, ccProjectSlug(storeLocal), `${rec.id}.jsonl`))) {
             legacy.projectPath = storeLocal;
             legacy.projectSlug = ccProjectSlug(storeLocal);
           }
@@ -639,8 +651,8 @@ export async function listPastSessions(
           const localPath = resolveLocal(rec);
           const transcriptHere = localPath
             ? (isNative
-                ? fs.existsSync(nativeJsonlPath(localPath, rec.id))
-                : fs.existsSync(path.join(PROJECTS_DIR, ccProjectSlug(localPath), `${rec.id}.jsonl`)))
+                ? await exists(nativeJsonlPath(localPath, rec.id))
+                : await exists(path.join(PROJECTS_DIR, ccProjectSlug(localPath), `${rec.id}.jsonl`)))
             : false;
           result.push({
             sessionId: rec.id,
