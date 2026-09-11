@@ -1607,7 +1607,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               className="layer-surface w-52 max-w-[calc(100vw-1rem)] overflow-hidden"
               style={{ position: 'fixed', top: tagsDropdownPos.top, left: tagsDropdownPos.left, zIndex: 60 }}
             >
-              {liveTags.length === 0 ? (
+              {/* A failed tag read is not "No tags yet" (code review 2026-09-11, F5). */}
+              {registry.error && registry.tags.length === 0 ? (
+                <div className="px-3 py-3">
+                  <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />
+                </div>
+              ) : liveTags.length === 0 ? (
                 <div className="px-3 py-3">
                   <EmptyState variant="inline" message="No tags yet" />
                 </div>
