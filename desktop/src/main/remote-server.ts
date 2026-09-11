@@ -61,6 +61,8 @@ import { installGh } from './github-auth';
 import { combinedGithubStatus } from './github-client';
 import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
+import { getJsonPath, setJsonPath } from './safe-json-path';
+import { resolveStaticFile } from './remote-static-path';
 
 const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
 // Perf (2026-09-03): the rolling PTY replay buffer is a LIST OF OUTPUT CHUNKS,
@@ -79,6 +81,10 @@ interface PtyBuffer { chunks: string[]; length: number; }
 const PTY_CHUNK_COALESCE_BELOW = 4096;
 const HOOK_BUFFER_SIZE = 10_000; // ~10MB max, covers full conversations without excessive memory
 const AUTH_TIMEOUT_MS = 5000;
+// The most an unauthenticated socket may buffer before it signs in. The auth
+// handshake is a single sub-KB JSON message; queued app traffic only follows
+// auth:ok. 16 KB covers the handshake with room to spare (2026-09-10).
+const PRE_AUTH_MAX_BYTES = 16 * 1024;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 // A failed authentication closes the socket, so a connection gets ONE real attempt; this
 // only bounds a client that pipelines several auth messages before the close lands.
@@ -754,17 +760,15 @@ export class RemoteServer {
     if (url === '/' || url === '/index.html') {
       filePath = path.join(staticDir, 'index.html');
     } else {
-      // Prevent directory traversal — decode percent-encoding first
-      const decoded = decodeURIComponent(url);
-      const safePath = path.normalize(decoded).replace(/^(\.\.[\/\\])+/, '');
-      filePath = path.join(staticDir, safePath);
-    }
-
-    // Verify the resolved path is within staticDir
-    if (!filePath.startsWith(staticDir)) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
+      // resolveStaticFile decodes safely (a malformed % no longer throws into the
+      // main process) and confines the result to staticDir by path segments.
+      const resolved = resolveStaticFile(url, staticDir);
+      if (resolved === null) {
+        res.writeHead(400);
+        res.end('Bad Request');
+        return;
+      }
+      filePath = resolved;
     }
 
     fs.readFile(filePath, (err, data) => {
@@ -893,14 +897,36 @@ export class RemoteServer {
     // loopback proxy every device shares one bucket, so five failures locked the household
     // out. Limits are per socket and per host now.
 
+    // Pre-auth byte budget (2026-09-10 security review). The socket accepts up to
+    // maxPayload (50 MB) so an authenticated device can upload a file, but the
+    // first message — an auth handshake — is well under 1 KB. Cap what an
+    // unauthenticated peer may buffer at PRE_AUTH_MAX_BYTES so it cannot make the
+    // host hold megabytes per idle connection. Removed the moment auth resolves.
+    // The `?.` on .on/.off is a RUNTIME guard, not a type one: a real net.Socket
+    // always has them, but the WS-level test harness passes a bare `{ remoteAddress }`
+    // stub, where the byte budget is moot.
+    let preAuthBytes = 0;
+    const budgetGuard = (chunk: Buffer) => {
+      preAuthBytes += chunk.length;
+      if (preAuthBytes > PRE_AUTH_MAX_BYTES) {
+        clearTimeout(timeout);
+        detachBudget();
+        ws.close(4009, 'Pre-auth payload too large');
+      }
+    };
+    const detachBudget = () => { req.socket.off?.('data', budgetGuard); };
+
     // Auth timeout
     const timeout = setTimeout(() => {
+      detachBudget();
       ws.close(4000, 'Auth timeout');
     }, AUTH_TIMEOUT_MS);
+    req.socket.on?.('data', budgetGuard);
 
     // Wait for auth message
     const authHandler = async (raw: Buffer | string) => {
       clearTimeout(timeout);
+      detachBudget();
       if (slowStart) await new Promise(r => setTimeout(r, slowStart));
       ws.off('message', authHandler);
 
@@ -2262,7 +2288,7 @@ export class RemoteServer {
           const raw = await fs.promises.readFile(claudeSettingsPath, 'utf-8');
           const parsed = JSON.parse(raw);
           const field: string = (payload as any)?.field ?? '';
-          const value = field.split('.').reduce((obj: any, k) => (obj == null ? undefined : obj[k]), parsed);
+          const value = getJsonPath(parsed, field);
           this.respond(client.ws, type, id, value);
         } catch {
           this.respond(client.ws, type, id, undefined);
@@ -2301,18 +2327,9 @@ export class RemoteServer {
           try { existing = JSON.parse(await fs.promises.readFile(claudeSettingsPath, 'utf-8')); } catch {}
           const field: string = (payload as any)?.field ?? '';
           const value = (payload as any)?.value;
-          const keys = field.split('.');
-          let cursor = existing;
-          for (let i = 0; i < keys.length - 1; i++) {
-            const k = keys[i];
-            if (cursor[k] == null || typeof cursor[k] !== 'object') cursor[k] = {};
-            cursor = cursor[k];
-          }
-          if (value === null || value === undefined) {
-            delete cursor[keys[keys.length - 1]];
-          } else {
-            cursor[keys[keys.length - 1]] = value;
-          }
+          // setJsonPath refuses __proto__/constructor/prototype segments — a paired
+          // remote device reaches this handler (2026-09-10 security review).
+          setJsonPath(existing, field, value);
           await fs.promises.mkdir(path.dirname(claudeSettingsPath), { recursive: true });
           await fs.promises.writeFile(claudeSettingsPath, JSON.stringify(existing, null, 2));
           this.respond(client.ws, type, id, true);
