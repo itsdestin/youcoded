@@ -1057,6 +1057,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                 // of those into a stop — a button that says Send and doesn't.
                 if (voiceListening) { void voice.stop(); return; }
                 if (minimal && sessionId) {
+                  // WHY ask canSend first (error inventory 2026-09-10, false message 6):
+                  // this branch sent and cleared unconditionally. Over remote access
+                  // session:input is refused while the connection is down, so the box
+                  // emptied as if the line had gone through and the words were lost.
+                  // Same check, same sentence as the composer's own send path.
+                  if (window.claude.session.canSend?.() === false) {
+                    onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+                    return;
+                  }
                   // Terminal mode: send text + Enter directly to PTY.
                   // pty-worker auto-splits text+\r with a 600ms gap so Ink
                   // sees Enter as a distinct keystroke after paste commits.
