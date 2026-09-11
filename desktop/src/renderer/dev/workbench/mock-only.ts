@@ -89,9 +89,13 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
-  // Remote access batches 2 and 3 (questions deck 2026-09-10). Designed ahead of their
-  // backend; each row is a channel the technical design has to build on all five
-  // surfaces, then delete here.
-  // Batch 3: save a copy of a file to the phone (Q-7 yes).
-  { channel: 'artifacts.download', feature: 'Remote access batch 3 — Download a file to the phone' },
+  // Remote access batches 2 and 3 (questions deck 2026-09-10) designed three channels
+  // ahead of their backend; all three came off on 2026-09-10 when the real channels
+  // landed. Batch 2: `on.remoteConversationStatus` (the host tells the phone where its
+  // copy of the conversation stands) and `remote.rehydrate` (Refresh on the may-be-behind
+  // strip). Batch 3: `artifacts.download` — main/remote-download.ts mints the link,
+  // remote-server.ts serves GET /download/<token>, preload declares it, the shim opens it,
+  // and Android's catch-all answers unsupported by design. The fakes in mock-shim.ts stay
+  // so the status strip, the too-large card and the Download button stay reviewable
+  // without a host.
 ];

@@ -242,7 +242,7 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const previewResumeLabel = previewNative ? COPY.resumeNative : COPY.resume;
   // Live external-change events while the drawer is actually visible — the
   // watcher in main is refcounted, so open drawers on the same project share one.
-  useProjectWatch(drawerOpen && projectRoot ? projectRoot : null);
+  // (Subscribed below, after listRetry exists: a reconnect re-lists through it.)
   // Set when a pill click couldn't resolve; cleared on next click/selection/close.
   const pillError = state.pillError?.[sessionId] ?? null;
 
@@ -265,6 +265,10 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // never an empty state that claims to know.
   const [listError, setListError] = useState<string | null>(null);
   const [listRetry, setListRetry] = useState(0);
+  // Over remote access the files the assistant touched while the phone was
+  // disconnected never arrived as events — re-list once the watch is back
+  // (batch 3, R12). The desktop never fires the reconnect.
+  useProjectWatch(drawerOpen && projectRoot ? projectRoot : null, () => setListRetry((n) => n + 1));
   useEffect(() => {
     if (!drawerOpen || !projectRoot || !sessionId) return;
     let cancelled = false;
@@ -497,9 +501,11 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Remote access batch 3 (questions deck 2026-09-10, Q-7 yes): a phone cannot
   // reveal or open a file that lives on another computer, so it gets Download —
   // the file lands in the phone's own downloads folder without blocking the chat.
+  // The project and record go along so the host can authorize a tracked file
+  // through its record (T7 review, finding 9).
   const handleDownload = useCallback(() => {
-    if (absolutePath) void downloadFile(absolutePath);
-  }, [absolutePath]);
+    if (absolutePath) void downloadFile(absolutePath, active ? { projectRoot, artifactId: active.id } : undefined);
+  }, [absolutePath, active, projectRoot]);
 
   // Rows to render: the filtered set, narrowed by the search box and sorted.
   // Search/sort affect ONLY the rendered list — not `artifacts`, which still

@@ -342,7 +342,9 @@ export function FilesTab({
   // mounted, and refresh the list when files appear/disappear on disk. Debounced
   // — a git checkout emits hundreds of add/remove events in a burst, and each
   // uncoalesced refresh would re-run the (cache-invalidated) discovery scan.
-  useProjectWatch(project.path);
+  // Over remote access, the changes made while the phone was disconnected never
+  // arrived as events — reload the list once the watch is back (batch 3, R12).
+  useProjectWatch(project.path, () => refreshRef.current());
   // This tab now stays mounted while another tab shows, so the refresh has to
   // know that. Refreshing while hidden would be a full uncached disk walk in the
   // main process (main drops the discovery cache on every add/remove) for a list
@@ -977,7 +979,8 @@ function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed 
   // the right action for formats the in-app viewer can't render (html) or only
   // renders partially (docx/xlsx). Desktop-only (shell.openPath); no-op on remote.
   const handleOpenExternal = () => (window.claude as any).shell?.openPath?.(absPath);
-  const handleDownload = () => { void downloadFile(absPath); };
+  // Project and record along with the path (T7 review, finding 9).
+  const handleDownload = () => { void downloadFile(absPath, { projectRoot: project.path, artifactId: artifact.id }); };
   const narrowViewport = useNarrowViewport();
   const handleCopyPath = () => {
     navigator.clipboard?.writeText(absPath).then(() => {

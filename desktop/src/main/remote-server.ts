@@ -1,6 +1,17 @@
 import http from 'http';
 import zlib from 'zlib';
 import { listProjectsIndex } from './artifacts/projects-index';
+// Files over remote (batch 3): the same read bodies the Electron handlers
+// call, plus the phone's smaller preview ceilings.
+import {
+  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
+  searchArtifactContent, checkArtifactExistence, isKnownRoot, isKnownProjectRef,
+} from './artifacts/read-service';
+import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
+import { watchProject, unwatchProject, dropSubscriber } from './artifacts/project-watcher';
+import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../shared/remote-file-limits';
+import { RemoteDownloads } from './remote-download';
+import { readSidecarShared } from './artifacts/artifact-store';
 import { readFileHead } from './fs-read-head';
 // Games arcade scores — remote browsers share the desktop's operations and
 // its stale-board cache (main/arcade-handlers.ts).
@@ -156,7 +167,18 @@ interface AuthenticatedClient {
    *  Keyed with the buffer's epoch, so a buffer recreated mid-restore is not read at the
    *  old buffer's position (T2 review, 12). */
   ptyCursor?: Map<string, { epoch: string; pos: number }>;
+  // The project watcher's subscriber id for this socket (batch 3, §8). Assigned
+  // on the first watch-project and dropped on close; negative so it can never
+  // collide with a webContents id, which is what the desktop subscribes with.
+  watchId?: number;
+  // Distinct roots this socket watches — capped (MAX_WATCHED_ROOTS_PER_SOCKET).
+  watchedRoots?: Set<string>;
 }
+
+// A phone shows one project's Files and one conversation's drawer at a time;
+// four leaves room for a switch mid-grace without letting a socket pin a
+// watcher per directory on the computer.
+const MAX_WATCHED_ROOTS_PER_SOCKET = 4;
 
 export interface ClientInfo {
   id: string;
@@ -456,6 +478,11 @@ export class RemoteServer {
         res.end(JSON.stringify({ needsSetup: !this.config.passwordHash }));
         return;
       }
+      // Download links (batch 3, §10) — matched before the static handler AND
+      // the Vite proxy: the SPA fallback would answer an expired link with
+      // index.html and a 200, and in dev the proxy would hand it to Vite. The
+      // 256-bit token in the path is the authorization; see remote-download.ts.
+      if (this.downloads.handleHttpRequest(req, res)) return;
       if (hasStaticBuild) {
         this.handleHttpRequest(req, res, staticDir);
       } else {
@@ -609,6 +636,7 @@ export class RemoteServer {
   /** Every device loses access — what a password change means. */
   invalidateTokens(): void {
     this.devices.revokeAll();
+    this.downloads.revokeAll();
     for (const client of this.clients) {
       client.ws.close(4001, 'Password changed');
     }
@@ -656,6 +684,8 @@ export class RemoteServer {
   unpairDevice(deviceId: string): boolean {
     const revoked = this.devices.revoke(deviceId);
     if (!revoked) return false;
+    // Contract R10 (batch 3): removing a device also ends its right to download.
+    this.downloads.revokeDevice(deviceId);
     for (const client of this.clients) {
       if (client.deviceId === deviceId) {
         client.ws.close(4003, 'Device unpaired');
@@ -3343,6 +3373,88 @@ export class RemoteServer {
         break;
       }
 
+      // --- Files over remote (batch 3, design 2026-09-10 §8, §9) ---
+      // The SAME functions the Electron handlers call (artifacts/read-service.ts,
+      // project-read-service.ts): same roots, same denylist, same shape, so the
+      // phone's Files screens show what the desktop shows (contract R7, R16).
+      // The reads carry the phone's preview ceiling; over it the answer is
+      // `too-large` with the real size, decided from `stat` — never a prefix.
+      // The write channels (save, append-version, import, rename…) are not
+      // bridged: editing over remote is not in this batch.
+      case 'artifacts:list-session':
+      case 'artifacts:list-project':
+      case 'artifacts:list-all-files':
+      case 'artifacts:get':
+      case 'artifacts:read-binary':
+      case 'artifacts:search-content':
+      case 'artifacts:check-existence':
+      case 'project:list-context':
+      case 'project:read-context-file':
+      case 'project:list-conversations':
+      case 'project:repo-info': {
+        try {
+          this.respond(client.ws, type, id, await this.readFileChannel(type, payload ?? {}));
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
+        }
+        break;
+      }
+      case 'artifacts:watch-project': {
+        // Live refresh (contract R12). The watcher refcounts subscribers by a
+        // numeric id; a WS client gets its own — negative, so it can never
+        // collide with a webContents id — and loses it when its socket closes,
+        // the way a destroyed renderer loses its refs. A reconnect is a NEW
+        // socket, so the phone re-subscribes (useProjectWatch).
+        const projectRoot = payload?.projectRoot;
+        // Same root gate as the reads: a watcher is a full tree walk on the
+        // main thread (project-watcher.ts measures 310-372 ms on a large
+        // folder) and holds OS watch handles, so a phone naming `/usr` or a
+        // hundred different roots must be refused (T6 review, finding 3).
+        const refused = await this.refuseUnknownRoot(projectRoot);
+        if (refused) { this.respond(client.ws, type, id, { ok: false, error: refused.error }); break; }
+        const watched = (client.watchedRoots ??= new Set<string>());
+        if (!watched.has(projectRoot) && watched.size >= MAX_WATCHED_ROOTS_PER_SOCKET) {
+          this.respond(client.ws, type, id, { ok: false, error: 'too-many' });
+          break;
+        }
+        watched.add(projectRoot);
+        this.respond(client.ws, type, id, await watchProject(projectRoot, this.watchSubscriberId(client)));
+        break;
+      }
+      case 'artifacts:unwatch-project': {
+        const projectRoot = payload?.projectRoot;
+        if (typeof projectRoot === 'string' && projectRoot.length > 0 && client.watchId !== undefined) {
+          unwatchProject(projectRoot, client.watchId);
+          client.watchedRoots?.delete(projectRoot);
+        }
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      case 'artifacts:download': {
+        // Mint a short-lived link bound to THIS device and THIS socket (§10);
+        // the answer's `url` is host-relative and the shim makes it absolute.
+        // Refusals (`sensitive`, `outside-roots`, `busy`…) are data the card
+        // shows, so this channel must never join REJECT_ON_NOT_OK.
+        try {
+          // The record route (projectRoot + artifactId) is offered only for a
+          // folder the computer shows or a live session runs in; for any other
+          // folder the record is IGNORED and the path alone decides (T7 review,
+          // finding 4; re-review, finding 6). A session-only folder therefore
+          // reaches only files that session recorded (re-review, finding 1).
+          const recordRoot = typeof payload?.projectRoot === 'string' && typeof payload?.artifactId === 'string'
+            && await this.isKnownRootForRecords(payload.projectRoot);
+          const request = recordRoot
+            ? { absolutePath: payload.absolutePath, projectRoot: payload.projectRoot, artifactId: payload.artifactId }
+            : { absolutePath: payload?.absolutePath };
+          this.respond(client.ws, type, id,
+            await this.downloads.mint(request, { deviceId: client.deviceId, socketId: client.id }));
+        } catch (err: any) {
+          // The phone gets an answer instead of a request that never returns.
+          this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
+        }
+        break;
+      }
+
       // --- Games arcade scores (spec §6.1) ---
       // The SAME operations the Electron IPC path runs, including the shared
       // stale-board cache — a remote browser must never see a different
@@ -3420,6 +3532,128 @@ export class RemoteServer {
         break;
       }
     }
+  }
+
+  // --- Files over remote (batch 3) ---
+
+  /**
+   * Every root a phone names is checked against the roots the desktop itself
+   * shows (saved folders, indexed projects) before any read (design §8 "same
+   * roots"; 2026-09-10 review of T6, finding 2). The desktop's renderer only ever
+   * asks about roots it was given; a phone's payload is the phone's, and without
+   * this every read channel answered for any directory on the computer.
+   * Remote-only by design: the desktop's own transport keeps its behaviour.
+   *
+   * A folder a live session runs in counts ONLY for that session's recorded
+   * files (`records: true`): the drawer's list, the existence check, a record
+   * read by its id, and Download's record route. WHY: a phone can start a
+   * session in any folder — and "No folder" lands in the home folder — so a
+   * session folder counting as a full root handed out every file in it by path
+   * (T7 re-review, finding 1).
+   */
+  private sessionRoots(): string[] {
+    return this.sessionManager.listSessions().map((s: any) => s?.cwd).filter((c: unknown): c is string => typeof c === 'string' && c.length > 0);
+  }
+
+  private isKnownRootForRecords(root: string): Promise<boolean> {
+    return isKnownRoot(root, this.sessionRoots());
+  }
+
+  private async refuseUnknownRoot(root: unknown, opts: { records?: boolean } = {}): Promise<{ ok: false; error: string } | null> {
+    if (typeof root !== 'string' || root.length === 0) return { ok: false, error: 'bad-request' };
+    const known = opts.records ? await this.isKnownRootForRecords(root) : await isKnownRoot(root);
+    return known ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  private async refuseUnknownProject(projectId: unknown, opts: { records?: boolean } = {}): Promise<{ ok: false; error: string } | null> {
+    if (typeof projectId !== 'string' || projectId.length === 0) return { ok: false, error: 'bad-request' };
+    return (await isKnownProjectRef(projectId, opts.records ? this.sessionRoots() : [])) ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  /** A record id the folder's sidecar actually holds. */
+  private async refuseUnlessRecorded(root: string, artifactId: string): Promise<{ ok: false; error: string } | null> {
+    const sidecar = await readSidecarShared(root).catch(() => null);
+    const recorded = !!sidecar && !('corrupted' in sidecar) && sidecar.artifacts.some((a) => a.id === artifactId);
+    return recorded ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  /**
+   * The read channels, answered from the shared services with the phone's
+   * preview ceilings applied (design §9) after the root gate above. Payloads
+   * are the shim's object form (`{ projectRoot, artifactId, full }`), never
+   * positional arguments; a malformed one answers `bad-request`, never a Node
+   * error's text.
+   *
+   * A lookup table, not a second `switch`: tests/remote-channel-parity.test.ts
+   * reads `case '<channel>':` out of this file to prove the handleMessage
+   * switch routes every read, and a `case` here would satisfy that guard for a
+   * channel the outer switch had dropped.
+   */
+  private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
+    'artifacts:list-session': async (p) => {
+      if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot);
+    },
+    'artifacts:list-project': async (p) =>
+      (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),
+    'artifacts:list-all-files': async (p) =>
+      (await this.refuseUnknownProject(p.projectId)) ?? listAllFiles(p.projectId, p.opts),
+    'artifacts:get': async (p) => {
+      if (typeof p.artifactId !== 'string') return { ok: false, error: 'bad-request' };
+      // By path inside a folder the computer shows; inside a session-only folder,
+      // only a file that session recorded, named by its record id.
+      if (await this.refuseUnknownRoot(p.projectRoot)) {
+        const refused = (await this.refuseUnknownRoot(p.projectRoot, { records: true }))
+          ?? (await this.refuseUnlessRecorded(p.projectRoot, p.artifactId));
+        if (refused) return refused;
+      }
+      return readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES });
+    },
+    // read-binary carries its own roots check (authorizeBytesRead), on the file itself.
+    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
+    'artifacts:search-content': async (p) =>
+      (await this.refuseUnknownRoot(p.projectRoot)) ?? searchArtifactContent(p.projectRoot, p.query),
+    'artifacts:check-existence': async (p) =>
+      (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? checkArtifactExistence(p.projectRoot, p.artifactIds),
+    'project:list-context': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? listContextFiles(p.projectPath),
+    'project:read-context-file': async (p) => {
+      if (typeof p.absolutePath !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownRoot(p.projectPath)) ?? readContext(p.projectPath, p.absolutePath);
+    },
+    'project:list-conversations': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? listConversations(p.projectPath),
+    'project:repo-info': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? repoInfo(p.projectPath),
+  };
+
+  private readFileChannel(type: string, payload: any): Promise<unknown> {
+    const read = this.fileReads[type];
+    return read ? read(payload) : Promise.resolve({ ok: false, error: `Not a file read channel (${type}).` });
+  }
+
+  // Negative and descending: never a webContents id (those are positive).
+  private nextWatchId = -1;
+
+  // Download links (§10). The revocation check reads the device store lazily,
+  // at each GET, so a device unpaired while its link was alive is refused.
+  readonly downloads = new RemoteDownloads({
+    isDeviceRevoked: (deviceId) => this.devices.isRevoked(deviceId),
+  });
+
+  /** This socket's project-watcher subscriber id, allocated on first use and released on close. */
+  private watchSubscriberId(client: AuthenticatedClient): number {
+    if (client.watchId === undefined) {
+      const watchId = this.nextWatchId--;
+      client.watchId = watchId;
+      // A phone that vanishes never sends unwatch — same as a crashed renderer,
+      // which the desktop handles with webContents 'destroyed'. Guarded because
+      // tests drive handleMessage with a bare `{ ws }`.
+      if (typeof (client.ws as any).once === 'function') {
+        client.ws.once('close', () => dropSubscriber(watchId));
+      }
+    }
+    return client.watchId;
   }
 
   // --- Helpers ---

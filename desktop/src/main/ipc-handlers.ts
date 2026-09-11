@@ -125,22 +125,18 @@ import { ARTIFACT_IPC } from './artifacts/ipc-channels';
 // the binary-roots pass) go through readSidecarShared — one parsed copy per
 // project however many callers ask at once. Only the manual include/exclude
 // handlers, which mutate and write back, keep the private readSidecar.
-import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord, runSidecarMigration } from './artifacts/artifact-store';
+import { appendVersion, readSidecar, readSidecarShared, writeSidecar, renameArtifact, removeArtifactRecord } from './artifacts/artifact-store';
 import { listProjects, removeProject } from './artifacts/central-index';
 // Shared with remote-server.ts — see that module's header for why these left
 // this file (they were closures, so the remote transport could not reach them).
-import { countArtifacts, projectAllFiles, isGatedRoot, listProjectsIndex } from './artifacts/projects-index';
+import { countArtifacts, listProjectsIndex } from './artifacts/projects-index';
 import { invalidateDiscoveryCache } from './artifacts/project-file-discovery';
 import { ensureProject, ensureProjectCoalesced, applyGitTreatmentCoalesced } from './artifacts/project-manager';
 import { sweepStaleTmp } from './artifacts/cas-write';
 import { canonicalize } from '../shared/artifacts/canonicalize';
-import { evaluateBinaryRead } from './artifacts/read-binary-access';
 import { readFileHead } from './fs-read-head';
 import { initProjectWatchers, watchProject, unwatchProject, dropSubscriber, noteOwnWrite, invalidateSidecarIdCache } from './artifacts/project-watcher';
-import { searchProjectContent } from './artifacts/content-search';
-import { looksBinary, EDIT_MAX_BYTES, FULL_READ_MAX_BYTES, READ_BINARY_MAX_BYTES } from '../shared/artifacts/editable-path-policy';
-import { decideOverCapRead } from '../shared/artifacts/over-cap-read';
-import { authorizeArtifactRead, authorizeArtifactWrite, isAbsoluteRecorded } from './artifacts/write-authorization';
+import { authorizeArtifactWrite } from './artifacts/write-authorization';
 import { trackedArtifacts } from './artifacts/visible-artifacts';
 import { importFile } from './artifacts/import-file';
 import { GIT_IPC } from './git/ipc-channels';
@@ -151,7 +147,14 @@ import {
 import { initGitWatchers, watchGit, unwatchGit, dropGitSubscriber } from './git/git-watcher';
 import { resolveRepoRoot, invalidateRepoRootCache } from './git/git-exec';
 import { PROJECT_IPC } from './project/ipc-channels';
-import { listProjectConversations, projectConversationHistory } from './project-conversations';
+import { projectConversationHistory } from './project-conversations';
+// The artifact and Project View READ bodies, shared with remote-server.ts
+// (remote access batch 3) so a phone gets the desktop's own answers.
+import {
+  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
+  searchArtifactContent, checkArtifactExistence,
+} from './artifacts/read-service';
+import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
 // cwd, title and flag changes. Keyed by CLAUDE session id (resolved from the
 // desktop id via sessionIdMap below), matching the store's record id.
@@ -176,8 +179,7 @@ import type { PortableModelRef } from './conversations/store-core';
 import { createHolderTakeover } from './conversations/takeover';
 import { getTagRegistry } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
-import { getRepoInfo } from './project-repo';
-import { listContext, readContextFile, writeContextFile } from './project-context';
+import { writeContextFile } from './project-context';
 
 // WHY: the chatsearch outbox drainer lives outside registerIpcHandlers but must
 // fire the SAME renderer + remote broadcast the IPC tag/flag/note handlers fire,
@@ -4502,48 +4504,26 @@ export function registerIpcHandlers(
     return result;
   });
 
-  ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, async (_e, sessionId: string, projectRoot: string) => {
-    // Repair legacy relative-external records before listing. The Session
-    // Drawer is the only surface where an unpinned external is visible, so this
-    // is where the false "no longer on disk" actually renders. Memoized per
-    // project per process — this handler also fires after every tracked write.
-    const migration = await runSidecarMigration(projectRoot);
-    // Fix: every other sidecar writer here calls invalidateSidecarIdCache after
-    // committing (see APPEND_VERSION/RENAME/REMOVE_RECORD above) so the
-    // watcher's path-to-id map doesn't go stale. runSidecarMigration writes too
-    // (it rewrites reclassified records' path/kind) but had no caller doing
-    // this. Wiring it from artifact-store.ts would import project-watcher.ts,
-    // which already imports artifact-store.ts's readSidecar — a cycle — so it's
-    // done here at each of the three call sites instead, and only when a write
-    // actually happened.
-    if (migration.migrated) invalidateSidecarIdCache(projectRoot);
-    const sidecar = await readSidecarShared(projectRoot);
-    if (!sidecar || 'corrupted' in sidecar) return { ok: true, artifacts: [] };
-    // Filter to artifacts touched by this session
-    const result = sidecar.artifacts.filter((a) =>
-      a.versions.some((v) => v.sessionId === sessionId)
-    );
-    return { ok: true, artifacts: result };
-  });
+  // The artifact READ bodies live in artifacts/read-service.ts (remote access
+  // batch 3): remote-server.ts calls the same functions for a phone, so the two
+  // transports cannot drift on roots, denylist or shape. The legacy-record
+  // repair each listing runs is inside the service.
+  ipcMain.handle(ARTIFACT_IPC.LIST_SESSION, (_e, sessionId: string, projectRoot: string) =>
+    listSessionFiles(sessionId, projectRoot));
 
   // Project View IPC — list project-scoped conversations, their history, git
   // repo info, and the discovered context files (CLAUDE.md, rules, etc.).
-  // Main-process modules already exist; these handlers just wire them to IPC.
-  ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, async (_e, projectPath: string) => {
-    return { ok: true, conversations: await listProjectConversations(projectPath) };
-  });
+  // The four reads go through project-read-service.ts (shared with the remote
+  // host); history and the context WRITE stay desktop-only.
+  ipcMain.handle(PROJECT_IPC.LIST_CONVERSATIONS, (_e, projectPath: string) =>
+    listConversations(projectPath));
   ipcMain.handle(PROJECT_IPC.CONVERSATION_HISTORY, async (_e, projectPath: string, sessionId: string, count: number, all: boolean) => {
     return { ok: true, messages: await projectConversationHistory(projectPath, sessionId, count ?? 20, !!all) };
   });
-  ipcMain.handle(PROJECT_IPC.REPO_INFO, async (_e, projectPath: string) => {
-    return { ok: true, ...(await getRepoInfo(projectPath)) };
-  });
-  ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, async (_e, projectPath: string) => {
-    return { ok: true, groups: await listContext(projectPath) };
-  });
-  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, async (_e, projectPath: string, absolutePath: string) => {
-    return readContextFile(projectPath, absolutePath);
-  });
+  ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, projectPath: string) => repoInfo(projectPath));
+  ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, projectPath: string) => listContextFiles(projectPath));
+  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, projectPath: string, absolutePath: string) =>
+    readContext(projectPath, absolutePath));
   ipcMain.handle(PROJECT_IPC.WRITE_CONTEXT_FILE, async (_e, projectPath: string, absolutePath: string, content: string) => {
     return writeContextFile(projectPath, absolutePath, content);
   });
@@ -4583,222 +4563,26 @@ export function registerIpcHandlers(
   //
   // visibleCount (withCount) is a separate, independently-computed count from
   // countArtifacts — non-deleted and on-disk — shared with the hero + switcher.
-  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECT, async (_e, projectId: string, opts?: { withCount?: boolean }) => {
-    const projects = await listProjects(CLAUDE_DIR);
-    const p = projects.find((x) => x.id === projectId);
-    // Synth (saved-folder) projects use their canonical PATH as id and have no
-    // index entry — fall back to reading the sidecar at that path so their
-    // artifacts resolve too. A bogus id simply yields no sidecar.
-    const projectRoot = p ? p.path : projectId;
-    // Same legacy-repair call as LIST_SESSION above (filepath pills + the
-    // hero/switcher count also read through this handler) — memoized per
-    // project per process, so this costs one Set lookup after the first call.
-    const migration = await runSidecarMigration(projectRoot);
-    if (migration.migrated) invalidateSidecarIdCache(projectRoot); // see LIST_SESSION's WHY
-    const sidecar = await readSidecarShared(projectRoot);
+  ipcMain.handle(ARTIFACT_IPC.LIST_PROJECT, (_e, projectId: string, opts?: { withCount?: boolean }) =>
+    listProjectFiles(projectId, opts));
 
-    let tracked: any[] = [];
-    if (sidecar && !('corrupted' in sidecar)) {
-      // Shared predicate — see visible-artifacts.ts for the full rules.
-      tracked = trackedArtifacts(sidecar.artifacts as any[], sidecar.manualIncludes, sidecar.manualExcludes, projectRoot);
-    }
+  // LIST_ALL_FILES → the Project Files section: the folder as it exists on
+  // disk, unioned with tracked internals discovery missed (read-service.ts).
+  ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, (_e, projectId: string, opts?: { force?: boolean }) =>
+    listAllFiles(projectId, opts));
 
-    const visibleCount = opts?.withCount ? await countArtifacts(projectRoot) : undefined;
-    return {
-      ok: true,
-      artifacts: tracked,
-      ...(visibleCount !== undefined ? { visibleCount } : {}),
-    };
-  });
+  // full: the user clicked "Load the whole file" on the partial-view bar. Still
+  // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
+  // unbounded one. No `maxBytes` here: the desktop's own limits are untouched.
+  ipcMain.handle(ARTIFACT_IPC.GET, (_e, projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
+    readArtifactText(projectRoot, artifactId, opts));
 
-  // LIST_ALL_FILES → the Project Files section. The project folder as it exists on
-  // disk: bounded, deterministic discovery (stops at nested git repos), cached.
-  //
-  // NOT pure discovery, despite what this comment said until 2026-07-23 — the
-  // callee projectAllFiles() UNIONS in any tracked INTERNAL artifact that exists on
-  // disk but discovery did not reach (e.g. one inside a skipped nested sub-repo).
-  // That union is load-bearing: it guarantees this list is a superset of the
-  // in-folder tracked files, so a code-heavy project cannot report fewer files than
-  // artifacts. Externals are NEVER unioned, which is exactly why they need their
-  // own section in the UI.
-  // Gated roots (home dir / drive root) return { gated: true } with no scan
-  // unless opts.force — the tab renders a "Browse anyway?" gate (see
-  // isGatedRoot above for WHY).
-  ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, async (_e, projectId: string, opts?: { force?: boolean }) => {
-    const projects = await listProjects(CLAUDE_DIR);
-    const p = projects.find((x) => x.id === projectId);
-    const projectRoot = p ? p.path : projectId;
-    if (isGatedRoot(projectRoot) && !opts?.force) {
-      return { ok: true, files: [], truncated: false, gated: true };
-    }
-    // Fix: this repair call used to run BEFORE the gated-root check above,
-    // so a gated root (home dir / drive root) could have its sidecar read
-    // and rewritten on a listing the user never confirmed via "Browse
-    // anyway?". Moved below the early return so the repair only touches a
-    // gated root once the user has actually agreed to browse it. Same
-    // legacy-repair call as LIST_SESSION above. Memoized per project per
-    // process.
-    const migration = await runSidecarMigration(projectRoot);
-    if (migration.migrated) invalidateSidecarIdCache(projectRoot); // see LIST_SESSION's WHY
-    const r = await projectAllFiles(projectRoot);
-    return { ok: true, files: r.files, truncated: r.truncated };
-  });
-
-  ipcMain.handle(ARTIFACT_IPC.GET, async (
-    _e, projectRoot: string, artifactId: string,
-    // full: the user clicked "Load the whole file" on the partial-view bar. Still
-    // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
-    // unbounded one.
-    opts?: { full?: boolean },
-  ) => {
-    const sidecar = await readSidecarShared(projectRoot);
-    const artifact = (sidecar && !('corrupted' in sidecar))
-      ? sidecar.artifacts.find((a) => a.id === artifactId)
-      : undefined;
-
-    let fullPath: string;
-    if (artifact) {
-      fullPath = artifact.kind === 'internal'
-        ? path.join(projectRoot, artifact.path)
-        : artifact.absolutePath!;
-    } else {
-      // Discovered (on-disk) file: the id IS a canonical relative path. Resolve
-      // it inside the project root and refuse anything that escapes (traversal
-      // guard) so this can't be used to read arbitrary files.
-      const resolved = path.resolve(projectRoot, artifactId);
-      const root = path.resolve(projectRoot);
-      if (resolved !== root && !resolved.startsWith(root + path.sep)) {
-        return { ok: false, error: 'artifact-not-found' };
-      }
-      fullPath = resolved;
-    }
-
-    // Symlink-resolve + in-root + sensitive-read policy, all on the RESOLVED
-    // path (write-authorization.ts owns the logic + its tests). Tracked
-    // internals were never traversal-checked before (spec §12.1) — now they are.
-    const readAuth = await authorizeArtifactRead(projectRoot, fullPath, !artifact || artifact.kind === 'internal');
-    if (!readAuth.ok) {
-      if ('orphan' in readAuth) return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
-      return { ok: false, error: readAuth.error };
-    }
-    const realPath = readAuth.realPath;
-
-    // Size gate BEFORE reading (spec §2.3): a multi-MB readFile blocks the main
-    // thread, ships whole over IPC/WS, then blocks the renderer rendering it.
-    let st: fs.Stats;
-    try {
-      st = await fs.promises.stat(realPath);
-    } catch (e: any) {
-      if (e.code !== 'ENOENT') throw e;
-      return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
-    }
-    // Over the cap we no longer refuse blind. Sniff the head first: an over-cap
-    // IMAGE used to get the TEXT editor's error message, which is the bug this
-    // whole workstream exists to fix. Text comes back as a readable prefix.
-    const wantsFull = opts?.full === true && st.size <= FULL_READ_MAX_BYTES;
-    if (st.size > EDIT_MAX_BYTES && !wantsFull) {
-      const fh = await fs.promises.open(realPath, 'r');
-      try {
-        // fs.read is only contractually required to return SOME bytes, not to
-        // fill the buffer — so loop until the window is full or the file ends.
-        const readFully = async (len: number) => {
-          const buf = Buffer.allocUnsafe(len);
-          let off = 0;
-          while (off < len) {
-            const { bytesRead } = await fh.read(buf, off, len - off, off);
-            if (bytesRead === 0) break;
-            off += bytesRead;
-          }
-          return buf.subarray(0, off);
-        };
-        // Head first, so a file that turns out to be binary is decided on 8 KB.
-        const head = await readFully(8192);
-        const win = await readFully(EDIT_MAX_BYTES);
-        const d = decideOverCapRead(head, win);
-        return {
-          ok: true, artifact: artifact ?? null, orphan: false,
-          content: d.content, binary: d.binary, truncated: d.truncated,
-          sizeBytes: st.size, mtimeMs: st.mtimeMs,
-        };
-      } finally {
-        await fh.close();
-      }
-    }
-
-    let content: string | null = null;
-    let binary = false;
-    try {
-      const buf = await fs.promises.readFile(realPath);
-      // Head-slice NUL sniff: binary bytes decoded as utf8 turn into U+FFFD
-      // soup — return binary:true + null content so the renderer routes to the
-      // binary fallback instead of a garbage text view (D4 routing).
-      binary = looksBinary(buf.subarray(0, 8192));
-      if (!binary) content = buf.toString('utf8');
-    } catch (e: any) {
-      if (e.code !== 'ENOENT') throw e;
-      return { ok: true, artifact: artifact ?? null, content: null, orphan: true };
-    }
-    // mtimeMs is the optimistic-concurrency token: round-trip it into
-    // artifacts:save as baseMtimeMs and the save is rejected when the file
-    // changed underneath (spec §12.9 — last-write-wins fix).
-    // sizeBytes and truncated ride EVERY response: the renderer derives
-    // editability from the size, and a `full` read must clear the partial bar.
-    return { ok: true, artifact: artifact ?? null, content, orphan: false, binary,
-             truncated: false, sizeBytes: st.size, mtimeMs: st.mtimeMs };
-  });
-
-  // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image). The
-  // renderer can't fetch a file:// URL from the http(dev)/app(prod) origin, so
-  // bytes come through IPC.
-  //
-  // SECURITY: unlike openPath (which only launches a local app and returns
-  // nothing), this IPC RETURNS file contents — and on remote-access setups it is
-  // reachable over the WebSocket from a remote browser. So reads are restricted
-  // to (a) the user's known project roots (saved folders + central-index
-  // projects) and (b) tracked external artifact paths (temp-dir files the
-  // session drawer legitimately shows), with well-known secret locations
-  // (.ssh, .netrc, .credentials.json, …) refused even inside those roots.
-  // Pure decision logic + tests live in artifacts/read-binary-access.ts.
-  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, async (_e, absolutePath: string) => {
-    if (typeof absolutePath !== 'string' || absolutePath.length === 0) {
-      return { ok: false, error: 'no path' };
-    }
-    try {
-      const canon = canonicalize(absolutePath, null);
-      // Known roots: saved folders (the session-creation picker) + every
-      // central-index project path.
-      const roots = [
-        ...readFolders().map((f) => canonicalize(f.path, null)),
-        ...(await listProjects(CLAUDE_DIR)).map((p) => canonicalize(p.path, null)),
-      ];
-      let verdict = evaluateBinaryRead(canon, roots, new Set());
-      if (verdict === 'outside-roots') {
-        // Second pass (rare): collect tracked EXTERNAL artifact paths + manual
-        // includes from each root's sidecar — covers e.g. a temp-dir xlsx.
-        const tracked = new Set<string>();
-        for (const root of roots) {
-          const sidecar = await readSidecarShared(root).catch(() => null);
-          if (!sidecar || 'corrupted' in sidecar) continue;
-          for (const a of sidecar.artifacts) {
-            if (a.kind === 'external' && a.absolutePath) tracked.add(canonicalize(a.absolutePath, null));
-          }
-          for (const inc of sidecar.manualIncludes) tracked.add(canonicalize(inc.path, null));
-        }
-        verdict = evaluateBinaryRead(canon, roots, tracked);
-      }
-      if (verdict !== 'allowed') return { ok: false, error: 'not-allowed' };
-
-      // Size gate before reading — a huge file would freeze the renderer (and
-      // the WS transport) long before the viewer could reject it.
-      const st = await fs.promises.stat(absolutePath);
-      if (st.size > READ_BINARY_MAX_BYTES) return { ok: false, error: 'too-large' };
-
-      const buf = await fs.promises.readFile(absolutePath);
-      return { ok: true, base64: buf.toString('base64') };
-    } catch (e: any) {
-      return { ok: false, error: e?.code === 'ENOENT' ? 'orphan' : String(e?.message ?? e) };
-    }
-  });
+  // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image).
+  // SECURITY: this IPC RETURNS file contents, and over remote access it is
+  // reachable from a phone. read-service.ts resolves symlinks FIRST, then
+  // restricts reads to the user's project roots and tracked artifacts, refusing
+  // well-known secret locations even inside those roots.
+  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, (_e, absolutePath: string) => readArtifactBytes(absolutePath));
 
   // First bytes of a user-chosen file, for the composer's attachment cards
   // (rendered markdown / mono text preview). The cap, the deny list and the
@@ -4910,6 +4694,12 @@ export function registerIpcHandlers(
     // Created/deleted files must show up in the next file-list fetch.
     if (evt.kind !== 'edit') invalidateDiscoveryCache(evt.projectRoot);
     webContents.getAllWebContents().forEach((wc) => wc.send(ARTIFACT_IPC.CHANGED, evt));
+    // A phone subscribed over remote access (remote-server.ts watch-project)
+    // is not a webContents; without this line the phone's file list never
+    // updated while the assistant worked (contract row R12). Every consumer
+    // filters on its own projectRoot, so an unrelated root costs one dropped
+    // message.
+    remoteServer?.broadcast({ type: ARTIFACT_IPC.CHANGED, payload: evt });
   });
   // A crashed/closed renderer never sends unwatch — drop its refs on destroy so
   // it cannot pin a watcher forever. One listener per webContents, attached on
@@ -5010,12 +4800,8 @@ export function registerIpcHandlers(
       return { ok: true };
     }));
 
-  ipcMain.handle(ARTIFACT_IPC.SEARCH_CONTENT, async (_e, projectRoot: string, query: string) => {
-    if (typeof projectRoot !== 'string' || projectRoot.length === 0 || typeof query !== 'string') {
-      return { ok: false, hits: [], truncated: false, error: 'projectRoot and query are required' };
-    }
-    return searchProjectContent(projectRoot, query);
-  });
+  ipcMain.handle(ARTIFACT_IPC.SEARCH_CONTENT, (_e, projectRoot: string, query: string) =>
+    searchArtifactContent(projectRoot, query));
 
   // Normalize an include/exclude entry to a canonical ABSOLUTE path. FilesTab
   // passes a relative path for internal artifacts and an absolute one for
@@ -5152,6 +4938,15 @@ export function registerIpcHandlers(
   // Thin wrapper — the computation lives in ./artifacts/projects-index so the
   // remote WebSocket server returns byte-identical results (remote Project View
   // was empty because that transport had no handler at all).
+  // artifacts:download is a REMOTE channel (batch 3): a phone asks the host for
+  // a short-lived link and the host's HTTP route streams the file. On the
+  // desktop's own transport there is nothing to download to, so it refuses
+  // with a code the renderer never shows (Download is only offered in remote
+  // mode). A literal, not an ARTIFACT_IPC constant: the artifact parity test
+  // requires every constant there to have an Android handler, and the phone's
+  // own bridge answers this one through its catch-all `else` by design.
+  ipcMain.handle('artifacts:download', async () => ({ ok: false, code: 'not-remote' }));
+
   ipcMain.handle(ARTIFACT_IPC.LIST_PROJECTS_INDEX, async (_e, opts?: { withCounts?: boolean }) =>
     listProjectsIndex(opts)
   );
@@ -5183,39 +4978,8 @@ export function registerIpcHandlers(
   // artifacts as deleted in the UI without mutating the sidecar. Internal
   // artifacts resolve to projectRoot/path; external artifacts resolve to
   // absolutePath. Parallel fs.access keeps this cheap even for hundreds of IDs.
-  ipcMain.handle(ARTIFACT_IPC.CHECK_EXISTENCE, async (
-    _e, projectRoot: string, artifactIds: string[]
-  ) => {
-    if (!projectRoot || !Array.isArray(artifactIds) || artifactIds.length === 0) {
-      return { ok: true, missingIds: [] };
-    }
-    const sidecar = await readSidecarShared(projectRoot);
-    if (!sidecar || 'corrupted' in sidecar) return { ok: true, missingIds: [] };
-    const byId = new Map(sidecar.artifacts.map((a) => [a.id, a]));
-    const results = await Promise.all(
-      artifactIds.map(async (id) => {
-        const a = byId.get(id);
-        if (!a) return id; // unknown id treated as missing
-        // A corrupt record (relative absolutePath) resolves against the PROCESS
-        // cwd here, which cuts both ways: it reports an in-project file as
-        // missing (the Session Drawer's "no longer on disk" — this handler feeds
-        // that label, SessionDrawer.tsx:42) AND would report an artifact as
-        // present if a same-named file happens to sit in the process cwd.
-        const fullPath = a.kind === 'internal'
-          ? path.join(projectRoot, a.path)
-          : a.absolutePath;
-        if (!fullPath) return id;
-        if (a.kind !== 'internal' && !isAbsoluteRecorded(fullPath)) return id;
-        try {
-          await fs.promises.access(fullPath);
-          return null;
-        } catch {
-          return id;
-        }
-      })
-    );
-    return { ok: true, missingIds: results.filter((x): x is string => x !== null) };
-  });
+  ipcMain.handle(ARTIFACT_IPC.CHECK_EXISTENCE, (_e, projectRoot: string, artifactIds: string[]) =>
+    checkArtifactExistence(projectRoot, artifactIds));
 
   // Return shape (Sign in with ChatGPT, backend design 2026-09-05 §5 / review
   // R3-2): `cleanup` for app shutdown — it returns the engine-stop promise so

@@ -1706,6 +1706,12 @@ contextBridge.exposeInMainWorld('claude', {
     // to bytes (renderer can't fetch a file:// URL from the http/app origin).
     readBinary: (absolutePath: string) =>
       ipcRenderer.invoke('artifacts:read-binary', absolutePath),
+    // Save a copy to THIS device — a remote-access channel (batch 3). The
+    // desktop answers { ok:false, code:'not-remote' }: a file on this computer
+    // is opened or revealed, never downloaded to itself. Declared so the shared
+    // renderer has one shape on both transports.
+    download: (absolutePath: string, opts?: { projectRoot?: string; artifactId?: string }) =>
+      ipcRenderer.invoke('artifacts:download', absolutePath, opts),
     // opts: { baseMtimeMs?, confirmed? } — concurrency token + confirm-tier ack
     save: (projectRoot: string, projectId: string, projectName: string,
            artifactId: string, content: string, sessionId: string,
