@@ -97,18 +97,18 @@ describe('repairHomeForks (spec §6.1)', () => {
     return { home, P, projectsDir, homeSlugDir, quarantine, opts };
   }
 
-  it('R2-owned foreign transcript with NO correct copy is MOVED to the correct dir', () => {
+  it('R2-owned foreign transcript with NO correct copy is MOVED to the correct dir', async () => {
     const h = makeHome();
     const f = path.join(h.homeSlugDir, 's1.jsonl');
     fs.writeFileSync(f, F('u1', h.P)); age(f);
-    const out = repairHomeForks(h.opts);
+    const out = await repairHomeForks(h.opts);
     const dest = path.join(h.projectsDir, ccProjectSlug(h.P), 's1.jsonl');
     expect(out).toEqual([{ sessionId: 's1', homeFolder: h.P, kind: 'moved', paths: [dest] }]);
     expect(fs.existsSync(f)).toBe(false);
     expect(fs.existsSync(dest)).toBe(true);
   });
 
-  it('identical copy in the $HOME dir is quarantined; correct copy untouched', () => {
+  it('identical copy in the $HOME dir is quarantined; correct copy untouched', async () => {
     const h = makeHome();
     const correctDir = path.join(h.projectsDir, ccProjectSlug(h.P));
     fs.mkdirSync(correctDir, { recursive: true });
@@ -116,13 +116,13 @@ describe('repairHomeForks (spec §6.1)', () => {
     const correct = path.join(correctDir, 's2.jsonl');
     fs.writeFileSync(wrong, F('u1', h.P)); fs.writeFileSync(correct, F('u1', h.P));
     age(wrong); age(correct);
-    repairHomeForks(h.opts);
+    await repairHomeForks(h.opts);
     expect(fs.existsSync(wrong)).toBe(false);
     expect(fs.existsSync(correct)).toBe(true);
     expect(fs.existsSync(path.join(h.quarantine.dir, path.relative(h.home, wrong)))).toBe(true);
   });
 
-  it('fork: NOTHING moves — both copies snapshotted, disk byte-identical (§7 merge-safety)', () => {
+  it('fork: NOTHING moves — both copies snapshotted, disk byte-identical (§7 merge-safety)', async () => {
     const h = makeHome();
     const correctDir = path.join(h.projectsDir, ccProjectSlug(h.P));
     fs.mkdirSync(correctDir, { recursive: true });
@@ -132,7 +132,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     fs.writeFileSync(correct, F('u1', h.P) + F('uB', h.P));     // …and the other
     age(wrong); age(correct);
     const before = [fs.readFileSync(wrong, 'utf8'), fs.readFileSync(correct, 'utf8')];
-    const out = repairHomeForks(h.opts);
+    const out = await repairHomeForks(h.opts);
     expect(out[0].kind).toBe('fork-surfaced');
     expect(fs.readFileSync(wrong, 'utf8')).toBe(before[0]);
     expect(fs.readFileSync(correct, 'utf8')).toBe(before[1]);
@@ -142,7 +142,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.readFileSync(path.join(h.quarantine.dir, path.relative(h.home, correct)), 'utf8')).toBe(before[1]);
   });
 
-  it('correct-dir copy is a strict subset of the $HOME copy: quarantine it, promote the superset (review fix, IMPORTANT 2a)', () => {
+  it('correct-dir copy is a strict subset of the $HOME copy: quarantine it, promote the superset (review fix, IMPORTANT 2a)', async () => {
     const h = makeHome();
     const correctDir = path.join(h.projectsDir, ccProjectSlug(h.P));
     fs.mkdirSync(correctDir, { recursive: true });
@@ -153,7 +153,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     fs.writeFileSync(wrong, supersetBytes);
     fs.writeFileSync(correct, subsetBytes);
     age(wrong); age(correct);
-    const out = repairHomeForks(h.opts);
+    const out = await repairHomeForks(h.opts);
     expect(out).toEqual([{ sessionId: 's6', homeFolder: h.P, kind: 'replaced-with-superset', paths: [correct] }]);
     expect(fs.existsSync(wrong)).toBe(false);
     expect(fs.readFileSync(correct, 'utf8')).toBe(supersetBytes);
@@ -161,7 +161,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.readFileSync(quarantinedCorrect, 'utf8')).toBe(subsetBytes);
   });
 
-  it('correct-dir copy is superset-eligible but currently live: pair is deferred, nothing moves (review fix, IMPORTANT 2b)', () => {
+  it('correct-dir copy is superset-eligible but currently live: pair is deferred, nothing moves (review fix, IMPORTANT 2b)', async () => {
     const h = makeHome();
     const correctDir = path.join(h.projectsDir, ccProjectSlug(h.P));
     fs.mkdirSync(correctDir, { recursive: true });
@@ -171,7 +171,7 @@ describe('repairHomeForks (spec §6.1)', () => {
     const subsetBytes = F('u1', h.P);
     fs.writeFileSync(wrong, supersetBytes); age(wrong);
     fs.writeFileSync(correct, subsetBytes);                    // fresh mtime = live; NOT aged
-    const out = repairHomeForks(h.opts);
+    const out = await repairHomeForks(h.opts);
     expect(out).toEqual([{ sessionId: 's7', homeFolder: h.P, kind: 'deferred-live', paths: [wrong, correct] }]);
     expect(fs.existsSync(wrong)).toBe(true);
     expect(fs.readFileSync(wrong, 'utf8')).toBe(supersetBytes);
@@ -180,29 +180,29 @@ describe('repairHomeForks (spec §6.1)', () => {
     expect(fs.existsSync(h.quarantine.dir)).toBe(false);
   });
 
-  it('top-level only: a subagent jsonl below the dir is never touched (§6.1 scoping)', () => {
+  it('top-level only: a subagent jsonl below the dir is never touched (§6.1 scoping)', async () => {
     const h = makeHome();
     const agent = path.join(h.homeSlugDir, 'sess-id', 'subagents', 'agent-x.jsonl');
     fs.mkdirSync(path.dirname(agent), { recursive: true });
     fs.writeFileSync(agent, F('u1', h.P)); age(agent);
-    expect(repairHomeForks(h.opts)).toEqual([]);
+    expect(await repairHomeForks(h.opts)).toEqual([]);
     expect(fs.existsSync(agent)).toBe(true);
   });
 
-  it('live file (fresh mtime) is deferred, not touched (§6.5)', () => {
+  it('live file (fresh mtime) is deferred, not touched (§6.5)', async () => {
     const h = makeHome();
     const f = path.join(h.homeSlugDir, 's4.jsonl');
     fs.writeFileSync(f, F('u1', h.P));                          // fresh mtime = live
-    const out = repairHomeForks(h.opts);
+    const out = await repairHomeForks(h.opts);
     expect(out).toEqual([{ sessionId: 's4', homeFolder: '', kind: 'deferred-live', paths: [f] }]);
     expect(fs.existsSync(f)).toBe(true);
   });
 
-  it('a transcript whose first cwd IS $HOME is left alone (legitimate resident)', () => {
+  it('a transcript whose first cwd IS $HOME is left alone (legitimate resident)', async () => {
     const h = makeHome();
     const f = path.join(h.homeSlugDir, 's5.jsonl');
     fs.writeFileSync(f, F('u1', h.home)); age(f);
-    expect(repairHomeForks(h.opts)).toEqual([]);
+    expect(await repairHomeForks(h.opts)).toEqual([]);
     expect(fs.existsSync(f)).toBe(true);
   });
 });
