@@ -162,6 +162,30 @@ function SavedKeyScreen({ trouble, attempting, onTryNow, onPassword }: {
   );
 }
 
+/** How long a saved-key sign-in shows only the spinner before it says what it is doing. */
+const CONNECTING_WORDS_AFTER_MS = 1500;
+
+/**
+ * The page's own boot spinner (index.html), drawn by React. WHY (Destin, 2026-09-11: "still flashes
+ * the password screen at me on refresh"): the "YouCoded Remote" titled screen, shown for the second a
+ * saved key takes, read as the password screen. A normal refresh now looks like one continuous load.
+ * Not id="boot": dev-mount-probe.ts reads that element's absence as "React mounted".
+ */
+function BootSpinner({ label }: { label: string }) {
+  const reduced = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+  return (
+    <div className="fixed inset-0 flex items-center justify-center" role="status" aria-label={label}>
+      <div
+        style={{
+          width: 28, height: 28, borderRadius: '50%',
+          border: '2px solid rgba(255, 255, 255, 0.15)', borderTopColor: 'rgba(255, 255, 255, 0.7)',
+          animation: reduced ? 'none' : 'boot-spin 0.7s linear infinite',
+        }}
+      />
+    </div>
+  );
+}
+
 /** `pending` until the shim has loaded; then whether a saved key is being tried, and how it went. */
 type SavedKey = 'pending' | 'none' | 'connecting' | Trouble;
 
@@ -181,6 +205,13 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
   const [attempting, setAttempting] = useState(false);
   // Why the password box is back, when the computer stopped accepting this device.
   const [notice, setNotice] = useState<string | null>(null);
+  // A saved-key sign-in still going after CONNECTING_WORDS_AFTER_MS.
+  const [slow, setSlow] = useState(false);
+  useEffect(() => {
+    if (savedKey !== 'connecting') { setSlow(false); return; }
+    const timer = setTimeout(() => setSlow(true), CONNECTING_WORDS_AFTER_MS);
+    return () => clearTimeout(timer);
+  }, [savedKey]);
 
   useEffect(() => {
     void loadShim().then((s) => {
@@ -230,9 +261,7 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
   // Once connected, keep showing the app even during transient disconnections.
   if (connected || hasConnectedOnce) return <>{renderApp()}</>;
 
-  if (!shim || savedKey === 'pending') {
-    return <div className="flex items-center justify-center h-full bg-panel text-fg text-sm">Loading...</div>;
-  }
+  if (!shim || savedKey === 'pending') return <BootSpinner label="Loading YouCoded" />;
 
   // Android always auto-connects to local bridge — never show the password screen.
   // Fix: wait for connection/auth to complete BEFORE mounting App. IPC calls made during the
@@ -241,6 +270,8 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
   if (isAndroid) {
     return <div className="flex items-center justify-center h-full bg-panel text-fg text-sm">Connecting...</div>;
   }
+
+  if (savedKey === 'connecting' && !slow) return <BootSpinner label="Connecting to your computer" />;
 
   if (savedKey !== 'none') {
     return (

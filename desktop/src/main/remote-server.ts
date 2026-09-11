@@ -209,6 +209,19 @@ interface SessionNamingWiring {
   rename: (sessionId: string, title: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
+/**
+ * Which copy of the app a phone's browser is served.
+ *
+ * WHY (Destin, 2026-09-11: "still flashes the password screen at me on refresh/reconnect"): the
+ * server served a built copy whenever one existed on disk, and a dev window found one left by an
+ * Android test build the night before, so a whole day of phone-side fixes never reached the phone.
+ * The installed app serves its built copy; a dev window serves live code unless a fresh copy was
+ * built for the phone (run-dev.sh --phone-build). Pinned by tests/remote-page-source.test.ts.
+ */
+export function choosePhonePageSource(opts: { serveBuiltPage: boolean; hasBuild: boolean }): 'built' | 'dev-server' {
+  return opts.serveBuiltPage && opts.hasBuild ? 'built' : 'dev-server';
+}
+
 export class RemoteServer {
   private httpServer: http.Server | null = null;
   private wss: WebSocketServer | null = null;
@@ -306,6 +319,9 @@ export class RemoteServer {
       listCommands?: () => Promise<unknown[]>;
       /** The desktop's theme:list. Injectable for tests; defaults to the same function. */
       listThemes?: () => string[];
+      /** Serve the built copy of the app when one exists (see choosePhonePageSource). main.ts
+       *  passes app.isPackaged or run-dev.sh --phone-build; the default keeps the old behaviour. */
+      serveBuiltPage?: boolean;
     },
   ) {
     this.devices = new RemoteDeviceStore();
@@ -316,7 +332,9 @@ export class RemoteServer {
     this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
     this.listCommands = opts?.listCommands ?? null;
     this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
+    this.serveBuiltPage = opts?.serveBuiltPage ?? true;
   }
+  private serveBuiltPage: boolean;
   private listCommands: (() => Promise<unknown[]>) | null;
   private listThemes: () => string[];
 
@@ -491,8 +509,14 @@ export class RemoteServer {
     // its dev URL from VITE_DEV_PORT; remote-server was the one place that
     // didn't. Never reintroduce a literal port here — import it from ports.ts.
     const viteDevUrl = process.env.VITE_DEV_SERVER_URL || `http://127.0.0.1:${VITE_DEV_PORT}`;
-    // In dev mode, dist/renderer/index.html doesn't exist — proxy to Vite
-    const hasStaticBuild = fs.existsSync(path.join(staticDir, 'index.html'));
+    const builtIndex = path.join(staticDir, 'index.html');
+    const hasStaticBuild = choosePhonePageSource({ serveBuiltPage: this.serveBuiltPage, hasBuild: fs.existsSync(builtIndex) }) === 'built';
+    // Say which, and how old a built copy is, so a stale copy shows in the log instead of hiding.
+    if (hasStaticBuild) {
+      console.log(`[RemoteServer] phone page: built copy from ${fs.statSync(builtIndex).mtime.toLocaleString()} (${staticDir})`);
+    } else {
+      console.log(`[RemoteServer] phone page: live code from the dev server (${viteDevUrl})`);
+    }
 
     this.httpServer = http.createServer((req, res) => {
       // WHY this endpoint exists: without it the sign-in screen has no way to know the host

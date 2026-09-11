@@ -44,9 +44,30 @@ describe('RemoteGate', () => {
     (globalThis as any).fetch = vi.fn(async () => { throw new Error('no endpoint'); });
   });
 
+  it('with a saved key, a normal sign-in shows only the loading spinner, never a sign-in screen', async () => {
+    vi.useFakeTimers();
+    try {
+      const f = fakeShim({ savedKey: true });
+      await mount(f);
+      // Destin, 2026-09-11: "still flashes the password screen at me on refresh". The first moments
+      // look exactly like the page's own boot spinner: no title, no words, no box.
+      expect(screen.getByRole('status', { name: 'Connecting to your computer' })).toBeTruthy();
+      expect(screen.queryByText('YouCoded Remote')).toBeNull();
+      expect(passwordBox()).toBeNull();
+      // Only a sign-in that takes a while says what it is doing.
+      await act(async () => { vi.advanceTimersByTime(1500); });
+      expect(screen.getByText('Connecting to your computer…')).toBeTruthy();
+      f.setState('connected');
+      expect(screen.getByText('THE APP')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('with a saved key, says it is connecting and never draws the password box', async () => {
     const f = fakeShim({ savedKey: true });
     await mount(f);
+    await act(async () => { await new Promise((r) => setTimeout(r, 1600)); });
     expect(screen.getByText('Connecting to your computer…')).toBeTruthy();
     expect(passwordBox()).toBeNull();
     f.setState('connecting');

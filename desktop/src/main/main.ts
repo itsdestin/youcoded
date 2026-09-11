@@ -282,6 +282,9 @@ skillProvider.setCacheInvalidationListener(() => commandProvider.invalidateCache
 // owner — see requestMergedChatSnapshot. The closures read mainWindow by reference; it
 // is null here and set before any client can connect.
 const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider, {
+  // The installed app serves the phone its built copy; a dev window serves live code unless
+  // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
+  serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
   // The phone's / menu: the same list the desktop's commands:list handler returns.
   listCommands: () => commandProvider.getCommands(),
   requestSnapshot: () => requestMergedChatSnapshot({
