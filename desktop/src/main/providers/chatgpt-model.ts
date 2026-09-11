@@ -10,6 +10,7 @@
 // `stream: true` from its provider options. All we do is fill those options in
 // and translate the one call shape the endpoint refuses.
 import type { LanguageModelMiddleware } from 'ai';
+import { bindChatGptRequest, type ChatGptRequestDiagnostics, type RequestPurpose } from './chatgpt-request-diagnostics';
 import type {
   LanguageModelV4CallOptions,
   LanguageModelV4Content,
@@ -18,6 +19,7 @@ import type {
   LanguageModelV4Prompt,
   LanguageModelV4ResponseMetadata,
   LanguageModelV4StreamPart,
+  LanguageModelV4StreamResult,
   LanguageModelV4Usage,
   SharedV4ProviderMetadata,
   SharedV4Warning,
@@ -44,10 +46,47 @@ type OpenAIResponsesOptions = Record<string, unknown> & { include?: unknown };
  * endpoint caches the shared prefix of a conversation under it, so every step
  * of one session must send the same key.
  */
-export function chatGptMiddleware(cacheKey?: string): LanguageModelMiddleware {
+export function chatGptMiddleware(cacheKey?: string, diagnostics?: ChatGptRequestDiagnostics): LanguageModelMiddleware {
+  // WHY: raw SDK parts preserve missing-vs-zero usage; a demand-driven reader
+  // observes them without teeing the HTTP response or buffering private chunks.
+  const observedStream = async (doStream: () => PromiseLike<LanguageModelV4StreamResult>, signal?: AbortSignal, purpose: RequestPurpose = 'unknown') => {
+    if (!diagnostics) return doStream();
+    return bindChatGptRequest(diagnostics, cacheKey ?? 'unscoped', async context => {
+      try {
+        const result = await doStream();
+        const reader = result.stream.getReader();
+        const stream = new ReadableStream<LanguageModelV4StreamPart>({
+          async pull(controller) {
+            try {
+              for (;;) {
+                const { done, value } = await reader.read();
+                if (done) { diagnostics.finish(context.attemptId, signal?.aborted ? 'aborted' : 'failed'); controller.close(); reader.releaseLock(); return; }
+                if (value.type === 'raw') { diagnostics.observeRaw(context.attemptId, value.rawValue); continue; }
+                controller.enqueue(value);
+                return;
+              }
+            } catch (error) {
+              diagnostics.finish(context.attemptId, signal?.aborted ? 'aborted' : 'failed');
+              // WHY: erroring the outer stream does not cancel/release its reader.
+              // An already-errored stream rejects cancel; preserve the original error.
+              try { await reader.cancel(); } catch { /* cleanup only */ }
+              finally { reader.releaseLock(); }
+              controller.error(error);
+            }
+          },
+          async cancel(reason) {
+            diagnostics.finish(context.attemptId, 'aborted');
+            try { await reader.cancel(reason); } finally { reader.releaseLock(); }
+          },
+        }, { highWaterMark: 0 });
+        return { ...result, stream };
+      } catch (error) { diagnostics.finish(context.attemptId, signal?.aborted ? 'aborted' : 'failed'); throw error; }
+    }, purpose);
+  };
   return {
     specificationVersion: 'v4',
-    transformParams: async ({ params }) => transformParams(params, cacheKey),
+    transformParams: async ({ params }) => ({ ...transformParams(params, cacheKey), ...(diagnostics ? { includeRawChunks: true } : {}) }),
+    wrapStream: ({ doStream, params }) => observedStream(doStream, params.abortSignal),
     // Phase 0 P0-5: a non-streaming call is refused outright (HTTP 400
     // "Stream must be set to true"). The harness always streams, but the
     // auto-title feeder calls `generateText`, which does not — without this
@@ -55,7 +94,7 @@ export function chatGptMiddleware(cacheKey?: string): LanguageModelMiddleware {
     // silently, because the feeder skips a model it cannot resolve. So a
     // generate call is served by streaming and folding the parts back into
     // the one-shot result shape.
-    wrapGenerate: async ({ doStream }) => foldStream(await doStream()),
+    wrapGenerate: async ({ doStream, params }) => foldStream(await observedStream(doStream, params.abortSignal, 'title')),
   };
 }
 

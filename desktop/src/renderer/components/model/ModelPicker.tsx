@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
-import { Button, fieldClasses } from '../ui';
+import { Button, fieldClasses, Tooltip } from '../ui';
 import { SearchFilterPill } from '../ui/SearchFilterPill';
 import { POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -33,7 +33,7 @@ import { CLAUDE_ALIASES, type ClaudeAlias } from '../../../shared/model-ids';
 import { matchesQuery } from '../../../shared/text-match';
 import { resolveModelBrand, type ProviderIconKey } from '../provider-brand';
 import { ProviderIcon } from '../ProviderIcon';
-import { unavailableReason, useClaudeReady, type CatalogRow, type ProviderRow } from './availability';
+import { nativeChoiceNeedsApiKey, unavailableReason, useClaudeStatus, type CatalogRow, type ProviderRow } from './availability';
 
 export type ModelChoice =
   | { runtime: 'claude'; alias: string }
@@ -74,6 +74,9 @@ interface Entry {
    *  (Q-E a): a model this install cannot run is still worth SEEING, so the
    *  list stops pretending the rest of the app does not exist. */
   unavailable?: string;
+  /** `unavailable` is specifically "Add an API key" — clicking it should open
+   *  Settings' Cloud providers page instead of sitting there as inert text. */
+  needsApiKey?: boolean;
 }
 
 /** Which company mark + colour a row carries.
@@ -184,8 +187,14 @@ export default function ModelPicker({
   defaultOpen = false,
   layout = 'floating',
   pinSelectedToTop = false,
+  emptyLabel = 'Choose a model…',
 }: {
   value: ModelChoice | null;
+  /** What the CLOSED button reads when nothing is picked. Defaults to the
+   *  create-time wording. A host where "nothing picked" is itself a meaningful
+   *  setting — session naming, where it means the conversation's own model —
+   *  says so here rather than printing a prompt for a choice already made. */
+  emptyLabel?: string;
   /** The second argument is the label this picker DISPLAYED for the choice —
    *  provider and model as the user just read them. Optional, and every caller
    *  that does not need it simply ignores it. Design review 2 (R2-3): the
@@ -237,9 +246,9 @@ export default function ModelPicker({
 }) {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
-  // Whether Claude Code itself can start a conversation here. Unknown counts as
-  // yes (see useClaudeReady) — the list must never invent a problem.
-  const claudeReady = useClaudeReady();
+  // Claude Code's LIVE sign-in (2026-09-09). Unknown and not-yet-answered both
+  // count as yes (see useClaudeStatus) — the list must never invent a problem.
+  const { status: claudeStatus } = useClaudeStatus();
   const [loaded, setLoaded] = useState(false);
   const [open, setOpen] = useState(defaultOpen);
   const [search, setSearch] = useState('');
@@ -269,10 +278,17 @@ export default function ModelPicker({
     const el = triggerRef.current;
     if (!el) return;
     const r = el.getBoundingClientRect();
-    const width = Math.max(r.width, 320);
-    const centred = r.left + r.width / 2 - width / 2;
     const gap = 4;
     const edge = 8;
+    // WHY the Math.min (2026-09-10): the 320 floor is a readability minimum, but
+    // it was applied unconditionally, so in a viewport NARROWER than 320+gutters
+    // the panel was wider than the window and clipped on the right — with no
+    // scrollbar and no visual tell. That is exactly the buddy floater's chat
+    // window, which is 320px wide, so the model list arrived there missing its
+    // right edge. A panel must never exceed the viewport it is clamped into.
+    // No-op in the main window and on Android, where innerWidth far exceeds 336.
+    const width = Math.min(Math.max(r.width, 320), window.innerWidth - edge * 2);
+    const centred = r.left + r.width / 2 - width / 2;
     const spaceBelow = window.innerHeight - r.bottom - edge;
     const spaceAbove = r.top - edge;
     const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
@@ -416,7 +432,7 @@ export default function ModelPicker({
 
   const entries: Entry[] = useMemo(() => {
     const out: Entry[] = [];
-    const data = { providers, catalog, claudeReady };
+    const data = { providers, catalog, claudeStatus };
     if (includeClaude) {
       for (const m of CLAUDE_MODELS) {
         const choice: ModelChoice = { runtime: 'claude', alias: m.alias };
@@ -440,11 +456,12 @@ export default function ModelPicker({
           sourceId: p.id, sourceLabel: p.label, local: p.type === 'local-engine',
           providerType: p.type,
           unavailable: unavailableReason(choice, data) ?? undefined,
+          needsApiKey: nativeChoiceNeedsApiKey(choice, data),
         });
       }
     }
     return out;
-  }, [providers, catalog, includeClaude, includeNative, claudeReady]);
+  }, [providers, catalog, includeClaude, includeNative, claudeStatus]);
 
   /** Nothing on this install can actually start a conversation. Drives the
    *  "You have not set up any model providers." block (P-3). */
@@ -520,13 +537,13 @@ export default function ModelPicker({
   const activeFilters = (sources.size ? 1 : 0) + (localOnly ? 1 : 0);
 
   const currentLabel = useMemo(() => {
-    if (!value) return 'Choose a model…';
+    if (!value) return emptyLabel;
     const hit = entries.find((e) => e.key === choiceKey(value));
     if (hit) return `${hit.label} · ${hit.sourceLabel}`;
     // A binding whose catalog row hasn't loaded (or a typed freeform id) still
     // needs a truthful label rather than falling back to "Choose a model…".
     return value.runtime === 'claude' ? value.alias : value.modelId;
-  }, [value, entries]);
+  }, [value, entries, emptyLabel]);
 
   const pick = (c: ModelChoice, label?: { provider: string; model: string }) => { onSelect(c, label); setOpen(false); setFilterOpen(false); };
 
@@ -564,6 +581,7 @@ export default function ModelPicker({
       // favourite star's column too instead of stopping at the name button.
       <div key={e.key} className="group/model flex items-center px-2">
         <div className={`flex-1 min-w-0 flex items-center gap-1 rounded ${selected ? 'bg-accent' : ''}`}>
+          <Tooltip text={e.unavailable ? `${e.label} · ${e.sourceLabel} — ${e.unavailable}` : ''}>
           <button
             type="button"
             // A row this install cannot run is inert, not hidden: nothing is
@@ -572,7 +590,6 @@ export default function ModelPicker({
             disabled={!!e.unavailable}
             onClick={() => pick(e.choice, { provider: e.sourceLabel, model: e.label })}
             aria-pressed={selected}
-            title={e.unavailable ? `${e.label} · ${e.sourceLabel} — ${e.unavailable}` : undefined}
             className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${
               e.unavailable
                 ? 'text-fg-faint cursor-default'
@@ -597,11 +614,32 @@ export default function ModelPicker({
                   or 400. */}
               <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
             </span>
-            {/* The one thing that would unlock this row, in its own words. */}
-            {e.unavailable && (
-              <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
-            )}
           </button>
+          </Tooltip>
+          {/* The one thing that would unlock this row, in its own words. Lives
+              OUTSIDE the row's own (disabled) button — a button can't nest
+              inside another button — so the one reason with a one-click fix
+              ("Add an API key") can be its own live control instead of inert
+              text next to a dead one. coarse-hit: the label text is well under
+              the touch target guideline. */}
+          {e.unavailable && (
+            e.needsApiKey ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  if (onManageModels) onManageModels();
+                  else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                }}
+                aria-label={`Add an API key for ${e.sourceLabel}`}
+                className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
+              >
+                {e.unavailable}
+              </button>
+            ) : (
+              <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
+            )
+          )}
           {/* touch-reveal + coarse-hit: hover-only affordances never resolve on
               the Android WebView (narrow-viewport rule). Selected uses the same
               on-accent colour as the mark/name above, for the same reason:
@@ -609,12 +647,12 @@ export default function ModelPicker({
               one place it can fail contrast, since the accent is theme-authored
               and unknown to us. mr-1 keeps it off the fill's rounded corner,
               mirroring the name button's own left inset (px-2) on the other end. */}
+          <Tooltip text={fav ? 'Remove from favourites' : 'Add to favourites'}>
           <button
             type="button"
             onClick={() => toggleFavorite(e.key)}
             aria-pressed={fav}
             aria-label={fav ? `Unfavourite ${e.label}` : `Favourite ${e.label}`}
-            title={fav ? 'Remove from favourites' : 'Add to favourites'}
             className={`shrink-0 w-6 h-6 mr-1 rounded inline-flex items-center justify-center transition-opacity coarse-hit touch-reveal ${
               selected
                 ? 'text-on-accent opacity-100'
@@ -625,6 +663,7 @@ export default function ModelPicker({
           >
             <StarGlyph filled={fav} />
           </button>
+          </Tooltip>
         </div>
       </div>
     );

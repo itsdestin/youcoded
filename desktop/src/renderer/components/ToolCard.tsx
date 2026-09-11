@@ -5,7 +5,7 @@ import { useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSp
 import { TaskConsentBlock } from './SpecialistEnvelope';
 import { hasNestedAsk } from '../utils/specialist-cards';
 import { useArtifactOptional } from '../state/ArtifactContext';
-import { Button, Radio, RadioGroup, Textarea } from './ui';
+import { Button, Radio, RadioGroup, Textarea, Tooltip } from './ui';
 // The card renders the widths this SHARED derivation produced and sends back only
 // which one was chosen — it never builds a rule pattern of its own.
 import { bashGrantOptions, bashNoGrantNote, type GrantScope } from '../../shared/bash-grant-shapes';
@@ -1341,9 +1341,13 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   const cardBorder = isCompactSkill
     ? 'border border-dashed border-edge-dim/60'
     : 'border border-edge';
+  // select-none: the title row is chrome, not highlightable or copyable
+  // (Destin, 2026-09-10). The expandable header is a <button>, which
+  // globals.css already covers; the compact-skill header is a <div>, so the
+  // class is what covers it. The card's BODY (commands, output) stays selectable.
   const headerClass = isCompactSkill
-    ? 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left'
-    : 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors';
+    ? 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left select-none'
+    : 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors select-none';
   const headerContent = (
     <>
       {/* Status indicator — a Task card with a run record shows the RUN's
@@ -1391,7 +1395,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         <span className="text-xs text-fg-muted truncate flex-1 min-w-0">{display.detail}</span>
       )}
       {run?.stale && run.status === 'running' && (
-        <span className="text-4xs uppercase tracking-wide text-amber-500 shrink-0" title="No activity for a while — may be stuck">may be stuck</span>
+        <Tooltip text="No activity for a while — may be stuck"><span className="text-4xs uppercase tracking-wide text-amber-500 shrink-0">may be stuck</span></Tooltip>
       )}
       {runIcon === 'stopped' && (
         <span className="text-4xs uppercase tracking-wide text-fg-muted shrink-0">stopped</span>

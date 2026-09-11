@@ -94,6 +94,21 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  // WHY the screen asks the host before drawing: a computer with no password set cannot
+  // accept ANY password, and this screen used to show the box anyway — you typed a guess,
+  // pressed Connect, and only then were told it was never configured. null = we have not
+  // heard back yet, and until we do the box behaves exactly as it always has.
+  const [needsSetup, setNeedsSetup] = useState<boolean | null>(null);
+  useEffect(() => {
+    let live = true;
+    fetch('/remote-state', { cache: 'no-store' })
+      .then(r => (r.ok ? r.json() : null))
+      .then(state => { if (live && state && typeof state.needsSetup === 'boolean') setNeedsSetup(state.needsSetup); })
+      // An older host has no such endpoint. Staying on the password box is the right
+      // fallback: it is what this screen did before, not a guess about the host.
+      .catch(() => {});
+    return () => { live = false; };
+  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -105,12 +120,29 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
     } catch (err: any) {
       setError(
         err.message === 'no-password-configured'
-          ? 'Remote access is not configured. Set a password in the desktop app.'
+          ? 'This computer has no remote access password yet. Set one on the computer itself, in Settings \u2192 Remote Access.'
           : 'Invalid password'
       );
       setLoading(false);
     }
   };
+
+  if (needsSetup) {
+    // No password on the host: there is nothing to type, so nothing is offered to type
+    // into. The one thing that moves this forward happens on the other computer.
+    return (
+      <div className="flex items-center justify-center h-full bg-panel text-fg">
+        <div className="flex flex-col gap-3 w-72 text-center">
+          <h1 className="text-xl font-bold mb-2">YouCoded Remote</h1>
+          <p className="text-sm text-fg-2">This computer has no remote access password yet.</p>
+          <p className="text-xs text-fg-muted">
+            On the computer itself, open Settings &rarr; Remote Access and set a password.
+            Then reload this page.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="flex items-center justify-center h-full bg-panel text-fg">
@@ -321,6 +353,19 @@ if ((import.meta.env.DEV || import.meta.env.VITE_WORKBENCH === '1') && __buddyMo
           import('./state/theme-context'),
         ]);
         __mount.render(<ThemeProvider><SessionStatusPillsMockup /></ThemeProvider>);
+        return;
+      }
+      // The buddy floater's empty screen (dev/workbench/mockups/BuddySessionScreens.tsx)
+      // — its New Session form and Resume list at the floater's real 320x480, so
+      // both panes can be operated in every theme without launching a dev
+      // Electron instance. ThemeProvider so the themes are the real ones; no
+      // ChatProvider because nothing on that screen touches chat state.
+      if (__view === 'buddy-session') {
+        const [{ BuddySessionScreensMockup }, { ThemeProvider }] = await Promise.all([
+          import('./dev/workbench/mockups/BuddySessionScreens'),
+          import('./state/theme-context'),
+        ]);
+        __mount.render(<ThemeProvider><BuddySessionScreensMockup /></ThemeProvider>);
         return;
       }
       // App is already statically imported above (Root renders it).

@@ -4,6 +4,7 @@ import { useThemeMascot } from '../../hooks/useThemeMascot';
 import { useAnyAttentionNeeded } from '../../hooks/useAnyAttentionNeeded';
 import { MascotRig, type RigMotion } from '../mascot/MascotRig';
 import type { PoseName } from '../mascot/mascot-poses';
+import { defaultMascotPaint } from '../mascot/default-mascot-paint';
 
 const DRAG_THRESHOLD_PX = 4;
 // Drag velocity is normalized to the 80px buddy-window scale before feeding
@@ -81,7 +82,7 @@ export interface OverlayDrive {
 
 export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = {}) {
   const attention = useAnyAttentionNeeded();
-  const { activeTheme, reducedEffects } = useTheme();
+  const { theme, activeTheme, reducedEffects } = useTheme();
 
   // Mascot resolution order (spec §3.5): theme rig → theme flat art →
   // first-party default rig. Flat art is the legacy tier: it gets the
@@ -159,10 +160,6 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   useEffect(() => () => {
     if (swingTimerRef.current) clearTimeout(swingTimerRef.current);
   }, []);
-
-  // Attention bounce: retrigger the CSS animation each time attention flips on.
-  const [bounceKey, setBounceKey] = useState(0);
-  useEffect(() => { if (attention) setBounceKey((k) => k + 1); }, [attention]);
 
   const [grabbed, setGrabbed] = useState(false);
 
@@ -360,6 +357,15 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
         // touchAction: 'none' lets us capture the pointer cleanly without
         // the browser's default scroll/pan gestures interfering.
         touchAction: 'none',
+        // WHY: default rig paints fall back to yellow until this mascot-window
+        // wrapper supplies the same theme tint contract as every other rig host.
+        // Custom rigs with authored fills do not read these variables.
+        ['--rig-accent' as string]: 'var(--accent)',
+        ['--rig-on-accent' as string]: 'var(--on-accent)',
+        ['--rig-line' as string]: 'var(--fg)',
+        // WHY: default-only variables also reach cloned PeekHands and fetch-failure
+        // fallback art, without changing authored rigs' --rig-* token mapping.
+        ...defaultMascotPaint(theme),
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -390,7 +396,9 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
             would swing the already-translated body around the stale center
             and out of the window (prototype splits the layers the same way). */}
         <div className="mascot-lean" style={{ width: '100%', height: '100%' }}>
-          <div key={bounceKey} className={attention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
+          {/* WHY: toggling the class restarts the attention bounce without a key
+              remount throwing away the rig's springs and the host PeekHands observes. */}
+          <div className={attention && !reducedEffects ? 'mascot-bounce' : ''} style={{ width: '100%', height: '100%' }}>
             {useRig ? (
               <div ref={rigHostRef} style={{ width: '100%', height: '100%' }}>
                 <MascotRig svgUrl={rigUrl} pose={pose} motionRef={motionRef} reducedEffects={reducedEffects} />

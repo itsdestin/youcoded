@@ -4,6 +4,128 @@
 
 `SessionProvider = 'claude' | 'native' | 'shell'`. The third member arrived 2026-09-05 with the local engine's set-up flow: a `'shell'` session is a plain terminal running the user's own `$SHELL` (`powershell.exe` on Windows) with **no AI in it at all** — no hook pipe, no transcript watcher, no model, no binding. It exists so the app can offer "Run in terminal" for a set-up command (`engine:run-in-terminal`, minted only by `prepareRunInTerminal` in `session-manager.ts`) instead of sending the user off to find a terminal. It is never offered in the new-session form, but the button SELECTS the session it makes, so every renderer branch that reads a provider can see it. The native runtime is a cloud-first + local slice layered so a native session emits the exact `TranscriptEventType` shapes CC does, letting the shared chat reducer/UI render it unchanged. `native.supported=true` in production as of 2026-07-16 (env kill switch: `YOUCODED_NATIVE=0`) — known Phase 2 Plan B/C gaps still apply (see roadmap spec). Modules: `desktop/src/main/harness/`, `desktop/src/main/providers/`, `native-home.ts`, `desktop/src/renderer/components/native-send.ts`. Governing specs: `docs/active/specs/2026-07-09-platform-vision-roadmap.md`, the archived phase0/phase1 design docs, ADRs 006–010. Empirical couplings: `youcoded/docs/provider-dependencies.md`.
 
+## ChatGPT request diagnostics (Stage 1, unshipped)
+
+The provider registry owns a process-local diagnostic observer under
+`<userData>/private-diagnostics/chatgpt-cache/`, outside NativeHome, transcripts,
+sync and ordinary bug-report logs. Actual sends (including internal 401 resends)
+are observed inside the credential wrapper without handing it headers. Chat,
+specialist, summary and title scopes are separate; the logical step is allocated
+outside the harness retry loop. Dispatch, not completion, advances comparison.
+Raw SDK usage distinguishes missing cache detail from a real zero. Comparisons
+are item counts, never cached-token-prefix estimates or proof of cache residency.
+
+The observer retains per-process HMAC fingerprints only in memory (8 MiB bound),
+256 unfinished observations for at most ten minutes, and at most 1,000 sanitized
+queued records. Two rotating JSONL files are each limited to 5 MiB, with private
+permissions where supported. File failures are nonfatal; cumulative loss counters
+make incomplete diagnostic coverage visible. No raw body, fingerprint, cache
+key, reasoning, account identity or provider error is written.
+
+Local summary (from `youcoded/desktop`, pass only diagnostic files):
+
+```sh
+node scripts/chatgpt-cache-summary.mjs /path/to/requests.previous.jsonl /path/to/requests.jsonl
+```
+
+It groups by opaque session/model/purpose, reports valid-subset weighted reuse
+and fresh input, overall input/output, request/token coverage, changes and timing.
+Unknown reuse is `null`, not zero. Offline tests do not establish cache savings.
+Parsing and hashing remain synchronous, and the body is now walked ONCE: the
+hand-rolled serialized-value scanner reports the input-array length and the model
+id itself, so the second full `JSON.parse` is gone. A scan that does not reach its
+container's closing bracket is dropped as an unparseable observation (counted,
+new baseline) rather than compared — a short walk yields a short fingerprint, and
+two short fingerprints of different requests would compare `identical`. A
+2026-09-09 offline 20-iteration CPU measurement, five runs each on one machine,
+medians: **12.98 ms -> 12.72 ms** for a 433,018-byte, 100k-token-like request and
+**29.33 ms -> 27.99 ms** with an additional 4 MiB encrypted part (4,627,366 bytes
+total). The single-parser change is worth a few percent; hashing dominates.
+Absolute figures move with machine load — an earlier same-day run of the same
+benchmark read 23.45 ms / 50.00 ms — so compare before/after within one run, not
+across sessions. These are observations, not performance budgets. The benchmark
+is opt-in: `YOUCODED_DIAG_BENCH=1 npx vitest run
+tests/chatgpt-request-diagnostics.test.ts` from `youcoded/desktop`. Stage 1 does not alter
+continuation acceptance/persistence.
+
+## Durable accepted history (Stage 4, unshipped)
+
+A ChatGPT continuation only stays cache-warm if the session can put the SAME
+earlier items back on the wire after the app closes. The transcript cannot do
+that: it never stores reasoning ciphertext, item ids or provider metadata.
+Stage 4 therefore keeps a private per-session sidecar beside nothing else.
+
+**Where.** `<userData>/private-continuation/<sessionId>.manifest.json` (the
+checkpoint) and `<sessionId>.eligibility.json` (the revision fence), both with
+the session id URL-encoded. Directory 0700, files 0600 where the platform
+supports it. This is the Electron profile, NOT NativeHome — so the sidecar is
+outside the transcript tree, outside sync, and outside every reader that walks
+either. Owned by `harness/accepted-history-store.ts`, which is the only module
+in the app that names the directory.
+
+**Referenced, not copied.** The manifest describes each history message as
+POINTERS into the persisted transcript: an event uuid (plus a byte range when a
+coalesced text/reasoning part was streamed in deltas), or a concatenation of
+consecutive uuids. Message text, tool input, tool output and image bytes are
+never copied; images are re-read from their transcript paths and digest-checked
+at restore, and pruned tool output is RECOMPUTED with the same helpers
+compaction uses (`prunedToolResultText`, `imageCollapsedToolResultText`). What
+the manifest does hold is provider continuation metadata under a per-part key
+allowlist — reasoning ciphertext, item ids, response phase — plus two bounded
+exceptions: a user string with no matching anchor (an injected rule or steer)
+is stored as a literal capped at 64 KiB, and
+`providerOptions.openai.parallelToolCall.input` is kept verbatim because the
+pinned `@ai-sdk/openai` converter re-emits that wrapper argument string byte for
+byte and the transcript (which keeps only each child call's parsed input) cannot
+rebuild it. Be honest about what that second exception holds: the wrapper
+argument string is the concatenated RAW ARGUMENTS of that step's child calls, so
+a parallel step's tool input does sit in the sidecar — as the wrapper's own
+string, never as a per-call copy — and it is kept only because the SDK re-emits
+it verbatim and it cannot be rebuilt from the transcript. One further descriptor
+cites nothing at all: `{kind:'empty', field:'reasoning-text'}`, for an encrypted
+reasoning item whose summary never emitted a token (`@ai-sdk/openai` still opens
+the part, so `ai` hands over `text:''`, and no anchor can reproduce an empty
+string). Reasoning is the only part allowed to be empty; an empty part of any
+other kind still fails the publish. Anything the descriptor cannot express fails
+the publish rather than restoring an approximation. Pinned by `tests/accepted-history-privacy.test.ts`,
+which runs a real session whose reasoning ciphertext is a sentinel and proves it
+reaches the manifest and no other reader.
+
+**Bound.** A serialized manifest over **16 MiB** (`ACCEPTED_HISTORY_MAX_BYTES`)
+is refused, and a stored file over that size is refused at restore. The refusal
+happens after the fence, so an oversized replacement leaves the older checkpoint
+ineligible rather than restorable-but-stale.
+
+**Fallback reason codes.** Every failure logs one fixed code and no content; the
+session silently falls back to rebuilding history from the transcript, which is
+correct but loses the ciphertext. Publish: `stale-generation`, `oversized`,
+`write-failed`, `unreferenced-history`, plus `persistence-failed` /
+`unknown-reference` from the transcript flush and `publish-failed` if the store
+itself rejects. Restore: `ineligible`, `malformed`, `oversized`,
+`missing-transcript`, `transcript-advanced`, `binding-mismatch`,
+`assembly-mismatch`, `image-mismatch`, plus `identity-unavailable` when the
+continuation identity cannot be built (ChatGPT signed out). The line carries a
+`phase` of `publish` or `restore`, because a restore fallback is routine (no
+sidecar yet, another device, a changed model) and used to read as a failed write.
+
+**Credential epoch.** The checkpoint is bound to a continuation identity, which
+for ChatGPT is `providerId\0modelId\0sha256(accountId)\0credentialEpoch`. The
+epoch is 16 random bytes stored in `chatgpt-account.json`, minted on every fresh
+sign-in and removed with the account on sign-out; a legacy row without one reads
+`legacy` until the next sign-in. `ProviderRegistry.continuationIdentity()` is
+the single place that string is built. Changing account, model or credentials
+therefore mismatches the manifest and falls back instead of replaying one
+account's ciphertext under another's credentials.
+
+**Lifecycle.** There is no native transcript-deletion UI today, so there is no
+delete hook to attach to. The two boundaries are `cleanupOrphans()`, run once at
+startup from `ipc-handlers.ts`, which drops sidecars whose transcript is gone,
+and restore's own removal when the transcript it names is missing.
+
+**Cross-device.** The sidecar is profile-local and never syncs. A session taken
+over on another device finds no manifest, falls back to a rebuild, and becomes
+durable again on that device at its next publication.
+
 ## Provider seam (Phase 0, PR #115)
 
 - **`'native'` has NO runtime in Phase 0.** `SessionManager.createSession` throws loudly for any non-claude provider — a deliberate guard so a stray native create (e.g. from a remote client payload) fails instead of spawning a broken PTY. Phase 1 branches BEFORE the PTY worker spawn.
@@ -22,7 +144,7 @@ Cloud-first slice: `~/.youcoded/` home, provider registry + keychain keys, `Harn
 - **`NativeHome` write path** — all `~/.youcoded/` JSON writes go through `mutateFileUnderLock`; it THROWS on lock exhaustion, never silently drops (dev + built app share the home — same cross-process race as the artifact index). `readJson` absorbs ENOENT only and rethrows other I/O errors. `readSessionHead` (256KB bounded head-read) is what `list()` uses so a huge session file can't throw-then-vanish from the Resume Browser; `readSessionLines` (full read) is only for replay.
 - **`SessionStore` delta coalescing** — same-`partId` `assistant-text`/`assistant-thinking` deltas coalesce into ONE persisted event before disk (~50× smaller; replay reproduces the identical merged reducer segment). **Display-only is a family, not a single event, and the filter is structural.** `SessionStore.append` drops (a) `session-error`, and (b) any `assistant-thinking` carrying **neither `text` nor `partId`** — which is what keeps `stallWarning`, `promptProcessing`, and `toolPreparing` (streaming tool-argument progress, the preparing-tool-card feed) off disk. Because the filter keys on the *absence* of those two fields rather than on a payload name, **adding `text` or `partId` to any of those payloads silently starts persisting it** — that is the regression shape to watch for, not a forgotten allow-list entry. The two halves differ on flushing: `session-error` IS a turn boundary and flushes the open streaming part first (a stale error banner on resume would be wrong); the heartbeats are NOT boundaries and must leave the open part buffered, since the stream may resume the same `partId`. Guard: `session-store.test.ts` pins both halves, including a `toolPreparing` case asserting the surrounding deltas still coalesce into one event. `SessionStore.append()` and `HarnessSession.send()` both require the CALLER to serialize per session — `NativeSessionHost` enforces a per-session append promise chain (forward-to-renderer is synchronous and NOT gated on the disk write); HarnessSession hard-throws on a re-entrant `send()`.
 - **`NativeSessionHost` lifecycle** — `send()` still never throws; it now returns a `NativeSendResult` synchronously (`{status:'sent'|'queued'}` or `{status:'failed', reason}`) instead of blocking on the turn. `'sent'` means dispatched, not completed — turn failures arrive later as `session-error` events, not as a rejected call. The dispatch is deferred one `setImmediate` so the invoke ack reaches the renderer before the `user-message` event does (ordering the UI depends on). `destroy()` order is load-bearing: `session.destroy()` (abort + removeAllListeners — synchronous, this stops re-enqueue, NOT the map delete) → await the append chain → `store.dispose()` (flush open part) → `live.delete`. App-quit calls `destroyAll()` (best-effort flush; bounded to one in-flight part).
-- **Step limits are explicit snapshots, never model guesses.** `HarnessSession` applies the existing `max_steps` continuation ask only when its manifest has `limits.maxSteps`. For an ordinary root, `NativeSessionHost` reads `native.stepGuard` once at fresh creation, persists that normalized value in `NativeSessionHeader.stepGuard`, and resumes from the header only; changing Settings cannot alter an existing session, and an old header means no guard. Specialist children continue to use their definition-owned `stepCap`; evaluator runs explicitly use `maxSteps: 100`. There is no model-name or model-tier fallback.
+- **Step limits are explicit snapshots, never model guesses.** `HarnessSession` applies the existing `max_steps` continuation ask only when its manifest has `limits.maxSteps`. For an ordinary root, `NativeSessionHost` reads `native.stepGuard` once at fresh creation, persists that normalized value in `NativeSessionHeader.stepGuard`, and resumes from the header only; changing Settings cannot alter an existing session, and an old header means no guard. Specialist children have no step cap at all since 2026-09-08 (`fix: remove specialist child step budgets`; a legacy `stepCap` in a personal definition file is ignored); evaluator runs explicitly use `maxSteps: 100`. There is no model-name or model-tier fallback.
 - **`quiesce(id)` (M2) is a SEPARATE, STRONGER teardown than `interrupt()` — cross-device takeover only, never the Stop button.** `interrupt()` aborts only the in-flight turn and leaves the M1 send queue draining (a queued message starts a new turn right after). `quiesce()` additionally clears the queue synchronously, awaits one macrotask (lets a same-tick `send()` finish its deferred dispatch before the abort), and awaits the turn settling + append chain — its postcondition is "no further appends until a new `send()`", which a cross-device transcript flush depends on. `createHolderTakeover` (conversations/takeover.ts) branches to it for a native holder instead of sending the ESC byte. Depth + full 5-step order: `docs/conversations.md` → "Native provider participation".
 - **M1 send queue** — per-session FIFO capped at `SEND_QUEUE_LIMIT` (10) in the host; drains ONLY on the dispatched `send()`'s turn settling, one queued message per drain step. Interrupt aborts the current turn only — the queue is untouched and still drains after. Past the cap, `send()` refuses honestly (`{status:'failed', reason:'queue-full'}`) rather than silently accepting. Pinned: `native-session-host.test.ts` "send queue (M1)" block.
 - **`native:send` is an `ipcMain.handle` invoke on ALL transports** (desktop IPC and remote WS) over the SAME transcript-event pipe CC uses — same `NativeSendResult` shape either side, no throw-vs-`{ok:false}` divergence (contrast the provider IPC parity gap above). Emits `user-message`/`assistant-text`/`assistant-thinking`/`turn-complete`/`user-interrupt`/`session-error`, forwarded via `sendForSession(…, IPC.TRANSCRIPT_EVENT, …)` + `remoteServer.broadcast`. `TRANSCRIPT_REPLAY` falls through `nativeHost.getHistory(id) ?? transcriptWatcher.getHistory(id)`.
@@ -38,7 +160,7 @@ Native sessions now write through the same Conversation Store (`conversations/se
 
 - **`session:get-meta`/`session:browse` are provider-aware on desktop IPC and the remote WS** — the 2026-07-19 hardcoded native refusal is retired. The renderer sentinel string survives the rename `NATIVE_META_UNSUPPORTED` → `META_UNSUPPORTED_FALLBACK` (still exercised by the Android stub below) rather than being deleted, so no renderer branch needed to change.
 - **Resume ALWAYS offers the unified `ModelPicker` (`components/model/ModelPicker.tsx`, which replaced `NativeModelSelect`), pre-filled from the stored record's `lastUsedModel`.** This holds from every native-resume entry point (inline ResumeBrowser, MovedGate's `onResume`, ProjectView's `onResumeConversation` — the latter two pre-existing 3-arg callers wired through App.tsx's `pendingNativeResume` modal). The selection is applied as `resume(id, cwd, bindingOverride?)`'s `bindingOverride`, which wins over the stored header's binding, and is applied BEFORE the eager transcript load so the UI never flashes the stale binding.
-- **Auto-titling (`native-title-feeder.ts`) fires once, at the session's first `turn-complete`**, using the session's own bound model (`providerRegistry.languageModel` + `generateText`, 15s abort, max 3 attempts, synchronous in-flight guard). It writes through the store's title path exactly like a CC auto-title and never touches the native session's own JSONL — titles are store-only metadata, not part of the replay log.
+- **Naming (`session-namer.ts`, 2026-09-09) is shared with the CC lane** and replaced `native-title-feeder.ts`. A native session's reviews use the separately chosen naming model if there is one, else the session's own bound model (`providerRegistry.languageModel` + `generateText`, 15s abort, 3 attempts per review, synchronous in-flight guard), on the Off/Basic/AI policy in `naming-settings.ts`. It writes through the store's title path exactly like a CC auto-title and never touches the native session's own JSONL — titles are store-only metadata, not part of the replay log. Name ownership and the review schedule live in a separate synced sidecar: `docs/conversations.md` → Session name ownership.
 - **Takeover quiesces instead of interrupting** — see the `quiesce(id)` bullet above. The native session lease acquire (SessionStart-equivalent for native) is re-enabled behind `isSyncSpacesEnabled()` with warn-on-denied, mirroring the CC lease-acquire path; `pushMoved` now carries `provider` so the requester's resume flow launches the correct runtime.
 - **Android has none of this.** No Android Kotlin code reads the Conversation Store, `~/.youcoded/`, or `lastUsedModel` — native provider support is desktop-only as of M2 (Android's `session:browse`/`get-meta` still answer from the legacy `~/.claude/conversation-index.json` + local project scan only; see `SessionService.kt`).
 > **Backfill gap:** Phase 2 Plan A (agent loop + core tools + permissions, PR #149) and Plan B (web tools + AskUser + presets, PR #156) NARRATIVE depth is NOT yet written here — this doc skips from Phase 1 straight to M2 and Plan C. The backfill item was closed 2026-09-01 (workspace `docs/roadmap/shipped.md`): the two rule-overflow sections below are what exists; a fuller walkthrough was never written. The section below carries the Plan A/B rule bullets' depth verbatim, migrated 2026-08-12 when the path-scoped rule was trimmed to its word budget (and split into `native-runtime.md` + `harness-tools.md` in `youcoded-dev/.claude/rules/`); it is the rule-overflow layer, not the full backfill.
@@ -107,9 +229,21 @@ Makes the harness usable on locally-hosted models: capability profiles, REAL con
 - **KNOWN LIMITATION — capability and context are conflated, and cloud is one tier.** Every non-local model resolves to `CLOUD_DEFAULT` (full presentation, parallel calls, doom-3), so a small HOSTED model (Haiku-class, Flash-Lite, a cheap OpenRouter model) gets frontier treatment and chokes for the same reasons a small local one does. And the local FALLBACK tiers by context window, a poor capability proxy — an unknown 9B with a 256k window resolves "large → full presentation" (known models are patched by their registry entry; unknown ones are not). The right model is two orthogonal axes — *capability* (params for local, cost/benchmarks for cloud) driving presentation/steering, and *context budget* driving compaction/instruction/history sizing — plus runtime deciding the constraint mechanism. Tracked in the workspace roadmap, `docs/roadmap/native-harness.md` → `## sessions` ("capability and context budget want to be two separate axes"). Not a regression: the prior status quo had no tiering at all.
 - **A local model's context window is READ and enforced, never guessed.** `EngineManager.effectiveContextWindow(modelId)` boots the engine if needed, reads llama-server **`/props?model=<id>`** (2026-09-05, design §C3 — the bare `/props` is the ROUTER's own dummy and answers `n_ctx: 0` even while a model is loaded; named, the router forwards the question to that model's child), and `clampContextWindow` takes `min(loaded, GGUF-trained)`; `effectiveContextForModel` then clamps to the registry `maxContextWindow` ceiling (local bindings ONLY — a hosted model whose id happens to match a local family must NOT be capped). **`/props` field drifts across llama.cpp builds** — read `default_generation_settings.n_ctx` then top-level `n_ctx`, defensively. `/props` is a ROOT management endpoint, not under `/v1` (same convention as `/health`, `/models`); read it with plain fetch, not `trackedFetch`, so a status read does not bump the idle-shutdown clock. **`trainedContextFor` returns null today** — so that half of the clamp is inert and the registry ceiling is the pragmatic stand-in. **The old reason for this is DEAD (corrected 2026-09-06): a GGUF header reader now exists** (`models/gguf-header.ts` parses `<arch>.context_length` into `GgufHeader.contextLength`, with a cache in userData), and the memory estimator already uses it. What is missing is only the WIRE: `cache-scan.ts` still exposes id/size/state, so `EngineManager` has no trained max to hand back. Do not build a second parser — wire this one. `effectiveContextWindow` NEVER throws (a status read must not break session create). **Its fallback is `contextLengthFor(modelId)` — the model's OWN configured length, falling back to the engine-wide one — never the bare engine-wide value**, or a model the user set to 128k would be sized at the engine's default whenever it happens to be asleep. **The ONE-number principle:** this single clamped value feeds profile tiering, the compaction trigger, AND the StatusBar context chip — the spec forbids the gauge and the threshold disagreeing.
 - **Constrained decoding is `--jinja` tool grammar + `parallel_tool_calls:false` — NEVER a top-level `json_schema`.** A top-level schema/`response_format` would force JSON on EVERY reply and break the "plain-text answers always legal" invariant (spec §4.2). llama.cpp `--jinja` (in the spawn args since Phase 1 Plan B) already grammar-constrains emitted tool-call ARGS; the lever we own is serial-only, injected via `@ai-sdk/openai-compatible@3.0.7` `transformRequestBody` config hook on the LOCAL branch only, gated on `profile.constrainToolArgs && !supportsParallelToolCalls`. The hook is stored on the model `config` (reachable at runtime as `(model as any).config`; pinned by `provider-registry.test.ts`) — **if the openai-compatible config API drops/renames `transformRequestBody`, the constraint silently stops applying**; re-verify on any bump. This whole mechanism is llama.cpp-specific and does NOT transfer to a hosted endpoint. Round-trip proven by `test-engine/probe-tools.mjs` (dev-run, engine-bump gated), which also reports the real `n_ctx` and asserts a plain prompt is not force-called.
-- **Two-stage compaction: prune, then summarize — and it must fail safe.** Trigger is the REAL last-step `inputTokens` (chars÷4 only as the pre-first-step fallback), checked at the top of every step. Stage 1 PRUNE shrinks old tool-result output TEXT outside a protected recent window — it maps messages 1:1 and never drops one, so no tool-call is orphaned. Stage 2 SUMMARIZE runs only if pruning frees too little; it cuts at the 2nd-to-last `role:'user'` message — a user message is only ever pushed at `send()` entry, so a user index is always a turn boundary and the cut can never split a tool-call/result pair. `protectedFrom` returns `i`, NOT `i+1`: the message that pushes past the budget must itself stay protected, or a single huge recent tool result gets pruned — defeating the point. **The summary stream is abort-raced AND 30s-timeout-bounded.** A bare `for await` here reintroduces the exact un-interruptible hang that `consumeStep`'s iterator race exists to prevent: a local model that stalls without honoring abort parks the turn forever, `send()` never resolves, `this.abort` stays non-null, and every later `send()` hits the re-entrancy guard — a permanent brick. A thrown/empty summary leaves the pruned history (`fitToContext` is the hard floor) and NEVER emits `session-error`. A thrash guard skips summarize when the condensable span is trivial (<500 tokens), or a `keep`-dominated history re-summarizes every step. The summary call usage is deliberately NOT folded into `turnUsage` — awaiting `result.usage` only settles on a clean stream end and would re-open the hang.
+- **Two-stage compaction: prune, then summarize — and it must fail safe.** Trigger is the REAL last-step `inputTokens` (chars÷4 only as the pre-first-step fallback), checked at the top of every step, against `contextBudget(...).triggerTokens` (see "Prompt caching" below — the trigger is derived from the request trimmer's budget and always sits below it). Stage 1 PRUNE shrinks old tool-result output TEXT outside a protected recent window — it maps messages 1:1 and never drops one, so no tool-call is orphaned — and is committed ONLY when `planCompaction` answers `'prune'` (it reclaims ≥ `minPruneSavings`) or together with a summary that succeeded. Stage 2 SUMMARIZE runs only if pruning frees too little; it cuts at the 2nd-to-last `role:'user'` message — a user message is only ever pushed at `send()` entry, so a user index is always a turn boundary and the cut can never split a tool-call/result pair. `protectedFrom` returns `i`, NOT `i+1`: the message that pushes past the budget must itself stay protected, or a single huge recent tool result gets pruned — defeating the point. **The summary stream is abort-raced AND 30s-timeout-bounded.** A bare `for await` here reintroduces the exact un-interruptible hang that `consumeStep`'s iterator race exists to prevent: a local model that stalls without honoring abort parks the turn forever, `send()` never resolves, `this.abort` stays non-null, and every later `send()` hits the re-entrancy guard — a permanent brick. A thrown/empty summary leaves history EXACTLY as it was (`fitToContext` is the hard floor) and NEVER emits `session-error` — until 2026-09-10 it left a freshly pruned history standing, a mid-history edit on every step the summary bailed, which moved the cache prefix each time (cache follow-ups item 3; pinned by `prune-gate.test.ts`). A thrash guard skips summarize when the condensable span is trivial (<500 tokens), or a `keep`-dominated history re-summarizes every step. The summary call's usage rides the `compact-summary` event's `usage` field (raced against the same stop promise, so it can never re-open the hang); it is NOT folded into `turnUsage`, which sums the conversation's own requests.
 - **Native auto-compaction surfaces via `data.autoCompaction`, not the `/compact` gate.** The driver emits the existing frozen `compact-summary` event as `{summary, autoCompaction:true}` — note the field is `summary`, not `text`. The renderer `COMPACTION_COMPLETE` guard bypasses `compactionPending` only when `action.auto`, which ONLY the native harness sets; a blanket ungate would make CC resume-from-summary wrongly insert a marker. Compaction is IN-MEMORY only: `rebuildHistory` reconstructs the full uncompacted history on resume while the persisted `compact-summary` still renders its marker in place — benign (`fitToContext` re-truncates) but the marker implies a durable compaction that did not persist.
 - **StatusBar chips read the reducer, not a status:data path.** `selectNativeStatusChips(usage, contextLength)` derives context %/tokens/tokens-per-sec from the active native session's latest `turn-complete` usage (the `useNativeSessionUsage` cached store selector walks the timeline back — it was an `App.tsx` memo over `chatStateMap` until the 2026-07-24 rebase, where AppInner perf tranche 1 had since replaced that reactive value with a ref; a memo over a ref would have frozen the chips); this serves desktop AND remote for free, since the remote reducer gets the same event over WS. `contextLength` rides the `turn-complete` usage payload — a session constant on a per-turn event, the same additive precedent as `tokensPerSecond`, used ONLY as a gauge denominator, never summed into token totals. **A `native:usage-report` renderer→main channel + `buildStatusData().nativeUsageMap` fold was built and then DELETED** — nothing consumed it once the reducer path existed; do not rebuild it without a reader. Chips update at turn END, so a long agentic turn context chip lags until the turn completes (accepted for v1).
+
+## Prompt caching (cache follow-ups, 2026-09-10)
+
+Providers discount the repeated part of a request only while its opening bytes match a recent request. The harness already kept the system prompt frozen per session, tool order stable and history append-only; this pass closed the remaining ways it moved the prefix or never asked for the discount. Survey of how other harnesses do it, and the review that trimmed the plan: workspace `docs/active/investigations/2026-09-09-cache-efficiency-competitor-survey.md`.
+
+- **Anthropic markers and the OpenRouter pin live in the registry, keyed on `cacheKey`** (`providers/prompt-cache.ts`, wrapped in `languageModel()` ONLY when a `cacheKey` is passed — the unwrapped handle is what the registry's structural tests reach into, and the one keyless caller, session naming, is the one-shot request that must carry nothing). Direct Anthropic: one explicit `1h` breakpoint on the last system block (render order is tools → system → messages, so it covers the tools; after a compaction the automatic tail's 20-position lookback finds nothing earlier, and without this entry the tools+system would be re-written too) plus Anthropic's top-level automatic `cache_control` for the moving tail. OpenRouter: `session_id` = the session id on every harness request (pins the upstream from the FIRST request; without it OpenRouter pins only after a cache hit, expiry 10 min idle), plus top-level `cache_control` for `anthropic/*` models only — DeepSeek, OpenAI and Gemini cache automatically. **One TTL, `1h`**: a read refreshes the timer, so 1h costs 2x (vs 1.25x) only on each turn's new tokens, and a single 5–60 minute pause between human messages would otherwise re-write the whole prefix. **A summary request gets no tail marker** (system-only direct, nothing on OpenRouter): `toolChoice: 'none'` makes the Anthropic SDK drop the tools, so its prefix matches nothing and a marker would write the whole span at 2x for an entry nothing reads. Guard: `prompt-cache.test.ts` (real SDK providers, stubbed network, assertions on the wire body).
+- **One window budget: `contextBudget({contextLength, maxTokens})` → reply reserve, trim budget, compaction trigger** (`compaction.ts`). Reserve = `min(maxTokens, window/4)` on a KNOWN window (the manifest value on an unknown one, so a cloud model the catalog could not size keeps its full output allowance); trim budget = window − reserve − 1,024; trigger = `min(0.75 × window, 0.9 × trim budget)`. Same number feeds `fitToContext`, `compactionConfig` and the request's `maxOutputTokens`. *Why:* the trimmer used the flat 16,000 reserve while compaction waited for 0.75 × window, so a 32k local window trimmed the request from 15,744 tokens while compaction waited for 24,576 — every step in between re-trimmed from a moving front edge and llama.cpp re-read the whole conversation; under ~17k the budget went negative and the request collapsed to the newest message. Windows ≥ 64k keep the old trigger exactly. An UNKNOWN window (a cloud model the catalog could not size) is assumed 32k as it always was, so with the manifest's 16,000 reserve it now compacts at 14,169 tokens instead of 24,576 — the same inverted band, fixed the same way, and pinned exactly. `fitToContext` is now an emergency floor that trims nothing in steady state. Guard: `compaction-budget.test.ts`.
+- **The summary request reuses the conversation's warm prefix** (`generateSummary`): same system text, same tools, the UNPRUNED span (which IS the front of the history as the provider cached it — pruning is applied to the kept tail only when the summary commits) with the SAME wire-adapter options as the chat request, then one instruction, `toolChoice: 'none'`. Providers whose cache is a hash over the prompt prefix (OpenAI/ChatGPT, DeepSeek, llama.cpp) read the whole span warm; it used to be a fresh "You compress conversation history" prompt with no tools and images stripped, which matched nothing. The span is bounded to the trim budget (not a flat 60% of the window, which sat below the trigger and front-trimmed most spans). On Anthropic the SDK drops tools on `'none'`, so the call is the plain 1x request it always was. Guard: `summary-warm-prefix.test.ts`.
+- **`usage.expectedRebuild` on `turn-complete`** (`harness-session.ts` `prefixMoved`): set when the harness moved the prefix on purpose — a prune commit, a summary (auto or manual), a real model swap (`setBinding` with a different provider/model; a same-binding pricing refresh is not one) — and consumed by the next request. Low cache reads WITH the flag are the known price of that event; WITHOUT it, a regression in one of the fixes above. A flag, not a classifier: appends (rules, notices, new turns) never set it. Guard: `cache-rebuild-flag.test.ts`.
+- **Cache numbers the SDK does not surface ride provider metadata** (`harness/cache-usage.ts`, extractors in `harness/pricing.ts`): llama.cpp's `timings.cache_n` (prompt tokens reused from the KV cache — the only ground truth for local prefix reuse) becomes `cacheReadTokens` for a local step; OpenRouter's `prompt_tokens_details.cache_write_tokens` becomes `cacheCreationTokens`. The SDK's own numbers win when non-zero. Guard: `cache-usage-metadata.test.ts`.
+- **The Task tool's bytes are pinned across a catalog reload** (`task-tool-prefix-stability.test.ts`): the tool is rebuilt from the live roster every turn and sits at the front of every request; an unchanged roster must serialize identically, and a real hire is one expected miss.
+- **Parked, with reasons** (survey): llama.cpp `--cache-reuse` (only pays when the prefix shifts, which the budget above makes rare; disabled by llama.cpp for multimodal and SWA models — revisit if `cache_n` shows shifts), `--no-context-shift` and `--cache-ram` (already the pinned build's defaults), `--slot-save-path` (writes chat content to disk for an idle-unload case not addressed), Anthropic's cache-diagnosis beta and a cross-provider prefix-diff observer (the flag above already makes regressions visible).
 
 ## Skills, rules and injection (M3 items 1 / 3 / 5)
 
@@ -603,10 +737,16 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   completed, never spliced in. A report too large for the ledger's cap spills to
   `<childId>.report.md` (`NativeHome.writeSessionArtifact`); the parent can `Read` its own spill
   directory without an external-directory ask (`internalReadRoots`).
-- **A compact per-turn status block, never polling.** `HarnessSessionOpts.specialistStatus`
-  injects one `<specialists-status>` history message before each real user turn, listing running
-  and undelivered-finished specialists; the PREVIOUS turn's block is removed first, so exactly one
-  ever lives in history — never an accumulating, increasingly stale list.
+- **Status on demand, never a per-turn reminder (2026-09-09).** `Task` with `list: true` returns
+  the ledger's view of this conversation's specialists (running, finished-pending-delivery,
+  failed, interrupted) and the shell registry's background commands, in one answer. The earlier per-turn `<specialists-status>` block was retired: the
+  transcript audit showed it kept helpers top-of-mind and invited "report now" steers, and
+  re-inserting it every turn discarded cached prompt prefix. Matches Codex (`list_agents`) and
+  Hermes (`delegate_task(action='list')`); the compaction summary prompt now asks the model to
+  carry "still running" helpers and background commands across a summary.
+- **Stop holds deliveries (2026-09-09).** `interrupt()` sets `LiveEntry.holdDeliveries`; while
+  set, no background report or shell notice starts a turn. The next user-started turn splices
+  them into history quietly (`HarnessSession.spliceNotice`) ahead of the user's message.
 - **Steering (`postSteer`) lands at the next iteration boundary — a tool call is never cut.**
   Posted text queues and drains as a `<steer>` history message at the top of the next turn-loop
   iteration. A steer posted with no turn in flight, or during the child's own FINAL step (too late
@@ -624,14 +764,15 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   can never re-enter through the root `resume()` path (it would get the preset's prompt and could
   re-acquire the Task tool) — `resumeSpecialist` is the only door back in.
 - **A child's ask now reaches a real user — routed to the parent's card, with a 5-minute
-  redirect.** `childAskRouter` replaces 1a's synchronous refusal: the ask re-registers on the
-  broker under the PARENT's own sessionId (the existing permission card renders it) and holds for
-  `SPECIALIST_ASK_HOLD_MS` (5 minutes, `specialists/limits.ts`). Only if nobody answers by then
-  does it resolve with `ASK_REDIRECT_MESSAGE` — copy that tells the child to keep working on
-  anything that doesn't depend on the blocked action and never route around it — while the ask
-  entry stays answerable past the timeout, not canceled. A real answer that lands late either
-  steers the still-live child (`APPROVED`/`DENIED`, naming the tool) or, once the child has
-  already ended, queues a parent delivery naming the `task_id` to resume.
+  redirect.** `childAskRouter` replaces 1a's synchronous refusal: a child's `doom_loop` or
+  decide-originated ask re-registers on the broker under the PARENT's own sessionId (the existing
+  permission card renders it) and holds for `SPECIALIST_ASK_HOLD_MS` (5 minutes,
+  `specialists/limits.ts`). Only if nobody answers by then does it resolve with
+  `ASK_REDIRECT_MESSAGE` — copy that tells the child to keep working on anything that doesn't
+  depend on the blocked action and never route around it — while the ask entry stays answerable
+  past the timeout, not canceled. A real answer that lands late either steers the still-live child
+  (`APPROVED`/`DENIED`, naming the tool) or, once the child has already ended, queues a parent
+  delivery naming the `task_id` to resume.
   <!-- verify: {"path": "youcoded/desktop/src/main/harness/specialists/child-ask-router.ts", "contains": "ASK_REDIRECT_MESSAGE"} -->
 - **Permission-store rule identity is now a quad, and the store is versioned.** `specialist?:
   string` (the agentType) joined `(tool, pattern, action)` as identity's fourth axis at every
@@ -665,9 +806,10 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
 - **Weak-model hardening, three independent guards.** A single JSON-string tool-arg (`"{\"prompt\":
   ...}"`) is re-parsed once before failing. Placeholder prompts (`todo`, `task 1`, an unexpanded
   `{{...}}` template) are refused against the WHOLE trimmed prompt only, never per-line — a
-  narrower check than the 40-char floor alone, which a padded placeholder can clear. A
-  per-conversation spawn budget (`SPECIALIST_SPAWN_BUDGET_PER_SESSION`, 30) is a runaway backstop,
-  not a normal-use limit.
+  narrower check than the 40-char floor alone, which a padded placeholder can clear. Specialists
+  have no per-child step cap; the per-parent lifetime spawn budget
+  (`SPECIALIST_SPAWN_BUDGET_PER_SESSION`, 30) is the remaining runaway-delegation backstop, not a
+  normal-use limit.
 
 ## A stalled turn parks instead of dying (2026-08-16, youcoded master `28d3f82e`)
 
@@ -853,7 +995,7 @@ PermissionRequest`, now carrying `specialist.parentToolCallId`; the 5-minute hol
 a `PermissionResolved` purge signal that stops a stale answered ask from replaying with live buttons.
 
 **File formats.** A personal specialist is frontmatter (`name`, `description`, `tools:`, `model:
-budget|frontier|parent`, `stepCap`, `reportBudgetTokens`) + a system-prompt body, in
+budget|frontier|parent`, `reportBudgetTokens`) + a system-prompt body, in
 `~/.youcoded/specialists/*.md`; `charter` (`read-only`/`read-write`) is always DERIVED from the
 mapped tools, never declared. A Claude Code agent file (`~/.claude/agents/*.md` or
 `<cwd>/.claude/agents/*.md`) maps through the same pipeline — see the mapping table below. Ids are

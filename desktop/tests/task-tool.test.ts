@@ -70,6 +70,7 @@ interface RunOpts {
   // built-in roster unmodified; only the new per-cwd-roster tests below pass
   // a fake one.
   roster?: SpecialistRoster;
+  listStatus?: string | null;
 }
 
 function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
@@ -96,6 +97,7 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
         },
         release,
         trySpendSpawnBudget: () => opts.budgetOk !== false,
+        listStatus: () => opts.listStatus ?? null,
         spawn,
       },
       ...(opts.models ? { models: opts.models } : {}),
@@ -106,6 +108,27 @@ function runTaskTool(args: Record<string, unknown>, opts: RunOpts = {}) {
     ctx,
   );
 }
+
+describe('Task tool — list: true (2026-09-09, replaces the per-turn status block)', () => {
+  it('returns the host\'s status text, and never spawns', async () => {
+    const spawn = vi.fn();
+    const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { spawn, listStatus: 'Nadia (explorer): running — 12s' });
+    expect(r.text).toBe('Nadia (explorer): running — 12s');
+    expect(r.isError).toBeFalsy();
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it('says so plainly when nothing is running or pending', async () => {
+    const r = await runTaskTool({ list: true, description: undefined, prompt: undefined, work_dir: undefined }, { listStatus: null });
+    expect(r.text).toBe('No specialists or background commands are running or awaiting delivery in this conversation.');
+  });
+
+  it('is described to the model as ask-once, never a loop', () => {
+    const tool = createTaskTool();
+    expect((tool.inputSchema as any).shape.list.description).toContain('never in a loop');
+    expect(tool.description).not.toContain('<specialists-status>');
+  });
+});
 
 describe('Task tool — typed refusals (plan 1a)', () => {
   it('refuses an unknown specialist with the available list', async () => {
@@ -403,7 +426,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
   const DOCS_WRITER: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-    stepCap: 10, reportBudgetTokens: 500, source: 'personal',
+    reportBudgetTokens: 500, source: 'personal',
     grantScope: 'user', fingerprint: 'aaaaaaaaaaaa',
   };
   const FAKE_ROSTER: SpecialistRoster = {
@@ -453,7 +476,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
     const FILE_WORKER: SpecialistDefinition = {
       id: 'repo-worker', displayName: 'Repo Worker', description: 'A worker a repo shipped.',
       systemPrompt: 'Do repo work.', allowedTools: ['Read', 'Write', 'Bash'], charter: 'read-write',
-      stepCap: 25, reportBudgetTokens: 2000, source: 'claude-code',
+      reportBudgetTokens: 2000, source: 'claude-code',
       grantScope: 'project', fingerprint: 'bbbbbbbbbbbb',
     };
     const MIXED_ROSTER: SpecialistRoster = {
@@ -481,7 +504,7 @@ describe('Task tool — per-cwd roster (Task 4, plan 1c)', () => {
     const mk = (over: Partial<SpecialistDefinition>): SpecialistDefinition => ({
       id: 'code-reviewer', displayName: 'code-reviewer', description: 'Reviews code.',
       systemPrompt: 'Review.', allowedTools: ['Read', 'Grep'], charter: 'read-only',
-      stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+      reportBudgetTokens: 500, source: 'claude-code',
       grantScope: 'project', fingerprint: 'f1f1f1f1f1f1', ...over,
     });
     const rosterOf = (d: SpecialistDefinition): SpecialistRoster =>
@@ -562,7 +585,7 @@ describe('Task tool — one roster lookup per id, per tool instance (D2)', () =>
   const BASE: SpecialistDefinition = {
     id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
     systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-    stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+    reportBudgetTokens: 500, source: 'claude-code',
     grantScope: 'project', fingerprint: 'aaaaaaaaaaaa',
   };
   const ARGS = { agent: 'docs-writer', work_dir: '/proj', description: 'd', prompt: 'a'.repeat(60) };
@@ -991,7 +1014,7 @@ describe('Task tool — task_id management surface (Task 6)', () => {
     const DOCS_WRITER: SpecialistDefinition = {
       id: 'docs-writer', displayName: 'Docs Writer', description: 'Writes and edits project docs.',
       systemPrompt: 'Write docs.', allowedTools: ['Read', 'Write'], charter: 'read-write',
-      stepCap: 10, reportBudgetTokens: 500, source: 'claude-code',
+      reportBudgetTokens: 500, source: 'claude-code',
       grantScope: 'project', fingerprint: 'bbbbbbbbbbbb',
     };
     const ROSTER: SpecialistRoster = {

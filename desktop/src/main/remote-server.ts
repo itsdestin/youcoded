@@ -22,6 +22,8 @@ import type { SessionManager } from './session-manager';
 import { prepareRunInTerminal, shellDisplayName } from './session-manager';
 import type { HookRelay } from './hook-relay';
 import type { RemoteConfig } from './remote-config';
+import { RemoteConfig as RemoteConfigStatics } from './remote-config';
+import { RemoteDeviceStore, type RemoteDeviceView } from './remote-devices';
 import type { LocalSkillProvider } from './skill-provider';
 import type { SerializedChatState } from '../renderer/state/chat-types';
 import { VITE_DEV_PORT } from '../shared/ports';
@@ -39,6 +41,7 @@ import type { StepGuardSettings } from './harness/step-guard-settings';
 import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
+import type { ClaudeAccount } from './providers/claude-account';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow } from 'electron';
@@ -77,20 +80,52 @@ const PTY_CHUNK_COALESCE_BELOW = 4096;
 const HOOK_BUFFER_SIZE = 10_000; // ~10MB max, covers full conversations without excessive memory
 const AUTH_TIMEOUT_MS = 5000;
 const RATE_LIMIT_WINDOW_MS = 60_000;
-const RATE_LIMIT_MAX_FAILURES = 5;
+// A failed authentication closes the socket, so a connection gets ONE real attempt; this
+// only bounds a client that pipelines several auth messages before the close lands.
+// The point of moving off a per-ADDRESS bucket: behind the loopback bind every device is
+// 127.0.0.1, so one bucket is the whole household — five bad guesses from anyone would lock
+// everyone out, and on upgrade day every retired credential fails at once.
+// A guesser can still open a new socket per five tries, so the host counts failures across
+// all sockets too. Above this it SLOWS new connections rather than refusing them: a
+// refusal here is indistinguishable from the feature being broken, and the person locked
+// out is the owner far more often than the attacker.
+const HOST_FAILURES_BEFORE_SLOWDOWN = 25;
+const HOST_SLOWDOWN_MS = 2_000;
+// Enough to cover a reconnect, not a session. Older than this answers "unknown".
+const COMPLETED_RING_PER_DEVICE = 200;
+const COMPLETED_RING_MS = 10 * 60_000;
+// A half-open socket is invisible without this: the host keeps buffering for a client that
+// is gone, and the client waits the full request timeout to learn anything is wrong.
+const PING_INTERVAL_MS = 20_000;
 
 interface AuthenticatedClient {
   id: string;
   ws: WebSocket;
-  token: string;
+  deviceId: string;
   ip: string;
   connectedAt: number;
+  awaitingPong?: boolean;
 }
 
 export interface ClientInfo {
   id: string;
   ip: string;
   connectedAt: number;
+}
+
+const HOST_ADMIN_REFUSAL = 'Change this on the computer itself.';
+
+export interface RemoteStatus {
+  state: 'listening' | 'stopped' | 'failed';
+  reason?: string;
+  port: number;
+}
+
+interface SessionNamingWiring {
+  get: () => Promise<{ mode: string; model: unknown }>;
+  set: (value: unknown) => Promise<{ ok: boolean; error?: string }>;
+  title: (sessionId: string, fallback: string) => Promise<{ title: string; manual: boolean }>;
+  rename: (sessionId: string, title: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 export class RemoteServer {
@@ -104,10 +139,10 @@ export class RemoteServer {
   // Held so stop() can clear it. Previously this interval was created by start()
   // and never cancelled, so it survived stop() and a restart stacked another.
   private uploadCleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private pingTimer: ReturnType<typeof setInterval> | null = null;
   private clients = new Set<AuthenticatedClient>();
   private lastClientActivityMs = 0; // see getLastClientActivityMs()
-  private tokens = new Map<string, boolean>(); // token → valid
-  private tokensPath: string;
+  private devices: RemoteDeviceStore;
   // `${encoding}:${urlPath}` → compressed bytes. Safe to hold indefinitely
   // because Vite content-hashes the URLs it serves; see compressStatic().
   private compressedAssets = new Map<string, Buffer>();
@@ -130,7 +165,20 @@ export class RemoteServer {
   // G-1: sessionId -> shellId -> latest run view, same latest-per-key shape.
   private shellRunBuffers = new Map<string, Map<string, ShellEvent>>();
   // statusInterval removed — status data now fed by ipc-handlers.ts via broadcastStatusData()
-  private failedAttempts = new Map<string, { count: number; resetAt: number }>();
+  // Host-wide failure count, for the slowdown. Per-socket attempts live on the socket.
+  private hostFailures = { count: 0, resetAt: 0 };
+  private statusListeners = new Set<(status: RemoteStatus) => void>();
+  /**
+   * Ids of requests this host finished, per device, so a client that lost the reply can ask
+   * whether its action ran. Bounded and in memory only: after a restart the honest answer
+   * is "unknown", and the milestone names host restart as a case the UI must handle.
+   */
+  private completedRequests = new Map<string, { id: string; at: number }[]>();
+  /** The OS reason the last start() failed, so the panel can say it rather than guess. */
+  private lastStartError: string | null = null;
+  /** The tailnet address to bind to. Null means Tailscale is not up, and start() refuses
+   *  rather than falling back to every interface — that fallback IS the open listener. */
+  private bindAddress: string | null = null;
   // Last-known topic names, fed by ipc-handlers.ts via setLastTopic()
   private lastTopics = new Map<string, string>();
   // Last-known FULL status payload, fed by ipc-handlers.ts via broadcastStatusData(),
@@ -151,7 +199,7 @@ export class RemoteServer {
   // field (Plan 2b) — both were added independently on master and this branch.
   // permissionStore (M5 2a) is carried for the READ side only — permissions:list.
   // The two revokes go through nativeHost, which also clears live in-memory state.
-  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null } | null = null;
+  private nativeRuntime: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null } | null = null;
   // Plan 2b Task 11: conversation-lease + device wiring, injected by ipc-handlers
   // via setLeaseWiring() AFTER main.ts builds the lease client/requester (they
   // live in the whenReady scope, not reachable at RemoteServer construction).
@@ -171,8 +219,7 @@ export class RemoteServer {
     private skillProvider?: LocalSkillProvider,
     opts?: { requestSnapshot?: () => Promise<SerializedChatState> },
   ) {
-    this.tokensPath = path.join(os.homedir(), '.claude', '.remote-tokens.json');
-    this.loadTokens();
+    this.devices = new RemoteDeviceStore();
     // Default is a no-op that returns an empty snapshot — allows the server to
     // be constructed before the main window exists (e.g. during first-run setup).
     this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
@@ -190,7 +237,7 @@ export class RemoteServer {
   /** Injected by ipc-handlers after it constructs the native stack, so remote
    *  WS clients reach the SAME nativeHost / providerRegistry / modelCatalog the
    *  Electron IPC handlers use (mirrors setLastTopic / broadcastStatusData). */
-  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null }): void {
+  setNativeRuntime(rt: { nativeHost: NativeSessionHost; providerRegistry: ProviderRegistry; modelCatalog: ModelCatalog; engineManager: EngineManager; modelManager: ModelManager; searchKeyStore: SearchKeyStore; searchService: SearchService; permissionStore: PermissionStore; stepGuardSettings: StepGuardSettings; specialistCatalog: SpecialistCatalog; chatgptAuth: ChatGptAuth | null; claudeAccount: ClaudeAccount | null }): void {
     this.nativeRuntime = rt;
   }
 
@@ -258,26 +305,44 @@ export class RemoteServer {
     canWrite: (sessionId: string, resolved: string) => boolean;
   };
 
-  private loadTokens(): void {
-    try {
-      const data = JSON.parse(fs.readFileSync(this.tokensPath, 'utf8'));
-      if (Array.isArray(data)) {
-        for (const t of data) this.tokens.set(t, true);
-      }
-    } catch { /* no persisted tokens yet */ }
-  }
+  /** Session naming, injected from ipc-handlers so a remote client runs the
+   *  SAME implementation as the local one — ownership checks, model-catalog
+   *  validation and the persist-then-broadcast order included. Absent until
+   *  registerIpcHandlers runs; the dispatch below answers honestly meanwhile. */
+  setSessionNamingWiring(w: SessionNamingWiring): void { this.sessionNamingWiring = w; }
+  private sessionNamingWiring?: SessionNamingWiring;
 
-  private saveTokens(): void {
-    try {
-      fs.mkdirSync(path.dirname(this.tokensPath), { recursive: true });
-      // Security: restrict file permissions to owner-only (prevents other users reading tokens)
-      fs.writeFileSync(this.tokensPath, JSON.stringify(Array.from(this.tokens.keys())), { mode: 0o600 });
-    } catch { /* best effort */ }
-  }
+  // loadTokens/saveTokens are deliberately NOT carried across this merge. They read the flat
+  // `.remote-tokens.json` file of opaque strings that this batch replaced with per-device
+  // records (RemoteDeviceStore): no identity, no dates, and revocation that dropped every
+  // device at once. Restoring them would not compile — the fields are gone — and would undo
+  // contract row R7.
 
   /** True once start() has bound the port; false after stop() or a failed start. */
   isRunning(): boolean {
     return this.running;
+  }
+
+  /**
+   * What the listener is actually doing. WHY this exists: the panel's indicator was derived
+   * from saved settings plus Tailscale's state, so it said "connected" whenever the switch
+   * was on — including when the port never bound. isRunning() was here all along with no
+   * caller outside tests.
+   */
+  getStatus(): RemoteStatus {
+    if (this.running) return { state: 'listening', port: this.config.port };
+    if (this.lastStartError) return { state: 'failed', reason: this.lastStartError, port: this.config.port };
+    return { state: 'stopped', port: this.config.port };
+  }
+
+  onStatusChange(listener: (status: RemoteStatus) => void): () => void {
+    this.statusListeners.add(listener);
+    return () => { this.statusListeners.delete(listener); };
+  }
+
+  private emitStatus(): void {
+    const status = this.getStatus();
+    for (const l of this.statusListeners) l(status);
   }
 
   async start(): Promise<void> {
@@ -287,10 +352,19 @@ export class RemoteServer {
     }
     if (this.running) return;
 
-    // Re-read persisted tokens: stop() clears the in-memory map, and loadTokens()
-    // only ran in the constructor. Without this, toggling remote access off and
-    // back on forced every already-paired device to re-enter the password.
-    this.loadTokens();
+    // WHY this refuses instead of falling back: binding every interface is exactly the
+    // open, unencrypted listener this batch exists to remove. No Tailscale, no remote
+    // access — and the panel says so rather than reporting a server that is not private.
+    const ts = await RemoteConfigStatics.detectTailscale(this.config.port);
+    if (!ts.connected || !ts.ip) {
+      this.bindAddress = null;
+      this.lastStartError = ts.installed
+        ? 'Tailscale is installed but not connected, so there is no private address to listen on.'
+        : 'Tailscale is not installed, so there is no private address to listen on.';
+      this.emitStatus();
+      throw new Error(this.lastStartError);
+    }
+    this.bindAddress = ts.ip;
 
     // Subscribe to events for buffering and broadcasting
     this.sessionManager.on('pty-output', this.onPtyOutput);
@@ -310,6 +384,19 @@ export class RemoteServer {
     const hasStaticBuild = fs.existsSync(path.join(staticDir, 'index.html'));
 
     this.httpServer = http.createServer((req, res) => {
+      // WHY this endpoint exists: without it the sign-in screen has no way to know the host
+      // has no password set, so it shows a password box, waits for you to type something,
+      // and only then says "Remote access is not configured". It asked for a secret that
+      // could not have existed. Now the screen knows before it draws.
+      //
+      // It discloses nothing new: anyone who can open this port learns the same thing by
+      // connecting, because the refusal names its own reason. It is deliberately the ONLY
+      // thing served without authentication, and it says nothing about devices or sessions.
+      if ((req.url || '').split('?')[0] === '/remote-state') {
+        res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+        res.end(JSON.stringify({ needsSetup: !this.config.passwordHash }));
+        return;
+      }
       if (hasStaticBuild) {
         this.handleHttpRequest(req, res, staticDir);
       } else {
@@ -381,17 +468,30 @@ export class RemoteServer {
         if (settled) return;
         settled = true;
         // Roll back the half-built state (event subscriptions, timer, sockets)
-        // so a retry starts clean instead of double-subscribing.
-        this.stop();
+        // so a retry starts clean instead of double-subscribing. Rollback, not a user
+        // stop: the reason is set on the next line, and announcing 'stopped' first would
+        // flash the panel through a state the server was never in.
+        this.stop(true);
+        // Keep the reason: a bind failure was only logged, so the panel had nothing to show
+        // and fell back to reporting the saved setting as though it had worked.
+        this.lastStartError = err.message;
+        this.emitStatus();
         reject(err);
       };
       server.once('error', onError);
-      server.listen(this.config.port, () => {
+      // Bind to the Tailscale address ONLY. Verified 2026-09-09: a server bound this way
+      // answers on the tailnet name and REFUSES the machine's home-wifi address, which is
+      // contract row R10 — and it needs neither Tailscale Serve nor an administrator
+      // password, because nothing about Tailscale's own configuration changes.
+      server.listen(this.config.port, this.bindAddress ?? undefined, () => {
         if (settled) return;
         settled = true;
         server.removeListener('error', onError);
         this.running = true;
+        this.lastStartError = null;
+        this.startLiveness();
         console.log(`[RemoteServer] Listening on port ${this.config.port}`);
+        this.emitStatus();
         resolve();
       });
     });
@@ -409,11 +509,17 @@ export class RemoteServer {
     this.broadcast({ type: 'status:data', payload: data });
   }
 
-  stop(): void {
+  /** @param forRollback internal use: unwinding a start that failed, where the caller sets
+   *  the real reason on the next line. Every other caller is a user switching it off. */
+  stop(forRollback = false): void {
     this.running = false;
     if (this.uploadCleanupTimer) {
       clearInterval(this.uploadCleanupTimer);
       this.uploadCleanupTimer = null;
+    }
+    if (this.pingTimer) {
+      clearInterval(this.pingTimer);
+      this.pingTimer = null;
     }
     this.lastTopics.clear();
     this.lastStatusData = null;
@@ -426,16 +532,23 @@ export class RemoteServer {
       client.ws.close(1001, 'Server shutting down');
     }
     this.clients.clear();
-    this.tokens.clear();
+    // Nothing to clear for devices: the store is file-backed, so toggling remote access off
+    // and on no longer forces every paired device to re-enter the password.
 
     if (this.wss) { this.wss.close(); this.wss = null; }
     if (this.httpServer) { this.httpServer.close(); this.httpServer = null; }
+    if (forRollback) return;
+    // A stop the USER asked for clears the last failure. It used to be cleared only by a
+    // successful listen, and this method skipped its own emit whenever the field was set —
+    // so after one failed start the panel read "Not running: <that reason>" for the rest of
+    // the process, including after remote access had been switched off entirely.
+    this.lastStartError = null;
+    this.emitStatus();
   }
 
-  /** Invalidate all session tokens (e.g., after password change). */
+  /** Every device loses access — what a password change means. */
   invalidateTokens(): void {
-    this.tokens.clear();
-    this.saveTokens();
+    this.devices.revokeAll();
     for (const client of this.clients) {
       client.ws.close(4001, 'Password changed');
     }
@@ -464,16 +577,32 @@ export class RemoteServer {
     }));
   }
 
-  /** Disconnect a specific client by ID. */
-  disconnectClient(clientId: string): boolean {
+  /** Contract R11: every device that has paired, until it is unpaired. */
+  getDeviceList(): RemoteDeviceView[] {
+    const online = new Set<string>();
+    for (const c of this.clients) online.add(c.deviceId);
+    return this.devices.list(online);
+  }
+
+  renameDevice(deviceId: string, name: string): boolean {
+    return this.devices.rename(deviceId, name);
+  }
+
+  /**
+   * Contract R7/R8. Unpair, then hang up: the record is what keeps the device out, so a
+   * device whose socket is already gone is still unpaired — which is the whole point of a
+   * list that keeps offline devices.
+   */
+  unpairDevice(deviceId: string): boolean {
+    const revoked = this.devices.revoke(deviceId);
+    if (!revoked) return false;
     for (const client of this.clients) {
-      if (client.id === clientId) {
-        client.ws.close(4002, 'Disconnected by admin');
+      if (client.deviceId === deviceId) {
+        client.ws.close(4003, 'Device unpaired');
         this.clients.delete(client);
-        return true;
       }
     }
-    return false;
+    return true;
   }
 
   // --- Event handlers for buffering ---
@@ -746,26 +875,23 @@ export class RemoteServer {
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     const ip = req.socket.remoteAddress || '';
+    // ONE auth attempt per connection. The handler below detaches itself on the first
+    // message and every failure path closes the socket, so a guesser pays a full
+    // reconnect per try and cannot spend anyone else's budget.
+    //
+    // This used to carry a five-attempt counter. The counter was unreachable — the
+    // detach happens before a second message could ever be counted — so the code
+    // claimed five and delivered one. One is the stronger of the two, so it is what
+    // the code now says. Found by writing the behaviour test in remote-rate-limit.test.ts;
+    // the source-scan version passed happily, because the words were all present.
+    const slowStart = this.shouldSlowConnection() ? HOST_SLOWDOWN_MS : 0;
 
-    // Check rate limiting
-    if (this.isRateLimited(ip)) {
-      ws.close(4029, 'Too many failed attempts');
-      return;
-    }
-
-    // Auto-accept Tailscale-trusted connections
-    if (this.config.trustTailscale && this.config.isTailscaleIp(ip)) {
-      const token = randomUUID();
-      this.tokens.set(token, true);
-      this.saveTokens();
-      this.config.markPaired();
-      this.addClient(ws, token, ip);
-      ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
-      this.replayBuffers(ws).catch((err) => {
-        console.error('[remote-server] replayBuffers failed:', err);
-      });
-      return;
-    }
+    // Contract R9: a device needs the password even on a private network. The block that
+    // stood here auto-paired any peer inside 100.64.0.0/10 with no password exchanged — a
+    // carrier-grade NAT range, not one Tailscale owns. Nothing is trusted for its address.
+    // The per-IP rate limiter that stood beside it is gone for the reason in §0: behind a
+    // loopback proxy every device shares one bucket, so five failures locked the household
+    // out. Limits are per socket and per host now.
 
     // Auth timeout
     const timeout = setTimeout(() => {
@@ -775,6 +901,7 @@ export class RemoteServer {
     // Wait for auth message
     const authHandler = async (raw: Buffer | string) => {
       clearTimeout(timeout);
+      if (slowStart) await new Promise(r => setTimeout(r, slowStart));
       ws.off('message', authHandler);
 
       try {
@@ -792,27 +919,53 @@ export class RemoteServer {
           return;
         }
 
-        let authenticated = false;
-
-        if (msg.token && this.tokens.has(msg.token)) {
-          authenticated = true;
-        } else if (msg.password) {
-          authenticated = await this.config.verifyPassword(msg.password);
+        // A credential first, then the password. WHY the credential answers with a REASON:
+        // "unpaired" and "credential retired" are terminal — the client must stop retrying
+        // rather than hammer the host into its own lockout — while a bad secret is not.
+        if (msg.deviceId) {
+          const result = this.devices.authenticate(msg.deviceId, msg.secret);
+          if (result.ok) {
+            this.clearFailedAttempts();
+            this.config.markPaired();
+            this.addClient(ws, result.device.id, ip);
+            // Same capability flag as the pairing path below — master's own note says the
+            // two sites must stay in step, and a returning device paints the same UI.
+            ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop', sessionNaming: true }));
+            this.replayBuffers(ws).catch((err) => {
+              console.error('[remote-server] replayBuffers failed:', err);
+            });
+            return;
+          }
+          if (result.reason !== 'bad-secret') {
+            // Not a failed guess, so it does not count toward the lockout: on upgrade day
+            // every retired credential arrives at once and must not lock the household out.
+            ws.send(JSON.stringify({ type: 'auth:failed', reason: result.reason }));
+            ws.close(result.reason === 'revoked' ? 4003 : 4004,
+              result.reason === 'revoked' ? 'Device unpaired' : 'Credential retired');
+            return;
+          }
         }
 
-        if (authenticated) {
-          this.clearFailedAttempts(ip);
-          const token = msg.token && this.tokens.has(msg.token) ? msg.token : randomUUID();
-          this.tokens.set(token, true);
-          this.saveTokens();
+        if (msg.password && await this.config.verifyPassword(msg.password)) {
+          this.clearFailedAttempts();
+          // The secret is returned exactly once, at pairing. A device that still HOLDS its
+          // credential re-authenticates with it above and keeps its row; arriving here
+          // with only the password means the credential is gone, and the host has no way
+          // to know which earlier row this is — matching on a name would merge two people
+          // with the same phone. So this is a new pairing, and the old row stays until it
+          // is unpaired, going cold in the Last seen column. Do not "deduplicate" it: that
+          // would be the host guessing about identity, which is what the password is for.
+          const paired = this.devices.pair(msg.deviceName);
           this.config.markPaired();
-          this.addClient(ws, token, ip);
-          ws.send(JSON.stringify({ type: 'auth:ok', token, platform: 'desktop' }));
+          this.addClient(ws, paired.deviceId, ip);
+          // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
+          // master while this branch was open. It rides on every auth:ok this host sends.
+          ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop', sessionNaming: true }));
           this.replayBuffers(ws).catch((err) => {
             console.error('[remote-server] replayBuffers failed:', err);
           });
         } else {
-          this.recordFailedAttempt(ip);
+          this.recordFailedAttempt();
           ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' }));
           ws.close(4001, 'Auth failed');
         }
@@ -825,11 +978,31 @@ export class RemoteServer {
     ws.on('message', authHandler);
   }
 
-  private addClient(ws: WebSocket, token: string, ip: string): void {
-    const client: AuthenticatedClient = { id: randomUUID(), ws, token, ip, connectedAt: Date.now() };
+  /** Close sockets that stopped answering. Without this a half-open connection is invisible
+   *  and the client waits the full 30s request timeout to learn anything is wrong. */
+  private startLiveness(): void {
+    if (this.pingTimer) return;
+    this.pingTimer = setInterval(() => {
+      for (const client of this.clients) {
+        if (client.awaitingPong) {
+          client.ws.close(4008, 'No response');
+          this.clients.delete(client);
+          continue;
+        }
+        client.awaitingPong = true;
+        try { client.ws.ping(); } catch { /* closing anyway */ }
+      }
+    }, PING_INTERVAL_MS);
+  }
+
+  private addClient(ws: WebSocket, deviceId: string, ip: string): void {
+    // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
+    // panel lists. Two id spaces, deliberately not merged.
+    const client: AuthenticatedClient = { id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now() };
     this.clients.add(client);
 
-    ws.on('message', (raw) => this.handleMessage(client, raw as Buffer | string));
+    ws.on('pong', () => { client.awaitingPong = false; });
+    ws.on('message', (raw) => { client.awaitingPong = false; void this.handleMessage(client, raw as Buffer | string); });
     ws.on('close', () => this.clients.delete(client));
     ws.on('error', () => this.clients.delete(client));
   }
@@ -1066,6 +1239,17 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
+      case 'native:session-context-text': {
+        // "What the assistant was given" — one file's text, read on the DESKTOP,
+        // where the session and its files live. Without this case the panel opens
+        // on a phone and every row reads "This file couldn't be read": the
+        // default arm answers {unsupported:true}, which is not an answer.
+        const result = this.nativeRuntime
+          ? this.nativeRuntime.nativeHost.sessionContextText(payload.sessionId, payload.kind, payload.id)
+          : { error: 'not-live' };
+        this.respond(client.ws, type, id, result);
+        break;
+      }
       case 'provider:list': {
         this.respond(client.ws, type, id, this.nativeRuntime ? await this.nativeRuntime.providerRegistry.list() : []);
         break;
@@ -1159,6 +1343,21 @@ export class RemoteServer {
         try {
           const auth = this.nativeRuntime?.chatgptAuth ?? null;
           this.respond(client.ws, type, id, auth ? await auth.signOut() : false);
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      // Claude Code's live sign-in (2026-09-09). The DESKTOP's answer, not the
+      // browser's: the phone has no `claude` binary, and the session it is
+      // driving runs here. `unknown` when the runtime is not wired yet, which
+      // every reader treats as available — a remote client must never grey out
+      // a model on the strength of a missing object.
+      case 'claude-code:status': {
+        try {
+          const account = this.nativeRuntime?.claudeAccount ?? null;
+          if (payload?.refresh) account?.invalidate();
+          this.respond(client.ws, type, id, account ? await account.status() : { state: 'unknown' });
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
         }
@@ -1357,6 +1556,37 @@ export class RemoteServer {
         // the payload and refetch meta).
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, flag: tagFlagKey(tagId), value: !!payload?.value } });
         this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      // Session naming. `unavailable` is answered as a refusal, not silence:
+      // the shim's capability probe reads a well-formed preference as "this
+      // host can name sessions", so a half-started host must not look ready.
+      case 'session-naming:get': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.get()
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
+        break;
+      }
+      case 'session-naming:set': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.set(payload?.value)
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
+        break;
+      }
+      case 'session-naming:title': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.title(String(payload?.sessionId ?? ''), String(payload?.fallback ?? ''))
+          : { title: String(payload?.fallback ?? ''), manual: false });
+        break;
+      }
+      case 'session-naming:rename': {
+        const w = this.sessionNamingWiring;
+        this.respond(client.ws, type, id, w
+          ? await w.rename(String(payload?.sessionId ?? ''), String(payload?.title ?? ''))
+          : { ok: false, error: 'The assistant isn’t ready yet.' });
         break;
       }
       case 'session:set-note': {
@@ -1938,6 +2168,37 @@ export class RemoteServer {
         }
         break;
       }
+      // WHY reading a theme file is bridged and nothing else under `theme:` is: the phone
+      // ALREADY learns which theme the host is on — `appearance:get` above hands it the
+      // slug — and then could not find out what that slug means, because loading the
+      // definition went unanswered. So a community theme fell back to a built-in and the
+      // phone looked like a different app. Destin's own theme is one (2026-09-10).
+      //
+      // Read-only, and the same two guards the desktop handler uses: a slug that is not a
+      // plain slug is refused, and the resolved path must still be inside the themes
+      // directory, so `../` cannot walk out of it. Writing a theme stays desktop-only,
+      // like every other change to the host.
+      case 'theme:read-file': {
+        const slug = String(payload?.slug ?? '');
+        if (!/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/.test(slug)) {
+          this.respond(client.ws, type, id, { ok: false, error: 'Invalid theme slug' });
+          break;
+        }
+        const { userThemeManifest, THEMES_DIR } = require('./theme-watcher');
+        const manifestPath = path.resolve(userThemeManifest(slug));
+        if (!manifestPath.startsWith(THEMES_DIR + path.sep)) {
+          this.respond(client.ws, type, id, { ok: false, error: 'Invalid theme slug' });
+          break;
+        }
+        try {
+          this.respond(client.ws, type, id, await fs.promises.readFile(manifestPath, 'utf-8'));
+        } catch {
+          // Not installed on this computer. The client keeps the theme it has rather than
+          // being handed a fallback it did not choose.
+          this.respond(client.ws, type, id, { ok: false, error: 'Theme not found' });
+        }
+        break;
+      }
       case 'appearance:get': {
         const appearancePath = path.join(os.homedir(), '.claude', 'youcoded-appearance.json');
         try {
@@ -2269,26 +2530,31 @@ export class RemoteServer {
         this.respond(client.ws, type, id, config);
         break;
       }
+      // Host administration does not travel over this socket at all. It stays on desktop
+      // IPC, which no remote client can reach.
+      //
+      // WHY not the old source-address check: it compared client.ip to 127.0.0.1. Behind a
+      // loopback bind — which is where this is going — every remote device arrives as
+      // 127.0.0.1, so that check would pass for all of them and any paired phone could
+      // change the host password, which also throws every other device off. Refusing the
+      // whole class is what makes the bind safe. set-config was never checked at all, so a
+      // phone could switch remote access off on the computer.
       case 'remote:set-password': {
-        // Security: only allow password changes from local connections (not remote clients)
-        const isLocal = client.ip === '127.0.0.1' || client.ip === '::1' || client.ip === '::ffff:127.0.0.1';
-        if (!isLocal) {
-          this.respond(client.ws, type, id, { error: 'Password change only allowed from local connection' });
-          break;
-        }
-        await this.config.setPassword(payload);
-        this.invalidateTokens();
-        this.respond(client.ws, type, id, true);
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
         break;
       }
       case 'remote:set-config': {
-        if (typeof payload.enabled === 'boolean') this.config.enabled = payload.enabled;
-        if (typeof payload.trustTailscale === 'boolean') this.config.trustTailscale = payload.trustTailscale;
-        if (typeof payload.keepAwakeHours === 'number') this.config.keepAwakeHours = payload.keepAwakeHours;
-        this.config.save();
-        this.respond(client.ws, type, id, this.config.toSafeObject());
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
         break;
       }
+      // remote:disconnect-client has NO case on purpose, and this comment is the guard's
+      // explanation. It was kept as an explicit `{ok:false}` refusal so an un-upgraded
+      // client would be told no rather than met with silence — but that reasoning was
+      // backwards. A shim only turns `{ok:false}` into an error for channels in its own
+      // REJECT_ON_NOT_OK, and no released version lists this one, so the refusal resolved
+      // as an ordinary value: another false success. Falling through to `default:` answers
+      // `{unsupported:true}`, which EVERY shim version rejects. Silence was never the
+      // alternative; the honest "no" is the one the default already gives.
       case 'remote:detect-tailscale': {
         const { RemoteConfig } = require('./remote-config');
         const result = await RemoteConfig.detectTailscale(this.config.port);
@@ -2303,12 +2569,46 @@ export class RemoteServer {
         this.respond(client.ws, type, id, this.getClientList());
         break;
       }
-      case 'remote:disconnect-client': {
-        const result = this.disconnectClient(payload.clientId || payload);
-        this.respond(client.ws, type, id, result);
+      case 'remote:request-outcome': {
+        const ids: string[] = Array.isArray(payload?.ids) ? payload.ids : [];
+        const outcomes: Record<string, 'completed' | 'unknown'> = {};
+        for (const requestId of ids.slice(0, 200)) {
+          // WHY the caller's own device id is checked: a request id carries the device
+          // that made it, and without this any paired device could ask about any other
+          // device's requests. Nothing secret comes back, but "did that phone's action
+          // run?" is not this phone's business, and the id was already there to check.
+          outcomes[requestId] = requestId.split(':')[0] === client.deviceId
+            ? this.outcomeOf(requestId)
+            : 'unknown';
+        }
+        this.respond(client.ws, type, id, { outcomes });
         break;
       }
-
+      // WHY this case exists at all: the channel was added to preload, the shim, the
+      // desktop IPC handlers and Android — but not here, and this is the host a remote
+      // BROWSER talks to. Without it the answer is `{unsupported:true}`, which the shim
+      // rejects; the panel asks for it in the same Promise.all as the config, the
+      // Tailscale info and the device list, so one missing case opened the whole Remote
+      // Access screen blank on a phone. Reading status is not administration — it is the
+      // same question the indicator already answers — so it is answered, not refused.
+      case 'remote:status': {
+        this.respond(client.ws, type, id, this.getStatus());
+        break;
+      }
+      case 'remote:devices:list': {
+        this.respond(client.ws, type, id, { devices: this.getDeviceList() });
+        break;
+      }
+      // Renaming and unpairing are host administration: they decide who may reach this
+      // computer, so they stay on desktop IPC like the password does. See HOST_ADMIN_REFUSAL.
+      case 'remote:devices:rename': {
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
+        break;
+      }
+      case 'remote:devices:unpair': {
+        this.respond(client.ws, type, id, { ok: false, error: HOST_ADMIN_REFUSAL });
+        break;
+      }
       // --- Sync management ---
       case 'sync:get-status': {
         const syncStatus = await getSyncStatus();
@@ -2736,9 +3036,32 @@ export class RemoteServer {
   // --- Helpers ---
 
   private respond(ws: WebSocket, type: string, id: string, payload: any): void {
+    this.noteCompleted(id);
     if (ws.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: `${type}:response`, id, payload }));
     }
+  }
+
+  /** Request ids are `<deviceId>:<generation>:<n>`, so the device is the ring's key. */
+  private noteCompleted(id: string): void {
+    const deviceId = id.split(':')[0];
+    if (!deviceId) return;
+    const now = Date.now();
+    const ring = this.completedRequests.get(deviceId) ?? [];
+    ring.push({ id, at: now });
+    const cutoff = now - COMPLETED_RING_MS;
+    let trimmed = ring.filter(e => e.at >= cutoff);
+    if (trimmed.length > COMPLETED_RING_PER_DEVICE) trimmed = trimmed.slice(-COMPLETED_RING_PER_DEVICE);
+    this.completedRequests.set(deviceId, trimmed);
+  }
+
+  /** 'completed' only when we can still see it. Anything else is 'unknown', deliberately. */
+  private outcomeOf(id: string): 'completed' | 'unknown' {
+    const deviceId = id.split(':')[0];
+    const ring = this.completedRequests.get(deviceId);
+    if (!ring) return 'unknown';
+    const cutoff = Date.now() - COMPLETED_RING_MS;
+    return ring.some(e => e.id === id && e.at >= cutoff) ? 'completed' : 'unknown';
   }
 
   broadcast(msg: { type: string; payload: any }): void {
@@ -2761,27 +3084,28 @@ export class RemoteServer {
 
   // --- Rate limiting ---
 
-  private isRateLimited(ip: string): boolean {
-    const entry = this.failedAttempts.get(ip);
-    if (!entry) return false;
-    if (Date.now() > entry.resetAt) {
-      this.failedAttempts.delete(ip);
+  /** Whether a new connection should be answered slowly, because the host is seeing a
+   *  burst of failed attempts. Slowing beats refusing: the owner is locked out far more
+   *  often than the attacker is stopped. (This returned a boolean while being named and
+   *  documented as milliseconds; the caller applied the delay. Renamed to what it is.) */
+  private shouldSlowConnection(): boolean {
+    if (Date.now() > this.hostFailures.resetAt) {
+      this.hostFailures = { count: 0, resetAt: 0 };
       return false;
     }
-    return entry.count >= RATE_LIMIT_MAX_FAILURES;
+    return this.hostFailures.count >= HOST_FAILURES_BEFORE_SLOWDOWN;
   }
 
-  private recordFailedAttempt(ip: string): void {
-    const entry = this.failedAttempts.get(ip);
-    if (entry && Date.now() < entry.resetAt) {
-      entry.count++;
+  private recordFailedAttempt(): void {
+    if (Date.now() > this.hostFailures.resetAt) {
+      this.hostFailures = { count: 1, resetAt: Date.now() + RATE_LIMIT_WINDOW_MS };
     } else {
-      this.failedAttempts.set(ip, { count: 1, resetAt: Date.now() + RATE_LIMIT_WINDOW_MS });
+      this.hostFailures.count++;
     }
   }
 
-  private clearFailedAttempts(ip: string): void {
-    this.failedAttempts.delete(ip);
+  private clearFailedAttempts(): void {
+    this.hostFailures = { count: 0, resetAt: 0 };
   }
 }
 

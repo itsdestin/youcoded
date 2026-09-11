@@ -6,8 +6,13 @@
 // Thrown error messages here surface DIRECTLY in the UI error banner, so they
 // are written as plain language telling the user what to do — not debug codes.
 import { ulid } from 'ulid';
+import { app } from 'electron';
+import { join } from 'node:path';
+import { createHash } from 'node:crypto';
+import { bindOpenAIContinuationModel } from '../harness/openai-continuation';
+import { ChatGptRequestDiagnostics } from './chatgpt-request-diagnostics';
 import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
-import { openRouterCostExtractor } from '../harness/pricing';
+import { openRouterCostExtractor, localTimingsExtractor } from '../harness/pricing';
 import { withPrefillProgress, type PrefillProgress } from './prefill-progress';
 import { createAnthropic } from '@ai-sdk/anthropic';
 import { createOpenAI } from '@ai-sdk/openai';
@@ -20,6 +25,7 @@ import { SecretsStore } from './secrets-store';
 import type { ChatGptAuth } from './chatgpt-auth';
 import { CHATGPT_CODEX_BASE_URL, CHATGPT_SIGN_IN_REQUIRED_MESSAGE } from './chatgpt-oauth';
 import { chatGptMiddleware } from './chatgpt-model';
+import { promptCacheMiddleware, type PromptCacheProvider } from './prompt-cache';
 
 const FILE = 'providers.json';
 const BUILT_INS: ProviderConfig[] = [
@@ -60,6 +66,7 @@ const TEST_TIMEOUT_MS = 10_000;
 interface ProvidersFile { v: 1; providers: ProviderConfig[]; }
 
 export class ProviderRegistry {
+  private diagnostics?: ChatGptRequestDiagnostics;
   constructor(private home: NativeHome, private secrets: SecretsStore,
               /** Plan B injects the EngineManager hook; null keeps the Plan A
                *  "coming in a later update" behavior (also what unit tests
@@ -240,12 +247,22 @@ export class ProviderRegistry {
   /** THE factory (spec §2.2). Throws plain-language errors — they surface in the UI error banner.
    *  `opts.serialToolCalls` (spec §4.2) is honored ONLY on the local-engine branch —
    *  cloud providers handle parallel tool calls fine and ignore it.
-   *  `opts.cacheKey` (the harness session id) is honored ONLY on the chatgpt
-   *  branch, where it becomes the endpoint's prompt_cache_key. */
+   *  `opts.cacheKey` (the harness session id) is honored on three branches:
+   *  chatgpt (the endpoint's prompt_cache_key), anthropic (cache_control
+   *  markers) and openrouter (session_id pin + cache_control for Claude
+   *  models) — see prompt-cache.ts. A caller without one gets none of them. */
   async languageModel(
     binding: ModelBinding,
     opts?: { serialToolCalls?: boolean; onPrefillProgress?: (p: PrefillProgress) => void; cacheKey?: string },
   ): Promise<LanguageModel> {
+    // WHY wrap only with a cacheKey: the registry's structural tests reach the
+    // inner SDK model's `config` (metadataExtractor, transformRequestBody) on
+    // the unwrapped handle, and the one caller without a key — session naming —
+    // is exactly the one-shot request that must carry no cache marker.
+    const cached = (provider: PromptCacheProvider, model: Parameters<typeof wrapLanguageModel>[0]['model']): LanguageModel =>
+      opts?.cacheKey
+        ? wrapLanguageModel({ model, middleware: promptCacheMiddleware({ provider, modelId: binding.modelId, cacheKey: opts.cacheKey }) })
+        : model;
     const p = this.readAll().find((x) => x.id === binding.providerId);
     // Kill switch (§6): with chatgpt null the virtual row is not in readAll(),
     // so a session still bound to it would otherwise read "not configured" —
@@ -300,6 +317,11 @@ export class ProviderRegistry {
           // guess for output. That silently starved both the context chip and the
           // compaction trigger, which is fed the same number (Destin, 2026-07-28).
           includeUsage: true,
+          // llama.cpp's `timings.cache_n` (prompt tokens reused from the KV
+          // cache) rides the final frame; the SDK's usage never sees it. This
+          // is how a local step learns whether its prefix stayed still — see
+          // cache-usage.ts.
+          metadataExtractor: localTimingsExtractor,
           // Serial-only for small local models (spec §4.2): llama-server honors
           // parallel_tool_calls:false; --jinja already grammar-constrains the args.
           // NEVER a top-level json_schema — that would force JSON on every reply.
@@ -332,7 +354,7 @@ export class ProviderRegistry {
       case 'openrouter': {
         const apiKey = await this.keyFor(p);
         if (!apiKey) throw new Error('OpenRouter needs an API key — add one in Settings → Providers.');
-        return createOpenAICompatible({
+        return cached('openrouter', createOpenAICompatible({
           name: 'openrouter',
           baseURL: p.baseUrl ?? OPENROUTER_BASE_URL,
           apiKey,
@@ -363,7 +385,7 @@ export class ProviderRegistry {
           // not. If OpenRouter ever stops volunteering the field, the metadata
           // simply comes back absent — which is already the handled case.
           metadataExtractor: openRouterCostExtractor,
-        })(binding.modelId);
+        })(binding.modelId));
       }
       case 'openai-compatible': {
         if (!p.baseUrl) throw new Error(`${p.label} has no endpoint URL configured.`);
@@ -378,7 +400,7 @@ export class ProviderRegistry {
       case 'anthropic': {
         const apiKey = await this.keyFor(p);
         if (!apiKey) throw new Error(`${p.label} needs an API key — add one in Settings → Providers.`);
-        return createAnthropic({ apiKey })(binding.modelId);
+        return cached('anthropic', createAnthropic({ apiKey })(binding.modelId));
       }
       case 'openai': {
         const apiKey = await this.keyFor(p);
@@ -412,21 +434,62 @@ export class ProviderRegistry {
             originator: CHATGPT_ORIGINATOR,
             'OpenAI-Beta': 'responses=experimental',
           },
-          fetch: this.chatgpt.fetch(),
+          // Bind the SDK model to the account generation whose continuation
+          // passed the harness check; auth rechecks after async serialization.
+          fetch: this.chatgpt.fetch(acct),
         });
         // The middleware (chatgpt-model.ts) owns the request shape the endpoint
         // insists on: store:false, instructions, encrypted reasoning, the cache
         // key, and streaming for the one caller that would not.
-        return wrapLanguageModel({
+        // WHY: profile-private diagnostics must never enter synced NativeHome.
+        // Even profile-path lookup failure must not prevent model construction.
+        try {
+          this.diagnostics ??= new ChatGptRequestDiagnostics({
+            directory: join(app.getPath('userData'), 'private-diagnostics', 'chatgpt-cache'),
+          });
+        } catch { /* diagnostics are optional; never log a sensitive exception */ }
+        const model = wrapLanguageModel({
           model: provider.responses(binding.modelId),
-          middleware: chatGptMiddleware(opts?.cacheKey),
+          middleware: chatGptMiddleware(opts?.cacheKey, this.diagnostics),
         });
+        // WHY: continuationIdentity() is the ONE place this string is built
+        // (cache-stage4-architecture.md "Identity strings") — read live state
+        // on every dispatch/acceptance, not only once when this turn's model
+        // was constructed, so a same-account reauth or an account switch is
+        // never missed. The future restore path calls the same method, so
+        // the two can never disagree.
+        const continuationOwner = () => this.continuationIdentity(binding);
+        return bindOpenAIContinuationModel(model, continuationOwner);
       }
       default:
         // Unreachable with the current ProviderType union, but a corrupt
         // providers.json could hold anything — fail with a real message.
         throw new Error(`${p.label} has an unknown type and cannot be used.`);
     }
+  }
+
+  /**
+   * THE one durable identity string for OpenAI continuation state (cache
+   * stage 4, Task 1). Non-ChatGPT bindings need no account context: provider
+   * + model IS the identity. ChatGPT additionally needs to know WHICH signed
+   * -in account and credential era produced the ciphertext, so a restored
+   * manifest is never applied against a different account's tokens — but the
+   * raw account id must never leave this process (it would be a stable,
+   * unhashed identifier sitting in a private-but-not-secret file), so only
+   * its hash travels. `credentialEpoch` (durable, minted per sign-in) — NOT
+   * `authGeneration` (in-memory, restarts at 0 every process) — is what
+   * still changes this string on a same-account reauth; see
+   * `ChatGptAuth.signedInAccount()`.
+   */
+  continuationIdentity(binding: ModelBinding): string {
+    if (!VIRTUAL_IDS.has(binding.providerId)) return `${binding.providerId}\0${binding.modelId}`;
+    if (!this.chatgpt) throw new Error(CHATGPT_TURNED_OFF_MESSAGE);
+    // Throws the sign-in-required sentence when signed out, or OpenAI's own
+    // refusal when blocked — both are real states the caller (a dispatch, or
+    // a restore) must see, not swallow.
+    const live = this.chatgpt.signedInAccount();
+    const accountFingerprint = createHash('sha256').update(live.accountId).digest('hex');
+    return `${binding.providerId}\0${binding.modelId}\0${accountFingerprint}\0${live.credentialEpoch}`;
   }
 
   /**

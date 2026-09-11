@@ -61,7 +61,7 @@ function renderBar(usage: any, extra: Record<string, unknown> = {}) {
   return rtlRender(<StatusBar statusData={statusData} provider="claude" sessionId="s1" {...extra} />, { wrapper: makeStoreWrapper(['s1']).wrapper });
 }
 const chipsOf = (container: HTMLElement) =>
-  Array.from(container.querySelectorAll('button[title="View usage on claude.ai"], button[title="Your ChatGPT plan — click to open Model Providers"]'));
+  Array.from(container.querySelectorAll('button[data-hint="View usage on claude.ai"], button[data-hint="Your ChatGPT plan — click to open Model Providers"]'));
 
 const snapshotBase: UsageSnapshot = {
   entryId: 'u1', timestamp: 1, costUsd: null, costIsPartial: false, countsFromSessionTotals: false, specialistRuns: 0,
@@ -81,8 +81,8 @@ describe('the approved 5h/7d output is byte-identical (captured before W-2 lande
   it('StatusBar — the two chips', () => {
     const { container } = renderBar(plus);
     expect(chipsOf(container).map((b) => b.outerHTML)).toEqual([
-      '<button class="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors" title="View usage on claude.ai"><span>5h:</span><span class="text-[#4CAF50]">42%</span><span class="text-fg-muted hidden sm:inline">Resets @ 5:09pm</span></button>',
-      '<button class="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors" title="View usage on claude.ai"><span>7d:</span><span class="text-[#4CAF50]">17%</span><span class="text-fg-muted hidden sm:inline">Resets Wednesday @ 4:00pm</span></button>',
+      '<button class="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors" data-hint="View usage on claude.ai"><span>5h:</span><span class="text-[#4CAF50]">42%</span><span class="text-fg-muted hidden sm:inline">Resets @ 5:09pm</span></button>',
+      '<button class="flex items-center gap-1 sm:gap-1.5 px-1.5 py-0.5 rounded-sm bg-panel border border-edge-dim cursor-pointer hover:bg-inset transition-colors" data-hint="View usage on claude.ai"><span>7d:</span><span class="text-[#4CAF50]">17%</span><span class="text-fg-muted hidden sm:inline">Resets Wednesday @ 4:00pm</span></button>',
     ]);
   });
 

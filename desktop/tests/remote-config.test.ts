@@ -46,7 +46,6 @@ describe('RemoteConfig', () => {
     expect(config.enabled).toBe(false);
     expect(config.port).toBe(9900);
     expect(config.passwordHash).toBeNull();
-    expect(config.trustTailscale).toBe(false);
   });
 
   it('loads config from disk', async () => {
@@ -63,7 +62,9 @@ describe('RemoteConfig', () => {
     expect(config.enabled).toBe(false);
     expect(config.port).toBe(8080);
     expect(config.passwordHash).toBe('$2b$10$fakehash');
-    expect(config.trustTailscale).toBe(true);
+    // Contract R9: a saved trustTailscale is read past and granted nothing. An existing
+    // user who had switched it on is not silently left trusted after the upgrade.
+    expect((config as unknown as Record<string, unknown>).trustTailscale).toBeUndefined();
   });
 
   it('setPassword hashes and saves to disk', async () => {
@@ -106,18 +107,15 @@ describe('RemoteConfig', () => {
     expect(result).toBe(false);
   });
 
-  it('isTailscaleIp detects CGNAT range', async () => {
+  it('no longer offers a way to trust an address instead of a password', async () => {
+    // The removed check treated 100.64.0.0/10 as proof of Tailscale membership. That is the
+    // carrier-grade NAT range, not one Tailscale owns, and membership was never authorization.
     vi.mocked(fs.existsSync).mockReturnValue(false);
     const { RemoteConfig } = await import('../src/main/remote-config');
-    const config = new RemoteConfig();
+    const config = new RemoteConfig() as unknown as Record<string, unknown>;
 
-    expect(config.isTailscaleIp('100.64.1.1')).toBe(true);
-    expect(config.isTailscaleIp('100.127.255.255')).toBe(true);
-    expect(config.isTailscaleIp('100.128.0.0')).toBe(false);
-    expect(config.isTailscaleIp('192.168.1.1')).toBe(false);
-    // IPv6-mapped IPv4
-    expect(config.isTailscaleIp('::ffff:100.64.1.1')).toBe(true);
-    expect(config.isTailscaleIp('::ffff:192.168.1.1')).toBe(false);
+    expect(config.isTailscaleIp).toBeUndefined();
+    expect(config.trustTailscale).toBeUndefined();
   });
 
   describe('detectTailscale', () => {
@@ -139,6 +137,9 @@ describe('RemoteConfig', () => {
       expect(result).toEqual({
         installed: false,
         connected: false,
+        // The setup banner needs to know WHICH prerequisite is missing, so a missing
+        // binary is reported as its own state rather than one flat not-connected flag.
+        state: 'not-installed',
         ip: null,
         hostname: null,
         url: null,
@@ -164,6 +165,9 @@ describe('RemoteConfig', () => {
       expect(result.connected).toBe(false);
       expect(result.ip).toBeNull();
       expect(result.url).toBeNull();
+      // Tailscale said nothing we can act on, so neither do we. The setup banner reads
+      // this and offers a plain Connect rather than naming a cause it cannot know.
+      expect(result.state).toBe('unknown');
     });
 
     it('returns installed:true, connected:false when daemon reports BackendState !== Running', async () => {
@@ -181,6 +185,39 @@ describe('RemoteConfig', () => {
       expect(result.hostname).toBe('mybox');
       expect(result.ip).toBeNull();
       expect(result.url).toBeNull();
+      expect(result.state).toBe('stopped');
+    });
+
+    it('separates signed out from switched off, because the next step differs', async () => {
+      // One flat connected:false sent both users to "open the Tailscale app and turn it
+      // on" — useless advice for a machine that is running but has never been signed in.
+      vi.mocked(fs.accessSync).mockImplementation(() => {});
+      execFileMock.mockImplementation((_file: string, args: string[]) => {
+        if (args[0] === 'status') return JSON.stringify({ BackendState: 'NeedsLogin', Self: { HostName: 'mybox' } });
+        return '';
+      });
+
+      const { RemoteConfig } = await import('../src/main/remote-config');
+      const result = await RemoteConfig.detectTailscale(9900);
+
+      expect(result.installed).toBe(true);
+      expect(result.connected).toBe(false);
+      expect(result.state).toBe('signed-out');
+    });
+
+    it('calls a starting daemon unknown rather than switched off', async () => {
+      // Starting is transitional. Telling the user to switch on something that is already
+      // switching on sends them to fix a problem that is fixing itself.
+      vi.mocked(fs.accessSync).mockImplementation(() => {});
+      execFileMock.mockImplementation((_file: string, args: string[]) => {
+        if (args[0] === 'status') return JSON.stringify({ BackendState: 'Starting', Self: { HostName: 'mybox' } });
+        return '';
+      });
+
+      const { RemoteConfig } = await import('../src/main/remote-config');
+      const result = await RemoteConfig.detectTailscale(9900);
+
+      expect(result.state).toBe('unknown');
     });
 
     it('returns installed:true, connected:true with IP from status JSON when running', async () => {

@@ -18,9 +18,16 @@
 // behaviour, and the guard in tests/ipc-error.test.ts breaks if either wrapper
 // stops being stripped.
 import { remoteUnsupportedMessage } from '../remote-unsupported';
+import { isAndroid, isRemoteMode } from '../platform';
 
 const ELECTRON_WRAPPER = /^Error invoking remote method '[^']*':\s*(Error:\s*)?/;
 const REMOTE_UNSUPPORTED = /^remote-unsupported:\s*(\S+)$/;
+
+/** The phone on its own bridge, not paired to a desktop. `window` is checked
+ *  first because this helper is pure and its test runs without a DOM. */
+function onPhone(): boolean {
+  return typeof window !== 'undefined' && isAndroid() && !isRemoteMode();
+}
 
 /** The user-facing sentence inside a rejected `window.claude.*` call.
  *  `fallback` is used when the failure carries no message of its own — never
@@ -33,6 +40,8 @@ export function plainMessage(e: unknown, fallback = 'Something went wrong.'): st
   const text = (typeof raw === 'string' ? raw : typeof e === 'string' ? e : '').trim();
   if (!text) return fallback;
   const unsupported = REMOTE_UNSUPPORTED.exec(text);
-  if (unsupported) return remoteUnsupportedMessage(unsupported[1]);
+  // A phone on its own bridge (not paired to a desktop) is the 'phone' host;
+  // the same wrapper reaches here from either transport.
+  if (unsupported) return remoteUnsupportedMessage(unsupported[1], onPhone() ? 'phone' : 'remote');
   return text.replace(ELECTRON_WRAPPER, '') || fallback;
 }

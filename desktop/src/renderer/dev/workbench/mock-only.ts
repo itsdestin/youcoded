@@ -74,18 +74,27 @@
 // rule, same reason as the rows above: the fake in mock-shim.ts stays so the
 // workbench can still pin signed-out / waiting / signed-in / blocked without a
 // browser round-trip — only the "no real backend" claim goes.
+// `native.onSessionContext` came off on 2026-09-10 when the real backend landed:
+// NativeSessionHost.buildSessionContext, emitted from wire(), forwarded by
+// ipc-handlers as `native:session-context`, with `native:session-context-text`
+// answering the panel's on-demand read of one file. Same lifecycle as every row
+// above — the panel was designed and reviewed against a fake, the fake told us
+// what to build, and the fakes in mock-shim.ts STAY so the workbench can still
+// show the trimmed and everything-fit states without a local model. Only the
+// "no real backend" claim goes.
 //
-// The two contribution-workspace rows (`dev.setupWorkspace`, `dev.setupStatus`) were
-// listed here on 2026-09-10 while the Contribute screen was designed ahead of its
-// backend, and came off the same day when it landed: dev-tools.ts's
-// setupManagedWorkspace/workspaceSetupStatus, the two handlers in ipc-handlers.ts, and
-// the constants in shared/types.ts + preload.ts. Exactly the lifecycle this registry is
-// for — the UI was built against a fake, and the fake said what to build. The fakes in
-// mock-shim.ts STAY: the workbench has no git, no network and no ~/YouCoded, so it still
-// needs a setup that "runs" for 2.5s and a status it can answer. Only the "no real
-// backend" claim goes.
+// The two contribution-workspace rows (`dev.setupWorkspace`, `dev.setupStatus`) were listed
+// here on 2026-09-10 while the Contribute screen was designed ahead of its backend, and came
+// off the same day when it landed. Exactly the lifecycle this registry is for — the UI was
+// built against a fake, and the fake said what to build. Their fakes in mock-shim.ts STAY:
+// the workbench has no git, no network and no ~/YouCoded. Only the "no real backend" claim
+// goes. They are deliberately desktop-only, which ipc-channels.test.ts's DESKTOP_ONLY set
+// enforces rather than leaving implicit.
 //
-// They are deliberately desktop-only, unlike the older dev:* channels — cloning a
-// workspace needs git and a shell on the machine the app runs on. That decision is
-// enforced by ipc-channels.test.ts's DESKTOP_ONLY set rather than left implicit.
-export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [];
+// Add a row the moment you design a channel ahead of its backend; delete the row, never the
+// guard, when it ships. An empty list is the healthy state.
+export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
+  // Browser encryption is an approved design with no backend: the Advanced section and its
+  // screen render only under the workbench preview. Delete this row when it ships.
+  { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+];

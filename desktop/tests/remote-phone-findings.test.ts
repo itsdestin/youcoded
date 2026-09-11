@@ -1,0 +1,144 @@
+import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { hasFeatureName, remoteUnsupportedMessage } from '../src/renderer/remote-unsupported';
+
+import { readStripped, assertPatternMatches } from './helpers/guard-scope';
+
+// Comments stripped: a WHY note that QUOTES the old code will otherwise satisfy an
+// assertion about the new code. See .claude/rules/test-suite-hygiene.md.
+const read = (rel: string) => readStripped(new URL(rel, import.meta.url).pathname);
+const server = read('../src/main/remote-server.ts');
+const shim = read('../src/renderer/remote-shim.ts');
+const classifier = read('../src/renderer/hooks/useAttentionClassifier.ts');
+const themeCtx = read('../src/renderer/state/theme-context.tsx');
+const index = read('../src/renderer/index.tsx');
+
+/**
+ * Three things Destin hit the first time a phone actually connected to a computer through
+ * this app (2026-09-10). Everything before that point was tests and screenshots.
+ */
+describe('a phone is never shown a channel id', () => {
+  it('says nothing at all rather than reading an unnamed channel out loud', () => {
+    // What he saw: "terminal:get-screen-text isn't available via remote access yet."
+    // flashed and vanished. It named an internal channel, to someone who does not write
+    // code, about a poll he never asked for.
+    expect(hasFeatureName('definitely:not-a-real-namespace')).toBe(false);
+    expect(shim).toContain('if (!hasFeatureName(channel)) {');
+    // ...and the developer still finds out, in the console rather than on his screen.
+    expect(shim).toMatch(/console\.warn\(`\[remote-shim\] not available over remote access \(unnamed\)/);
+  });
+
+  it('names the terminal, for anything that still reaches this path', () => {
+    expect(hasFeatureName('terminal:get-screen-text')).toBe(true);
+    expect(remoteUnsupportedMessage('terminal:get-screen-text'))
+      .toBe("The terminal isn't available via remote access yet.");
+  });
+
+  it('does not poll the host for terminal text from a browser at all', () => {
+    // The root cause, and a documented invariant: `.claude/rules/react-renderer.md` says a
+    // remote browser takes attention from status:data's attentionMap and must not run its
+    // own classifier. It was running, once a second, for the life of every connection.
+    expect(classifier).toContain("import { isRemoteMode } from '../platform';");
+    // assertPatternMatches proves the regex can match SOMETHING before it is trusted to
+    // prove the source does — a pattern matching nothing passes a `not`, and reads green.
+    const shape = /const hasBuffer = \(provider === undefined \|\| provider === 'claude'\) && !isRemoteMode\(\);/;
+    assertPatternMatches(shape, "const hasBuffer = (provider === undefined || provider === 'claude') && !isRemoteMode();", 'classifier remote gate');
+    expect(classifier).toMatch(shape);
+  });
+});
+
+describe('connecting a phone does not open with a list of what is broken', () => {
+  it('the app\u2019s own boot fetches are recorded, not announced', () => {
+    // Ten of these fired the moment a phone connected: skills, commands, themes, the
+    // marketplace, project files, presence — every one a fetch the app makes on mount,
+    // none of them asked for, none actionable. The person had not looked at anything yet.
+    expect(shim).toContain('const BOOT_QUIET_MS = 4000;');
+    expect(shim).toContain('if (connectedAt === 0 || Date.now() - connectedAt < BOOT_QUIET_MS) return;');
+    // Measured from a real connection, not from page load: a slow first hop would
+    // otherwise spend the quiet window waiting to connect.
+    expect(shim).toMatch(/setConnectionState\('connected'\);\s*\n\s*markConnectedForNotices\(\);/);
+  });
+
+  it('several at once become one sentence, not a flicker of half-read ones', () => {
+    const notice = read('../src/renderer/components/RemoteUnsupportedNotice.tsx');
+    expect(notice).toContain('if (prev && prev.feature !== detail.feature)');
+    expect(notice).toContain('setAlso(list =>');
+  });
+});
+
+describe('a phone browser knows it is remote', () => {
+  it('declares remote mode on auth, not only on the Android pairing path', () => {
+    // The flag that names this whole situation was set in exactly one place: connectToHost,
+    // which is how an ANDROID app pairs to a desktop. A plain phone browser opening the
+    // host's address goes through connect(), so isRemoteMode() was false there — on the one
+    // surface the flag exists for. Everything keyed on it was inert: the terminal poll, the
+    // wallpaper, the disabled Unpair button.
+    expect(shim).toContain('if (!isAndroidLocal()) {');
+    expect(shim).toMatch(/markConnectedForNotices\(\);[\s\S]{0,1400}setConnectionMode\('remote'\)/);
+  });
+
+  it('leaves an Android WebView on its own device local', () => {
+    // file:// with no target is a WebView talking to a runtime on the same phone. It has a
+    // real terminal buffer and real theme files, so it is not remote and must not be told
+    // it is. The platform string cannot make this call: the host labels everyone 'desktop'.
+    expect(shim).toContain("return location.protocol === 'file:' && !targetUrl;");
+  });
+});
+
+describe('a computer with no password says so before asking for one', () => {
+  it('the host answers what it needs, without authentication and without saying more', () => {
+    expect(server).toContain("=== '/remote-state'");
+    expect(server).toContain('needsSetup: !this.config.passwordHash');
+    // Exactly one fact. Not the device list, not the session count, not the port's history.
+    const arm = server.slice(server.indexOf("=== '/remote-state'"));
+    expect(arm.slice(0, 400)).not.toMatch(/deviceStore|getDeviceList|sessions/);
+  });
+
+  it('the sign-in screen asks first, and offers no box when there is nothing to type', () => {
+    expect(index).toContain("fetch('/remote-state'");
+    expect(index).toContain('if (needsSetup) {');
+    expect(index).toContain('This computer has no remote access password yet.');
+    // An older host has no such endpoint; the screen must keep working as it did.
+    expect(index).toMatch(/\.catch\(\(\) => \{\}\)/);
+  });
+});
+
+describe('a load that failed is not a list that is empty', () => {
+  const resume = read('../src/renderer/components/ResumeBrowser.tsx');
+
+  it('never reports someone\u2019s own history as absent because a request failed', () => {
+    // "oh wait it worked the second try for resume. idk why nothing appeared the first
+    // time." — Destin, 2026-09-10, over remote access. The first attempt failed and the
+    // screen said "No previous sessions found", which is a confident claim about his own
+    // history. He had 946 conversations at that moment; the host function was fine.
+    expect(resume).not.toContain('.catch(() => setSessions([]))');
+    expect(resume).toContain('setLoadError(err?.message ? String(err.message) : \'\');');
+    // A failure is a failure on screen, and it offers the one thing that fixes a
+    // transient one: asking again.
+    expect(resume).toMatch(/loadError !== null \?/);
+    expect(resume).toMatch(/ErrorState[\s\S]{0,200}onRetry=\{loadSessions\}/);
+  });
+
+  it('says the reason when there is one and does not invent one when there is not', () => {
+    expect(resume).toMatch(/Couldn.{1,8}t load your conversations: \$\{loadError\}/);
+    expect(resume).toMatch(/message="Couldn.{1,8}t load your conversations\."/);
+  });
+});
+
+describe('a phone paired to this computer looks like this computer', () => {
+  it('the host will hand over a theme definition, read-only and path-guarded', () => {
+    // The phone already learned WHICH theme (appearance:get was bridged); it could not
+    // find out what the name meant, so a community theme fell back to a built-in.
+    expect(server).toContain("case 'theme:read-file': {");
+    expect(server).toContain("if (!/^[a-z0-9_]+(?:-[a-z0-9_]+)*$/.test(slug))");
+    expect(server).toContain("if (!manifestPath.startsWith(THEMES_DIR + path.sep))");
+    // Reading only. Writing a theme stays desktop-only like every other host change.
+    expect(server).not.toContain("case 'theme:write-file'");
+  });
+
+  it('takes the colours and leaves the wallpaper behind', () => {
+    // A theme's background files live on the computer that owns them, so their paths mean
+    // nothing in a phone browser. Dropping `background` also zeroes the glass knobs.
+    expect(themeCtx).toMatch(/isRemoteMode\(\) \? \{ \.\.\.activeTheme, background: undefined \}/);
+  });
+});

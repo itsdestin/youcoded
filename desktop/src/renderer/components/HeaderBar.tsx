@@ -12,6 +12,7 @@ import NarrowViewToggle from './NarrowViewToggle';
 import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
+import { Tooltip } from './ui';
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
 
@@ -52,15 +53,23 @@ function CaptionButtons() {
 
   return (
     <div className="flex bg-inset rounded-md p-0.5 gap-0.5">
-      <button className={btnClass} onClick={() => claude.window.minimize()} title="Minimize">
-        <svg className="w-3.5 h-3.5" viewBox="0 0 10 10"><rect fill="currentColor" y="5" width="10" height="1" /></svg>
-      </button>
-      <button className={btnClass} onClick={() => claude.window.maximize()} title="Maximize">
-        <svg className="w-3.5 h-3.5" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="1" width="8" height="8" /></svg>
-      </button>
-      <button className={`${btnClass} hover:!bg-red-500 hover:!text-white`} onClick={() => claude.window.close()} title="Close">
-        <svg className="w-3.5 h-3.5" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.4"><line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" /></svg>
-      </button>
+      {/* Placement "bottom": these sit in the very top row of the window, where
+          there is no room above them for a hint. */}
+      <Tooltip text="Minimize" placement="bottom">
+        <button className={btnClass} onClick={() => claude.window.minimize()}>
+          <svg className="w-3.5 h-3.5" viewBox="0 0 10 10"><rect fill="currentColor" y="5" width="10" height="1" /></svg>
+        </button>
+      </Tooltip>
+      <Tooltip text="Maximize" placement="bottom">
+        <button className={btnClass} onClick={() => claude.window.maximize()}>
+          <svg className="w-3.5 h-3.5" viewBox="0 0 10 10" fill="none" stroke="currentColor" strokeWidth="1.2"><rect x="1" y="1" width="8" height="8" /></svg>
+        </button>
+      </Tooltip>
+      <Tooltip text="Close" placement="bottom">
+        <button className={`${btnClass} hover:!bg-red-500 hover:!text-white`} onClick={() => claude.window.close()}>
+          <svg className="w-3.5 h-3.5" viewBox="0 0 10 10" stroke="currentColor" strokeWidth="1.4"><line x1="1" y1="1" x2="9" y2="9" /><line x1="9" y1="1" x2="1" y2="9" /></svg>
+        </button>
+      </Tooltip>
     </div>
   );
 }
@@ -237,11 +246,11 @@ interface Props {
 function ProjectsButton() {
   const { dispatch } = useArtifact();
   return (
+    <Tooltip text="Projects" placement="bottom">
     <button
       type="button"
       className="relative p-1 rounded-sm hover:bg-inset transition-colors shrink-0 text-fg-muted hover:text-fg"
       onClick={() => dispatch({ type: 'PROJECT_VIEW_OPENED' })}
-      title="Projects"
       aria-label="Open Projects"
     >
       {/* Folder icon — matches the document icon style used by ArtifactDrawerButton */}
@@ -250,6 +259,7 @@ function ProjectsButton() {
           d="M3 7a2 2 0 012-2h4l2 2h8a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V7z" />
       </svg>
     </button>
+    </Tooltip>
   );
 }
 
@@ -273,6 +283,11 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
   // is open, text-fg-dim/hover:text-fg-2 otherwise.
   return (
     <div className="bg-inset rounded-md p-0.5">
+      {/* "Session Files" (Destin, 2026-07-23; was "Session artifacts" from
+          2026-07-20). The "Session" qualifier carries the distinction: this is
+          ONE session's activity log (including files merely VIEWED via pills),
+          as distinct from Project View's project-wide set. */}
+      <Tooltip text="Session Files" placement="bottom">
       <button
         type="button"
         onClick={() => {
@@ -285,11 +300,12 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
         className={`px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center gap-1 ${
           drawerOpen ? 'bg-accent text-on-accent' : 'text-fg-dim hover:text-fg-2'
         }`}
-        // "Session Files" (Destin, 2026-07-23; was "Session artifacts" from
-        // 2026-07-20). The "Session" qualifier carries the distinction: this is
-        // ONE session's activity log (including files merely VIEWED via pills),
-        // as distinct from Project View's project-wide set.
-        title="Session Files"
+        // WHY an explicit name now that `title` is gone: the only text inside
+        // this button is the count badge, so the accessible name was the bare
+        // number "3" whenever any file was tracked, and fell back to `title`
+        // only at zero. Naming it here makes it announce the same thing in both
+        // states, and lets the hint be a description rather than the name.
+        aria-label="Session Files"
       >
         {/* Document icon — SVG matches the style of the settings gear above */}
         <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -307,6 +323,7 @@ function ArtifactDrawerButton({ activeSessionId, projectRoot }: { activeSessionI
           </span>
         )}
       </button>
+      </Tooltip>
     </div>
   );
 }
@@ -323,10 +340,10 @@ function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBadge, set
   settingsDangerBadge?: boolean;
 }) {
   return (
+    <Tooltip text="Settings" placement="bottom">
     <button
       onClick={onToggleSettings}
       className={`relative ${isAndroid() ? 'p-2' : 'p-1'} rounded-sm hover:bg-inset transition-colors shrink-0 ${settingsOpen ? 'text-fg' : 'text-fg-muted'}`}
-      title="Settings"
     >
       <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
         <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -340,6 +357,7 @@ function SettingsGearButton({ settingsOpen, onToggleSettings, settingsBadge, set
         <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-blue-500" />
       ) : null}
     </button>
+    </Tooltip>
   );
 }
 
@@ -479,7 +497,10 @@ export default function HeaderBar({
     );
 
   return (
-    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+    // select-none: the header is chrome, not highlightable or copyable (Destin,
+    // 2026-09-10). A session rename box inside stays editable: globals.css
+    // re-enables text fields.
+    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       {/* Mac-only decorative pill under the native traffic lights. Mirrors the
           bg-inset rounded-md look of <CaptionButtons> on Windows/Linux. */}
       <MacTrafficLights headerRef={headerRef} />
@@ -573,6 +594,10 @@ export default function HeaderBar({
           />
         )}
         <div className="bg-inset rounded-md p-0.5 hidden sm:block">
+          {/* §4.1: the pane holds four games now, so the button names the pane,
+              not the game. "Games" also matches the accessibility rule that a
+              control's name says where it goes. */}
+          <Tooltip text={challengePending ? 'Incoming challenge!' : 'Games'} placement="bottom">
           <button
             onClick={onToggleGamePanel}
             className={`px-2 py-1 rounded-[var(--radius-toggle)] transition-colors flex items-center gap-1 ${
@@ -590,16 +615,13 @@ export default function HeaderBar({
             style={challengePending && !gamePanelOpen ? {
               animation: 'challenge-pulse 2.5s steps(8) infinite',
             } : undefined}
-            // §4.1: the pane holds four games now, so the button names the
-            // pane, not the game. "Games" also matches the accessibility rule
-            // that a control's name says where it goes.
-            title={challengePending ? 'Incoming challenge!' : 'Games'}
           >
             <GamepadIcon className="w-4 h-4" />
           {gameConnected && (
             <span className={`w-1.5 h-1.5 rounded-full ${challengePending && !gamePanelOpen ? 'bg-orange-400' : 'bg-green-400'}`} />
           )}
           </button>
+          </Tooltip>
         </div>
 
         {/* Custom caption buttons (Windows/Linux only) */}
@@ -639,7 +661,10 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
   // MacTrafficLights measures the .header-bar element it sits in.
   const headerRef = useRef<HTMLDivElement>(null);
   return (
-    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
+    // select-none: the header is chrome, not highlightable or copyable (Destin,
+    // 2026-09-10). A session rename box inside stays editable: globals.css
+    // re-enables text fields.
+    <div ref={headerRef} className="header-bar flex items-center h-10 px-2 sm:px-3 shrink-0 select-none" style={{ WebkitAppRegion: 'drag' } as React.CSSProperties}>
       <MacTrafficLights headerRef={headerRef} />
       <div className="flex items-center gap-1 sm:gap-2">
         <SettingsGearButton

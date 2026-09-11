@@ -1,4 +1,4 @@
-import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent } from '../../shared/types';
+import { ChatMessage, ToolCallState, ToolGroupState, type AttentionState, type SpecialistRunView, type ShellRunView, type PageCursor, type TranscriptEvent, type SessionContext, type SessionContextSkill, type SessionContextText } from '../../shared/types';
 import { emptyTotals, type SessionTotals } from './session-totals';
 // Re-export so test files and future consumers can import these types from
 // chat-types directly, without reaching into the shared/types boundary.
@@ -162,6 +162,26 @@ export interface UsageSnapshot {
   specialistRuns?: number;
 }
 
+// Step 3 (2026-08-17, broadened "context transparency"): what the native harness
+// began the session with — a full accounting of the assistant's starting
+// context, truncated or not. The session-start panel renders this at the top of
+// every session (local or cloud), so the user can see the system prompt,
+// project instructions (as truncated), skills, and tools the assistant was
+// given — with outlinks to the real files.
+//
+// Every "was there a truncation" question is answered by a sub-field: an
+// all-null record is a session that started with everything fully loaded.
+//
+// This REPLACES the truncation-only record (2026-08-17 v1): the banner could
+// only say "something was cut". The panel can account for everything, and
+// truncation falls out naturally as the difference between the raw file and the
+// truncated copy shown.
+// MOVED to shared/types.ts on 2026-09-10, when main started building it: the
+// harness is the only thing that knows what a session was given, and a renderer
+// type main has to import is the wrong way round. Re-exported here so the
+// components that already import it from chat-types keep working.
+export type { SessionContext, SessionContextSkill, SessionContextText };
+
 // Thin divider entry — shown when a slash command produced a side-effect
 // worth marking in the conversation history (e.g. /clear, /compact).
 // Permanent so the user can scroll back and see that "these messages end here."
@@ -169,7 +189,7 @@ export interface SystemMarker {
   id: string;
   timestamp: number;
   label: string;                                // e.g. "Conversation cleared"
-  variant?: 'clear' | 'compact' | 'info'; // For styling hooks
+  variant?: 'clear' | 'compact' | 'info' | 'model'; // For styling hooks
   // Optional long-form text the marker can reveal on click. Currently only
   // set on compact markers — the actual conversation summary CC produced.
   summary?: string;
@@ -367,6 +387,16 @@ export interface SessionChatState {
    *  as events arrive rather than walked on demand — see session-totals.ts for
    *  why, and for exactly what is counted. */
   totals: SessionTotals;
+  /**
+   * Step 3 (2026-08-17, broadened): the session's STARTING context — model,
+   * window, system prompt, project instructions (as truncated), skills, tools,
+   * dropped MCP servers. Null = the host hasn't reported it yet. Lives here
+   * (not a timeline entry) so it survives resume — the accounting is a fact
+   * about the session's prompt, which is rebuilt on resume. Set by the
+   * SESSION_CONTEXT action (native session start / resume). Drives the
+   * session-start context panel + the "Context was trimmed" banner.
+   */
+  sessionContext: SessionContext | null;
 }
 
 export function createSessionChatState(): SessionChatState {
@@ -397,6 +427,7 @@ export function createSessionChatState(): SessionChatState {
     queuedMessages: [],
     history: { cursor: null, hasMore: false, loading: false },
     totals: emptyTotals(),
+    sessionContext: null,
   };
 }
 
@@ -491,6 +522,16 @@ export type ChatAction =
       type: 'NATIVE_SESSION_ERROR';
       sessionId: string;
       message: string;
+    }
+  | {
+      // Step 3 (2026-08-17, broadened): the session's STARTING context, reported
+      // by the native harness on session start/resume. Sets
+      // SessionChatState.sessionContext — the session-start panel + the
+      // "Context was trimmed" banner both render from it. null = host hasn't
+      // reported yet (or reported a fully-loaded session).
+      type: 'SESSION_CONTEXT';
+      sessionId: string;
+      context: SessionContext | null;
     }
   | {
       // Plan 2b: another device took over this session's lease. The holder side
@@ -781,6 +822,17 @@ export type ChatAction =
       markerId: string;       // Stable id so the divider survives re-renders
       timestamp: number;
     }
+  // Typed `/model <alias>` in chat: replaces the raw "/model opus" bubble with
+  // a thin divider, same shape as /clear's. Dispatched only after the PTY send
+  // actually went through (slash-command-dispatcher.ts) — never optimistic
+  // about a switch that may have been refused.
+  | {
+      type: 'MODEL_SWITCH_MARKER';
+      sessionId: string;
+      markerId: string;
+      timestamp: number;
+      label: string;           // e.g. "Model switched to Opus"
+    }
   // Spinner card shown during /compact. Sets compactionPending flag + inserts
   // a 'compacting' timeline entry so users see *something* is happening.
   | {
@@ -867,6 +919,10 @@ export interface SerializedSessionChatState {
   // it comes back as empty totals, which read as "nothing counted yet" rather
   // than as a crash or a wrong number.
   totals?: SessionTotals;
+  // Step 3 (2026-08-17): survives resume — the accounting is a fact about the
+  // session's prompt, which IS rebuilt on resume. Optional so a pre-field
+  // snapshot from an older host still deserializes.
+  sessionContext?: SessionContext | null;
 }
 
 export interface SerializedChatState {
@@ -912,6 +968,7 @@ export function serializeChatState(state: ChatState): SerializedChatState {
         // inherited loading:true would never fetch again.
         history: { ...s.history, loading: false },
         totals: s.totals,
+        sessionContext: s.sessionContext,
       },
     ]);
   }
@@ -967,6 +1024,8 @@ export function deserializeChatState(s: SerializedChatState): ChatState {
       // Older hosts (and a pre-field snapshot) predate totals — default to
       // empty totals rather than undefined.
       totals: ser.totals ?? emptyTotals(),
+      // Older hosts predate sessionContext — default null (no panel/banner).
+      sessionContext: ser.sessionContext ?? null,
     });
   }
   return result;

@@ -409,6 +409,35 @@ html {
   background-color: var(--canvas);
 }
 
+/* App chrome is not highlightable or copyable (Destin, 2026-09-10): Ctrl+A or a
+   drag painted status bar chips, quick chips, tool card titles and the
+   composer's placeholder as selected text, and Copy carried them along.
+   Every <button> is chrome; chrome AREAS (header, status bar, quick chips,
+   composer, empty-chat hints) carry `select-none` in their own component.
+   Message words stay selectable, and `select-text` opts a button back in where
+   its label IS content (a clickable file name inside a message).
+   In @layer base, NOT unlayered: Tailwind v4 emits utilities inside
+   @layer utilities, and unlayered CSS beats every layer regardless of
+   specificity — unlayered, this rule would silently defeat that opt-in.
+   Text fields re-enable ONLY while focused. Measured in headless Chromium
+   2026-09-10: a field inside an unselectable area still drag-selects its own
+   text with no rule at all, but an always-on `user-select: text` made a
+   page-wide Ctrl+A paint the composer's EMPTY placeholder as selected, one of
+   the exact things this change exists to stop. The focused re-enable is for
+   engines that do not give fields that exemption (unverified here). */
+@layer base {
+  button {
+    -webkit-user-select: none;
+    user-select: none;
+  }
+  input:focus,
+  textarea:focus,
+  [contenteditable]:not([contenteditable="false"]):focus {
+    -webkit-user-select: text;
+    user-select: text;
+  }
+}
+
 /* Prevent iOS Safari auto-zoom on input focus (triggers at font-size < 16px) */
 @media screen and (max-width: 768px) {
   textarea, input[type="text"], input {
@@ -1116,6 +1145,44 @@ body[data-mode="buddy-chat"] #theme-bg {
 .scroll-fade[data-fade-top="true"]::before { opacity: 1; }
 .scroll-fade[data-fade-bottom="true"]::after { opacity: 1; }
 
+/* Sideways twin of .scroll-fade for a single row of chips (design guide §4.8:
+   a chip row that does not fit scrolls sideways behind an edge fade). Same hook
+   (useScrollFade sets data-fade-left / data-fade-right), same sticky-pseudo
+   trick turned 90°. First home: the Resume browser's filter chips, where at
+   390px the third chip was simply cut off with nothing saying the row moved. */
+.scroll-fade-x {
+  overflow-x: auto;
+  overflow-y: hidden;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+  position: relative;
+}
+.scroll-fade-x::-webkit-scrollbar { display: none; }
+.scroll-fade-x::before,
+.scroll-fade-x::after {
+  content: '';
+  display: block;
+  position: sticky;
+  align-self: stretch;
+  flex: 0 0 24px;
+  pointer-events: none;
+  z-index: 2;
+  opacity: 0;
+  transition: opacity 150ms ease-out;
+}
+.scroll-fade-x::before {
+  left: 0;
+  margin-right: -24px;
+  background: linear-gradient(to right, var(--panel) 0%, transparent 100%);
+}
+.scroll-fade-x::after {
+  right: 0;
+  margin-left: -24px;
+  background: linear-gradient(to left, var(--panel) 0%, transparent 100%);
+}
+.scroll-fade-x[data-fade-left="true"]::before { opacity: 1; }
+.scroll-fade-x[data-fade-right="true"]::after { opacity: 1; }
+
 /* Floating overlays (portaled menus/popups). Solid themes: opaque.
    Wallpaper themes: translucent + blur (injected by theme-engine). */
 .glass-overlay {
@@ -1409,6 +1476,24 @@ pre.yc-code code {
   color: inherit;
 }
 
+/* Let the browser skip layout and paint for code blocks that are scrolled out
+   of sight.
+   WHY: syntax highlighting wraps every keyword, string and comment in its own
+   <span>. Measured 2026-09-10 on the perf rig's 394 KB fixture: 7,056 elements
+   without highlighting, 108,576 with — and laying all of them out was the
+   single largest share of a 1,487 ms open. The DOM is left completely intact,
+   so find-in-page, the Copy button and filepath chips are unaffected; only the
+   work for blocks nobody is looking at is deferred.
+   `auto` in contain-intrinsic-size means "remember the real height once you
+   have measured it", which keeps the scrollbar honest after the first pass;
+   the 8rem is only the guess for a block never yet rendered.
+   Scoped to the block wrapper MarkdownContent puts around every <pre> — keep
+   .yc-code-block there or this stops matching. */
+.yc-code-block {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 8rem;
+}
+
 /* Command-drawer tiles opt OUT of glassmorphism.
    theme-engine.ts injects `[data-wallpaper] .layer-surface { backdrop-filter:
    blur(<panels-blur>px) ... }`, and change 22 moved every drawer tile (skill
@@ -1683,6 +1768,29 @@ pre.yc-code code {
 @keyframes row-fade-in {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: none; }
+}
+
+/* Hover hint entrance.
+   WHY it exists (Destin, live deck L-3, 2026-09-10): sweeping the pointer along
+   a row of chips made hints pop in and out instantly, because a neighbour opens
+   with no wait once the row is warm. He asked for "slightly more of a delay/fade
+   in when moving across buttons next to each other" — the short warm delay is in
+   Tooltip.tsx, and this is the fade half. No transform: the bubble is a
+   .layer-surface, which can carry a backdrop-filter, and animating transform on
+   one forces a compositing layer per hint. */
+@keyframes tooltip-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+.tooltip-in { animation: tooltip-in 110ms ease-out both; }
+
+/* Both gates, per the design guide: the app's own Reduce Visual Effects toggle
+   AND the OS preference. */
+[data-reduced-effects] .tooltip-in { animation: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  .tooltip-in { animation: none; }
 }
 
 @keyframes challenge-pulse {
@@ -2621,3 +2729,57 @@ html[data-platform="electron"][data-view-mode="terminal"] .chrome-glass {
 .voice-rec-dot { animation: voice-blink 1.2s steps(2) infinite; }
 [data-reduced-effects] .voice-rec-dot { animation: none; }
 @media (prefers-reduced-motion: reduce) { .voice-rec-dot { animation: none; } }
+
+/* Stop button — alive while the turn is working (questions deck
+   stop-button-alive-questions, 2026-09-10). `.stop-live` is only on the button while
+   useTurnIsWorking() is true, so stuck/parked turns and permission asks get a still
+   button with no extra CSS. C (slow glow) SHIPS — picked on the live deck (L-1). A and B
+   were not picked; like the mic's alternatives they stay only as the round-1 record in
+   the workbench compare view (surface `stop-button-alive`), reachable nowhere else.
+   Every one is stepped (deck S-2, tests/animation-frame-budget.test.ts): this runs for
+   the whole of every reply, which can be many minutes, and smooth looping motion was
+   measured at ~30% of a core on a 180 Hz panel. */
+/* A · Breathing ring: grows out of the button and fades. Box-shadow, no layout. */
+@keyframes stop-halo {
+  0%   { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 50%, transparent); }
+  100% { box-shadow: 0 0 0 9px color-mix(in srgb, var(--accent) 0%, transparent); }
+}
+.stop-live--halo { animation: stop-halo 1.6s steps(10) infinite; }
+/* B · Circling light: a comet-tailed arc 4px outside the button. The ring is a masked
+   conic gradient on ::before and only its transform animates, so the button itself
+   (and a theme pack's own glow on it) is untouched. */
+@keyframes stop-orbit { to { transform: rotate(360deg); } }
+.stop-live--orbit::before {
+  content: '';
+  position: absolute;
+  inset: -4px;
+  border-radius: 9999px;
+  background: conic-gradient(from 0deg, transparent 0 55%, var(--accent) 100%);
+  -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 calc(100% - 2px));
+  pointer-events: none;
+  animation: stop-orbit 1.2s steps(16) infinite;
+}
+/* C · Slow glow (SHIPPING): the button's own soft glow swells and settles; nothing leaves
+   it. Peak was 12px blur / 3px spread in round 1; Destin asked for the glow's reach "a bit
+   smaller" (L-1), so it peaks at 8px / 1px around the smaller 24px button. */
+@keyframes stop-glow {
+  0%, 100% { box-shadow: 0 0 2px 0 color-mix(in srgb, var(--accent) 35%, transparent); }
+  50%      { box-shadow: 0 0 8px 1px color-mix(in srgb, var(--accent) 55%, transparent); }
+}
+.stop-live--glow { animation: stop-glow 2.2s steps(12) infinite; }
+/* Reduced Effects and the OS preference (deck S-1): no motion, one still ring, so the
+   button still reads as "working" — the mic's rule. The orbit's arc is hidden rather
+   than frozen: a stopped spinner reads as "hung". Keep the two bodies identical. */
+[data-reduced-effects] .stop-live {
+  animation: none;
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+}
+[data-reduced-effects] .stop-live::before { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .stop-live {
+    animation: none;
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 35%, transparent);
+  }
+  .stop-live::before { display: none; }
+}

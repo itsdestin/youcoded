@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useState, useEffect, useCallback, useMemo, useRef } from 'react';
 // @ts-ignore — Vite inline CSS import
 import hljsDarkCss from 'highlight.js/styles/github-dark.css?inline';
 // @ts-ignore — Vite inline CSS import
@@ -6,6 +6,7 @@ import hljsLightCss from 'highlight.js/styles/github.css?inline';
 
 import { validateTheme } from '../themes/theme-validator';
 import { applyThemeToDom, applyThemeFont, buildBackgroundStyle, buildPatternStyle } from '../themes/theme-engine';
+import { isRemoteMode } from '../platform';
 import type { ThemeDefinition, LoadedTheme } from '../themes/theme-types';
 import { resolveAllAssetPaths } from '../themes/theme-asset-resolver';
 import { buildDefaultIconSvg, rasterizeSvgToPngDataUrl } from '../themes/theme-default-icon';
@@ -276,6 +277,38 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   const allThemes = useMemo(() => allThemesInternal.filter(t => t.slug !== PREVIEW_SLUG), [allThemesInternal]);
   const activeThemeRaw = useMemo(() => allThemesInternal.find(t => t.slug === activeSlug) ?? BUILTIN_THEMES[0], [allThemesInternal, activeSlug]);
 
+  const selectionGeneration = useRef(0);
+  const themesRef = useRef(allThemesInternal);
+  themesRef.current = allThemesInternal;
+
+  // WHY: appearance sync can beat the install notification in another window.
+  // Never expose an unknown slug to the uninstall fallback: load it first,
+  // then publish the definition and selection together. A failed peer read is
+  // not authority to overwrite global appearance, nor is a late read a choice.
+  const applyIncomingTheme = useCallback(async (slug: string) => {
+    const generation = ++selectionGeneration.current;
+    try {
+      let loaded: LoadedTheme | undefined;
+      if (!themesRef.current.some(t => t.slug === slug)) {
+        const raw = await (window as any).claude?.theme?.readFile(slug);
+        const theme = validateTheme(JSON.parse(raw));
+        if (theme.slug !== slug) return;
+        const source = (theme as any).source === 'community' ? 'community' as const : 'user' as const;
+        loaded = resolveAllAssetPaths({ ...theme, source });
+      }
+      if (generation !== selectionGeneration.current) return;
+      if (loaded) {
+        const incoming = loaded;
+        setUserThemes(prev => [...prev.filter(t => t.slug !== slug), incoming]);
+      }
+      setActiveSlug(slug);
+      try { localStorage.setItem(STORAGE_KEY, slug); } catch {}
+    } catch {
+      // Keep the current theme on unavailable/invalid peer data; never persist a fallback.
+    }
+  }, []);
+  useEffect(() => () => { selectionGeneration.current++; }, []);
+
   // Merge glass overrides into the active theme for non-user themes.
   // User themes write glass values directly to the theme file. For solid
   // themes the sliders are disabled (see ThemeScreen.tsx) so overrides
@@ -340,6 +373,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Load appearance preferences from disk (source of truth) on mount
   useEffect(() => {
+    const generation = selectionGeneration.current;
     const loadAppearance = async () => {
       try {
         const claude = (window as any).claude;
@@ -347,10 +381,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
         const prefs = await claude.appearance.get();
         if (!prefs) return; // First launch — no file yet, keep localStorage/defaults
 
-        if (prefs.theme && typeof prefs.theme === 'string') {
-          setActiveSlug(prefs.theme);
-          try { localStorage.setItem(STORAGE_KEY, prefs.theme); } catch {}
-          document.documentElement.setAttribute('data-theme', prefs.theme);
+        if (prefs.theme && typeof prefs.theme === 'string' && generation === selectionGeneration.current) {
+          void applyIncomingTheme(prefs.theme);
         }
         if (Array.isArray(prefs.themeCycle) && prefs.themeCycle.length > 0) {
           setCycleListState(prefs.themeCycle);
@@ -385,7 +417,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       } catch {}
     };
     loadAppearance();
-  }, []);
+  }, [applyIncomingTheme]);
 
   // Listen for cross-window appearance broadcasts from peer windows. The
   // source window already persisted to disk, so we only update in-memory
@@ -396,8 +428,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
     const unsub = onSync((prefs: any) => {
       if (!prefs || typeof prefs !== 'object') return;
       if (typeof prefs.theme === 'string' && prefs.theme) {
-        setActiveSlug(prefs.theme);
-        try { localStorage.setItem(STORAGE_KEY, prefs.theme); } catch {}
+        void applyIncomingTheme(prefs.theme);
       }
       if (Array.isArray(prefs.themeCycle) && prefs.themeCycle.length > 0) {
         setCycleListState(prefs.themeCycle);
@@ -430,7 +461,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
       }
     });
     return () => { try { unsub?.(); } catch {} };
-  }, []);
+  }, [applyIncomingTheme]);
 
   // Track the slug the user had before preview auto-switch
   const [prePreviewSlug, setPrePreviewSlug] = useState<string | null>(null);
@@ -515,7 +546,17 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   // Apply theme to DOM whenever active theme or reduced-effects changes
   useEffect(() => {
-    applyThemeToDom(activeTheme, reducedEffects);
+    // WHY a remote client gets the COLOURS and not the background: a theme's wallpaper and
+    // pattern are files on the computer that owns the theme, so their paths mean nothing in
+    // a phone browser — it would ask its own origin for them and get nothing. Dropping
+    // `background` also turns the glass knobs off (blur defaults to 0, opacity to 1), which
+    // is what Destin asked for: "not full backgrounds or glass effects yet, but basic
+    // theme/color tokens" (2026-09-10). Tokens and shape still apply, so a phone paired to
+    // this computer looks like this computer.
+    applyThemeToDom(
+      isRemoteMode() ? { ...activeTheme, background: undefined } : activeTheme,
+      reducedEffects,
+    );
     applyHighlightTheme(activeTheme.dark);
 
     // Hot-swap the Electron window + dock icon. Guarded via optional chaining —
@@ -559,6 +600,7 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, [activeTheme, reducedEffects]);
 
   const setTheme = useCallback((slug: string) => {
+    selectionGeneration.current++;
     setActiveSlug(slug);
     try { localStorage.setItem(STORAGE_KEY, slug); } catch {}
     if (slug !== PREVIEW_SLUG) persistAppearance({ theme: slug });
@@ -620,6 +662,8 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const cycleTheme = useCallback(() => {
+    // WHY: cycling (including leaving preview) is a newer choice than an in-flight peer read.
+    selectionGeneration.current++;
     setActiveSlug(prev => {
       // If currently previewing, exit preview and cycle from the pre-preview theme
       if (prev === PREVIEW_SLUG && prePreviewSlug) {

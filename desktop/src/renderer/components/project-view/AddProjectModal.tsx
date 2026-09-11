@@ -10,6 +10,7 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { Scrim, OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
 import ImportProjectModal from '../ImportProjectModal';
+import { plainMessage } from '../../utils/ipc-error';
 import { Button, InputGroup } from '../ui';
 
 interface Props {
@@ -54,14 +55,15 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
     inFlightRef.current = true;
     setBusy(true);
     setError(null);
-    // try/catch: on Android the shim rejects after 30s — surface inline.
+    // try/catch: on the phone's own bridge the shim refuses at once (no Sync Spaces
+    // engine there) — surface the plain sentence inline, never the channel id.
     try {
       const r = await (window as any).claude.syncSpaces.createProject(trimmed);
       if (cancelledRef.current) return;
       if (r?.ok) onAdded(r.path);
       else setError(r?.error ?? 'Could not create the project');
     } catch (err: any) {
-      if (!cancelledRef.current) setError(String(err?.message ?? err));
+      if (!cancelledRef.current) setError(plainMessage(err));
     } finally {
       inFlightRef.current = false;
       if (!cancelledRef.current) setBusy(false);
@@ -78,7 +80,7 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
     } catch (err: any) {
       // Cancel resolves to null (handled above), NOT a rejection — anything
       // caught here is a genuine failure worth showing, not a user cancel.
-      if (!cancelledRef.current) setError(String(err?.message ?? err));
+      if (!cancelledRef.current) setError(plainMessage(err));
     }
   }, []);
 
@@ -91,7 +93,7 @@ export default function AddProjectModal({ onClose, onAdded }: Props) {
       await (window as any).claude.folders.add(step.path);
       if (!cancelledRef.current) onAdded(step.path);
     } catch (err: any) {
-      if (!cancelledRef.current) setError(String(err?.message ?? err));
+      if (!cancelledRef.current) setError(plainMessage(err));
     } finally {
       inFlightRef.current = false;
       if (!cancelledRef.current) setBusy(false);

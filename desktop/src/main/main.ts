@@ -66,6 +66,7 @@ import { startConversationStore, stopConversationStore, materializeOne, resumeSw
 import { runSlugRepair } from './conversations/slug-repair';
 import { startChatsearchIndex, stopChatsearchIndex } from './chatsearch-index/index-service';
 import { startOutboxDrain, stopOutboxDrain } from './chatsearch-index/outbox-drain';
+import { stopProjectWatchers } from './artifacts/project-watcher';
 // One-time cleanup of the legacy sync-service's slug-symlink aggregation (Plan 2c).
 import { sweepProjectSymlinks } from './conversations/symlink-sweep';
 import { startTagRegistry } from './conversations/tag-registry-service';
@@ -287,6 +288,15 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
   },
 });
 
+// WHY push and not poll: a bind failure happens once, seconds after launch, and a panel
+// that is not open cannot poll for it. The indicator has to learn about it when it opens
+// (getStatus) and while it is open (this).
+remoteServer.onStatusChange((status) => {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (!win.isDestroyed()) win.webContents.send(IPC.REMOTE_STATUS, status);
+  }
+});
+
 // Dev server URL — env override wins; otherwise compute from YOUCODED_PORT_OFFSET
 // (via shared/ports.ts) so Vite and main stay in sync without a second env var.
 const DEV_SERVER_URL = process.env.VITE_DEV_SERVER_URL || `http://localhost:${VITE_DEV_PORT}`;
@@ -346,7 +356,9 @@ if (process.platform === 'win32') {
 
 // Must be called before app.whenReady() — Electron requirement
 protocol.registerSchemesAsPrivileged([
-  { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, stream: true } },
+  // WHY: supportFetchAPI alone does not allow cross-origin fetch from the
+  // renderer. Inline mascot rigs need the scheme in Chromium's CORS allowlist.
+  { scheme: 'theme-asset', privileges: { bypassCSP: true, supportFetchAPI: true, corsEnabled: true, stream: true } },
 ]);
 
 // --- Permission override classification ---
@@ -2471,6 +2483,10 @@ async function runShutdown(): Promise<void> {
   try { stopConversationStore(); } catch {}
   try { stopChatsearchIndex(); } catch {}
   try { stopOutboxDrain(); } catch {}
+  // Close the project file-watchers. Needed since they gained a grace period
+  // (project-watcher.ts): a watcher is now deliberately alive after its last
+  // window is gone, and its fs handles are ref'd. Sync fn.
+  try { stopProjectWatchers(); } catch {}
   // Plan 2b Task 8: tear down the lease client so its per-session renew timers
   // don't linger past a hard quit (destroy clears all held timers). Sync fn.
   try { leaseClient?.destroy(); } catch {}

@@ -107,25 +107,76 @@ function readCost(parsed: unknown): number | undefined {
  *  providerMetadata — which streamText resolves as `result.providerMetadata`. */
 export const openRouterCostExtractor = {
   async extractMetadata({ parsedBody }: { parsedBody: unknown }) {
-    const cost = readCost(parsedBody);
-    return cost === undefined ? undefined : { [OPENROUTER_METADATA_KEY]: { costUsd: cost } };
+    return openRouterMetadata(readCost(parsedBody), readCacheWrite(parsedBody));
   },
   createStreamExtractor() {
     let cost: number | undefined;
+    let cacheWrite: number | undefined;
     return {
       processChunk(parsedChunk: unknown) {
         const c = readCost(parsedChunk);
         // Last one wins, but only a real reading overwrites: a later chunk
         // WITHOUT the field must not erase the figure an earlier one carried.
         if (c !== undefined) cost = c;
+        const w = readCacheWrite(parsedChunk);
+        if (w !== undefined) cacheWrite = w;
       },
       buildMetadata() {
         // undefined, not { costUsd: 0 } — see the section header.
-        return cost === undefined ? undefined : { [OPENROUTER_METADATA_KEY]: { costUsd: cost } };
+        return openRouterMetadata(cost, cacheWrite);
       },
     };
   },
 };
+
+/** Cache follow-ups item 8 (2026-09-10): OpenRouter reports cache WRITES as
+ *  `prompt_tokens_details.cache_write_tokens` for explicit-cache models (Claude).
+ *  @ai-sdk/openai-compatible maps only `cached_tokens` (reads), so without this
+ *  every OpenRouter write read as 0 and the Reuse chip could not tell a fresh
+ *  cache write from a request that simply had nothing to cache. Same
+ *  present-vs-absent discipline as the cost: undefined when not reported. */
+function readCacheWrite(parsed: unknown): number | undefined {
+  const w = (parsed as any)?.usage?.prompt_tokens_details?.cache_write_tokens;
+  return typeof w === 'number' && Number.isFinite(w) ? w : undefined;
+}
+function openRouterMetadata(cost: number | undefined, cacheWrite: number | undefined) {
+  if (cost === undefined && cacheWrite === undefined) return undefined;
+  return {
+    [OPENROUTER_METADATA_KEY]: {
+      ...(cost === undefined ? {} : { costUsd: cost }),
+      ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),
+    },
+  };
+}
+
+/** The `metadataExtractor` for the LOCAL llama.cpp branch (cache follow-ups
+ *  item 8, 2026-09-10). llama-server puts `timings.cache_n` — the number of
+ *  prompt tokens it reused from its KV cache — on the final frame (the same
+ *  block prefill-progress.ts reads speeds from). It is the only ground truth
+ *  for "did the local prefix stay still", and the SDK's usage never sees it.
+ *  A zero IS a reading (a cold prompt); only an absent block reports nothing. */
+export const localTimingsExtractor = {
+  async extractMetadata({ parsedBody }: { parsedBody: unknown }) {
+    return localMetadata(readCacheN(parsedBody));
+  },
+  createStreamExtractor() {
+    let cacheN: number | undefined;
+    return {
+      processChunk(parsedChunk: unknown) {
+        const n = readCacheN(parsedChunk);
+        if (n !== undefined) cacheN = n;
+      },
+      buildMetadata() { return localMetadata(cacheN); },
+    };
+  },
+};
+function readCacheN(parsed: unknown): number | undefined {
+  const n = (parsed as any)?.timings?.cache_n;
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : undefined;
+}
+function localMetadata(cacheN: number | undefined) {
+  return cacheN === undefined ? undefined : { local: { cacheReadTokens: cacheN } };
+}
 
 /** The provider's own USD figure for one request, or undefined when it did not
  *  report one (every non-OpenRouter provider, and OpenRouter itself if it ever

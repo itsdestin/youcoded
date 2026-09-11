@@ -2,6 +2,7 @@ import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { OverlayPanel } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
+import { placeBubble } from './anchor-position';
 
 /**
  * Anchored info bubble (change 28, §1.7).
@@ -25,8 +26,6 @@ import { useEscClose } from '../../hooks/use-esc-close';
  * plain hover hints. Two tools, one documented policy.
  */
 
-/** Breathing room the bubble keeps from the edge of the panel it lives in. */
-const EDGE = 8;
 /** The gaps the bubble has always sat at, kept exactly: 6 px under the trigger,
  *  10 px above it. */
 const GAP_BELOW = 6;
@@ -80,69 +79,24 @@ export function AnchorTip({
   const panelRef = useRef<HTMLDivElement>(null);
 
   /**
-   * The box the bubble is not allowed to leave.
-   *
-   * WHY it is not simply the window (contract R21, 2026-09-06): these bubbles
-   * are opened from rows inside a settings dialog, and the window is much taller
-   * than the dialog. A size number near the bottom of the Model Providers panel
-   * therefore opened a bubble that hung 51 px BELOW the panel, floating over the
-   * page behind it — measured in the real app. The bubble belongs to the panel,
-   * so the panel is the boundary; anywhere there is no dialog around the trigger
-   * (a bubble on the main screen), the window is. Whichever it is, it is also
-   * intersected with the window, because a dialog can itself be taller than a
-   * short window.
-   */
-  const boundsFor = (el: HTMLElement) => {
-    const host = el.closest('[role="dialog"]');
-    const h = host ? host.getBoundingClientRect() : null;
-    return {
-      left: Math.max(EDGE, h ? h.left + EDGE : EDGE),
-      right: Math.min(window.innerWidth - EDGE, h ? h.right - EDGE : window.innerWidth - EDGE),
-      top: Math.max(EDGE, h ? h.top + EDGE : EDGE),
-      bottom: Math.min(window.innerHeight - EDGE, h ? h.bottom - EDGE : window.innerHeight - EDGE),
-    };
-  };
-
-  /**
    * Where the bubble actually goes. Two passes by construction: the first render
    * after `open` commits the panel to the DOM at 0,0, this runs as a LAYOUT
    * effect (so it is measured and moved before the browser paints — no flash),
    * and it can read the panel's real width and height, which is what makes
    * "does it fit below?" answerable at all.
    *
-   * Position is written as plain left/top rather than a CSS transform so that
-   * clamping is possible: a `translateX(-50%)` bubble cannot be nudged back
-   * inside its panel without fighting the transform.
+   * The arithmetic — dialog-aware bounds, flip, clamp — is shared with `Tooltip`
+   * in `anchor-position.ts`; see the WHY there.
    */
   const measure = () => {
     const el = triggerRef.current;
     if (!el) return;
-    const rect = el.getBoundingClientRect();
-    const panel = panelRef.current?.getBoundingClientRect();
-    const w = panel?.width ?? 0;
-    const h = panel?.height ?? 0;
-    const b = boundsFor(el);
-
-    // Preferred side, then flip if the preferred side does not fit and the other
-    // one does. Flipping only happens when staying put would push the bubble out
-    // of the panel — the contract asks for "below the number", and this keeps it
-    // there in every case where below is actually available.
-    const belowTop = rect.bottom + GAP_BELOW;
-    const aboveTop = rect.top - GAP_ABOVE - h;
-    let side = placement;
-    if (h > 0) {
-      if (side === 'bottom' && belowTop + h > b.bottom && aboveTop >= b.top) side = 'top';
-      else if (side === 'top' && aboveTop < b.top && belowTop + h <= b.bottom) side = 'bottom';
-    }
-
-    const wantLeft = align === 'start' ? rect.left : rect.left + rect.width / 2 - w / 2;
-    const left = w > 0 ? Math.min(Math.max(wantLeft, b.left), Math.max(b.left, b.right - w)) : wantLeft;
-    const wantTop = side === 'bottom' ? belowTop : aboveTop;
-    // The final clamp is the backstop for a bubble taller than the panel itself:
-    // it is pinned to the top of the panel and allowed to overflow downwards
-    // rather than being pushed off the top, because the heading is the part you
-    // need to see first.
-    const top = h > 0 ? Math.min(Math.max(wantTop, b.top), Math.max(b.top, b.bottom - h)) : wantTop;
+    const { left, top } = placeBubble(el, panelRef.current, {
+      placement,
+      align,
+      gapBelow: GAP_BELOW,
+      gapAbove: GAP_ABOVE,
+    });
     setPos((prev) => (prev.left === left && prev.top === top ? prev : { left, top }));
   };
 

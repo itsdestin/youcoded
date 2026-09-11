@@ -4,6 +4,8 @@ declare const __APP_VERSION__: string;
 declare const __BUILD_CHANNEL__: string;
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { createPortal } from 'react-dom';
+import type { RemoteAccessView, RemoteAccessAction, RemoteAccessPreview } from './remote/preview-types';
+
 import { QRCodeSVG } from 'qrcode.react';
 import { isAndroid } from '../platform';
 import { useCurrentPlatform } from '../state/platform';
@@ -56,14 +58,13 @@ const REMOTE_ACCESS_EXPLAINER: { intro: string; sections: ExplainerSection[] } =
         { term: 'Enabled', text: 'Turns the remote server on or off. When off, no other device can connect to this computer.' },
         { term: 'Password', text: "A short word or phrase you'll type on your phone or tablet to prove it's really you. Required by default." },
         { term: 'Keep awake', text: "Stops your computer from going to sleep so it stays ready to respond. Set to a few hours during a session, or 'Off' to let it sleep normally." },
-        { term: 'Skip password on Tailscale', text: 'If a device is already on your private Tailscale network, you trust it and skip the password. Convenient, but only turn on if you trust everyone on your Tailscale.' },
       ],
     },
     {
       heading: 'Common issues',
       bullets: [
         { term: '"Tailscale not installed"', text: 'Click "Set Up Remote Access" and follow the prompts. It downloads about 50MB and asks you to sign in through a browser.' },
-        { term: '"VPN not active"', text: 'Tailscale is installed but turned off. Open the Tailscale app on your computer and switch it on.' },
+        { term: '"Switched off" or "Not signed in"', text: 'Tailscale is installed but not running. The Remote Access panel has a button that fixes whichever one it is.' },
         { term: "Phone can't connect", text: 'Make sure Tailscale is also installed on your phone and signed in to the same account. Both devices need it running at the same time.' },
         { term: "QR code won't scan", text: 'Tap "Copy link" instead, send the link to your phone (text it to yourself), and open it in your phone\'s browser.' },
         { term: 'Forgot the password', text: 'Just type a new one into the password box and hit "Set". The old one is replaced — there\'s nothing to recover.' },
@@ -77,7 +78,6 @@ interface RemoteConfig {
   enabled: boolean;
   port: number;
   hasPassword: boolean;
-  trustTailscale: boolean;
   keepAwakeHours: number;
   clientCount: number;
 }
@@ -90,18 +90,52 @@ const KEEP_AWAKE_OPTIONS = [
   { label: '24h', value: 24 },
 ];
 
-interface TailscaleInfo {
+export interface TailscaleInfo {
   installed: boolean;
   connected: boolean;
+  /**
+   * WHICH prerequisite is missing, from Tailscale's own backend state. Optional because
+   * the Android bridge answers this channel too and can only see whether the app is
+   * installed. Absent means "we do not know" — never a reason to guess one.
+   */
+  state?: 'not-installed' | 'signed-out' | 'stopped' | 'running' | 'unknown';
   ip: string | null;
   hostname: string | null;
   url: string | null;
 }
 
-interface ClientInfo {
+/**
+ * The end-of-setup check (contract row R1). It reports what the host itself says — the
+ * listener's own state — never what the settings were set to. It also cannot say the
+ * other device works, because no other device has been contacted.
+ */
+export interface SetupCheck {
+  listening: boolean;
+  /** The address a device would open, when there is one. */
+  address: string | null;
+  /** Why it is not listening, in the words the server or the OS used. Never invented. */
+  reason: string | null;
+}
+
+/**
+ * A row in the device list. Contract R7/R11: a device that has paired stays here, named,
+ * marked Online or Offline, until it is unpaired. The old shape was a live CONNECTION —
+ * an address and how long ago it connected — so a device that closed its browser vanished
+ * and could never be unpaired.
+ */
+/** What the listener is actually doing, straight from the server. */
+interface RemoteStatus {
+  state: 'listening' | 'stopped' | 'failed';
+  reason?: string;
+  port: number;
+}
+
+interface RemoteDeviceRow {
   id: string;
-  ip: string;
-  connectedAt: number;
+  name: string;
+  online: boolean;
+  createdAt: number;
+  lastSeenAt: number;
 }
 
 interface Props {
@@ -315,9 +349,12 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
 // color="red" maps to tone="danger" (the theme's destructive token, replacing the
 // raw red-600); the default maps to the app accent, replacing green-600.
 
-export function Toggle({ enabled, onToggle, color = 'green', label }: { enabled: boolean; onToggle: () => void; color?: 'green' | 'red'; label?: string }) {
+export function Toggle({ enabled, onToggle, color = 'green', label, disabled }: { enabled: boolean; onToggle: () => void; color?: 'green' | 'red'; label?: string; disabled?: boolean }) {
   return (
     <UiToggle
+      // The primitive already dims and blocks a disabled switch; this wrapper just
+      // never passed it through, so a caller could not express "shown, not operable".
+      disabled={disabled}
       checked={enabled}
       // The primitive hands back the next state; every call site here is a plain
       // flip, so we discard it and keep the existing zero-arg handlers intact.
@@ -1194,10 +1231,243 @@ export function BuddyButton() {
 
 // ─── Remote settings popup button ─────────────────────────────────────────
 
+/**
+ * The mock secure-setup stages, drawn with the banner's OWN vocabulary — a status strip for
+ * a state, a warning callout for something to read first, an ErrorState for a failure.
+ * WHY no bespoke panel: round-2 review rejected one for not looking like the app.
+ */
+function renderPreviewSetup(view: RemoteAccessView, act: (action: RemoteAccessAction) => void) {
+  if (view.stage === 'checking') {
+    return <StatusStrip tone="busy" detail="Keep YouCoded open">Checking this computer&apos;s connection…</StatusStrip>;
+  }
+  if (view.stage === 'checked') {
+    // Straight through to the real one — see the note on RemoteAccessView.check.
+    return renderSetupProgress('checked', '', view.check ?? null, () => act({ type: 'check' }), () => act({ type: 'report' }), () => {}, () => {});
+  }
+  if (view.stage === 'conflict') {
+    return (
+      <ErrorState
+        mode="recoverable"
+        message="Tailscale is already using this address for another service. Nothing was replaced. Check that service before trying again."
+        onRetry={() => act({ type: 'check' })}
+        variant="inline"
+      />
+    );
+  }
+  if (view.stage === 'error') {
+    return (
+      <ErrorState
+        mode="general"
+        title="Unable to check the connection."
+        explainer="We don't know why yet. Diagnose sends the log to Claude to find out."
+        onReportBug={() => act({ type: 'report' })}
+        onDiagnose={() => act({ type: 'diagnose' })}
+      />
+    );
+  }
+  if (view.stage === 'disabled') {
+    return (
+      <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'check' })}>Turn on</Button>}>
+        Remote access is off.
+      </StatusStrip>
+    );
+  }
+  if (view.prerequisite === 'not-installed') {
+    return (
+      <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'prerequisite' })}>Install Tailscale</Button>}>
+        Not set up yet.
+      </StatusStrip>
+    );
+  }
+  if (view.prerequisite === 'sign-in-required') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={() => act({ type: 'prerequisite' })}>Sign in</Button>}>
+        Tailscale is installed, but you&apos;re not signed in yet.
+      </StatusStrip>
+    );
+  }
+  return (
+    <StatusStrip tone="idle" action={<Button size="sm" onClick={() => act({ type: 'consent' })}>Set up</Button>}>
+      Not set up yet.
+    </StatusStrip>
+  );
+}
+
+/**
+ * The server's reason, said in words. WHY not just show what came back: a beta tester
+ * reading `listen EADDRINUSE: address already in use 100.82.14.7:9900` had no idea what
+ * was wrong or what to do, and the error standard asks for detail that is accurate AND
+ * specific — not for the raw text of whichever layer spoke last.
+ *
+ * Only codes we actually recognise are translated, and the original is kept after the
+ * explanation. Anything unrecognised is passed through untouched rather than described
+ * with a guess.
+ */
+export function plainReason(reason: string): string {
+  if (/EADDRINUSE/.test(reason)) {
+    return `Another program on this computer is already using that address, so remote access could not start. Close it and try again. (${reason})`;
+  }
+  if (/EACCES/.test(reason)) {
+    return `This computer would not let YouCoded use that address. (${reason})`;
+  }
+  if (/EADDRNOTAVAIL/.test(reason)) {
+    return `That address is not on this computer any more — Tailscale may have changed it. Try again. (${reason})`;
+  }
+  return reason;
+}
+
+export type SetupStatus = 'idle' | 'confirm' | 'installing' | 'authenticating' | 'checking' | 'checked' | 'error';
+
+/**
+ * The prerequisite the host can actually observe, one status line and one button each
+ * (contract row R5). WHY it is driven by `tailscale.state` and not by `connected` alone:
+ * "signed out" and "switched off" need different next steps, and the panel used to send
+ * everyone to the same place — or, when the state was simply unknown, tell them to go
+ * open an app that may not be the problem.
+ *
+ * Exported for `remote-setup-flow.test.tsx`: these two are the whole of what the user
+ * reads during setup, and reaching them through the full Settings tree would test the
+ * tree instead of the copy.
+ */
+export function renderPrerequisite(
+  tailscale: TailscaleInfo | null,
+  hasPassword: boolean,
+  onRunSetup: () => void,
+  onConnect: () => void,
+) {
+  const notSetUp = (
+    <StatusStrip tone="idle" action={<Button size="sm" onClick={onRunSetup}>Set up</Button>}>
+      Not set up yet.
+    </StatusStrip>
+  );
+  if (!tailscale?.installed) return notSetUp;
+  if (tailscale.state === 'signed-out') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Sign in</Button>}>
+        Tailscale is installed, but you&apos;re not signed in yet.
+      </StatusStrip>
+    );
+  }
+  if (tailscale.state === 'stopped') {
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Turn on</Button>}>
+        Tailscale is installed, but it&apos;s switched off.
+      </StatusStrip>
+    );
+  }
+  if (!tailscale.connected) {
+    // The honest fallback: installed, not connected, and Tailscale did not say why.
+    // The old copy asserted the VPN was off and told the user to go turn it on.
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Connect</Button>}>
+        Tailscale is installed, but it isn&apos;t connected.
+      </StatusStrip>
+    );
+  }
+  if (!hasPassword) {
+    // Connected, but nothing can pair without a password — the field is directly below.
+    return <StatusStrip tone="warn">Set a password below to finish enabling remote access.</StatusStrip>;
+  }
+  if (!tailscale.url) {
+    // Installed, connected, password set — and still no address. Tailscale's status gave no
+    // IP and the fallback lookup failed too. This used to fall off the end of the function
+    // to "Not set up yet." with a Set up button, which walks a fully configured machine back
+    // into the installer. What is actually missing is the address, so that is what it says.
+    return (
+      <StatusStrip tone="warn" action={<Button size="sm" onClick={onConnect}>Try again</Button>}>
+        Tailscale is connected, but it hasn&apos;t given this computer an address yet.
+      </StatusStrip>
+    );
+  }
+  return notSetUp;
+}
+
+/**
+ * Setup in motion, and the check that ends it. WHY the last step is a check and not a
+ * success message: the old flow said "Tailscale is connected" the moment the auth command
+ * returned, which is a claim about a setting rather than about the server. It now asks the
+ * host what its listener is doing and repeats that answer, and it says plainly that no
+ * other device has been tried — because none has.
+ */
+export function renderSetupProgress(
+  setupStatus: SetupStatus,
+  setupError: string,
+  setupCheck: SetupCheck | null,
+  onRunSetup: () => void,
+  onReportIssue: () => void,
+  onCancelSetup: () => void,
+  onConfirmSetup: () => void,
+) {
+  if (setupStatus === 'confirm') {
+    return (
+      <div className="space-y-2">
+        <p className="text-3xs text-fg-2 text-center">This will download and install Tailscale (~50MB) for secure remote access.</p>
+        <div className="flex gap-2">
+          <Button variant="secondary" onClick={onCancelSetup} className="flex-1">Cancel</Button>
+          <Button onClick={onConfirmSetup} className="flex-1">Install</Button>
+        </div>
+      </div>
+    );
+  }
+  if (setupStatus === 'installing') {
+    // K5. Every branch below was its own shape: centred green text, centred muted
+    // text, a bare button with no message at all. The WORDS were mostly fine —
+    // seven of eleven carry over verbatim. It was eleven shapes.
+    return <StatusStrip tone="busy" detail="This may take a few minutes">Installing Tailscale…</StatusStrip>;
+  }
+  if (setupStatus === 'authenticating') {
+    return <StatusStrip tone="busy" detail="Check your browser to sign in to Tailscale">Waiting for Tailscale sign-in…</StatusStrip>;
+  }
+  if (setupStatus === 'checking') {
+    return <StatusStrip tone="busy" detail="A few seconds. Leave YouCoded open.">Checking this computer&apos;s connection…</StatusStrip>;
+  }
+  if (setupStatus === 'checked' && setupCheck) {
+    if (setupCheck.listening) {
+      return (
+        <StatusStrip tone="ok" detail="No device has connected yet — pair one below to try it.">
+          {setupCheck.address ? `This computer is listening at ${setupCheck.address}.` : 'This computer is listening.'}
+        </StatusStrip>
+      );
+    }
+    return setupCheck.reason ? (
+      <ErrorState mode="recoverable" message={plainReason(setupCheck.reason)} onRetry={onRunSetup} variant="inline" />
+    ) : (
+      <ErrorState
+        mode="general"
+        title="Remote access isn't listening yet."
+        explainer="We don't know why yet. Diagnose sends the log to Claude to find out."
+        onReportBug={onReportIssue}
+        onDiagnose={onReportIssue}
+      />
+    );
+  }
+  if (setupStatus === 'error') {
+    // `{setupError || 'Setup failed'}` replaced a missing reason with a hardcoded
+    // guess and left the user two words and no next step — the exact pattern
+    // docs/error-message-standards.md forbids. When we HAVE the real reason we show
+    // it with Retry; when we do not, we say so without inventing a cause and hand
+    // over the two actions the standard mandates.
+    return setupError ? (
+      <ErrorState mode="recoverable" message={plainReason(setupError)} onRetry={onRunSetup} variant="inline" />
+    ) : (
+      <ErrorState
+        mode="general"
+        title="Unable to set up remote access."
+        explainer="The installer didn't say why. Diagnose sends the log to Claude to find out."
+        onReportBug={onReportIssue}
+        onDiagnose={onReportIssue}
+      />
+    );
+  }
+  return null;
+}
+
 interface RemoteButtonProps {
+  mockView?: RemoteAccessView;
+  mockAction?: (action: RemoteAccessAction) => void;
   config: RemoteConfig | null;
   tailscale: TailscaleInfo | null;
-  clients: ClientInfo[];
+  clients: RemoteDeviceRow[];
   loading: boolean;
   hasActiveSession: boolean;
   newPassword: string;
@@ -1210,14 +1480,16 @@ interface RemoteButtonProps {
   onToggleEnabled: () => void;
   /** Why the server refused to start, shown under the Enabled toggle. */
   enableError: string;
-  onToggleTailscaleTrust: () => void;
   onSetKeepAwake: (hours: number) => void;
   onRunSetup: () => void;
   onConfirmSetup: () => void;
   onCancelSetup: () => void;
-  setupStatus: 'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error';
+  setupStatus: SetupStatus;
   setupError: string;
-  onDisconnectClient: (id: string) => void;
+  /** The result of the end-of-setup check, once it has run. */
+  setupCheck: SetupCheck | null;
+  onUnpairDevice: (deviceId: string) => void;
+  status: RemoteStatus | null;
   onCopyLink: () => void;
   onSetShowSetupQR: (v: boolean) => void;
   onSetShowAddDevice: (v: boolean) => void;
@@ -1231,21 +1503,66 @@ interface RemoteButtonProps {
   onReportIssue: (context?: ReportContext) => void;
 }
 
-function RemoteButton({
+function RemoteButton(props: RemoteButtonProps) {
+  // WHY the controls stay and are disabled rather than hidden: host administration is
+  // refused over the remote socket, so leaving them live means a phone taps them and gets
+  // an error every time; hiding them contradicts contract row R4, which promises Enabled,
+  // Password and Keep awake stay exactly where they are. Disabled, with the reason, is the
+  // only option that is both true and keeps the panel recognisable.
+  const [hostOnly, setHostOnly] = useState(false);
+  useEffect(() => {
+    let live = true;
+    void import('../platform').then(({ isRemoteMode, onConnectionModeChange }) => {
+      if (!live) return;
+      setHostOnly(isRemoteMode());
+      onConnectionModeChange(mode => { if (live) setHostOnly(mode === 'remote'); });
+    });
+    return () => { live = false; };
+  }, []);
+  let {
   config, tailscale, clients, loading,
   newPassword, passwordStatus, copied, showSetupQR, showAddDevice,
-  onSetNewPassword, onSetPassword, onToggleEnabled, enableError, onToggleTailscaleTrust,
-  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, onDisconnectClient, onCopyLink,
+  onSetNewPassword, onSetPassword, onToggleEnabled, enableError,
+  onSetKeepAwake, onRunSetup, onConfirmSetup, onCancelSetup, setupStatus, setupError, setupCheck, onUnpairDevice, status, onCopyLink,
   onSetShowSetupQR, onSetShowAddDevice, onReportIssue,
-}: RemoteButtonProps) {
-  const [open, setOpen] = useState(false);
+  } = props;
+  const [open, setOpen] = useState(!!props.mockView);
+  const [mockPassword, setMockPassword] = useState('');
+  const [mockSaved, setMockSaved] = useState(false);
+  const [mockAwake, setMockAwake] = useState(4); // WHY 4: matches the Before capture's fixture, so the deck shows only the changes under review
+  const [mockAdd, setMockAdd] = useState(false);
+  const [revoking, setRevoking] = useState<string | null>(null);
   // showInfo flips the popup body to the plain-language explainer view.
   // Reset to false whenever the popup re-opens so users always start on the
   // main settings, not whichever screen they last viewed.
   const [showInfo, setShowInfo] = useState(false);
+  // Browser encryption gets its OWN screen inside this dialog rather than sitting inline
+  // (Destin, round 4: "this whole browser protection menu should be hidden behind a second
+  // level popup"). The main panel stays short; the explanation gets the room it needs.
+  const [showEncryption, setShowEncryption] = useState(false);
   const popupRef = useRef<HTMLDivElement>(null);
+  // WHY: Dialog owns one scroll region and keeps its position across a view swap, so a
+  // sub-screen opened from the bottom of a long panel started scrolled past its own first
+  // sentence. Navigating within a dialog should start at the top, like opening a page.
+  useEffect(() => {
+    const region = popupRef.current?.querySelector('.scroll-fade');
+    if (region) region.scrollTop = 0;
+  }, [showEncryption, showInfo]);
   // No scroll ref here any more — Dialog owns the scroll region and its edge
   // fades for both views.
+
+  // WHY Add Device scrolls itself into view: it is appended at the BOTTOM of a panel
+  // taller than the dialog, so on a normal window pressing it changed nothing you could
+  // see. A tester pressed it, saw no result, and only found the QR code by scrolling.
+  const addDeviceRef = useRef<HTMLElement>(null);
+  const [justOpenedAddDevice, setJustOpenedAddDevice] = useState(false);
+  useEffect(() => {
+    if (!justOpenedAddDevice) return;
+    // Feature-checked, not assumed: jsdom has no scrollIntoView, and neither did some of
+    // the Android WebView builds this same bundle runs in.
+    addDeviceRef.current?.scrollIntoView?.({ block: 'nearest', behavior: 'smooth' });
+    setJustOpenedAddDevice(false);
+  }, [justOpenedAddDevice]);
 
   useEffect(() => {
     if (!open) setShowInfo(false);
@@ -1260,26 +1577,103 @@ function RemoteButton({
     return () => document.removeEventListener('mousedown', handler);
   }, [open]);
 
-  const hasClients = clients.length > 0;
-  // Green: enabled + Tailscale installed + VPN active. Gray otherwise (disabled, or VPN not connected).
-  const isFullyConnected = config?.enabled && tailscale?.installed && tailscale?.connected;
+  // WHY this explicit MOCK_ONLY gate: reviewed mockups must not replace real host settings before the contract/backend exists.
+  const previewApi = (window.claude?.remote as unknown as { preview?: () => RemoteAccessPreview } | undefined)?.preview;
+  const servicePreview = typeof previewApi === 'function' ? previewApi() : undefined;
+  const preview = props.mockView && props.mockAction ? { act: props.mockAction } : servicePreview;
+  const storedView = React.useSyncExternalStore(
+    servicePreview?.subscribe ?? (() => () => {}), servicePreview?.getView ?? (() => null),
+  );
+  const previewView = props.mockView ?? storedView;
+  // WHY reuse the original body: mock review must retain familiar controls, while every write stays local.
+  if (previewView && preview) {
+    loading = false;
+    // WHY these are derived rather than hardcoded: a beta tester read three controls that
+    // disagreed with each other — "Not set up yet." above "Status: Connected", an Enabled
+    // switch already on for a machine with no Tailscale, an IP shown while signed out, a
+    // "Change password..." placeholder before any password existed, and devices marked
+    // Online under "Remote access is off." Every one was the MOCK contradicting itself,
+    // not the panel, and a mockup that lies is worse than no mockup: it is what the review
+    // decks are cut from.
+    const ready = previewView.prerequisite === 'ready' || !previewView.prerequisite;
+    const working = previewView.stage === 'ready'
+      || (previewView.stage === 'checked' && !!previewView.check?.listening);
+    config = {
+      enabled: previewView.stage !== 'disabled' && previewView.stage !== 'setup' && ready,
+      hasPassword: ready,
+      port: 9900, keepAwakeHours: mockAwake,
+      clientCount: previewView.stage === 'disabled' ? 0 : previewView.devices.length,
+    };
+    tailscale = {
+      installed: previewView.prerequisite !== 'not-installed',
+      connected: ready,
+      state: previewView.prerequisite === 'not-installed' ? 'not-installed'
+        : previewView.prerequisite === 'sign-in-required' ? 'signed-out'
+          : 'running',
+      // No address until the network is actually up, and ONE address throughout: the mock
+      // used to answer a bare IP here and a different tailnet hostname in Add Device, with
+      // nothing saying they were the same machine.
+      ip: ready ? '100.82.14.7' : null,
+      hostname: ready ? 'home-laptop' : null,
+      url: working ? previewView.address : null,
+    };
+    newPassword = mockPassword; passwordStatus = mockSaved ? 'saved' : 'idle';
+    onSetNewPassword = value => { setMockPassword(value); setMockSaved(false); };
+    onSetPassword = () => { if (mockPassword.trim()) { setMockSaved(true); setMockPassword(''); } };
+    onSetKeepAwake = setMockAwake;
+    onToggleEnabled = () => preview.act({ type: previewView.stage === 'disabled' ? 'check' : 'disable' });
+    showAddDevice = mockAdd && working; onSetShowAddDevice = setMockAdd;
+    onRunSetup = () => preview.act({ type: 'prerequisite' });
+    onCopyLink = () => { void navigator.clipboard.writeText(previewView.address); };
+    enableError = '';
+  }
+  const deviceRows: RemoteDeviceRow[] = previewView
+    ? previewView.devices.map(d => ({
+        id: d.id, name: d.name,
+        // Nothing is Online while the listener is off — that combination is not a state
+        // the real host can produce, and it read as "off, but still connected".
+        online: d.online && previewView.stage !== 'disabled',
+        createdAt: 0, lastSeenAt: 0,
+      }))
+    : clients;
+  const unpair = (deviceId: string) => {
+    if (previewView && preview) preview.act({ type: 'revoke', deviceId });
+    else onUnpairDevice(deviceId);
+  };
+  const hasClients = deviceRows.length > 0;
+  // WHY this reads `status` and not `config.enabled`: the indicator used to go green
+  // because the switch was on, so a server whose port never bound still reported Connected
+  // and the reason was only in a log nobody sees.
+  const listening = status?.state === 'listening';
+  const isFullyConnected = previewView
+    ? previewView.stage === 'ready' || (previewView.stage === 'checked' && !!previewView.check?.listening)
+    : listening && tailscale?.installed && tailscale?.connected;
   const statusText = loading
     ? 'Loading...'
-    : !config?.enabled
-      ? 'Disabled'
-      : isFullyConnected
-        ? hasClients
-          ? `Connected · ${clients.length} client${clients.length > 1 ? 's' : ''}`
-          : 'Connected'
-        : tailscale?.installed
-          ? 'Tailscale VPN not active'
-          : 'Enabled · No Tailscale';
+    : status?.state === 'failed'
+      ? 'Not running'
+      : !config?.enabled || status?.state === 'stopped'
+        ? 'Disabled'
+        : isFullyConnected
+          ? hasClients
+            ? `Connected · ${deviceRows.filter(d => d.online).length} online`
+            : 'Connected'
+          : tailscale?.installed
+            ? 'Tailscale not connected'
+            : 'Enabled · No Tailscale';
 
   // Tailscale is the transport under a fully-connected session — the old UI
   // showed a separate "Tailscale" tag next to the title whenever installed;
   // folding it into the subtitle only when it adds information (fully
-  // connected) avoids a redundant "Tailscale VPN not active · Tailscale".
-  const subtitle = isFullyConnected ? `${statusText} · Tailscale` : statusText;
+  // connected) avoids a redundant "Tailscale not connected · Tailscale".
+  const previewLabels = { setup: 'Set up secure access', consent: 'Ready to connect', checking: 'Checking connection…', checked: 'Setup checked', ready: 'Ready to connect', conflict: 'Address in use', error: 'Check failed', disabled: 'Remote access is off' };
+  // WHY `checked` cannot be one label: it is the state that carries an ANSWER, and the
+  // answer can be no. A single "Setup checked" meant the settings list read as finished
+  // while the panel inside showed the failure — the row is where a problem gets noticed.
+  const previewSubtitle = previewView?.stage === 'checked'
+    ? (previewView.check?.listening ? 'Connected' : 'Not running')
+    : previewView ? previewLabels[previewView.stage] : '';
+  const subtitle = previewView ? previewSubtitle : isFullyConnected ? `${statusText} · Tailscale` : statusText;
 
   return (
     <>
@@ -1300,26 +1694,74 @@ function RemoteButton({
       <Dialog
         open={open}
         onClose={() => setOpen(false)}
-        title={showInfo ? 'About Remote Access' : 'Remote Access'}
-        onBack={showInfo ? () => setShowInfo(false) : undefined}
-        headerActions={showInfo ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
+        title={showInfo ? 'About Remote Access' : showEncryption ? 'Browser encryption' : 'Remote Access'}
+        onBack={showInfo ? () => setShowInfo(false) : showEncryption ? () => setShowEncryption(false) : undefined}
+        // WHY: Workbench catch-all APIs can return a truthy Promise; only a rendered preview view replaces the legacy Info action.
+        headerActions={showInfo || showEncryption ? undefined : <InfoIconButton onClick={() => setShowInfo(true)} />}
         size="panel"
         fill
         panelRef={popupRef}
       >
-            {showInfo ? (
+            {showEncryption && previewView && preview ? (
+              // pb-9 clears the scroll region's 36px bottom fade. Without it this screen's
+              // one primary action sat under the gradient, half-cut at 1440x900 and out of
+              // sight in a short window — a tester clicked around it and never found it.
+              <div className="space-y-4 text-sm pb-9">
+                <p className="text-fg-2">
+                  Your connection is already private either way — Tailscale encrypts everything
+                  between your devices.
+                </p>
+                <div>
+                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">What this adds</h4>
+                  <p className="text-fg-2 text-xs">
+                    A certificate, so your phone&apos;s browser can verify the connection. Browsers only
+                    allow the microphone, copy buttons and the font picker on a connection they can
+                    verify, so turning this on is what makes those work on a phone.
+                  </p>
+                </div>
+                <Callout tone="warning" title={previewView.browserEncryption === 'on' ? 'Already done:' : 'This cannot be undone:'}>
+                  {previewView.browserEncryption === 'on'
+                    ? 'This computer\u2019s name is now on a public list of issued certificates. Turning this off does not remove it, and renaming the computer does not either. Only the name is public. Your conversations and files are not.'
+                    : 'This computer\u2019s name is added to a public list of issued certificates. The list is permanent: turning this off later does not remove it, and renaming the computer does not either. Only the name is public. Your conversations and files are not.'}
+                </Callout>
+                <div>
+                  <h4 className="text-2xs uppercase tracking-wide text-fg-muted mb-2">You will also need</h4>
+                  <p className="text-fg-2 text-xs">
+                    To turn on certificates for your Tailscale account, on their website. YouCoded cannot
+                    do that part for you.
+                  </p>
+                </div>
+                <SettingRow
+                  variant="item"
+                  title="Browser encryption"
+                  description={previewView.browserEncryption === 'on'
+                    ? 'On — your phone can use the microphone, copy buttons and font picker.'
+                    : 'Off'}
+                  control={<Toggle
+                    enabled={previewView.browserEncryption === 'on'}
+                    onToggle={() => preview.act({ type: 'advanced' })}
+                    label="Browser encryption"
+                  />}
+                />
+                {previewView.stage === 'consent' && (
+                  <Button onClick={() => preview.act({ type: 'check' })} className="w-full">
+                    I understand — continue
+                  </Button>
+                )}
+              </div>
+            ) : showInfo ? (previewView ? <p className="text-xs text-fg-2">On your phone: install Tailscale and sign in to the same account. Then tap Add Device here and scan the code. A paired phone can use the assistant, not just read conversations — so keep this computer awake while you are away from it.</p> : (
               <SettingsExplainer
                 intro={REMOTE_ACCESS_EXPLAINER.intro}
                 sections={REMOTE_ACCESS_EXPLAINER.sections}
               />
-            ) : (
-            <div className="space-y-6">
+            )) : (
+            <div className="space-y-4">
                 {loading ? (
                   <LoadingState what="remote access" />
                 ) : (
                   <>
                     {/* Setup banner — shown when no clients connected */}
-                    {!hasClients && (
+                    {(previewView ? previewView.stage !== 'ready' && previewView.stage !== 'consent' : !hasClients) && (
                       // Info callouts are accent-tinted, warnings are amber. The
                       // amber "setup required" boxes below stay amber — they're a
                       // true warning status, not information.
@@ -1328,7 +1770,12 @@ function RemoteButton({
                           Remote access lets you use YouCoded from any device — phone, tablet, or another computer.
                         </p>
 
-                        {tailscale?.installed && tailscale.url && config?.hasPassword ? (
+                        {/* WHY setup-in-motion is tested BEFORE the ready branch: the end-of-setup
+                            check is the last thing the user sees, and the moment Tailscale comes up
+                            the branch below it would take over and hide the answer. */}
+                        {previewView && preview ? renderPreviewSetup(previewView, preview.act)
+                          : setupStatus !== 'idle' ? renderSetupProgress(setupStatus, setupError, setupCheck, onRunSetup, onReportIssue, onCancelSetup, onConfirmSetup)
+                          : tailscale?.installed && tailscale.url && config?.hasPassword ? (
                           showSetupQR ? (
                             <div className="mt-2">
                               {/* Remind users that Tailscale must be installed + running on the receiving device too */}
@@ -1358,77 +1805,7 @@ function RemoteButton({
                               </Button>
                             </div>
                           )
-                        ) : setupStatus === 'confirm' ? (
-                          <div className="space-y-2">
-                            <p className="text-3xs text-fg-2 text-center">This will download and install Tailscale (~50MB) for secure remote access.</p>
-                            <div className="flex gap-2">
-                              <Button variant="secondary" onClick={onCancelSetup} className="flex-1">Cancel</Button>
-                              <Button onClick={onConfirmSetup} className="flex-1">Install</Button>
-                            </div>
-                          </div>
-                        ) : setupStatus === 'installing' ? (
-                          // K5. Every branch below was its own shape: centred
-                          // green text, centred muted text, a bare button with no
-                          // message at all. The WORDS were mostly fine — seven of
-                          // eleven carry over verbatim. It was eleven shapes.
-                          <StatusStrip tone="busy" detail="This may take a few minutes">
-                            Installing Tailscale…
-                          </StatusStrip>
-                        ) : setupStatus === 'authenticating' ? (
-                          <StatusStrip tone="busy" detail="Check your browser to sign in to Tailscale">
-                            Waiting for Tailscale sign-in…
-                          </StatusStrip>
-                        ) : setupStatus === 'done' ? (
-                          // Was "Tailscale installed and connected!" — the only
-                          // exclamation mark in the settings family. A status
-                          // strip says what you can do next (Destin, 2026-07-28).
-                          <StatusStrip tone="ok">Tailscale is connected. You can pair a device now.</StatusStrip>
-                        ) : setupStatus === 'error' ? (
-                          // `{setupError || 'Setup failed'}` replaced a missing
-                          // reason with a hardcoded guess and left the user two
-                          // words and no next step — the exact pattern
-                          // docs/error-message-standards.md forbids. When we HAVE
-                          // the real reason we show it with Retry; when we do not,
-                          // we say so without inventing a cause and hand over the
-                          // two actions the standard mandates.
-                          setupError ? (
-                            <ErrorState
-                              mode="recoverable"
-                              message={setupError}
-                              onRetry={onRunSetup}
-                              variant="inline"
-                            />
-                          ) : (
-                            <ErrorState
-                              mode="general"
-                              title="Unable to set up remote access."
-                              explainer="The Tailscale installer didn't report a reason. Diagnosing will collect the setup log so the assistant can look at what happened."
-                              onReportBug={() => onReportIssue({ surface: 'Settings' })}
-                              onDiagnose={() => onReportIssue({ surface: 'Settings', diagnose: true })}
-                            />
-                          )
-                        ) : tailscale?.installed && !tailscale.connected ? (
-                          // Fix: Tailscale is installed but VPN is off — tailscale.url is null in this state,
-                          // so we used to fall through to the install-button branch and pretend it wasn't installed.
-                          <StatusStrip tone="warn">
-                            Tailscale is installed, but the VPN isn&apos;t active. Open the Tailscale app and turn it on, then come back here.
-                          </StatusStrip>
-                        ) : tailscale?.installed && !config?.hasPassword ? (
-                          // Installed + connected but no password yet — guide the user down to the password field
-                          // rather than re-prompting to install.
-                          <StatusStrip tone="warn">
-                            Set a password below to finish enabling remote access.
-                          </StatusStrip>
-                        ) : (
-                          // Was a bare button with no message. A status strip
-                          // says what state you are in, then offers the way out.
-                          <StatusStrip
-                            tone="idle"
-                            action={<Button size="sm" onClick={onRunSetup}>Set up</Button>}
-                          >
-                            Not set up yet.
-                          </StatusStrip>
-                        )}
+                        ) : renderPrerequisite(tailscale, !!config?.hasPassword, onRunSetup, onConfirmSetup)}
                       </div>
                     )}
 
@@ -1442,21 +1819,34 @@ function RemoteButton({
                       <SettingRow
                         variant="item"
                         title="Enabled"
-                        onClick={onToggleEnabled}
-                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} label="Remote access server enabled" />}
+                        onClick={hostOnly ? undefined : onToggleEnabled}
+                        control={<Toggle enabled={!!config?.enabled} onToggle={onToggleEnabled} disabled={hostOnly} label="Remote access server enabled" />}
                       />
+                      {hostOnly && (
+                        <p className="text-2xs text-fg-muted pb-2">Change these on the computer itself.</p>
+                      )}
                       {/* The server is started from the toggle now, so it can fail
                           (port already bound, permission denied). Show the real
                           reason here — the toggle has already snapped back off. */}
                       {enableError && (
-                        <FieldError as="p" size="2xs" className="pb-2">{enableError}</FieldError>
+                        <FieldError as="p" size="2xs" className="pb-2">{plainReason(enableError)}</FieldError>
+                      )}
+                      {/* A bind failure was logged and nowhere else. Specific and accurate
+                          when the OS gave us a reason; never a guess. */}
+                      {!enableError && status?.state === 'failed' && (
+                        <FieldError as="p" size="2xs" className="pb-2">
+                          {status.reason ? `Not running: ${plainReason(status.reason)}` : 'Not running.'}
+                        </FieldError>
                       )}
 
                       <div className="py-2">
                         <div className="flex items-center justify-between mb-1">
                           <span className="text-xs text-fg-2">Password</span>
+                          {/* "Saved", not "Set": the button beside this one also says Set,
+                              so the row read as two identical controls, one of which did
+                              nothing when clicked. */}
                           {config?.hasPassword && (
-                            <span className="text-3xs text-green-400">Set</span>
+                            <span className="text-3xs text-green-400">Saved</span>
                           )}
                         </div>
                         {/* The Set button moves INSIDE the field (change 77): this is a
@@ -1471,12 +1861,13 @@ function RemoteButton({
                             onChange={(e) => onSetNewPassword(e.target.value)}
                             onKeyDown={(e) => e.key === 'Enter' && onSetPassword()}
                             aria-label="Remote access password"
+                            disabled={hostOnly}
                           />
                           <Button
                             variant="secondary"
                             size="sm"
                             onClick={onSetPassword}
-                            disabled={!newPassword.trim() || passwordStatus === 'saving'}
+                            disabled={hostOnly || !newPassword.trim() || passwordStatus === 'saving'}
                           >
                             {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
                           </Button>
@@ -1508,9 +1899,16 @@ function RemoteButton({
                         no variant. Destin's call (spec §11.8 A): plain `secondary`. Unlike the
                         orange billing button, nothing here is a warning — the blue was decorative,
                         not signal. */}
-                    {tailscale?.installed && tailscale?.connected && tailscale?.url && config?.hasPassword && (
+                    {(previewView || (tailscale?.installed && tailscale?.connected && tailscale?.url && config?.hasPassword)) && (
                       <Button
-                        onClick={() => onSetShowAddDevice(!showAddDevice)}
+                        // WHY consent counts as ready: the default setup is complete and
+                        // pairing works; the optional level is only being considered. And
+                        // WHY a listening `checked` counts: that screen tells the user in
+                        // so many words to pair a device below, and a tester clicked this
+                        // button four times before accepting it was dead.
+                        disabled={!!previewView && previewView.stage !== 'ready' && previewView.stage !== 'consent'
+                          && !(previewView.stage === 'checked' && previewView.check?.listening)}
+                        onClick={() => { onSetShowAddDevice(!showAddDevice); setJustOpenedAddDevice(!showAddDevice); }}
                         variant="secondary"
                         className="w-full py-2"
                       >
@@ -1524,27 +1922,34 @@ function RemoteButton({
                     {/* Remote Clients section */}
                     {hasClients && (
                       <section>
-                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Connected Devices</h3>
+                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Devices</h3>
 
                         <div className="space-y-1">
-                          {clients.map(client => (
-                            // K6: an item list is a K2 row with a status dot in
-                            // the icon slot. The action was a bare ✕ with no
-                            // accessible name and no focus ring — change 41
-                            // banned those app-wide and this one survived the
-                            // sweep, announcing itself to a screen reader as
-                            // the literal character.
+                          {deviceRows.map(row => (
+                            // K6: an item list is a K2 row with a status dot in the icon
+                            // slot. One shape for the mockup and the real panel — a preview
+                            // that renders differently is not evidence about the app.
                             <SettingRow
-                              key={client.id}
+                              key={row.id}
                               variant="item"
-                              icon={<span className="w-2 h-2 rounded-full bg-green-500 shrink-0" />}
-                              title={client.ip}
-                              description={timeAgo(client.connectedAt)}
-                              control={
-                                <Button variant="ghost" size="sm" onClick={() => onDisconnectClient(client.id)}>
-                                  Disconnect
-                                </Button>
-                              }
+                              icon={<span className={`w-2 h-2 rounded-full shrink-0 ${row.online ? 'bg-green-500' : 'bg-fg-faint'}`} />}
+                              title={row.name}
+                              description={revoking === row.id
+                                ? 'Unpair this device? It must pair again to reconnect.'
+                                : hostOnly ? `${row.online ? 'Online' : 'Offline'} · unpair on the computer itself`
+                                  : row.online ? 'Online' : 'Offline'}
+                              // WHY disabled rather than live on a phone: the host refuses this
+                              // over the remote socket, exactly as it refuses the password. Left
+                              // live, the row vanished from the list while the device kept full
+                              // access — the refusal came back as an ordinary value and nothing
+                              // read it. The refusal is a rejection now, and the button is not
+                              // offered here at all.
+                              control={revoking === row.id
+                                ? <div className="flex gap-1">
+                                    <Button variant="ghost" size="sm" onClick={() => setRevoking(null)}>Cancel</Button>
+                                    <Button variant="danger-outline" size="sm" onClick={() => { unpair(row.id); setRevoking(null); }}>Confirm unpair</Button>
+                                  </div>
+                                : <Button variant="ghost" size="sm" disabled={hostOnly} aria-label={`Unpair ${row.name}`} onClick={() => setRevoking(row.id)}>Unpair</Button>}
                             />
                           ))}
                         </div>
@@ -1553,7 +1958,7 @@ function RemoteButton({
 
                     {/* Add Device overlay */}
                     {showAddDevice && tailscale?.url && (
-                      <section className="bg-inset/50 rounded-lg p-3">
+                      <section ref={addDeviceRef} className="bg-inset/50 rounded-lg p-3">
                         <div className="flex items-center justify-between mb-2">
                           <h3 className="text-xs font-medium text-fg-2">Add Device</h3>
                           {/* NOT a K6 action — this dismisses the whole
@@ -1576,9 +1981,24 @@ function RemoteButton({
                       </section>
                     )}
 
+                    {/* The optional second level. It sits BELOW the working setup, as its own
+                        eyebrow section, because the default is complete on its own — this is
+                        an upgrade, not an unfinished step (Destin, 2026-09-10). */}
+                    {previewView && preview && (previewView.stage === 'ready' || previewView.stage === 'consent') && (
+                      <section>
+                        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Advanced</h3>
+                        <SettingRow
+                          variant="item"
+                          title="Browser encryption"
+                          description={previewView.browserEncryption === 'on' ? 'On' : 'Off'}
+                          onClick={() => setShowEncryption(true)}
+                        />
+                      </section>
+                    )}
+
                     {/* Tailscale section */}
                     <section>
-                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Tailscale</h3>
+                      <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Tailscale</h3>
 
                       {tailscale?.installed ? (
                         // space-y-1 replaces the py-2 each bare row used to carry
@@ -1600,16 +2020,31 @@ function RemoteButton({
                                   Connected{tailscale.hostname ? ` · ${tailscale.hostname}` : ''}
                                 </span>
                               ) : (
-                                <span className="text-fg-muted">VPN not active</span>
+                                <span className="text-fg-muted">{
+                                  tailscale.state === 'signed-out' ? 'Not signed in'
+                                    : tailscale.state === 'stopped' ? 'Switched off'
+                                      : 'Not connected'
+                                }</span>
                               )
                             }
                           />
-                          <SettingRow variant="item" title="IP" value={tailscale.ip ?? '—'} />
+                          {/* WHY the address lives here and not only behind Add Device: it
+                              appeared during setup and then disappeared the moment setup
+                              finished, so at the one point a user wants to type it into a
+                              phone there was nowhere to look it up. An IP on its own is not
+                              that address — the port is half of it — which is why this row
+                              replaces the bare IP rather than sitting beside it. */}
                           <SettingRow
                             variant="item"
-                            title="Skip password on Tailscale"
-                            onClick={onToggleTailscaleTrust}
-                            control={<Toggle enabled={!!config?.trustTailscale} onToggle={onToggleTailscaleTrust} label="Skip password on Tailscale" />}
+                            title="Address"
+                            value={tailscale.url
+                              ? <button
+                                  type="button"
+                                  onClick={onCopyLink}
+                                  className="font-mono text-3xs text-fg-2 hover:text-fg underline decoration-dotted underline-offset-2"
+                                  title="Copy this address"
+                                >{copied ? 'Copied' : tailscale.url}</button>
+                              : tailscale.ip ?? '—'}
                           />
                         </div>
                       ) : (
@@ -1617,13 +2052,16 @@ function RemoteButton({
                           <p className="text-xs text-fg-muted mb-2">
                             Tailscale is not installed. It creates a secure private network so you can access YouCoded from anywhere.
                           </p>
-                          <Button
+                          {/* WHY hidden in the preview: the setup banner above already offers
+                              Install, and two identical actions in one dialog is the duplicate
+                              this review is meant to remove, not reproduce. */}
+                          {!previewView && <Button
                             variant="secondary"
                             onClick={onRunSetup}
                             disabled={setupStatus === 'installing' || setupStatus === 'authenticating'}
                           >
                             {setupStatus === 'installing' ? 'Installing...' : setupStatus === 'authenticating' ? 'Authenticating...' : 'Install Tailscale'}
-                          </Button>
+                          </Button>}
                         </div>
                       )}
                     </section>
@@ -1637,6 +2075,12 @@ function RemoteButton({
 }
 
 // ─── Tier selector popup ───────────────────────────────────────────────────
+
+/** Same dialog and body as Settings; the candidate provides no real settings callbacks. */
+export function RemoteAccessMockPanel({ view, onAction }: { view: RemoteAccessView; onAction: (action: RemoteAccessAction) => void }) {
+  const noop = () => {};
+  return <RemoteButton mockView={view} mockAction={onAction} config={null} tailscale={null} clients={[]} loading={false} hasActiveSession={false} newPassword="" passwordStatus="idle" copied={false} showSetupQR={false} showAddDevice={false} onSetNewPassword={noop} onSetPassword={noop} onToggleEnabled={noop} enableError="" onSetKeepAwake={noop} onRunSetup={noop} onConfirmSetup={noop} onCancelSetup={noop} setupStatus="idle" setupError="" setupCheck={null} onUnpairDevice={noop} status={null} onCopyLink={noop} onSetShowSetupQR={noop} onSetShowAddDevice={noop} onReportIssue={noop} />;
+}
 
 // Mirrors PackageTier.kt — descriptions list the actual packages each tier
 // installs, matching the native first-run TierPickerScreen labels.
@@ -2237,7 +2681,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 }) {
   const [config, setConfig] = useState<RemoteConfig | null>(null);
   const [tailscale, setTailscale] = useState<TailscaleInfo | null>(null);
-  const [clients, setClients] = useState<ClientInfo[]>([]);
+  const [clients, setClients] = useState<RemoteDeviceRow[]>([]);
+  const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
   const [newPassword, setNewPassword] = useState('');
   const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
   const [loading, setLoading] = useState(true);
@@ -2245,8 +2690,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [showSetupQR, setShowSetupQR] = useState(false);
   const [copied, setCopied] = useState(false);
   const [defaults, setDefaults] = useState<AssistantDefaults>({ skipPermissions: false, model: 'sonnet', projectFolder: '' });
-  const [setupStatus, setSetupStatus] = useState<'idle' | 'confirm' | 'installing' | 'authenticating' | 'done' | 'error'>('idle');
+  const [setupStatus, setSetupStatus] = useState<SetupStatus>('idle');
   const [setupError, setSetupError] = useState('');
+  const [setupCheck, setSetupCheck] = useState<SetupCheck | null>(null);
   // Populated when IPC.REMOTE_SET_CONFIG reports the server failed to bind.
   const [enableError, setEnableError] = useState('');
   const [showDonateConfirm, setShowDonateConfirm] = useState(false);
@@ -2263,6 +2709,12 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     setLoading(true);
     setShowAddDevice(false);
     setShowSetupQR(false);
+    // WHY the setup state resets on open: the check result now stays on screen instead of
+    // clearing itself after three seconds, so the panel must not reopen tomorrow still
+    // showing yesterday's answer.
+    setSetupStatus('idle');
+    setSetupError('');
+    setSetupCheck(null);
     const claude = (window as any).claude;
     if (!claude?.remote) { setLoading(false); return; }
     // Fix: defer IPC calls until after the 300ms slide-in animation. detectTailscale
@@ -2271,12 +2723,14 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     Promise.all([
       claude.remote.getConfig(),
       claude.remote.detectTailscale(),
-      claude.remote.getClientList(),
+      claude.remote.devices?.list?.() ?? [],
+      claude.remote.getStatus?.() ?? null,
       claude.defaults?.get?.() ?? { skipPermissions: false, model: 'sonnet', projectFolder: '' },
-    ]).then(([cfg, ts, cls, defs]: [RemoteConfig, TailscaleInfo, ClientInfo[], any]) => {
+    ]).then(([cfg, ts, cls, st, defs]: [RemoteConfig, TailscaleInfo, RemoteDeviceRow[], RemoteStatus | null, any]) => {
       setConfig(cfg);
       setTailscale(ts);
       setClients(cls);
+      setRemoteStatus(st);
       setDefaults(defs);
       setLoading(false);
     }).catch(() => setLoading(false));
@@ -2308,12 +2762,6 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
   }, [config]);
 
-  const handleToggleTailscaleTrust = useCallback(async () => {
-    if (!config) return;
-    const updated = await (window as any).claude.remote.setConfig({ trustTailscale: !config.trustTailscale });
-    setConfig(prev => prev ? { ...prev, ...updated } : prev);
-  }, [config]);
-
   const handleSetKeepAwake = useCallback(async (hours: number) => {
     const updated = await (window as any).claude.remote.setConfig({ keepAwakeHours: hours });
     setConfig(prev => prev ? { ...prev, ...updated } : prev);
@@ -2322,11 +2770,40 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const handleRunSetup = useCallback(() => {
     setSetupStatus('confirm');
     setSetupError('');
+    setSetupCheck(null);
   }, []);
 
   const handleCancelSetup = useCallback(() => {
     setSetupStatus('idle');
     setSetupError('');
+    setSetupCheck(null);
+  }, []);
+
+  /**
+   * The end-of-setup check (contract row R1). WHY it exists: setup used to declare
+   * success the moment `tailscale up` returned — a claim about a command, not about the
+   * server. This asks the host what its listener is actually doing and repeats that
+   * answer verbatim, including the reason when the answer is no.
+   *
+   * It stops there deliberately. Nothing here has contacted the user's other device, so
+   * nothing here may imply the other device works; the strip says a device still has to
+   * be paired.
+   */
+  const runSetupCheck = useCallback(async () => {
+    setSetupStatus('checking');
+    const remote = (window as any).claude?.remote;
+    const ts = await remote?.detectTailscale?.().catch(() => null);
+    if (ts) setTailscale(ts);
+    const st: RemoteStatus | null = await remote?.getStatus?.().catch(() => null) ?? null;
+    if (st) setRemoteStatus(st);
+    setSetupCheck({
+      listening: st?.state === 'listening',
+      address: ts?.url ?? null,
+      // The server's own reason when it has one. A missing status is not evidence of a
+      // cause, so it stays null and the panel says so rather than naming a culprit.
+      reason: st?.reason ?? null,
+    });
+    setSetupStatus('checked');
   }, []);
 
   const handleConfirmSetup = useCallback(async () => {
@@ -2334,12 +2811,17 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       // Check if already installed before trying to install
       const check = await (window as any).claude.remote.detectTailscale();
       if (check?.installed) {
-        // Already installed — skip to auth
+        // Already installed — skip to auth. This is also the path the Sign in and Turn
+        // on buttons take, which is why it must not go through the install confirmation.
         setSetupStatus('authenticating');
-        await (window as any).claude.remote.authTailscale();
-        setSetupStatus('done');
         setTailscale(check);
-        setTimeout(() => setSetupStatus('idle'), 3000);
+        const auth = await (window as any).claude.remote.authTailscale();
+        if (auth?.error) {
+          setSetupError(String(auth.error));
+          setSetupStatus('error');
+          return;
+        }
+        await runSetupCheck();
         return;
       }
 
@@ -2347,24 +2829,49 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
       const result = await (window as any).claude.remote.installTailscale();
       if (result?.success) {
         setSetupStatus('authenticating');
-        await (window as any).claude.remote.authTailscale();
-        setSetupStatus('done');
-        const ts = await (window as any).claude.remote.detectTailscale();
-        setTailscale(ts);
-        setTimeout(() => setSetupStatus('idle'), 3000);
+        const auth = await (window as any).claude.remote.authTailscale();
+        if (auth?.error) {
+          setSetupError(String(auth.error));
+          setSetupStatus('error');
+          return;
+        }
+        await runSetupCheck();
       } else {
-        setSetupError(result?.error || 'Installation failed');
+        // WHY not `|| 'Installation failed'`: a hardcoded fallback reason is an invented
+        // cause. Empty means the installer said nothing, and the panel then shows the
+        // general error with Report bug / Diagnose instead of naming a culprit.
+        setSetupError(result?.error ? String(result.error) : '');
         setSetupStatus('error');
       }
     } catch (err) {
       setSetupError(String(err));
       setSetupStatus('error');
     }
+  }, [runSetupCheck]);
+
+  useEffect(() => {
+    // WHY subscribe as well as fetch: a bind failure happens once, seconds after launch.
+    // Fetching alone shows it only if the panel happened to be open at that moment.
+    const off = (window as any).claude?.remote?.onStatus?.((st: RemoteStatus) => setRemoteStatus(st));
+    return () => { if (typeof off === 'function') off(); };
   }, []);
 
-  const handleDisconnectClient = useCallback(async (clientId: string) => {
-    await (window as any).claude.remote.disconnectClient(clientId);
-    setClients(prev => prev.filter(c => c.id !== clientId));
+  const handleUnpairDevice = useCallback(async (deviceId: string) => {
+    // WHY the row goes even when the device is offline: unpairing is a change to the
+    // record, not to a connection. Disconnect used to be the only option and left the
+    // credential valid, so the device came straight back.
+    // WHY the answer is read: the host returns false for an id it does not have — a row
+    // the panel is showing from a stale list. Removing it regardless told the user a
+    // device had lost access when nothing had changed, which is the same false success
+    // in the other direction. On a refusal or a failure the list is re-read instead, so
+    // what is on screen is what the host actually has.
+    const removed = await (window as any).claude.remote.devices.unpair(deviceId).catch(() => false);
+    if (removed === false) {
+      const fresh = await (window as any).claude.remote.devices?.list?.().catch(() => null);
+      if (Array.isArray(fresh)) setClients(fresh);
+      return;
+    }
+    setClients(prev => prev.filter(c => c.id !== deviceId));
     setConfig(prev => prev ? { ...prev, clientCount: Math.max(0, prev.clientCount - 1) } : prev);
   }, []);
 
@@ -2433,14 +2940,15 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onSetPassword={handleSetPassword}
           onToggleEnabled={handleToggleEnabled}
           enableError={enableError}
-          onToggleTailscaleTrust={handleToggleTailscaleTrust}
           onSetKeepAwake={handleSetKeepAwake}
           onRunSetup={handleRunSetup}
           onConfirmSetup={handleConfirmSetup}
           onCancelSetup={handleCancelSetup}
           setupStatus={setupStatus}
           setupError={setupError}
-          onDisconnectClient={handleDisconnectClient}
+          setupCheck={setupCheck}
+          onUnpairDevice={handleUnpairDevice}
+          status={remoteStatus}
           onCopyLink={handleCopyLink}
           onSetShowSetupQR={setShowSetupQR}
           onSetShowAddDevice={setShowAddDevice}

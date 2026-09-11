@@ -232,7 +232,8 @@ export default function ArcadeShell({ connection, chessConnection, incognito, on
           `overflow-hidden` while a game is open, so the board keeps its size
           and the chat below it can fill the remaining height instead of
           growing into an unbounded scroll container. */}
-      <div className={`flex-1 min-h-0 flex flex-col ${openGame?.kind === 'versus' ? 'overflow-hidden' : 'overflow-y-auto'}`}>
+      {/* a size container: the chess board reads `cqh` off it to stay inside a short pane (ChessBoard.tsx) */}
+      <div className={`flex-1 min-h-0 flex flex-col ${openGame?.kind === 'versus' ? 'overflow-hidden' : 'overflow-y-auto'}`} style={{ containerType: 'size' }}>
         {!openGame && (
           statuses === null
             ? <LoadingState what="games" />

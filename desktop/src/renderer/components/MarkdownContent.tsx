@@ -34,6 +34,101 @@ const rehypeMarkBlockCode: Plugin<[], Root> = () => (tree: Root) => {
 };
 
 /**
+ * Rehype plugin: support the one raw-HTML construct assistant replies commonly
+ * use, while keeping arbitrary model-generated HTML inert.
+ *
+ * react-markdown deliberately emits HTML as `raw` nodes unless rehype-raw is
+ * enabled. Rendering all raw HTML would unnecessarily widen the trust boundary,
+ * but leaving those nodes alone exposes standalone closing tags such as
+ * `</details>` as visible text. Convert only a strict details/summary pair into
+ * real HAST elements; every other raw node becomes escaped readable text with
+ * its tags removed.
+ */
+const rehypeSafeDisclosures: Plugin<[{ disclosures?: boolean }?], Root> =
+  (options) => (tree: Root) => {
+  const renderDisclosures = options?.disclosures ?? true;
+  const processChildren = (parent: Root | Element) => {
+    const children = parent.children;
+    for (let index = 0; index < children.length; index++) {
+      const child = children[index] as RootContent & { value?: string };
+      if (child.type === 'element') processChildren(child as Element);
+      if (child.type !== 'raw' || typeof child.value !== 'string') continue;
+
+      const combinedOpening = child.value.match(
+        /^\s*<details(\s+open)?\s*>\s*<summary>\s*([^<>]*?)\s*<\/summary>\s*$/i,
+      );
+      const detailsOnly = child.value.match(/^\s*<details(\s+open)?\s*>\s*$/i);
+      let summary = combinedOpening?.[2];
+      let contentStart = index + 1;
+      if (!summary && detailsOnly) {
+        // CommonMark inserts newline text nodes around HTML blocks. Ignore only
+        // whitespace while looking for a separately parsed <summary> node.
+        let summaryIndex = index + 1;
+        while (summaryIndex < children.length
+          && children[summaryIndex].type === 'text'
+          && hastText(children[summaryIndex]).trim() === '') summaryIndex++;
+        const summaryNode = children[summaryIndex] as RootContent & { value?: string };
+        const summaryMatch = summaryNode?.type === 'raw'
+          ? summaryNode.value?.match(/^\s*<summary>\s*([^<>]*?)\s*<\/summary>\s*$/i)
+          : null;
+        if (summaryMatch) {
+          summary = summaryMatch[1];
+          contentStart = summaryIndex + 1;
+        }
+      }
+
+      if (summary !== undefined && renderDisclosures) {
+        const closingIndex = children.findIndex(
+          (candidate, candidateIndex) => candidateIndex >= contentStart
+            && candidate.type === 'raw'
+            && /^\s*<\/details>\s*$/i.test((candidate as RootContent & { value?: string }).value ?? ''),
+        );
+        // Nested raw disclosures are deliberately flattened rather than paired
+        // incorrectly; only one unambiguous details/summary pair is promoted.
+        const hasNestedOpening = children.slice(contentStart, closingIndex).some(
+          (candidate) => candidate.type === 'raw'
+            && /^\s*<details(?:\s+open)?\s*>/i.test((candidate as RootContent & { value?: string }).value ?? ''),
+        );
+        if (closingIndex !== -1 && !hasNestedOpening) {
+          // A root may technically contain a doctype, but an element may not.
+          // Model replies do not need one inside a disclosure, so keep the HAST
+          // child contract exact rather than casting the wider RootContent type.
+          const disclosureChildren: Element['children'] = children
+            .slice(contentStart, closingIndex)
+            .filter((candidate) => candidate.type !== 'doctype');
+          const details: Element = {
+            type: 'element',
+            tagName: 'details',
+            properties: (combinedOpening?.[1] ?? detailsOnly?.[1]) ? { open: true } : {},
+            children: [
+              {
+                type: 'element',
+                tagName: 'summary',
+                properties: {},
+                children: [{ type: 'text', value: summary }],
+              },
+              ...disclosureChildren,
+            ],
+          };
+          processChildren(details);
+          children.splice(index, closingIndex - index + 1, details);
+          continue;
+        }
+      }
+
+      // WHY: preserve words from unsupported HTML without ever handing raw HTML
+      // to React. The tag matcher respects quoted `>` characters, so attributes
+      // cannot spill into text and become clickable in the later linkify pass.
+      const readable = child.value.replace(/<(?:"[^"]*"|'[^']*'|[^'">])*>/g, '').trim();
+      children.splice(index, 1, ...(readable ? [{ type: 'text' as const, value: readable }] : []));
+      if (!readable) index--;
+    }
+  };
+
+  processChildren(tree);
+};
+
+/**
  * Collect the raw text of a hast subtree.
  *
  * Fix: the Copy button used to read `child.props.children` and only accepted a
@@ -149,14 +244,22 @@ const rehypeLinkTokens: Plugin<[{ filepaths: boolean }], Root> =
 // switched on per-session in the memo below.
 const remarkPluginsStable = [remarkGfm];
 const rehypePluginsStable: PluggableList = [
+  rehypeSafeDisclosures,
   rehypeHighlight,
   rehypeMarkBlockCode,
   [rehypeLinkTokens, { filepaths: false }],
 ];
 const rehypePluginsWithFilepaths: PluggableList = [
+  rehypeSafeDisclosures,
   rehypeHighlight,
   rehypeMarkBlockCode,
   [rehypeLinkTokens, { filepaths: true }],
+];
+const rehypePluginsPreview: PluggableList = [
+  [rehypeSafeDisclosures, { disclosures: false }],
+  rehypeHighlight,
+  rehypeMarkBlockCode,
+  [rehypeLinkTokens, { filepaths: false }],
 ];
 
 function CopyButton({ text }: { text: string }) {
@@ -252,7 +355,10 @@ const mdComponents = {
       return <ConversationsFence body={codeText} />;
     }
     return (
-      <div className="relative group my-3">
+      // yc-code-block carries content-visibility so the browser can skip layout
+      // and paint for blocks scrolled out of view — see globals.css. A document
+      // with hundreds of fences is otherwise laid out in full before it paints.
+      <div className="yc-code-block relative group my-3">
         {/* yc-code is the hook the globals.css rule needs to out-specify
             highlight.js's own `pre code.hljs` box (see the .yc-code block
             there). Don't drop it. */}
@@ -379,9 +485,11 @@ export default React.memo(function MarkdownContent({ content, sessionId, preview
   // Both arrays are module-level constants, so this only picks between them —
   // URLs are linkified either way; the filepath half needs a session to resolve
   // a click against, and in preview mode nothing may be clickable at all.
-  const rehypePlugins = (sessionId && !preview)
-    ? rehypePluginsWithFilepaths
-    : rehypePluginsStable;
+  const rehypePlugins = preview
+    ? rehypePluginsPreview
+    : sessionId
+      ? rehypePluginsWithFilepaths
+      : rehypePluginsStable;
 
   const components = useMemo(() => {
     if (preview) return mdPreviewComponents;

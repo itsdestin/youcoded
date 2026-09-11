@@ -91,7 +91,11 @@ const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> =
 // layer, or is this genuinely a general error?
 const HARDCODED_ERROR_FALLBACK: Record<string, { count: number; why: string }> = {
   'AccountSection.tsx': { count: 1, why: "'Could not export data'" },
-  'SettingsPanel.tsx': { count: 1, why: "'Installation failed' — the local-models installer, not remote access" },
+  // SettingsPanel.tsx is off this list as of the remote-access batch. Its one entry was
+  // recorded as "the local-models installer, not remote access" — it was in fact remote
+  // access's own Tailscale install (`result?.error || 'Installation failed'`), so the
+  // batch that rewrote that flow was the right place to fix it. It now reports the
+  // installer's own reason, or the general error when the installer gave none.
   'SyncPanel.tsx': { count: 1, why: "'Could not remove this device.'" },
   'SyncSetupWizard.tsx': { count: 6, why: 'six sign-in / install / repo-create branches' },
 };

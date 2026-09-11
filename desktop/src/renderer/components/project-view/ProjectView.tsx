@@ -759,7 +759,10 @@ export function ProjectView(props: ProjectViewProps) {
                 onNewConversation={props.onNewConversation}
                 sync={heroSync}
                 onTurnOnSync={() => setTurnOnSyncFor({ path: activeProject.path, name: activeProject.name })}
-                onSyncNow={(spaceId) => { void (window.claude as any).syncSpaces.syncNow(spaceId); }}
+                // .catch: the phone's bridge refuses sync-now (no engine there), and a
+                // refused promise nobody catches is an unhandled rejection in the console.
+                // The sync dot already shows the outcome; nothing to say here.
+                onSyncNow={(spaceId) => { void (window.claude as any).syncSpaces.syncNow(spaceId).catch(() => {}); }}
                 onRenamed={async () => {
                   // try/catch + slash/case-normalized match — same conventions
                   // as handleAdded (exact === path compare is a latent Windows
@@ -904,8 +907,16 @@ export function ProjectView(props: ProjectViewProps) {
               model this must take its NATURAL height and let the page scroll,
               not clamp itself to the viewport and scroll internally. */}
           <div className="flex-1 overflow-hidden min-h-0 w-full max-w-[1100px] mx-auto max-sm:flex-none max-sm:overflow-visible">
-            {activeProject && tab === 'files' && (
-              <FilesTab project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={() => setCountsKey((k) => k + 1)} onClearSearch={() => setArtifactSearch('')} onCurrentDirChange={setCurrentRelDir} />
+            {/* Files stays MOUNTED and hides when another tab is active. It is
+                the only tab that holds a main-process project watcher, and
+                dropping it on the way out means rebuilding it (a full tree walk
+                that freezes the app) on the way back — clicking Files /
+                Conversations eight times cost 7.5 s of stall before this.
+                Conversations and Context hold no such resource, so they stay
+                conditional. Side benefit: the folder you were browsing and the
+                file you had open are still there when you come back. */}
+            {activeProject && (
+              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={() => setCountsKey((k) => k + 1)} onClearSearch={() => setArtifactSearch('')} onCurrentDirChange={setCurrentRelDir} />
             )}
             {activeProject && tab === 'conversations' && (
               <ConversationsTab conversations={conversations} onOpenPreview={setPreviewSession} />

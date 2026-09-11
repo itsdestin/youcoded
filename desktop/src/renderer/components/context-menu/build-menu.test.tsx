@@ -170,3 +170,62 @@ describe('previewed-conversation right-click (spec §A3)', () => {
     expect(composed).toBe(`${COPY.askPreviewContext('Untitled thread', 'conv-2')} Earlier I wrote:\n"my question"\n\nThe user has a follow-up: `);
   });
 });
+
+// Destin, 2026-09-10: tool card titles, chips and other app chrome must not be
+// highlightable OR copyable from the right-click menu. CSS makes them
+// unselectable (globals.css — every <button>; `select-none` on chrome areas);
+// these pin the menu half, which CSS cannot reach: `bubble.textContent` reads
+// unselectable text just the same.
+describe('app chrome is not copy material', () => {
+  // An assistant message holding prose, a tool-group title (a <button>), an
+  // unselectable label, and a clickable file name (a <button> opted back in
+  // with `select-text`, because a file name IS part of the message's words).
+  function mountMessageWithChrome() {
+    const scroller = document.createElement('div');
+    scroller.className = 'chat-scroll';
+    const bubble = document.createElement('div');
+    bubble.className = 'assistant-bubble';
+    bubble.innerHTML =
+      '<p id="prose">Edited </p>' +
+      '<button id="file" class="select-text" data-file-path="/proj/src/app.ts">app.ts</button>' +
+      '<span id="sep" class="select-none">|</span>' +
+      '<div class="border-edge"><button id="tool">Ran 6 commands</button></div>';
+    scroller.appendChild(bubble);
+    document.body.appendChild(scroller);
+    const $ = (id: string) => bubble.querySelector<HTMLElement>(`#${id}`)!;
+    return { bubble, prose: $('prose'), file: $('file'), sep: $('sep'), tool: $('tool') };
+  }
+
+  it('right-clicking a tool card title shows no menu at all', () => {
+    const { tool } = mountMessageWithChrome();
+    expect(buildContextMenu(tool)).toBeNull();
+  });
+
+  it('right-clicking an unselectable label shows no menu at all', () => {
+    const { sep } = mountMessageWithChrome();
+    expect(buildContextMenu(sep)).toBeNull();
+  });
+
+  it('a clickable file name keeps its own menu (it is a button, but not chrome)', () => {
+    const { file } = mountMessageWithChrome();
+    const ids = buildContextMenu(file)?.filter((e) => e.type === 'item').map((e: any) => e.id);
+    expect(ids).toContain('copy-path');
+  });
+
+  it('"Ask about this" on the prose quotes the message without the tool title, keeping the file name', () => {
+    const { prose } = mountMessageWithChrome();
+    const composed = composedTextFor(prose);
+    expect(composed).toBe('In an earlier message, you said:\n"Edited app.ts"\n\nThe user has a follow-up: ');
+  });
+
+  it('whole-message Copy leaves chrome text out', async () => {
+    const { prose } = mountMessageWithChrome();
+    const writeText = vi.fn(async () => {});
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const copy = buildContextMenu(prose)?.find((e) => e.type === 'item' && e.id === 'copy');
+    expect(copy && copy.type === 'item' && !copy.disabled).toBe(true);
+    if (copy?.type === 'item') copy.run();
+    await vi.waitFor(() => expect(writeText).toHaveBeenCalled());
+    expect(writeText).toHaveBeenCalledWith('Edited app.ts');
+  });
+});
