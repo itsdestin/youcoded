@@ -13,11 +13,13 @@
 //
 // Both the OUTPUT and the INPUT are bounded. This used to read and parse the
 // WHOLE file to number the messages, and a click on a 42 MB conversation froze
-// the main process — every live chat with it — for ~100 ms (measured
-// 2026-09-11). It now reads a window off the END of the file, the way the main
-// chat's own history pager does (transcript-page.ts), growing the window only
-// when the tail holds too few messages. A message's `seq` is the byte offset of
-// its line, so "Load older" is just the next window ending at that offset.
+// the main process — every live chat with it — for ~120 ms (measured
+// 2026-09-11). It now reads backwards from the END of the file in growing
+// chunks, the way the main chat's own history pager reads a window
+// (transcript-page.ts), and stops as soon as it holds enough messages. Each
+// chunk ends where the previous one began, so no byte is read or parsed twice.
+// A message's `seq` is the byte offset of its line, so "Load older" is just
+// another read ending at that offset.
 import fs from 'node:fs';
 import path from 'node:path';
 import type { ChatsearchReadRequest, ChatsearchReadResponse, TranscriptMessage } from '../../shared/chatsearch-refs';
@@ -27,9 +29,9 @@ const SESSION_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 const NUL = String.fromCharCode(0);
 const NEWLINE = 0x0a;
 
-/** First window read off the end. Forty messages of a real conversation
- *  (2026-09-11 sample: 20–70 KB of text) almost always fit, tool output and
- *  all; when they don't, the window grows ×4 until they do. */
+/** First chunk read off the end; each further chunk is ×4 the last. Forty
+ *  messages of a tool-heavy real conversation took ~8.5 MB (2026-09-11), a
+ *  chatty one far less — growing covers both without over-reading the small. */
 export const FIRST_WINDOW_BYTES = 512 * 1024;
 /** Enough for a native header line; the header is a few hundred bytes. */
 const HEAD_BYTES = 64 * 1024;
@@ -51,14 +53,12 @@ function toolUsesIn(content: unknown): number {
 }
 
 /** One JSONL line and the byte offset it starts at. */
-export interface ScannedLine { offset: number; text: string }
-
-// Null-byte lines are NTFS pre-allocation gaps left by a killed process, not
-// data — a JSON.parse of one throws and would otherwise look like corruption.
-const isData = (l: ScannedLine) => !!l.text.trim() && !l.text.includes(NUL);
+interface ScannedLine { offset: number; text: string }
+/** A line that parsed, and where it was. */
+interface ParsedLine { offset: number; value: any }
 
 /** Whole-text form, for callers that already hold the file. Offsets are BYTES,
- *  the same unit the windowed reader uses, so `seq` means one thing. */
+ *  the same unit the chunked reader uses, so `seq` means one thing. */
 function linesOf(text: string): ScannedLine[] {
   const out: ScannedLine[] = [];
   let offset = 0;
@@ -87,19 +87,26 @@ function scanLines(buf: Buffer, from: number): ScannedLine[] {
   return lines;
 }
 
-function parseClaudeLines(lines: ScannedLine[]): { messages: TranscriptMessage[]; allSidechain: boolean } {
+function parseLines(lines: ScannedLine[]): ParsedLine[] {
+  const out: ParsedLine[] = [];
+  for (const l of lines) {
+    // Null-byte lines are NTFS pre-allocation gaps left by a killed process,
+    // not data — a JSON.parse of one throws and would look like corruption.
+    if (!l.text.trim() || l.text.includes(NUL)) continue;
+    try { out.push({ offset: l.offset, value: JSON.parse(l.text) }); } catch { /* torn line at the tail of a file being written */ }
+  }
+  return out;
+}
+
+function claudeMessages(parsed: ParsedLine[]): { messages: TranscriptMessage[]; allSidechain: boolean } {
   // Last occurrence wins — loadHistory's rule — but a message keeps the offset
   // of its FIRST occurrence, so it stays where it first appeared and paging
   // before that offset can never return it again.
   const byUuid = new Map<string, { p: any; offset: number }>();
-  for (const l of lines) {
-    if (!isData(l)) continue;
-    try {
-      const p = JSON.parse(l.text);
-      if (p && p.uuid && (p.type === 'user' || p.type === 'assistant')) {
-        byUuid.set(p.uuid, { p, offset: byUuid.get(p.uuid)?.offset ?? l.offset });
-      }
-    } catch { /* torn line at the tail of a file being written */ }
+  for (const { offset, value: p } of parsed) {
+    if (p && p.uuid && (p.type === 'user' || p.type === 'assistant')) {
+      byUuid.set(p.uuid, { p, offset: byUuid.get(p.uuid)?.offset ?? offset });
+    }
   }
   const out: TranscriptMessage[] = [];
   let dropped = 0, seen = 0, sidechain = 0;
@@ -132,13 +139,10 @@ function parseClaudeLines(lines: ScannedLine[]): { messages: TranscriptMessage[]
   return { messages: out, allSidechain: seen > 0 && sidechain === seen };
 }
 
-function parseNativeLines(lines: ScannedLine[]): TranscriptMessage[] {
+function nativeMessages(parsed: ParsedLine[]): TranscriptMessage[] {
   const out: TranscriptMessage[] = [];
   let dropped = 0;
-  for (const l of lines) {
-    if (!isData(l)) continue;
-    let ev: any;
-    try { ev = JSON.parse(l.text); } catch { continue; }
+  for (const { offset, value: ev } of parsed) {
     if (!ev || typeof ev.type !== 'string') continue; // the header line has no type
     if (ev.type === 'tool-use') { dropped += 1; continue; }
     if (ev.type !== 'user-message' && ev.type !== 'assistant-text') continue;
@@ -146,7 +150,7 @@ function parseNativeLines(lines: ScannedLine[]): TranscriptMessage[] {
     if (!t) continue;
     out.push({
       role: ev.type === 'user-message' ? 'user' : 'assistant',
-      content: t, timestamp: Number(ev.timestamp) || 0, seq: l.offset, droppedToolCalls: dropped,
+      content: t, timestamp: Number(ev.timestamp) || 0, seq: offset, droppedToolCalls: dropped,
     });
     dropped = 0;
   }
@@ -155,12 +159,12 @@ function parseNativeLines(lines: ScannedLine[]): TranscriptMessage[] {
 
 /** Claude Code JSONL → messages (+ whether every line was a subagent sidechain). */
 export function parseClaudeTranscript(text: string): { messages: TranscriptMessage[]; allSidechain: boolean } {
-  return parseClaudeLines(linesOf(text));
+  return claudeMessages(parseLines(linesOf(text)));
 }
 
 /** Native session JSONL (header line + TranscriptEvent lines) → messages. */
 export function parseNativeTranscript(text: string): TranscriptMessage[] {
-  return parseNativeLines(linesOf(text));
+  return nativeMessages(parseLines(linesOf(text)));
 }
 
 /** Is this native file a specialist's transcript rather than a conversation?
@@ -223,7 +227,7 @@ export interface ReadDeps {
    *  + how many — so re-opening a conversation, or hovering then clicking it,
    *  reads nothing at all while the file is unchanged. */
   cache: Map<string, SliceCacheEntry>;
-  /** Seams for tests: observe the byte ranges read, or shrink the window. */
+  /** Seams for tests: observe the byte ranges read, or shrink the first chunk. */
   readRange?: (file: string, start: number, end: number) => Promise<Buffer>;
   firstWindowBytes?: number;
 }
@@ -262,28 +266,37 @@ export async function readTranscriptSlice(req: ChatsearchReadRequest, deps: Read
     if (req.provider === 'native' && isNativeSpecialist((await read(chosen, 0, Math.min(HEAD_BYTES, st.size))).toString('utf8'))) {
       return { ok: false, error: COPY.errNotAConversation };
     }
+    // `parsed` holds every line in [cursor, end), in file order. Each chunk ends
+    // at `cursor` — the start of the oldest complete line already held — so
+    // lines are read and parsed exactly once however far back this has to go.
+    let parsed: ParsedLine[] = [];
+    let cursor = end;
     let result: SliceCacheEntry = { ok: true, messages: [], hasMore: false };
-    for (let span = deps.firstWindowBytes ?? FIRST_WINDOW_BYTES; end > 0; span *= 4) {
-      const windowStart = Math.max(0, end - span);
+    for (let span = deps.firstWindowBytes ?? FIRST_WINDOW_BYTES; cursor > 0; span *= 4) {
+      const windowStart = Math.max(0, cursor - span);
       const from = windowStart > 0 ? windowStart - 1 : 0;
-      const lines = scanLines(await read(chosen, from, end), from);
+      const lines = scanLines(await read(chosen, from, cursor), from);
+      // No complete line in this chunk (one line longer than it): leave the
+      // cursor where it is and read a bigger chunk.
+      if (from > 0 && !lines.length) continue;
+      parsed = parseLines(lines).concat(parsed);
+      cursor = from === 0 ? 0 : lines[0].offset;
       let messages: TranscriptMessage[];
       if (req.provider === 'native') {
-        messages = parseNativeLines(lines);
+        messages = nativeMessages(parsed);
       } else {
-        const r = parseClaudeLines(lines);
+        const r = claudeMessages(parsed);
         if (r.allSidechain) return { ok: false, error: COPY.errNotAConversation };
         messages = r.messages;
       }
-      // The oldest message in a window that does NOT reach the file's start
-      // has an unknown gap before it — the tool calls that closed it may be
-      // just outside the window. Never show that count: drop the message and
-      // let a wider window (or "Load older") supply it with its real count.
-      // `from`, not `windowStart`: a window starting at byte 1 reads from 0,
-      // so it DID reach the start and its oldest count is complete.
-      const honest = from > 0 ? messages.slice(1) : messages;
-      if (honest.length >= n || from === 0) {
-        result = { ok: true, messages: honest.slice(-n), hasMore: from > 0 || honest.length > n };
+      // The oldest message held has an unknown gap before it unless the read
+      // reached the start of the file — the tool calls that closed that gap may
+      // be just before the cursor. Never show that count: drop the message and
+      // let the next chunk (or "Load older") supply it with its real count.
+      const atStart = cursor === 0;
+      const honest = atStart ? messages : messages.slice(1);
+      if (honest.length >= n || atStart) {
+        result = { ok: true, messages: honest.slice(-n), hasMore: !atStart || honest.length > n };
         break;
       }
     }
