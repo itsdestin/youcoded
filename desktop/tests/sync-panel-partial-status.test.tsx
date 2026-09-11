@@ -22,7 +22,7 @@
 
 import React from 'react';
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { render, cleanup, waitFor } from '@testing-library/react';
+import { render, cleanup, waitFor, fireEvent, screen } from '@testing-library/react';
 import SyncSection from '../src/renderer/components/SyncPanel';
 
 function spacesStatus() {
@@ -69,6 +69,22 @@ async function renderOpen() {
 
 describe('Backup & Sync — a partial status must not crash the app', () => {
   afterEach(() => { cleanup(); delete (window as any).claude; });
+
+  it('explains what happened and where to find conflicting changes without sync jargon', async () => {
+    installClaudeMock([]);
+    (window as any).claude.syncSpaces.status.mockResolvedValue({
+      ...spacesStatus(), recentEvents: [{ type: 'conflict', spaceId: 'personal', copies: ['notes (from Laptop, 2026-09-09).md'], at: Date.now() }],
+    });
+    await renderOpen();
+    // WHY: users need a filename cue, not sync internals or a promise that a deleted file still exists.
+    const explanation = 'Conflicting changes were saved in separate files. Look for “(from …)” in their names.';
+    const notice = screen.getByText(explanation);
+    expect(notice.textContent).not.toMatch(/local|remote|canonical|resolving device|original filename/i);
+    fireEvent.click(screen.getByRole('button', { name: 'What is this?' }));
+    await waitFor(() => expect(document.body.textContent).toContain('About Backup & Sync'));
+    expect(document.body.textContent).toContain(`${explanation} They appear in the same folder as the affected file.`);
+    expect(document.body.textContent).not.toMatch(/resolving the conflict|original filename/i);
+  });
 
   // The exact payload the workbench catch-all used to return.
   it('survives getStatus() answering [] (the workbench catch-all default)', async () => {

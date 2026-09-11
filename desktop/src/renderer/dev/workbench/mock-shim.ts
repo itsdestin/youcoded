@@ -1455,7 +1455,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // in the workbench, but it is not what the public landing page's live demo
       // should greet a first-time visitor with — so the `site` scenario (and only
       // it) gets the all-green history instead.
-      recentEvents: activeScenario === 'site'
+      // WHY: a deterministic conflict-only fixture exposes the notice without the
+      // default error taking its place. Uses existing payloads; no backend claim.
+      recentEvents: new URLSearchParams(location.search).get('syncReview') === 'conflict'
+        ? [{ type: 'conflict', spaceId: 'project:youcoded', copies: ['notes (from Z13 Laptop, 2026-09-09).md'], at: SYNC_NOW - 120_000 }]
+        : activeScenario === 'site'
         ? [
             { type: 'synced', spaceId: 'personal', at: SYNC_NOW - 60_000 },
             { type: 'synced', spaceId: 'project:youcoded', at: SYNC_NOW - 120_000 },

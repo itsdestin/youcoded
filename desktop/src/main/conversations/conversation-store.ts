@@ -8,6 +8,7 @@
 // healer below cleans up the rare record-level conflict copies it does produce.
 import fs from 'node:fs';
 import path from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 import {
   ConversationRecord,
@@ -63,6 +64,14 @@ const EPOCH = '1970-01-01T00:00:00.000Z';
 // Quarantine marker the healer appends when it atomically CLAIMS a conflict
 // copy (see heal()). Files carrying it are healer-private intermediates.
 const HEALING_MARKER = '.healing-';
+
+function originalConflictName(name: string): string {
+  // WHY: device labels may contain the marker. Discovery and healing must
+  // agree: only strip a claim suffix after the original record extension.
+  if (isConflictCopyName(name)) return name;
+  const h = name.lastIndexOf('.json' + HEALING_MARKER);
+  return h < 0 ? name : name.slice(0, h + 5);
+}
 
 // SECURITY (review fix 1): `provider` and `id` become path segments, and this
 // store sits near IPC/remote surfaces, so raw strings could traverse out of the
@@ -140,6 +149,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
     provider: string,
     id: string,
     fn: (onDisk: ConversationRecord | null) => ConversationRecord,
+    strictExisting = false,
   ): Promise<ConversationRecord> {
     // recordPath validates provider + id and THROWS on traversal — this is the
     // single chokepoint every write path funnels through (review fix 1).
@@ -153,6 +163,12 @@ export function createConversationStore(conversationsRoot: string): Conversation
     // whole read+compute+write.
     const committed = await mutateFileUnderLock(target, (onDisk) => {
       const existing = onDisk ? parseRecord(onDisk) : null;
+      // WHY: healing may seed only an absent canonical, never replace evidence
+      // it cannot interpret. Check inside the lock, including present empty files.
+      if (strictExisting && onDisk !== null &&
+          (!existing || existing.id !== id || existing.provider !== provider)) {
+        throw new Error(`conversation-store: cannot heal invalid canonical ${provider}/${id}`);
+      }
       result = fn(existing);
       return JSON.stringify(result, null, 2);
     });
@@ -175,9 +191,9 @@ export function createConversationStore(conversationsRoot: string): Conversation
   // heal can remove the copy and the engine can write NEW conflict content at
   // the very same name (its free-name probe sees the name free; the date suffix
   // is day-granular). Our unlink would then destroy unfolded data. Renaming to
-  // '<copy>.healing-<pid>' atomically claims the EXACT content we read: the
-  // engine can never collide with a claimed name, and everything we later
-  // delete is a name only we created.
+  // '<copy>.healing-<pid>-<nonce>' gives each claim a private name, including
+  // recovery of another healer's claim. Cleanup cannot delete a recreated copy
+  // or a later claim; the bytes actually claimed are revalidated before folding.
   async function heal(provider: string, id: string): Promise<void> {
     const dir = providerDir(provider);
     let names: string[];
@@ -185,72 +201,37 @@ export function createConversationStore(conversationsRoot: string): Conversation
     try { names = fs.readdirSync(dir); } catch { return; }
     const baseName = `${id}.json`;
 
-    // CRASH RECOVERY: a healer that died after claiming left
-    // '<copy>.healing-<pid>' behind — junk that would otherwise sync forever.
-    // Adopt such files into this fold. Refolding content a previous healer
-    // already folded is harmless (the fold is idempotent), and if the file
-    // belongs to a LIVE concurrent healer, both of us fold the same bytes and
-    // the ENOENT guards below absorb whichever deletion lands second.
-    const claimed: string[] = names
-      .filter((n) => {
-        const h = n.indexOf(HEALING_MARKER);
-        if (h < 0) return false;
-        const original = n.slice(0, h);
-        return isConflictCopyName(original) && extractConflictBase(original) === baseName;
-      })
-      .map((n) => path.join(dir, n));
-
-    // Live conflict copies whose canonical base is exactly this id's file.
-    // extractConflictBase runs to the LAST ')' before .json (device names may
-    // contain ')'), so this correctly scopes to <id>.json copies only.
-    const copies = names.filter(
-      (n) => isConflictCopyName(n) && extractConflictBase(n) === baseName,
-    );
-
-    for (const n of copies) {
+    const validated: { path: string; record: ConversationRecord }[] = [];
+    for (const n of names) {
+      // Recover claims regardless of age/PID, without accumulating suffixes.
+      const original = originalConflictName(n);
+      if (!isConflictCopyName(original) || extractConflictBase(original) !== baseName) continue;
       const full = path.join(dir, n);
-      // Review fix 5b: a copy that parses to a VALID record with a DIFFERENT id
-      // is someone's data under a misleading filename — leave it in place for
-      // investigation; never fold it, never delete it. (Unreadable/corrupt
-      // copies fall through to claiming: unparseable content carries nothing
-      // usable as a record and would re-trigger healing forever if kept.)
-      let peek: ConversationRecord | null = null;
-      try { peek = parseRecord(fs.readFileSync(full, 'utf8')); } catch { /* vanished — claim attempt below sorts it out */ }
-      if (peek && peek.id !== id) continue;
-      // Atomic claim. ENOENT (or any rename failure) means another healer
-      // claimed or removed this copy first — skip it; their fold covers it.
-      const quarantine = full + HEALING_MARKER + process.pid;
-      try {
-        fs.renameSync(full, quarantine);
-        claimed.push(quarantine);
-      } catch { /* lost the claim race — not ours to heal */ }
+      // WHY: read/parse failure is not proof of disposable data. Preflight also
+      // leaves unreadable or rejected old claims in place rather than renaming
+      // them on every read. It is NOT proof of the bytes we will actually claim.
+      let peek: ConversationRecord | null;
+      try { peek = parseRecord(fs.readFileSync(full, 'utf8')); } catch { continue; }
+      if (!peek || peek.id !== id || peek.provider !== provider) continue;
+      const quarantine = path.join(dir, original) + HEALING_MARKER + process.pid + '-' + randomUUID();
+      try { fs.renameSync(full, quarantine); } catch { continue; }
+      // Another live healer may reclaim this private path. If it already read
+      // the bytes, both folds are safe; if not, ENOENT skips its contribution.
+      // Never restore over an original name that the engine may have recreated.
+      let record: ConversationRecord | null;
+      try { record = parseRecord(fs.readFileSync(quarantine, 'utf8')); } catch { continue; }
+      if (!record || record.id !== id || record.provider !== provider) continue;
+      validated.push({ path: quarantine, record });
     }
-    if (claimed.length === 0) return;
-
-    // Read the claimed content. A quarantine file can still vanish under a
-    // concurrent adopter (see crash-recovery note) — per-file try/catch keeps
-    // one loss from aborting the fold of the rest.
-    const parsed = claimed
-      .map((q) => {
-        try { return parseRecord(fs.readFileSync(q, 'utf8')); }
-        catch { return null; }
-      })
-      .filter((r): r is ConversationRecord => !!r && r.id === id);
-
-    if (parsed.length > 0) {
-      await mutateRecord(provider, id, (existing) =>
-        // With a canonical on disk: fold ALL copies into it. Without one (only
-        // conflict copies exist): seed from the first copy and fold the rest.
-        // foldConflictCopies picks each field over its ORIGINAL inputs, so the
-        // result is independent of directory enumeration order.
-        foldConflictCopies(existing ?? parsed[0], existing ? parsed : parsed.slice(1)));
-    }
-    // Delete the quarantine files ONLY after the fold landed — if mutateRecord
-    // threw above, they stay on disk and the next heal adopts them (no data
-    // loss on a failed fold). Unparseable claims are deleted too: they carry
-    // nothing usable as a record. ENOENT tolerated (concurrent adopter).
-    for (const q of claimed) {
-      try { fs.unlinkSync(q); } catch { /* already gone */ }
+    if (validated.length === 0) return;
+    const parsed = validated.map(({ record }) => record);
+    await mutateRecord(provider, id, (existing) =>
+      // Preserve field selection over ORIGINAL inputs, including copies-only seeding.
+      foldConflictCopies(existing ?? parsed[0], existing ? parsed : parsed.slice(1)), true);
+    // Only successfully incorporated private paths are disposable. A failed
+    // commit leaves all evidence; a failed unlink leaves an idempotent retry.
+    for (const { path: q } of validated) {
+      try { fs.unlinkSync(q); } catch { /* retained or reclaimed — retry later */ }
     }
   }
 
@@ -334,8 +315,7 @@ export function createConversationStore(conversationsRoot: string): Conversation
       // a stuck lock on ONE record must not empty the whole list.
       for (const n of names) {
         // A stale quarantine name maps back to its original conflict-copy name.
-        const h = n.indexOf(HEALING_MARKER);
-        const original = h >= 0 ? n.slice(0, h) : n;
+        const original = originalConflictName(n);
         if (isConflictCopyName(original)) {
           const base = extractConflictBase(original);
           if (base) {

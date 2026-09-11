@@ -330,9 +330,8 @@ describe('createConversationStore', () => {
     expect(noHealingLeftovers(path.join(tmp, 'claude'))).toBe(true);
   });
 
-  // Review fix 5d: a corrupt copy is deleted (unparseable junk) while valid
-  // copies in the same pass still fold in.
-  it('heal deletes a corrupt copy while folding valid copies', async () => {
+  // WHY: inability to parse is not permission to discard original evidence.
+  it('heal preserves a corrupt copy while folding valid copies', async () => {
     stage(tmp, 'claude', 'sess-1.json', recJson({ id: 'sess-1', flags: {} }));
     stage(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json', 'corrupt garbage {{{');
     stage(tmp, 'claude', 'sess-1 (from B, 2026-07-03).json', recJson({
@@ -342,9 +341,156 @@ describe('createConversationStore', () => {
 
     const rec = await store.get('claude', 'sess-1');
     expect(rec!.flags.complete.value).toBe(true); // valid copy folded
-    expect(fs.existsSync(path.join(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json'))).toBe(false);
+    expect(fs.readFileSync(path.join(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json'), 'utf8')).toBe('corrupt garbage {{{');
     expect(fs.existsSync(path.join(tmp, 'claude', 'sess-1 (from B, 2026-07-03).json'))).toBe(false);
     expect(noHealingLeftovers(path.join(tmp, 'claude'))).toBe(true);
+  });
+
+  it.each(['{{{', '', '{}', recJson({ id: 'other' }), recJson({ provider: 'native' })])(
+    'heal preserves invalid canonical bytes %j and its claims', async (bytes) => {
+      stage(tmp, 'claude', 'sess-1.json', bytes);
+      stage(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json', recJson());
+      await store.get('claude', 'sess-1');
+      expect(fs.readFileSync(path.join(tmp, 'claude', 'sess-1.json'), 'utf8')).toBe(bytes);
+      const claims = fs.readdirSync(path.join(tmp, 'claude')).filter(n => n.includes('.healing-'));
+      expect(claims).toHaveLength(1);
+      expect(fs.readFileSync(path.join(tmp, 'claude', claims[0]), 'utf8')).toBe(recJson());
+      // WHY: unlike fail-soft get/list, a write must stop before replacing evidence.
+      await expect(store.upsert({ id: 'sess-1', provider: 'claude', title: 'New title' }))
+        .rejects.toThrow('cannot heal invalid canonical');
+      expect(fs.readFileSync(path.join(tmp, 'claude', 'sess-1.json'), 'utf8')).toBe(bytes);
+      const remaining = fs.readdirSync(path.join(tmp, 'claude')).filter(n => n.includes('.healing-'));
+      expect(remaining).toHaveLength(1);
+      expect(fs.readFileSync(path.join(tmp, 'claude', remaining[0]), 'utf8')).toBe(recJson());
+    },
+  );
+
+  it.each(['{{{', '{}', recJson({ id: 'other' }), recJson({ provider: 'native' })])(
+    'heal leaves invalid originals and old claims untouched without seeding %j', async (bytes) => {
+      const original = 'sess-1 (from A, 2026-07-03).json';
+      const oldClaim = original + `.healing-${process.pid}`;
+      stage(tmp, 'claude', original, bytes);
+      stage(tmp, 'claude', oldClaim, bytes);
+      expect(await store.get('claude', 'sess-1')).toBeNull();
+      expect(await store.list('claude')).toEqual([]);
+      expect(fs.readdirSync(path.join(tmp, 'claude')).sort()).toEqual([original, oldClaim].sort());
+      for (const name of [original, oldClaim]) {
+        expect(fs.readFileSync(path.join(tmp, 'claude', name), 'utf8')).toBe(bytes);
+      }
+    },
+  );
+
+  it.each(['', '.healing-123-old-nonce'])('heal recognizes marker text in device labels %s', async (suffix) => {
+    stage(tmp, 'claude', 'sess-1 (from Laptop.healing-backup, 2026-07-03).json' + suffix, recJson());
+    expect((await store.list('claude')).map(record => record.title)).toEqual(['Hello']);
+    expect((await store.get('claude', 'sess-1'))?.title).toBe('Hello');
+    expect(fs.readdirSync(path.join(tmp, 'claude'))).toEqual(['sess-1.json']);
+  });
+
+  it.each(['original', 'claim'])('heal retries transient %s read failures without losing bytes', async (phase) => {
+    const name = 'sess-1 (from A, 2026-07-03).json';
+    stage(tmp, 'claude', name, recJson());
+    const read = fs.readFileSync;
+    const spy = vi.spyOn(fs, 'readFileSync').mockImplementation((file, ...args) => {
+      if (String(file).includes(phase === 'claim' ? '.healing-' : name)) {
+        throw Object.assign(new Error('injected read failure'), { code: 'EIO' });
+      }
+      return read(file, ...args);
+    });
+    expect(await store.get('claude', 'sess-1')).toBeNull();
+    spy.mockRestore();
+    const names = fs.readdirSync(path.join(tmp, 'claude'));
+    expect(names).toHaveLength(1);
+    expect(phase === 'original' ? names[0] === name : names[0].includes('.healing-')).toBe(true);
+    expect(fs.readFileSync(path.join(tmp, 'claude', names[0]), 'utf8')).toBe(recJson());
+    expect((await store.get('claude', 'sess-1'))?.title).toBe('Hello');
+    expect(noHealingLeftovers(path.join(tmp, 'claude'))).toBe(true);
+  });
+
+  it.each(['{{{', '{}', recJson({ id: 'other' }), recJson({ provider: 'native' })])(
+    'heal revalidates replaced claimed bytes and cleans only a persisted valid sibling %j', async (bytes) => {
+      const name = 'sess-1 (from A, 2026-07-03).json';
+      const dir = path.join(tmp, 'claude');
+      const oldClaim = name + `.healing-${process.pid}`;
+      stage(tmp, 'claude', oldClaim, 'retained evidence');
+      stage(tmp, 'claude', name, recJson());
+      stage(tmp, 'claude', 'sess-1 (from B, 2026-07-03).json', recJson());
+      const rename = fs.renameSync;
+      const claimed: string[] = [];
+      vi.spyOn(fs, 'renameSync').mockImplementation((from, to) => {
+        if (String(from) === path.join(dir, name)) fs.writeFileSync(from, bytes);
+        claimed.push(String(to));
+        rename(from, to);
+      });
+      const unlink = fs.unlinkSync;
+      const cleaned: string[] = [];
+      vi.spyOn(fs, 'unlinkSync').mockImplementation(file => {
+        expect(JSON.parse(fs.readFileSync(path.join(dir, 'sess-1.json'), 'utf8')).title).toBe('Hello');
+        cleaned.push(String(file));
+        unlink(file);
+      });
+      await store.get('claude', 'sess-1');
+      expect(claimed).toHaveLength(2);
+      expect(new Set(claimed).size).toBe(2);
+      for (const file of claimed) expect(file).toMatch(/\.healing-\d+-[0-9a-f-]{36}$/);
+      const validClaim = claimed.find(file => file.includes('(from B,'))!;
+      const invalidClaim = claimed.find(file => file.includes('(from A,'))!;
+      expect(cleaned).toEqual([validClaim]);
+      expect(fs.readFileSync(invalidClaim, 'utf8')).toBe(bytes);
+      expect(fs.readFileSync(path.join(dir, oldClaim), 'utf8')).toBe('retained evidence');
+    },
+  );
+
+  it.each(['read', 'rename', 'unlink'])('heal retains claims after canonical %s failure and retries', async (fault) => {
+    stage(tmp, 'claude', 'sess-1.json', recJson({ title: 'Before' }));
+    stage(tmp, 'claude', 'sess-1 (from A, 2026-07-03).json', recJson({ title: 'After', lastActive: '2026-07-04T00:00:00Z' }));
+    const target = path.join(tmp, 'claude', 'sess-1.json');
+    const before = fs.readFileSync(target, 'utf8');
+    if (fault === 'read') vi.spyOn(fs.promises, 'readFile').mockRejectedValueOnce(Object.assign(new Error('injected'), { code: 'EIO' }));
+    if (fault === 'rename') vi.spyOn(fs.promises, 'rename').mockRejectedValueOnce(new Error('injected'));
+    if (fault === 'unlink') vi.spyOn(fs, 'unlinkSync').mockImplementationOnce(() => { throw new Error('injected'); });
+    await store.get('claude', 'sess-1');
+    expect(noHealingLeftovers(path.join(tmp, 'claude'))).toBe(false);
+    if (fault !== 'unlink') expect(fs.readFileSync(target, 'utf8')).toBe(before);
+    vi.restoreAllMocks();
+    expect((await store.get('claude', 'sess-1'))?.title).toBe('After');
+    expect(noHealingLeftovers(path.join(tmp, 'claude'))).toBe(true);
+  });
+
+  it('concurrent healer reclaims an already-read claim without deleting recreated originals', async () => {
+    const dir = path.join(tmp, 'claude');
+    const name = 'sess-1 (from A, 2026-07-03).json';
+    stage(tmp, 'claude', name, recJson({ flags: { pinned: { value: true, updatedAt: '2026-07-03T00:00:00Z' } } }));
+    const mkdir = fs.promises.mkdir;
+    let entered!: () => void;
+    let release!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    const barrier = new Promise<void>(resolve => { release = resolve; });
+    let pause = true;
+    // WHY: pause before acquiring the canonical lock, after the claim was read;
+    // the second healer can reclaim and commit it without a timing-based sleep.
+    vi.spyOn(fs.promises, 'mkdir').mockImplementation(async (...args) => {
+      if (pause && String(args[0]).endsWith('.lock')) {
+        pause = false;
+        entered();
+        await barrier;
+      }
+      return mkdir(...args);
+    });
+    const first = store.get('claude', 'sess-1');
+    await reached;
+    try {
+      stage(tmp, 'claude', name, recJson({ flags: { complete: { value: true, updatedAt: '2026-07-03T00:00:00Z' } } }));
+      const second = await createConversationStore(tmp).get('claude', 'sess-1');
+      expect(second?.flags.pinned.value).toBe(true);
+      expect(second?.flags.complete.value).toBe(true);
+      stage(tmp, 'claude', name, 'new unincorporated evidence');
+    } finally { release(); await first; }
+    const disk = JSON.parse(fs.readFileSync(path.join(dir, 'sess-1.json'), 'utf8'));
+    expect(disk.flags.pinned.value).toBe(true);
+    expect(disk.flags.complete.value).toBe(true);
+    expect(fs.readFileSync(path.join(dir, name), 'utf8')).toBe('new unincorporated evidence');
+    expect(noHealingLeftovers(dir)).toBe(true);
   });
 
   // Review fix 5b: a conflict copy that parses to a VALID record with a

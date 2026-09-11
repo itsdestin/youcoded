@@ -48,6 +48,7 @@ import { SyncService } from './sync-service';
 import { setSyncService, getSyncConfig } from './sync-state';
 // Cross-device sync spaces (spec 2026-07-03) — folder-based sync engine.
 import { startSyncSpaces, stopSyncSpaces, setSyncSpacesRemoteBroadcaster, setSyncSpacesAuthStore, hubLeaseRequest, setSyncSpacesLeaseEventListener, getManagedRoots, syncSpacesSyncNowAwaited } from './sync-spaces/service';
+import { selectSpaceBackupTargets } from './sync-spaces/backup-targets';
 import { createGithubClient, setGithubClient } from './github-client';
 // Plan 2b Task 8: conversation-lease lifecycle. The lease client coordinates
 // which device "holds" a conversation so two devices don't append to the same
@@ -2327,14 +2328,9 @@ void app.whenReady().then(async () => {
       // system uses — drive + iCloud only (GitHub is sync, not backup; spec §11).
       // getSyncConfig is async and exposes the backends array as `.backends`
       // (each BackendInstance carries type-specific fields in `.config`).
+      // WHY: storage-only/paused backends have not consented to automatic spaces backup.
       const cfg = await getSyncConfig();
-      return (cfg?.backends ?? [])
-        .filter((b) => b.type === 'drive' || b.type === 'icloud')
-        .map((b) => b.type === 'drive'
-          ? { type: 'drive' as const, base: `${b.config?.rcloneRemote ?? 'gdrive'}:${b.config?.DRIVE_ROOT ?? 'Claude'}` }
-          // iCloud base is a local folder path — drop backends that never set one.
-          : { type: 'icloud' as const, base: b.config?.ICLOUD_PATH ?? '' })
-        .filter((t) => t.base.length > 0);
+      return selectSpaceBackupTargets(cfg?.backends ?? []);
     },
     (m) => log('INFO', 'SyncSpaces', m),
     // Durable machineId → keys the hub's per-device sync-recency map (same id the

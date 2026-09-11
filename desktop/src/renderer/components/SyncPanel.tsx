@@ -72,7 +72,8 @@ const SYNC_EXPLAINER: { intro: string; sections: ExplainerSection[] } = {
       bullets: [
         { term: "Sync won't turn on", text: 'It needs GitHub. If you see a "GitHub CLI / not signed in" message, connect GitHub and try again.' },
         { term: '"No Internet Connection"', text: 'Check your WiFi or cellular and try again.' },
-        { term: 'A conflict note appeared', text: 'Two devices edited the same file — YouCoded kept both, saving the other device\'s version as a "(from …)" copy next to yours.' },
+        // WHY: give users a filename cue without sync internals or promising a deleted file remains.
+        { term: 'A conflict note appeared', text: 'Conflicting changes were saved in separate files. Look for “(from …)” in their names. They appear in the same folder as the affected file.' },
         { term: 'Something seems stuck', text: 'Open Sync Log and look for ERROR or WARN lines.' },
       ],
     },
@@ -1239,8 +1240,7 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                     <div className="border-t border-edge-dim px-3 py-2.5 space-y-2">
                       {conflict && (
                         <p className="text-xs text-amber-600">
-                          Some files had conflicting edits — the other device's copy was kept alongside yours
-                          (look for "(from …)" files).
+                          Conflicting changes were saved in separate files. Look for “(from …)” in their names.
                         </p>
                       )}
                       {notice && <p className="text-xs text-fg-muted">{notice.message}</p>}
