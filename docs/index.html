@@ -1396,6 +1396,27 @@ body.cycler-static .lead-hold{display:none}
   .demo-pinned .step{position:relative;inset:auto;opacity:1;transform:none}
 }
 
+/* ==========================================================================
+   RISE AND RECEDE — the demo cards' scroll feel, for the rest of the page
+   ==========================================================================
+   Destin, 2026-09-11: "apply a similar effect to the entire site, so the whole
+   scroll experience has the same premium feel as the demo cards". Three
+   versions were built and scrolled side by side -- every section as a parking
+   glass card, this, and a mix of the two -- and he picked this one ("rise nd
+   recede is perfect"). Review deck: site-scroll-motion, in the workspace.
+   Every heading, panel, account card, FAQ question, the gallery and the footer
+   rises into place a beat faster than the page as it arrives, and shrinks and
+   fades as it leaves under the top bar. Nothing parks, so whenever you stop
+   scrolling the page is exactly what it was. The script (WHOLE-PAGE MOTION)
+   writes the values every frame.
+   Hangs off body.motion-on, which the script sets only on a wide window
+   without reduced motion -- the demo cards themselves are a plain list under
+   1000px, and this follows them.
+   ========================================================================== */
+/* Shrink from the top edge, so a block leaving under the top bar pulls away
+   from the bar rather than toward the middle of the window. */
+body.motion-on .m-rise{transform-origin:50% 0}
+
 
 /* ==========================================================================
    THE BAR AT THE TOP, on any small screen  — added 2026-09-03
@@ -3132,6 +3153,87 @@ if (document.querySelector('.demo-deck')) {
   };
   addEventListener('scroll', onDeck, { passive: true }); onDeck();
 }
+
+// --- WHOLE-PAGE MOTION: rise and recede (see RISE AND RECEDE in the stylesheet).
+// Like the demo cards, every value is computed straight off scroll position
+// each frame -- no transitions -- so nothing lags behind the scroll. (No
+// literal percent sign in here: see the CORE_JS note above.)
+(function(){
+  var reducedMQ = matchMedia('(prefers-reduced-motion: reduce)');
+  var TOP_LINE = 80;            // the line the demo cards park on (.deck-fade .step top:80px)
+  var risers = [];
+  function clamp(v){ return v < 0 ? 0 : v > 1 ? 1 : v; }
+
+  // ---- build: list the blocks that rise ----
+  function addRiser(el, col){ el.classList.add('m-rise'); risers.push({ el: el, col: col || 0, top: 0, h: 0 }); }
+  [].slice.call(document.querySelectorAll('body > section')).forEach(function(sec){
+    var wrap = sec.querySelector(':scope > .wrap');
+    if (sec.id === 'demo') {
+      // The demo cards already have their motion; only the heading joins in.
+      addRiser(wrap.querySelector(':scope > .eyebrow')); addRiser(wrap.querySelector(':scope > h2'));
+      return;
+    }
+    // A section moves in pieces, so a row of cards or a list of questions
+    // arrives one after another rather than as one slab.
+    [].slice.call(sec.children).forEach(function(part){
+      [].slice.call(part.classList.contains('wrap') ? part.children : [part]).forEach(function(el){
+        if (el.classList.contains('acctgrid') || el.classList.contains('faq')) {
+          [].slice.call(el.children).forEach(function(c, n){ addRiser(c, el.classList.contains('acctgrid') ? n : 0); });
+        } else addRiser(el);
+      });
+    });
+  });
+  addRiser(document.querySelector('footer .foot'));
+
+  // ---- measure: where each riser sits in the page, ignoring its own motion ----
+  function pageTop(el){ var y = 0; for (var e = el; e; e = e.offsetParent) y += e.offsetTop; return y; }
+  function remeasure(){
+    risers.forEach(function(b){ b.top = pageTop(b.el); b.h = b.el.offsetHeight; });
+  }
+
+  function clear(){
+    risers.forEach(function(b){ b.el.style.translate = ''; b.el.style.scale = ''; b.el.style.opacity = ''; });
+  }
+
+  var queued = false;
+  function frame(){
+    queued = false;
+    if (!document.body.classList.contains('motion-on')) return;
+    var vh = innerHeight, sy = scrollY;
+    // RISE: arrive over the bottom 22 hundredths of the window, rising 56px
+    // faster than the page and growing from 94 hundredths; leave as the
+    // block's bottom climbs from 30 hundredths of the window to the top bar.
+    var enterSpan = vh * 0.22, exitLine = vh * 0.30;
+    risers.forEach(function(b){
+      var top = b.top - sy, bot = top + b.h;
+      var e = clamp((vh - top - b.col * 36) / enterSpan);
+      e = 1 - Math.pow(1 - e, 3);
+      var x = clamp((exitLine - bot) / (exitLine - TOP_LINE));
+      b.el.style.translate = '0 ' + ((1 - e) * 56).toFixed(1) + 'px';
+      b.el.style.scale = ((0.94 + 0.06 * e) * (1 - 0.04 * x)).toFixed(4);
+      b.el.style.opacity = Math.min(e, 1 - x).toFixed(3);
+    });
+  }
+  function queue(){ if (!queued) { queued = true; requestAnimationFrame(frame); } }
+
+  function apply(){
+    var on = !narrowMQ.matches && !reducedMQ.matches;
+    document.body.classList.toggle('motion-on', on);
+    if (!on) { clear(); return; }
+    remeasure(); frame();
+  }
+  addEventListener('scroll', queue, { passive: true });
+  addEventListener('resize', apply);
+  if (narrowMQ.addEventListener) narrowMQ.addEventListener('change', apply);
+  if (reducedMQ.addEventListener) reducedMQ.addEventListener('change', apply);
+  // Same re-measure triggers the deck needed: fonts, the intro's end, load, and
+  // anything that changes the page's height (an FAQ opening, a clip's poster).
+  if (document.fonts && document.fonts.ready) document.fonts.ready.then(apply);
+  setTimeout(apply, 3200);
+  addEventListener('load', apply);
+  if (window.ResizeObserver) new ResizeObserver(function(){ if (document.body.classList.contains('motion-on')) { remeasure(); queue(); } }).observe(document.body);
+  apply();
+})();
 
 // --- RAIL: nothing scroll-driven. Pick one, or let it advance on its own.
 if (document.querySelector('.demo-rail')) {
