@@ -17,6 +17,7 @@
 // extract-copy-blocks.ts still use the type). Found in the 2026-08-06 sweep.
 import type { ChatAction, TimelineEntry, UsageSnapshot, SessionChatState } from './chat-types';
 import { buildCopyPayload } from '../utils/extract-copy-blocks';
+import { copyText } from '../components/context-menu/clipboard';
 import { claudeAliasForModelId, CLAUDE_ALIAS_LABELS, type ClaudeAlias } from '../../shared/model-ids';
 
 export type ViewMode = 'chat' | 'terminal';
@@ -288,10 +289,18 @@ export function dispatchSlashCommand(input: DispatcherInput): DispatcherResult {
         return { handled: true };
       }
       if (payload.mode === 'single') {
-        // Single block — direct copy, no picker. Browser clipboard API works
-        // even when focus is on a textarea, unlike execCommand.
-        void navigator.clipboard.writeText(payload.content).catch(() => {});
-        input.callbacks.onToast?.('Copied to clipboard');
+        // Single block — direct copy, no picker.
+        // WHY wait for the write (error inventory 2026-09-10, false message 7): this
+        // toasted "Copied to clipboard" before, and regardless of, the write, so a
+        // refused clipboard read as a success. It also called
+        // navigator.clipboard.writeText directly, which does not exist on a remote
+        // browser over plain http — /copy threw there and said nothing at all.
+        // copyText tries the clipboard API first (it works with focus in a textarea),
+        // falls back to execCommand, and answers whether anything was copied.
+        // The dispatcher stays synchronous; the toast arrives when the write settles.
+        void copyText(payload.content).then((copied) => {
+          input.callbacks.onToast?.(copied ? 'Copied to clipboard' : "Couldn't copy — select the text and copy it yourself");
+        });
         return { handled: true };
       }
       // Multi-block — show picker inline
