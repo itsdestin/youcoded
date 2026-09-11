@@ -300,6 +300,10 @@ interface Props {
 // warms nothing, short enough to finish before a deliberate click.
 const PANES_KEPT = 4;
 const WARM_AFTER_MS = 150;
+// How far the previewed conversation must scroll one way before the header card
+// tucks away or comes back. Small enough that a short flick counts, big enough
+// that touchpad jitter at rest moves nothing.
+const TUCK_MIN_PX = 6;
 
 type RowActions = {
   select: (s: PastSession) => void;
@@ -339,7 +343,9 @@ const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, pro
 }) {
   useEffect(() => () => onGone(id), [id, onGone]);
   return (
-    <div className="absolute inset-0 flex flex-col" style={{ visibility: visible ? 'visible' : 'hidden' }}>
+    // data-preview-id: lets the header card's scroll handler tell the layer on
+    // screen from the hidden ones (see onPreviewScroll).
+    <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
       <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} />
     </div>
   );
@@ -405,6 +411,14 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // paint after the animation has begun, which is the third beat above.
   const [shownId, setShownId] = useState<string | null>(null);
   const [arrival, setArrival] = useState<'staged' | 'run' | null>(null);
+  // ── The header card tucks away while you read back (Destin, 2026-09-11) ──
+  // A preview opens on the NEWEST message, so reading it means scrolling UP,
+  // and the floating card covered the top of what you were reading. Scrolling
+  // up slides it out through the top of the sheet; scrolling down brings it
+  // back. `tuckMark` is the position the last decision was made from, so slow
+  // moves add up against it instead of each being judged alone.
+  const [headerTucked, setHeaderTucked] = useState(false);
+  const tuckMark = useRef<{ el: EventTarget | null; top: number; height: number }>({ el: null, top: 0, height: 0 });
   // ── Conversations kept built ────────────────────────────────────────────
   // A click used to read and format its conversation from scratch every time,
   // even one previewed a moment ago: 0.6–1 s from click to settled on large
@@ -429,6 +443,10 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const reveal = useCallback((id: string) => {
     setShownId(id);
     setArrival('staged');
+    // A newly picked conversation always arrives with its card showing — it
+    // is the only thing that says which conversation this is.
+    setHeaderTucked(false);
+    tuckMark.current.el = null;
   }, []);
   const warmPane = useCallback((id: string) => {
     paneUsedAt.current.set(id, performance.now());
@@ -456,10 +474,41 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   const onPreviewGone = useCallback((id: string) => {
     settledRef.current.delete(id);
   }, []);
+  // Moves the header card (headerTucked, above). Caught on the layers' wrapper
+  // in the CAPTURE phase: scroll does not bubble, and the element that scrolls
+  // is inside SessionPreviewPane.
+  const onPreviewScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.target;
+    if (!(el instanceof HTMLElement)) return;
+    // Only the conversation on screen counts. A hidden layer jumps itself to
+    // its newest message when its read lands, and that is not the reader moving.
+    if (el.closest('[data-preview-id]')?.getAttribute('data-preview-id') !== shownIdRef.current) return;
+    const mark = tuckMark.current;
+    // The content changed height under the reader: Load older adds messages
+    // ABOVE, and the browser pushes the position down to keep the same message
+    // in view. Nobody scrolled, so take a new bearing and decide nothing —
+    // otherwise pressing Load older would drop the card back over the top.
+    if (mark.el !== el || mark.height !== el.scrollHeight) {
+      tuckMark.current = { el, top: el.scrollTop, height: el.scrollHeight };
+      return;
+    }
+    const moved = el.scrollTop - mark.top;
+    if (Math.abs(moved) < TUCK_MIN_PX) return;
+    mark.top = el.scrollTop;
+    // Its tags/note sheet is open: leave it where it is rather than slide the
+    // thing being edited away.
+    if (cloneOrganizeId) return;
+    setHeaderTucked(moved < 0);
+  };
   // Closing the browser unmounts every layer. Keep only the one that was on
-  // screen, so reopening re-reads one conversation rather than four.
+  // screen, so reopening re-reads one conversation rather than four. The card
+  // comes back with it rather than reopening tucked away.
   useEffect(() => {
-    if (!open) setPaneIds((prev) => prev.filter((id) => id === shownIdRef.current));
+    if (!open) {
+      setPaneIds((prev) => prev.filter((id) => id === shownIdRef.current));
+      setHeaderTucked(false);
+      tuckMark.current.el = null;
+    }
   }, [open]);
   // Cards are memoised (RowMemo), so they reach this render's handlers through
   // a ref that is reassigned every render, never through a captured closure.
@@ -2033,19 +2082,31 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                         the top of the window inside the container". Floating, not
                         welded: older messages pass under it as you scroll back.
                         pointer-events-none on the strip, auto on the card, so the
-                        gutter beside it does not swallow scroll wheels. */}
-                    <div className="absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none">
+                        gutter beside it does not swallow scroll wheels.
+                        preview-header-slide / data-tucked: it slides up out of the
+                        sheet while you scroll back, and down again when you scroll
+                        toward the newest message (onPreviewScroll). data-still on
+                        the staged frame, so a card coming back for a newly picked
+                        conversation is simply there, not sliding in under the
+                        arrival. The open tags/note sheet holds it on screen. */}
+                    <div
+                      className="preview-header-slide absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none"
+                      data-tucked={headerTucked && !cloneOrganizeId ? '' : undefined}
+                      data-still={arrival === 'staged' ? '' : undefined}
+                    >
                       {/* PERF: box-shadow, not `drop-shadow-[…]`. drop-shadow is a CSS
                           FILTER — it traces the alpha of the whole subtree and re-runs
                           on every paint, and this card floats over a scrolling
-                          transcript, so it repaints constantly. */}
-                      <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
+                          transcript, so it repaints constantly.
+                          onFocusCapture: Tab can still land on a tucked card's
+                          buttons, so focus brings it back into view. */}
+                      <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]" onFocusCapture={() => setHeaderTucked(false)}>
                         {renderSessionRow(s, true, true)}
                       </div>
                     </div>
                   </>
                 )}
-                <div className="relative flex-1 min-h-0">
+                <div className="relative flex-1 min-h-0" onScrollCapture={onPreviewScroll}>
                   {paneIds.map((id) => {
                     const r = sessionsById.get(id);
                     return r ? (
