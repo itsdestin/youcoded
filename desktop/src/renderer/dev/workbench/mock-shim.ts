@@ -1858,6 +1858,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     ['fine, leave it. run the tests',
      'All 41 in that file pass, plus the new one. Types and lint are clean.'],
   ];
+  // The student persona's conversation (`&student=1`, the promo film and site clips). WHY
+  // (2026-09-10): the film opens "econ midterm brief" in the Resume preview, and the coding
+  // chat above under that title read as a mistake on camera. Same shape as CHAT_TURNS.
+  const STUDENT_TURNS: [string, string, string?][] = [
+    ['what is on the econ midterm?',
+     'Chapters 4 to 7: elasticity, consumer choice, production costs and perfect competition. The syllabus says half the marks are short graphs.',
+     'Let me check the syllabus first.'],
+    ['which one should I study first',
+     'Elasticity. It shows up in the other three chapters, and your problem set 3 answers had the most corrections there.'],
+    ['explain elasticity like I have five minutes',
+     'It is how much people change what they buy when the price changes. If a small price rise makes sales drop a lot, demand is elastic. If sales barely move, it is inelastic.'],
+    ['make me three practice questions',
+     'Done — they are in midterm-practice.md, each with a graph to sketch and the answer on the next page.',
+     'Pulling the examples from your lecture notes.'],
+    ['ask about the demand curve on Thursday',
+     'Added to your note for this conversation, so it shows under All Sessions.'],
+  ];
 
   const chatsearch = {
     resolve: async (shortIds: string[]) => ({ ok: true as const, results: shortIds.map(resolveFixture) }),
@@ -1876,7 +1893,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const push = (role: string, content: string, droppedToolCalls = 0) =>
         all.push({ role, content, timestamp: 0, seq: all.length, droppedToolCalls });
       while (all.length < 60) {
-        const turn = CHAT_TURNS[Math.floor(all.length / 2.5) % CHAT_TURNS.length];
+        const turns = studentSwitch ? STUDENT_TURNS : CHAT_TURNS;
+        const turn = turns[Math.floor(all.length / 2.5) % turns.length];
         push('user', turn[0]);
         if (turn[2]) {
           push('assistant', turn[2]);
