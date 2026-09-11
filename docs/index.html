@@ -36,6 +36,13 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:ital,opsz,wght@0,9..40,400;0,9..40,500;0,9..40,700;0,9..40,800;0,9..40,900;1,9..40,400;1,9..40,900&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!-- WHY (2026-09-11): the two wallpapers the opening intro crossfades through start
+     downloading while the page is still being read. Measured on fresh visits, the
+     "Useful." one was only requested when its word arrived and landed after it.
+     Keep in step with HERO_SEQUENCE in the word-cycler script; the third beat's
+     theme is a gradient and has no file. -->
+<link rel="preload" as="image" href="wall/golden-sunbreak.webp" fetchpriority="high">
+<link rel="preload" as="image" href="wall/cotton-candy-sky.webp" fetchpriority="high">
 <style>
 /* ==========================================================================
    VARIANT D — "SKIN"
@@ -1090,6 +1097,15 @@ body:has(.hero-themefirst) .nav .swatches{display:none}
 body.cycler-static .cycler-word{animation:none}
 body.cycler-static .cycler-word-1,body.cycler-static .cycler-word-2{display:none}
 body.cycler-static .cycler-word-final{opacity:1;transform:none}
+/* The words wait for the script's start signal (Destin 2026-09-11: fresh loads
+   "janky or out of sync"). They used to start counting their delays at first
+   paint while the script's theme and reveal timers started ~150ms later, so
+   every theme change trailed its word. A paused animation does not count its
+   delay down, so words and timers now start in the same frame. The gate that
+   adds .intro-go is at the end of the word-cycler script. */
+body:not(.intro-go) .cycler-word,
+body:not(.intro-go) .lead-hold,
+body:not(.intro-go) .lead-final{animation-play-state:paused}
 
 /* Yellow on a pale glass chip is the one weak pairing (Golden Sunbreak's
    accent against a light theme's panel), so the art gets a tight dark rim.
@@ -2675,7 +2691,20 @@ if (embed) {
     // just short at rest), so D1's demo sat on its dark poster until the
     // visitor scrolled. Fire instead when any part of it reaches the middle
     // band of the window.
-    new IntersectionObserver(function(es){ es.forEach(function(e){ if (e.isIntersecting) bootEmbed(); }); }, { rootMargin: '-20' + String.fromCharCode(37) + ' 0px -20' + String.fromCharCode(37) + ' 0px', threshold: 0 }).observe(embed);
+    var armAutoBoot = function(){
+      new IntersectionObserver(function(es){ es.forEach(function(e){ if (e.isIntersecting) bootEmbed(); }); }, { rootMargin: '-20' + String.fromCharCode(37) + ' 0px -20' + String.fromCharCode(37) + ' 0px', threshold: 0 }).observe(embed);
+    };
+    // WHY wait for the intro (2026-09-11): the embed sits in that middle band
+    // while it is still invisible under the intro, so the whole app booted at
+    // once -- measured 175-215ms freezes just before "Useful.", 60ms ones on
+    // "Fun." and "Yours.", and its script competing with the intro's wallpapers
+    // for the connection. It now boots once the page has risen into place (the
+    // rise is a .1s delay plus .62s). "Try Demo" still boots it immediately.
+    if (document.body.classList.contains('intro-mode')) {
+      document.addEventListener('yc:intro-end', function(){ setTimeout(armAutoBoot, 800); }, { once: true });
+    } else {
+      armAutoBoot();
+    }
   }
 }
 
@@ -3910,8 +3939,22 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
   function setWidth(host, px){ host.style.setProperty('--cycler-width', (px > 0 ? px + 4 : 0) + 'px'); }
 
   var timers = [];
-  function endIntro(){ document.body.classList.remove('intro-mode'); }
-  function cancel(){ timers.forEach(clearTimeout); timers = []; endIntro(); }
+  var introEnded = false;
+  function endIntro(){
+    document.body.classList.remove('intro-mode');
+    // The live demo waits for this before it boots (autoBoot, above).
+    if (!introEnded) { introEnded = true; document.dispatchEvent(new Event('yc:intro-end')); }
+  }
+  function cancel(){
+    timers.forEach(clearTimeout); timers = [];
+    // Taken over before the words were released: they would stay paused and the
+    // slot empty, so show the resting word the way the static path does.
+    if (!document.body.classList.contains('intro-go')) {
+      document.body.classList.add('cycler-static');
+      applyStep(2);
+    }
+    endIntro();
+  }
   // A click on any mascot is the visitor taking over -- stop the scripted
   // sequence so it can't yank the theme back out from under them.
   document.addEventListener('click', function(e){ if (e.target.closest('.mascot, .sw')) cancel(); });
@@ -3963,17 +4006,70 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
     slots.forEach(function(sl){ sl.w = measure(sl.el); });
     applyStep(curStep);
   });
-  HERO_SEQUENCE.forEach(function(step, i){
-    timers.push(setTimeout(function(){
-      applyTheme(step.theme);
-      curStep = i;
-      applyStep(i);
-    }, step.at));
-  });
-  // 'Yours.' starts at 2180 and settles ~2344 (its bump is done at 20% of
-  // 820ms). The rise fires right on that settle now -- the pause that used to
-  // sit between them is what read as a slow tail.
-  timers.push(setTimeout(endIntro, 2360));
+  // WHY a start gate (Destin 2026-09-11: "on fresh site loads the first-run
+  // animations act a bit janky or get out of sync"). Measured on fresh loads:
+  // the words ran on the stylesheet's clock from first paint while these timers
+  // started ~150ms later, at the end of a 268KB page, so every theme change and
+  // the page's rise trailed its word instead of leading it; the first wallpaper
+  // landed after its word (1.1-8.6s); and the headline's own web font could
+  // arrive after the intro was over. The words now sit paused until the
+  // headline font and the intro's wallpapers are ready, then the words and
+  // these timers start in the same frame. The cap keeps a slow connection from
+  // holding the headline empty: past it the intro plays with whatever has
+  // arrived, the way it always did.
+  // WHY 700ms: on a slow connection nothing arrives in time -- measured
+  // 2026-09-11, the 62KB headline font took 3.8-8.1s and our own 151KB wallpaper
+  // 3.3-10.9s over one bad network -- so a longer wait only buys a longer blank.
+  // On a simulated 3 Mbit/s link with 70ms latency everything was ready in
+  // ~110ms; 700ms is headroom above that, and the most a bad link can add.
+  var START_CAP_MS = 700;
+  var started = false;
+  function beginSequence(){
+    if (started) return;
+    started = true;
+    requestAnimationFrame(function(){
+      if (introEnded) return;          // a mascot click already took over
+      // Measure in the real font and re-centre before anything moves.
+      slots.forEach(function(sl){ sl.w = measure(sl.el); });
+      applyStep(0);
+      setLift();
+      document.body.classList.add('intro-go');
+      HERO_SEQUENCE.forEach(function(step, i){
+        timers.push(setTimeout(function(){
+          applyTheme(step.theme);
+          curStep = i;
+          applyStep(i);
+        }, step.at));
+      });
+      // 'Yours.' starts at 2180 and settles ~2344 (its bump is done at 20% of
+      // 820ms). The rise fires right on that settle now -- the pause that used to
+      // sit between them is what read as a slow tail.
+      timers.push(setTimeout(endIntro, 2360));
+    });
+  }
+  function introReady(){
+    var waits = [];
+    // The headline's face is DM Sans 900 (--font-ui) in every theme; load() also
+    // starts the download if the page has not asked for it yet.
+    if (document.fonts && document.fonts.load) {
+      waits.push(document.fonts.load('900 1em "DM Sans"').catch(function(){}));
+    }
+    HERO_SEQUENCE.forEach(function(step){
+      var t = THEMES[step.theme];
+      if (!t || !t.wall) return;       // a gradient theme has no file to wait for
+      var img = new Image();
+      img.src = t.wall;
+      waits.push(img.decode ? img.decode().catch(function(){})
+        : new Promise(function(done){ img.onload = img.onerror = done; }));
+    });
+    return Promise.all(waits);
+  }
+  if (window.Promise) {
+    introReady().then(beginSequence);
+    setTimeout(beginSequence, START_CAP_MS);
+  } else {
+    beginSequence();
+  }
 })();
 
 </script>
