@@ -18,6 +18,14 @@ export function resolveStaticFile(url: string, staticDir: string): string | null
   } catch {
     return null; // malformed percent-encoding
   }
+  // Reject a NUL byte (2026-09-11 review): decodeURIComponent('%00') does NOT
+  // throw, but fs.readFile throws SYNCHRONOUSLY on any path containing '\0'
+  // (ERR_INVALID_ARG_VALUE) — inside the createServer callback, which has no
+  // try/catch and a process with no uncaughtException handler. That is the same
+  // unauthenticated one-request crash `GET /%` used to cause. Any control char is
+  // refused for good measure; none belongs in a static asset path.
+  // eslint-disable-next-line no-control-regex
+  if (/[\u0000-\u001f]/.test(decoded)) return null;
   const safe = path.normalize(decoded).replace(/^(\.\.[/\\])+/, '');
   const filePath = path.join(staticDir, safe);
   return isWithinDir(filePath, staticDir) ? filePath : null;

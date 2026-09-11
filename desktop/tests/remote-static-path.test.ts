@@ -21,6 +21,14 @@ describe('resolveStaticFile — the unauthenticated static handler (2026-09-10 s
     expect(resolveStaticFile('/%zz', DIR)).toBeNull();
   });
 
+  it('rejects a NUL byte / control chars (fs.readFile crashes synchronously on \\0)', () => {
+    // decodeURIComponent('%00') does NOT throw, but the resulting path crashes
+    // fs.readFile in the unguarded server callback — the same crash class as /%.
+    expect(resolveStaticFile('/%00', DIR)).toBeNull();
+    expect(resolveStaticFile('/assets/%00.js', DIR)).toBeNull();
+    expect(resolveStaticFile('/a%01b', DIR)).toBeNull();
+  });
+
   it('a traversal attempt is contained inside the directory, never above it', () => {
     // normalize + strip leading `..` clamps every escape back under staticDir,
     // so these resolve to a (usually missing) file INSIDE the dir — never /etc/passwd.

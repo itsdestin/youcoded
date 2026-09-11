@@ -37,6 +37,18 @@ describe('setJsonPath — prototype pollution guard (2026-09-10 security review)
     expect(({}) as Record<string, unknown>).not.toHaveProperty('polluted');
   });
 
+  it('walks into an existing array instead of clobbering it (2026-09-11 review)', () => {
+    const obj: Record<string, unknown> = { permissions: { allow: ['Bash(npm:*)', 'Read(*)'] } };
+    setJsonPath(obj, 'permissions.allow.0', 'Bash(rm:*)');
+    // the array survives as an array with the one element replaced
+    expect((obj.permissions as any).allow).toEqual(['Bash(rm:*)', 'Read(*)']);
+    expect(Array.isArray((obj.permissions as any).allow)).toBe(true);
+  });
+
+  it('reads a value nested under an array', () => {
+    expect(getJsonPath({ a: { list: [{ x: 1 }, { x: 2 }] } }, 'a.list.1.x')).toBe(2);
+  });
+
   it('overwrites a non-object step rather than walking into it', () => {
     const obj: Record<string, unknown> = { a: 5 };
     setJsonPath(obj, 'a.b', 1);
