@@ -1735,8 +1735,9 @@ function AppInner() {
     // sessions changes, we read via sessionsRef.current to always see fresh data.
     // The handler itself lives in state/artifact-tool-use-tracker.ts (pinned by
     // tests/artifacts/artifact-tool-use-tracker.test.ts). It appends one version
-    // per tracked tool call and refreshes the session's drawer list ONCE per
-    // burst — see the WHY there for the 2026-08-15 out-of-memory incident.
+    // per tracked tool call once that call's RESULT confirms it happened, and
+    // refreshes the session's drawer list ONCE per burst — see the WHYs there
+    // (the 2026-08-15 out-of-memory incident; the 2026-09-11 false "deleted").
     const artifactTracker = createArtifactToolUseTracker({
       getSessions: () => sessionsRef.current,
       getSessionArtifacts: (sessionId) => artifactStateRef.current.sessionArtifacts[sessionId] ?? [],

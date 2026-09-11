@@ -42,7 +42,15 @@ interface Entry {
   known: boolean;
   /** Id set of the check currently in flight, so identical requests coalesce. */
   inFlight: string | null;
+  /** Start order of checks, and which check last answered each id — see refresh. */
+  seq: number;
+  verdictSeq: Map<string, number>;
+  /** A request that arrived after files changed while an identical one was running. */
+  again: string[] | null;
 }
+
+/** Quiet period before a file-change burst triggers one re-check. */
+export const CHANGE_RECHECK_DELAY_MS = 300;
 
 const cache = new Map<string, Entry>();
 const subs = new Map<string, Set<() => void>>();
@@ -62,7 +70,7 @@ function notify(key: string): void {
 
 function entryFor(key: string): Entry {
   let e = cache.get(key);
-  if (!e) { e = { missing: EMPTY, known: false, inFlight: null }; cache.set(key, e); }
+  if (!e) { e = { missing: EMPTY, known: false, inFlight: null, seq: 0, verdictSeq: new Map(), again: null }; cache.set(key, e); }
   return e;
 }
 
@@ -75,25 +83,43 @@ export function __resetMissingArtifactsCache(): void {
 /**
  * Ask main which of `ids` are gone, then publish the answer to every consumer
  * of this project root. Safe to call concurrently: a request for an identical
- * id set that is already in flight is not re-issued.
+ * id set that is already in flight is not re-issued — unless `afterChange` says
+ * files changed since that check may have started, in which case it runs once
+ * more when the running one lands.
  */
-export async function refreshMissingArtifacts(root: string, ids: string[]): Promise<void> {
+export async function refreshMissingArtifacts(
+  root: string,
+  ids: string[],
+  opts?: { afterChange?: boolean },
+): Promise<void> {
   if (!root || ids.length === 0) return;
   const key = keyFor(root);
   const request = ids.join(',');
   const entry = entryFor(key);
-  if (entry.inFlight === request) return;
+  if (entry.inFlight === request) {
+    if (opts?.afterChange) entry.again = ids;
+    return;
+  }
   entry.inFlight = request;
+  const seq = ++entry.seq;
   try {
     const res: any = await (window.claude as any)?.artifacts?.checkExistence?.(root, ids);
     if (res?.ok) {
-      const next = new Set<string>(res.missingIds ?? []);
+      const missingNow = new Set<string>(res.missingIds ?? []);
       // Ids that were NOT part of this request keep their previous verdict: the
       // drawer and the badge check slightly different id sets (the badge drops
       // explicit tombstones, the drawer drops on-disk discovered rows), and
       // neither may erase what the other established.
-      const asked = new Set(ids);
-      for (const id of entry.missing) if (!asked.has(id)) next.add(id);
+      const next = new Set<string>(entry.missing);
+      for (const id of ids) {
+        // WHY: two overlapping checks (the drawer's and the badge's, or one
+        // started before a file appeared and one after) can land out of order.
+        // A check that STARTED later has already answered this id, so an older
+        // answer arriving afterwards must not put back a stale "not found".
+        if ((entry.verdictSeq.get(id) ?? 0) > seq) continue;
+        entry.verdictSeq.set(id, seq);
+        if (missingNow.has(id)) next.add(id); else next.delete(id);
+      }
       entry.missing = next;
     }
     // `known` flips even when the check FAILED or the surface does not
@@ -108,6 +134,11 @@ export async function refreshMissingArtifacts(root: string, ids: string[]): Prom
     notify(key);
   } finally {
     if (entry.inFlight === request) entry.inFlight = null;
+    const again = entry.again;
+    if (again && again.join(',') === request) {
+      entry.again = null;
+      void refreshMissingArtifacts(root, again);
+    }
   }
 }
 
@@ -146,6 +177,32 @@ export function useMissingArtifacts(
     if (!root || !enabled) return;
     void refreshMissingArtifacts(root, idsRef.current);
   }, [root, idsKey, enabled]);
+
+  // Re-check when files change on disk. WHY (2026-09-11): nothing re-asked
+  // while a surface stayed open, so a file removed by a Bash `rm`, or one that
+  // appeared after its check, kept the wrong verdict until the drawer was
+  // closed and reopened. artifacts:changed fires for every tracked write and,
+  // on desktop while the drawer holds a project watch, for outside changes too.
+  // A burst of events becomes one check after a quiet period.
+  useEffect(() => {
+    if (!root || !enabled) return;
+    const api = (window.claude as any)?.artifacts;
+    if (typeof api?.onChanged !== 'function') return;
+    const rootKey = keyFor(root);
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    const unsubscribe = api.onChanged((evt: any) => {
+      if (typeof evt?.projectRoot !== 'string' || keyFor(evt.projectRoot) !== rootKey) return;
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => {
+        timer = null;
+        void refreshMissingArtifacts(root, idsRef.current, { afterChange: true });
+      }, CHANGE_RECHECK_DELAY_MS);
+    });
+    return () => {
+      if (timer) clearTimeout(timer);
+      if (typeof unsubscribe === 'function') unsubscribe();
+    };
+  }, [root, enabled]);
 
   const entry = key ? cache.get(key) : undefined;
   return { missingIds: entry?.missing ?? EMPTY, known: entry?.known ?? false };

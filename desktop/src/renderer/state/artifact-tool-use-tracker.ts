@@ -52,11 +52,21 @@ export interface ArtifactToolUseTracker {
 
 const DEFAULT_REFRESH_DELAY_MS = 250;
 const TRACKED_TOOLS = ['Write', 'Edit', 'MultiEdit', 'Read', 'SendUserFile'];
-// SendUserFile calls wait for their RESULT: the tool fails on a missing path,
-// and recording at call time would create a "delivered" artifact of a file
-// that does not exist (the renderer cannot check disk). Bounded so a session
-// that dies between call and result cannot grow it forever.
-const PENDING_DELIVERIES_CAP = 200;
+// EVERY tracked call waits for its RESULT before anything is recorded.
+// WHY (2026-09-11): the transcript writes a tool call BEFORE the tool runs —
+// measured on 1,464 real Write/Edit calls, the result lands a median 0.14 s
+// later, and 32 of them waited over a second (a permission prompt waits as long
+// as the user does). Recording at call time asked the drawer's on-disk check
+// about a file that did not exist yet, so a brand-new file showed "deleted"
+// until the drawer was reopened; and a call the user DENIED, or an Edit that
+// failed, was listed as a real change. SendUserFile always worked this way for
+// the same reason. Bounded so a session that dies between call and result
+// cannot grow the map forever.
+const PENDING_CALLS_CAP = 200;
+
+type PendingCall =
+  | { sessionId: string; tool: 'SendUserFile'; files: string[] }
+  | { sessionId: string; tool: 'Write' | 'Edit' | 'MultiEdit' | 'Read'; targetPath: string };
 
 export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): ArtifactToolUseTracker {
   const refreshDelayMs = deps.refreshDelayMs ?? DEFAULT_REFRESH_DELAY_MS;
@@ -66,22 +76,25 @@ export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): 
   const pendingRefresh = new Map<string, { timer: ReturnType<typeof setTimeout>; projectRoot: string }>();
   let disposed = false;
 
-  const pendingDeliveries = new Map<string, { sessionId: string; files: string[] }>();
+  const pendingCalls = new Map<string, PendingCall>();
 
-  const holdDelivery = (sessionId: string, toolUseId: string | undefined, input: Record<string, unknown>) => {
-    if (!toolUseId) return;
-    const files = Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string' && f.length > 0) : [];
-    if (!files.length) return;
-    if (pendingDeliveries.size >= PENDING_DELIVERIES_CAP) pendingDeliveries.delete(pendingDeliveries.keys().next().value as string);
-    pendingDeliveries.set(toolUseId, { sessionId, files });
+  const hold = (toolUseId: string, call: PendingCall) => {
+    if (pendingCalls.size >= PENDING_CALLS_CAP) pendingCalls.delete(pendingCalls.keys().next().value as string);
+    pendingCalls.set(toolUseId, call);
   };
 
-  const settleDelivery = (toolUseId: string | undefined, isError: boolean) => {
+  const settle = (toolUseId: string | undefined, isError: boolean) => {
     if (!toolUseId) return;
-    const pending = pendingDeliveries.get(toolUseId);
+    const pending = pendingCalls.get(toolUseId);
     if (!pending) return;
-    pendingDeliveries.delete(toolUseId);
-    if (isError) return;                                   // nothing was sent — nothing to record
+    pendingCalls.delete(toolUseId);
+    if (isError) return;          // denied, failed or cancelled — nothing happened on disk
+    if (pending.tool === 'SendUserFile') recordDelivery(toolUseId, pending.sessionId, pending.files);
+    else recordFileCall(toolUseId, pending.sessionId, pending.tool, pending.targetPath);
+  };
+
+  const recordDelivery = (toolUseId: string, sessionId: string, files: string[]) => {
+    const pending = { sessionId, files };
     const session = deps.getSessions()?.find?.((s) => s.id === pending.sessionId);
     const projectRoot: string = session?.cwd ?? '';
     if (!projectRoot) return;
@@ -121,13 +134,21 @@ export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): 
     if (disposed) return;
     const event = raw as { type?: string; sessionId?: string; data?: { toolName?: string; toolUseId?: string; toolInput?: Record<string, unknown>; isError?: boolean } } | null;
     if (!event?.type || !event?.sessionId) return;
-    if (event.type === 'tool-result') { settleDelivery(event.data?.toolUseId, event.data?.isError === true); return; }
+    if (event.type === 'tool-result') { settle(event.data?.toolUseId, event.data?.isError === true); return; }
     if (event.type !== 'tool-use') return;
     const toolName: string = event.data?.toolName ?? '';
-    const isRead = toolName === 'Read';
     if (!TRACKED_TOOLS.includes(toolName)) return;
+    // No id = no way to match the result, so nothing can be confirmed. Both
+    // transcript sources (Claude Code's JSONL and the native harness) always
+    // carry one; an event without it is malformed.
+    const toolUseId = event.data?.toolUseId;
+    if (typeof toolUseId !== 'string' || !toolUseId) return;
     const input = event.data?.toolInput ?? {};
-    if (toolName === 'SendUserFile') { holdDelivery(event.sessionId, event.data?.toolUseId, input); return; }
+    if (toolName === 'SendUserFile') {
+      const files = Array.isArray(input.files) ? input.files.filter((f): f is string => typeof f === 'string' && f.length > 0) : [];
+      if (files.length) hold(toolUseId, { sessionId: event.sessionId, tool: 'SendUserFile', files });
+      return;
+    }
     const targetPath = (typeof input.file_path === 'string' && input.file_path) || (typeof input.path === 'string' && input.path) || '';
     if (!targetPath) return;
 
@@ -135,13 +156,16 @@ export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): 
     // the tool card becomes openable — code/config reads would flood the
     // drawer and aren't what the artifact viewer is for. Writes/Edits track
     // everything (they're genuine changes Claude made).
-    if (isRead && categorizeArtifact(targetPath) !== 'document') return;
+    if (toolName === 'Read' && categorizeArtifact(targetPath) !== 'document') return;
+    hold(toolUseId, { sessionId: event.sessionId, tool: toolName as 'Write' | 'Edit' | 'MultiEdit' | 'Read', targetPath });
+  };
 
+  const recordFileCall = (toolUseId: string, sessionId: string, toolName: string, targetPath: string) => {
+    const isRead = toolName === 'Read';
     // Resolve cwd by looking up the session — transcript events don't carry cwd.
-    const session = deps.getSessions()?.find?.((s) => s.id === event.sessionId);
+    const session = deps.getSessions()?.find?.((s) => s.id === sessionId);
     const projectRoot: string = session?.cwd ?? '';
     if (!projectRoot) return;
-    const sessionId = event.sessionId;
 
     // Dedup reads: only the FIRST read of a doc this session appends a 'read'
     // version. Skip if the file is already a known session artifact (already
@@ -174,14 +198,13 @@ export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): 
     const versionType: 'create' | 'edit' | 'read' =
       isRead ? 'read' : toolName === 'Write' ? 'create' : 'edit';
 
-    const toolUseId = typeof event.data?.toolUseId === 'string' && event.data.toolUseId ? event.data.toolUseId : undefined;
     const appendArgs: TrackerAppendArgs = {
       path: resolved.path,
       kind: resolved.kind,
       absolutePath: resolved.absolutePath,
       type: versionType,
       author: 'agent',
-      ...(toolUseId ? { toolUseId } : {}),
+      toolUseId,
     };
     Promise.resolve(deps.appendVersion(projectRoot, sessionId, appendArgs))
       .catch((e) => log('[artifact-tracker] appendVersion failed', e))
@@ -192,7 +215,7 @@ export function createArtifactToolUseTracker(deps: ArtifactToolUseTrackerDeps): 
     disposed = true;
     for (const { timer } of pendingRefresh.values()) clearTimeout(timer);
     pendingRefresh.clear();
-    pendingDeliveries.clear();
+    pendingCalls.clear();
   };
 
   return { handle, dispose };

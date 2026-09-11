@@ -5,6 +5,7 @@ import {
   useMissingArtifacts,
   refreshMissingArtifacts,
   __resetMissingArtifactsCache,
+  CHANGE_RECHECK_DELAY_MS,
 } from '../src/renderer/hooks/useMissingArtifacts';
 
 // The "deleted files flash": the Session Drawer used to hold the on-disk
@@ -120,5 +121,90 @@ describe('useMissingArtifacts', () => {
       ]);
     });
     expect(spy.mock.calls.length).toBe(1);
+  });
+});
+
+// 2026-09-11: nothing re-asked while the drawer stayed open, so a file removed
+// by a Bash `rm` — or one that appeared after its check — kept the wrong
+// verdict until the drawer was closed and reopened.
+describe('useMissingArtifacts — re-checking after files change', () => {
+  function installBridgeWithChanges(impl: (root: string, ids: string[]) => Promise<any>) {
+    const listeners = new Set<(e: any) => void>();
+    (globalThis as any).window.claude = {
+      artifacts: {
+        checkExistence: vi.fn(impl),
+        onChanged: vi.fn((cb: (e: any) => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; }),
+      },
+    };
+    return {
+      spy: (globalThis as any).window.claude.artifacts.checkExistence,
+      emit: (e: any) => { for (const l of [...listeners]) l(e); },
+      listeners,
+    };
+  }
+
+  it('a burst of change events for its folder becomes ONE re-check, and the verdict updates', async () => {
+    let answer = ['b'];
+    const { spy, emit } = installBridgeWithChanges(async () => ({ ok: true, missingIds: answer }));
+    const { result } = renderHook(() => useMissingArtifacts(ROOT, ['a', 'b']));
+    await waitFor(() => expect(result.current.missingIds.has('b')).toBe(true));
+
+    answer = [];
+    vi.useFakeTimers();
+    try {
+      act(() => {
+        emit({ projectRoot: ROOT, kind: 'add' });
+        emit({ projectRoot: `${ROOT}/`, kind: 'edit' });   // same folder, other spelling
+      });
+      await act(async () => { await vi.advanceTimersByTimeAsync(CHANGE_RECHECK_DELAY_MS + 10); });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(spy).toHaveBeenCalledTimes(2);
+    expect(result.current.missingIds.has('b')).toBe(false);
+  });
+
+  it('ignores change events for another folder and stops listening when unmounted', async () => {
+    const { spy, emit, listeners } = installBridgeWithChanges(async () => ({ ok: true, missingIds: [] }));
+    const { result, unmount } = renderHook(() => useMissingArtifacts(ROOT, ['a']));
+    await waitFor(() => expect(result.current.known).toBe(true));
+    vi.useFakeTimers();
+    try {
+      act(() => { emit({ projectRoot: '/other', kind: 'remove' }); });
+      await act(async () => { await vi.advanceTimersByTimeAsync(CHANGE_RECHECK_DELAY_MS + 10); });
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(spy).toHaveBeenCalledTimes(1);
+    unmount();
+    expect(listeners.size).toBe(0);
+  });
+
+  it('an older answer landing after a newer one cannot bring back a stale "missing"', async () => {
+    const releases: Array<(v: any) => void> = [];
+    installBridgeWithChanges(() => new Promise((r) => { releases.push(r); }));
+    let older!: Promise<void>;
+    let newer!: Promise<void>;
+    act(() => {
+      older = refreshMissingArtifacts(ROOT, ['a']);        // started before the file appeared
+      newer = refreshMissingArtifacts(ROOT, ['a', 'b']);   // started after
+    });
+    await act(async () => { releases[1]({ ok: true, missingIds: [] }); await newer; });
+    await act(async () => { releases[0]({ ok: true, missingIds: ['a'] }); await older; });
+
+    const { result } = renderHook(() => useMissingArtifacts(ROOT, ['a'], false));
+    expect(result.current.missingIds.has('a')).toBe(false);
+  });
+
+  it('a change-prompted request that meets an identical running check asks once more when it lands', async () => {
+    const releases: Array<(v: any) => void> = [];
+    const { spy } = installBridgeWithChanges(() => new Promise((r) => { releases.push(r); }));
+    let first!: Promise<void>;
+    act(() => { first = refreshMissingArtifacts(ROOT, ['a']); });
+    void refreshMissingArtifacts(ROOT, ['a'], { afterChange: true });
+    expect(spy).toHaveBeenCalledTimes(1);
+    await act(async () => { releases[0]({ ok: true, missingIds: ['a'] }); await first; });
+    expect(spy).toHaveBeenCalledTimes(2);
+    await act(async () => { releases[1]({ ok: true, missingIds: [] }); });
   });
 });
