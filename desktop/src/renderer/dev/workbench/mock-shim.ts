@@ -768,9 +768,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // through this path too: the first message TYPED into an autoplayed window
     // plays turn 2 — intended for the sync row's phone half.
     if (!isControl(text)) replyCursor.set(sessionId, n + 1);
+    // `?replySpeed=<k>` plays the reply k times faster — text AND the pauses between lines.
+    // WHY (2026-09-11): the landing loops were 25–33 s, mostly spent watching a scripted reply
+    // stream (the inbox reply alone is ~18 s); Destin asked for ~15 s clips "without losing real
+    // content". Speeding playback keeps every word; editing the fixtures would change the copy.
+    const speed = Number(new URLSearchParams(location.search).get('replySpeed')) || 1;
     void playReply(sessionId, text, turns[n % turns.length], {
       transcript: (e) => subs.transcript.forEach((f) => f(e)),
       hook: (e) => subs.hook.forEach((f) => f(e)),
+      speed,
     });
   };
 
