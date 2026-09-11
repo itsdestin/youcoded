@@ -1,5 +1,5 @@
 // desktop/tests/transcript-cwd.test.ts
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs'; import os from 'os'; import path from 'path';
 import { isForeignCwd, firstCwd, r1CwdForDir } from '../src/main/transcript-cwd';
 import { ccProjectSlug } from '../src/main/slug-encoding';
@@ -25,35 +25,35 @@ describe('R1 vs R2 — the shape that broke the earlier draft (spec §5.4/§7)',
     return f;
   }
 
-  it('R2 returns the FIRST cwd (session origin), not the later switch', () => {
+  it('R2 returns the FIRST cwd (session origin), not the later switch', async () => {
     const dir = path.join(tmp, ccProjectSlug(HOME)); fs.mkdirSync(dir);
     // Pin platform to 'linux' explicitly — these fixtures use POSIX paths as
     // the LOCAL cwd, so leaving this on the default process.platform would
     // silently only pass on POSIX CI runners (it fails on windows-latest).
-    expect(firstCwd(writeForkFile(dir), 'linux')).toBe(PROJ);
+    expect(await firstCwd(writeForkFile(dir), 'linux')).toBe(PROJ);
   });
 
-  it('R1 asked of the $HOME directory finds the LATE matching cwd (line 279 — no cap)', () => {
+  it('R1 asked of the $HOME directory finds the LATE matching cwd (line 279 — no cap)', async () => {
     const dir = path.join(tmp, ccProjectSlug(HOME)); fs.mkdirSync(dir);
     writeForkFile(dir);
-    expect(r1CwdForDir(dir, 'linux')).toBe(HOME);
+    expect(await r1CwdForDir(dir, 'linux')).toBe(HOME);
   });
 
-  it('R1 skips foreign cwds and picks the one that re-slugs to the dirname', () => {
+  it('R1 skips foreign cwds and picks the one that re-slugs to the dirname', async () => {
     const dir = path.join(tmp, ccProjectSlug(PROJ)); fs.mkdirSync(dir);
     fs.writeFileSync(path.join(dir, 'win.jsonl'), line({ type: 'user', uuid: 'w', cwd: 'C:\\Users\\desti\\x' }));
     fs.writeFileSync(path.join(dir, 'ours.jsonl'), line({ type: 'user', uuid: 'o', cwd: PROJ }));
-    expect(r1CwdForDir(dir, 'linux')).toBe(PROJ);
+    expect(await r1CwdForDir(dir, 'linux')).toBe(PROJ);
   });
 
-  it('R2 skips metadata head lines and foreign values', () => {
+  it('R2 skips metadata head lines and foreign values', async () => {
     const f = path.join(tmp, 'a.jsonl');
     fs.writeFileSync(f, line({ type: 'last-prompt' }) + line({ type: 'user', cwd: 'C:\\Users\\x' }) + line({ type: 'user', cwd: PROJ }));
-    expect(firstCwd(f, 'linux')).toBe(PROJ);
+    expect(await firstCwd(f, 'linux')).toBe(PROJ);
     // Platform inversion, same fixture: under win32 the POSIX cwd becomes
     // foreign and the Windows cwd becomes local, so the winner flips. This
     // pins the seam itself, not just that it exists.
-    expect(firstCwd(f, 'win32')).toBe('C:\\Users\\x');
+    expect(await firstCwd(f, 'win32')).toBe('C:\\Users\\x');
   });
 
   it('isForeignCwd: drive-letter on linux, POSIX-absolute on win32', () => {
@@ -61,5 +61,38 @@ describe('R1 vs R2 — the shape that broke the earlier draft (spec §5.4/§7)',
     expect(isForeignCwd('/home/u', 'linux')).toBe(false);
     expect(isForeignCwd('/home/u', 'win32')).toBe(true);
     expect(isForeignCwd('C:\\Users\\x', 'win32')).toBe(false);
+  });
+});
+
+describe('a failing file close never costs the read', () => {
+  // WHY: a rejection inside `finally` replaces the return value. Uncaught, a
+  // failed close would turn a good read into a throw that climbs
+  // firstCwd -> r1CwdForDir -> resolveSlugToPath, which the Resume Browser
+  // awaits outside any try — so the whole listing would come back empty.
+  it('firstCwd still returns the cwd it read when close() rejects', async () => {
+    const PROJ = '/home/u/proj';
+    const f = path.join(tmp, 'close-fails.jsonl');
+    fs.writeFileSync(f, line({ type: 'user', uuid: 'u1', cwd: PROJ }));
+
+    const realOpen = fs.promises.open.bind(fs.promises);
+    let closeRejections = 0;
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation(async (...args: Parameters<typeof fs.promises.open>) => {
+      const fh = await realOpen(...args);
+      const realClose = fh.close.bind(fh);
+      // Close the real descriptor (no leak), THEN report failure, like an EIO on close.
+      fh.close = async () => {
+        await realClose();
+        closeRejections++;
+        throw Object.assign(new Error('EIO: i/o error, close'), { code: 'EIO' });
+      };
+      return fh;
+    });
+    try {
+      await expect(firstCwd(f, 'linux')).resolves.toBe(PROJ);
+      // Non-vacuity: the failing close really ran on this path.
+      expect(closeRejections).toBe(1);
+    } finally {
+      openSpy.mockRestore();
+    }
   });
 });

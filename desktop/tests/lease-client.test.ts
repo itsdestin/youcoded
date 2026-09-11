@@ -3,7 +3,11 @@
 // timers are driven by vitest fake timers; the lease-file fallback is asserted
 // against a REAL temp dir (readFileSync/existsSync), not mocks.
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import * as fs from 'fs';
+// WHY default import (not `import * as fs`): a namespace import produces a
+// frozen ES module namespace object whose properties vi.spyOn cannot redefine
+// ("Cannot redefine property: writeFileSync") — needed below to prove the
+// hung-write guard never touches the SYNC fs surface.
+import fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { createLeaseClient, type LeaseClient } from '../src/main/conversations/lease-client';
@@ -194,13 +198,26 @@ describe('lease-client', () => {
     await client.acquire('s1');
     expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(true);
 
+    // WHY spy-and-await, not a vi.waitFor poll: the renew tick's
+    // deleteLeaseFile is fire-and-forget (`void deleteLeaseFile(...)`),
+    // queued through the per-session fs.promises chain — the file removal is
+    // off the event loop. Polling fs.existsSync on the 1s vi.waitFor budget
+    // flaked once under a full-suite run (2026-09-10: `expected true to be
+    // false` at the poll's clock deadline). Awaiting the delete's OWN promise
+    // instead makes the assertion fire exactly when the queued delete has
+    // settled, however slow the disk is — a deterministic signal, not a clock.
+    const rmSpy = vi.spyOn(fs.promises, 'rm');
+
     // Next renew fails — another device force-acquired (holder is now dev-B).
     hubRequest.mockClear();
     hubRequest.mockResolvedValue(lostResult('renew', 's1'));
     await vi.advanceTimersByTimeAsync(RENEW_MS);
 
     expect(client.isHeld('s1')).toBe(false);
+    expect(rmSpy).toHaveBeenCalledWith(leaseFilePath(tmpRoot, 's1'), { force: true });
+    await rmSpy.mock.results[0].value;
     expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    rmSpy.mockRestore();
     // The renew reply carries the new holder — the takeover is attributed so
     // the MovedGate can name the device instead of "another device".
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
@@ -245,6 +262,11 @@ describe('lease-client', () => {
     hubRequest.mockResolvedValue(okResult('acquire', 's1', Date.now() + 300_000));
     await client.acquire('s1');
 
+    // WHY spy-and-await, not a vi.waitFor poll: same fire-and-forget delete
+    // as the renew-failure teardown test above — see its WHY for the
+    // 2026-09-10 flake this replaces.
+    const rmSpy = vi.spyOn(fs.promises, 'rm');
+
     // Renew reports the lease lapsed (no holder); the re-acquire then loses a
     // race — dev-B claimed it between the expiry and our re-acquire.
     hubRequest.mockClear();
@@ -256,7 +278,10 @@ describe('lease-client', () => {
     await vi.advanceTimersByTimeAsync(RENEW_MS);
 
     expect(client.isHeld('s1')).toBe(false);
+    expect(rmSpy).toHaveBeenCalledWith(leaseFilePath(tmpRoot, 's1'), { force: true });
+    await rmSpy.mock.results[0].value;
     expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    rmSpy.mockRestore();
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
   });
 
@@ -351,5 +376,36 @@ describe('lease-client', () => {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
     expect(parsed.deviceId).toBe(DEVICE_ID);
     expect(typeof parsed.expiresAt).toBe('number');
+  });
+
+  it('acquire then release in the same tick leaves no lease file (write/delete stay ordered)', async () => {
+    hubRequest.mockResolvedValue({ ok: true, op: 'acquire', sessionId: 's1', holder: { deviceId: DEVICE_ID, device: DEVICE_NAME, expiresAt: Date.now() + 100_000 } });
+    const p1 = client.acquire('s1');
+    const p2 = client.release('s1');
+    await Promise.all([p1, p2]);
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+  });
+
+  it('a hung lease-file write does not hang the event loop', async () => {
+    // WHY: this is the 2026-09-08 freeze shape — a disk stall inside the lease
+    // write. The write must be off the event loop, so a real timer still fires
+    // while the write is pending. Controller decision (task-1-brief deviation):
+    // also assert the SYNC fs writers were never called and that fs.promises
+    // writeFile WAS called, so a fast writeFileSync can't make this pass by
+    // accident.
+    vi.useRealTimers(); // afterEach re-enables fake timers for the next case
+    hubRequest.mockResolvedValue({ ok: true, op: 'acquire', sessionId: 's1', holder: { deviceId: DEVICE_ID, device: DEVICE_NAME, expiresAt: Date.now() + 100_000 } });
+    const never = new Promise<void>(() => {});
+    const writeFileSpy = vi.spyOn(fs.promises, 'writeFile').mockReturnValue(never as any);
+    const syncWriteSpy = vi.spyOn(fs, 'writeFileSync');
+    const syncMkdirSpy = vi.spyOn(fs, 'mkdirSync');
+    try {
+      void client.acquire('s1');
+      const ticked = await new Promise<boolean>((r) => setTimeout(() => r(true), 20));
+      expect(ticked).toBe(true);
+      expect(syncWriteSpy).not.toHaveBeenCalled();
+      expect(syncMkdirSpy).not.toHaveBeenCalled();
+      await vi.waitFor(() => expect(writeFileSpy).toHaveBeenCalled());
+    } finally { writeFileSpy.mockRestore(); syncWriteSpy.mockRestore(); syncMkdirSpy.mockRestore(); }
   });
 });
