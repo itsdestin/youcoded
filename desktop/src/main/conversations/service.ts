@@ -435,7 +435,7 @@ export function noteTranscriptEvent(claudeSessionId: string, ev: TranscriptEvent
         spaceTranscriptPath: spaceTranscriptPath(key, claudeSessionId, sessionProvider),
       }).catch(() => { /* best-effort; the reconciler catches up */ }).then(() => {
         Promise.resolve(syncSpacesSyncNow('personal')).catch(() => { /* the poll covers a miss */ });
-      });
+      }).catch(() => { /* review round 1: a synchronous throw inside the .then above must not become an unhandled rejection */ });
     }
     return;
   }
@@ -716,9 +716,16 @@ async function materializeSweep(): Promise<void> {
     const local = resolveLocalProject(rec, managed, saved);
     if (!local) continue;
     try {
+      // WHY shouldCommit (review round 1): the check above and the rename
+      // inside materializeOut are no longer adjacent — several threadpool
+      // steps run between them, and a resume (SessionStart re-acquiring this
+      // id, or a takeover) can land in that gap. Re-checking liveness right
+      // before the rename closes it; see materializeOut's WHY for the full
+      // shape.
       await materializeOut({
         spaceTranscriptPath: src,
         localJsonlPath: localJsonlPath(local, rec.id, sessionProvider),
+        shouldCommit: () => !sessions.has(rec.id),
       });
     } catch { /* per-record isolation — one bad copy must not abort the sweep */ }
   }
@@ -820,7 +827,10 @@ export async function materializeOne(id: string, cwd?: string): Promise<void> {
   // CC is now appending to (the sweep's live-session invariant).
   if (sessions.has(id)) return;
   try {
-    await materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath });
+    // WHY shouldCommit: same gap as materializeSweep above — a resume
+    // (takeover.ts:220 resumes right after this call) can land between the
+    // check above and the rename.
+    await materializeOut({ spaceTranscriptPath: src, localJsonlPath: localPath, shouldCommit: () => !sessions.has(id) });
   } catch { /* grow-only copy failed — startup sweep catches up */ }
 }
 

@@ -191,6 +191,25 @@ describe('materializeOut (space → local, add/update-only)', () => {
     expect(res).toEqual({ copied: false });
     expect(fs.existsSync(localPath)).toBe(false); // nothing conjured
   });
+
+  // New (review round 1, IMPORTANT finding): shouldCommit re-checked right
+  // before the rename. A session resuming mid-copy (materializeSweep/
+  // materializeOne's real callers) must see the local file untouched and no
+  // orphaned tmp — the copy is discarded, not just skipped up front.
+  it('shouldCommit returning false leaves the local dest untouched and no .tmp behind', async () => {
+    put(spacePath, 'from-other-device\n');
+    // localPath's parent dir does not exist yet — shouldCommit must abort
+    // BEFORE the rename, but the mkdir/copy-into-tmp steps still ran.
+    const res = await materializeOut({
+      spaceTranscriptPath: spacePath,
+      localJsonlPath: localPath,
+      shouldCommit: () => false, // simulates a session that resumed mid-copy
+    });
+    expect(res).toEqual({ copied: false });
+    expect(fs.existsSync(localPath)).toBe(false); // never renamed into place
+    // The tmp file the copy created must be cleaned up, not orphaned.
+    expect(fs.existsSync(path.dirname(localPath)) ? fs.readdirSync(path.dirname(localPath)).filter((n) => n.endsWith('.tmp')) : []).toEqual([]);
+  });
 });
 
 // Contract 8 (explicit): NEITHER direction ever deletes a file. After running

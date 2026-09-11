@@ -290,6 +290,34 @@ describe('conversations service composition root', () => {
     expect(h.materializeOut.mock.calls[0][0].localJsonlPath).toContain(`${idleRec.id}.jsonl`);
   });
 
+  // New (review round 1, IMPORTANT finding): the live-session check at the top
+  // of the sweep and materializeOut's actual rename are no longer adjacent —
+  // several threadpool steps separate them, and a resume can land in that gap
+  // (SessionStart re-acquiring this id, or a takeover resuming right after
+  // materializeOne). service.ts passes `shouldCommit: () => !sessions.has(id)`
+  // so the real transcript-mirror re-checks liveness right before its rename.
+  // Since materializeOut is mocked here, this test instead proves the WIRING:
+  // the closure reads LIVE state at call time, not a value snapshotted when
+  // the sweep started — calling it again after a session starts must flip.
+  it('the shouldCommit passed to materializeOut reflects a session that starts WHILE the copy is pending', async () => {
+    const idleDir = path.join(tmpRoot, 'resume-mid-copy-proj');
+    fs.mkdirSync(idleDir, { recursive: true });
+    const rec = {
+      id: 'aaaabbbb-cccc-dddd-eeee-ffff00001111', provider: 'claude',
+      projectName: 'resume-mid-copy-proj', originalPath: idleDir,
+      transcriptRef: 'claude/transcripts/resume-mid-copy-proj/aaaabbbb-cccc-dddd-eeee-ffff00001111.jsonl',
+    };
+    const svc = await freshService(startOpts());
+    h.store.list.mockImplementation(async (p: string) => (p === 'claude' ? [rec] : []));
+    fireSync({ type: 'synced', spaceId: 'personal', updated: true, pushed: false });
+    await vi.waitFor(() => expect(h.materializeOut).toHaveBeenCalled());
+    const shouldCommit = h.materializeOut.mock.calls[0][0].shouldCommit;
+    expect(typeof shouldCommit).toBe('function');
+    expect(shouldCommit()).toBe(true); // no live session yet — safe to commit
+    svc.noteSessionStarted(rec.id, idleDir, 'claude'); // resume lands mid-copy
+    expect(shouldCommit()).toBe(false); // same closure, now refuses the rename
+  });
+
   // Bug 2 Part 2 (Plan 2b Task 7): noteSessionEnded releases the per-session
   // materialize guard. A record that was SKIPPED while its session was live
   // must materialize once the session ends — proven here via the full sweep

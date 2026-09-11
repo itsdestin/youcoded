@@ -14,7 +14,13 @@
 //     hold rather than a failure — sync must degrade gracefully, never wedge.
 //   - Every timer is unref()'d so a lingering renew timer can't keep the Electron
 //     main process alive on quit; all fs ops are try/caught (best-effort).
-import * as fs from 'fs';
+// WHY default import (review round 1): a namespace import (`import * as fs`)
+// produces properties vitest's `vi.spyOn` cannot intercept from an outside
+// test file spying on the mutable default-exported `fs` object — proven by
+// swapping a write to `fs.writeFileSync` here and watching the test-file spy
+// on `fs.writeFileSync` fail to see it. `conversation-store.ts` (spied on
+// successfully by its own test) already uses this same default-import form.
+import fs from 'fs';
 import * as path from 'path';
 import type { LeaseResult } from '../sync-hub-socket';
 
@@ -202,16 +208,16 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
     return enqueueFileOp(sessionId, () => writeLeaseFileBody(sessionId, expiresAt));
   }
 
-  // FIX (found in TDD, not in the brief's Step 3 sketch): enqueueFileOp orders
-  // ops by when they are ENQUEUED, not by when their caller was CALLED. acquire()
-  // can't know whether/what to write until the hub round-trip resolves, so a
-  // naive `writeLeaseFile(...)` call after that await enqueues LATE. A release()
-  // fired in the same tick with no await between (the exact "acquire then
-  // release" guard test) calls deleteLeaseFile synchronously, before any await,
-  // so its delete would win the queue position and run BEFORE the write it was
-  // supposed to follow — the file would end up WRITTEN, not gone. Reserving a
-  // slot synchronously, before the hub call, makes queue order match call
-  // order regardless of how long the hub takes to answer.
+  // INVARIANT: a session's queue position is claimed at CALL time, before any
+  // await — never at "value known" time. enqueueFileOp orders ops by when they
+  // are ENQUEUED, and acquire() can't know whether/what to write until the hub
+  // round-trip resolves, so a naive `writeLeaseFile(...)` call placed after
+  // that await would enqueue LATE. A release() fired in the same tick with no
+  // await between calls deleteLeaseFile synchronously, before any await, so
+  // its delete would otherwise win the queue position and run BEFORE the write
+  // it was logically supposed to follow — the file would end up WRITTEN, not
+  // gone. Reserving a slot synchronously, before the hub call, makes queue
+  // order match call order regardless of how long the hub takes to answer.
   function reserveFileSlot(sessionId: string): { settle: (op: (() => Promise<void>) | null) => void; done: Promise<void> } {
     let settle!: (op: (() => Promise<void>) | null) => void;
     const opPromise = new Promise<(() => Promise<void>) | null>((resolve) => { settle = resolve; });
@@ -373,12 +379,18 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
       // awaiting hubRequest becomes a no-op when it resumes (no leaked 2nd loop).
       stopTimer(sessionId);
       held.delete(sessionId);
-      // Awaited: the existing "writes the lease file" test and the hub-down
-      // fallback both assert the file exists right after acquire() resolves —
-      // awaiting a promise here does not block the event loop, only the caller.
       slot.settle(() => writeLeaseFileBody(sessionId, expiresAt));
-      await slot.done;
+      // WHY start the timer BEFORE awaiting the write (review round 1): if the
+      // disk stalls inside writeLeaseFileBody, the heartbeat must still fire on
+      // schedule — otherwise the hub lease lapses at 300s while the session is
+      // genuinely live and held. startRenewTimer only touches in-memory state
+      // (`held`/`gen`) and arms a setTimeout; it does no I/O of its own.
       startRenewTimer(sessionId);
+      // Still awaited: the existing "writes the lease file" test and the
+      // hub-down fallback both assert the file exists right after acquire()
+      // resolves — awaiting a promise here does not block the event loop, only
+      // the caller.
+      await slot.done;
       return res ?? { ok: true, op: 'acquire', sessionId, holder: { deviceId: opts.deviceId, device: opts.deviceName, expiresAt } };
     },
 
