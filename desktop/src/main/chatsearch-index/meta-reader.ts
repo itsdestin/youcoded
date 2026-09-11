@@ -19,12 +19,16 @@ const PROVIDERS: ChatsearchProvider[] = ['claude', 'native'];
 // go looking through a directory.
 const QUERY_RE = /^[0-9a-f-]{4,36}$/;
 
+/** The shape check both readers apply — refs-service keeps a cached async copy
+ *  of this same file, and the two must agree on what counts as an index. */
+export function asMetaFile(parsed: unknown): ChatsearchMetaFile | null {
+  const p = parsed as ChatsearchMetaFile;
+  return p && typeof p === 'object' && p.conversations && typeof p.conversations === 'object' ? p : null;
+}
+
 export function readMetaFile(dir: string, provider: string): ChatsearchMetaFile | null {
   try {
-    const parsed = JSON.parse(fs.readFileSync(metaPath(dir, provider), 'utf8')) as ChatsearchMetaFile;
-    return parsed && typeof parsed === 'object' && parsed.conversations && typeof parsed.conversations === 'object'
-      ? parsed
-      : null;
+    return asMetaFile(JSON.parse(fs.readFileSync(metaPath(dir, provider), 'utf8')));
   } catch {
     // No index yet, or a refresh caught mid-write. Both are ordinary states,
     // and the caller reports every query as "unknown" rather than failing the
