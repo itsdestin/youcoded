@@ -108,6 +108,28 @@ function mergesIntoOpenSegment(
 }
 
 /**
+ * Append a timeline entry ABOVE this device's still-pending user bubbles.
+ *
+ * WHY (Destin, 2026-09-11, phone test of remote access batches 2/3: messages and replies
+ * "interweave in different orders across the two platforms"): the device that sends a
+ * message draws it at once as a pending bubble, while every other device draws it only
+ * when the transcript records it. Anything that arrived in between — the reply to the
+ * PREVIOUS message, a message typed in the terminal — used to land below the pending
+ * bubble here and above it everywhere else. Keeping pending bubbles as the timeline's
+ * tail makes every device show transcript order; a pending bubble joins that order when
+ * TRANSCRIPT_USER_MESSAGE confirms it. Pinned by tests/chat-order-sender-matches-receiver.test.ts.
+ */
+function appendAbovePending(timeline: TimelineEntry[], entry: TimelineEntry): TimelineEntry[] {
+  let at = timeline.length;
+  while (at > 0) {
+    const prev = timeline[at - 1];
+    if (prev.kind !== 'user' || prev.pending !== true) break;
+    at--;
+  }
+  return [...timeline.slice(0, at), entry, ...timeline.slice(at)];
+}
+
+/**
  * Returns the current assistant turn (or creates a new one).
  * All assistant text and tool groups within a single turn accumulate here.
  */
@@ -135,7 +157,7 @@ function getOrCreateTurn(session: SessionChatState): {
     usage: null,
     anthropicRequestId: null,
   });
-  timeline = [...timeline, { kind: 'assistant-turn' as const, turnId: currentTurnId }];
+  timeline = appendAbovePending(timeline, { kind: 'assistant-turn' as const, turnId: currentTurnId });
   return { assistantTurns, timeline, currentTurnId };
 }
 
@@ -909,8 +931,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...session,
         timeline: [...session.timeline, { kind: 'user', message, pending: true }],
         isThinking: true,
-        currentGroupId: null,
-        currentTurnId: null,
+        // A message sent while a reply is still streaming does not end that reply: Claude
+        // Code records the message at the next turn boundary, and TRANSCRIPT_USER_MESSAGE
+        // starts the new turn then. Clearing the turn here split the streaming reply in
+        // two on the sending device only (tests/chat-order-sender-matches-receiver.test.ts).
+        currentGroupId: session.currentTurnId ? session.currentGroupId : null,
+        currentTurnId: session.currentTurnId,
         // Typing again after a provider error is the retry — clear the banner
         // (attentionState + errorMessage) so a fresh turn starts clean.
         attentionState: 'ok',
@@ -970,18 +996,18 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         next.set(action.sessionId, session);
       }
 
-      const timeline = session.timeline.filter(
-        (e) => !(e.kind === 'prompt' && e.prompt.promptId === action.promptId),
-      );
-      timeline.push({
-        kind: 'prompt',
-        prompt: {
-          promptId: action.promptId,
-          title: action.title,
-          description: action.description,
-          buttons: action.buttons,
+      const timeline = appendAbovePending(
+        session.timeline.filter((e) => !(e.kind === 'prompt' && e.prompt.promptId === action.promptId)),
+        {
+          kind: 'prompt',
+          prompt: {
+            promptId: action.promptId,
+            title: action.title,
+            description: action.description,
+            buttons: action.buttons,
+          },
         },
-      });
+      );
 
       next.set(action.sessionId, { ...session, timeline });
       return next;
@@ -1313,11 +1339,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           pending: false,
           uuid: action.uuid,
         };
-        const timeline = [
-          ...session.timeline.slice(0, confirmedIdx),
+        // Placed where the transcript recorded it — after everything already confirmed,
+        // above the bubbles still waiting — not left where it was drawn at send time
+        // (see appendAbovePending).
+        const timeline = appendAbovePending(
+          [...session.timeline.slice(0, confirmedIdx), ...session.timeline.slice(confirmedIdx + 1)],
           confirmed,
-          ...session.timeline.slice(confirmedIdx + 1),
-        ];
+        );
         next.set(action.sessionId, {
           ...session,
           timeline,
@@ -1430,11 +1458,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // `injected` rides only this append path on purpose: a host-injected
         // turn never has an optimistic pending bubble to confirm (nobody typed
         // it), so it can only ever land here.
-        timeline: suppressBubble ? session.timeline : [...session.timeline, {
+        timeline: suppressBubble ? session.timeline : appendAbovePending(session.timeline, {
           kind: 'user', message, pending: false, uuid: action.uuid,
           ...(action.injected ? { injected: action.injected } : {}),
           ...(action.injectedMeta ? { injectedMeta: action.injectedMeta } : {}),
-        }],
+        }),
         seenUuids,
         queuedMessages,
         isThinking: true,
@@ -1893,7 +1921,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // Belt-and-braces: a previous turn's prefill progress must not be
         // mistaken for this turn's (the next assistant-thinking event replaces it).
         promptProcessing: null,
-        timeline: [...session.timeline, {
+        timeline: appendAbovePending(session.timeline, {
           kind: 'skill-invocation' as const,
           id: `skill-${action.uuid}`,
           skillId: action.skillId,
@@ -1901,7 +1929,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...(action.args ? { args: action.args } : {}),
           ...(action.skillPath ? { skillPath: action.skillPath } : {}),
           timestamp: action.timestamp,
-        }],
+        }),
       });
       return next;
     }
@@ -2664,7 +2692,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'usage-card', snapshot: action.snapshot }],
+        timeline: appendAbovePending(session.timeline, { kind: 'usage-card', snapshot: action.snapshot }),
       });
       return next;
     }
@@ -2746,7 +2774,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'copy-picker', id: action.id, options: action.options }],
+        timeline: appendAbovePending(session.timeline, { kind: 'copy-picker', id: action.id, options: action.options }),
       });
       return next;
     }
