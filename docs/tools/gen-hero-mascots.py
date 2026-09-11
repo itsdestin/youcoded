@@ -64,7 +64,10 @@ PICKER = [
 # bytes; an emptied one costs the character.
 # `shutdown` joined every theme rig on 2026-09-05 (wecoded-themes 817e6b6); the picker never
 # powers a mascot down, so it goes too rather than shipping ~1 KB per button of a hidden face.
-DROP_GROUPS = ['rig-hand-peek-right', 'rig-hand-peek-left', 'rig-face-dizzy', 'rig-face-shutdown']
+# `slot-item` is what a mascot holds (Cotton Candy Sky's star wand). Destin, 2026-09-11: "remove wand
+# from purple's hand" — at 45px a held item reads as a stray shape, and the picker's other three hold
+# nothing. The in-app mascot keeps it; only these buttons drop it.
+DROP_GROUPS = ['rig-hand-peek-right', 'rig-hand-peek-left', 'rig-face-dizzy', 'rig-face-shutdown', 'slot-item']
 
 PARTS = ['rig-root', 'rig-arm-left', 'rig-arm-right', 'rig-leg-left',
          'rig-leg-right', 'rig-body', 'rig-tail']
