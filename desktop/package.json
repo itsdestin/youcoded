@@ -44,6 +44,7 @@
     "chess.js": "1.4.0",
     "chokidar": "^5.0.0",
     "diff": "^9.0.0",
+    "dompurify": "^3.4.15",
     "exceljs": "^4.4.0",
     "koffi": "^2.16.3",
     "linkedom": "0.18.13",

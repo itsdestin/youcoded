@@ -35,6 +35,7 @@ import { VITE_DEV_PORT } from '../shared/ports';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
 import { registerThemeProtocol } from './theme-protocol';
+import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable } from './first-run';
 import type { FirstRunState } from '../shared/first-run-types';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): the account object is
@@ -773,10 +774,10 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     });
   }
 
-  // Security: block navigation to external origins (prevents preload API exposure)
+  // Security: allow navigation only to the app's own page (prevents preload API
+  // exposure). Any file:// used to pass — see isAppPageUrl for why that was not enough.
   win.webContents.on('will-navigate', (event, url) => {
-    const isAppOrigin = url.startsWith('file://') || url.startsWith(DEV_SERVER_URL);
-    if (!isAppOrigin) event.preventDefault();
+    if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {

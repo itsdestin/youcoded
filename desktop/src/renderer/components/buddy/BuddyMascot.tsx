@@ -3,6 +3,7 @@ import { useTheme } from '../../state/theme-context';
 import { useThemeMascot } from '../../hooks/useThemeMascot';
 import { useAnyAttentionNeeded } from '../../hooks/useAnyAttentionNeeded';
 import { MascotRig, type RigMotion } from '../mascot/MascotRig';
+import { purifySvgMarkup } from '../mascot/sanitize-rig-svg';
 import type { PoseName } from '../mascot/mascot-poses';
 import { defaultMascotPaint } from '../mascot/default-mascot-paint';
 
@@ -471,10 +472,12 @@ function PeekHands({ side, rigHostRef }: { side: 'left' | 'right'; rigHostRef: R
       clone.style.display = '';
       clone.removeAttribute('id'); // no duplicate ids in the document
       const pad = 0.4; // breathing room for the stroke
-      // Content comes from the already-sanitized inlined rig — safe to re-inline.
-      setHandSvg(
+      // Content comes from the already-sanitized inlined rig, but re-serializing
+      // live DOM and parsing it again is exactly where markup can change meaning
+      // (2026-09-10 security review), so it goes back through the final pass.
+      setHandSvg(purifySvgMarkup(
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bbox.x - pad} ${bbox.y - pad} ${bbox.width + pad * 2} ${bbox.height + pad * 2}" width="100%" height="100%">${clone.outerHTML}</svg>`,
-      );
+      ));
     };
     extract(); // the rig may already be present (peek toggled with a stable rig)
     const obs = new MutationObserver(extract);
