@@ -937,6 +937,24 @@ body[data-mode="buddy-chat"] #theme-bg {
    theme-engine.ts. Honoured alongside the OS preference, never instead of it. */
 [data-reduced-effects] .switch-arrival { animation: none; }
 
+/* Resume preview header card (2026-09-11): it tucks up out of the sheet while you
+   read back through a conversation and returns when you scroll down
+   (ResumeBrowser.tsx, headerTucked). The 24px beyond its own height clears the
+   card's shadow, which reaches below it. A transform on one element, so it runs
+   on the compositor over a transcript that is repainting as it scrolls.
+   --ease-out: it has to get out of the way at once, not ease into moving. */
+.preview-header-slide {
+  transition: transform var(--dur-reveal) var(--ease-out);
+}
+.preview-header-slide[data-tucked] {
+  transform: translateY(calc(-100% - 24px));
+}
+.preview-header-slide[data-still] { transition: none; }
+@media (prefers-reduced-motion: reduce) {
+  .preview-header-slide { transition: none; }
+}
+[data-reduced-effects] .preview-header-slide { transition: none; }
+
 /* ── Session pill label (2026-09-01) ─────────────────────────────────────────
    The label is a clipping box whose max-width animates (pill-label-style.ts);
    the name inside is laid out ONCE at its full width so it never re-wraps or
