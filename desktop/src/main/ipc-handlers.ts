@@ -107,8 +107,10 @@ import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
 import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
-import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
-import type { UpdateProgressEvent } from '../shared/update-install-types';
+import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
+import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
+import { verifyDownloadedUpdate } from './update-manifest-verify';
+import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
 // Analytics opt-out — Phase 6. The two exported functions read/write
 // ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
@@ -2013,7 +2015,14 @@ export function registerIpcHandlers(
 
   // --- YouCoded app update checker via GitHub Releases API ---
   // Caches the latest release info and refreshes every 30 minutes.
-  let cachedUpdateStatus: { current: string; latest: string; update_available: boolean; download_url: string | null } | null = null;
+  // manifest_url/signature_url/tag are captured for the 2026-09-10 signed-update
+  // verification (#7): the app fetches the signed manifest + signature at launch
+  // time and refuses any installer that doesn't match. tag is the FULL tag
+  // (e.g. `v1.3.0`) the manifest's version must equal.
+  let cachedUpdateStatus: {
+    current: string; latest: string; update_available: boolean; download_url: string | null;
+    manifest_url: string | null; signature_url: string | null; tag: string | null;
+  } | null = null;
   let lastReleaseCheck = 0;
   const RELEASE_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
@@ -2077,12 +2086,22 @@ export function registerIpcHandlers(
       // Fallback to release page if no matching asset found
       if (!downloadUrl) downloadUrl = release.html_url || null;
 
-      cachedUpdateStatus = { current: currentVersion, latest: latestVersion, update_available: isNewer, download_url: downloadUrl };
+      // Signed-manifest assets (2026-09-10 security review #7). A release built
+      // through the new pipeline publishes these two alongside the installers;
+      // an older/unsigned release won't have them, and the app then refuses to
+      // launch an unverifiable installer.
+      const manifestUrl = assets.find(a => a.name === 'youcoded-release.json')?.browser_download_url || null;
+      const signatureUrl = assets.find(a => a.name === 'youcoded-release.json.sig')?.browser_download_url || null;
+
+      cachedUpdateStatus = {
+        current: currentVersion, latest: latestVersion, update_available: isNewer, download_url: downloadUrl,
+        manifest_url: manifestUrl, signature_url: signatureUrl, tag: tagName || null,
+      };
       lastReleaseCheck = Date.now();
     } catch {
       // Parse failed — keep previous cache or set current version only
       if (!cachedUpdateStatus) {
-        cachedUpdateStatus = { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null };
+        cachedUpdateStatus = { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null, manifest_url: null, signature_url: null, tag: null };
       }
     }
   }
@@ -2162,6 +2181,77 @@ export function registerIpcHandlers(
   // env var is somehow set.
   const devFakeUpdate = !app.isPackaged && process.env.YOUCODED_DEV_FAKE_UPDATE === '1';
 
+  // Fetch a small HTTPS body (the release manifest ~1 KB, its signature ~64 B)
+  // into a Buffer, following redirects and re-checking the host on each hop.
+  // Byte-capped so a hostile response can't balloon memory. 2026-09-10 security
+  // review #7.
+  function fetchUrlToBuffer(url: string, maxBytes: number): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const step = (current: string, depth: number) => {
+        if (!isAllowedUpdateHost(current)) { reject(new UpdateInstallError('url-rejected', `host not allowed: ${current}`)); return; }
+        if (depth > 5) { reject(new UpdateInstallError('network-failed', 'too many redirects')); return; }
+        const req = https.get(current, { headers: { 'User-Agent': 'YouCoded' }, timeout: 10000 }, (res) => {
+          const code = res.statusCode ?? 0;
+          if ((code === 301 || code === 302 || code === 307 || code === 308) && res.headers.location) {
+            res.resume();
+            step(new URL(res.headers.location, current).toString(), depth + 1);
+            return;
+          }
+          if (code !== 200) { res.resume(); reject(new UpdateInstallError('network-failed', `status ${code}`)); return; }
+          const chunks: Buffer[] = [];
+          let total = 0;
+          res.on('data', (c: Buffer) => {
+            total += c.length;
+            if (total > maxBytes) { req.destroy(); reject(new UpdateInstallError('verify-failed', 'metadata too large')); return; }
+            chunks.push(c);
+          });
+          res.on('end', () => resolve(Buffer.concat(chunks)));
+          res.on('error', (e: Error) => reject(new UpdateInstallError('network-failed', e.message)));
+        });
+        req.on('error', (e: Error) => reject(new UpdateInstallError('network-failed', e.message)));
+        req.on('timeout', () => { req.destroy(); reject(new UpdateInstallError('network-failed', 'timeout')); });
+      };
+      step(url, 0);
+    });
+  }
+
+  // Verify a downloaded installer against the release's signed manifest before we
+  // run it (2026-09-10 security review #7). Returns an error code to refuse, or
+  // null to proceed. A release with no signed manifest is REFUSED
+  // ('signature-invalid') rather than run unverified — that is the whole point of
+  // the fix. Reads cachedUpdateStatus directly (the dev-fake override never
+  // reaches here; dev short-circuits before this).
+  async function verifyBeforeLaunch(filePath: string): Promise<UpdateInstallErrorCode | null> {
+    const status = cachedUpdateStatus;
+    const manifestUrl = status?.manifest_url;
+    const signatureUrl = status?.signature_url;
+    const tag = status?.tag;
+    if (!manifestUrl || !signatureUrl || !tag) {
+      console.error('[update] refusing launch: this release has no signed manifest to verify against');
+      return 'signature-invalid';
+    }
+    try {
+      const [manifestBytes, signatureBytes] = await Promise.all([
+        fetchUrlToBuffer(manifestUrl, 1024 * 1024),
+        fetchUrlToBuffer(signatureUrl, 8 * 1024),
+      ]);
+      await verifyDownloadedUpdate({
+        filePath,
+        fileName: path.basename(filePath),
+        manifestBytes,
+        signatureBytes,
+        tag,
+        currentVersion: app.getVersion(),
+        publicKeyPem: UPDATE_SIGNING_PUBLIC_KEY_PEM,
+      });
+      return null;
+    } catch (err) {
+      if (err instanceof UpdateInstallError) return err.code;
+      console.error('[update] verification error:', err);
+      return 'verify-failed'; // a transient fetch failure is retriable
+    }
+  }
+
   ipcMain.handle('update:download', async () => {
     if (devFakeUpdate) {
       // Copy the bundled dummy installer into the cache dir so the launch path
@@ -2206,6 +2296,14 @@ export function registerIpcHandlers(
       // Return the fallback: 'browser' shape so the renderer flips out of launching
       // state and calls onClose() — do NOT schedule app.quit() (that would kill the dev session).
       return { success: true, quitPending: false, fallback: 'browser' as const };
+    }
+    // Gate: never run an installer we can't prove is genuine (2026-09-10 security
+    // review #7). On verify-failed, delete the cached file so a Retry re-downloads
+    // a clean copy rather than re-verifying the same corrupt bytes.
+    const verifyError = await verifyBeforeLaunch(payload.filePath);
+    if (verifyError) {
+      if (verifyError === 'verify-failed') { try { fs.unlinkSync(payload.filePath); } catch { /* ignore */ } }
+      return { success: false, error: verifyError };
     }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
     if (result.success && result.quitPending) {

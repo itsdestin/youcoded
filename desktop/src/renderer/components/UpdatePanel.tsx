@@ -12,11 +12,22 @@ import { Button, Dialog, LoadingState, ProgressBar } from './ui';
 
 // Error codes where a fresh download might succeed (transient or file-level).
 // The complement (dmg-corrupt, appimage-not-writable, unsupported-platform,
-// remote-unsupported, url-rejected, spawn-failed, busy) won't benefit from retry —
-// the user's best move is the browser fallback link.
-const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing']);
+// remote-unsupported, url-rejected, spawn-failed, busy, signature-invalid) won't
+// benefit from retry — the user's best move is the browser fallback link.
+// 'verify-failed' IS retriable: a corrupted download can succeed next time (the
+// main process deletes the bad file so Retry re-downloads it). 2026-09-10 #7.
+const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing', 'verify-failed']);
 function isRetriableErrorCode(code: string): boolean {
   return RETRIABLE_ERROR_CODES.has(code);
+}
+
+// Codes with their own message. Everything else falls back to 'Launch failed'.
+// 2026-09-10 security review #7: verification failures get honest, specific copy
+// instead of the generic launch error.
+function updateErrorMessage(code: string): string {
+  if (code === 'signature-invalid') return "This update couldn't be verified, so it wasn't installed. Your current version still works.";
+  if (code === 'verify-failed') return 'The download looked corrupted — Retry';
+  return 'Launch failed';
 }
 
 interface UpdateStatus {
@@ -288,23 +299,33 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
               {installState.kind === 'ready' && 'Launch Installer'}
               {installState.kind === 'launching' && 'Launching…'}
               {installState.kind === 'error' && (
-                // Retriable errors (network/disk/file-missing) can be fixed by
-                // a fresh download; the rest (dmg-corrupt, appimage-not-writable,
-                // unsupported-platform, remote-unsupported) can't — the user's
-                // best option is the browser fallback link below.
-                isRetriableErrorCode(installState.code)
-                  ? 'Download failed — Retry'
+                // A blocked/unverifiable update, a corrupt download that a retry
+                // may fix, and a launch failure each read differently.
+                installState.code === 'signature-invalid' ? 'Update blocked'
+                  : installState.code === 'verify-failed' ? 'Retry download'
+                  : isRetriableErrorCode(installState.code) ? 'Download failed — Retry'
                   : 'Launch failed'
               )}
             </Button>
-            {installState.kind === 'error' && (
-              <div className="text-xs text-fg-dim mt-2">
-                <button
-                  onClick={handleFallbackBrowser}
-                  className="underline hover:text-fg"
-                >
-                  Open in browser instead
-                </button>
+            {/* No browser fallback for a VERIFICATION failure: handleFallbackBrowser
+                opens download_url — the raw installer binary — which for a
+                verify-failed (sha256/size mismatch, i.e. the installer was swapped
+                after signing) is the very tampered file the gate just refused.
+                Offering it there would reopen the attack outside the app. Retry
+                (which re-downloads and re-verifies) is the only safe move; a
+                signature-invalid shows an explanation instead. 2026-09-10 #7 review. */}
+            {installState.kind === 'error' && installState.code !== 'verify-failed' && (
+              <div className="text-xs mt-2">
+                {installState.code === 'signature-invalid' ? (
+                  <p className="text-amber-400">{updateErrorMessage('signature-invalid')}</p>
+                ) : (
+                  <button
+                    onClick={handleFallbackBrowser}
+                    className="text-fg-dim underline hover:text-fg"
+                  >
+                    Open in browser instead
+                  </button>
+                )}
               </div>
             )}
           </footer>
