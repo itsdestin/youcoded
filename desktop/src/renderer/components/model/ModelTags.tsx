@@ -181,14 +181,17 @@ export function ModelTags({ tags, selected = false, className = '' }: {
       {tags.map((t) => (
         <Tooltip key={t.kind} text={t.hint}>
           {style === 'dot' ? (
-            <span className={`inline-flex items-center gap-[3px] text-2xs leading-none whitespace-nowrap ${selected ? '' : t.tone === 'dim' ? 'text-fg-muted' : 'text-fg-2'}`}>
+            <span className={`inline-flex items-center gap-[3px] text-2xs leading-none whitespace-nowrap ${selected ? '' : 'text-fg-2'}`}>
               <Dot tone={t.tone} />
               {t.label}
             </span>
           ) : (
             <span
               className={`inline-flex items-center px-1 py-[2px] rounded-sm border text-2xs leading-none whitespace-nowrap ${
-                selected ? '' : `${TINT[t.tone]} ${t.tone === 'dim' ? 'text-fg-muted' : 'text-fg-2'}`
+                // WHY every tag's words are fg-2, "Not rated" included: fg-muted
+                // measured 4.06:1 on Halftone Dimension (needs 4.5), and "Not rated"
+                // is information, not decoration (G-6). The dashed edge is its cue.
+                selected ? '' : `${TINT[t.tone]} text-fg-2`
               }`}
               style={selected ? onAccent : undefined}
             >
