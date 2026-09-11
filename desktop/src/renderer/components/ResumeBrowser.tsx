@@ -522,7 +522,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // mount per expansion is what actually resets ITS internal state; this just
   // keeps the Resume-button gate and the value threaded through onResume in
   // sync with that same lifecycle.
-  const [nativeResumeBinding, setNativeResumeBinding] = useState<ModelBinding | null>(null);
+  //
+  // OWNED by the conversation it was picked for. In the preview panel the reset
+  // lands one render AFTER the next conversation's picker has mounted — and that
+  // picker only pre-fills when it sees no value. Unowned, it saw the PREVIOUS
+  // conversation's model, skipped its own pre-fill, and then the reset left it
+  // on "Choose a model…" (Destin, 2026-09-11). Read it only through
+  // nativeBindingFor, which never hands one conversation another's pick.
+  const [nativeResumeBinding, setNativeResumeBinding] = useState<{ sessionId: string; binding: ModelBinding } | null>(null);
+  const nativeBindingFor = (s: PastSession): ModelBinding | null =>
+    (nativeResumeBinding && nativeResumeBinding.sessionId === s.sessionId ? nativeResumeBinding.binding : null);
   // Launch the resumed session in a new peer window (multi-window only).
   const [resumeLaunchInNewWindow, setResumeLaunchInNewWindow] = useState(false);
   // Sesion id currently resuming — keeps its Resume button busy + the browser open
@@ -1112,15 +1121,14 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // scoped and only one can ever be in play.
   const resumeChoice = (s: PastSession): ModelChoice | null => {
     if (s.provider === 'native') {
-      return nativeResumeBinding
-        ? { runtime: 'native', providerId: nativeResumeBinding.providerId, modelId: nativeResumeBinding.modelId }
-        : null;
+      const b = nativeBindingFor(s);
+      return b ? { runtime: 'native', providerId: b.providerId, modelId: b.modelId } : null;
     }
     return resumeModel ? { runtime: 'claude', alias: resumeModel } : null;
   };
 
-  const applyResumeChoice = (_s: PastSession, c: ModelChoice) => {
-    if (c.runtime === 'native') setNativeResumeBinding({ providerId: c.providerId, modelId: c.modelId });
+  const applyResumeChoice = (s: PastSession, c: ModelChoice) => {
+    if (c.runtime === 'native') setNativeResumeBinding({ sessionId: s.sessionId, binding: { providerId: c.providerId, modelId: c.modelId } });
     else setResumeModel(c.alias);
   };
 
@@ -1138,7 +1146,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     // browser open (App has toasted the honest reason) so the user can retry or
     // pick another row, rather than closing over a silent failure.
     setResumingId(s.sessionId);
-    const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow, s.provider, nativeResumeBinding ?? undefined);
+    const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow, s.provider, nativeBindingFor(s) ?? undefined);
     setResumingId(null);
     if (result !== false) onClose(); // undefined (non-awaiting wiring) or true → close
   };
@@ -1213,6 +1221,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         <div onClick={(e) => e.stopPropagation()}>
           <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
           <ModelPicker
+            // One picker per conversation. The preview's action card stays
+            // mounted while you move between conversations, and the picker fills
+            // in `prefill` only once per mount — so without this key only the
+            // FIRST conversation previewed got its last-used model, and every
+            // later one opened on "Choose a model…" (Destin, 2026-09-11).
+            key={s.sessionId}
             value={resumeChoice(s)}
             onSelect={(c) => applyResumeChoice(s, c)}
             includeClaude={s.provider !== 'native'}
@@ -1275,7 +1289,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           // binding exists (manual pick or a prefill auto-select). Never lets
           // resume proceed with no binding to launch — that would be exactly
           // the auto-launch Destin's ruling forbids.
-          const nativeNeedsPick = s.provider === 'native' && !nativeResumeBinding;
+          const nativeNeedsPick = s.provider === 'native' && !nativeBindingFor(s);
           const busy = resumingId === s.sessionId; // create in flight — keep the button busy (ack-gap)
           return (
             /* Filled danger for skip-permissions — same call as SessionStrip's
