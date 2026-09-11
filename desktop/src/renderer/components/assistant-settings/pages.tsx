@@ -332,7 +332,9 @@ export const PAGES: PageDef[] = [
     // The three cards stacked as the Model Providers popup stacked them (P-5
     // note: "similar to the current page"), then your own API keys.
     render: (ctx) => (
-      <div className="space-y-2">
+      // data-guide-anchor: the first-run tour's "models and providers" stop
+      // rings the whole page — every way to be answered, not just API keys.
+      <div className="space-y-2" data-guide-anchor="providers">
         <ClaudeCodeBlock onOpenClaudePreferences={ctx.onOpenClaudePreferences} onCloseParent={ctx.onClosePanel} />
         <ChatGptBlock />
         <OpenRouterBlock keysHeading="Your own API keys" />

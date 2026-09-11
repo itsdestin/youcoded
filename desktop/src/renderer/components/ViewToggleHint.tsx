@@ -38,8 +38,10 @@ const ARROW_PX = 12;   // side of the rotated square; its visible tip is ~8px ta
 // edge toward the label colour is the app's own trick for deriving a rim from a
 // fill (globals.css does it for the accent gradients), so a theme pack that
 // changes --accent gets a matching outline for free.
-const HINT_FILL = 'var(--accent)';
-const HINT_EDGE = 'color-mix(in srgb, var(--on-accent) 55%, var(--accent))';
+// Exported: the first-run guide's bubble (components/guide/GuideBubble.tsx) is
+// this same shape speaking for the buddy, and must never drift a shade from it.
+export const HINT_FILL = 'var(--accent)';
+export const HINT_EDGE = 'color-mix(in srgb, var(--on-accent) 55%, var(--accent))';
 
 interface Props {
   /** The ✕. Auto-dismissal on switching back to chat is the caller's job. */

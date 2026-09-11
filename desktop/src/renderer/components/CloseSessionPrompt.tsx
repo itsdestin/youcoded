@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { useEscClose } from '../hooks/use-esc-close';
+import { triggerTip } from './guide/tips';
 import { useTagRegistry } from '../hooks/useTagRegistry';
 import { TagNoteEditor } from './tags/TagNoteEditor';
 import { PRIORITY_TAG, PRIORITY_HINT } from './tags/built-in-tags';
@@ -107,6 +108,8 @@ export default function CloseSessionPrompt({ open, sessionName, sessionId, onCan
   // Tag registry editing lives in its own surface now (it used to be a ✎ on
   // each TagPicker row). Layer 3 because this prompt is itself a layer-2 Dialog.
   const [manageOpen, setManageOpen] = useState(false);
+  // The notes tip's moment: the first time this prompt shows (guide/tips.ts).
+  useEffect(() => { if (open) triggerTip('notes'); }, [open]);
   // The tag/note EDITOR is collapsed by default (see the summary block below).
   // Not persisted and not remembered across opens: each close starts from the
   // summary, because the common case is closing a session without filing it.

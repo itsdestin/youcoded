@@ -1134,7 +1134,13 @@ export default function StatusBar({
 
       {/* Session tags & note — fixed control (design §"In-session surface").
           Hidden on Android (touch UI deferred); shown on desktop + remote. */}
-      {!isAndroid() && <SessionTagsChip sessionId={sessionId ?? null} />}
+      {/* data-guide-anchor: the first-run tour's tags stop rings this chip —
+          it is the everyday way to tag a session or leave it a note. */}
+      {!isAndroid() && (
+        <span data-guide-anchor="tags-notes" className="inline-flex">
+          <SessionTagsChip sessionId={sessionId ?? null} />
+        </span>
+      )}
 
       {/* Open Tasks chip — hidden when 0 open OR when widget is toggled off.
           Counts are derived at App root to share one useSessionTasks instance

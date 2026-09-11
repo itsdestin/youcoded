@@ -1,6 +1,7 @@
 import React from 'react';
 import BrailleSpinner from '../BrailleSpinner';
 import { Button } from './Button';
+import { triggerTip } from '../guide/tips';
 
 /**
  * The loading / empty / error family (changes 31-34, §1.6).
@@ -144,6 +145,9 @@ export function ErrorState(props: ErrorStateProps) {
   // `mode` no longer narrows the type, so the layout is chosen from the text shape
   // unless a caller overrides it. Title+explainer stacks; a bare message is a row.
   const general = (props.mode ?? ('title' in props ? 'general' : 'recoverable')) === 'general';
+  // The help tip's moment: the first general error a new user sees is the
+  // moment "Report bug" and the community become worth knowing about.
+  React.useEffect(() => { if (general) triggerTip('help'); }, [general]);
 
   // WHY this exact order and emphasis: five existing general-mode sites render
   // "Report bug" secondary then "Diagnose with the assistant" primary, and must not

@@ -43,6 +43,7 @@ import { resumeBlockedReason } from './tool-views/SessionRefActions';
 import ResumeOptionsPopover from './tool-views/ResumeOptionsPopover';
 import { ChatResumeIcon } from './Icons';
 import { TagGlyph } from './tags/glyphs';
+import { triggerTip } from './guide/tips';
 import { TagNoteEditor } from './tags/TagNoteEditor';
 
 // 'type' removed 2026-07-23 — the Type FILTER supersedes sorting by type.
@@ -188,6 +189,9 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const narrowViewport = useNarrowViewport();
   const [previewSheetOpen, setPreviewSheetOpen] = useState(false);
   const previewSheetWrapRef = useRef<HTMLDivElement>(null);
+  // The tags tip's moment: the first time the drawer is on screen with the
+  // Organize button that opens the tag editor (guide/tips.ts).
+  useEffect(() => { if (activePreview) triggerTip('tags'); }, [activePreview]);
   // The Resume options popover (M-header). Its own click-away/Escape live in
   // ResumeOptionsPopover; this side only owns open/closed and the anchor.
   const [resumeSheetOpen, setResumeSheetOpen] = useState(false);
