@@ -39,11 +39,17 @@ THEME_RIG = 'docs/mascots/%s.rig.svg'
 # 1-2 other minor poses they cycle through"). The long idle never stops and is
 # what gives each one a resting personality; the minor poses interrupt it every
 # few seconds, in rotation rather than at random so both actually get seen.
+#
+# 2026-09-10: WARM is False on every row now. WHY: the theme rigs carry the warm set
+# themselves (wecoded-themes 817e6b6), and Cotton Candy Sky and Meadow Mist ship their
+# own rigs (3e87b17) instead of borrowing the tinted default — so overwriting a rig's
+# faces here would paint this script's older copies over the characters' current ones.
+# Refresh docs/mascots/<slug>.rig.svg from the registry before running.
 PICKER = [
-    ('cotton-candy-sky',   'Cotton Candy Sky',   '#8B47B8', True,  'float',   'wave cheer'),
-    ('meadow-mist',        'Meadow Mist',        '#2F7D55', True,  'breathe', 'shrug nod'),
+    ('cotton-candy-sky',   'Cotton Candy Sky',   '#8B47B8', False, 'float',   'wave cheer'),
+    ('meadow-mist',        'Meadow Mist',        '#2F7D55', False, 'breathe', 'shrug nod'),
     ('halftone-dimension', 'Halftone Dimension', '#E51F48', False, 'scan',    'think startle'),
-    ('golden-sunbreak',    'Golden Sunbreak',    '#ffc030', True,  'bob',     'tada armwave'),
+    ('golden-sunbreak',    'Golden Sunbreak',    '#ffc030', False, 'bob',     'tada armwave'),
 ]
 
 # Dropped: the mittens that grip a screen edge (there is no screen edge in a
@@ -56,7 +62,9 @@ PICKER = [
 # mascots/README.md -> Component slots). Stripping them turned Halftone's bot
 # into a featureless dark blob and left both cats bald. An empty slot costs 20
 # bytes; an emptied one costs the character.
-DROP_GROUPS = ['rig-hand-peek-right', 'rig-hand-peek-left', 'rig-face-dizzy']
+# `shutdown` joined every theme rig on 2026-09-05 (wecoded-themes 817e6b6); the picker never
+# powers a mascot down, so it goes too rather than shipping ~1 KB per button of a hidden face.
+DROP_GROUPS = ['rig-hand-peek-right', 'rig-hand-peek-left', 'rig-face-dizzy', 'rig-face-shutdown']
 
 PARTS = ['rig-root', 'rig-arm-left', 'rig-arm-right', 'rig-leg-left',
          'rig-leg-right', 'rig-body', 'rig-tail']
