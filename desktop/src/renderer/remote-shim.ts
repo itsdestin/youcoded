@@ -113,6 +113,8 @@ function collectPtyOffsets(): Record<string, { epoch: string; units: number }> {
 // in UTF-16 units; overflow drops the oldest, so a long-idle tab still draws the tail.
 // `pty:raw-bytes` is deliberately not here: no desktop host emits it.
 const PTY_BACKLOG_MAX_UNITS = 256 * 1024;
+/** Permission answers sent from this page and not yet replied to (T2 review, 1). */
+const answersInFlight = new Set<string>();
 type PtyBacklogEntry = { kind: 'output'; data: string } | { kind: 'reset' };
 const ptyBacklog = new Map<string, { entries: PtyBacklogEntry[]; units: number }>();
 
@@ -121,9 +123,26 @@ function backlogPty(sessionId: string, entry: PtyBacklogEntry): void {
   if (!b) { b = { entries: [], units: 0 }; ptyBacklog.set(sessionId, b); }
   b.entries.push(entry);
   if (entry.kind === 'output') b.units += entry.data.length;
-  while (b.units > PTY_BACKLOG_MAX_UNITS && b.entries.length > 1) {
-    const dropped = b.entries.shift()!;
-    if (dropped.kind === 'output') b.units -= dropped.data.length;
+  // Over the cap, trim the OLDEST output and keep its tail (T2 review, 5). Dropping whole
+  // entries threw away a restore's entire replay — one frame of up to 4M units — the
+  // moment one more frame arrived, while the saved offset already counted it as drawn,
+  // so no later reconnect would ever send it again. A terminal needs the tail; the cut
+  // moves forward to a line break when there is one, so it rarely lands mid-sequence.
+  while (b.units > PTY_BACKLOG_MAX_UNITS) {
+    const idx = b.entries.findIndex((e) => e.kind === 'output');
+    if (idx < 0) break;
+    const oldest = b.entries[idx] as { kind: 'output'; data: string };
+    const excess = b.units - PTY_BACKLOG_MAX_UNITS;
+    if (oldest.data.length <= excess) {
+      b.entries.splice(idx, 1);
+      b.units -= oldest.data.length;
+      continue;
+    }
+    let cut = excess;
+    const nl = oldest.data.indexOf('\n', cut);
+    if (nl >= 0 && nl + 1 < oldest.data.length) cut = nl + 1;
+    b.entries[idx] = { kind: 'output', data: oldest.data.slice(cut) };
+    b.units -= cut;
   }
 }
 
@@ -656,6 +675,15 @@ function handleMessage(data: string, generation: number): void {
   switch (type) {
     case 'pty:output': {
       const sid: string = payload.sessionId;
+      // A frame from a different stream than the one this terminal drew — the host
+      // restarted, or the session was recreated — with no restore pass to say so: clear
+      // the terminal first instead of appending the new stream to the old screen
+      // (T2 review, 12).
+      const drawn = ptyOffsets.get(sid);
+      if (drawn && typeof payload.epoch === 'string' && drawn.epoch !== payload.epoch) {
+        if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:reset:${sid}`);
+        else backlogPty(sid, { kind: 'reset' });
+      }
       if (typeof payload.epoch === 'string' && typeof payload.offset === 'number') {
         ptyOffsets.set(sid, { epoch: payload.epoch, units: payload.offset + String(payload.data ?? '').length });
       }
@@ -683,6 +711,11 @@ function handleMessage(data: string, generation: number): void {
       dispatchEvent(`pty:raw-bytes:${payload.sessionId}`, payload.data);
       break;
     case 'hook:event':
+      // T2 review (1): the host announces a resolution BEFORE it replies to the answer
+      // that caused it, so the answering phone always hears "resolved" first and would
+      // mark its own answer "Answered on the computer". An answer this shim has in
+      // flight is ours — hide that one resolution; every other device still gets it.
+      if (payload?.type === 'PermissionResolved' && answersInFlight.has(payload?.payload?._requestId)) break;
       dispatchEvent('hook:event', payload);
       break;
     case 'session:created':
@@ -1376,7 +1409,12 @@ export function installShim(): void {
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
-      respondToPermission: (requestId: string, decision: object) => invoke('permission:respond', { requestId, decision }),
+      // Tracked while in flight so the host's resolution of THIS answer is not shown as
+      // "answered elsewhere" (see the hook:event case). Cleared when the reply settles.
+      respondToPermission: (requestId: string, decision: object) => {
+        answersInFlight.add(requestId);
+        return invoke('permission:respond', { requestId, decision }).finally(() => { answersInFlight.delete(requestId); });
+      },
     },
     // Tag registry CRUD (custom user-defined tags shared across sessions).
     // Args wrapped as objects to match this transport's handler read-shape

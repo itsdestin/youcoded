@@ -66,3 +66,69 @@ describe('hook:replay-complete clears every card not in the pending list', () =>
     expect(chatReducer(s, { type: 'PERMISSION_REPLAY_COMPLETE', sessionId: 's1', pendingRequestIds: [] })).toBe(s);
   });
 });
+
+
+// Review of T2 (2026-09-10): the note must never outlive the truth.
+describe('answered elsewhere, against the events that follow it', () => {
+  const EXPIRED = 'Permission request expired — socket closed before a response was sent';
+
+  it('a cancelled native ask (broker order: Resolved, then Expired) ends failed as expired, with no note', () => {
+    let s = withAsk('r1');
+    s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1' });
+    s = chatReducer(s, { type: 'PERMISSION_EXPIRED', sessionId: 's1', requestId: 'r1' });
+    expect(tool(s)).toMatchObject({ status: 'failed', error: EXPIRED });
+    expect(tool(s).answeredElsewhere).toBeUndefined();
+  });
+
+  it('the reverse order ends the same way', () => {
+    let s = withAsk('r1');
+    s = chatReducer(s, { type: 'PERMISSION_EXPIRED', sessionId: 's1', requestId: 'r1' });
+    s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1' });
+    expect(tool(s)).toMatchObject({ status: 'failed', error: EXPIRED });
+    expect(tool(s).answeredElsewhere).toBeUndefined();
+  });
+
+  it('this device\'s own answer landing after the resolution clears the note', () => {
+    let s = withAsk('r1');
+    s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1' });
+    s = chatReducer(s, { type: 'PERMISSION_RESPONDED', sessionId: 's1', requestId: 'r1' });
+    expect(tool(s).status).toBe('running');
+    expect(tool(s).answeredElsewhere).toBeUndefined();
+  });
+
+  it('a running card that still carries a stale request id is left alone', () => {
+    let s = withAsk('r1');
+    const session = s.get('s1')!;
+    const toolCalls = new Map(session.toolCalls);
+    toolCalls.set('t1', { ...toolCalls.get('t1')!, status: 'running' });   // the overwritten-ask shape keeps requestId
+    s = new Map(s).set('s1', { ...session, toolCalls });
+    expect(tool(s).requestId).toBe('r1');
+    expect(chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1' })).toBe(s);
+    expect(chatReducer(s, { type: 'PERMISSION_REPLAY_COMPLETE', sessionId: 's1', pendingRequestIds: [] })).toBe(s);
+  });
+
+  it('a new ask binding the same card drops the old note', () => {
+    let s = withAsk('r1');
+    s = chatReducer(s, { type: 'PERMISSION_RESOLVED_ELSEWHERE', sessionId: 's1', requestId: 'r1' });
+    s = chatReducer(s, { type: 'PERMISSION_REQUEST', sessionId: 's1', toolName: 'Bash', input: { command: 'ls' }, requestId: 'r2' });
+    expect(tool(s)).toMatchObject({ status: 'awaiting-approval', requestId: 'r2' });
+    expect(tool(s).answeredElsewhere).toBeUndefined();
+  });
+
+  it('replay-complete also clears a nested specialist ask that is not listed', () => {
+    let s = withAsk('r1', 'Task');
+    s = chatReducer(s, { type: 'PERMISSION_RESPONDED', sessionId: 's1', requestId: 'r1' });
+    const session = s.get('s1')!;
+    const toolCalls = new Map(session.toolCalls);
+    toolCalls.set('t1', { ...toolCalls.get('t1')!, subagentSegments: [
+      { type: 'tool', id: 'n1', toolUseId: 'n1', toolName: 'Bash', input: {}, status: 'awaiting-approval', requestId: 'nested-gone' },
+      { type: 'tool', id: 'n2', toolUseId: 'n2', toolName: 'Bash', input: {}, status: 'awaiting-approval', requestId: 'nested-open' },
+    ] as any });
+    s = new Map(s).set('s1', { ...session, toolCalls });
+    const after = chatReducer(s, { type: 'PERMISSION_REPLAY_COMPLETE', sessionId: 's1', pendingRequestIds: ['nested-open'] });
+    const segs = tool(after).subagentSegments as any[];
+    expect(segs[0]).toMatchObject({ status: 'running' });
+    expect(segs[0].requestId).toBeUndefined();
+    expect(segs[1]).toMatchObject({ status: 'awaiting-approval', requestId: 'nested-open' });
+  });
+});

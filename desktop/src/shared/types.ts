@@ -754,6 +754,12 @@ export interface ToolCallState {
    *  The card returns to 'running' (never 'failed', never a claim about a
    *  socket) and ToolCard shows a neutral note until the result lands. */
   answeredElsewhere?: boolean;
+  /** The request id the host said was resolved elsewhere, kept after `requestId` is
+   *  cleared, so an expiry or this device's own answer that arrives AFTER the
+   *  resolution still finds the card (T2 review: the broker emits Resolved, then
+   *  Expired, for a cancelled ask — without this the card read "Answered on the
+   *  computer" for an ask nobody answered). */
+  resolvedRequestId?: string;
   response?: string;
   error?: string;
   /** Set when the tool result carries a structuredPatch (Edit/MultiEdit). */

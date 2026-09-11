@@ -478,6 +478,8 @@ describe('RemoteServer runtime start/stop', () => {
     expect(mockSessionManager.listenerCount('pty-output')).toBe(0);
     expect(mockSessionManager.listenerCount('session-exit')).toBe(0);
     expect(mockHookRelay.listenerCount('hook-event')).toBe(0);
+    // Batch 2 (T2 review, 7): the relay-expiry listener is subscribed with the others.
+    expect(mockHookRelay.listenerCount('permission-expired')).toBe(0);
   });
 
   it('does not start when config.enabled is false', async () => {

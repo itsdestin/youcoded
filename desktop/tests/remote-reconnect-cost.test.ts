@@ -17,7 +17,9 @@ class FakeSocket extends EventEmitter {
   readyState = 1;
   bufferedAmount = 0;
   closed: { code: number; reason: string } | null = null;
-  send(raw: string) { this.frames.push(JSON.parse(raw)); }
+  /** Runs after each frame is recorded — lets a test act at an exact point in the restore. */
+  onSend: ((msg: any) => void) | null = null;
+  send(raw: string) { const msg = JSON.parse(raw); this.frames.push(msg); this.onSend?.(msg); }
   close(code = 1000, reason = '') { this.readyState = 3; this.closed = { code, reason }; this.emit('close'); }
   ping() {}
   types() { return this.frames.map((f) => f.type); }
@@ -179,6 +181,7 @@ describe('consent does not lie', () => {
     relay.on('hook-event', (e: any) => events.push(e));
     expect(relay.respond('cc-1', { decision: { behavior: 'allow' } })).toBe(true);
     expect(socket.write).toHaveBeenCalled();
+    await Promise.resolve();                     // announced after the current emit (see respond)
     expect(events).toEqual([expect.objectContaining({ type: 'PermissionResolved', sessionId: 's1', payload: { _requestId: 'cc-1' } })]);
 
     const { server } = await makeServer();
@@ -198,11 +201,21 @@ describe('consent does not lie', () => {
     server.onHookEvent({ type: 'PermissionResolved', sessionId: 's1', payload: { _requestId: 'quick' }, timestamp: 2 });
     snap(snapshotOf(['s1']));
     await restoring;
-    const hooks = ws.ofType('hook:event').map((f) => f.payload.type);
-    // The queued request is flushed (a reconnect keeps every hook event) and so is its
-    // resolution, in order — the phone's card appears and is cleared with the neutral note.
-    expect(hooks).toEqual(['PermissionRequest', 'PermissionResolved']);
+    // Design test 7: "shows no card after the flush". The request and its resolution were
+    // both queued in this restore and the snapshot never held the card, so the request is
+    // not flushed at all; the resolution still is (a card the snapshot DID hold needs it).
+    expect(ws.ofType('hook:event').map((f) => f.payload.type)).toEqual(['PermissionResolved']);
     expect(ws.ofType('hook:replay-complete')[0].payload.pendingRequestIds).toEqual([]);
+    // Run what the phone received through its own dispatcher and reducer: no card.
+    const { hookEventToAction } = await import('../src/renderer/state/hook-dispatcher');
+    const { chatReducer } = await import('../src/renderer/state/chat-reducer');
+    let phone: any = chatReducer(new Map(), { type: 'SESSION_INIT', sessionId: 's1' });
+    for (const f of ws.frames) {
+      if (f.type !== 'hook:event') continue;
+      const action = hookEventToAction(f.payload);
+      if (action) phone = chatReducer(phone, action);
+    }
+    expect([...phone.get('s1').toolCalls.values()]).toEqual([]);
   });
 });
 
@@ -236,5 +249,162 @@ describe('backpressure', () => {
     ws.bufferedAmount = 33 * 1024 * 1024;
     await server.handleMessage(client, ready(2, true));
     expect(ws.closed?.code).toBe(4009);
+  });
+});
+
+
+// Review of T2 (2026-09-10) and the cursor bug found fixing it.
+describe('the replay under a paused send', () => {
+  const MB = 1024 * 1024;
+  async function drain(ws: FakeSocket, restoring: Promise<unknown>) {
+    ws.bufferedAmount = 0;
+    await vi.advanceTimersByTimeAsync(200);
+    await restoring;
+  }
+
+  it('output that arrives while a terminal send is paused is sent next pass — not skipped, not doubled', async () => {
+    const { server } = await makeServer();
+    server.onPtyOutput('s1', 'first ');
+    const { ws, client } = connect(server);
+    ws.onSend = (msg) => {
+      if (msg.type === 'hook:replay-complete') {          // the first pass is done; pause the next send
+        ws.onSend = null;
+        server.onPtyOutput('s1', 'second ');
+        ws.bufferedAmount = 9 * MB;
+      }
+    };
+    const restoring = server.handleMessage(client, ready(2, true));
+    await vi.advanceTimersByTimeAsync(100);
+    server.onPtyOutput('s1', 'third');                     // lands DURING the paused send of 'second '
+    await drain(ws, restoring);
+    expect(ws.terminal('s1')).toBe('first second third');
+  });
+
+  it('a message broadcast during the final terminal pass is still delivered', async () => {
+    const { server } = await makeServer();
+    const { ws, client } = connect(server);
+    ws.onSend = (msg) => {
+      if (msg.type === 'hook:replay-complete') {
+        ws.onSend = null;
+        server.onPtyOutput('s1', 'late output');
+        ws.bufferedAmount = 9 * MB;
+      }
+    };
+    const restoring = server.handleMessage(client, ready(2, true));
+    await vi.advanceTimersByTimeAsync(100);
+    server.onHookEvent({ type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'during', tool_name: 'Bash' }, timestamp: 1 });
+    await drain(ws, restoring);
+    expect(ws.ofType('hook:event').map((f) => f.payload.payload._requestId)).toEqual(['during']);
+    expect(client.phase).toBe('live');
+  });
+
+  it('when the head trim overtakes the cursor during a pause, the terminal is reset, never silently skipped', async () => {
+    const { server } = await makeServer();
+    server.onPtyOutput('s1', 'x'.repeat(1000));
+    const { ws, client } = connect(server);
+    ws.onSend = (msg) => {
+      if (msg.type === 'hook:replay-complete') {
+        ws.onSend = null;
+        server.onPtyOutput('s1', 'y');
+        ws.bufferedAmount = 9 * MB;
+      }
+    };
+    const restoring = server.handleMessage(client, ready(2, true));
+    await vi.advanceTimersByTimeAsync(100);
+    for (let i = 0; i < 5; i++) server.onPtyOutput('s1', String.fromCharCode(97 + i).repeat(MB));   // 5M > 4M window
+    await drain(ws, restoring);
+    const buf = server.ptyBuffers.get('s1');
+    const resets = ws.frames.filter((f) => f.type === 'pty:reset');
+    expect(resets).toHaveLength(1);
+    const afterReset = ws.frames.slice(ws.frames.indexOf(resets[0]) + 1).filter((f) => f.type === 'pty:output');
+    expect(afterReset[0].payload.offset).toBe(buf.base);
+    expect(afterReset.map((f) => f.payload.data).join('')).toBe(buf.chunks.join(''));
+  });
+
+  it('hook events added while the hook pass is paused are sent once', async () => {
+    const { server } = await makeServer();
+    server.bufferHookEvent({ type: 'Notification', sessionId: 's1', payload: { n: 1 }, timestamp: 1 });
+    server.bufferHookEvent({ type: 'Notification', sessionId: 's1', payload: { n: 2 }, timestamp: 1 });
+    const { ws, client } = connect(server);
+    ws.onSend = (msg) => {
+      if (msg.type === 'hook:event' && msg.payload.payload.n === 1) { ws.onSend = null; ws.bufferedAmount = 9 * MB; }
+    };
+    const restoring = server.handleMessage(client, ready(1, false));
+    await vi.advanceTimersByTimeAsync(100);
+    server.onHookEvent({ type: 'Notification', sessionId: 's1', payload: { n: 3 }, timestamp: 1 });
+    await drain(ws, restoring);
+    expect(ws.ofType('hook:event').map((f) => f.payload.payload.n)).toEqual([1, 2, 3]);
+  });
+
+  it('a live client that stops reading is closed above 32 MB instead of buffered without bound', async () => {
+    const { server } = await makeServer();
+    const { ws, client } = connect(server);
+    await server.handleMessage(client, ready(1, false));
+    ws.bufferedAmount = 33 * MB;
+    server.onPtyOutput('s1', 'more');
+    expect(ws.closed?.code).toBe(4009);
+  });
+});
+
+describe('exact slicing at the edges', () => {
+  it('an offset exactly at a trimmed window\'s start gets the whole window with no reset', async () => {
+    const { server } = await makeServer();
+    for (let i = 0; i < 5; i++) server.onPtyOutput('s1', String.fromCharCode(97 + i).repeat(1024 * 1024));
+    const buf = server.ptyBuffers.get('s1');
+    const { ws, client } = connect(server);
+    await server.handleMessage(client, ready(2, true, { s1: { epoch: buf.epoch, units: buf.base } }));
+    expect(ws.ofType('pty:reset')).toHaveLength(0);
+    expect(ws.terminal('s1')).toBe(buf.chunks.join(''));
+  });
+
+  it('an offset inside the second of several chunks slices across the chunk boundary', async () => {
+    const { server } = await makeServer();
+    server.onPtyOutput('s1', 'a'.repeat(5000));
+    server.onPtyOutput('s1', 'b'.repeat(5000));
+    server.onPtyOutput('s1', 'c'.repeat(5000));
+    const buf = server.ptyBuffers.get('s1');
+    expect(buf.chunks.length).toBe(3);
+    const { ws, client } = connect(server);
+    await server.handleMessage(client, ready(2, true, { s1: { epoch: buf.epoch, units: 7000 } }));
+    expect(ws.terminal('s1')).toBe('b'.repeat(3000) + 'c'.repeat(5000));
+  });
+});
+
+describe('which asks are still open', () => {
+  it('an ask the snapshot shows awaiting is listed pending even when the host buffer never saw it', async () => {
+    // Remote access switched on after the ask was raised, or the buffer trimmed it: the
+    // desktop's own copy is the truth for a session the snapshot holds (T2 review, 6).
+    const snap = { sessions: [['s1', { timeline: [], toolCalls: [['t1', { toolUseId: 't1', toolName: 'Bash', input: {}, status: 'awaiting-approval', requestId: 'pre-remote' }]], toolGroups: [], assistantTurns: [] }]] };
+    const { server } = await makeServer({ snapshot: () => Promise.resolve(snap) });
+    const { ws, client } = connect(server);
+    await server.handleMessage(client, ready(2, true));
+    expect(ws.ofType('hook:replay-complete')[0].payload).toEqual({ sessionId: 's1', pendingRequestIds: ['pre-remote'] });
+  });
+
+  it('a Claude Code ask whose socket closed is purged and the phone is told it expired', async () => {
+    const { server } = await makeServer();
+    const { ws, client } = connect(server);
+    await server.handleMessage(client, ready(1, false));
+    server.bufferHookEvent({ type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'cc-dead', tool_name: 'Bash' }, timestamp: 1 });
+    server.onPermissionExpired('s1', 'cc-dead');
+    expect(server.hookBuffers.get('s1')).toEqual([]);
+    expect(ws.ofType('hook:event').map((f) => [f.payload.type, f.payload.payload._requestId])).toEqual([['PermissionExpired', 'cc-dead']]);
+  });
+
+  it('the relay announces a resolution only after every listener has seen the request', async () => {
+    // Remote access switched on after boot registers RemoteServer's listener AFTER main's
+    // auto-approve listener; a synchronous Resolved purged nothing and the Request stayed
+    // buffered as open forever (T2 review, 7).
+    const { HookRelay } = await import('../src/main/hook-relay');
+    const relay: any = new HookRelay();
+    const socket = { write: vi.fn(), end: vi.fn(), destroyed: false };
+    relay.pendingSockets.set('auto', { socket, sessionId: 's1' });
+    const request = { type: 'PermissionRequest', sessionId: 's1', payload: { _requestId: 'auto' }, timestamp: 1 };
+    relay.on('hook-event', (e: any) => { if (e.type === 'PermissionRequest') relay.respond('auto', { decision: { behavior: 'allow' } }); });
+    const { server } = await makeServer();
+    relay.on('hook-event', server.onHookEvent);
+    relay.emit('hook-event', request);
+    await Promise.resolve();
+    expect(server.hookBuffers.get('s1')).toEqual([]);
   });
 });

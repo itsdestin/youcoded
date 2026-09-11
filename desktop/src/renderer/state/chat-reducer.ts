@@ -2178,6 +2178,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...tool,
           status: 'awaiting-approval',
           requestId: action.requestId,
+          // A new ask on this card: the previous one's "answered elsewhere" note is
+          // about a different question (T2 review, 10).
+          answeredElsewhere: undefined,
+          resolvedRequestId: undefined,
           // Fix: the card must show the input THIS request is about. Tier 2
           // binds to a card matched only by NAME, so its input belongs to an
           // earlier call — that is how the second AskUserQuestion of a session
@@ -2276,6 +2280,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
 
       const toolCalls = new Map(session.toolCalls);
+      // T2 review (1): if the host's resolution beat this device's own answer back, the
+      // card already reads "Answered on the computer" — about an answer given HERE.
+      // This device's confirmation removes that note.
+      for (const [id, tool] of toolCalls) {
+        if (tool.answeredElsewhere && tool.resolvedRequestId === action.requestId) {
+          toolCalls.set(id, { ...tool, answeredElsewhere: undefined, resolvedRequestId: undefined });
+        }
+      }
       for (const [id, tool] of toolCalls) {
         if (tool.status === 'awaiting-approval' && tool.requestId === action.requestId) {
           // Fix: native budget gates (max_steps / doom_loop) are synthetic asks
@@ -2318,11 +2330,19 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
 
       const toolCalls = new Map(session.toolCalls);
       for (const [id, tool] of toolCalls) {
-        if (tool.status === 'awaiting-approval' && tool.requestId === action.requestId) {
+        const heldHere = tool.status === 'awaiting-approval' && tool.requestId === action.requestId;
+        // T2 review (2): a cancelled native ask arrives as Resolved THEN Expired, and the
+        // resolution has already moved the card to running with the "answered" note. The
+        // expiry is the truth — nobody answered — so it must still reach that card.
+        const clearedByResolution = tool.status === 'running' && !!tool.answeredElsewhere
+          && tool.resolvedRequestId === action.requestId;
+        if (heldHere || clearedByResolution) {
           toolCalls.set(id, {
             ...tool,
             status: 'failed',
             requestId: undefined,
+            answeredElsewhere: undefined,
+            resolvedRequestId: undefined,
             error: 'Permission request expired — socket closed before a response was sent',
           });
           break;
@@ -2367,7 +2387,21 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           status: isBudgetGate ? 'complete' : 'running',
           requestId: undefined,
           answeredElsewhere: isBudgetGate ? undefined : true,
+          resolvedRequestId: isBudgetGate ? undefined : tool.requestId,
         });
+      }
+      // Replay-complete covers nested specialist asks too (T2 review, 8): a nested ask
+      // answered while the phone was away must not keep live-looking buttons.
+      if (pending) {
+        for (const tool of session.toolCalls.values()) {
+          for (const seg of tool.subagentSegments ?? []) {
+            if (seg.type !== 'tool' || seg.status !== 'awaiting-approval' || !seg.requestId || pending.has(seg.requestId)) continue;
+            const patched = patchNestedAsk(toolCalls ?? session.toolCalls, seg.requestId, (s) => ({
+              ...s, status: 'running', requestId: undefined, askHeld: undefined,
+            }));
+            if (patched) toolCalls = patched;
+          }
+        }
       }
       if (!toolCalls) return state;                 // nothing was awaiting: same reference, no re-render
       next.set(action.sessionId, { ...session, toolCalls });

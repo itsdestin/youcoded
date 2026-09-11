@@ -69,7 +69,7 @@ const PTY_BUFFER_UNITS = 4 * 1024 * 1024;
 // not one big string, so appending costs O(chunk) instead of O(whole buffer).
 // `length` is the running total of `chunks` measured in JavaScript string length
 // (UTF-16 code units) — deliberately the SAME unit the old
-// `buf.length > PTY_BUFFER_SIZE` cap counted, so the effective cap size does not
+// 4 MB cap counted (`buf.length > cap`), so the effective cap size does not
 // silently change. (It is a character count, not a byte count: a non-ASCII char
 // can cost 2 units and a UTF-8 byte count would differ — exactly as before.)
 //
@@ -150,8 +150,10 @@ interface AuthenticatedClient {
   fallbackTimer?: ReturnType<typeof setTimeout> | null;
   /** What the phone said it had drawn per session, from client:ready (§7). */
   ptyOffsets?: Record<string, { epoch: string; units: number }>;
-  /** Stream position sent so far per session during THIS restore — the replay cursor. */
-  ptyCursor?: Map<string, number>;
+  /** Stream position sent so far per session during THIS restore — the replay cursor.
+   *  Keyed with the buffer's epoch, so a buffer recreated mid-restore is not read at the
+   *  old buffer's position (T2 review, 12). */
+  ptyCursor?: Map<string, { epoch: string; pos: number }>;
 }
 
 export interface ClientInfo {
@@ -420,6 +422,7 @@ export class RemoteServer {
     // Subscribe to events for buffering and broadcasting
     this.sessionManager.on('pty-output', this.onPtyOutput);
     this.hookRelay.on('hook-event', this.onHookEvent);
+    this.hookRelay.on('permission-expired', this.onPermissionExpired);
     this.sessionManager.on('session-exit', this.onSessionExit);
     this.sessionManager.on('session-created', this.onSessionCreated);
 
@@ -576,6 +579,7 @@ export class RemoteServer {
     this.lastStatusData = null;
     this.sessionManager.off('pty-output', this.onPtyOutput);
     this.hookRelay.off('hook-event', this.onHookEvent);
+    this.hookRelay.off('permission-expired', this.onPermissionExpired);
     this.sessionManager.off('session-exit', this.onSessionExit);
     this.sessionManager.off('session-created', this.onSessionCreated);
 
@@ -679,7 +683,7 @@ export class RemoteServer {
       buf.length += data.length;
 
       // Trim WHOLE chunks off the head until we are back under the cap.
-      // Behaviour note: the old code cut mid-chunk at exactly PTY_BUFFER_SIZE, so
+      // Behaviour note: the old code cut mid-chunk at exactly the cap, so
       // the replay could begin part-way through a terminal escape sequence; the cut
       // now lands on a chunk boundary, which means the buffer can hold slightly
       // LESS than the cap. That is the intended trade — the replayed tail is
@@ -731,29 +735,62 @@ export class RemoteServer {
     const cursor = (client.ptyCursor ??= new Map());
     let sent = false;
     for (const [sessionId, buf] of this.ptyBuffers) {
-      const total = buf.base + buf.length;
-      let from = cursor.get(sessionId);
-      if (from === undefined) {
+      const prior = cursor.get(sessionId);
+      let from: number;
+      let reset = false;
+      if (prior && prior.epoch === buf.epoch) {
+        from = prior.pos;
+        // More output arrived while a send was paused than the window holds, so the head
+        // trim passed the cursor: what lies between is gone. Start the terminal over
+        // rather than skip it silently (T2 review, 4).
+        if (from < buf.base) { reset = true; from = buf.base; }
+      } else if (prior) {
+        // This session's buffer was destroyed and recreated during the restore.
+        reset = true;
+        from = buf.base;
+      } else {
         const reported = client.ptyOffsets?.[sessionId];
+        const total = buf.base + buf.length;
         if (reported && reported.epoch === buf.epoch && reported.units >= buf.base && reported.units <= total) {
           from = reported.units;
         } else {
           from = buf.base;
-          if (reported) {
-            // The phone drew a terminal this window cannot continue: start it over.
-            if (!(await this.sendGated(client, { type: 'pty:reset', payload: { sessionId, epoch: buf.epoch } }))) return sent;
-            sent = true;
-          }
+          // The phone drew a terminal this window cannot continue: start it over.
+          reset = !!reported;
         }
       }
-      if (from < total) {
+      if (reset) {
+        if (!(await this.sendGated(client, { type: 'pty:reset', payload: { sessionId, epoch: buf.epoch } }))) return sent;
+        sent = true;
+        from = Math.max(from, buf.base);          // the window may have moved during the send
+      }
+      if (from < buf.base + buf.length) {
+        // Sliced HERE, synchronously; the cursor advances by exactly what was sliced. It
+        // used to jump to the buffer's end after the send, which skipped any output that
+        // arrived while that send was paused.
         const data = RemoteServer.sliceFrom(buf, from);
         if (!(await this.sendGated(client, { type: 'pty:output', payload: { sessionId, data, epoch: buf.epoch, offset: from } }))) return sent;
         sent = true;
+        from += data.length;
       }
-      cursor.set(sessionId, buf.base + buf.length);   // re-read: output may have arrived during the send
+      cursor.set(sessionId, { epoch: buf.epoch, pos: from });
     }
     return sent;
+  }
+
+  /** Permission asks the snapshot shows awaiting in one session, top-level and nested.
+   *  For a session the snapshot holds, the desktop's own copy is the truth about which
+   *  asks are open — the host buffer misses asks raised before remote access started. */
+  private static awaitingInSnapshot(snapshot: SerializedChatState, sessionId: string): string[] {
+    const held = snapshot.sessions.find(([id]) => id === sessionId)?.[1];
+    const out: string[] = [];
+    for (const [, tool] of held?.toolCalls ?? []) {
+      if (tool.status === 'awaiting-approval' && tool.requestId) out.push(tool.requestId);
+      for (const seg of tool.subagentSegments ?? []) {
+        if (seg.type === 'tool' && seg.status === 'awaiting-approval' && seg.requestId) out.push(seg.requestId);
+      }
+    }
+    return out;
   }
 
   /**
@@ -774,6 +811,16 @@ export class RemoteServer {
     ws.send(JSON.stringify(msg));
     return true;
   }
+
+  /** A Claude Code ask whose hook socket closed before anyone answered (T2 review, 7).
+   *  main.ts tells the desktop windows; nothing told the host's replay buffer or a phone,
+   *  so a reconnecting phone was replayed the dead ask as open. Purge it from the buffer
+   *  (the same purge a resolution does) and tell connected clients it expired — for the
+   *  relay, "socket closed before a response was sent" is literally what happened. */
+  private onPermissionExpired = (sessionId: string, requestId: string) => {
+    this.bufferHookEvent({ type: 'PermissionResolved', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent);
+    this.broadcast({ type: 'hook:event', payload: { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } });
+  };
 
   private onHookEvent = (event: any) => {
     this.bufferHookEvent(event);
@@ -1238,7 +1285,11 @@ export class RemoteServer {
       // pass is already reflected here, so the flush skips those (hookPassIndex); from
       // this point on they are queued and flushed.
       client.hookPassIndex = queue.length;
-      for (const [_sessionId, events] of this.hookBuffers) {
+      // A copy taken at the same instant as hookPassIndex: an event added while this
+      // pass is paused is in the queue (flushed later), and must not ALSO be picked up
+      // by the pass walking the live array — it went out twice (T2 review, 9).
+      const hookPass = [...this.hookBuffers].map(([sid, events]) => [sid, events.slice()] as const);
+      for (const [_sessionId, events] of hookPass) {
         for (const event of events) {
           const requestId = (event.payload as Record<string, unknown> | undefined)?._requestId;
           if (event.type === 'PermissionRequest' && typeof requestId === 'string') replayedAsks.add(requestId);
@@ -1249,10 +1300,14 @@ export class RemoteServer {
       // phone clears any awaiting card not named — it was answered while it was away —
       // with a neutral note, never a failure.
       for (const session of sessions) {
-        const pendingRequestIds = (this.hookBuffers.get(session.id) ?? [])
+        const fromBuffer = (this.hookBuffers.get(session.id) ?? [])
           .filter((e) => e.type === 'PermissionRequest')
           .map((e) => (e.payload as Record<string, unknown> | undefined)?._requestId)
           .filter((id): id is string => typeof id === 'string');
+        // Plus what the snapshot shows awaiting (T2 review, 6): an ask raised before
+        // remote access was switched on, or trimmed from the buffer, is open on the
+        // desktop and must not be cleared on the phone.
+        const pendingRequestIds = [...new Set([...fromBuffer, ...RemoteServer.awaitingInSnapshot(snapshot, session.id)])];
         if (!(await send({ type: 'hook:replay-complete', payload: { sessionId: session.id, pendingRequestIds } }))) return;
       }
 
@@ -1269,16 +1324,26 @@ export class RemoteServer {
 
     // The queue, then whatever was queued while the flush itself was paused, until
     // nothing is left; only the first round has entries below the cut line.
+    //
+    // Queue and terminal passes ALTERNATE until a round finds neither (T2 review, 3): a
+    // terminal pass can pause on backpressure, and anything broadcast meanwhile lands in
+    // the queue — flushing the queue only once, before the passes, lost it when the
+    // client went live. Live only after a round that found nothing new (§7). A pass or
+    // flush that sends nothing awaits nothing, so no broadcast can land between the last
+    // check and the phase change (broadcasts arrive on the event loop, never as a
+    // microtask).
     let firstRound = true;
-    while (queue.length > 0) {
-      if (!(await this.flushRestoreQueue(client, snapshot, sessions.map((s) => s.id), opts.reconnect, replayedAsks, firstRound))) return;
+    for (;;) {
+      while (queue.length > 0) {
+        if (!(await this.flushRestoreQueue(client, snapshot, sessions.map((s) => s.id), opts.reconnect, replayedAsks, firstRound))) return;
+        firstRound = false;
+      }
+      // Entries queued from here on are all above the cut line.
       firstRound = false;
-    }
-    // Live only after a terminal pass that found nothing new (§7). A pass that sends
-    // nothing awaits nothing, so no output can land between it and the phase change
-    // (PTY output arrives on the event loop, never as a microtask).
-    if (opts.replayBuffers) {
-      while (await this.ptyPass(client)) { /* until nothing is new */ }
+      if (!opts.replayBuffers) break;
+      const sent = await this.ptyPass(client);
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (!sent && queue.length === 0) break;
     }
   }
 
@@ -1312,6 +1377,15 @@ export class RemoteServer {
     const hookPass = firstRound ? client.hookPassIndex : undefined;
     const held = new Set(snapshot.sessions.map(([id]) => id));
     void knownSessionIds; // a session the list has and the snapshot lacks is simply not in `held`
+    // Design test 7, "shows no card after the flush": an ask whose resolution is LATER in
+    // this same round was raised and answered while the client was restoring. Flushing
+    // the request would draw a card only to clear it. The resolution is still flushed —
+    // a card the snapshot did hold needs it, and it is a no-op otherwise.
+    const resolvedAt = new Map<string, number>();
+    queue.forEach((m, idx) => {
+      const rid = m.payload?.payload?._requestId;
+      if (m.type === 'hook:event' && m.payload?.type === 'PermissionResolved' && typeof rid === 'string') resolvedAt.set(rid, idx);
+    });
     for (let i = 0; i < queue.length; i++) {
       const msg = queue[i];
       if (i < cutLine && RemoteServer.isTranscriptShaped(msg.type)) {
@@ -1326,6 +1400,8 @@ export class RemoteServer {
         if (!reconnect && hookPass !== undefined && i < hookPass) continue;
         const requestId = msg.payload?.payload?._requestId;
         if (msg.payload?.type === 'PermissionRequest' && typeof requestId === 'string' && replayedAsks.has(requestId)) continue;
+        const asks = msg.payload?.type === 'PermissionRequest' || msg.payload?.type === 'PermissionHeld';
+        if (asks && typeof requestId === 'string' && (resolvedAt.get(requestId) ?? -1) > i) continue;
       }
       if (!(await this.sendGated(client, msg))) return false;
     }

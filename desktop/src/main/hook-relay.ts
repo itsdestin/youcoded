@@ -168,11 +168,21 @@ export class HookRelay extends EventEmitter {
     // answer clears its card with a neutral note. Without it a Claude Code ask
     // answered on the computer was replayed to every reconnecting phone as a
     // live question.
-    this.emit('hook-event', {
-      sessionId: pending.sessionId,
-      type: 'PermissionResolved',
-      payload: { _requestId: requestId },
-      timestamp: Date.now(),
+    //
+    // On a microtask (T2 review, 7): respond() is often called from INSIDE another
+    // hook-event listener — main.ts auto-approves while the Request is still being
+    // emitted. A synchronous Resolved reached listeners registered after that one
+    // before they had seen the Request (RemoteServer, when remote access is switched on
+    // after launch), so it purged nothing and the answered Request stayed buffered as
+    // open forever. After the current emit, every listener has seen the Request first.
+    const sessionId = pending.sessionId;
+    queueMicrotask(() => {
+      this.emit('hook-event', {
+        sessionId,
+        type: 'PermissionResolved',
+        payload: { _requestId: requestId },
+        timestamp: Date.now(),
+      });
     });
     return true;
   }

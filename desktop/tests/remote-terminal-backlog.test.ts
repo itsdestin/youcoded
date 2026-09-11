@@ -76,14 +76,20 @@ describe('remote-shim terminal backlog and offsets', () => {
     expect(s1).toEqual(['one']);
   });
 
-  it('caps the backlog at 256 KB of units, dropping the oldest', () => {
-    const chunk = 'x'.repeat(100 * 1024);
-    output('s1', 'a' + chunk.slice(1), 0);
-    output('s1', 'b' + chunk.slice(1), 100 * 1024);
-    output('s1', 'c' + chunk.slice(1), 200 * 1024);   // 300 KB total: the first chunk must go
+  it('caps the backlog at 256 KB of units by trimming the OLDEST output, keeping its tail and everything after', () => {
+    // A restore's replay is one frame of up to 4M units. Dropping whole entries threw the
+    // entire replay away the moment one more frame arrived — while the saved offset still
+    // counted it as drawn, so no reconnect ever brought the history back (T2 review, 5).
+    const replay = 'old-line\n'.repeat(40 * 1024);              // 360 KB, line-shaped
+    output('s1', replay, 0);
+    output('s1', 'live', replay.length);
     const seen: string[] = [];
-    (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d[0]));
-    expect(seen).toEqual(['b', 'c']);
+    (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+    const total = seen.reduce((n, d) => n + d.length, 0);
+    expect(total).toBeLessThanOrEqual(256 * 1024);
+    expect(seen[seen.length - 1]).toBe('live');
+    expect(seen[0].startsWith('old-line\n')).toBe(true);        // cut at a line break, not mid-line
+    expect(replay.endsWith(seen[0])).toBe(true);                   // the TAIL of the replay survived
   });
 
   it('reports the epoch and the units it has drawn per session in client:ready, and 0 after a reset', async () => {
@@ -113,10 +119,43 @@ describe('remote-shim terminal backlog and offsets', () => {
     expect(seen).toEqual([]);
   });
 
-  it('an old host that sends no epoch leaves the offsets unreported rather than wrong', () => {
+  it('an old host that sends no epoch leaves the offsets unreported rather than wrong', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
     ws.receive({ type: 'pty:output', payload: { sessionId: 's1', data: 'abc' } });
     const seen: string[] = [];
     (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
     expect(seen).toEqual(['abc']);
+    (window as any).claude.on.chatHydrate(() => {});
+    ws.close();
+    vi.advanceTimersByTime(1000);
+    const ws2 = FakeWebSocket.instances[1];
+    ws2.open();
+    ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', platform: 'desktop' });
+    await Promise.resolve();
+    expect(ws2.sentOf('client:ready')[0].payload.ptyOffsets).toEqual({});
+  });
+
+  it('a live frame from a NEW buffer (another epoch) resets the terminal before drawing', () => {
+    // A host restart or a recreated session: no restore pass saw it, so the first frame of
+    // the new stream is the only signal. Appending it to the old screen was the bug (T2 review, 12).
+    const seen: string[] = [];
+    (window as any).claude.on.ptyResetForSession('s1', () => seen.push('<RESET>'));
+    (window as any).claude.on.ptyOutputForSession('s1', (d: string) => seen.push(d));
+    output('s1', 'old', 0, 'e1');
+    output('s1', 'new', 0, 'e2');
+    output('s1', '!', 3, 'e2');
+    expect(seen).toEqual(['old', '<RESET>', 'new', '!']);
+  });
+
+  it('pairing to a different host forgets every terminal position', async () => {
+    output('s1', 'abc', 0);
+    (window as any).claude.on.chatHydrate(() => {});
+    (globalThis as any).location.host = 'other-desktop:9900';
+    const p2 = shim.connect('pw', false);
+    const ws2 = FakeWebSocket.instances[1];
+    ws2.open();
+    ws2.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+    await p2;
+    expect(ws2.sentOf('client:ready')[0].payload.ptyOffsets).toEqual({});
   });
 });

@@ -1226,6 +1226,11 @@ function AppInner() {
     });
 
     const hookHandler = window.claude.on.hookEvent((event) => {
+      // T2 review (1): a desktop window learns of a phone's answer from the phone's own
+      // broadcast PERMISSION_RESPONDED. Acting on the host's resolution too would put
+      // "Answered on the computer" on the computer — about a phone's answer, or its own.
+      // Only a remote client needs the resolution.
+      if (event.type === 'PermissionResolved' && !isRemoteMode()) return;
       const action = hookEventToAction(event);
       if (action) {
         dispatch(action);
