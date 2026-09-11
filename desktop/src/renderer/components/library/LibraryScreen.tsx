@@ -5,7 +5,7 @@
 import React, { useMemo, useState, useEffect } from "react";
 import { useMarketplace } from "../../state/marketplace-context";
 import { useEscClose } from "../../hooks/use-esc-close";
-import { Button, CloseButton, EmptyState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
+import { Button, CloseButton, EmptyState, ErrorState, LoadingState, SegmentedTabs, SegmentedTabLabel, PluginIcon, PaletteIcon } from "../ui";
 import MarketplaceCard from "../marketplace/MarketplaceCard";
 import WallpaperBackdrop from "../WallpaperBackdrop";
 import MarketplaceGrid from "../marketplace/MarketplaceGrid";
@@ -13,6 +13,7 @@ import MarketplaceDetailOverlay, {
   type DetailTarget,
 } from "../marketplace/MarketplaceDetailOverlay";
 import type { SkillEntry } from "../../../shared/types";
+import { plainMessage } from "../../utils/ipc-error";
 
 interface Props {
   onExit(): void;
@@ -30,6 +31,28 @@ export default function LibraryScreen({
   onExit, onOpenMarketplace, onOpenShareSheet, onOpenThemeShare, initialTab,
 }: Props) {
   const mp = useMarketplace();
+
+  // What a tab shows INSTEAD of its sections while it has nothing real to show.
+  // WHY (error inventory 2026-09-10, false message 15): installedSkills and themeEntries
+  // are [] both before marketplace-context's fetchAll finishes and after it fails, and the
+  // sections' empty state cannot tell either from a real "nothing installed" — so a failed
+  // or unfinished load told someone with plugins "Nothing installed yet." A running load
+  // now says so; a failed one names the reason and offers Retry. Once a tab HAS rows, a
+  // later failed refresh leaves them on screen: stale rows are still real rows, and
+  // swapping them for an error would hide things the user can see are installed.
+  const loadGate = (hasRows: boolean, what: 'plugins' | 'themes'): React.ReactNode | null => {
+    if (hasRows) return null;
+    if (mp.error) {
+      return (
+        <ErrorState
+          message={`Couldn't load your installed ${what}: ${plainMessage(mp.error)}`}
+          onRetry={() => { void mp.refresh(); }}
+        />
+      );
+    }
+    if (mp.loading) return <LoadingState what={`your ${what}`} />;
+    return null;
+  };
   const [detail, setDetail] = useState<DetailTarget | null>(null);
   // Tab state — defaults to 'skills' if no initialTab provided.
   const [tab, setTab] = useState<'skills' | 'themes' | 'updates'>(initialTab ?? 'skills');
@@ -223,7 +246,7 @@ export default function LibraryScreen({
         {/* Skills tab — starred favorites first, then the rest. Each skill
              card carries a plugin-name badge that jumps to the parent
              plugin's marketplace detail overlay. */}
-        {tab === 'skills' && (
+        {tab === 'skills' && (loadGate(mp.installedSkills.length > 0, 'plugins') ?? (
           <>
             <Section title="Favorites" empty="Star an installed plugin and it appears here.">
               {mp.installedSkills.filter(s => favSet.has(s.id)).length > 0 && (
@@ -240,10 +263,10 @@ export default function LibraryScreen({
               )}
             </Section>
           </>
-        )}
+        ))}
 
         {/* Themes tab — starred theme favorites first, then the rest. */}
-        {tab === 'themes' && (
+        {tab === 'themes' && (loadGate(installedThemeCount > 0, 'themes') ?? (
           <>
             <Section title="Favorite themes" empty="Star an installed theme and it appears here.">
               {mp.themeEntries.filter(t => t.installed && themeFavSet.has(t.slug)).length > 0 && (
@@ -260,7 +283,7 @@ export default function LibraryScreen({
               )}
             </Section>
           </>
-        )}
+        ))}
 
         {/* Updates tab — all update-available items (skills + themes) in one list. */}
         {tab === 'updates' && (
