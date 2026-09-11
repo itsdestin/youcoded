@@ -34,6 +34,7 @@ import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionS
 import { VITE_DEV_PORT } from '../shared/ports';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
+import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
 import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable } from './first-run';
@@ -123,6 +124,11 @@ process.on('unhandledRejection', (reason) => {
     reason: reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
   });
 });
+
+// Crash + hang capture. Must run before app.whenReady(): Crashpad has to be
+// live before the child processes it watches are spawned. Dumps stay on the
+// machine — see crash-diagnostics.ts.
+installCrashDiagnostics();
 
 // macOS and Linux Electron apps may inherit a minimal PATH that's missing
 // common tool locations (Homebrew, nvm, Volta, pipx, cargo). macOS Finder/Dock
@@ -722,6 +728,11 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
       sandbox: true,
     },
   });
+
+  // Record beachballs. A hung window is otherwise invisible: it keeps servicing
+  // background work, so nothing in the app, the OS, or this log says anything is
+  // wrong — which is exactly why the 2026-09-03 force quit was unexplainable.
+  wireWindowHangDiagnostics(win, opts?.buddy ? `buddy:${opts.buddy}` : 'main');
 
   // Lift alwaysOnTop to 'screen-saver' level for buddy windows after construction.
   // 'screen-saver' is the highest reliable always-on-top level; floats over
@@ -1526,6 +1537,9 @@ void app.whenReady().then(async () => {
   perfMark('main:when-ready');
   await rotateLog();
   perfMark('main:chore:rotate-log:done');
+
+  // After rotateLog so the line survives the trim, not before it.
+  reportPreviousCrashes();
 
   // Fire-and-forget: never await. Respects the opt-out in About → Privacy
   // internally and fails silently on any network issue.

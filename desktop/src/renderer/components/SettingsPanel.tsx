@@ -2639,6 +2639,11 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
         {/* Account leads the stack — your identity is the first thing settings should show (Destin, 2026-07-08) */}
         <AccountSection />
 
+        {/* Assistant settings sits right under Account (Destin, 2026-09-08) — the
+            same row as desktop, with the pages the phone can serve today —
+            General. (Originally added here as Q-6b, 2026-09-05.) */}
+        <AssistantSettingsRow platform="android" defaults={defaults} onDefaultsChange={handleDefaultsChange} />
+
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
 
         {/* No <BuddyButton /> on Android — the floater relies on an Electron always-on-top window that Android doesn't support yet */}
@@ -2655,10 +2660,6 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
         )}
 
         <ConnectToDesktopButton />
-
-        {/* Q-6b (2026-09-05): the same Assistant settings row as desktop, with
-            the pages the phone can serve today — General. */}
-        <AssistantSettingsRow platform="android" defaults={defaults} onDefaultsChange={handleDefaultsChange} />
 
         {/* Help & feedback — the tour, tips, the community, bug reports, the
             version (first-run guide design 2026-09-10 §1.6). Sits above
@@ -3009,22 +3010,13 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
             sign-in (Destin feedback, 2026-07-22). */}
         <AccountSection />
 
-        <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
-
-        <BuddyButton />
-
-        <SoundButton />
-
-        <PerformanceButton />
-
-        <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
-
-        {/* Assistant settings (2026-09-05): ONE row where Model Providers,
-            Defaults, Permissions and Specialists were four. The deep link that
-            used to open Model Providers now opens this panel on its first
-            provider page. Provider pages self-gate on native.supported, so over
-            remote access the panel still shows General, Permissions and
-            Specialists — the three that never had the gate. */}
+        {/* Assistant settings sits right under Account (Destin, 2026-09-08) — ONE
+            row where Model Providers, Defaults, Permissions and Specialists were
+            four. The deep link that used to open Model Providers now opens this
+            panel on its first provider page. Provider pages self-gate on
+            native.supported, so over remote access the panel still shows
+            General, Permissions and Specialists — the three that never had the
+            gate. */}
         <AssistantSettingsRow
           defaults={defaults}
           onDefaultsChange={handleDefaultsChange}
@@ -3034,6 +3026,16 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           autoOpenPage="cloud"
           onAutoOpenHandled={onProvidersAutoOpenHandled}
         />
+
+        <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />
+
+        <BuddyButton />
+
+        <SoundButton />
+
+        <PerformanceButton />
+
+        <SyncSection autoOpen={syncAutoOpen} onAutoOpenHandled={onSyncAutoOpenHandled} />
 
         <RemoteButton
           config={config}
