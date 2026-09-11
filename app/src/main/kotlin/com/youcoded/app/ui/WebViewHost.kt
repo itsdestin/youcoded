@@ -66,14 +66,56 @@ fun WebViewHost(
                     displayZoomControls = false
                 }
 
-                webViewClient = object : WebViewClient() {
-                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
-                        val url = request.url.toString()
-                        if (!url.startsWith("file://") && !url.startsWith("http://localhost") && !url.startsWith("http://10.0.2.2")) {
-                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, request.url))
-                            return true
+                // One router for both ways the WebView can be asked to open a URL
+                // (remote access batch 3, design §10). WHY: on a phone paired to a
+                // desktop, Download opens http://<desktop>/download/<token>/<name>,
+                // and until now every non-local URL went to ACTION_VIEW, so the file
+                // opened in Chrome as a page instead of saving to Downloads. The
+                // decision is WebViewUrlPolicy (pure, unit-tested in
+                // WebViewUrlRouterTest); these are only the framework calls it drives.
+                val urlRouter = WebViewUrlRouter(object : WebViewUrlRouter.Actions {
+                    override fun download(url: String, fileName: String) {
+                        try {
+                            val request = android.app.DownloadManager.Request(android.net.Uri.parse(url))
+                                .setTitle(fileName)
+                                .setNotificationVisibility(android.app.DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                            if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                                // Android 10+: the shared Downloads folder needs no permission.
+                                request.setDestinationInExternalPublicDir(android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                            } else {
+                                // Android 9 (minSdk 28) would need WRITE_EXTERNAL_STORAGE and a
+                                // permission prompt for the shared folder; the app's own
+                                // Downloads folder needs none, and the completed-download
+                                // notification still opens the file.
+                                request.setDestinationInExternalFilesDir(context, android.os.Environment.DIRECTORY_DOWNLOADS, fileName)
+                            }
+                            val manager = context.getSystemService(android.content.Context.DOWNLOAD_SERVICE) as android.app.DownloadManager
+                            manager.enqueue(request)
+                        } catch (e: Exception) {
+                            // The page already said "Saving…"; say plainly that it did not
+                            // start, without guessing why (the log keeps the real reason).
+                            android.util.Log.w("WebViewHost", "download could not start: ${e.message}")
+                            android.widget.Toast.makeText(context, "Couldn’t start the download.", android.widget.Toast.LENGTH_LONG).show()
                         }
-                        return false
+                    }
+
+                    override fun openExternally(url: String) {
+                        try {
+                            context.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                        } catch (_: android.content.ActivityNotFoundException) {
+                            // Nothing on this phone opens that kind of link. Before the
+                            // router this threw out of the WebView callback.
+                        }
+                    }
+                })
+                // The route a same-origin click, or a response that turns out to be an
+                // attachment, takes, so a download can never go dark on this path.
+                setDownloadListener { url, _, _, _, _ -> urlRouter.onDownloadRequested(url) }
+
+                webViewClient = object : WebViewClient() {
+                    // The route a cross-origin <a download> click from the file:// page takes.
+                    override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                        return urlRouter.onNavigation(request.url.toString())
                     }
 
                     // Phase 5c: Intercept theme-asset:// URLs — Android equivalent
