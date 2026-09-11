@@ -55,3 +55,15 @@ describe('sanitizeDocHtml — what a .docx preview may contain (2026-09-10)', ()
     expect(DOMPurify.sanitize('<a href="https://example.com">x</a>')).not.toContain('target');
   });
 });
+
+describe('sanitizeDocHtml fails CLOSED if DOMPurify is unsupported (2026-09-10 review)', () => {
+  it('throws (→ DocxView error state) rather than returning the raw HTML', () => {
+    const orig = DOMPurify.isSupported;
+    try {
+      (DOMPurify as unknown as { isSupported: boolean }).isSupported = false;
+      expect(() => sanitizeDocHtml('<a href="javascript:alert(1)">x</a>')).toThrow();
+    } finally {
+      (DOMPurify as unknown as { isSupported: boolean }).isSupported = orig;
+    }
+  });
+});

@@ -38,5 +38,13 @@ function purifier(): typeof DOMPurify {
 }
 
 export function sanitizeDocHtml(html: string): string {
+  // Fail CLOSED (2026-09-10 review): if DOMPurify reports itself unsupported it
+  // returns its input unchanged, and this is the ONLY defense on mammoth's raw
+  // HTML — a silent pass-through of any javascript:/onerror it produced. Throw so
+  // DocxView shows its error state instead of inlining unsanitized markup.
+  if (!DOMPurify.isSupported) throw new Error('document viewer unavailable');
+  // ADD_ATTR keeps `target` (not in the default allowlist) so the link hook's
+  // target=_blank survives; the default profile permits it on no element where it
+  // would do harm.
   return purifier().sanitize(html, { ADD_ATTR: ['target'] });
 }

@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from 'vitest';
-import { sanitizeRigSvg } from '../src/renderer/components/mascot/sanitize-rig-svg';
+import { sanitizeRigSvg, purifySvgMarkup } from '../src/renderer/components/mascot/sanitize-rig-svg';
+import DOMPurify from 'dompurify';
 import { readFileSync, readdirSync, existsSync } from 'fs';
 import { join } from 'path';
 import { DEFAULT_BUDDY_RIG } from '../src/renderer/components/mascot/default-buddy-rig';
@@ -130,5 +131,29 @@ describe('sanitizeRigSvg — every shipped drawing keeps the parts the app anima
     expect(ids(host)).toEqual(ids(source));
     expect(pivots(host)).toEqual(pivots(source));
     expect(host.querySelectorAll('*').length).toBe(source.querySelectorAll('*').length);
+  });
+});
+
+describe('sanitizeRigSvg — data: href is real rasters only (2026-09-10 review)', () => {
+  it('keeps an embedded PNG but drops a data:image/svg+xml href', () => {
+    const out = inline(sanitizeRigSvg(wrap(
+      '<image href="data:image/png;base64,iVBORw0KGgo="/><image href="data:image/svg+xml;base64,PHN2Zz48L3N2Zz4="/>'
+    )));
+    const hrefs = Array.from(out.querySelectorAll('image')).map((e) => e.getAttribute('href') || e.getAttribute('xlink:href'));
+    expect(hrefs.some((h) => h?.startsWith('data:image/png'))).toBe(true);
+    expect(hrefs.some((h) => h?.includes('svg+xml'))).toBe(false);
+  });
+});
+
+describe('the cleaner fails CLOSED if DOMPurify is ever unsupported (2026-09-10 review)', () => {
+  it('purifySvgMarkup returns empty (→ default buddy) instead of the input', () => {
+    const orig = DOMPurify.isSupported;
+    try {
+      (DOMPurify as unknown as { isSupported: boolean }).isSupported = false;
+      expect(purifySvgMarkup('<svg><script>alert(1)</script></svg>')).toBe('');
+      expect(sanitizeRigSvg(wrap('<circle r="5"/>'))).toBeNull();
+    } finally {
+      (DOMPurify as unknown as { isSupported: boolean }).isSupported = orig;
+    }
   });
 });

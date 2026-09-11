@@ -27,6 +27,9 @@ const BLOCKED_TAGS = new Set([
   'animate', 'animatetransform', 'animatemotion', 'set',
 ]);
 
+/** An embedded raster image, the only external-looking href a rig may keep. */
+const DATA_IMAGE_RASTER = /^data:image\/(?:png|jpe?g|gif|webp|avif);/i;
+
 const ELEMENT_NODE = 1;
 const TEXT_NODE = 3;
 const CDATA_SECTION_NODE = 4;
@@ -41,8 +44,16 @@ const PURIFY_SVG = {
 };
 
 /** Pass 3 on its own, for SVG markup assembled from an already-inlined rig (the
- *  buddy's peek hands re-serialize part of the live rig with outerHTML). */
+ *  buddy's peek hands re-serialize part of the live rig with outerHTML).
+ *
+ *  Fails CLOSED (2026-09-10 review): if DOMPurify reports itself unsupported it
+ *  returns the INPUT unchanged, which for the peek-hands path — no XML/blocklist
+ *  pre-pass — would be a silent total bypass. An empty string renders nothing;
+ *  sanitizeRigSvg then falls back to the default buddy. DOMPurify is supported in
+ *  Electron, the Android WebView and every remote browser, so this only guards a
+ *  should-never-happen. */
 export function purifySvgMarkup(markup: string): string {
+  if (!DOMPurify.isSupported) return '';
   return DOMPurify.sanitize(markup, PURIFY_SVG);
 }
 
@@ -80,10 +91,14 @@ export function sanitizeRigSvg(svgText: string): string | null {
       if (name.startsWith('on')) {
         el.removeAttribute(attr.name);
       } else if (name === 'href' || name === 'xlink:href') {
-        if (!(value.startsWith('#') || value.toLowerCase().startsWith('data:image/'))) {
+        // Same-document refs and embedded RASTER data URIs only. Restricted to
+        // real raster types (2026-09-10 review): `data:image/svg+xml` is another
+        // document — browsers sandbox script inside an <image>, but the type list
+        // makes that a design choice here, not a reliance on that sandboxing.
+        if (!(value.startsWith('#') || DATA_IMAGE_RASTER.test(value))) {
           el.removeAttribute(attr.name);
         }
-      } else if (name === 'style' && /url\s*\(\s*['"]?\s*(?!#|data:image\/)/i.test(value)) {
+      } else if (name === 'style' && /url\s*\(\s*['"]?\s*(?!#|data:image\/(?:png|jpe?g|gif|webp|avif))/i.test(value)) {
         // fill:url(https://…) can exfiltrate via fetch — allow only #refs/data images.
         el.removeAttribute(attr.name);
       }
