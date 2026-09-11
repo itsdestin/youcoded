@@ -103,6 +103,16 @@ describe('Resume browser — conversations kept built', () => {
     expect(readsOf(read, idFor(2))).toBe(1);
   });
 
+  // The top row of a card is the name, then empty space, then the tag and
+  // complete icons. That empty space used to do nothing (Destin, 2026-09-11).
+  it('opens a conversation from the empty space beside its name', async () => {
+    mockClaude(rows(2));
+    open();
+    const nameControl = (await screen.findByText('Conversation 1')).closest('button')!;
+    fireEvent.click(nameControl.parentElement!);
+    await waitFor(() => expect(isShown(idFor(1))).toBe(true));
+  });
+
   it('passes the row’s project folder so main can open the file without a lookup', async () => {
     const read = mockClaude(rows(1));
     open();

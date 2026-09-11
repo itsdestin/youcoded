@@ -1387,7 +1387,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
           the organize icons. Keep the viewer unchanged and retain this dialog's
           separate keyboard handling. R5-1 keeps both edit cues visible even at rest. */}
-      <div className={`flex items-center gap-1 px-3 pt-2 ${ICON_GUTTER}`}>
+      <div
+        className={`flex items-center gap-1 px-3 pt-2 ${ICON_GUTTER}`}
+        // The empty space between the name and the tag/complete icons was a
+        // dead zone: the name opens Rename, the icons float over the corner, and
+        // only the lower half of the card was the select button. Clicking there
+        // did nothing (Destin, 2026-09-11). Clicks INSIDE a button are left to
+        // that button — without the check the no-rename fallback button would
+        // select twice, which on a narrow screen expands the card and
+        // immediately collapses it again.
+        onClick={(e) => {
+          if (inert || (e.target as HTMLElement).closest('button')) return;
+          rowActions.current?.select(s);
+        }}
+      >
         {namingApi() ? <Button variant="ghost" size="sm"
           // -ml-2 cancels the button's own px-2 so the NAME's first letter lands
           // on the same left edge as the metadata line below it, while the hover
