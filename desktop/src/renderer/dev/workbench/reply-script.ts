@@ -12,7 +12,9 @@
 // plus `delay` (ms before the line) and two new kinds:
 //   permission_request — emits a PermissionRequest hook event and PAUSES until
 //                        session.respondToPermission(id) (mock-shim) resolves it
-//   turn_complete      — ends the turn
+//   turn_complete      — ends the turn (optional `usage` = the usage payload
+//                        the reducer stamps on the turn; drives the native
+//                        context/usage chips and the picker warning)
 // No Date.now(): timestamps are a counter so a replay is byte-identical.
 
 export type ReplyLine =
@@ -24,7 +26,7 @@ export type ReplyLine =
   | { type: 'tool_use'; id: string; name: string; input: Record<string, unknown>; delay?: number }
   | { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean; delay?: number }
   | { type: 'permission_request'; id: string; name: string; input: Record<string, unknown>; delay?: number }
-  | { type: 'turn_complete'; delay?: number; model?: string };
+  | { type: 'turn_complete'; delay?: number; model?: string; usage?: Record<string, unknown> };
 
 export interface ReplySinks {
   transcript: (event: unknown) => void;
@@ -110,7 +112,16 @@ export async function playReply(sessionId: string, text: string, script: ReplyLi
         break;
       }
       case 'turn_complete':
-        t('turn-complete', { stopReason: 'end_turn', model: line.model ?? null });
+        t('turn-complete', {
+          stopReason: 'end_turn',
+          model: line.model ?? null,
+          // Optional usage payload → the reducer stamps the turn's usage
+          // (contextUsedTokens etc.), so a fixture can drive the StatusBar's
+          // context chip AND the model-picker re-prefill warning with real
+          // numbers instead of a hand-set store override. Omitted for live
+          // scripts with no `usage` — byte-identical to before.
+          ...(line.usage ? { usage: line.usage } : {}),
+        });
         break;
       default:
         // A typo in a fixture must be loud, not a silently skipped beat.

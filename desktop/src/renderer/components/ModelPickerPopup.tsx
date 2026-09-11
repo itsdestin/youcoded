@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import type { ModelAlias } from './StatusBar';
 import { FastIcon } from './Icons';
 import { useEscClose } from '../hooks/use-esc-close';
+import { useNativeSessionUsage } from '../hooks/useNativeSessionUsage';
 import { Button, Dialog, TextInput, Toggle, FOCUS_RING, LoadingState, SettingRow } from './ui';
 import ModelPicker, { type ModelChoice } from './model/ModelPicker';
 
@@ -172,6 +173,13 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
   // the user knows the swap did NOT take effect (don't close as if it succeeded).
   const [nativeError, setNativeError] = useState<string | null>(null);
   const [nativeSwapping, setNativeSwapping] = useState(false);
+
+  // Context occupancy — the last completed native turn's real measured usage
+  // (the number the StatusBar's "Context: X% remaining" chip shows). Feeds the
+  // switch-re-prefills-warning in the picker: the prompt cache is per model, so
+  // switching re-sends the whole history to the new model, and how big that is
+  // is exactly this. Same hook useNativeSessionUsage already drives.
+  const nativeUsage = useNativeSessionUsage(sessionId);
 
   useEffect(() => {
     if (!open || provider !== 'native') return;
@@ -358,6 +366,8 @@ export default function ModelPickerPopup({ open, onClose, sessionId, currentMode
                 onSelect={(c) => { void applyChoice(c); }}
                 includeClaude={!isNative}
                 includeNative={isNative}
+                currentContextTokens={isNative ? nativeUsage?.contextUsedTokens ?? undefined : undefined}
+                currentModelId={isNative ? currentModelId ?? null : null}
               />
               {nativeError && <p className="text-xs text-destructive-fg mt-2">{nativeError}</p>}
               {nativeSwapping && <p className="text-xs text-fg-muted mt-2">Switching…</p>}

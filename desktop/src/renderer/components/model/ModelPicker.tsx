@@ -48,6 +48,17 @@ const CLAUDE_MODELS = CLAUDE_ALIASES.map((alias) => ({ alias, label: CLAUDE_LABE
 
 const CLAUDE_SOURCE = 'claude';
 
+/** Context occupancy (in input tokens) above which switching the bound model
+ *  shows the re-prefill footnote: the cache is keyed per model, so the next
+ *  turn re-sends the whole history to the new model — a full cache-write on
+ *  OpenRouter, a minutes-long full prefill on a local model. The number is the
+ *  native session-turn threshold at which compaction becomes worthwhile
+ *  (harness compaction triggers near 70% of the window; the biggest small
+ *  model window here is 32k), i.e. the point where the footnote stops being a
+ *  curiosity and starts being actionable. Not a "free" hint: the host must
+ *  actively pass currentContextTokens, or the message never appears. */
+const CONTEXT_SWITCH_WARNING_TOKENS = 16_000;
+
 /** How much brand COLOUR the list carries. The company mark is always drawn in
  *  full colour at every level — the variable is how far the colour spreads into
  *  the text.
@@ -178,6 +189,11 @@ export default function ModelPicker({
   includeNative = true,
   onManageModels,
   prefill,
+  /** Turning this on makes the picker report the session's current context
+   *  occupancy so the host can warn when a switch re-prefills a long history.
+   *  Shared components stay stateless — the picker only forwards the number. */
+  currentContextTokens,
+  currentModelId,
 }: {
   value: ModelChoice | null;
   onSelect: (choice: ModelChoice) => void;
@@ -201,6 +217,8 @@ export default function ModelPicker({
    *  (Destin's Task 6 ruling — native resume ALWAYS offers the picker,
    *  pre-filled when the model is available here). */
   prefill?: PortableModelRef;
+  currentContextTokens?: number;
+  currentModelId?: string | null;
 }) {
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [catalog, setCatalog] = useState<CatalogRow[]>([]);
@@ -414,6 +432,33 @@ export default function ModelPicker({
     return b ? { icon: b.icon, color: b.color } : null;
   }, [value, providers]);
 
+  // The ONE way today's model can be identified. Why currentModelId instead of
+  // `value`: `value` is the CURRENT pick — it IS the pre-answer state, so it
+  // would never differ and the message could never appear. currentModelId comes
+  // from the host (the live SessionInfo.model), a prop deliberately kept on the
+  // other side of the pick state so an open panel can still see "what is
+  // running now". Same shape as the Session footnote in that file's sibling
+  // popover.
+  const swapAwayFromCurrent = useMemo(() => {
+    if (!currentModelId || currentModelId === 'unknown') return false;
+    if (!value) return false;
+    if (value.runtime !== 'native') return false;
+    return value.modelId !== currentModelId;
+  }, [currentModelId, value]);
+
+  // Cross-runtime / cross-provider switches are machine-honest "no" — the
+  // cached-prefix guarantee only holds within one provider (same account, same
+  // id), so moving providers is unambiguously a cache-miss either way and the
+  // message would be a redundant guess. The model-class estimate for Claude
+  // sessions is withheld for the same reason below.
+  const sameProvider = useMemo(() => {
+    if (!value || value.runtime !== 'native') return false;
+    const p = providers.find((x) => x.id === value.providerId);
+    return p?.type === 'local-engine' || p?.type === 'openrouter' || p?.type === 'anthropic';
+  }, [value, providers]);
+
+  const showReprefillWarning = swapAwayFromCurrent && sameProvider && (currentContextTokens ?? 0) >= CONTEXT_SWITCH_WARNING_TOKENS;
+
   const row = (e: Entry) => {
     const selected = !!value && choiceKey(value) === e.key;
     const fav = favorites.has(e.key);
@@ -607,6 +652,17 @@ export default function ModelPicker({
                 that does. A flex sibling of the scroll area (not inside it) so
                 it stays pinned as the list scrolls. Omitted when the host has
                 nowhere to send the user. */}
+            {showReprefillWarning && (
+              <div className="border-t border-edge shrink-0 px-3 py-2 bg-inset/60">
+                <p className="text-3xs leading-relaxed text-fg-muted">
+                  Switching models re-sends this whole conversation
+                  ({Math.round(currentContextTokens! / 1000)}k tokens) to the
+                  new model — the prompt cache is per model, so your next
+                  message starts a full re-prefill. If the chat is getting
+                  long, compact first.
+                </p>
+              </div>
+            )}
             {onManageModels && (
               <div className="border-t border-edge shrink-0">
                 <button
