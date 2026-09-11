@@ -79,6 +79,26 @@ interface RemoteConfig {
   hasPassword: boolean;
   keepAwakeHours: number;
   clientCount: number;
+  // True when the current password is shorter than the 8-char minimum (a
+  // password set before the rule, or by hand-editing the config file). Drives a
+  // gentle note; never forces a change. 2026-09-10 security review, #5.
+  weakPassword?: boolean;
+}
+
+// The minimum length for a new remote-access password. Mirrors
+// MIN_REMOTE_PASSWORD_LENGTH in main/remote-config.ts (renderer can't import
+// from main). 2026-09-10 security review, #5.
+const MIN_REMOTE_PASSWORD_LENGTH = 8;
+
+// Make a memorable, easy-to-type passphrase like `abcd-efgh-jkmn`: three groups
+// of four letters, drawn from an alphabet with the visually ambiguous characters
+// (i, l, o) removed. Uses the browser CSPRNG. Well over the 8-char minimum.
+function generateRemotePassphrase(): string {
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz'; // no i, l, o
+  const bytes = new Uint8Array(12);
+  crypto.getRandomValues(bytes);
+  const chars = Array.from(bytes, (b) => alphabet[b % alphabet.length]);
+  return `${chars.slice(0, 4).join('')}-${chars.slice(4, 8).join('')}-${chars.slice(8, 12).join('')}`;
 }
 
 const KEEP_AWAKE_OPTIONS = [
@@ -1470,7 +1490,7 @@ interface RemoteButtonProps {
   loading: boolean;
   hasActiveSession: boolean;
   newPassword: string;
-  passwordStatus: 'idle' | 'saving' | 'saved';
+  passwordStatus: 'idle' | 'saving' | 'saved' | 'too-short';
   copied: boolean;
   showSetupQR: boolean;
   showAddDevice: boolean;
@@ -1871,6 +1891,32 @@ function RemoteButton(props: RemoteButtonProps) {
                             {passwordStatus === 'saved' ? '✓' : passwordStatus === 'saving' ? '...' : 'Set'}
                           </Button>
                         </InputGroup>
+                        {/* Length rule + a one-tap generator + the disconnect warning
+                            (2026-09-10 security review, #5). The hint turns into the
+                            error when a too-short password is submitted. */}
+                        <div className="flex items-center justify-between mt-1.5">
+                          <span className={`text-3xs ${passwordStatus === 'too-short' ? 'text-red-400' : 'text-fg-muted'}`}>
+                            {passwordStatus === 'too-short'
+                              ? `Use at least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`
+                              : `At least ${MIN_REMOTE_PASSWORD_LENGTH} characters.`}
+                          </span>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            disabled={hostOnly}
+                            onClick={() => onSetNewPassword(generateRemotePassphrase())}
+                          >
+                            Generate
+                          </Button>
+                        </div>
+                        <p className="text-3xs text-fg-muted mt-1">
+                          Changing the password disconnects every device; each reconnects with the new one.
+                        </p>
+                        {config?.weakPassword && passwordStatus !== 'too-short' && (
+                          <p className="text-3xs text-amber-400 mt-1">
+                            Your current password is short. Consider setting a longer one.
+                          </p>
+                        )}
                       </div>
 
                       <div className="py-2">
@@ -2681,7 +2727,7 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   const [clients, setClients] = useState<RemoteDeviceRow[]>([]);
   const [remoteStatus, setRemoteStatus] = useState<RemoteStatus | null>(null);
   const [newPassword, setNewPassword] = useState('');
-  const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved'>('idle');
+  const [passwordStatus, setPasswordStatus] = useState<'idle' | 'saving' | 'saved' | 'too-short'>('idle');
   const [loading, setLoading] = useState(true);
   const [showAddDevice, setShowAddDevice] = useState(false);
   const [showSetupQR, setShowSetupQR] = useState(false);
@@ -2735,10 +2781,19 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
 
   const handleSetPassword = useCallback(async () => {
     if (!newPassword.trim()) return;
+    // Length rule (2026-09-10 security review, #5). Checked here for the message,
+    // and enforced again in the main handler, which returns false if it's short.
+    if (newPassword.length < MIN_REMOTE_PASSWORD_LENGTH) {
+      setPasswordStatus('too-short');
+      return;
+    }
     setPasswordStatus('saving');
     try {
-      await (window as any).claude.remote.setPassword(newPassword);
-      setConfig(prev => prev ? { ...prev, hasPassword: true } : prev);
+      const ok = await (window as any).claude.remote.setPassword(newPassword);
+      if (ok === false) { setPasswordStatus('too-short'); return; }
+      // A new password disconnects every paired device (the server invalidates
+      // tokens). Reflect that: not weak, and no clients until they reconnect.
+      setConfig(prev => prev ? { ...prev, hasPassword: true, weakPassword: false } : prev);
       setNewPassword('');
       setPasswordStatus('saved');
       setTimeout(() => setPasswordStatus('idle'), 2000);
