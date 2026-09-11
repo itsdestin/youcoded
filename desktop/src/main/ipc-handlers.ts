@@ -119,6 +119,7 @@ import { SavedFolder, readFolders, writeFolders } from './saved-folders';
 // Shared cap so a local folder's description can't drift from the synced
 // registry's limit (project-registry.ts uses the same constant).
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
+import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
 import { loadConfigSync, writeConfig, getAppliedAtLaunch, getCachedGpu } from './performance-config';
 import type { PerformanceConfigSnapshot, SessionInfo } from '../shared/types';
 import { ARTIFACT_IPC } from './artifacts/ipc-channels';
@@ -1442,97 +1443,14 @@ export function registerIpcHandlers(
   // above) so the sync-spaces import flow can rewrite an entry when a folder
   // moves. The FOLDERS_* handlers below call the no-arg forms, which default
   // to the same ~/.claude/youcoded-folders.json path.
-  ipcMain.handle(IPC.FOLDERS_LIST, async () => {
-    let folders = readFolders();
-    // Seed with home directory on first use
-    if (folders.length === 0) {
-      const home = os.homedir();
-      folders = [{ path: home, nickname: 'Home', addedAt: Date.now() }];
-      writeFolders(folders);
-    }
-    // Annotate each folder with whether the path still exists on disk.
-    // A saved folder that lives under ~/YouCoded/Projects/ IS a managed sync
-    // project (the import flow rewrites saved entries to their new managed
-    // path) — badge it like the synthesized managed rows below.
-    const projectsRoot = getManagedRoots()?.projectsRoot;
-    const projectsPrefix = projectsRoot ? path.resolve(projectsRoot).toLowerCase() + path.sep : null;
-    const result: any[] = folders.map(f => ({
-      ...f,
-      exists: fs.existsSync(f.path),
-      ...(projectsPrefix && path.resolve(f.path).toLowerCase().startsWith(projectsPrefix)
-        ? { managed: true } : {}),
-    }));
-    // Managed projects (spec §3) always appear in the session-creation picker,
-    // deduped against saved folders by normalized path. `managed: true` lets
-    // the renderer badge them. addedAt:0 sorts them below user-added folders.
-    const managed = getManagedRoots()?.listProjects() ?? [];
-    const known = new Set(result.map(f => path.resolve(f.path).toLowerCase()));
-    for (const p of managed) {
-      if (!known.has(path.resolve(p.path).toLowerCase())) {
-        result.push({ path: p.path, nickname: p.name, addedAt: 0, exists: true, managed: true });
-      }
-    }
-    return result;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_ADD, async (_event, folderPath: string, nickname?: string) => {
-    const folders = readFolders();
-    // Deduplicate by normalized path
-    const normalized = path.resolve(folderPath);
-    if (folders.some(f => path.resolve(f.path) === normalized)) {
-      return folders.find(f => path.resolve(f.path) === normalized);
-    }
-    const entry: SavedFolder = {
-      path: normalized,
-      nickname: nickname || path.basename(normalized),
-      addedAt: Date.now(),
-    };
-    folders.unshift(entry);
-    writeFolders(folders);
-    return entry;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_REMOVE, async (_event, folderPath: string) => {
-    const folders = readFolders();
-    // Compare case-insensitively on Windows (paths are case-insensitive there).
-    // WHY: Project View passes the project's CANONICAL path (lowercase drive,
-    // e.g. c:\…) while the store holds the path.resolve form (uppercase drive,
-    // C:\…). A case-sensitive compare would silently fail to remove the entry.
-    const samePath = (a: string, b: string) =>
-      process.platform === 'win32'
-        ? a.toLowerCase() === b.toLowerCase()
-        : a === b;
-    const normalized = path.resolve(folderPath);
-    const filtered = folders.filter(f => !samePath(path.resolve(f.path), normalized));
-    if (filtered.length === folders.length) return false;
-    writeFolders(filtered);
-    return true;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_RENAME, async (_event, folderPath: string, nickname: string) => {
-    const folders = readFolders();
-    const normalized = path.resolve(folderPath);
-    const entry = folders.find(f => path.resolve(f.path) === normalized);
-    if (!entry) return false;
-    entry.nickname = nickname;
-    writeFolders(folders);
-    return true;
-  });
-
-  ipcMain.handle(IPC.FOLDERS_SET_DESCRIPTION, async (_event, folderPath: string, description: string) => {
-    const folders = readFolders();
-    const normalized = path.resolve(folderPath);
-    const entry = folders.find(f => path.resolve(f.path) === normalized);
-    if (!entry) return false;
-    // Trim + cap here as well as in the UI: the renderer is a mirror, never the
-    // boundary (same rule as the artifact write policy). String(… ?? '') matches
-    // the remote-server path's coercion: the renderer always sends a string
-    // today, but the two transports must be equally defensive so a future
-    // null/undefined caller throws on neither surface rather than only one.
-    entry.description = String(description ?? '').trim().slice(0, PROJECT_DESCRIPTION_MAX) || null;
-    writeFolders(folders);
-    return true;
-  });
+  // The folder picker's five operations live in folders-service.ts, shared with remote-server.ts
+  // so a phone lists and edits folders exactly as this window does (a hand-copied remote version
+  // had stopped listing synced projects — Destin, 2026-09-11).
+  ipcMain.handle(IPC.FOLDERS_LIST, async () => listPickerFolders());
+  ipcMain.handle(IPC.FOLDERS_ADD, async (_event, folderPath: string, nickname?: string) => addFolder(folderPath, nickname));
+  ipcMain.handle(IPC.FOLDERS_REMOVE, async (_event, folderPath: string) => removeFolder(folderPath));
+  ipcMain.handle(IPC.FOLDERS_RENAME, async (_event, folderPath: string, nickname: string) => renameFolder(folderPath, nickname));
+  ipcMain.handle(IPC.FOLDERS_SET_DESCRIPTION, async (_event, folderPath: string, description: string) => setFolderDescription(folderPath, description));
 
   // --- Skills discovery & marketplace ---
   ipcMain.handle(IPC.SKILLS_LIST, async () => {

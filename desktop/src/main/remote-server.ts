@@ -21,6 +21,7 @@ import { getArcadeOps } from './arcade-handlers';
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
+import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
@@ -2760,101 +2761,36 @@ export class RemoteServer {
         }
         break;
       }
+      // The folder picker's five operations: the SAME functions the Electron handlers call
+      // (folders-service.ts). WHY: the hand-copied versions here had stopped listing synced
+      // projects, so a phone's new-session picker showed only the saved-folders file (Destin,
+      // 2026-09-11). The catch answers keep what a phone got before on a failed read or write.
       case 'folders:list': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
         try {
-          const raw = await fs.promises.readFile(foldersPrefPath, 'utf8');
-          let folders = JSON.parse(raw);
-          if (!Array.isArray(folders)) folders = [];
-          if (folders.length === 0) {
-            const home = os.homedir();
-            folders = [{ path: home, nickname: 'Home', addedAt: Date.now() }];
-            await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          }
-          const annotated = folders.map((f: any) => ({ ...f, exists: fs.existsSync(f.path) }));
-          this.respond(client.ws, type, id, annotated);
+          this.respond(client.ws, type, id, listPickerFolders());
         } catch {
-          const home = os.homedir();
-          const folders = [{ path: home, nickname: 'Home', addedAt: Date.now(), exists: true }];
-          this.respond(client.ws, type, id, folders);
+          this.respond(client.ws, type, id, [{ path: os.homedir(), nickname: 'Home', addedAt: Date.now(), exists: true }]);
         }
         break;
       }
       case 'folders:add': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          if (folders.some((f: any) => path.resolve(f.path) === normalized)) {
-            this.respond(client.ws, type, id, folders.find((f: any) => path.resolve(f.path) === normalized));
-            break;
-          }
-          const entry = { path: normalized, nickname: payload.nickname || path.basename(normalized), addedAt: Date.now() };
-          folders.unshift(entry);
-          await fs.promises.mkdir(path.dirname(foldersPrefPath), { recursive: true });
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          this.respond(client.ws, type, id, entry);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
+        try { this.respond(client.ws, type, id, addFolder(payload.folderPath, payload.nickname)); }
+        catch { this.respond(client.ws, type, id, null); }
         break;
       }
       case 'folders:remove': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          const filtered = folders.filter((f: any) => path.resolve(f.path) !== normalized);
-          if (filtered.length === folders.length) { this.respond(client.ws, type, id, false); break; }
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(filtered, null, 2));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        try { this.respond(client.ws, type, id, removeFolder(payload.folderPath)); }
+        catch { this.respond(client.ws, type, id, false); }
         break;
       }
       case 'folders:rename': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          const entry = folders.find((f: any) => path.resolve(f.path) === normalized);
-          if (!entry) { this.respond(client.ws, type, id, false); break; }
-          entry.nickname = payload.nickname;
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        try { this.respond(client.ws, type, id, renameFolder(payload.folderPath, payload.nickname)); }
+        catch { this.respond(client.ws, type, id, false); }
         break;
       }
-      // Sibling of folders:rename above. DELIBERATELY duplicates that case's
-      // inline read/find/write instead of importing saved-folders.ts — this
-      // file already re-implements the folders store rather than sharing it,
-      // and unifying that is out of scope for a description-only change to a
-      // shipped, uncovered code path. Only the length cap is shared (imported
-      // above), so it can't drift from the other setters.
       case 'folders:set-description': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          const entry = folders.find((f: any) => path.resolve(f.path) === normalized);
-          if (!entry) { this.respond(client.ws, type, id, false); break; }
-          entry.description = String(payload.description ?? '').trim().slice(0, PROJECT_DESCRIPTION_MAX) || null;
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        try { this.respond(client.ws, type, id, setFolderDescription(payload.folderPath, payload.description)); }
+        catch { this.respond(client.ws, type, id, false); }
         break;
       }
       case 'favorites:get': {
