@@ -6,7 +6,7 @@ import { WebglAddon } from '@xterm/addon-webgl';
 import '@xterm/xterm/css/xterm.css';
 import { usePtyOutput } from '../hooks/useIpc';
 import { usePtyRawBytes } from '../hooks/usePtyRawBytes';
-import { registerTerminal, unregisterTerminal, notifyBufferReady } from '../hooks/terminal-registry';
+import { registerTerminal, unregisterTerminal, notifyBufferReady, noteAtlasClear } from '../hooks/terminal-registry';
 import { createTerminalKeyHandler } from './terminal-key-handler';
 import { useTheme } from '../state/theme-context';
 import { isTouchDevice } from '../platform';
@@ -310,6 +310,9 @@ export default function TerminalView({ sessionId, visible }: Props) {
       // all of them. Becoming visible is covered by the visibility effect.
       if (hasFlushedResize) {
         (terminalRef.current ?? terminal).clearTextureAtlas();
+        // WHY: rig instrument; the heal costs every open terminal a
+        // re-rasterize, so the rig counts clears per switch (terminal-registry).
+        noteAtlasClear();
       }
       hasFlushedResize = true;
     };
@@ -513,6 +516,9 @@ export default function TerminalView({ sessionId, visible }: Props) {
       // terminal has nothing to heal anyway.
       if (wasVisible === false) {
         terminalRef.current.clearTextureAtlas();
+        // WHY: rig instrument; the heal costs every open terminal a
+        // re-rasterize, so the rig counts clears per switch (terminal-registry).
+        noteAtlasClear();
       }
       const raf = requestAnimationFrame(() => terminalRef.current?.focus());
       return () => cancelAnimationFrame(raf);
