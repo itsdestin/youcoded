@@ -83,6 +83,37 @@ describe('screens that load once ask again after a reconnect', () => {
     expect(session.getMeta.mock.calls.length).toBe(before + 1);
   });
 
+  it("a note typed while a re-read is in flight is not overwritten by that read", async () => {
+    let answer!: (m: unknown) => void;
+    const session = {
+      getMeta: vi.fn()
+        .mockResolvedValueOnce({ tags: [], flags: {}, note: 'old' })
+        .mockImplementationOnce(() => new Promise((r) => { answer = r; })),
+      setNote: vi.fn(async () => ({ ok: true })),
+    };
+    (window as any).claude = { session, on: {} };
+    const { useSessionMeta } = await import('../src/renderer/hooks/useSessionMeta');
+    const h = renderHook(() => useSessionMeta('s1'));
+    await flush();
+    expect(h.result.current.note).toBe('old');
+    await reconnect();
+    act(() => h.result.current.setNote('typed'));
+    await act(async () => { answer({ tags: [], flags: {}, note: 'old' }); });
+    expect(h.result.current.note).toBe('typed');
+  });
+
+  it("a session's tags and note stay when the reconnect re-read fails", async () => {
+    const session = { getMeta: vi.fn().mockResolvedValueOnce({ tags: ['t1'], flags: {}, note: 'hi' }).mockRejectedValue(new Error('lost')) };
+    (window as any).claude = { session, on: {} };
+    const { useSessionMeta } = await import('../src/renderer/hooks/useSessionMeta');
+    const h = renderHook(() => useSessionMeta('s1'));
+    await flush();
+    await reconnect();
+    await flush();
+    expect([...h.result.current.tags]).toEqual(['t1']);
+    expect(h.result.current.note).toBe('hi');
+  });
+
   it('the platform, which no longer remembers a failed read for the page\'s life', async () => {
     const getPlatform = vi.fn().mockRejectedValueOnce(new Error('lost')).mockResolvedValue('linux');
     (window as any).claude = { getPlatform };

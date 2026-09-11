@@ -22,7 +22,11 @@ export interface RemoteGateShim {
   startSavedKeySignIn(listener: (e: SavedKeySignInEvent) => void): boolean;
   retrySavedKeyNow(): void;
   stopSavedKeySignIn(): void;
+  onCredentialRefused(cb: (reason: string) => void): void;
 }
+
+/** Refusals that mean the computer will not take this device's key again. */
+const KEY_REFUSALS = new Set(['revoked', 'unknown', 'invalid-credentials', 'retired']);
 
 type Trouble = Exclude<SignInFailure['kind'], 'refused'>;
 
@@ -30,13 +34,12 @@ type Trouble = Exclude<SignInFailure['kind'], 'refused'>;
 export function troubleText(kind: Trouble): string {
   switch (kind) {
     case 'unreachable': return "Can't reach your computer.";
-    case 'rate-limited': return 'Your computer paused sign-ins after too many failed attempts.';
     default: return 'Your computer closed the connection before sign-in finished.';
   }
 }
 
 /** Minimal login screen for remote browser access. */
-function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>; }) {
+function LoginScreen({ onLogin, notice }: { onLogin: (password: string) => Promise<void>; notice?: string | null }) {
   const [password, setPassword] = useState('');
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
@@ -67,12 +70,17 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
       const failure: SignInFailure | undefined = err?.signInFailure;
       // WHY not "Invalid password" for everything (it was): a phone with no signal typing the
       // right password was told it was wrong, and tried other passwords.
+      // Each says only what the answer proves (review of the 2026-09-11 fixes, finding 10).
       setError(
-        failure?.kind === 'refused' && failure.reason === 'no-password-configured'
-          ? 'This computer has no remote access password yet. Set one on the computer itself, in Settings → Remote Access.'
-          : failure && failure.kind !== 'refused'
+        failure?.kind === 'refused'
+          ? failure.reason === 'no-password-configured'
+            ? 'This computer has no remote access password yet. Set one on the computer itself, in Settings → Remote Access.'
+            : failure.reason === 'invalid-credentials'
+              ? 'Invalid password'
+              : 'Your computer refused this sign-in.'
+          : failure
             ? troubleText(failure.kind)
-            : 'Invalid password'
+            : "Couldn't sign in."
       );
       setLoading(false);
     }
@@ -99,6 +107,7 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
     <div className="flex items-center justify-center h-full bg-panel text-fg">
       <form onSubmit={handleSubmit} className="flex flex-col gap-3 w-72">
         <h1 className="text-xl font-bold text-center mb-2">YouCoded Remote</h1>
+        {notice && <p className="text-xs text-fg-2 text-center" role="status">{notice}</p>}
         {/* Was a hand-rolled field with gray focus (`focus:border-fg-muted`) — the
             exact paradigm change 20 retires. Fields focus by accent border now. */}
         <TextInput
@@ -125,8 +134,10 @@ function LoginScreen({ onLogin }: { onLogin: (password: string) => Promise<void>
 }
 
 /** The saved key is signing in, or trying to. No password box: none is needed yet. */
-function SavedKeyScreen({ trouble, onTryNow, onPassword }: {
+function SavedKeyScreen({ trouble, attempting, onTryNow, onPassword }: {
   trouble: Trouble | null;
+  /** "Try now" was pressed and that attempt has not finished (review finding 7). */
+  attempting: boolean;
   onTryNow: () => void;
   onPassword: () => void;
 }) {
@@ -136,9 +147,9 @@ function SavedKeyScreen({ trouble, onTryNow, onPassword }: {
         <h1 className="text-xl font-bold mb-2">YouCoded Remote</h1>
         {trouble ? (
           <>
-            <p className="text-sm text-fg-2" role="status">{troubleText(trouble)}</p>
-            <p className="text-xs text-fg-muted">Trying again…</p>
-            <Button size="lg" className="justify-center" onClick={onTryNow}>Try now</Button>
+            <p className="text-sm text-fg-2" role="status">{attempting ? 'Trying to connect…' : troubleText(trouble)}</p>
+            {!attempting && <p className="text-xs text-fg-muted">Trying again…</p>}
+            <Button size="lg" className="justify-center" onClick={onTryNow} disabled={attempting}>Try now</Button>
             {/* The way out when the computer is gone for good, or this browser should pair
                 again. The saved key is kept: a reload tries it once more. */}
             <Button variant="ghost" className="justify-center" onClick={onPassword}>Enter password instead</Button>
@@ -167,6 +178,9 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
   const [connected, setConnected] = useState(false);
   const [hasConnectedOnce, setHasConnectedOnce] = useState(false);
   const [savedKey, setSavedKey] = useState<SavedKey>('pending');
+  const [attempting, setAttempting] = useState(false);
+  // Why the password box is back, when the computer stopped accepting this device.
+  const [notice, setNotice] = useState<string | null>(null);
 
   useEffect(() => {
     void loadShim().then((s) => {
@@ -175,6 +189,17 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         const isConnected = state === 'connected';
         setConnected(isConnected);
         if (isConnected) setHasConnectedOnce(true);
+      });
+      // The computer stopped accepting this device after it had connected (unpaired, or a password
+      // change retired its key). WHY leave the app (review of the 2026-09-11 fixes, finding 4): it
+      // stayed on screen saying "Reconnecting" with no way to type the password. The Android app
+      // goes back to its own runtime by itself, so there is nothing to show there.
+      s.onCredentialRefused((reason) => {
+        if (isAndroid) return;
+        setConnected(false);
+        setHasConnectedOnce(false);
+        setSavedKey('none');
+        setNotice(KEY_REFUSALS.has(reason) ? 'This computer no longer accepts this device. Enter the password to connect again.' : null);
       });
       setShim(s);
       // Android WebView: auto-connect to LocalBridgeServer. If the bridge server isn't
@@ -187,7 +212,10 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
         setSavedKey('none');
         return;
       }
-      const started = s.startSavedKeySignIn((e) => setSavedKey(e.type === 'refused' ? 'none' : e.kind));
+      const started = s.startSavedKeySignIn((e) => {
+        setAttempting(false);
+        setSavedKey(e.type === 'refused' ? 'none' : e.kind);
+      });
       setSavedKey(started ? 'connecting' : 'none');
     });
     // Once, for the page's life: the shim is a module-level singleton.
@@ -218,11 +246,12 @@ export function RemoteGate({ isAndroid, loadShim, renderApp }: {
     return (
       <SavedKeyScreen
         trouble={savedKey === 'connecting' ? null : savedKey}
-        onTryNow={() => shim.retrySavedKeyNow()}
+        attempting={attempting}
+        onTryNow={() => { setAttempting(true); shim.retrySavedKeyNow(); }}
         onPassword={() => { shim.stopSavedKeySignIn(); setSavedKey('none'); }}
       />
     );
   }
 
-  return <LoginScreen onLogin={handleLogin} />;
+  return <LoginScreen onLogin={handleLogin} notice={notice} />;
 }

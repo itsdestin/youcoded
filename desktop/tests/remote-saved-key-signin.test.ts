@@ -73,13 +73,13 @@ describe('signing in with the saved key when the page loads', () => {
     expect(latest().sentOf('auth')[0]).toMatchObject({ deviceId: 'dev-1', secret: 'secret', readyHandshake: true });
   });
 
-  it('a busy computer (too many attempts) is not "unreachable", and the key stays', async () => {
+  it('a computer that closes the connection during sign-in is not "unreachable", and the key stays', async () => {
     store[KEY] = 'dev-1:secret';
     start();
     latest().open();
-    latest().close(4029, 'Too many');
+    latest().close(4000, 'Auth timeout');
     await Promise.resolve();
-    expect(events).toEqual([{ type: 'failed', kind: 'rate-limited' }]);
+    expect(events).toEqual([{ type: 'failed', kind: 'closed' }]);
     expect(store[KEY]).toBe('dev-1:secret');
   });
 

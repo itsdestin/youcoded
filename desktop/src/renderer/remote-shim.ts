@@ -77,10 +77,10 @@ const MAX_RECONNECT_ATTEMPTS = 10;
  * kinds say nothing about it. */
 export type SignInFailure =
   | { kind: 'refused'; reason: string }
-  | { kind: 'unreachable' | 'rate-limited' | 'closed' };
+  | { kind: 'unreachable' | 'closed' };
 export type SavedKeySignInEvent =
   | { type: 'refused'; reason: string }
-  | { type: 'failed'; kind: 'unreachable' | 'rate-limited' | 'closed' };
+  | { type: 'failed'; kind: 'unreachable' | 'closed' };
 
 /** Refusals that mean the saved key can never sign in again. `no-password-configured` is not
  *  one: remote access is switched off on the computer, and the key works again once it is on. */
@@ -90,6 +90,25 @@ const KEY_IS_DEAD = new Set(['revoked', 'unknown', 'invalid-credentials']);
 let savedKeyListener: ((e: SavedKeySignInEvent) => void) | null = null;
 /** Set by "Enter password instead": no more automatic attempts with the saved key. */
 let savedKeyStopped = false;
+
+/** Told when the computer refuses this device AFTER it had connected (unpaired, or its key
+ *  retired by a password change), so the page can leave the app for the password screen instead
+ *  of saying "Reconnecting" forever (review of the 2026-09-11 fixes, finding 4). */
+let credentialRefusedListener: ((reason: string) => void) | null = null;
+export function onCredentialRefused(cb: (reason: string) => void): void {
+  credentialRefusedListener = cb;
+}
+
+function noteRefusedAfterConnecting(reason: string): void {
+  // The next sign-in is a new pairing whose terminals start empty: resuming the old terminal
+  // positions would skip everything before them.
+  lastReadyHost = null;
+  credentialRefusedListener?.(reason);
+}
+
+/** Messages received from the computer. The wake check reads it: anything arriving after its
+ *  question proves the connection is alive, even when the reply itself is queued behind it. */
+let framesReceived = 0;
 
 function signInError(message: string, failure: SignInFailure): Error {
   return Object.assign(new Error(message), { signInFailure: failure });
@@ -335,7 +354,26 @@ function setConnectionState(state: RemoteConnectionState) {
   // Batch 2 (§6): leaving `connected` after a first successful connect is a drop —
   // the strip says "reconnecting" and the phone keeps what it shows.
   if (was === 'connected' && state !== 'connected' && hasConnectedBefore && !suppressReconnectingPhase) setConversationPhase('reconnecting');
+  if (was === 'connected' && state !== 'connected') failRequestsCutOffByDrop();
   stateChangeCallback?.(state);
+}
+
+/**
+ * Requests sent on a connection that just dropped can never be answered: the host replies on the
+ * socket a request came from. WHY fail them now (review of the 2026-09-11 fixes, finding 3): each
+ * used to wait out its 30 s, by which time the reconnect had already asked the host about the
+ * requests it knew were lost, so one that ran was reported as timed out and never checked. Marked
+ * "may have run" here, so the reconnect's sign-in asks. The Android app's own bridge cannot
+ * answer that question, so there they are simply dropped.
+ */
+function failRequestsCutOffByDrop(): void {
+  for (const [id, entry] of pending) {
+    if (entry.outcomeUnknown) continue;
+    clearTimeout(entry.timeout);
+    if (isAndroidLocal()) pending.delete(id);
+    else entry.outcomeUnknown = true;
+    entry.reject(new Error('Lost the connection before the computer answered.'));
+  }
 }
 
 export function onConnectionStateChange(cb: (state: RemoteConnectionState) => void) {
@@ -804,6 +842,7 @@ function handleMessage(data: string, generation: number): void {
   // socket the connect timeout abandoned — or one replaced by a reconnect — was still
   // dispatched into the page as if it came from the current host connection (R2-17).
   if (generation !== connectionGeneration) return;
+  framesReceived++;
   let msg: any;
   try { msg = JSON.parse(data); } catch { return; }
 
@@ -1062,8 +1101,19 @@ function handleMessage(data: string, generation: number): void {
 export function connect(passwordOrToken: string, isToken = false): Promise<string> {
   return new Promise((resolve, reject) => {
     const generation = ++connectionGeneration;
+    // One socket at a time. WHY retire the previous one (review of the 2026-09-11 fixes, finding
+    // 2): an attempt left running — "Enter password instead" while offline, or the Android app
+    // going back to its own runtime — kept its handlers, and they wrote through the shared `ws`.
+    // Its late open set "authenticating" over a working connection and sent a second sign-in on
+    // it; its late close set "disconnected". Every handler below is bound to its own socket.
+    if (ws) retireSocket(ws);
     setConnectionState('connecting');
-    ws = new WebSocket(getWsUrl());
+    const socket = new WebSocket(getWsUrl());
+    ws = socket;
+    const isCurrent = () => generation === connectionGeneration && ws === socket;
+    // Decided now, not when the close arrives: by then the Android app may already have gone back
+    // to its own runtime, which changes the answer (finding 1).
+    const localBridge = location.protocol === 'file:' && !targetUrl;
 
     // Track whether the socket ever got to OPEN. Lets onclose tell the difference
     // between "couldn't reach host" (TCP refused, Android cleartext block,
@@ -1074,16 +1124,18 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
 
     // Timeout if WebSocket stays in CONNECTING state (network unreachable, etc.)
     const connectTimeout = setTimeout(() => {
-      if (ws && ws.readyState === WebSocket.CONNECTING) {
+      if (isCurrent() && socket.readyState === WebSocket.CONNECTING) {
         console.error('[remote-shim] connect timeout to', getWsUrl());
-        ws.close();
+        // Retired, not only closed: its close event must not run the close handler below as well.
+        retireSocket(socket);
         ws = null;
         setConnectionState('disconnected');
         reject(signInError('Connection timed out', { kind: 'unreachable' }));
       }
     }, 15_000);
 
-    ws.onopen = () => {
+    socket.onopen = () => {
+      if (!isCurrent()) return;
       didOpen = true;
       clearTimeout(connectTimeout);
       setConnectionState('authenticating');
@@ -1097,7 +1149,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         : isToken
           ? { type: 'auth', ...splitCredential(passwordOrToken), readyHandshake: true }
           : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice(), readyHandshake: true };
-      ws!.send(JSON.stringify(authMsg));
+      socket.send(JSON.stringify(authMsg));
     };
 
     let authResolved = false;
@@ -1106,7 +1158,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
     // slowdown for every other device.
     let refused = false;
 
-    ws.onmessage = (event) => {
+    socket.onmessage = (event) => {
       if (!authResolved) {
         let msg: any;
         try { msg = JSON.parse(event.data); } catch { return; }
@@ -1114,7 +1166,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         if (msg.type === 'auth:ok') {
           // WHY the guard: without it a late auth:ok from a socket we already replaced
           // rebinds the CURRENT connection's handlers to the dead one.
-          if (generation !== connectionGeneration) return;
+          if (!isCurrent()) return;
           myDeviceId = msg.deviceId ?? myDeviceId;
           authResolved = true;
           reconnectDelay = 1000; // Reset backoff on success
@@ -1184,8 +1236,9 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           if (naming) naming.available = msg.sessionNaming === true;
           resolve(token);
           // Switch to normal message handling
-          ws!.onmessage = (e) => handleMessage(e.data as string, generation);
+          socket.onmessage = (e) => handleMessage(e.data as string, generation);
         } else if (msg.type === 'auth:failed') {
+          if (!isCurrent()) return;
           authResolved = true;
           refused = true;
           const reason = String(msg.reason || 'refused');
@@ -1195,7 +1248,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           if (isToken && KEY_IS_DEAD.has(reason)) localStorage.removeItem('youcoded-remote-token');
           setConnectionState('disconnected');
           reject(signInError(msg.reason || 'Authentication failed', { kind: 'refused', reason }));
-          ws!.close();
+          socket.close();
         }
         return;
       }
@@ -1203,8 +1256,11 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       handleMessage(event.data as string, generation);
     };
 
-    ws.onclose = (event) => {
+    socket.onclose = (event) => {
       clearTimeout(connectTimeout);
+      // A socket that is no longer the current one (disconnect() closed it, or a newer attempt
+      // replaced it) must not change the state of the one that is.
+      if (!isCurrent()) return;
       if (!authResolved) {
         const url = getWsUrl();
         const code = event.code;
@@ -1225,13 +1281,13 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         } else {
           message = `Connection closed before auth (code ${code}${reason ? `: ${reason}` : ''}).`;
         }
-        reject(signInError(message, { kind: !didOpen ? 'unreachable' : code === 4029 ? 'rate-limited' : 'closed' }));
+        reject(signInError(message, { kind: didOpen ? 'closed' : 'unreachable' }));
         return;
       }
 
       // The Android app's own bridge keeps its old retry: its token comes from the page address,
       // and a refusal there during start-up is not an answer about a saved key.
-      if (refused && !isAndroidLocal()) {
+      if (refused && !localBridge) {
         setConnectionState('disconnected');
         return;
       }
@@ -1241,14 +1297,14 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       suppressReconnectingPhase = false;
       // Attempt reconnection — local bridge uses its own retry (token comes
       // from the URL each time), remote connections use stored session tokens.
-      const isLocalBridge = location.protocol === 'file:' && !targetUrl;
-      if (isLocalBridge) {
+      if (localBridge) {
         retryLocalBridge();
       } else if (isTerminalClose(event.code)) {
         // Unpaired or retired: the credential can never work again. Forget it so the next
         // attempt asks for the password once, rather than retrying forever.
         localStorage.removeItem('youcoded-remote-token');
         console.warn('[remote-shim] host refused this device permanently:', event.code, event.reason);
+        noteRefusedAfterConnecting(event.code === 4003 ? 'revoked' : event.code === 4004 ? 'retired' : 'unsupported-version');
       } else {
         const storedToken = localStorage.getItem('youcoded-remote-token');
         if (storedToken) {
@@ -1257,7 +1313,7 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       }
     };
 
-    ws.onerror = () => {
+    socket.onerror = () => {
       // onclose will fire after this
     };
   });
@@ -1324,10 +1380,13 @@ function onSavedKeyAttemptFailed(err: unknown, token: string): void {
   const failure = signInFailureOf(err);
   if (failure?.kind === 'refused') {
     savedKeyListener?.({ type: 'refused', reason: failure.reason });
-    // The Android app paired to a computer that refused it goes back to its own runtime now,
-    // which is where MAX_RECONNECT_ATTEMPTS used to land it after minutes of refusals.
+    if (hasConnectedBefore) noteRefusedAfterConnecting(failure.reason);
     if (location.protocol === 'file:' && targetUrl) {
-      reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+      // The Android app paired to a computer that will never take its key goes back to its own
+      // runtime now, which is where MAX_RECONNECT_ATTEMPTS used to land it after minutes. Any
+      // other refusal (remote access switched off on the computer) keeps the pairing and keeps
+      // trying slowly, as it always did: deleting it would unpair the phone (finding 1).
+      if (KEY_IS_DEAD.has(failure.reason)) reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
       scheduleReconnect(token);
     }
     return;
@@ -1370,9 +1429,10 @@ export function stopSavedKeySignIn(): void {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
 }
 
-/** How long the wake check waits before calling the connection dead. Short on purpose: a live
- *  connection answers in milliseconds, and the person is looking at the screen meanwhile. */
-const WAKE_CHECK_TIMEOUT_MS = 5_000;
+/** How long the wake check waits, with nothing at all arriving, before calling the connection
+ *  dead. 10 s, not 5: right after waking a phone's radio and tunnel can take several seconds to
+ *  come back, and a reply can queue behind a catch-up already on its way (review finding 3). */
+const WAKE_CHECK_TIMEOUT_MS = 10_000;
 let wakeCheckInFlight = false;
 
 /**
@@ -1387,7 +1447,13 @@ let wakeCheckInFlight = false;
  */
 export function checkConnectionAfterWake(): void {
   // The Android app's own bridge is on the same device; the first sign-in has its own screen.
-  if (isAndroidLocal() || !hasConnectedBefore) return;
+  if (isAndroidLocal()) return;
+  if (!hasConnectedBefore) {
+    // Still on the sign-in screen, trying the saved key: the network coming back is the moment to
+    // try again, not the end of a backoff of up to a minute (finding 6).
+    if (savedKeyListener && !savedKeyStopped && connectionState === 'disconnected') retrySavedKeyNow();
+    return;
+  }
   if (connectionState === 'connecting' || connectionState === 'authenticating') return;
   const token = localStorage.getItem('youcoded-remote-token');
   if (connectionState === 'disconnected') {
@@ -1398,11 +1464,13 @@ export function checkConnectionAfterWake(): void {
   if (!socket || wakeCheckInFlight) return;
   wakeCheckInFlight = true;
   const generation = connectionGeneration;
+  const framesAtSend = framesReceived;
   const id = `${myDeviceId || 'anon'}:${generation}:${++messageId}`;
   const settle = () => { clearTimeout(timeout); pending.delete(id); wakeCheckInFlight = false; };
   const timeout = setTimeout(() => {
     settle();
     if (generation !== connectionGeneration || ws !== socket || connectionState !== 'connected') return;
+    if (framesReceived > framesAtSend) return;   // the computer is talking: the connection is alive
     console.warn('[remote-shim] no answer after waking; replacing the connection');
     abandonSocket(socket);
     if (token) reconnectNow(token);
@@ -1424,13 +1492,18 @@ export function checkConnectionAfterWake(): void {
  *  first: a closing handshake on a dead connection can take far longer than the check did, and
  *  a late frame or close from it must not reach the page or the connection that replaces it. */
 function abandonSocket(socket: WebSocket): void {
+  retireSocket(socket);
+  if (ws === socket) ws = null;
+  setConnectionState('disconnected');
+}
+
+/** Detach a socket's handlers and close it, so nothing it does afterwards reaches the page. */
+function retireSocket(socket: WebSocket): void {
   socket.onopen = null;
   socket.onmessage = null;
   socket.onclose = null;
   socket.onerror = null;
   try { socket.close(); } catch { /* already gone */ }
-  if (ws === socket) ws = null;
-  setConnectionState('disconnected');
 }
 
 /** Connect with the saved key now, dropping any backoff: the conditions that made it grow changed. */

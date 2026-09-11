@@ -12,6 +12,7 @@ type Listener = Parameters<RemoteGateShim['startSavedKeySignIn']>[0];
 function fakeShim(opts: { savedKey: boolean }) {
   let stateCb: (s: string) => void = () => {};
   let listener: Listener = () => {};
+  let refusedCb: (reason: string) => void = () => {};
   const shim: RemoteGateShim = {
     installShim: vi.fn(),
     onConnectionStateChange: vi.fn((cb) => { stateCb = cb as any; }),
@@ -20,11 +21,13 @@ function fakeShim(opts: { savedKey: boolean }) {
     startSavedKeySignIn: vi.fn((l: Listener) => { listener = l; return opts.savedKey; }),
     retrySavedKeyNow: vi.fn(),
     stopSavedKeySignIn: vi.fn(),
+    onCredentialRefused: vi.fn((cb: (reason: string) => void) => { refusedCb = cb; }),
   };
   return {
     shim,
     setState: (s: string) => act(() => stateCb(s)),
     report: (e: Parameters<Listener>[0]) => act(() => listener(e)),
+    refuseCredential: (reason: string) => act(() => refusedCb(reason)),
   };
 }
 
@@ -96,6 +99,43 @@ describe('RemoteGate', () => {
     fireEvent.change(passwordBox()!, { target: { value: 'nope' } });
     await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
     expect(screen.getByText('Invalid password')).toBeTruthy();
+  });
+
+  it('a computer that stops accepting this device after it connected: back to the password box, saying why', async () => {
+    const f = fakeShim({ savedKey: true });
+    await mount(f);
+    f.setState('connected');
+    expect(screen.getByText('THE APP')).toBeTruthy();
+    f.refuseCredential('revoked');
+    expect(passwordBox()).toBeTruthy();
+    expect(screen.getByText('This computer no longer accepts this device. Enter the password to connect again.')).toBeTruthy();
+  });
+
+  it('"Try now" shows it is trying, and the password stays one tap away', async () => {
+    const f = fakeShim({ savedKey: true });
+    await mount(f);
+    f.report({ type: 'failed', kind: 'unreachable' });
+    fireEvent.click(screen.getByRole('button', { name: 'Try now' }));
+    expect(screen.getByText('Trying to connect…')).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Try now' }) as HTMLButtonElement).disabled).toBe(true);
+    expect(screen.getByRole('button', { name: 'Enter password instead' })).toBeTruthy();
+    f.report({ type: 'failed', kind: 'unreachable' });
+    expect(screen.getByText("Can't reach your computer.")).toBeTruthy();
+    expect((screen.getByRole('button', { name: 'Try now' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
+  it('a refusal the page cannot explain, or an unexpected error, does not blame the password', async () => {
+    const f = fakeShim({ savedKey: false });
+    (f.shim.connect as any)
+      .mockRejectedValueOnce(Object.assign(new Error('invalid-message'), { signInFailure: { kind: 'refused', reason: 'invalid-message' } }))
+      .mockRejectedValueOnce(new Error('boom'));
+    await mount(f);
+    fireEvent.change(passwordBox()!, { target: { value: 'pw' } });
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
+    expect(screen.getByText('Your computer refused this sign-in.')).toBeTruthy();
+    await act(async () => { fireEvent.click(screen.getByRole('button', { name: 'Connect' })); });
+    expect(screen.getByText("Couldn't sign in.")).toBeTruthy();
+    expect(screen.queryByText('Invalid password')).toBeNull();
   });
 
   it('once connected, a later drop keeps the app on screen', async () => {

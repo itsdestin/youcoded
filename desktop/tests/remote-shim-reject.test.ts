@@ -165,12 +165,13 @@ describe('the shim rejects a failure instead of resolving it', () => {
     const inApplyResponse = body.slice(0, body.indexOf('\n}\n'));
     const settlesEverywhere = [...shim.matchAll(/entry\.(resolve|reject)\(/g)].length;
     const settlesInApplyResponse = [...inApplyResponse.matchAll(/entry\.(resolve|reject)\(/g)].length;
-    // The two outside it are the connection-drop path ('Server switched'), which
-    // settles nothing about a response.
+    // The ones outside it are connection-drop paths, which settle nothing about a response:
+    // switching servers ('Server switched', two) and a drop cutting off requests already sent
+    // (failRequestsCutOffByDrop, added 2026-09-11, one).
     const outside = shim.split('\n').filter((l) => /entry\.(resolve|reject)\(/.test(l) && !inApplyResponse.includes(l));
     expect(settlesInApplyResponse).toBe(3);
-    expect(settlesEverywhere - settlesInApplyResponse).toBe(2);
-    expect(outside.every((l) => l.includes('Server switched'))).toBe(true);
+    expect(settlesEverywhere - settlesInApplyResponse).toBe(3);
+    expect(outside.every((l) => l.includes('Server switched') || l.includes('Lost the connection before the computer answered.'))).toBe(true);
   });
 
   // And each is a REQUEST the shim makes — a push channel has no caller to

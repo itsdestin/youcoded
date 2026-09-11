@@ -75,7 +75,7 @@ describe('checking the connection when the phone wakes', () => {
     const ws = await signedIn();
     wake();
     expect(ws.sentOf('remote:ping')).toHaveLength(1);
-    await vi.advanceTimersByTimeAsync(5_000);
+    await vi.advanceTimersByTimeAsync(10_000);
     expect(FakeWebSocket.instances).toHaveLength(2);
     latest().open();
     expect(latest().sentOf('auth')[0]).toMatchObject({ deviceId: 'dev-1', secret: 'secret' });
