@@ -17,9 +17,10 @@ import java.io.File
  * page. The decision is a pure function so it can be driven here without a
  * device; the framework call (DownloadManager) is not.
  *
- * Hardened after the T8 review: a download needs the EXACT token shape AND a
- * host:port the phone has paired with. "Any http(s) host" let any link in the
- * chat, or a previewed HTML page, drop a stranger's file into Downloads.
+ * Hardened after two T8 reviews: a download needs the EXACT token shape AND a
+ * host:port the phone has paired with; only the bundled page loads in place
+ * (any other file:// address is refused); and the saved name cannot hide what
+ * the file is.
  */
 class WebViewUrlRouterTest {
 
@@ -29,7 +30,8 @@ class WebViewUrlRouterTest {
     private val paired: (String, Int) -> Boolean = { host, port ->
         (host == "100.64.0.9" && port == 9900) ||
             (host == "desk.tailnet.ts.net" && port == 443) ||
-            (host == "fd7a:115c::1" && port == 9900)
+            (host == "fd7a:115c::1" && port == 9900) ||
+            (host == "my_desk.local" && port == 9900)
     }
 
     private fun decide(url: String) = WebViewUrlPolicy.decide(url, paired)
@@ -41,8 +43,13 @@ class WebViewUrlRouterTest {
         override fun openExternally(url: String) { external += url }
     }
 
+    /** Pinned to the desktop's own route, so the two ends cannot drift apart. */
     @Test fun `the token is the shape the desktop mints`() {
         assertEquals(43, token.length)
+        val routeLine = File("../desktop/src/main/remote-download.ts").readLines().first { it.startsWith("const ROUTE = ") }
+        assertTrue(routeLine, routeLine.contains("[A-Za-z0-9_-]{43}"))
+        assertEquals(UrlDecision.OPEN_EXTERNALLY, decide("http://100.64.0.9:9900/download/${token.dropLast(1)}/x.pdf"))
+        assertEquals(UrlDecision.OPEN_EXTERNALLY, decide("http://100.64.0.9:9900/download/${token}A/x.pdf"))
     }
 
     @Test fun `a download link from a paired computer is a download`() {
@@ -52,6 +59,9 @@ class WebViewUrlRouterTest {
             "http://100.64.0.9:9900/download/$token",
             "http://100.64.0.9:9900/download/$token/report.pdf?x=1#part",
             "http://[fd7a:115c::1]:9900/download/$token/notes.md",
+            // java.net.URI will not parse a host with an underscore; the link
+            // from a computer named that way must still download.
+            "http://my_desk.local:9900/download/$token/notes.md",
         )) {
             assertEquals(url, UrlDecision.DOWNLOAD, decide(url))
         }
@@ -59,18 +69,15 @@ class WebViewUrlRouterTest {
 
     @Test fun `a download-shaped link from anywhere else opens outside the app, as before`() {
         for (url in listOf(
-            // A stranger's server: never saved silently into Downloads.
             "https://example.com/download/$token/setup.apk",
-            // The paired computer's address on another port.
             "http://100.64.0.9:9901/download/$token/report.pdf",
-            // An ordinary website's download page, not a minted link.
             "http://100.64.0.9:9900/download/setup/app.zip",
             "http://100.64.0.9:9900/download/$token/extra/segment",
+            "http://100.64.0.9:9900/downloads/not-the-route",
             "http://100.64.0.9:9900/download/",
             "http://100.64.0.9:9900/download",
-            // Credentials in the link, or a scheme the download manager rejects.
             "http://user@100.64.0.9:9900/download/$token/report.pdf",
-            "HTTP://100.64.0.9:9900/download/$token/report.pdf",
+            "http://my_desk.local:9901/download/$token/notes.md",
         )) {
             assertEquals(url, UrlDecision.OPEN_EXTERNALLY, decide(url))
         }
@@ -79,6 +86,7 @@ class WebViewUrlRouterTest {
     @Test fun `the bundled page and the dev servers load in place`() {
         for (url in listOf(
             "file:///android_asset/web/index.html?bridgePort=9901",
+            "file:///android_asset/web/assets/index-abc123.js",
             "http://localhost:5173/",
             "http://10.0.2.2:5173/src/main.tsx",
             "http://localhost:9950/download/$token/x.bin",
@@ -87,8 +95,29 @@ class WebViewUrlRouterTest {
         }
     }
 
-    // Before, "local" was a text prefix, so these replaced the app's own page
-    // with an outside site inside the app window (T8 review, finding 6).
+    // A downloaded .html in the phone's storage, tapped, used to load AS the
+    // app's own page — sharing its storage (which holds the pairing credential)
+    // and its file access (T8 re-review, finding 1).
+    @Test fun `no other file address loads in the app, or leaves it`() {
+        for (url in listOf(
+            "file:///storage/emulated/0/Download/report.html",
+            "file:///sdcard/Download/x.html",
+            "file:///data/data/com.youcoded.app/files/home/secret.txt",
+            "file:///android_asset/../../data/data/com.youcoded.app/x",
+            "file:///android_asset/%2e%2e/%2e%2e/data/x",
+            "file:///android_asset/web%2F..%2F..%2Fx",
+            "file:///android_assets/look-alike.html",
+        )) {
+            assertEquals(url, UrlDecision.BLOCK, decide(url))
+        }
+        val actions = FakeActions()
+        val router = WebViewUrlRouter(actions, paired)
+        assertTrue("a refused navigation is consumed", router.onNavigation("file:///sdcard/Download/x.html"))
+        router.onDownloadRequested("file:///sdcard/Download/x.html")
+        assertEquals(emptyList<String>(), actions.external)
+        assertEquals(emptyList<Pair<String, String>>(), actions.downloads)
+    }
+
     @Test fun `lookalike local addresses are not local`() {
         for (url in listOf(
             "http://localhost.evil.com/",
@@ -123,8 +152,6 @@ class WebViewUrlRouterTest {
         assertEquals(listOf("https://example.com/download/$token/setup.apk"), actions.external)
     }
 
-    // The path a same-origin click, or a response that turns out to be an
-    // attachment, takes — so the download can never go dark on that route.
     @Test fun `the download listener routes the same links, and ignores what nothing outside can open`() {
         val actions = FakeActions()
         val router = WebViewUrlRouter(actions, paired)
@@ -137,48 +164,68 @@ class WebViewUrlRouterTest {
         assertEquals(listOf("https://example.com/elsewhere.zip"), actions.external)
     }
 
-    // The name lands in setDestinationInExternalPublicDir(DIRECTORY_DOWNLOADS, name):
-    // it must be one plain, openable file name, whatever the link says.
+    private val base = "http://h/download/$token/"
+    private fun name(encoded: String) = WebViewUrlPolicy.downloadFileName(base + encoded)
+
     @Test fun `the saved file name is one safe name`() {
-        val base = "http://h/download/$token/"
-        assertEquals("report.pdf", WebViewUrlPolicy.downloadFileName(base + "report.pdf"))
-        // Android's shared storage refuses the FAT-reserved set ("*:<>?|); the
-        // emoji, the space and the semicolon are fine.
-        assertEquals("odd_; name 🎉.txt", WebViewUrlPolicy.downloadFileName(base + "odd%22%3B%20name%20%F0%9F%8E%89.txt"))
-        assertEquals("a_b_c.txt", WebViewUrlPolicy.downloadFileName(base + "a%3Ab%3Fc.txt"))
-        assertEquals("c++ notes.md", WebViewUrlPolicy.downloadFileName(base + "c++%20notes.md"))
-        assertEquals("passwd", WebViewUrlPolicy.downloadFileName(base + "..%2F..%2Fetc%2Fpasswd"))
-        assertEquals("evil.sh", WebViewUrlPolicy.downloadFileName(base + "a%5Cb%5Cevil.sh"))
-        assertEquals("line_break.txt", WebViewUrlPolicy.downloadFileName(base + "line%0Abreak.txt"))
-        assertEquals("download", WebViewUrlPolicy.downloadFileName(base + ".."))
+        assertEquals("report.pdf", name("report.pdf"))
+        assertEquals("odd_; name 🎉.txt", name("odd%22%3B%20name%20%F0%9F%8E%89.txt"))
+        assertEquals("a_b_c.txt", name("a%3Ab%3Fc.txt"))
+        assertEquals("c++ notes.md", name("c++%20notes.md"))
+        assertEquals("passwd", name("..%2F..%2Fetc%2Fpasswd"))
+        assertEquals("evil.sh", name("a%5Cb%5Cevil.sh"))
+        assertEquals("line_break.txt", name("line%0Abreak.txt"))
+        assertEquals("download", name(".."))
         assertEquals("download", WebViewUrlPolicy.downloadFileName("http://h/download/$token"))
         assertEquals("download", WebViewUrlPolicy.downloadFileName(base))
         assertEquals("download", WebViewUrlPolicy.downloadFileName("not a url at all"))
     }
 
-    // A right-to-left override shows "invoicekpa.pdf" for an .apk (T8 review, finding 5).
     @Test fun `invisible and formatting characters cannot disguise the name`() {
-        val base = "http://h/download/$token/"
-        assertEquals("invoice_fdp.apk", WebViewUrlPolicy.downloadFileName(base + "invoice%E2%80%AEfdp.apk"))
-        assertEquals("a_b.txt", WebViewUrlPolicy.downloadFileName(base + "a%C2%85b.txt"))
-        assertEquals("a_b.txt", WebViewUrlPolicy.downloadFileName(base + "a%E2%80%8Fb.txt"))
+        assertEquals("invoice_fdp.apk", name("invoice%E2%80%AEfdp.apk"))
+        assertEquals("a_b.txt", name("a%C2%85b.txt"))
+        assertEquals("a_b.txt", name("a%E2%80%8Fb.txt"))
+        // A line or paragraph separator, or a run of spaces, used to push ".apk"
+        // out of sight after "invoice.pdf" (T8 re-review, finding 2): each shows
+        // as one ordinary space, so the whole name stays in view.
+        assertEquals("invoice.pdf .apk", name("invoice.pdf%E2%80%A8.apk"))
+        assertEquals("invoice.pdf .apk", name("invoice.pdf%E2%80%A9%E2%80%A9.apk"))
+        assertEquals("invoice.pdf .apk", name("invoice.pdf" + "%20".repeat(60) + ".apk"))
+        assertEquals("invoice.pdf .apk", name("invoice.pdf%E3%80%80%E3%80%80.apk"))
+        // Blank-looking fillers are dropped outright.
+        assertEquals("invoice.pdf.apk", name("invoice.pdf%E3%85%A4%E3%85%A4%E1%85%9F%E2%A0%80%CD%8F.apk"))
     }
 
-    // Android caps a file name at 255 BYTES; a long name must stay valid and
-    // keep its extension so the file still opens (T8 review, finding 4).
+    // A name that starts with a dot would be saved as a hidden file the person
+    // cannot see in Downloads (T8 re-review, finding 7).
+    @Test fun `a saved file is never hidden`() {
+        assertEquals("_gitignore", name(".gitignore"))
+        assertEquals("_x.txt", name("...x.txt"))
+    }
+
     @Test fun `a long name is cut by bytes, on character boundaries, keeping the extension`() {
-        val base = "http://h/download/$token/"
         for (stem in listOf("a".repeat(300), "文".repeat(200), "🎉".repeat(120))) {
             val encoded = java.net.URLEncoder.encode("$stem.pdf", "UTF-8").replace("+", "%20")
-            val name = WebViewUrlPolicy.downloadFileName(base + encoded)
-            assertTrue(name, name.endsWith(".pdf"))
-            assertTrue("${name.toByteArray(Charsets.UTF_8).size} bytes", name.toByteArray(Charsets.UTF_8).size <= WebViewUrlPolicy.MAX_NAME_BYTES)
-            assertTrue("a split surrogate pair", name.indices.none { i ->
-                val c = name[i]
-                (Character.isHighSurrogate(c) && (i + 1 >= name.length || !Character.isLowSurrogate(name[i + 1]))) ||
-                    (Character.isLowSurrogate(c) && (i == 0 || !Character.isHighSurrogate(name[i - 1])))
+            val cut = name(encoded)
+            assertTrue(cut, cut.endsWith(".pdf"))
+            assertTrue("${cut.toByteArray(Charsets.UTF_8).size} bytes", cut.toByteArray(Charsets.UTF_8).size <= WebViewUrlPolicy.MAX_NAME_BYTES)
+            assertTrue("a split surrogate pair", cut.indices.none { i ->
+                val c = cut[i]
+                (Character.isHighSurrogate(c) && (i + 1 >= cut.length || !Character.isLowSurrogate(cut[i + 1]))) ||
+                    (Character.isLowSurrogate(c) && (i == 0 || !Character.isHighSurrogate(cut[i - 1])))
             })
         }
+    }
+
+    @Test fun `the byte limit, a name with no extension, and a long extension`() {
+        val max = WebViewUrlPolicy.MAX_NAME_BYTES
+        assertEquals("a".repeat(max), name("a".repeat(max)))
+        assertEquals("a".repeat(max), name("a".repeat(max + 1)))
+        assertEquals("a".repeat(max), name("a".repeat(400)))
+        val longExt = ".backup-2026-09-10"   // 18 characters: still the file's extension
+        val cut = name("b".repeat(400) + longExt)
+        assertTrue(cut, cut.endsWith(longExt))
+        assertTrue(cut.toByteArray(Charsets.UTF_8).size <= max)
     }
 
     @Test fun `a link matches a paired computer by host and port`() {
@@ -194,12 +241,27 @@ class WebViewUrlRouterTest {
         assertFalse(PairedDeviceStore.matches("""[{"port":9900}]""", "", 9900))
     }
 
+    // Remove edits only the encrypted list; the old unencrypted list is read
+    // only when no encrypted list exists yet, exactly when SessionService would
+    // migrate it. Reading it always kept a removed computer trusted for good
+    // (T8 re-review, finding 3).
+    @Test fun `the old unencrypted list counts only until an encrypted one exists`() {
+        val legacy = """[{"host":"100.64.0.9","port":9900}]"""
+        assertEquals(legacy, PairedDeviceStore.effectiveDevicesJson(null) { legacy })
+        assertEquals("[]", PairedDeviceStore.effectiveDevicesJson("[]") { legacy })
+        assertEquals("""[{"host":"a","port":1}]""", PairedDeviceStore.effectiveDevicesJson("""[{"host":"a","port":1}]""") { legacy })
+        var legacyRead = false
+        PairedDeviceStore.effectiveDevicesJson("[]") { legacyRead = true; legacy }
+        assertFalse("the old list is not even read once an encrypted list exists", legacyRead)
+    }
+
     /**
      * Both framework entry points must feed the router. A source check, because
      * the WebView itself cannot be constructed in a JVM test. Comments are
-     * stripped (never the `//` inside "file://"), and the override's BODY is
-     * extracted by brace matching, so a reformat does not break the check and an
-     * ACTION_VIEW moved anywhere into the override still fails it.
+     * stripped (never the `//` inside "file://"). The override's body must be
+     * exactly the delegation, so "call the router, then return false" (which
+     * would download AND load) fails, and the paired lookup is looked for inside
+     * the router's own construction, not anywhere later in the file.
      * Gradle runs unit tests from the module directory (app/).
      */
     @Test fun `WebViewHost drives the router from both the override and the download listener`() {
@@ -216,14 +278,17 @@ class WebViewUrlRouterTest {
             if (src[i] == '}') { depth--; if (depth == 0) { close = i; break } }
         }
         val body = src.substring(open, close + 1)
-        assertTrue("the override must delegate to urlRouter.onNavigation", body.contains("urlRouter.onNavigation("))
-        assertFalse("the override still opens links itself", body.contains("ACTION_VIEW") || body.contains("startActivity"))
+        assertTrue("the override must be exactly `return urlRouter.onNavigation(request.url.toString())`, got: $body",
+            Regex("""^\{\s*return\s+urlRouter\.onNavigation\(\s*request\.url\.toString\(\)\s*\)\s*\}$""").matches(body.trim()))
 
-        val listeners = Regex("""setDownloadListener""").findAll(src).count()
-        assertEquals("exactly one download listener", 1, listeners)
+        assertEquals("exactly one download listener", 1, Regex("""setDownloadListener""").findAll(src).count())
         assertTrue("the download listener must call urlRouter.onDownloadRequested",
             Regex("""setDownloadListener\s*\{[^}]*urlRouter\.onDownloadRequested\(""").containsMatchIn(src))
+
+        val construction = src.indexOf("val urlRouter = WebViewUrlRouter(")
+        val listener = src.indexOf("setDownloadListener", construction)
+        assertTrue("the router is built before the listener", construction >= 0 && listener > construction)
         assertTrue("the router must be told which computers are paired",
-            Regex("""WebViewUrlRouter\([\s\S]*PairedDeviceStore\.isPaired\(""").containsMatchIn(src))
+            src.substring(construction, listener).contains("PairedDeviceStore.isPaired("))
     }
 }

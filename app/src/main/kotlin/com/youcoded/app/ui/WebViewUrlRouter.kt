@@ -18,11 +18,21 @@ import java.net.URLDecoder
  * (WebViewUrlRouterTest). The unit tests run against a stubbed android.jar that
  * answers null for android.net.Uri, so java.net.URI does the parsing here.
  */
-enum class UrlDecision { LOAD, DOWNLOAD, OPEN_EXTERNALLY }
+enum class UrlDecision {
+    /** The WebView loads it in place: the bundled page, or a dev server. */
+    LOAD,
+    /** Saved into Downloads through DownloadManager. */
+    DOWNLOAD,
+    /** Handed to another app (a browser, a mail app). */
+    OPEN_EXTERNALLY,
+    /** Neither loaded nor handed out: a file:// address other than the bundled page. */
+    BLOCK,
+}
 
 object WebViewUrlPolicy {
     private const val DOWNLOAD_ROUTE = "/download/"
     private const val FALLBACK_NAME = "download"
+    private const val ASSET_PREFIX = "file:///android_asset/"
 
     /**
      * Android caps a file name at 255 BYTES. A little under, so the download
@@ -30,18 +40,36 @@ object WebViewUrlPolicy {
      */
     const val MAX_NAME_BYTES = 240
 
+    /** An extension (dot included) longer than this is treated as part of the name. */
+    private const val MAX_EXTENSION_CHARS = 33
+
     /** The exact path the desktop mints (remote-download.ts ROUTE): a 43-char base64url token, an optional name. */
     private val MINTED_PATH = Regex("^/download/[A-Za-z0-9_-]{43}(/[^/]*)?$")
 
     /**
-     * Control and invisible formatting characters (a right-to-left override can
-     * show an .apk as a .pdf; T8 review, finding 5), plus the characters
-     * Android's shared storage refuses (the FAT set FileUtils.buildValidFatFilename
-     * replaces).
+     * Characters that show as nothing, or as a blank, and are dropped outright:
+     * soft hyphen, the combining grapheme joiner, the Hangul and halfwidth
+     * fillers, the Khmer inherent vowels, the Mongolian selectors, the braille
+     * blank and the variation selectors (T8 re-review, finding 2).
+     */
+    private val INVISIBLE_FILLERS = Regex("[\\u00AD\\u034F\\u115F\\u1160\\u17B4\\u17B5\\u180B-\\u180F\\u2800\\u3164\\uFE00-\\uFE0F\\uFFA0]")
+
+    /**
+     * Control and formatting characters (a right-to-left override can show an
+     * .apk as a .pdf; T8 review, finding 5), plus the characters Android's shared
+     * storage refuses (the FAT set FileUtils.buildValidFatFilename replaces).
      */
     private val UNSAFE_NAME_CHARS = Regex("[\\p{Cc}\\p{Cf}\"*:<>?|]")
 
-    private val LOCAL_HOSTS = setOf("localhost", "10.0.2.2")
+    /**
+     * Every kind of space, and line and paragraph separators, in runs. Each run
+     * shows as one ordinary space, so "invoice.pdf", a separator and ".apk" can
+     * never push the real extension out of sight (T8 re-review, finding 2).
+     */
+    private val SEPARATOR_RUNS = Regex("\\p{Z}+")
+
+    private val LOCAL_DEV_HOSTS = setOf("localhost", "10.0.2.2")
+    private val PLAIN_HOST = Regex("^[A-Za-z0-9._-]+$")
 
     /**
      * A link is a download only when it has the exact minted shape AND comes
@@ -49,22 +77,28 @@ object WebViewUrlPolicy {
      * finding 1): with "any http(s) host", a link in the chat or a previewed
      * HTML page could save a stranger's file into the shared Downloads folder
      * under a name of their choosing. The token protects files on the paired
-     * computer; only the host check protects the phone. Every other link keeps
-     * the rule WebViewHost applied before: the bundled page and the dev servers
-     * load in place, everything else leaves the app.
+     * computer; only the host check protects the phone.
+     *
+     * A file:// address loads in place only inside the bundled page's own asset
+     * folder. WHY (T8 re-review, finding 1): a tapped file:///…/Download/x.html
+     * used to load AS the app's page, sharing its storage — which holds the
+     * pairing credential — and its file access. Any other file:// address is
+     * refused, not handed out: no other app can open a file:// URL from here.
      */
     fun decide(url: String, isPairedHost: (host: String, port: Int) -> Boolean): UrlDecision {
         val uri = parse(url)
         if (uri != null && isMintedDownload(uri, isPairedHost)) return UrlDecision.DOWNLOAD
-        if (isLocal(url, uri)) return UrlDecision.LOAD
+        if (url.startsWith("file:")) return if (isBundledAsset(url)) UrlDecision.LOAD else UrlDecision.BLOCK
+        if (isDevServer(uri)) return UrlDecision.LOAD
         return UrlDecision.OPEN_EXTERNALLY
     }
 
     /**
-     * The one plain, openable file name to save as. It lands in the Downloads
-     * folder, so it must never carry a directory (`../`), a control or
-     * formatting character, or a character shared storage refuses; it is cut by
-     * BYTES on character boundaries and keeps its extension, so the file still
+     * The one plain, visible, openable file name to save as. It lands in the
+     * Downloads folder, so it never carries a directory (`../`), an invisible,
+     * control or formatting character, or a character shared storage refuses;
+     * it never starts with a dot (a hidden file nobody can find); and it is cut
+     * by BYTES on character boundaries, keeping its extension, so the file still
      * opens (T8 review, finding 4). Anything unusable falls back to "download".
      */
     fun downloadFileName(url: String): String {
@@ -80,8 +114,12 @@ object WebViewUrlPolicy {
             return FALLBACK_NAME
         }
         val base = decoded.substringAfterLast('/').substringAfterLast('\\')
-        val cleaned = UNSAFE_NAME_CHARS.replace(base, "_").trim()
+        var cleaned = INVISIBLE_FILLERS.replace(base, "")
+        cleaned = UNSAFE_NAME_CHARS.replace(cleaned, "_")
+        cleaned = SEPARATOR_RUNS.replace(cleaned, " ").trim()
         if (cleaned.isEmpty() || cleaned.all { it == '.' }) return FALLBACK_NAME
+        // A leading dot would save a hidden file (T8 re-review, finding 7).
+        cleaned = cleaned.replace(Regex("^\\.+"), "_")
         return fitBytes(cleaned)
     }
 
@@ -93,28 +131,56 @@ object WebViewUrlPolicy {
         if (uri.rawUserInfo != null) return false
         val path = uri.rawPath ?: return false
         if (!MINTED_PATH.matches(path)) return false
-        val host = uri.host?.removePrefix("[")?.removeSuffix("]") ?: return false
-        if (host.isEmpty()) return false
-        val port = if (uri.port != -1) uri.port else if (scheme == "https") 443 else 80
+        val (host, port) = hostAndPort(uri, scheme) ?: return false
         return isPairedHost(host, port)
     }
 
     /**
-     * The bundled page, and the two dev-server hosts, compared EXACTLY. WHY not
-     * a text prefix (the old rule): "http://localhost.evil.com/" and
-     * "http://localhost@evil.com/" both start with "http://localhost", and
-     * loaded an outside site in place of the app's own page (T8 review, finding 6).
+     * java.net.URI answers a null host for a name it will not treat as a server
+     * name — one with an underscore, common for local machines — so the raw
+     * authority is read directly then, accepting only a plain name and a port
+     * (T8 re-review, finding 6).
      */
-    private fun isLocal(url: String, uri: URI?): Boolean {
-        if (url.startsWith("file://")) return true
+    private fun hostAndPort(uri: URI, scheme: String): Pair<String, Int>? {
+        val defaultPort = if (scheme == "https") 443 else 80
+        val parsedHost = uri.host
+        if (parsedHost != null) {
+            val host = parsedHost.removePrefix("[").removeSuffix("]")
+            if (host.isEmpty()) return null
+            return host to (if (uri.port != -1) uri.port else defaultPort)
+        }
+        val authority = uri.rawAuthority ?: return null
+        val colon = authority.lastIndexOf(':')
+        val host = if (colon >= 0) authority.substring(0, colon) else authority
+        val port = if (colon >= 0) (authority.substring(colon + 1).toIntOrNull() ?: return null) else defaultPort
+        if (!PLAIN_HOST.matches(host)) return null
+        return host to port
+    }
+
+    /** Inside the bundled asset folder, with no way back out of it. */
+    private fun isBundledAsset(url: String): Boolean {
+        if (!url.startsWith(ASSET_PREFIX)) return false
+        val path = url.substring(ASSET_PREFIX.length).substringBefore('?').substringBefore('#')
+        val lower = path.lowercase()
+        return !lower.contains("..") && !lower.contains("%2e") && !lower.contains("%2f") &&
+            !lower.contains("%5c") && !path.contains('\\')
+    }
+
+    /**
+     * The two dev-server hosts, compared EXACTLY. WHY not a text prefix (the old
+     * rule): "http://localhost.evil.com/" and "http://localhost@evil.com/" both
+     * start with "http://localhost", and loaded an outside site in place of the
+     * app's own page (T8 review, finding 6).
+     */
+    private fun isDevServer(uri: URI?): Boolean {
         if (uri == null || uri.scheme != "http" || uri.rawUserInfo != null) return false
-        return uri.host in LOCAL_HOSTS
+        return uri.host in LOCAL_DEV_HOSTS
     }
 
     private fun fitBytes(name: String): String {
         if (name.toByteArray(Charsets.UTF_8).size <= MAX_NAME_BYTES) return name
         val dot = name.lastIndexOf('.')
-        val ext = if (dot > 0 && name.length - dot <= 16) name.substring(dot) else ""
+        val ext = if (dot > 0 && name.length - dot <= MAX_EXTENSION_CHARS) name.substring(dot) else ""
         val stem = if (ext.isEmpty()) name else name.substring(0, dot)
         val budget = MAX_NAME_BYTES - ext.toByteArray(Charsets.UTF_8).size
         val out = StringBuilder()
@@ -129,7 +195,7 @@ object WebViewUrlPolicy {
             i += Character.charCount(codePoint)
         }
         val kept = out.toString().trimEnd()
-        return if (kept.isEmpty()) FALLBACK_NAME else kept + ext
+        return (if (kept.isEmpty()) FALLBACK_NAME else kept) + ext
     }
 
     private fun parse(url: String): URI? = try { URI(url) } catch (_: Exception) { null }
@@ -156,6 +222,7 @@ class WebViewUrlRouter(
     fun onNavigation(url: String): Boolean = when (WebViewUrlPolicy.decide(url, isPairedHost)) {
         UrlDecision.DOWNLOAD -> { actions.download(url, WebViewUrlPolicy.downloadFileName(url)); true }
         UrlDecision.OPEN_EXTERNALLY -> { actions.openExternally(url); true }
+        UrlDecision.BLOCK -> true
         UrlDecision.LOAD -> false
     }
 
@@ -167,9 +234,9 @@ class WebViewUrlRouter(
             // that nothing outside the app can open, so it is left alone.
             UrlDecision.OPEN_EXTERNALLY ->
                 if (url.startsWith("http://") || url.startsWith("https://")) actions.openExternally(url)
-            // A download of the bundled page's own file:// content: the app
-            // offers none, and there is nothing outside the app to hand it to.
-            UrlDecision.LOAD -> Unit
+            // The bundled page's own content, or a refused file:// address:
+            // nothing to save and nothing outside the app to hand it to.
+            UrlDecision.LOAD, UrlDecision.BLOCK -> Unit
         }
     }
 }

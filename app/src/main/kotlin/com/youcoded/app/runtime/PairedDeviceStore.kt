@@ -24,39 +24,57 @@ object PairedDeviceStore {
     private const val DEFAULT_PORT = 9900
 
     /**
+     * Built once and kept. WHY (T8 re-review, finding 4): rebuilding it means a
+     * keystore call and a key decryption, and WebViewHost asks from the main
+     * thread for every download-shaped link; two threads building it at once is
+     * also a known EncryptedSharedPreferences hazard, hence the lock.
+     */
+    @Volatile private var encrypted: SharedPreferences? = null
+
+    /**
      * The encrypted store, or the legacy plain one when the keystore is
-     * unavailable — exactly the fallback SessionService has always used.
+     * unavailable — exactly the fallback SessionService has always used. Only a
+     * successfully built encrypted store is kept, so a transient keystore failure
+     * is retried next time rather than remembered.
      */
     fun prefs(context: Context): SharedPreferences {
+        encrypted?.let { return it }
         val app = context.applicationContext
         return try {
-            val masterKeyAlias = MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC)
-            EncryptedSharedPreferences.create(
-                ENCRYPTED_PREFS,
-                masterKeyAlias,
-                app,
-                EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
-                EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
-            )
+            synchronized(this) {
+                encrypted ?: EncryptedSharedPreferences.create(
+                    ENCRYPTED_PREFS,
+                    MasterKeys.getOrCreate(MasterKeys.AES256_GCM_SPEC),
+                    app,
+                    EncryptedSharedPreferences.PrefKeyEncryptionScheme.AES256_SIV,
+                    EncryptedSharedPreferences.PrefValueEncryptionScheme.AES256_GCM
+                ).also { encrypted = it }
+            }
         } catch (e: Exception) {
             android.util.Log.w("PairedDeviceStore", "EncryptedSharedPreferences unavailable, using fallback: ${e.message}")
             app.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE)
         }
     }
 
-    /**
-     * Is host:port one of the paired computers? Reads the encrypted list, and
-     * the legacy plain list a device paired before encryption may still hold
-     * (SessionService migrates it only when the Settings screen lists devices).
-     */
+    /** Is host:port one of the paired computers? */
     fun isPaired(context: Context, host: String, port: Int): Boolean {
-        val encrypted = try { prefs(context).getString(KEY, null) } catch (_: Exception) { null }
-        if (matches(encrypted, host, port)) return true
-        val legacy = try {
-            context.applicationContext.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE).getString(KEY, null)
-        } catch (_: Exception) { null }
-        return matches(legacy, host, port)
+        val app = context.applicationContext
+        val stored = try { prefs(app).getString(KEY, null) } catch (_: Exception) { null }
+        val json = effectiveDevicesJson(stored) {
+            try { app.getSharedPreferences(LEGACY_PREFS, Context.MODE_PRIVATE).getString(KEY, null) } catch (_: Exception) { null }
+        }
+        return matches(json, host, port)
     }
+
+    /**
+     * The list that counts: the encrypted one whenever it exists — even when it
+     * is empty — and the old unencrypted one only before any encrypted list was
+     * written, which is exactly when SessionService would migrate it. WHY
+     * (T8 re-review, finding 3): Remove edits only the encrypted list, so reading
+     * the old list as well kept a removed computer trusted for good.
+     */
+    fun effectiveDevicesJson(encryptedJson: String?, legacy: () -> String?): String? =
+        encryptedJson ?: legacy()
 
     /**
      * Pure matcher, unit-tested. Host names compare case-insensitively (a URL
