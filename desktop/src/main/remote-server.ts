@@ -6,6 +6,7 @@ import { listProjectsIndex } from './artifacts/projects-index';
 import {
   listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
   searchArtifactContent, checkArtifactExistence, isKnownRoot, isKnownProjectRef,
+  resolveArtifactPath,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 import { watchProject, unwatchProject, dropSubscriber } from './artifacts/project-watcher';
@@ -3403,6 +3404,7 @@ export class RemoteServer {
       case 'artifacts:list-session':
       case 'artifacts:list-project':
       case 'artifacts:list-all-files':
+      case 'artifacts:resolve-path':
       case 'artifacts:get':
       case 'artifacts:read-binary':
       case 'artifacts:search-content':
@@ -3617,6 +3619,19 @@ export class RemoteServer {
       (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),
     'artifacts:list-all-files': async (p) =>
       (await this.refuseUnknownProject(p.projectId)) ?? listAllFiles(p.projectId, p.opts),
+    // One file path tapped in chat (2026-09-11). A phone can name ANY path
+    // here, so: the root gate runs first and nothing is looked up for a folder
+    // the computer never showed; and a folder known only because a chat runs
+    // there (a phone can start one anywhere, "No folder" lands in home) answers
+    // only files that chat recorded — the rule artifacts:get applies — with the
+    // same not-allowed whether or not any other path exists (trackedOnly).
+    'artifacts:resolve-path': async (p) => {
+      if (typeof p.path !== 'string' || p.path.length === 0) return { ok: false, error: 'bad-request' };
+      const refused = await this.refuseUnknownRoot(p.projectRoot, { records: true });
+      if (refused) return refused;
+      const shownByComputer = await isKnownRoot(p.projectRoot);
+      return resolveArtifactPath(p.projectRoot, p.path, { trackedOnly: !shownByComputer });
+    },
     'artifacts:get': async (p) => {
       if (typeof p.artifactId !== 'string') return { ok: false, error: 'bad-request' };
       // By path inside a folder the computer shows; inside a session-only folder,

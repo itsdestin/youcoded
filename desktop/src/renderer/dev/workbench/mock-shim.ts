@@ -2219,6 +2219,19 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       if (filesRefused()) return refuseAsToday('artifacts:list-all-files');
       return { ok: true, files: withRemoteRows(studentSwitch ? studentAllFiles(projectId) : allFiles(projectId)), truncated: false };
     },
+    // artifacts:resolve-path — one tapped chat path. Same answer shapes as the
+    // real lookup (read-service.ts resolveArtifactPath): the fixture row whose
+    // FULL path is exactly the tapped one, else outside-project / not-found
+    // decided from the strings (the workbench has no disk to look at).
+    resolvePath: async (projectRoot: string, filePath: string) => {
+      if (filesRefused()) return refuseAsToday('artifacts:resolve-path');
+      const root = projectRoot.replace(/\/+$/, '');
+      const abs = filePath.startsWith('/') ? filePath : `${root}/${filePath.replace(/^\.\//, '')}`;
+      const rows = studentSwitch ? studentAllFiles(projectRoot) : allFiles(projectRoot);
+      const hit = rows.find((r) => (r.kind === 'internal' ? `${root}/${r.path}` : r.absolutePath) === abs);
+      if (hit) return { ok: true, artifact: hit };
+      return { ok: false, error: abs.startsWith(`${root}/`) ? 'not-found' : 'outside-project' };
+    },
     // Batch 3, Q-7 (yes): save a copy to the phone. The real channel
     // (remote-download.ts) mints a short-lived link on the host and the shim
     // opens it; here it only records the ask, because a workbench has no bytes

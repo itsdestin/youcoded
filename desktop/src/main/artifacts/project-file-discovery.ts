@@ -69,6 +69,32 @@ async function isGitRepo(dir: string): Promise<boolean> {
   catch { return false; }
 }
 
+/**
+ * The ONE shape of a discovered (on disk, never tracked) file record.
+ *
+ * WHY a builder and not a literal: three places make this record — the walk
+ * below, projectAllFiles' union of tracked internals the walk missed
+ * (projects-index.ts), and resolveArtifactPath for a file path tapped in chat
+ * (read-service.ts). The drawer treats them as the same thing (id == canonical
+ * relative path, content read by path), so a field added to one copy and not
+ * the others would make one file behave differently depending on how it was
+ * found. Pinned by tests/artifacts/resolve-artifact-path.test.ts.
+ */
+export function discoveredFileRecord(relPath: string, lastModified: string): ArtifactRecord {
+  return {
+    id: relPath,           // discovered id == canonical relative path
+    path: relPath,
+    kind: 'internal',
+    absolutePath: null,
+    lastModified,
+    status: 'active',
+    versions: [],
+    comments: [],
+    tags: [],
+    discovered: true,
+  };
+}
+
 export async function discoverProjectFiles(projectRoot: string): Promise<DiscoveryResult> {
   const key = canonicalize(projectRoot, null);
   const now = Date.now();
@@ -119,18 +145,7 @@ export async function discoverProjectFiles(projectRoot: string): Promise<Discove
         let lastModified = '';
         try { lastModified = (await fs.promises.stat(full)).mtime.toISOString(); } catch { /* leave blank */ }
         const rel = canonicalize(full, projectRoot);
-        files.push({
-          id: rel,           // discovered id == canonical relative path
-          path: rel,
-          kind: 'internal',
-          absolutePath: null,
-          lastModified,
-          status: 'active',
-          versions: [],
-          comments: [],
-          tags: [],
-          discovered: true,
-        });
+        files.push(discoveredFileRecord(rel, lastModified));
       }
     }
   }

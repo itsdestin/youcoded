@@ -38,6 +38,15 @@ vi.mock('electron', () => {
   };
 });
 
+// A pass-through wrapper around the ONE lookup artifacts:resolve-path calls, so
+// a test can prove the host refused BEFORE looking anything up. Behaviour is
+// the real function's; only the call record is added.
+vi.mock('../src/main/artifacts/read-service', async (importOriginal) => {
+  const actual: any = await importOriginal();
+  return { ...actual, resolveArtifactPath: vi.fn((...args: any[]) => actual.resolveArtifactPath(...args)) };
+});
+
+import * as readService from '../src/main/artifacts/read-service';
 import { registerIpcHandlers } from '../src/main/ipc-handlers';
 import { RemoteServer } from '../src/main/remote-server';
 import { __resetProjectWatchersForTest, __setWatchGraceMsForTest, __watchersStartedForTest } from '../src/main/artifacts/project-watcher';
@@ -362,6 +371,50 @@ describe('the roots a phone may name are the ones the desktop shows (R7)', () =>
       who.ws.emit('close');
       (server as any).clients.delete(who.client);
     }
+  });
+});
+
+// artifacts:resolve-path (2026-09-11): one tapped file path, answered by the
+// host, instead of a whole project list downloaded to find it. It is a READ a
+// phone can name any path with, so it gets the same root rules as the reads
+// above — refused before the lookup runs for a folder the computer never
+// showed, and inside a folder known only because a chat runs there, only the
+// files that chat recorded (never "does this other path exist?").
+describe('artifacts:resolve-path over remote', () => {
+  const resolveSpy = () => vi.mocked(readService.resolveArtifactPath);
+
+  it('a saved folder: an untracked file resolves to its discovered record, the same on both transports', async () => {
+    const abs = path.join(root, 'notes.md');
+    const ipc = await overIpc('artifacts:resolve-path', root, abs);
+    const remote = await overRemote('artifacts:resolve-path', { projectRoot: root, path: abs });
+    expect(remote).toMatchObject({ ok: true, artifact: { id: 'notes.md', path: 'notes.md', discovered: true } });
+    expect(remote).toEqual(ipc);
+  });
+
+  it('a folder the computer never showed is refused, and the lookup never runs', async () => {
+    fs.writeFileSync(path.join(outside, 'plain.md'), 'not a secret, just not yours\n');
+    resolveSpy().mockClear();
+    for (const p of [path.join(outside, 'plain.md'), path.join(outside, 'nope.md')]) {
+      expect(await overRemote('artifacts:resolve-path', { projectRoot: outside, path: p })).toEqual({ ok: false, error: 'not-allowed' });
+    }
+    expect(resolveSpy()).not.toHaveBeenCalled();
+  });
+
+  it("a chat-only folder: that chat's recorded file resolves; an untracked or missing path is not-allowed alike", async () => {
+    expect(await overRemote('artifacts:resolve-path', { projectRoot: sessionRoot, path: path.join(sessionRoot, 'todo.md') }))
+      .toMatchObject({ ok: true, artifact: { id: 'rec-todo' } });
+    // Same answer whether or not the file exists — no existence oracle in a folder that was never shared.
+    for (const p of [path.join(sessionRoot, 'untracked.txt'), path.join(sessionRoot, 'nope.md')]) {
+      expect(await overRemote('artifacts:resolve-path', { projectRoot: sessionRoot, path: p }), p).toEqual({ ok: false, error: 'not-allowed' });
+    }
+  });
+
+  it('a malformed payload answers bad-request, and the lookup never runs', async () => {
+    resolveSpy().mockClear();
+    expect(await overRemote('artifacts:resolve-path', { projectRoot: root })).toEqual({ ok: false, error: 'bad-request' });
+    expect(await overRemote('artifacts:resolve-path', { path: 'notes.md' })).toEqual({ ok: false, error: 'bad-request' });
+    expect(await overRemote('artifacts:resolve-path', { projectRoot: root, path: 7 })).toEqual({ ok: false, error: 'bad-request' });
+    expect(resolveSpy()).not.toHaveBeenCalled();
   });
 });
 

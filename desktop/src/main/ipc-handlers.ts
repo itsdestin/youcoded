@@ -153,7 +153,7 @@ import { projectConversationHistory } from './project-conversations';
 // (remote access batch 3) so a phone gets the desktop's own answers.
 import {
   listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
-  searchArtifactContent, checkArtifactExistence,
+  searchArtifactContent, checkArtifactExistence, resolveArtifactPath,
 } from './artifacts/read-service';
 import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
 // Conversation Store (Phase 2a): live intake of transcript activity, session
@@ -4600,6 +4600,14 @@ export function registerIpcHandlers(
   // disk, unioned with tracked internals discovery missed (read-service.ts).
   ipcMain.handle(ARTIFACT_IPC.LIST_ALL_FILES, (_e, projectId: string, opts?: { force?: boolean }) =>
     listAllFiles(projectId, opts));
+
+  // RESOLVE_PATH → ONE file path tapped in chat, answered with the record the
+  // drawer opens. Replaces listing the whole project to find one file (a phone
+  // measured 3,090 records / ~1 MB for a single tap). The desktop's own
+  // renderer only names the folder of the chat it is showing, so no root gate
+  // here; the remote host adds one (remote-server.ts fileReads).
+  ipcMain.handle(ARTIFACT_IPC.RESOLVE_PATH, (_e, projectRoot: string, filePath: string) =>
+    resolveArtifactPath(projectRoot, filePath));
 
   // full: the user clicked "Load the whole file" on the partial-view bar. Still
   // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an

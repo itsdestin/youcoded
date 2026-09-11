@@ -20,7 +20,9 @@ import path from 'path';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
 import { looksBinary, EDIT_MAX_BYTES, FULL_READ_MAX_BYTES, READ_BINARY_MAX_BYTES } from '../../shared/artifacts/editable-path-policy';
 import { decideOverCapRead } from '../../shared/artifacts/over-cap-read';
+import type { ArtifactRecord } from '../../shared/artifacts/types';
 import { readSidecarShared, runSidecarMigration } from './artifact-store';
+import { discoveredFileRecord } from './project-file-discovery';
 import { listProjects } from './central-index';
 import { countArtifacts, projectAllFiles, isGatedRoot } from './projects-index';
 import { evaluateBinaryRead } from './read-binary-access';
@@ -123,6 +125,105 @@ export async function listAllFiles(projectId: string, opts?: { force?: boolean }
   await repairSidecar(projectRoot);
   const r = await projectAllFiles(projectRoot);
   return { ok: true, files: r.files, truncated: r.truncated };
+}
+
+export type ResolvePathError =
+  | 'bad-request'      // the call itself was malformed
+  | 'not-found'        // inside the folder, nothing exists at that path
+  | 'not-a-file'       // inside the folder, but a folder (or other non-file)
+  | 'protected-path'   // a credential location refused for reads (editable-path-policy.ts)
+  | 'outside-project'  // not inside the folder and not a tracked file
+  | 'not-allowed';     // trackedOnly: not a file this folder's records name
+
+export type ResolvePathResult =
+  | { ok: true; artifact: ArtifactRecord }
+  | { ok: false; error: ResolvePathError };
+
+/** A tracked record's comparable absolute form, or null when it has none. */
+function trackedAbsoluteForm(a: ArtifactRecord, projectRoot: string): string | null {
+  if (a.kind === 'internal') return a.path ? canonicalize(path.join(projectRoot, a.path), null) : null;
+  // A legacy relative absolutePath would resolve against the process cwd —
+  // never let it match anything (write-authorization.ts, isAbsoluteRecorded).
+  return a.absolutePath && isAbsoluteRecorded(a.absolutePath) ? canonicalize(a.absolutePath, null) : null;
+}
+
+/**
+ * Which file does a path tapped in chat name? (artifacts:resolve-path)
+ *
+ * WHY this exists (2026-09-11, found on the owner's phone): the renderer used
+ * to answer this by downloading the whole project list — 3,090 records, about
+ * 1 MB, to a phone over Tailscale — and searching it; and a file discovery
+ * never lists (inside a nested git repo) fell through to recording it with a
+ * WRITE the phone is not allowed to make, so the phone said the file was not
+ * found. One targeted question answers both.
+ *
+ * Order, and why:
+ *  1. The tracked records (READ-ONLY sidecar copy): a tracked file keeps its
+ *     id and history, and resolves even when the file is gone — the viewer
+ *     already shows "no longer on disk" for those.
+ *  2. `trackedOnly` stops here. The remote host passes it for a folder known
+ *     only because a chat runs there: such a folder may hand out only what
+ *     its chat recorded, and must not reveal whether other paths exist.
+ *  3. Outside the folder → `outside-project`, decided from the strings ALONE.
+ *     Looking at the file first would make this a way to ask whether any path
+ *     on the computer exists.
+ *  4. Inside the folder → the same symlink-resolving, in-folder, protected-path
+ *     check artifacts:get applies (authorizeArtifactRead), then a stat. A file
+ *     answers the exact record discovery would build for it.
+ */
+export async function resolveArtifactPath(
+  projectRoot: unknown,
+  clickedPath: unknown,
+  opts?: { trackedOnly?: boolean },
+): Promise<ResolvePathResult> {
+  if (typeof projectRoot !== 'string' || projectRoot.length === 0
+      || typeof clickedPath !== 'string' || clickedPath.length === 0) {
+    return { ok: false, error: 'bad-request' };
+  }
+  // `~` means the home folder of the computer that holds the files — this
+  // one. The renderer cannot expand it (and on a phone its home is not ours).
+  const expanded = clickedPath === '~' || /^~[\\/]/.test(clickedPath)
+    ? path.join(os.homedir(), clickedPath.slice(1))
+    : clickedPath;
+  const absolute = path.resolve(projectRoot, expanded);
+  const target = canonicalize(absolute, null);
+
+  const sidecar = await readSidecarShared(projectRoot);
+  if (sidecar && !('corrupted' in sidecar)) {
+    const matches = sidecar.artifacts.filter((a) => trackedAbsoluteForm(a, projectRoot) === target);
+    // Two records can name one path (a deleted one and a re-created one): the live one wins.
+    const hit = matches.find((a) => a.status !== 'deleted') ?? matches[0];
+    if (hit) return { ok: true, artifact: hit };
+  }
+  if (opts?.trackedOnly) return { ok: false, error: 'not-allowed' };
+
+  const root = canonicalize(path.resolve(projectRoot), null);
+  const inside = target === root || target.startsWith(root.endsWith('/') ? root : `${root}/`);
+  if (!inside) return { ok: false, error: 'outside-project' };
+
+  let auth: Awaited<ReturnType<typeof authorizeArtifactRead>>;
+  try {
+    auth = await authorizeArtifactRead(projectRoot, absolute, true);
+  } catch (e: any) {
+    // A path THROUGH a file (notes.md/x) — there is nothing at that path.
+    if (e?.code === 'ENOTDIR') return { ok: false, error: 'not-found' };
+    throw e;
+  }
+  if (!auth.ok) {
+    if ('orphan' in auth) return { ok: false, error: 'not-found' };
+    // artifact-not-found here means the RESOLVED path left the folder: a link
+    // inside it pointing somewhere else.
+    return { ok: false, error: auth.error === 'protected-path' ? 'protected-path' : 'outside-project' };
+  }
+  let st: fs.Stats;
+  try {
+    st = await fs.promises.stat(auth.realPath);
+  } catch (e: any) {
+    if (e?.code === 'ENOENT') return { ok: false, error: 'not-found' };
+    throw e;
+  }
+  if (!st.isFile()) return { ok: false, error: 'not-a-file' };
+  return { ok: true, artifact: discoveredFileRecord(canonicalize(absolute, projectRoot), st.mtime.toISOString()) };
 }
 
 /**
