@@ -164,6 +164,15 @@ describe('the desktop serializes AFTER flushing the transcript batch', () => {
     expect(dispatched).toHaveLength(0);
   });
 
+  it('reports the sessions still loading history, read before serialization normalises the flag', () => {
+    const { store } = mount();
+    act(() => { store.dispatch({ type: 'HISTORY_PAGE_REQUESTED', sessionId: 's1' }); });
+    act(() => { exportRequests[0]('req-loading'); });
+    expect((responses[0] as any).loadingSessionIds).toEqual(['s1']);
+    const s1 = new Map(responses[0].snapshot.sessions).get('s1')!;
+    expect(s1.history!.loading).toBe(false);          // the wire copy is still normalised
+  });
+
   it('serializes the synchronous store, never a render-lagged ref', () => {
     const { store } = mount();
     // Dispatch straight into the store and ask for the snapshot in the SAME

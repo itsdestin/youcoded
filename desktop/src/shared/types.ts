@@ -1614,6 +1614,8 @@ export const IPC = {
   SESSION_RESIZE: 'session:resize',
   SESSION_LIST: 'session:list',
   SESSION_SWITCH: 'session:switch',
+  // Remote access batch 2 (§2): a window tells main which session it shows.
+  SESSION_SELECTED: 'session:selected',
   SKILLS_LIST: 'skills:list',
   COMMANDS_LIST: 'commands:list',
   SKILLS_LIST_MARKETPLACE: 'skills:list-marketplace',

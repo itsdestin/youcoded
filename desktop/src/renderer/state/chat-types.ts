@@ -949,6 +949,10 @@ export interface SerializedChatState {
   // without it, both look like a valid empty snapshot. Optional so a payload
   // from a pre-field host still deserializes.
   degraded?: true;
+  // Remote access batch 2 (§2, R2): the session the desktop is showing (its
+  // last-focused main window's selection), so a phone with no place of its own
+  // opens it. Optional so a payload from a pre-field host still deserializes.
+  focus?: { sessionId: string | null };
 }
 
 export function serializeChatState(state: ChatState): SerializedChatState {

@@ -264,13 +264,17 @@ export class RemoteServer {
     private hookRelay: HookRelay,
     private config: RemoteConfig,
     private skillProvider?: LocalSkillProvider,
-    opts?: { requestSnapshot?: () => Promise<SerializedChatState> },
+    opts?: { requestSnapshot?: () => Promise<SerializedChatState>; getFocusSessionId?: () => string | null },
   ) {
     this.devices = new RemoteDeviceStore();
     // Default is a no-op that returns an empty snapshot — allows the server to
     // be constructed before the main window exists (e.g. during first-run setup).
     this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
+    this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
   }
+  // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
+  // Rides session:destroyed so a phone whose conversation went away opens that one.
+  private getFocusSessionId: () => string | null;
 
   /** Injected by main.ts. Read-only access to the marketplace auth session so
    *  remote clients can see whether the host is signed in — the game lobby
@@ -865,7 +869,7 @@ export class RemoteServer {
     this.shellRunBuffers.delete(sessionId);   // G-1
     // Forward exitCode so the remote shim can surface 'session-died' banners
     // when Claude's process dies mid-turn on the host machine.
-    this.broadcast({ type: 'session:destroyed', payload: { sessionId, exitCode } });
+    this.broadcast({ type: 'session:destroyed', payload: { sessionId, exitCode, focus: { sessionId: this.getFocusSessionId() } } });
   };
 
   // --- HTTP static file serving ---
@@ -1363,6 +1367,11 @@ export class RemoteServer {
         await this.restoreClient(client, { seq, reconnect: payload?.reconnect === true, replayBuffers: true });
         break;
       }
+      case 'session:selected':
+        // Batch 2 (§2): desktop windows report their selection to main over IPC. A
+        // remote client has no desktop window, so it must never write that cache —
+        // and gets no answer, as a push never does.
+        break;
       // --- Request/response ---
       case 'session:create': {
         // This payload is passed to createSession unfiltered, so without this
@@ -1395,7 +1404,7 @@ export class RemoteServer {
         const result = this.sessionManager.destroySession(payload.sessionId || payload);
         this.respond(client.ws, type, id, result);
         if (result) {
-          this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload } });
+          this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload, focus: { sessionId: this.getFocusSessionId() } } });
         }
         break;
       }

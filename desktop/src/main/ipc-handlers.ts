@@ -1079,6 +1079,14 @@ export function registerIpcHandlers(
     });
   });
 
+  // Remote access batch 2 (§2, R2): each window reports the session it shows; main
+  // caches it per window (WindowRegistry) so the remote snapshot and
+  // session:destroyed can tell a phone what the desktop is showing. Fire-and-forget:
+  // nothing on the desktop reads it back.
+  ipcMain.on(IPC.SESSION_SELECTED, (evt, sessionId: unknown) => {
+    windowRegistry?.setSelectedSession(evt.sender.id, typeof sessionId === 'string' ? sessionId : null);
+  });
+
   ipcMain.handle(IPC.SESSION_SWITCH, async (_event, _sessionId: string) => {
     // Switch is a client-side concern on desktop — the renderer manages active session.
     // This handler exists for protocol parity with Android/remote.

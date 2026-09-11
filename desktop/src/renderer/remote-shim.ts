@@ -1358,6 +1358,9 @@ export function installShim(): void {
       loadHistory: (sessionId: string, projectSlug: string, count?: number, all?: boolean) =>
         invoke('session:history', { sessionId, projectSlug, count: count || 10, all: all || false }),
       switch: (sessionId: string) => invoke('session:switch', { sessionId }),
+      // Shape parity with preload (batch 2 §2). A phone or browser has no desktop window
+      // whose selection main could cache, and the host ignores the channel anyway.
+      noteSelected: (_sessionId: string | null) => {},
       // Set a named flag on a past session (complete, priority; helpful retired).
       setFlag: (sessionId: string, flag: string, value: boolean) =>
         invoke('session:set-flag', { sessionId, flag, value }),

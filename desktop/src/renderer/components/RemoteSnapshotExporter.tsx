@@ -34,8 +34,13 @@ export function RemoteSnapshotExporter() {
     const unsubscribe = api.onChatExportSnapshot((requestId: string) => {
       try {
         flushTranscriptActions();
-        const snapshot = serializeChatState(store.getState());
-        api.sendChatSnapshotResponse({ requestId, snapshot });
+        const state = store.getState();
+        // Batch 2 (§2): sessions whose history page is still arriving. Read HERE,
+        // because serializeChatState normalises `loading` to false for the wire —
+        // main omits these from the merged snapshot rather than hand a phone half.
+        const loadingSessionIds = [...state].filter(([, s]) => s.history?.loading).map(([id]) => id);
+        const snapshot = serializeChatState(state);
+        api.sendChatSnapshotResponse({ requestId, snapshot, loadingSessionIds });
       } catch (err) {
         // Fix: flag the fallback as degraded so the connecting client can tell
         // a serialization failure apart from a host with no sessions, instead

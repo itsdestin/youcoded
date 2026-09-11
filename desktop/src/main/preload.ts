@@ -198,6 +198,8 @@ const IPC = {
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   SESSION_SWITCH: 'session:switch',
+  // Remote access batch 2 (§2): a window tells main which session it shows.
+  SESSION_SELECTED: 'session:selected',
   // Sync management
   SYNC_GET_STATUS: 'sync:get-status',
   SYNC_GET_CONFIG: 'sync:get-config',
@@ -518,6 +520,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SESSION_HISTORY, sessionId, projectSlug, count || 10, all || false),
     switch: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_SWITCH, sessionId),
+    // Remote access batch 2 (§2): report this window's selection to main, which
+    // caches it per window so a phone's first connect opens what the desktop shows.
+    noteSelected: (sessionId: string | null) =>
+      ipcRenderer.send(IPC.SESSION_SELECTED, sessionId),
     // Mark/unmark a session flag (complete, priority, helpful, …).
     // Persists in conversation-index.json and rides the existing sync pipeline.
     setFlag: (sessionId: string, flag: string, value: boolean) =>
@@ -677,7 +683,7 @@ contextBridge.exposeInMainWorld('claude', {
     ipcRenderer.on(IPC.CHAT_EXPORT_SNAPSHOT, handler);
     return () => ipcRenderer.off(IPC.CHAT_EXPORT_SNAPSHOT, handler);
   },
-  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown }) =>
+  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown; loadingSessionIds?: string[] }) =>
     ipcRenderer.send(IPC.CHAT_SNAPSHOT_RESPONSE, payload),
   fireRemoteAttentionChanged: (payload: { sessionId: string; state: string }) =>
     ipcRenderer.send(IPC.REMOTE_ATTENTION_CHANGED, payload),

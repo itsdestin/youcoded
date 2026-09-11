@@ -214,6 +214,12 @@ function AppInner() {
   // deliverable auto-open rule needs it without re-subscribing per switch).
   const focusedSessionIdRef = useRef<string | null>(null);
   useEffect(() => { focusedSessionIdRef.current = sessionId; }, [sessionId]);
+  // Remote access batch 2 (§2, R2): tell main which session this window shows, so a
+  // phone connecting for the first time opens what the desktop is showing. A no-op
+  // on the remote shim (a phone is not a desktop window).
+  useEffect(() => {
+    (window.claude as any).session?.noteSelected?.(sessionId);
+  }, [sessionId]);
   // Multi-window detach state (desktop-only; remote-shim stubs these as no-ops).
   // `myWindowId` identifies this renderer's BrowserWindow so the switcher can
   // distinguish local sessions from sessions owned by peer windows. `directory`
