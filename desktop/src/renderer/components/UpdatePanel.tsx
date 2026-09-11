@@ -307,11 +307,16 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
                   : 'Launch failed'
               )}
             </Button>
-            {installState.kind === 'error' && (
+            {/* No browser fallback for a VERIFICATION failure: handleFallbackBrowser
+                opens download_url — the raw installer binary — which for a
+                verify-failed (sha256/size mismatch, i.e. the installer was swapped
+                after signing) is the very tampered file the gate just refused.
+                Offering it there would reopen the attack outside the app. Retry
+                (which re-downloads and re-verifies) is the only safe move; a
+                signature-invalid shows an explanation instead. 2026-09-10 #7 review. */}
+            {installState.kind === 'error' && installState.code !== 'verify-failed' && (
               <div className="text-xs mt-2">
                 {installState.code === 'signature-invalid' ? (
-                  // No browser fallback here: we refuse to point the user at an
-                  // installer we couldn't verify. Explain plainly instead.
                   <p className="text-amber-400">{updateErrorMessage('signature-invalid')}</p>
                 ) : (
                   <button
