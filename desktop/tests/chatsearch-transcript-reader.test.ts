@@ -1,17 +1,18 @@
 /**
  * The bounded reader behind the preview pane, on both lanes.
  *
- * Three things here are safety properties rather than features, and each has
+ * Four things here are safety properties rather than features, and each has
  * its own describe block: the reader must never read outside the folders the
  * app is allowed to read, must never present a subagent's transcript as a
- * conversation, and must never re-read a large file just to page backwards.
+ * conversation, must never read a whole large file to show its last page, and
+ * must never show a tool-gap count it did not actually finish counting.
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import {
-  parseClaudeTranscript, parseNativeTranscript, sliceMessages, containedTranscriptPath, readTranscriptSlice,
+  parseClaudeTranscript, parseNativeTranscript, containedTranscriptPath, readTranscriptSlice, type ReadDeps,
 } from '../src/main/chatsearch-index/transcript-reader';
 import { COPY } from '../src/shared/chatsearch-refs';
 
@@ -26,7 +27,8 @@ describe('parseClaudeTranscript', () => {
     // stop_reason === 'end_turn'), which on a real 42 MB transcript threw away
     // 1,135 of 1,405 assistant messages. A preview exists to remember what was
     // decided, and the deciding happens between the tool calls.
-    const { messages, allSidechain } = parseClaudeTranscript(read('claude-session.jsonl'));
+    const text = read('claude-session.jsonl');
+    const { messages, allSidechain } = parseClaudeTranscript(text);
     expect(allSidechain).toBe(false);
     expect(messages.map((x) => [x.role, x.content, x.droppedToolCalls])).toEqual([
       ['user', 'Fix the timeout', 0],
@@ -34,7 +36,12 @@ describe('parseClaudeTranscript', () => {
       ['assistant', 'Done — **fixed**.', 2],
       ['user', 'thanks', 0],
     ]);
-    expect(messages.map((x) => x.seq)).toEqual([0, 1, 2, 3]);
+    // seq is the BYTE offset of the message's line — the cursor "Load older"
+    // hands back. Each one must point at the start of a line naming that text.
+    const buf = Buffer.from(text, 'utf8');
+    for (const m of messages) {
+      expect(m.seq === 0 || buf[m.seq - 1] === 0x0a).toBe(true);
+    }
   });
 
   it('dedupes by uuid (last wins) and ignores unparseable lines', () => {
@@ -56,33 +63,19 @@ describe('parseNativeTranscript', () => {
   });
 });
 
-describe('sliceMessages', () => {
-  const all = Array.from({ length: 10 }, (_, i) => ({ role: 'user' as const, content: String(i), timestamp: i, seq: i, droppedToolCalls: 0 }));
-  it('returns the newest tail with hasMore', () => {
-    expect(sliceMessages(all, 3)).toEqual({ messages: all.slice(7), hasMore: true });
-  });
-  it('pages backwards with before and reports the end', () => {
-    expect(sliceMessages(all, 4, 3)).toEqual({ messages: all.slice(0, 3), hasMore: false });
-  });
-  it('clamps tail to 1..200', () => {
-    expect(sliceMessages(all, 0).messages).toHaveLength(1);
-    expect(sliceMessages(all, 9999).messages).toHaveLength(10);
-  });
-});
-
 describe('containedTranscriptPath', () => {
-  it('accepts a real file under a root; refuses traversal, foreign roots, a look-alike root, and a symlink escaping the root', () => {
+  it('accepts a real file under a root; refuses traversal, foreign roots, a look-alike root, and a symlink escaping the root', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-root-'));
     const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'cs-out-'));
     fs.writeFileSync(path.join(root, 'ok.jsonl'), '');
     fs.writeFileSync(path.join(outside, 'secret.jsonl'), '');
     fs.symlinkSync(path.join(outside, 'secret.jsonl'), path.join(root, 'link.jsonl'));
-    expect(containedTranscriptPath(path.join(root, 'ok.jsonl'), [root])).toBe(fs.realpathSync(path.join(root, 'ok.jsonl')));
-    expect(containedTranscriptPath(path.join(root, '..', path.basename(outside), 'secret.jsonl'), [root])).toBeNull();
-    expect(containedTranscriptPath(path.join(outside, 'secret.jsonl'), [root])).toBeNull();
+    expect(await containedTranscriptPath(path.join(root, 'ok.jsonl'), [root])).toBe(fs.realpathSync(path.join(root, 'ok.jsonl')));
+    expect(await containedTranscriptPath(path.join(root, '..', path.basename(outside), 'secret.jsonl'), [root])).toBeNull();
+    expect(await containedTranscriptPath(path.join(outside, 'secret.jsonl'), [root])).toBeNull();
     // A symlink INSIDE the root pointing out of it is the interesting case:
     // the string check passes and only realpath catches it.
-    expect(containedTranscriptPath(path.join(root, 'link.jsonl'), [root])).toBeNull();
+    expect(await containedTranscriptPath(path.join(root, 'link.jsonl'), [root])).toBeNull();
     // The trailing-separator check: `/tmp/cs-root-x-evil` must not pass as
     // being under `/tmp/cs-root-x`. The look-alike has to REALLY EXIST or
     // realpath refuses it first and this asserts nothing — which is exactly
@@ -90,7 +83,7 @@ describe('containedTranscriptPath', () => {
     // containment check broke no test).
     fs.mkdirSync(root + '-evil');
     fs.writeFileSync(path.join(root + '-evil', 'x.jsonl'), '');
-    expect(containedTranscriptPath(path.join(root + '-evil', 'x.jsonl'), [root])).toBeNull();
+    expect(await containedTranscriptPath(path.join(root + '-evil', 'x.jsonl'), [root])).toBeNull();
   });
 });
 
@@ -107,7 +100,7 @@ describe('readTranscriptSlice', () => {
     local: string, space: string,
     entry: { transcriptPath: string; tombstone: boolean } | null,
     localPath: string | null,
-  ) => ({ entryFor: () => entry, localPathFor: () => localPath, roots: [local, space], cache: new Map() });
+  ): ReadDeps => ({ entryFor: () => entry, localPathFor: () => localPath, roots: [local, space], cache: new Map() });
 
   it('refuses an id that is not a session uuid', async () => {
     const { local, space } = setup();
@@ -203,16 +196,73 @@ describe('readTranscriptSlice', () => {
     expect(!gone.ok && gone.error).toMatch(/ENOENT/);
   });
 
-  it('parses once per (path, mtime, size) — Load older does not re-read the file', async () => {
+  // A conversation shaped like a real one: runs of tool calls between the
+  // messages, and a non-ASCII message so a character/byte mix-up in the
+  // offsets would land a cursor mid-line.
+  function longConversation(messages: number): string {
+    const lines: string[] = [];
+    for (let i = 0; i < messages; i++) {
+      for (let t = 0; t < i % 4; t++) {
+        lines.push(JSON.stringify({ type: 'assistant', uuid: `t${i}-${t}`, timestamp: '2026-07-26T00:00:00Z',
+          message: { role: 'assistant', content: [{ type: 'tool_use', id: `x${i}${t}`, name: 'Bash', input: { command: 'x'.repeat(300) } }] } }));
+      }
+      lines.push(JSON.stringify(i % 2
+        ? { type: 'assistant', uuid: `a${i}`, timestamp: '2026-07-26T00:00:00Z', message: { role: 'assistant', content: [{ type: 'text', text: `reply ${i} — naïve ✓` }] } }
+        : { type: 'user', uuid: `u${i}`, promptId: `p${i}`, timestamp: '2026-07-26T00:00:00Z', message: { role: 'user', content: `ask ${i}` } }));
+    }
+    return lines.join('\n') + '\n';
+  }
+
+  it('reads only the end of a large file for the newest page', async () => {
+    const { local, space } = setup();
+    const p = path.join(space, `${ID}.jsonl`);
+    fs.writeFileSync(p, longConversation(4000));
+    const size = fs.statSync(p).size;
+    let bytes = 0;
+    const deps = depsFor(local, space, { transcriptPath: p, tombstone: false }, null);
+    deps.readRange = async (file, start, end) => { bytes += end - start; return fs.readFileSync(file).subarray(start, end); };
+    const r = await readTranscriptSlice({ provider: 'claude', id: ID, tail: 40 }, deps);
+    expect(r.ok && r.messages).toHaveLength(40);
+    expect(r.ok && r.hasMore).toBe(true);
+    // The whole point: a 40-message page of a multi-megabyte file costs one
+    // window, not the file. Reading everything is exactly the regression.
+    expect(size).toBeGreaterThan(2 * 1024 * 1024);
+    expect(bytes).toBeLessThan(size / 2);
+  });
+
+  it('pages back to the start with no message lost, repeated or miscounted, across window edges', async () => {
+    const { local, space } = setup();
+    const p = path.join(space, `${ID}.jsonl`);
+    const text = longConversation(60);
+    fs.writeFileSync(p, text);
+    const deps = depsFor(local, space, { transcriptPath: p, tombstone: false }, null);
+    // A window smaller than one line forces every edge case: windows that
+    // start mid-line, windows that must grow, and gaps split across windows.
+    deps.firstWindowBytes = 97;
+    let all: unknown[] = [];
+    let before: number | undefined;
+    for (let pages = 0; pages < 100; pages++) {
+      const r = await readTranscriptSlice({ provider: 'claude', id: ID, tail: 7, ...(before === undefined ? {} : { before }) }, deps);
+      if (!r.ok) throw new Error(r.error);
+      all = [...r.messages, ...all];
+      if (!r.hasMore || !r.messages.length) break;
+      before = r.messages[0].seq;
+    }
+    expect(all).toEqual(parseClaudeTranscript(text).messages);
+  });
+
+  it('answers an unchanged slice from memory — hovering then clicking reads the file once', async () => {
     const { local, space } = setup();
     const p = path.join(space, `${ID}.jsonl`);
     fs.writeFileSync(p, read('claude-session.jsonl'));
+    let reads = 0;
     const deps = depsFor(local, space, { transcriptPath: p, tombstone: false }, null);
-    await readTranscriptSlice({ provider: 'claude', id: ID, tail: 2 }, deps);
-    const spy = vi.spyOn(fs.promises, 'readFile');
-    await readTranscriptSlice({ provider: 'claude', id: ID, tail: 2, before: 2 }, deps);
-    expect(spy).not.toHaveBeenCalled();
-    spy.mockRestore();
+    deps.readRange = async (file, start, end) => { reads++; return fs.readFileSync(file).subarray(start, end); };
+    const first = await readTranscriptSlice({ provider: 'claude', id: ID, tail: 40 }, deps);
+    const readsAfterFirst = reads;
+    expect(await readTranscriptSlice({ provider: 'claude', id: ID, tail: 40 }, deps)).toEqual(first);
+    expect(readsAfterFirst).toBeGreaterThan(0);
+    expect(reads).toBe(readsAfterFirst);
   });
 
   it('re-reads when the file has changed since it was cached', async () => {
