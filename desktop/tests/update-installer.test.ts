@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { validateDownloadUrl, deriveDownloadFilename, createUpdateInstaller, cleanupStaleDownloads, findCachedDownload, makeLaunchInstaller } from '../src/main/update-installer';
+import { validateDownloadUrl, deriveDownloadFilename, createUpdateInstaller, cleanupStaleDownloads, findCachedDownload, makeLaunchInstaller, isAllowedUpdateHost } from '../src/main/update-installer';
 import type { UpdateLaunchResult } from '../src/shared/update-install-types';
 import fs from 'fs';
 import os from 'os';
@@ -15,6 +15,12 @@ describe('validateDownloadUrl', () => {
     expect(() => validateDownloadUrl('https://objects.githubusercontent.com/github-production-release-asset-xyz/YouCoded-1.2.3.dmg')).not.toThrow();
   });
 
+  it('accepts release-assets.githubusercontent.com URLs (GitHub moved downloads here 2026-09-10)', () => {
+    // The regression that broke the Update button for everyone: this host was
+    // rejected, so every download failed url-rejected.
+    expect(() => validateDownloadUrl('https://release-assets.githubusercontent.com/github-production-release-asset-xyz/YouCoded-Setup-1.3.0.exe')).not.toThrow();
+  });
+
   it('rejects http:// URLs with url-rejected', () => {
     expect(() => validateDownloadUrl('http://github.com/itsdestin/youcoded/releases/download/v1/YouCoded.exe'))
       .toThrow(/url-rejected/);
@@ -27,6 +33,19 @@ describe('validateDownloadUrl', () => {
 
   it('rejects malformed URLs with url-rejected', () => {
     expect(() => validateDownloadUrl('not a url')).toThrow(/url-rejected/);
+  });
+});
+
+describe('isAllowedUpdateHost (manifest/signature fetch trust boundary)', () => {
+  it('accepts the three GitHub release hosts over https', () => {
+    expect(isAllowedUpdateHost('https://github.com/a/b/releases/download/v1/youcoded-release.json')).toBe(true);
+    expect(isAllowedUpdateHost('https://objects.githubusercontent.com/x/youcoded-release.json.sig')).toBe(true);
+    expect(isAllowedUpdateHost('https://release-assets.githubusercontent.com/x/youcoded-release.json')).toBe(true);
+  });
+  it('rejects other hosts, http, and junk', () => {
+    expect(isAllowedUpdateHost('https://evil.example.com/youcoded-release.json')).toBe(false);
+    expect(isAllowedUpdateHost('http://github.com/x/youcoded-release.json')).toBe(false);
+    expect(isAllowedUpdateHost('not a url')).toBe(false);
   });
 });
 

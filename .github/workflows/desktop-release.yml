@@ -139,7 +139,35 @@ jobs:
         with:
           path: artifacts
 
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      # Signed release manifest (2026-09-10 security review, #7). Computes each
+      # installer's SHA-256 + size, writes youcoded-release.json, and signs it
+      # with the ed25519 release key so the in-app updater can prove a download is
+      # genuine before running it.
+      #
+      # NON-FATAL if the key isn't configured yet: the release still ships, just
+      # WITHOUT a manifest — and the updater (which requires one) will refuse to
+      # install this release until it's signed. Set the repository/environment
+      # secret UPDATE_SIGNING_KEY (the PKCS8 PEM private key from
+      # ~/system/youcoded-release-signing/) to activate signing. Ideally scope it
+      # to a protected `release` environment.
+      - name: Sign release manifest
+        if: startsWith(github.ref, 'refs/tags/v')
+        working-directory: desktop
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::warning::UPDATE_SIGNING_KEY is not set — shipping WITHOUT a signed manifest. The in-app updater will refuse this release until it is signed."
+            exit 0
+          fi
+          node scripts/generate-release-manifest.mjs --dir "$GITHUB_WORKSPACE/artifacts" --version "$GITHUB_REF_NAME"
+
       - name: Upload installers to release
         uses: softprops/action-gh-release@v3
         with:
+          # Includes youcoded-release.json + .sig when signing ran above.
           files: artifacts/**/*
