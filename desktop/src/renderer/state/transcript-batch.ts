@@ -60,6 +60,9 @@ export function installTranscriptBatcher(dispatch: Dispatch): TranscriptBatcher 
   }
 
   function push(action: ChatAction) {
+    // A push after dispose (a transcript event racing the effect's cleanup) must not
+    // arm a frame whose flush would only no-op — the batch is gone with the effect.
+    if (disposed) return;
     pending.push(action);
     if (rafId !== null || timerId !== null) return;
     // Hidden-window caveat: Electron suspends requestAnimationFrame while the
@@ -114,6 +117,10 @@ export function flushTranscriptActions(): void {
  * and a stale turn-complete would end the turn the snapshot shows in flight.
  */
 export function applyChatHydrate(dispatch: Dispatch, snapshot: SerializedChatState): void {
+  // Presumes the host's per-client queue (remote-server.ts restoreClient): nothing
+  // ABOVE the cut line reaches the phone before its hydrate, so flushing first can
+  // only apply what the snapshot already holds — never drop something newer.
+
   flushTranscriptActions();
   dispatch({ type: 'HYDRATE_CHAT_STATE', sessions: snapshot });
 }

@@ -18,17 +18,19 @@ import {
   applyChatHydrate,
   type TranscriptBatcher,
 } from '../src/renderer/state/transcript-batch';
-import { serializeChatState, type SerializedChatState } from '../src/renderer/state/chat-types';
+import { serializeChatState, type ChatAction, type SerializedChatState } from '../src/renderer/state/chat-types';
 
-type Holder = { store: ChatStore | null; batcher: TranscriptBatcher | null };
+type Holder = { store: ChatStore | null; batcher: TranscriptBatcher | null; dispatched: ChatAction[] };
 
 // Mirrors App's transcript effect: the batcher is installed with the store's
 // dispatch and disposed on cleanup. Nothing else App does is needed here.
+// `dispatched` counts what the batcher handed the store — the reducer's uuid
+// dedup would otherwise hide a double flush behind an unchanged state.
 function Probe({ holder }: { holder: Holder }) {
   const store = useChatStore();
   holder.store = store;
   useEffect(() => {
-    const batcher = installTranscriptBatcher(store.dispatch);
+    const batcher = installTranscriptBatcher((a) => { holder.dispatched.push(a); store.dispatch(a); });
     holder.batcher = batcher;
     return () => batcher.dispose();
   }, [store, holder]);
@@ -45,26 +47,36 @@ function runFrames() {
 let exportRequests: Array<(requestId: string) => void> = [];
 let responses: Array<{ requestId: string; snapshot: SerializedChatState }> = [];
 
+const realRaf = window.requestAnimationFrame;
+const realCaf = window.cancelAnimationFrame;
+let cancelled: number[] = [];
+let visibility: DocumentVisibilityState = 'visible';
+
 beforeEach(() => {
   frames = [];
+  cancelled = [];
   exportRequests = [];
   responses = [];
+  visibility = 'visible';
   window.requestAnimationFrame = (cb: FrameRequestCallback) => { frames.push(cb); return frames.length; };
-  window.cancelAnimationFrame = () => {};
+  window.cancelAnimationFrame = (id: number) => { cancelled.push(id); };
   (window as any).claude = {
     onChatExportSnapshot: (cb: (requestId: string) => void) => { exportRequests.push(cb); return () => {}; },
     sendChatSnapshotResponse: (payload: { requestId: string; snapshot: SerializedChatState }) => { responses.push(payload); },
   };
-  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'visible' });
+  Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
 });
 
 afterEach(() => {
   vi.useRealTimers();
   delete (window as any).claude;
+  window.requestAnimationFrame = realRaf;
+  window.cancelAnimationFrame = realCaf;
+  delete (document as any).visibilityState;
 });
 
 function mount() {
-  const holder: Holder = { store: null, batcher: null };
+  const holder: Holder = { store: null, batcher: null, dispatched: [] };
   render(
     <ChatProvider>
       <Probe holder={holder} />
@@ -72,7 +84,7 @@ function mount() {
     </ChatProvider>,
   );
   act(() => { holder.store!.dispatch({ type: 'SESSION_INIT', sessionId: 's1' }); });
-  return { store: holder.store!, batcher: holder.batcher! };
+  return { store: holder.store!, batcher: holder.batcher!, dispatched: holder.dispatched };
 }
 
 function delta(uuid: string, text: string) {
@@ -90,7 +102,7 @@ function textOf(store: ChatStore): string[] {
 
 describe('the desktop serializes AFTER flushing the transcript batch', () => {
   it('a native delta delivered in the frame before the export is in the snapshot, and applied once', () => {
-    const { store, batcher } = mount();
+    const { store, batcher, dispatched } = mount();
     // Two per-delta text events arrive; the frame that would apply them has not fired.
     batcher.push(delta('u1', 'Hel'));
     batcher.push(delta('u2', 'lo'));
@@ -104,14 +116,16 @@ describe('the desktop serializes AFTER flushing the transcript batch', () => {
     expect(turns.flatMap((t) => t.segments.filter((s) => s.type === 'text').map((s: any) => s.content))).toEqual(['Hello']);
 
     // The frame fires later: the batch was consumed by the flush, so nothing is applied twice.
+    expect(dispatched).toHaveLength(2);
     act(() => { runFrames(); });
+    expect(dispatched).toHaveLength(2);           // the store was handed each delta exactly once
     expect(textOf(store)).toEqual(['Hello']);
   });
 
   it('the hidden-window case: a batch stalled on the 16 ms timer is flushed by the export too', () => {
-    vi.useFakeTimers();
-    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => 'hidden' });
-    const { store, batcher } = mount();
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    visibility = 'hidden';
+    const { store, batcher, dispatched } = mount();
     batcher.push(delta('u1', 'Hel'));
     batcher.push(delta('u2', 'lo'));
     expect(frames).toHaveLength(0);              // hidden → timer path, no frame requested
@@ -124,7 +138,30 @@ describe('the desktop serializes AFTER flushing the transcript batch', () => {
     expect(turns.flatMap((t) => t.segments.filter((s) => s.type === 'text').map((s: any) => s.content))).toEqual(['Hello']);
 
     act(() => { vi.runAllTimers(); });
+    expect(dispatched).toHaveLength(2);
     expect(textOf(store)).toEqual(['Hello']);
+  });
+
+  it('hiding the window while a frame is pending hands the batch to the timer, so it cannot strand', () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    const { store, batcher, dispatched } = mount();
+    batcher.push(delta('u1', 'Hello'));
+    expect(frames).toHaveLength(1);
+    visibility = 'hidden';
+    document.dispatchEvent(new Event('visibilitychange'));  // Electron suspends rAF from here on
+    expect(cancelled).toEqual([1]);                          // the pending frame is withdrawn…
+    act(() => { vi.advanceTimersByTime(16); });              // …and the timer applies the batch
+    expect(dispatched).toHaveLength(1);
+    expect(textOf(store)).toEqual(['Hello']);
+  });
+
+  it('a push after dispose neither queues nor arms a frame', () => {
+    const { batcher, dispatched } = mount();
+    batcher.dispose();
+    batcher.push(delta('u1', 'late'));
+    expect(frames).toHaveLength(0);
+    batcher.flush();
+    expect(dispatched).toHaveLength(0);
   });
 
   it('serializes the synchronous store, never a render-lagged ref', () => {
