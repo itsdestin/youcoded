@@ -1,6 +1,15 @@
 import http from 'http';
 import zlib from 'zlib';
 import { listProjectsIndex } from './artifacts/projects-index';
+// Files over remote (batch 3): the same read bodies the Electron handlers
+// call, plus the phone's smaller preview ceilings.
+import {
+  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
+  searchArtifactContent, checkArtifactExistence,
+} from './artifacts/read-service';
+import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
+import { watchProject, unwatchProject, dropSubscriber } from './artifacts/project-watcher';
+import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../shared/remote-file-limits';
 import { readFileHead } from './fs-read-head';
 // Games arcade scores — remote browsers share the desktop's operations and
 // its stale-board cache (main/arcade-handlers.ts).
@@ -105,6 +114,10 @@ interface AuthenticatedClient {
   ip: string;
   connectedAt: number;
   awaitingPong?: boolean;
+  // The project watcher's subscriber id for this socket (batch 3, §8). Assigned
+  // on the first watch-project and dropped on close; negative so it can never
+  // collide with a webContents id, which is what the desktop subscribes with.
+  watchId?: number;
 }
 
 export interface ClientInfo {
@@ -2954,6 +2967,55 @@ export class RemoteServer {
         break;
       }
 
+      // --- Files over remote (batch 3, design 2026-09-10 §8, §9) ---
+      // The SAME functions the Electron handlers call (artifacts/read-service.ts,
+      // project-read-service.ts): same roots, same denylist, same shape, so the
+      // phone's Files screens show what the desktop shows (contract R7, R16).
+      // The reads carry the phone's preview ceiling; over it the answer is
+      // `too-large` with the real size, decided from `stat` — never a prefix.
+      // The write channels (save, append-version, import, rename…) are not
+      // bridged: editing over remote is not in this batch.
+      case 'artifacts:list-session':
+      case 'artifacts:list-project':
+      case 'artifacts:list-all-files':
+      case 'artifacts:get':
+      case 'artifacts:read-binary':
+      case 'artifacts:search-content':
+      case 'artifacts:check-existence':
+      case 'project:list-context':
+      case 'project:read-context-file':
+      case 'project:list-conversations':
+      case 'project:repo-info': {
+        try {
+          this.respond(client.ws, type, id, await this.readFileChannel(type, payload ?? {}));
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
+        }
+        break;
+      }
+      case 'artifacts:watch-project': {
+        // Live refresh (contract R12). The watcher refcounts subscribers by a
+        // numeric id; a WS client gets its own — negative, so it can never
+        // collide with a webContents id — and loses it when its socket closes,
+        // the way a destroyed renderer loses its refs. A reconnect is a NEW
+        // socket, so the phone re-subscribes (useProjectWatch).
+        const projectRoot = payload?.projectRoot;
+        if (typeof projectRoot !== 'string' || projectRoot.length === 0) {
+          this.respond(client.ws, type, id, { ok: false });
+          break;
+        }
+        this.respond(client.ws, type, id, await watchProject(projectRoot, this.watchSubscriberId(client)));
+        break;
+      }
+      case 'artifacts:unwatch-project': {
+        const projectRoot = payload?.projectRoot;
+        if (typeof projectRoot === 'string' && projectRoot.length > 0 && client.watchId !== undefined) {
+          unwatchProject(projectRoot, client.watchId);
+        }
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+
       // --- Games arcade scores (spec §6.1) ---
       // The SAME operations the Electron IPC path runs, including the shared
       // stale-board cache — a remote browser must never see a different
@@ -3031,6 +3093,55 @@ export class RemoteServer {
         break;
       }
     }
+  }
+
+  // --- Files over remote (batch 3) ---
+
+  /**
+   * The read channels, answered from the shared services with the phone's
+   * preview ceilings applied (design §9). Payloads are the shim's object form
+   * (`{ projectRoot, artifactId, full }`), never positional arguments.
+   *
+   * A lookup table, not a second `switch`: tests/remote-channel-parity.test.ts
+   * reads `case '<channel>':` out of this file to prove the handleMessage
+   * switch routes every read, and a `case` here would satisfy that guard for a
+   * channel the outer switch had dropped.
+   */
+  private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
+    'artifacts:list-session': (p) => listSessionFiles(p.sessionId, p.projectRoot),
+    'artifacts:list-project': (p) => listProjectFiles(p.projectId, p.opts),
+    'artifacts:list-all-files': (p) => listAllFiles(p.projectId, p.opts),
+    'artifacts:get': (p) => readArtifactText(p.projectRoot, p.artifactId, { full: p.full, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES }),
+    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
+    'artifacts:search-content': (p) => searchArtifactContent(p.projectRoot, p.query),
+    'artifacts:check-existence': (p) => checkArtifactExistence(p.projectRoot, p.artifactIds),
+    'project:list-context': (p) => listContextFiles(p.projectPath),
+    'project:read-context-file': (p) => readContext(p.projectPath, p.absolutePath),
+    'project:list-conversations': (p) => listConversations(p.projectPath),
+    'project:repo-info': (p) => repoInfo(p.projectPath),
+  };
+
+  private readFileChannel(type: string, payload: any): Promise<unknown> {
+    const read = this.fileReads[type];
+    return read ? read(payload) : Promise.resolve({ ok: false, error: `Not a file read channel (${type}).` });
+  }
+
+  // Negative and descending: never a webContents id (those are positive).
+  private nextWatchId = -1;
+
+  /** This socket's project-watcher subscriber id, allocated on first use and released on close. */
+  private watchSubscriberId(client: AuthenticatedClient): number {
+    if (client.watchId === undefined) {
+      const watchId = this.nextWatchId--;
+      client.watchId = watchId;
+      // A phone that vanishes never sends unwatch — same as a crashed renderer,
+      // which the desktop handles with webContents 'destroyed'. Guarded because
+      // tests drive handleMessage with a bare `{ ws }`.
+      if (typeof (client.ws as any).once === 'function') {
+        client.ws.once('close', () => dropSubscriber(watchId));
+      }
+    }
+    return client.watchId;
   }
 
   // --- Helpers ---

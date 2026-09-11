@@ -9,6 +9,7 @@ import type { VoiceReadiness } from '../shared/voice-types';
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
 import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_RECONNECTED_EVENT } from './remote-events';
 import type { FirstRunState } from '../shared/first-run-types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
@@ -190,7 +191,20 @@ export const REHYDRATE_ON_RECONNECT: readonly string[] = [
   'commands:list',
   'remote:get-config',
   'remote:status',
+  // The file lists a phone was showing when it dropped (remote access batch 3,
+  // design §8). Re-issued with the arguments they were last asked with — see
+  // lastReadPayload — because a bare list-all-files names no project and is a
+  // request the host can only refuse.
+  'artifacts:list-all-files',
+  'artifacts:list-session',
 ];
+
+/**
+ * The payload each REHYDRATE_ON_RECONNECT channel was last invoked with, so the
+ * re-issue asks the same question. Channels that take no arguments simply never
+ * appear here and are re-issued bare, as before.
+ */
+const lastReadPayload = new Map<string, unknown>();
 
 function send(msg: any): boolean {
   const data = JSON.stringify(msg);
@@ -259,7 +273,16 @@ function reconcileUnknownOutcomes(): void {
 /** Ask again for the state a fresh mount would have fetched. Reads only. */
 function rehydrate(): void {
   for (const channel of REHYDRATE_ON_RECONNECT) {
-    invoke(channel).catch(() => { /* a reconnect is not the place to surface a read failure */ });
+    // A list the phone never asked for has nothing to re-ask.
+    if ((channel === 'artifacts:list-all-files' || channel === 'artifacts:list-session') && !lastReadPayload.has(channel)) continue;
+    invoke(channel, lastReadPayload.get(channel)).catch(() => { /* a reconnect is not the place to surface a read failure */ });
+  }
+  // Tell the page. Screens holding a per-SOCKET subscription on the host (the
+  // project watcher) have to subscribe again on the new socket; the shim cannot
+  // do it for them because it does not know which root they show. Only ever
+  // reached on a reconnect — the caller guards on hasConnectedBefore.
+  if (typeof window !== 'undefined' && typeof window.dispatchEvent === 'function') {
+    window.dispatchEvent(new CustomEvent(REMOTE_RECONNECTED_EVENT));
   }
 }
 
@@ -306,6 +329,7 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
       reject(new Error(`Request ${type} timed out`));
     }, timeoutMs);
     pending.set(id, { resolve, reject, timeout, type });
+    if (REHYDRATE_ON_RECONNECT.includes(type)) lastReadPayload.set(type, payload);
     send({ type, id, payload });
   });
 }
