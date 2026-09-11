@@ -115,7 +115,9 @@ declare global {
       };
       remote: {
         getConfig: () => Promise<any>;
-        setPassword: (pw: string) => Promise<void>;
+        // Returns false when the password is under the minimum length (2026-09-10
+        // security review #5); true on success.
+        setPassword: (pw: string) => Promise<boolean>;
         setConfig: (config: any) => Promise<void>;
         detectTailscale: () => Promise<any>;
         getClientCount: () => Promise<number>;

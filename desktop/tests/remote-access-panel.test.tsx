@@ -17,6 +17,18 @@ function mount(stage: RemoteAccessView['stage'], prerequisite?: RemoteAccessView
   return onAction;
 }
 
+it('password field offers Generate, the length hint and the disconnect warning (2026-09-10 security review)', () => {
+  mount('ready');
+  const password = screen.getByLabelText('Remote access password') as HTMLInputElement;
+  // Generate fills a memorable passphrase over the minimum length.
+  fireEvent.click(screen.getByRole('button', { name: 'Generate' }));
+  expect(password.value).toMatch(/^[a-z]{4}-[a-z]{4}-[a-z]{4}$/);
+  expect(password.value.replace(/-/g, '').length).toBeGreaterThanOrEqual(8);
+  // The guidance and the consequence are both stated.
+  expect(screen.getByText('At least 8 characters.')).toBeTruthy();
+  expect(screen.getByText(/disconnects every device/)).toBeTruthy();
+});
+
 it('preserves the panel: enabled, password, keep awake, full-width Add Device and Info', () => {
   mount('ready');
   expect(screen.getByRole('switch', { name: 'Remote access server enabled' })).toBeTruthy();
