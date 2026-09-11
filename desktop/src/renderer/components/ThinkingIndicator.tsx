@@ -281,7 +281,9 @@ export default function ThinkingIndicator({ stallWarning, promptProcessing, last
     // so callers that need to assert this is (or is NOT) on screen — e.g. the
     // compaction case, where CompactingCard is the only status — have no stable
     // text to match on.
-    <div data-testid="thinking-indicator" className="flex items-center gap-2 px-4 py-1.5 in-view">
+    // select-none: a status line, not content. Ctrl+A must not paint it
+    // (Destin, 2026-09-10).
+    <div data-testid="thinking-indicator" className="flex items-center gap-2 px-4 py-1.5 in-view select-none">
       <div className="flex items-center gap-2 bg-inset rounded-2xl rounded-bl-sm px-4 py-2.5">
         <BrailleSpinner size="base" />
         <span className="text-sm text-fg-dim">
