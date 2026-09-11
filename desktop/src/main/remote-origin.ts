@@ -17,12 +17,19 @@
 //   - file://     → the Android WebView dials the socket out while its page is a
 //     bundled file:// document. Allowed.
 //   - Different host → a genuinely cross-origin page (evil.com). Refused.
-//   - null / absent → a sandboxed iframe or a non-browser client. Refused: a
-//     normal page always sends its real Origin, so `null` is the sandbox-iframe
-//     CSWSH variant, not a case we need. (If a future native client legitimately
-//     sends no Origin, add a User-Agent marker allow-list here — but the phone
-//     connects from a WebView, which sends file:// or a real Origin, so today
-//     nothing legitimate lands here.)
+//   - null / absent / the literal "null" → an OPAQUE origin: the Android WebView
+//     (its page is a file:// document, whose origin serializes to `null` in the
+//     header), or a non-browser client. ALLOWED. WHY this is safe: this socket
+//     carries NO ambient credential — there is no cookie or HTTP auth the browser
+//     attaches automatically; every client must send the password (or a stored
+//     device secret it can only have from a prior pairing) as its FIRST message.
+//     A cross-site page cannot read the victim's stored secret and cannot know
+//     the password, so it gains nothing by connecting. The Origin check is
+//     therefore defense-in-depth against a normal visited page opening pre-auth
+//     sockets (that page has a real, non-matching Origin and is refused); it must
+//     NOT refuse the opaque-origin case, or it breaks the phone — the very client
+//     this feature exists for. (2026-09-10 review caught that refusing `null`
+//     would 403 the real Android WebView.)
 
 /** Extract `host:port` (lowercased, default ports dropped) from an Origin or a
  *  Host header value, or null if it can't be parsed. A Host header has no
@@ -47,10 +54,12 @@ function hostOf(value: string, kind: 'origin' | 'host'): string | null {
  */
 export function isAllowedWsOrigin(origin: string | undefined | null, host: string | undefined | null): boolean {
   const o = (origin ?? '').trim();
-  // No Origin at all → refuse (see file header: sandbox-iframe CSWSH variant).
-  if (!o) return false;
-  // The Android WebView's own bundled page is a file:// document; when it dials
-  // the socket out, the browser reports the page origin, which has no host.
+  // Opaque origin — absent, empty, or the literal "null" a file:// document
+  // sends. This is the Android WebView (and other non-browser clients). Allowed:
+  // it still can't authenticate without the password/secret, and refusing it
+  // would break the phone. See the file header for why this is safe.
+  if (!o || o.toLowerCase() === 'null') return true;
+  // Some engines report the page's own file:// URL instead of "null" — same case.
   if (o.toLowerCase().startsWith('file:')) return true;
   const originHost = hostOf(o, 'origin');
   const hostHeaderHost = hostOf(host ?? '', 'host');

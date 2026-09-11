@@ -94,10 +94,18 @@ const MIN_REMOTE_PASSWORD_LENGTH = 8;
 // of four letters, drawn from an alphabet with the visually ambiguous characters
 // (i, l, o) removed. Uses the browser CSPRNG. Well over the 8-char minimum.
 function generateRemotePassphrase(): string {
-  const alphabet = 'abcdefghjkmnpqrstuvwxyz'; // no i, l, o
-  const bytes = new Uint8Array(12);
-  crypto.getRandomValues(bytes);
-  const chars = Array.from(bytes, (b) => alphabet[b % alphabet.length]);
+  const alphabet = 'abcdefghjkmnpqrstuvwxyz'; // 23 chars, no i/l/o
+  // Rejection sampling (draw fresh bytes, discard those in the biased tail) so
+  // every letter is equally likely — a plain `byte % 23` slightly favours the
+  // first few letters. The bias is tiny here, but a password generator should
+  // not have one at all.
+  const max = 256 - (256 % alphabet.length); // 253 → bytes 253..255 discarded
+  const chars: string[] = [];
+  const buf = new Uint8Array(1);
+  while (chars.length < 12) {
+    crypto.getRandomValues(buf);
+    if (buf[0] < max) chars.push(alphabet[buf[0] % alphabet.length]);
+  }
   return `${chars.slice(0, 4).join('')}-${chars.slice(4, 8).join('')}-${chars.slice(8, 12).join('')}`;
 }
 

@@ -25,14 +25,18 @@ describe('isAllowedWsOrigin', () => {
     expect(isAllowedWsOrigin('http://desktop.tailnet.ts.net.evil.com', 'desktop.tailnet.ts.net:9900')).toBe(false);
   });
 
-  it('refuses a null / absent Origin (the sandbox-iframe CSWSH variant, and non-browser clients)', () => {
-    expect(isAllowedWsOrigin(undefined, 'desktop:9900')).toBe(false);
-    expect(isAllowedWsOrigin(null, 'desktop:9900')).toBe(false);
-    expect(isAllowedWsOrigin('', 'desktop:9900')).toBe(false);
-    expect(isAllowedWsOrigin('null', 'desktop:9900')).toBe(false); // literal string "null" is not a URL
+  it('allows an opaque origin — null / absent / "null" — because the Android file:// WebView sends it and auth is still required', () => {
+    // A file:// document's origin serializes to the header "null"; refusing it
+    // would 403 the real phone. Safe: no ambient credential, so the client must
+    // still send the password/secret. (2026-09-10 review caught this.)
+    expect(isAllowedWsOrigin(undefined, 'desktop:9900')).toBe(true);
+    expect(isAllowedWsOrigin(null, 'desktop:9900')).toBe(true);
+    expect(isAllowedWsOrigin('', 'desktop:9900')).toBe(true);
+    expect(isAllowedWsOrigin('null', 'desktop:9900')).toBe(true);
   });
 
-  it('refuses when either header is unparseable', () => {
+  it('still refuses a present, cross-origin page even if the Host header is junk', () => {
+    // A real page with a real Origin that doesn't match is the case we refuse.
     expect(isAllowedWsOrigin('http://desktop:9900', undefined)).toBe(false);
     expect(isAllowedWsOrigin('http://desktop:9900', '')).toBe(false);
     expect(isAllowedWsOrigin('%%%not-a-url', 'desktop:9900')).toBe(false);
