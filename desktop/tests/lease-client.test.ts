@@ -198,16 +198,26 @@ describe('lease-client', () => {
     await client.acquire('s1');
     expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(true);
 
+    // WHY spy-and-await, not a vi.waitFor poll: the renew tick's
+    // deleteLeaseFile is fire-and-forget (`void deleteLeaseFile(...)`),
+    // queued through the per-session fs.promises chain — the file removal is
+    // off the event loop. Polling fs.existsSync on the 1s vi.waitFor budget
+    // flaked once under a full-suite run (2026-09-10: `expected true to be
+    // false` at the poll's clock deadline). Awaiting the delete's OWN promise
+    // instead makes the assertion fire exactly when the queued delete has
+    // settled, however slow the disk is — a deterministic signal, not a clock.
+    const rmSpy = vi.spyOn(fs.promises, 'rm');
+
     // Next renew fails — another device force-acquired (holder is now dev-B).
     hubRequest.mockClear();
     hubRequest.mockResolvedValue(lostResult('renew', 's1'));
     await vi.advanceTimersByTimeAsync(RENEW_MS);
 
     expect(client.isHeld('s1')).toBe(false);
-    // WHY vi.waitFor: the renew tick's deleteLeaseFile is now fire-and-forget
-    // (`void deleteLeaseFile(...)`) — the file removal is off the event loop,
-    // so it may not have landed the instant advanceTimersByTimeAsync returns.
-    await vi.waitFor(() => expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false));
+    expect(rmSpy).toHaveBeenCalledWith(leaseFilePath(tmpRoot, 's1'), { force: true });
+    await rmSpy.mock.results[0].value;
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    rmSpy.mockRestore();
     // The renew reply carries the new holder — the takeover is attributed so
     // the MovedGate can name the device instead of "another device".
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
@@ -252,6 +262,11 @@ describe('lease-client', () => {
     hubRequest.mockResolvedValue(okResult('acquire', 's1', Date.now() + 300_000));
     await client.acquire('s1');
 
+    // WHY spy-and-await, not a vi.waitFor poll: same fire-and-forget delete
+    // as the renew-failure teardown test above — see its WHY for the
+    // 2026-09-10 flake this replaces.
+    const rmSpy = vi.spyOn(fs.promises, 'rm');
+
     // Renew reports the lease lapsed (no holder); the re-acquire then loses a
     // race — dev-B claimed it between the expiry and our re-acquire.
     hubRequest.mockClear();
@@ -263,8 +278,10 @@ describe('lease-client', () => {
     await vi.advanceTimersByTimeAsync(RENEW_MS);
 
     expect(client.isHeld('s1')).toBe(false);
-    // WHY vi.waitFor: same fire-and-forget delete as above.
-    await vi.waitFor(() => expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false));
+    expect(rmSpy).toHaveBeenCalledWith(leaseFilePath(tmpRoot, 's1'), { force: true });
+    await rmSpy.mock.results[0].value;
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
+    rmSpy.mockRestore();
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
   });
 
