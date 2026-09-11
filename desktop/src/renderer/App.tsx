@@ -25,6 +25,8 @@ import { buildSessionCreateArgs } from '../shared/session-create-args';
 import GamePanel from './components/game/GamePanel';
 import TerminalRightSlot from './components/TerminalRightSlot';
 import { ChatProvider, useChatDispatch, useChatStore } from './state/chat-context';
+import type { ChatAction } from './state/chat-types';
+import { installTranscriptBatcher, applyChatHydrate } from './state/transcript-batch';
 import { artifactReducer, initialArtifactState } from './state/artifact-tracker';
 import { ArtifactProvider } from './state/ArtifactContext';
 import { createArtifactToolUseTracker } from './state/artifact-tool-use-tracker';
@@ -1237,51 +1239,11 @@ function AppInner() {
 
     // Batch transcript dispatches into animation frames — multiple fs.watch events
     // within a single frame become one React render instead of N separate renders.
-    //
-    // Hidden-window caveat: Electron suspends requestAnimationFrame while the
-    // window is minimized/occluded, which used to FREEZE chat state (queued
-    // actions never flushed) while wall-clock timers kept firing — the 8s
-    // submit-retry then evaluated its idle gate against stale state and could
-    // send a stray \r into the PTY. While hidden we batch on a 16ms timeout
-    // instead: same batching cost, but state keeps advancing.
-    const pendingTranscriptActions: any[] = [];
-    let transcriptRafId: number | null = null;
-    let transcriptTimerId: ReturnType<typeof setTimeout> | null = null;
-    let transcriptBatchCancelled = false;
-
-    function flushTranscriptActions() {
-      transcriptRafId = null;
-      transcriptTimerId = null;
-      if (transcriptBatchCancelled) return;
-      const batch = pendingTranscriptActions.splice(0);
-      // React 18 batches all synchronous dispatches → single render for the whole batch
-      for (const action of batch) {
-        dispatch(action);
-      }
-    }
-
-    function batchTranscriptDispatch(action: any) {
-      pendingTranscriptActions.push(action);
-      if (transcriptRafId !== null || transcriptTimerId !== null) return;
-      if (document.visibilityState === 'hidden') {
-        transcriptTimerId = setTimeout(flushTranscriptActions, 16);
-      } else {
-        transcriptRafId = requestAnimationFrame(flushTranscriptActions);
-      }
-    }
-
-    // If the window hides while an rAF flush is pending, that rAF may never
-    // fire — hand the pending batch to a timeout so it can't strand.
-    function onTranscriptVisibilityChange() {
-      if (document.visibilityState === 'hidden' && transcriptRafId !== null) {
-        cancelAnimationFrame(transcriptRafId);
-        transcriptRafId = null;
-        if (transcriptTimerId === null) {
-          transcriptTimerId = setTimeout(flushTranscriptActions, 16);
-        }
-      }
-    }
-    document.addEventListener('visibilitychange', onTranscriptVisibilityChange);
+    // The batcher lives in state/transcript-batch.ts (with its hidden-window
+    // timer fallback) so the remote snapshot exporter and the chat:hydrate
+    // handler can flush it on demand — see that module's WHY.
+    const transcriptBatcher = installTranscriptBatcher(dispatch);
+    const batchTranscriptDispatch = (action: ChatAction) => transcriptBatcher.push(action);
 
     const transcriptHandler = (window.claude.on as any).transcriptEvent?.((event: any) => {
       if (!event?.type || !event?.sessionId) return;
@@ -1720,8 +1682,10 @@ function AppInner() {
     // remote client connects. Dispatches HYDRATE_CHAT_STATE so the reducer
     // pre-populates all session timelines without waiting for transcript replay.
     // Typed-optional on the shared surface — present only on remote-shim.
+    // applyChatHydrate flushes this client's pending transcript batch FIRST —
+    // the phone's half of the cut line (state/transcript-batch.ts).
     const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
-      dispatch({ type: 'HYDRATE_CHAT_STATE', sessions: payload });
+      applyChatHydrate(dispatch, payload);
     });
     // Remote access batch 2 (2026-09-10): where the phone's copy of the
     // conversation stands — reconnecting, restoring, incomplete, complete. Only
@@ -1793,10 +1757,7 @@ function AppInner() {
     // removed as dead state.
 
     return () => {
-      transcriptBatchCancelled = true;
-      if (transcriptRafId !== null) cancelAnimationFrame(transcriptRafId);
-      if (transcriptTimerId !== null) clearTimeout(transcriptTimerId);
-      document.removeEventListener('visibilitychange', onTranscriptVisibilityChange);
+      transcriptBatcher.dispose();
       window.claude.off('session:created', createdHandler);
       window.claude.off('session:destroyed', destroyedHandler);
       window.claude.off('hook:event', hookHandler);
