@@ -85,14 +85,19 @@ export function TagManagerPopup({ open, onClose, registry, layer = 2 }: {
             read, they stay — they are real — and one line says they may be out of date. */}
         {registry.error && registry.tags.length === 0 ? (
           <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />
-        ) : visible.length === 0 ? (
-          <EmptyState message={showArchived ? 'No tags yet' : 'No tags yet — create one above'} />
         ) : (
           <>
+            {/* Tags DID load before, so a failed refresh is reported whether or not any of
+                them are visible — with every loaded tag archived and hidden it used to drop
+                out, leaving a bare "No tags yet" (code review 2026-09-11, F9). */}
             {registry.error && (
               <ErrorState variant="inline" message="Couldn't refresh your tags — showing the last ones loaded." onRetry={registry.reload} />
             )}
-            {visible.map((t) => <ManagedTagRow key={t.id} tag={t} registry={registry} />)}
+            {visible.length === 0 ? (
+              <EmptyState message={showArchived ? 'No tags yet' : 'No tags yet — create one above'} />
+            ) : (
+              visible.map((t) => <ManagedTagRow key={t.id} tag={t} registry={registry} />)
+            )}
           </>
         )}
       </div>

@@ -87,4 +87,15 @@ describe('Tag manager — a read that failed is not "No tags yet"', () => {
     expect(tagShown()).toBe(true);
     expect(screen.queryByText(/No tags yet/)).toBeNull();
   });
+
+  it('with every loaded tag archived, a failed refresh still says the list may be stale (code review F9)', async () => {
+    const list = vi.fn().mockResolvedValueOnce([{ ...TAG, archived: true }]).mockRejectedValueOnce(new Error('disk went away'));
+    const { pushTagsChanged } = stub(list);
+    render(<Harness />);
+    await vi.waitFor(() => expect(list).toHaveBeenCalledTimes(1));
+
+    pushTagsChanged();
+
+    expect(await screen.findByText(/couldn.t refresh your tags/i)).toBeInTheDocument();
+  });
 });
