@@ -155,6 +155,8 @@ function ToolRow({
   dispatch: ReturnType<typeof useChatDispatch>;
 }) {
   const [responding, setResponding] = useState(false);
+  // Set when an answer got NO reply (the call rejected); cleared on the next try.
+  const [unconfirmed, setUnconfirmed] = useState(false);
 
   // Mirrors ToolCard's PermissionButtons.handleRespond — same IPC call + same
   // reducer dispatches so both paths are functionally identical.
@@ -162,6 +164,7 @@ function ToolRow({
     async (decision: object) => {
       if (!tool.requestId) return;
       setResponding(true);
+      setUnconfirmed(false);
       try {
         const delivered = await (window as any).claude.session.respondToPermission(
           tool.requestId,
@@ -190,22 +193,20 @@ function ToolRow({
         (window as any).claude?.remote?.broadcastAction(action);
       } catch (err) {
         console.error('CompactToolStrip: failed to respond to permission:', err);
-        // Treat as expired so the card doesn't get stuck
-        if (tool.requestId) {
-          const action = {
-            type: 'PERMISSION_EXPIRED' as const,
-            sessionId,
-            requestId: tool.requestId,
-          };
-          dispatch(action);
-          (window as any).claude?.remote?.broadcastAction(action);
-        }
+        // WHY not "expired" (error inventory 2026-09-10, false message 4): a rejected
+        // respond got NO reply — over remote access the 30-second timeout, which
+        // remote-shim.ts documents as a request that MAY have run. Marking it expired,
+        // and broadcasting that, asserted the answer was lost. The buttons never came
+        // back either: `responding` was left true here, so nothing could answer again.
+        setResponding(false);
+        setUnconfirmed(true);
       }
     },
     [tool.requestId, sessionId, dispatch],
   );
 
   return (
+    <>
     <div
       style={{
         display: 'flex',
@@ -282,5 +283,12 @@ function ToolRow({
         </span>
       ) : null}
     </div>
+    {/* Same sentence as ToolCard's permission buttons: the answer's fate is unknown. */}
+    {unconfirmed && (
+      <div role="alert" style={{ padding: '0 8px 4px 19px', fontSize: 10, color: 'var(--fg-dim)' }}>
+        YouCoded couldn&apos;t confirm your answer reached the session. If this is still waiting for you, answer again.
+      </div>
+    )}
+    </>
   );
 }
