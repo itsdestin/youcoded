@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import type { ArtifactViewProps } from './types';
 import { BinaryContent, CenterNote } from './BinaryContent';
+import { sanitizeDocHtml } from './sanitize-doc-html';
 
 // @ts-ignore mammoth.browser lacks type declarations
 import mammoth from 'mammoth/mammoth.browser';
@@ -24,7 +25,8 @@ function DocxContent({ bytes }: { bytes: Uint8Array }) {
     // mammoth wants an ArrayBuffer; pass the bytes' underlying buffer.
     mammoth
       .convertToHtml({ arrayBuffer: bytes.buffer })
-      .then((result: any) => { if (!cancelled) setHtml(result.value); })
+      // Cleaned before it is ever stored for render — see sanitize-doc-html.ts.
+      .then((result: any) => { if (!cancelled) setHtml(sanitizeDocHtml(result.value)); })
       .catch((e: any) => { if (!cancelled) setParseError(String(e?.message ?? e)); });
     return () => { cancelled = true; };
   }, [bytes]);

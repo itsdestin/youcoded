@@ -187,7 +187,10 @@ export interface TranscriptMessage {
   role: 'user' | 'assistant';
   content: string;
   timestamp: number;
-  /** Ordinal in the FULL conversation — `before: seq` pages backwards. */
+  /** Byte offset of this message's line in its transcript: increasing through
+   *  the conversation and unique within it, so it keys a bubble and
+   *  `before: seq` pages backwards. Not a message count — reading only the end
+   *  of a large file (transcript-reader.ts) means nobody counted from the top. */
   seq: number;
   /** Tool calls that ran between the previous kept message and this one. */
   droppedToolCalls: number;
@@ -200,6 +203,11 @@ export interface ChatsearchReadRequest {
   tail: number;
   /** Return messages with seq < before. Omit for the newest slice. */
   before?: number;
+  /** The project folder's slug when the caller already knows it (a Resume
+   *  list row does). Lets main open the file directly instead of looking the id
+   *  up in the search index; validated there, and a wrong or stale hint only
+   *  falls back to that lookup. */
+  projectSlug?: string;
 }
 
 export type ChatsearchReadResponse =

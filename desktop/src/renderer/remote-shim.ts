@@ -1808,7 +1808,7 @@ export function installShim(): void {
     // server reads named fields off `payload`, never positional arguments.
     chatsearch: {
       resolve: (shortIds: string[]) => invoke('chatsearch:resolve', { shortIds }),
-      read: (req: { provider: string; id: string; tail: number; before?: number }) =>
+      read: (req: { provider: string; id: string; tail: number; before?: number; projectSlug?: string }) =>
         invoke('chatsearch:read', req),
     },
     // Voice typing — the PHONE's half of window.claude.voice.

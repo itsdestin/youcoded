@@ -4,7 +4,10 @@
 // desktop/src/renderer/components/UpdatePanel.tsx,
 // app/src/main/kotlin/.../runtime/UpdateInstallerStub.kt (mirror).
 //
-// Keep in sync with the Kotlin stub's error code enum — see parity test in tests/update-install-ipc.test.ts.
+// The Kotlin stub has NO per-code enum — it only ever returns "not-supported"
+// (UpdateInstallerStub.kt), because updates are desktop-only. So adding a code
+// here needs NO Kotlin change. The parity test (tests/update-install-ipc.test.ts)
+// pins the IPC CHANNEL surface, not the error codes.
 
 export type UpdateInstallErrorCode =
   | 'spawn-failed'          // spawn() threw or child exited non-zero within 2s
@@ -17,6 +20,8 @@ export type UpdateInstallErrorCode =
   | 'disk-full'             // ENOSPC during write
   | 'url-rejected'          // failed HTTPS / domain allowlist check
   | 'busy'                  // another download is already active (different URL)
+  | 'verify-failed'         // manifest/hash/size/version mismatch — corrupt download, retry once
+  | 'signature-invalid'     // manifest signature didn't verify — do NOT retry, do NOT offer browser
   | 'not-supported';        // Android stub's universal error
 
 export interface UpdateDownloadResult {

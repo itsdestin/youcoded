@@ -3,16 +3,16 @@
     Example rig: Halftone Dimension — the theme's shipped capsule buddy rebuilt to the rig
     contract. 2.5D-soft shading stack on the theme's ink-navy body, with the identity kept
     hardcoded (README → Tinting):
-      body #191327 · highlight #332852 · shade #0b0813 · face/socket #1e2636
+      body #191327 · highlight #332852 · shade #0b0813 · face #33265c with a #00b8ff outline (a near-black face with no outline was invisible on this body)
       CMYK dots + sparkles #e8234a (red) / #00b8ff (cyan) / #ffea00 (yellow)
     The chromatic rim light (cyan top-left / red bottom-right) replaces the single warm rim —
-    the misregistered-print read. The dimensional visor is pre-filled into slot-eyewear
-    (it is also available standalone at ../components/eyewear/dimensional-visor.svg).
+    the misregistered-print read. The dimensional visor is NOT pre-filled — it hid every expression, so it ships as an
+    opt-in component at mascots/components/eyewear/dimensional-visor.svg (from the repo root).
     The chromatic after-image ghost + glitch bars are NOT baked — they ship as scene
     companions that spring-follow the buddy (README → Scene companions).
     NOTE: the shipped flat art drew this body in currentColor, which renders BLACK through
     the app's <img> path — hardcoding the navy here is the fix, not a style change.
-    Contract: ../README.md
+    Contract: mascots/README.md (from the repo root)
   -->
   <defs>
     <radialGradient id="hd-hi" cx="33%" cy="20%" r="80%">
@@ -60,48 +60,30 @@
       <circle cx="17" cy="6" r="0.4" fill="#e8234a" opacity="0.25"/><circle cx="15" cy="14" r="0.35" fill="#00b8ff" opacity="0.2"/>
       <circle cx="8" cy="14.5" r="0.4" fill="#e8234a" opacity="0.2"/><circle cx="16" cy="5.5" r="0.3" fill="#ffea00" opacity="0.15"/>
       <g id="rig-face-idle">
-        <path fill="#1e2636" d="M8.5 8 L10.5 10 L8.5 12 L9.5 12 L11.5 10 L9.5 8 Z"/>
-        <path fill="#1e2636" d="M15.5 8 L13.5 10 L15.5 12 L14.5 12 L12.5 10 L14.5 8 Z"/>
+        <path d="M8 10.2 Q9.3 9.1 10.6 10.2" fill="none" stroke="#00b8ff" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.9 Q14.7 8.8 16 9.9" fill="none" stroke="#00b8ff" stroke-width="0.85" stroke-linecap="round"/><ellipse cx="12" cy="13.35" rx="0.5" ry="0.42" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/>
       </g>
       <g id="rig-face-welcome" style="display:none">
-        <ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="#1e2636"/>
-        <ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="#1e2636"/>
-        <circle cx="10" cy="10.25" r="0.3" fill="#e8234a" opacity="0.9"/><circle cx="9.35" cy="10.85" r="0.2" fill="#00b8ff" opacity="0.75"/><circle cx="10.3" cy="10.85" r="0.15" fill="#ffea00" opacity="0.6"/>
-        <circle cx="15.4" cy="9.95" r="0.3" fill="#e8234a" opacity="0.9"/><circle cx="14.75" cy="10.55" r="0.2" fill="#00b8ff" opacity="0.75"/><circle cx="15.65" cy="10.55" r="0.15" fill="#ffea00" opacity="0.6"/>
-        <g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="#1e2636"/></g>
+        <ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/><g class="pupil"><circle cx="10" cy="10.25" r="0.3" fill="#ffffff" fill-opacity="0.95"/><circle cx="9.35" cy="10.85" r="0.2" fill="#8fd8ff" fill-opacity="0.85"/><circle cx="10.3" cy="10.85" r="0.14" fill="#ffea00" fill-opacity="0.7"/></g><ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/><g class="pupil"><circle cx="15.4" cy="9.95" r="0.3" fill="#ffffff" fill-opacity="0.95"/><circle cx="14.75" cy="10.55" r="0.2" fill="#8fd8ff" fill-opacity="0.85"/><circle cx="15.7" cy="10.55" r="0.14" fill="#ffea00" fill-opacity="0.7"/></g><g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/></g>
       </g>
       <g id="rig-face-curious" style="display:none">
-        <ellipse cx="9.3" cy="9.55" rx="1.7" ry="2.3" fill="#1e2636"/>
-        <ellipse cx="14.7" cy="9.25" rx="1.7" ry="2.3" fill="#1e2636"/>
-        <g class="pupil"><circle cx="9.75" cy="9.2" r="0.42" fill="#e8234a"/><circle cx="9" cy="10.3" r="0.22" fill="#00b8ff" opacity="0.8"/><circle cx="9.95" cy="10.15" r="0.14" fill="#ffea00" opacity="0.7"/></g>
-        <g class="pupil"><circle cx="15.15" cy="8.9" r="0.42" fill="#e8234a"/><circle cx="14.4" cy="10" r="0.22" fill="#00b8ff" opacity="0.8"/><circle cx="15.35" cy="9.85" r="0.14" fill="#ffea00" opacity="0.7"/></g>
-        <path d="M13.5 6.1 Q14.7 5.55 15.9 6.1" fill="none" stroke="#1e2636" stroke-width="0.45" stroke-linecap="round"/>
-        <ellipse cx="12.1" cy="13.1" rx="0.55" ry="0.65" fill="#1e2636"/>
+        <ellipse cx="9.3" cy="9.55" rx="1.6" ry="2.2" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/><g class="pupil"><circle cx="10" cy="10.25" r="0.3" fill="#ffffff" fill-opacity="0.95"/><circle cx="9.35" cy="10.85" r="0.2" fill="#8fd8ff" fill-opacity="0.85"/><circle cx="10.3" cy="10.85" r="0.14" fill="#ffea00" fill-opacity="0.7"/></g><ellipse cx="14.7" cy="9.25" rx="1.6" ry="2.2" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/><g class="pupil"><circle cx="15.4" cy="9.95" r="0.3" fill="#ffffff" fill-opacity="0.95"/><circle cx="14.75" cy="10.55" r="0.2" fill="#8fd8ff" fill-opacity="0.85"/><circle cx="15.7" cy="10.55" r="0.14" fill="#ffea00" fill-opacity="0.7"/></g><path d="M8 7.1 L10.6 6.9" fill="none" stroke="#00b8ff" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.6 Q14.7 5.7 16.05 6" fill="none" stroke="#00b8ff" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12.05" cy="13.35" rx="0.45" ry="0.5" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/>
       </g>
       <g id="rig-face-shocked" style="display:none">
-        <circle cx="9.3" cy="9.8" r="2.1" fill="#1e2636"/>
-        <circle cx="14.7" cy="9.8" r="2.1" fill="#1e2636"/>
-        <circle cx="9.9" cy="9.2" r="0.5" fill="#00b8ff" opacity="0.85"/><circle cx="15.3" cy="9.2" r="0.5" fill="#00b8ff" opacity="0.85"/>
-        <ellipse cx="12" cy="13.6" rx="1" ry="1.25" fill="#1e2636"/>
+        <ellipse cx="9.3" cy="9.7" rx="1.79" ry="2.46" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/><g class="pupil"><circle cx="10.08" cy="10.48" r="0.34" fill="#ffffff" fill-opacity="0.95"/><circle cx="9.36" cy="11.16" r="0.22" fill="#8fd8ff" fill-opacity="0.85"/><circle cx="10.42" cy="11.16" r="0.16" fill="#ffea00" fill-opacity="0.7"/></g><ellipse cx="14.7" cy="9.4" rx="1.79" ry="2.46" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/><g class="pupil"><circle cx="15.48" cy="10.18" r="0.34" fill="#ffffff" fill-opacity="0.95"/><circle cx="14.76" cy="10.86" r="0.22" fill="#8fd8ff" fill-opacity="0.85"/><circle cx="15.82" cy="10.86" r="0.16" fill="#ffea00" fill-opacity="0.7"/></g><path d="M7.95 6.5 Q9.3 5.9 10.65 6.5" fill="none" stroke="#00b8ff" stroke-width="0.5" stroke-linecap="round"/><path d="M13.35 6.2 Q14.7 5.6 16.05 6.2" fill="none" stroke="#00b8ff" stroke-width="0.5" stroke-linecap="round"/><ellipse cx="12" cy="13.6" rx="0.7" ry="0.85" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/>
       </g>
       <g id="rig-face-dizzy" style="display:none">
-        <g stroke="#1e2636" stroke-width="1" stroke-linecap="round">
-          <line x1="8" y1="8.6" x2="10.6" y2="11.4"/><line x1="10.6" y1="8.6" x2="8" y2="11.4"/>
-          <line x1="13.4" y1="8.6" x2="16" y2="11.4"/><line x1="16" y1="8.6" x2="13.4" y2="11.4"/>
-        </g>
-        <path d="M10.4 13.6 L11.2 13 L12 13.6 L12.8 13 L13.6 13.6" fill="none" stroke="#1e2636" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>
-        <path d="M5.4 3.6 Q6.4 2.6 7.4 3.6 Q6.4 4.6 5.4 3.6" fill="none" stroke="#e8234a" stroke-width="0.5" stroke-linecap="round"/>
-        <path d="M16.6 3.6 Q17.6 2.6 18.6 3.6 Q17.6 4.6 16.6 3.6" fill="none" stroke="#00b8ff" stroke-width="0.5" stroke-linecap="round"/>
+        <path d="M9.3 9.8 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="#00b8ff" stroke-width="0.6" stroke-linecap="round"/><path d="M14.7 9.6 a0.3 0.3 0 0 1 0.3 0.3 a0.6 0.6 0 0 1 -0.6 0.6 a0.9 0.9 0 0 1 -0.9 -0.9 a1.2 1.2 0 0 1 1.2 -1.2 a1.3 1.3 0 0 1 1.3 1.3" fill="none" stroke="#00b8ff" stroke-width="0.6" stroke-linecap="round"/><path d="M10.4 13.6 L11.2 13 L12 13.6 L12.8 13 L13.6 13.6" fill="none" stroke="#00b8ff" stroke-width="0.8" stroke-linecap="round" stroke-linejoin="round"/>
       </g>
       <g id="rig-face-blink" style="display:none">
-        <path d="M8 10 Q9.3 11 10.6 10" fill="none" stroke="#1e2636" stroke-width="0.9" stroke-linecap="round"/>
-        <path d="M13.4 10 Q14.7 11 16 10" fill="none" stroke="#1e2636" stroke-width="0.9" stroke-linecap="round"/>
+        <path d="M8 10 Q9.3 10.5 10.6 10" fill="none" stroke="#00b8ff" stroke-width="0.85" stroke-linecap="round"/><path d="M13.4 9.7 Q14.7 10.2 16 9.7" fill="none" stroke="#00b8ff" stroke-width="0.85" stroke-linecap="round"/><g transform="rotate(-2 12 13.3)"><path d="M10.8 13.3 Q10.8 13 12 13 Q13.2 13 13.2 13.3 A1.1 1 0 0 1 10.8 13.3 Z" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/></g>
       </g>
-      <g id="slot-eyewear">
-        <rect x="5.8" y="7.6" width="12.4" height="2.8" rx="1.2" fill="#e8234a" opacity="0.55"/>
-        <rect x="6.2" y="8" width="11.6" height="2" rx="0.9" fill="#08060e" opacity="0.45"/>
-        <path d="M6.6 8.3 L17 8.3" stroke="#00b8ff" stroke-width="0.18" opacity="0.6"/>
+      <g id="rig-face-happy" style="display:none">
+        <path d="M8 10.4 Q9.3 8.6 10.6 10.4" fill="none" stroke="#00b8ff" stroke-width="0.9" stroke-linecap="round"/><path d="M13.4 10.1 Q14.7 8.3 16 10.1" fill="none" stroke="#00b8ff" stroke-width="0.9" stroke-linecap="round"/><path d="M10.3 13 Q10.3 12.7 12 12.7 Q13.7 12.7 13.7 13 A1.7 1.5 0 0 1 10.3 13 Z" fill="#33265c" stroke="#00b8ff" stroke-width="0.3"/>
       </g>
+      <g id="rig-face-shutdown" style="display:none">
+        <path d="M8 10 L10.6 10" fill="none" stroke="#00b8ff" stroke-width="0.8" stroke-linecap="round"/><path d="M13.4 9.8 L16 9.8" fill="none" stroke="#00b8ff" stroke-width="0.8" stroke-linecap="round"/><path d="M11.3 13.3 L12.7 13.3" fill="none" stroke="#00b8ff" stroke-width="0.5" stroke-linecap="round"/>
+      </g>
+      <g id="slot-eyewear"/>
     </g>
     <g id="slot-hat"/>
     <g id="rig-hand-peek-right" style="display:none">

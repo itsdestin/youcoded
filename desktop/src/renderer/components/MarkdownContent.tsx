@@ -298,10 +298,64 @@ function CopyButton({ text }: { text: string }) {
   );
 }
 
+/** A picture referenced from an assistant message.
+ *
+ *  WHY (2026-09-10 security review, Destin's "tap to show"): a `![](https://…)`
+ *  in a reply used to load the moment the message rendered — and the web address
+ *  can carry stolen text (`https://x/?d=<secret>`), so a prompt-injected model
+ *  could exfiltrate with no tool call and no click. A picture from a WEBSITE now
+ *  waits behind a Show button (the request only leaves once the person taps it);
+ *  a relative/app-local src has no network fetch and renders inline. (data:/blob:
+ *  never reach here — react-markdown's urlTransform drops them before this.)
+ *
+ *  Parsed with the URL constructor, NOT a `https://` prefix regex: `https:evil/x`
+ *  (one slash, or none) is normalised by the browser to `https://evil/x` and
+ *  fetched all the same, but a strict-prefix check read it as local — a
+ *  one-character bypass of the whole gate (2026-09-10 review). */
+function isNetworkImageSrc(src: string): boolean {
+  const s = src.trim();
+  if (s.startsWith('//')) return true; // protocol-relative → the page's scheme
+  try {
+    const proto = new URL(s).protocol;
+    return proto === 'http:' || proto === 'https:' || proto === 'ftp:' || proto === 'ws:' || proto === 'wss:';
+  } catch {
+    return false; // no scheme → relative / app-local, no network request
+  }
+}
+
+function ChatImage({ src, alt, ...props }: any) {
+  const [shown, setShown] = useState(false);
+  const source = typeof src === 'string' ? src : '';
+  if (!source || !isNetworkImageSrc(source)) {
+    // data:/blob:/app-local — no network request, safe to render.
+    return <img src={source} alt={alt} className="max-w-full rounded my-2" {...props} />;
+  }
+  if (shown) {
+    return <img src={source} alt={alt} className="max-w-full rounded my-2" {...props} />;
+  }
+  let host = 'a website';
+  try { host = new URL(source).host || host; } catch { /* keep the generic label */ }
+  return (
+    <button
+      type="button"
+      onClick={() => setShown(true)}
+      className="my-2 inline-flex items-center gap-2 rounded border border-edge bg-inset px-3 py-2 text-sm text-fg-2 hover:bg-panel"
+      title={`Load image from ${host}`}
+    >
+      <span aria-hidden>🖼</span>
+      <span>Image from {host}</span>
+      <span className="text-fg-dim">· Show</span>
+    </button>
+  );
+}
+
 // Stable component overrides — defined at module scope so ReactMarkdown
 // receives the same object reference on every render, preventing unnecessary
 // reconciliation of the entire markdown tree.
 const mdComponents = {
+  img(props: any) {
+    return <ChatImage {...props} />;
+  },
   h1({ children, ...props }: any) {
     return <h1 className="text-xl font-bold mt-6 mb-3 pb-1.5 text-fg border-b border-edge" {...props}>{children}</h1>;
   },
@@ -459,6 +513,15 @@ const mdPreviewComponents = {
   },
   a({ href: _href, children, ...props }: any) {
     return <span className="text-link underline" {...props}>{children}</span>;
+  },
+  // A preview tile is decorative and never loads a network image (same exfil
+  // reason as the chat img handler); a data:/app-local image still renders.
+  img({ src, alt }: any) {
+    const source = typeof src === 'string' ? src : '';
+    if (source && !isNetworkImageSrc(source)) {
+      return <img src={source} alt={alt} className="max-w-full rounded" />;
+    }
+    return <span className="text-fg-dim">[image]</span>;
   },
   // Same reason as the <a> above: a preview tile is itself a <button>, so the
   // path renders as its own text and nothing inside is focusable.

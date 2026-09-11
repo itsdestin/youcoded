@@ -27,6 +27,7 @@
 import * as path from 'path';
 import * as os from 'os';
 import { isSensitivePath, isUnderRoot } from '../../artifacts/read-binary-access';
+import { isCredentialPath } from './credential-paths';
 import { spillRoot } from './spill-paths';
 
 /** Canonicalize to the form isSensitivePath / isUnderRoot expect: forward
@@ -210,6 +211,13 @@ export function checkPathGuard(rawPath: string, cwd: string, internalReadRoots?:
     if (isUnderRoot(canonical, secretDir)) {
       return { kind: 'deny', reason: `Access to ${rawPath} is blocked: it is under a credential directory. This cannot be overridden.` };
     }
+  }
+  // Harness-only credential files (2026-09-10 security review): git/docker/cloud
+  // credentials, keyrings, browser login stores, YouCoded's own encrypted stores.
+  // Separate from isSensitivePath so the file VIEWER is unaffected — see
+  // credential-paths.ts.
+  if (isCredentialPath(canonical, home)) {
+    return { kind: 'deny', reason: `Access to ${rawPath} is blocked: it looks like a stored credential. This cannot be overridden.` };
   }
   // Bash's own spill files are readable without an external_directory ask.
   //

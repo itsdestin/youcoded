@@ -15,6 +15,7 @@ import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
+import { isAllowedWsOrigin } from './remote-origin';
 import type { SessionManager } from './session-manager';
 // Value import (not type-only): the "Run in terminal" case below runs the SAME
 // validation the desktop handler runs — a remote client's payload is the least
@@ -61,6 +62,8 @@ import { installGh } from './github-auth';
 import { combinedGithubStatus } from './github-client';
 import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
+import { getJsonPath, setJsonPath } from './safe-json-path';
+import { resolveStaticFile } from './remote-static-path';
 
 const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
 // Perf (2026-09-03): the rolling PTY replay buffer is a LIST OF OUTPUT CHUNKS,
@@ -79,6 +82,10 @@ interface PtyBuffer { chunks: string[]; length: number; }
 const PTY_CHUNK_COALESCE_BELOW = 4096;
 const HOOK_BUFFER_SIZE = 10_000; // ~10MB max, covers full conversations without excessive memory
 const AUTH_TIMEOUT_MS = 5000;
+// The most an unauthenticated socket may buffer before it signs in. The auth
+// handshake is a single sub-KB JSON message; queued app traffic only follows
+// auth:ok. 16 KB covers the handshake with room to spare (2026-09-10).
+const PRE_AUTH_MAX_BYTES = 16 * 1024;
 const RATE_LIMIT_WINDOW_MS = 60_000;
 // A failed authentication closes the socket, so a connection gets ONE real attempt; this
 // only bounds a client that pipelines several auth messages before the close lands.
@@ -91,6 +98,13 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 // out is the owner far more often than the attacker.
 const HOST_FAILURES_BEFORE_SLOWDOWN = 25;
 const HOST_SLOWDOWN_MS = 2_000;
+// The most sockets that may sit unauthenticated at once (2026-09-10 security
+// review, #5). An auth handshake resolves in milliseconds and the socket then
+// leaves this count, so a legitimate household never approaches it; the cap only
+// bounds a flood of half-open pre-auth sockets held open to exhaust memory.
+// A TOTAL cap, not per-IP: behind the loopback proxy every device shares
+// 127.0.0.1, so a per-IP cap would be one bucket for the whole household.
+const MAX_UNAUTH_SOCKETS = 64;
 // Enough to cover a reconnect, not a session. Older than this answers "unknown".
 const COMPLETED_RING_PER_DEVICE = 200;
 const COMPLETED_RING_MS = 10 * 60_000;
@@ -141,6 +155,10 @@ export class RemoteServer {
   private uploadCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private clients = new Set<AuthenticatedClient>();
+  // Sockets that have connected but not yet authenticated. Bounded by
+  // MAX_UNAUTH_SOCKETS so a flood of half-open pre-auth sockets can't exhaust
+  // memory (2026-09-10 security review, #5).
+  private unauthSockets = 0;
   private lastClientActivityMs = 0; // see getLastClientActivityMs()
   private devices: RemoteDeviceStore;
   // `${encoding}:${urlPath}` → compressed bytes. Safe to hold indefinitely
@@ -404,8 +422,26 @@ export class RemoteServer {
       }
     });
 
-    // Security: limit message size to 50MB to prevent memory exhaustion attacks
-    this.wss = new WebSocketServer({ server: this.httpServer, path: '/ws', maxPayload: 52428800 });
+    // Security: limit message size to 50MB to prevent memory exhaustion attacks.
+    // verifyClient (2026-09-10 security review, #5): reject a cross-origin upgrade
+    // before the socket opens, so a web page the user has open elsewhere cannot
+    // hijack this WebSocket (CSWSH). See remote-origin.ts for the rule.
+    this.wss = new WebSocketServer({
+      server: this.httpServer,
+      path: '/ws',
+      maxPayload: 52428800,
+      verifyClient: (info, cb) => {
+        if (isAllowedWsOrigin(info.origin, info.req.headers.host)) {
+          cb(true);
+          return;
+        }
+        // Log so a legitimate refusal (e.g. a nickname we didn't anticipate) is
+        // visible rather than a silent "it just won't connect".
+        console.warn('[remote-server] refused WS upgrade: origin', JSON.stringify(info.origin || null),
+          'host', JSON.stringify(info.req.headers.host || null));
+        cb(false, 403, 'Forbidden origin');
+      },
+    });
     this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
 
     // Dev mode: proxy WebSocket upgrades (non-/ws) to Vite for HMR
@@ -754,17 +790,15 @@ export class RemoteServer {
     if (url === '/' || url === '/index.html') {
       filePath = path.join(staticDir, 'index.html');
     } else {
-      // Prevent directory traversal — decode percent-encoding first
-      const decoded = decodeURIComponent(url);
-      const safePath = path.normalize(decoded).replace(/^(\.\.[\/\\])+/, '');
-      filePath = path.join(staticDir, safePath);
-    }
-
-    // Verify the resolved path is within staticDir
-    if (!filePath.startsWith(staticDir)) {
-      res.writeHead(403);
-      res.end('Forbidden');
-      return;
+      // resolveStaticFile decodes safely (a malformed % no longer throws into the
+      // main process) and confines the result to staticDir by path segments.
+      const resolved = resolveStaticFile(url, staticDir);
+      if (resolved === null) {
+        res.writeHead(400);
+        res.end('Bad Request');
+        return;
+      }
+      filePath = resolved;
     }
 
     fs.readFile(filePath, (err, data) => {
@@ -875,6 +909,19 @@ export class RemoteServer {
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     const ip = req.socket.remoteAddress || '';
+
+    // Bound the number of sockets held open without authenticating (2026-09-10
+    // security review, #5). releaseUnauth() runs exactly once — on auth success
+    // below, or on close for every failure/timeout path — so an authenticated
+    // long-lived socket does not keep occupying a pre-auth slot.
+    if (this.unauthSockets >= MAX_UNAUTH_SOCKETS) {
+      ws.close(4009, 'Too many pending connections');
+      return;
+    }
+    this.unauthSockets++;
+    let releasedUnauth = false;
+    const releaseUnauth = () => { if (!releasedUnauth) { releasedUnauth = true; this.unauthSockets--; } };
+    ws.once('close', releaseUnauth);
     // ONE auth attempt per connection. The handler below detaches itself on the first
     // message and every failure path closes the socket, so a guesser pays a full
     // reconnect per try and cannot spend anyone else's budget.
@@ -893,14 +940,36 @@ export class RemoteServer {
     // loopback proxy every device shares one bucket, so five failures locked the household
     // out. Limits are per socket and per host now.
 
+    // Pre-auth byte budget (2026-09-10 security review). The socket accepts up to
+    // maxPayload (50 MB) so an authenticated device can upload a file, but the
+    // first message — an auth handshake — is well under 1 KB. Cap what an
+    // unauthenticated peer may buffer at PRE_AUTH_MAX_BYTES so it cannot make the
+    // host hold megabytes per idle connection. Removed the moment auth resolves.
+    // The `?.` on .on/.off is a RUNTIME guard, not a type one: a real net.Socket
+    // always has them, but the WS-level test harness passes a bare `{ remoteAddress }`
+    // stub, where the byte budget is moot.
+    let preAuthBytes = 0;
+    const budgetGuard = (chunk: Buffer) => {
+      preAuthBytes += chunk.length;
+      if (preAuthBytes > PRE_AUTH_MAX_BYTES) {
+        clearTimeout(timeout);
+        detachBudget();
+        ws.close(4009, 'Pre-auth payload too large');
+      }
+    };
+    const detachBudget = () => { req.socket.off?.('data', budgetGuard); };
+
     // Auth timeout
     const timeout = setTimeout(() => {
+      detachBudget();
       ws.close(4000, 'Auth timeout');
     }, AUTH_TIMEOUT_MS);
+    req.socket.on?.('data', budgetGuard);
 
     // Wait for auth message
     const authHandler = async (raw: Buffer | string) => {
       clearTimeout(timeout);
+      detachBudget();
       if (slowStart) await new Promise(r => setTimeout(r, slowStart));
       ws.off('message', authHandler);
 
@@ -926,6 +995,7 @@ export class RemoteServer {
           const result = this.devices.authenticate(msg.deviceId, msg.secret);
           if (result.ok) {
             this.clearFailedAttempts();
+            releaseUnauth(); // authenticated — free the pre-auth slot
             this.config.markPaired();
             this.addClient(ws, result.device.id, ip);
             // Same capability flag as the pairing path below — master's own note says the
@@ -956,6 +1026,7 @@ export class RemoteServer {
           // is unpaired, going cold in the Last seen column. Do not "deduplicate" it: that
           // would be the host guessing about identity, which is what the password is for.
           const paired = this.devices.pair(msg.deviceName);
+          releaseUnauth(); // authenticated — free the pre-auth slot
           this.config.markPaired();
           this.addClient(ws, paired.deviceId, ip);
           // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
@@ -2270,7 +2341,7 @@ export class RemoteServer {
           const raw = await fs.promises.readFile(claudeSettingsPath, 'utf-8');
           const parsed = JSON.parse(raw);
           const field: string = (payload as any)?.field ?? '';
-          const value = field.split('.').reduce((obj: any, k) => (obj == null ? undefined : obj[k]), parsed);
+          const value = getJsonPath(parsed, field);
           this.respond(client.ws, type, id, value);
         } catch {
           this.respond(client.ws, type, id, undefined);
@@ -2309,18 +2380,9 @@ export class RemoteServer {
           try { existing = JSON.parse(await fs.promises.readFile(claudeSettingsPath, 'utf-8')); } catch {}
           const field: string = (payload as any)?.field ?? '';
           const value = (payload as any)?.value;
-          const keys = field.split('.');
-          let cursor = existing;
-          for (let i = 0; i < keys.length - 1; i++) {
-            const k = keys[i];
-            if (cursor[k] == null || typeof cursor[k] !== 'object') cursor[k] = {};
-            cursor = cursor[k];
-          }
-          if (value === null || value === undefined) {
-            delete cursor[keys[keys.length - 1]];
-          } else {
-            cursor[keys[keys.length - 1]] = value;
-          }
+          // setJsonPath refuses __proto__/constructor/prototype segments — a paired
+          // remote device reaches this handler (2026-09-10 security review).
+          setJsonPath(existing, field, value);
           await fs.promises.mkdir(path.dirname(claudeSettingsPath), { recursive: true });
           await fs.promises.writeFile(claudeSettingsPath, JSON.stringify(existing, null, 2));
           this.respond(client.ws, type, id, true);
