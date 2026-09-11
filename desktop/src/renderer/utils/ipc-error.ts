@@ -20,7 +20,11 @@
 import { remoteUnsupportedMessage } from '../remote-unsupported';
 import { isAndroid, isRemoteMode } from '../platform';
 
-const ELECTRON_WRAPPER = /^Error invoking remote method '[^']*':\s*(Error:\s*)?/;
+// The optional name after the wrapper is the thrown error's own `name`: Electron replies
+// with error.toString(), so a plain Error arrives as "Error: …" but a subclass that sets
+// `name` (UpdateInstallError) arrives as "UpdateInstallError: …". Stripping only "Error:"
+// left that prefix in front of the code UpdatePanel reads (code review 2026-09-11, F2).
+const ELECTRON_WRAPPER = /^Error invoking remote method '[^']*':\s*(?:[A-Za-z]*Error:\s*)?/;
 const REMOTE_UNSUPPORTED = /^remote-unsupported:\s*(\S+)$/;
 
 /** The phone on its own bridge, not paired to a desktop. `window` is checked

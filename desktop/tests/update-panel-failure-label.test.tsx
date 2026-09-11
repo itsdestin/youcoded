@@ -20,8 +20,12 @@ const STATUS = { current: '1.1.1', latest: '1.1.2', update_available: true, down
 
 // The exact shape Electron gives a handler's thrown UpdateInstallError
 // (update-installer.ts: `super(detail ? \`${code}: ${detail}\` : code)`).
+// Electron replies with the thrown error's toString(), and UpdateInstallError sets `name`,
+// so the real text carries "UpdateInstallError: " after the wrapper. The first version of
+// this fixture left that out and passed a fix that never read a code (code review
+// 2026-09-11, F2/F3).
 const wrapped = (code: string, detail: string) =>
-  new Error(`Error invoking remote method 'update:download': ${code}: ${detail}`);
+  new Error(`Error invoking remote method 'update:download': UpdateInstallError: ${code}: ${detail}`);
 
 beforeEach(() => {
   (window as any).claude = {
@@ -48,7 +52,7 @@ describe('UpdatePanel — the failure label names the failed step', () => {
     (window as any).claude.update.download = vi.fn().mockRejectedValue(wrapped('network-failed', 'getaddrinfo ENOTFOUND github.com'));
     await clickUpdate();
 
-    const button = await screen.findByRole('button', { name: /download failed/i });
+    const button = await screen.findByRole('button', { name: 'Download failed — Retry' });
     expect(button).toBeEnabled();
     expect(screen.queryByText(/launch failed/i)).toBeNull();
   });
@@ -57,7 +61,9 @@ describe('UpdatePanel — the failure label names the failed step', () => {
     (window as any).claude.update.download = vi.fn().mockRejectedValue(wrapped('busy', 'another download is already active'));
     await clickUpdate();
 
-    await waitFor(() => expect(screen.getByRole('button', { name: /download failed/i })).toBeInTheDocument());
+    // Exactly "Download failed", disabled — a loose /download failed/ also matched the
+    // ENABLED "Download failed — Retry", a retry that cannot help (code review F3).
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Download failed' })).toBeDisabled());
     expect(screen.queryByText(/launch failed/i)).toBeNull();
   });
 
