@@ -369,6 +369,14 @@ function extractToolResultContent(content: any): string {
 // wider than the old exact-500 prune, strictly safer for dedup correctness.
 const DEDUP_CAP = 500;
 
+// WHY (2026-09-10): a /compact rewrite, a paste of a huge tool result, or a
+// transcript that grew while the app was suspended arrives as ONE delta.
+// Buffer.alloc(delta) + one decode + one synchronous parse loop over the whole
+// thing is a single long task on the main thread. Cap each read; the
+// serialized runner below loops immediately until the file is drained, and
+// every await in between lets timers and IPC run.
+const MAX_TAIL_READ_BYTES = 1024 * 1024;
+
 interface WatchedSession {
   desktopSessionId: string;
   claudeSessionId: string;
@@ -732,7 +740,8 @@ export class TranscriptWatcher extends EventEmitter {
     }
     if (fileSize <= session.offset) return; // No new data
 
-    const bytesToRead = fileSize - session.offset;
+    const remaining = fileSize - session.offset;
+    const bytesToRead = Math.min(remaining, MAX_TAIL_READ_BYTES);
     const buffer = Buffer.alloc(bytesToRead);
 
     let handle: fs.promises.FileHandle;
@@ -754,6 +763,20 @@ export class TranscriptWatcher extends EventEmitter {
     // stream (the remainder is picked up by the next invocation).
     session.offset += bytesRead;
     if (bytesRead === 0) return;
+
+    // Ask the serialized runner (readNewLines' do…while) for another pass only
+    // when this pass made progress AND bytes remain past it (a capped or short
+    // read). WHY only here, after a successful non-zero read: a failed open or
+    // a 0-byte read makes no progress, so an immediate rerun would just repeat
+    // the same stat+open as fast as the thread pool allows for as long as the
+    // error lasts (EMFILE, or a Windows sharing violation during an antivirus
+    // scan) — starving the 4 libuv threads that lease writes, transcript copies
+    // and other reads share. Those failures wait for the next watch event or
+    // poll tick instead, as they always did. Set BEFORE the "no complete line
+    // yet" return below, because a capped read may end mid-line; the do…while
+    // clears rerunQueued before each call, so a flag raised here is still
+    // standing when the loop checks it after this pass returns.
+    if (bytesRead < remaining) session.rerunQueued = true;
 
     // Stitch the byte carry-over BEFORE decoding so a multi-byte UTF-8 char
     // split across reads reassembles losslessly (decoding the halves

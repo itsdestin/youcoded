@@ -784,6 +784,113 @@ describe('TranscriptWatcher read integrity', () => {
     expect(msg!.data.text).not.toContain('�');
   });
 
+  // 300 assistant-text lines of ~10 KB each ≈ 3 MB written in ONE fs write —
+  // simulates a /compact rewrite, a huge pasted tool result, or a transcript
+  // that grew while the app was suspended: all arrive as a single delta that
+  // must still deliver every line, whatever the per-read byte cap is.
+  const bigBurstLine = (i: number) =>
+    JSON.stringify({
+      uuid: `u${i}`,
+      type: 'assistant',
+      message: { role: 'assistant', content: [{ type: 'text', text: `${i}:` + 'x'.repeat(10_000) }] },
+      timestamp: new Date().toISOString(),
+    }) + '\n';
+
+  // WHY a session with NO fs.watch: the cap/drain tests below must prove the
+  // watcher drains a multi-pass burst ON ITS OWN from one trigger. startWatching
+  // attaches fs.watch only when the file already exists, so creating the file
+  // AFTERWARDS leaves no watch attached; the describe's 60s poll interval is far
+  // longer than any waitFor here. The only read that can happen is the one the
+  // test triggers — nothing external can do the draining for it.
+  function setupUnwatchedSession(desktopId: string, claudeId: string) {
+    const projectDir = path.join(tmpDir, 'proj');
+    fs.mkdirSync(projectDir, { recursive: true });
+    const jsonlPath = path.join(projectDir, `${claudeId}.jsonl`);
+    watcher.startWatching(desktopId, claudeId, '/home/user/integrity', jsonlPath);
+    return jsonlPath;
+  }
+
+  it('delivers every line of a burst larger than one read cap, in order', async () => {
+    const jsonlPath = setupUnwatchedSession('desktop-burst', 'claude-burst');
+
+    const events: TranscriptEvent[] = [];
+    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
+
+    fs.writeFileSync(jsonlPath, Array.from({ length: 300 }, (_, i) => bigBurstLine(i)).join(''));
+
+    // ONE trigger, no retry loop: ~3 MB against a 1 MiB cap needs at least three
+    // passes, and only readNewLines' own rerun request can chain them.
+    watcher.readNewLinesForSession('desktop-burst');
+    await vi.waitFor(
+      () => expect(events.filter((e) => e.type === 'assistant-text')).toHaveLength(300),
+      { timeout: SETTLE_MS },
+    );
+
+    const texts = events.filter((e) => e.type === 'assistant-text').map((e) => e.data.text.split(':')[0]);
+    expect(texts).toEqual(Array.from({ length: 300 }, (_, i) => String(i)));
+  });
+
+  it('never allocates more than the read cap per pass', async () => {
+    const jsonlPath = setupUnwatchedSession('desktop-cap', 'claude-cap');
+
+    const events: TranscriptEvent[] = [];
+    watcher.on('transcript-event', (ev: TranscriptEvent) => events.push(ev));
+
+    const sizes: number[] = [];
+    const orig = Buffer.alloc.bind(Buffer);
+    // Narrow to allocations that could plausibly be a tail-read buffer (>= 64
+    // KiB) — Buffer.alloc is a common global utility (e.g. the shrink-reset
+    // `partialBytes = Buffer.alloc(0)` a few lines away), and recording every
+    // call would make this spy flaky against unrelated callers rather than
+    // proving anything about the read cap.
+    const spy = vi.spyOn(Buffer, 'alloc').mockImplementation((n: number, ...rest: any[]) => {
+      if (n >= 64 * 1024) sizes.push(n);
+      return orig(n, ...rest);
+    });
+    try {
+      fs.writeFileSync(jsonlPath, Array.from({ length: 300 }, (_, i) => bigBurstLine(i)).join(''));
+
+      // One trigger, same reason as the burst test above.
+      watcher.readNewLinesForSession('desktop-cap');
+      await vi.waitFor(
+        () => expect(events.filter((e) => e.type === 'assistant-text')).toHaveLength(300),
+        { timeout: SETTLE_MS },
+      );
+
+      expect(sizes.length).toBeGreaterThan(0);
+      expect(Math.max(...sizes)).toBeLessThanOrEqual(1024 * 1024);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('does not spin retrying when opening the transcript keeps failing', async () => {
+    // WHY: a failed open makes no progress, so it must wait for the next watch
+    // event or poll tick — never rerun at once. An immediate rerun loops
+    // stat+open as fast as libuv's 4-thread pool allows for as long as the error
+    // lasts (EMFILE, a Windows sharing violation during an antivirus scan),
+    // starving lease writes, transcript copies and other reads.
+    const jsonlPath = setupUnwatchedSession('desktop-open-fail', 'claude-open-fail');
+    // Larger than one read cap, so a pass that asked for a rerun before opening
+    // (the regression) would have a reason to ask.
+    fs.writeFileSync(jsonlPath, Array.from({ length: 150 }, (_, i) => bigBurstLine(i)).join(''));
+
+    const openSpy = vi.spyOn(fs.promises, 'open').mockRejectedValue(
+      Object.assign(new Error('EMFILE: too many open files'), { code: 'EMFILE' }),
+    );
+    try {
+      watcher.readNewLinesForSession('desktop-open-fail');
+      await vi.waitFor(() => expect(openSpy).toHaveBeenCalled(), { timeout: SETTLE_MS });
+      // Fixed settle before a NEGATIVE assertion (see `wait` above): it gives a
+      // retry loop time to show itself. No watch is attached and the poll is 60s,
+      // so exactly one open is correct; a tight loop makes hundreds in 300ms.
+      await wait(300);
+      expect(openSpy.mock.calls.length).toBeLessThanOrEqual(2);
+    } finally {
+      openSpy.mockRestore();
+    }
+  });
+
   it('getHistory skips repeated assistant-text for the same uuid (mirrors live dedup)', () => {
     const jsonlPath = setupSession('desktop-replay', 'claude-replay');
 
