@@ -50,7 +50,14 @@ describe('Reduced Effects neutralises theme-injected animation', () => {
 
   it('survives a theme with no custom_css', () => {
     applyThemeToDom({ ...minimalTheme, custom_css: undefined } as any, true);
-    expect(document.getElementById('theme-custom-reduced')?.textContent ?? '').toBe('');
+    // WHY no `?.` / `?? ''`: they let this case pass with the whole feature
+    // deleted (a missing element read as ''). applyThemeToDom attaches
+    // #theme-custom-reduced on EVERY apply, so it must exist, sit in <head>, and
+    // be empty — a theme with no custom CSS has nothing to override.
+    const reducedEl = document.getElementById('theme-custom-reduced');
+    expect(reducedEl).not.toBeNull();
+    expect(document.head.contains(reducedEl)).toBe(true);
+    expect(reducedEl!.textContent).toBe('');
   });
 
   // WHY (controller decision 2): #theme-custom is only created lazily, on the
