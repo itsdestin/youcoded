@@ -30,13 +30,20 @@ export interface ReadComponentResult {
 const CLAUDE_PLUGINS_ROOT = path.join(os.homedir(), '.claude', 'plugins');
 const REGISTRY_BASE = `https://raw.githubusercontent.com/itsdestin/wecoded-marketplace/${process.env.YOUCODED_MARKETPLACE_BRANCH || 'master'}`;
 
-function resolvePluginDir(id: string): string | null {
+// WHY: fs.existsSync blocks the main thread; access() answers the same question off it.
+const exists = (p: string) => fs.promises.access(p).then(() => true, () => false);
+
+// WHY (perf/main-thread-async-reads, Task 2): this and findLocalFile below ran
+// on fs.*Sync — a user opening a skill/command/agent file in the marketplace
+// viewer froze the whole app's main thread for the duration of the disk walk.
+// Converted to fs.promises; readComponent (the only caller) already awaits.
+async function resolvePluginDir(id: string): Promise<string | null> {
   // Core toolkit lives at ~/.claude/plugins/youcoded-core (not the marketplace
   // subtree); marketplace-installed plugins live under YOUCODED_PLUGINS_DIR.
   const topLevel = path.join(CLAUDE_PLUGINS_ROOT, id);
-  if (fs.existsSync(topLevel)) return topLevel;
+  if (await exists(topLevel)) return topLevel;
   const marketplace = path.join(YOUCODED_PLUGINS_DIR, id);
-  if (fs.existsSync(marketplace)) return marketplace;
+  if (await exists(marketplace)) return marketplace;
   return null;
 }
 
@@ -51,23 +58,23 @@ function relativePathsFor(kind: ComponentKind, name: string): string[] {
 // Depth 4 covers youcoded-core's `core/skills/...` / `life/skills/...` /
 // `productivity/skills/...` layouts without descending into node_modules
 // or other deep trees.
-function findLocalFile(rootDir: string, relative: string, maxDepth = 4): string | null {
+async function findLocalFile(rootDir: string, relative: string, maxDepth = 4): Promise<string | null> {
   const direct = path.join(rootDir, relative);
-  if (fs.existsSync(direct)) return direct;
+  if (await exists(direct)) return direct;
 
   const queue: Array<{ dir: string; depth: number }> = [{ dir: rootDir, depth: 0 }];
   while (queue.length > 0) {
     const { dir, depth } = queue.shift()!;
     if (depth >= maxDepth) continue;
     let entries: fs.Dirent[];
-    try { entries = fs.readdirSync(dir, { withFileTypes: true }); }
+    try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); }
     catch { continue; }
     for (const entry of entries) {
       if (!entry.isDirectory()) continue;
       if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
       const sub = path.join(dir, entry.name);
       const candidate = path.join(sub, relative);
-      if (fs.existsSync(candidate)) return candidate;
+      if (await exists(candidate)) return candidate;
       queue.push({ dir: sub, depth: depth + 1 });
     }
   }
@@ -112,12 +119,12 @@ export async function readComponent(
   const relatives = relativePathsFor(kind, name);
 
   // Local first — cheap and works offline.
-  const installDir = resolvePluginDir(pluginId);
+  const installDir = await resolvePluginDir(pluginId);
   if (installDir) {
     for (const rel of relatives) {
-      const hit = findLocalFile(installDir, rel);
+      const hit = await findLocalFile(installDir, rel);
       if (hit) {
-        const content = fs.readFileSync(hit, 'utf8');
+        const content = await fs.promises.readFile(hit, 'utf8');
         return { content, source: 'local', path: hit };
       }
     }
