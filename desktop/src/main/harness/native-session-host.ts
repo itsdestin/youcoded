@@ -28,6 +28,7 @@ import { SessionStore, type NativeSessionListEntry } from './session-store';
 import { PermissionBroker, type AskDecision, type LateResponseEntry } from './permission-broker';
 import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
+import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
 import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from './prompt-assembly';
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
@@ -2439,7 +2440,10 @@ export class NativeSessionHost extends EventEmitter {
         ...await this.permissionStore.rulesFor(cwd),
         ...(this.rememberedFor.get(sessionId) ?? []),
       ].filter(inScope),
-    });
+    // PowerShell (Windows without Git Bash) runs code inside arguments too, so its
+    // wildcard grants refuse more characters (subject-glob.ts POWERSHELL_OPERATORS).
+    // getShell() is memoized and lazy — see its note in tools/bash.ts.
+    }, { powershell: getShell().label === 'PowerShell' });
   }
 
   /** Resolve BOTH the clamped context window AND the capability profile for a
