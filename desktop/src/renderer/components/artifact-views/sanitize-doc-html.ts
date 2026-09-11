@@ -22,7 +22,11 @@ function purifier(): typeof DOMPurify {
   if (docPurify) return docPurify;
   // A PRIVATE instance, created on first use: the link hook below must never run
   // over the mascot sanitizer, which uses the default instance.
-  const instance = DOMPurify(window);
+  // The cast: DOMPurify 3.4.x's factory param requires a `trustedTypes` property,
+  // which this TypeScript DOM lib does not declare on Window — a types-only gap
+  // (every browser this runs in has window.trustedTypes). Cast to exactly the
+  // parameter type rather than `any` so the rest of the call stays checked.
+  const instance = DOMPurify(window as unknown as Parameters<typeof DOMPurify>[0]);
   instance.addHook('afterSanitizeAttributes', (node) => {
     if (node.nodeName !== 'A' || !node.hasAttribute('href')) return;
     const href = (node.getAttribute('href') ?? '').trim();
