@@ -63,6 +63,38 @@ describe('remote-shim client:ready', () => {
     expect(readies[0].id).toBeUndefined();                    // no reply expected
   });
 
+  it('a listener added while the socket is still authenticating sends one client:ready at auth:ok, reconnect:false', async () => {
+    const p = shim.connect('pw', false);
+    const ws = FakeWebSocket.instances[0];
+    (window as any).claude.on.chatHydrate(() => {});           // App mounted before auth finished
+    ws.open();
+    expect(ws.sentOf('client:ready')).toEqual([]);
+    ws.receive({ type: 'auth:ok', deviceId: 'dev-1', secret: 's', platform: 'desktop' });
+    await p;
+    const readies = ws.sentOf('client:ready');
+    expect(readies).toHaveLength(1);
+    expect(readies[0].payload).toMatchObject({ seq: 1, reconnect: false });
+  });
+
+  it('a first connect to a DIFFERENT host is not a reconnect, however many times the old one was reached', async () => {
+    const p1 = shim.connect('pw', false);
+    const ws1 = FakeWebSocket.instances[0];
+    await authenticate(ws1, p1);
+    (window as any).claude.on.chatHydrate(() => {});
+    expect(ws1.sentOf('client:ready')[0].payload.reconnect).toBe(false);
+
+    (globalThis as any).location.host = 'other-desktop:9900';   // the page now points at another host
+    const p2 = shim.connect('pw', false);
+    const ws2 = FakeWebSocket.instances[1];
+    await authenticate(ws2, p2);
+    expect(ws2.sentOf('client:ready')[0].payload).toMatchObject({ seq: 2, reconnect: false });
+
+    const p3 = shim.connect('pw', false);                         // the same host again: now a reconnect
+    const ws3 = FakeWebSocket.instances[2];
+    await authenticate(ws3, p3);
+    expect(ws3.sentOf('client:ready')[0].payload).toMatchObject({ seq: 3, reconnect: true });
+  });
+
   it('a second listener add (an effect re-run, a StrictMode double mount) sends no second client:ready', async () => {
     const p = shim.connect('pw', false);
     const ws = FakeWebSocket.instances[0];

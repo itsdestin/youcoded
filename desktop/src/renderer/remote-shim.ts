@@ -85,9 +85,13 @@ let targetUrl: string | null = null;
 // newer one. Refresh (remote:rehydrate, §6) draws from the same counter.
 let clientReadySeq = 0;
 let readySentThisGeneration = false;
-/** Whether this client held state before the current connection — true from the second
- *  auth:ok on. The host uses it to decide what its restore may skip. */
+/** Whether this client held state from THIS host before the current connection. The host
+ *  uses it to decide what its restore may skip. Keyed on the host, not the shim's lifetime
+ *  (review of T1, finding 1): an Android page connects to its local bridge first, and a
+ *  later pairing to a desktop is a FIRST connect to that desktop, however many times the
+ *  bridge was reached before — and the same in reverse on the fallback to local. */
 let readyReconnect = false;
+let lastReadyHost: string | null = null;
 
 /** Per-session terminal offsets the host uses to send only what the phone has not drawn
  *  (design §7). Filled in by the terminal backlog; empty until then. */
@@ -864,7 +868,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // On a reconnect App's listener is still registered, so it goes out right here;
           // on a first connect App mounts after this, and addListener sends it.
           readySentThisGeneration = false;
-          readyReconnect = hasConnectedBefore;
+          readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
+          lastReadyHost = getWsUrl();
           maybeSendClientReady();
           hasConnectedBefore = true;
           reconcileUnknownOutcomes();
@@ -1043,6 +1048,9 @@ export function retryLocalBridge(): void {
 
 function disconnect(): void {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null; }
+  // A new generation, so a frame still buffered from the socket being closed is dropped by
+  // handleMessage's stamp instead of landing in the page between here and the next connect.
+  connectionGeneration++;
   if (ws) { ws.close(); ws = null; }
   setConnectionState('disconnected');
   localStorage.removeItem('youcoded-remote-token');

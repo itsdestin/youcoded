@@ -207,6 +207,40 @@ describe('the cut line', () => {
     expect(ws.ofType('chat:hydrate')[0].payload.degraded).toBe(true);
   });
 
+  it('native per-delta events below the cut line are skipped; native:shell-event and transcript:shrink follow the rule too', async () => {
+    const snap = deferred<any>();
+    const { server } = await makeServer({ snapshot: () => snap.promise });
+    const { ws, client } = connect(server);
+    server.broadcast({ type: 'native:session-context', payload: { sessionId: 's1', context: {} } });
+    server.broadcast({ type: 'native:model-state', payload: { sessionId: 's1', state: 'x' } });
+    server.broadcast({ type: 'transcript:shrink', payload: { sessionId: 's1', keep: 3 } });
+    server.broadcast({ type: 'native:shell-event', payload: { sessionId: 's1', run: { shellId: 'sh1' } } });
+    const restoring = server.handleMessage(client, ready(1));
+    await tick();
+    server.broadcast({ type: 'native:model-state', payload: { sessionId: 's1', state: 'y' } });
+    snap.resolve(snapshotOf(['s1']));
+    await restoring;
+    expect(ws.types()).not.toContain('native:session-context');
+    expect(ws.types()).not.toContain('transcript:shrink');
+    expect(ws.ofType('native:model-state').map((f) => f.payload.state)).toEqual(['y']);
+    expect(ws.ofType('native:shell-event')).toHaveLength(1);
+  });
+
+  it('the cut line survives an overflow that shifts the queue', async () => {
+    const snap = deferred<any>();
+    const { server } = await makeServer({ snapshot: () => snap.promise });
+    const { ws, client } = connect(server);
+    for (let i = 0; i < 5; i++) server.broadcast(delta('s1', `below-${i}`));   // cut line will be 5
+    const restoring = server.handleMessage(client, ready(1));
+    await tick();
+    server.broadcast(delta('s1', 'above'));                                   // index 5, above the line
+    for (let i = 0; i < 1995; i++) server.broadcast({ type: 'tags:changed', payload: { i } });   // 2001 → one shift
+    snap.resolve(snapshotOf(['s1']));
+    await restoring;
+    // Without moving the cut line with the shift, 'above' would sit at index 4 < 5 and be lost.
+    expect(ws.ofType('transcript:event').map((f) => f.payload.uuid)).toEqual(['above']);
+  });
+
   it('a hook event arriving on a FIRST connect before the hook pass is not replayed on top of the pass', async () => {
     const snap = deferred<any>();
     const { server } = await makeServer({ snapshot: () => snap.promise });
@@ -237,8 +271,8 @@ describe('the cut line', () => {
 describe('the host has no fixed wait', () => {
   it('replays with no 500 ms timer — the only timer on the restore path is the 5 s old-client fallback', () => {
     const src = readStripped(join(__dirname, '..', 'src', 'main', 'remote-server.ts'));
-    const halfSecondTimer = /,\s*500\s*\)\s*;/g;
-    assertPatternMatches(halfSecondTimer, '}, 500);', 'a setTimeout ending in `, 500);`');
+    const halfSecondTimer = /\},\s*500\s*\)/g;                      // a callback closed and timed at 500
+    assertPatternMatches(halfSecondTimer, '}, 500);', 'a setTimeout callback ending in `}, 500)`');
     expect(src.match(halfSecondTimer)).toBeNull();
     expect(src).toMatch(/OLD_CLIENT_FALLBACK_MS\s*=\s*5000/);
     expect(src).toMatch(/setTimeout\([\s\S]*?\}, OLD_CLIENT_FALLBACK_MS\);/);

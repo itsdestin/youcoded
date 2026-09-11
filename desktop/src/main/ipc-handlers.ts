@@ -2954,7 +2954,7 @@ export function registerIpcHandlers(
       // is one-shot and the 3s heartbeat stops re-announcing once an ask is
       // held (permission-broker.ts). bufferHookEvent() feeds the SAME
       // hookBuffers map the legacy path fills, so the existing replay loop in
-      // replayBuffers() picks these up for free, in the same push order
+      // restoreClient() picks these up for free, in the same push order
       // (request, then held).
       remoteServer.bufferHookEvent(event);
       remoteServer.broadcast({ type: 'hook:event', payload: event });
@@ -2972,7 +2972,7 @@ export function registerIpcHandlers(
       // Task 9 (plan 1c): the phone hydrates over this WebSocket, never
       // through TRANSCRIPT_REPLAY, so it needs its own connect-time catch-up
       // for a helper's run status — bufferSpecialistRun feeds the buffer
-      // replayBuffers() reads from on connect (mirrors bufferHookEvent above).
+      // restoreClient() reads from on connect (mirrors bufferHookEvent above).
       remoteServer.bufferSpecialistRun(event);
       remoteServer.broadcast({ type: 'specialists:event', payload: event });
     }

@@ -207,14 +207,14 @@ export class RemoteServer {
   // Last-known topic names, fed by ipc-handlers.ts via setLastTopic()
   private lastTopics = new Map<string, string>();
   // Last-known FULL status payload, fed by ipc-handlers.ts via broadcastStatusData(),
-  // replayed to each new client in replayBuffers(). Was previously `contextMap` — only
+  // replayed to each new client in restoreClient(). Was previously `contextMap` — only
   // the context-% slice was stored, and nothing ever read it, so a remote client that
   // connected between polls showed a blank status bar for up to 10s (the ipc-handlers
   // status interval). Storing the whole payload fixes that for every status field
   // (usage, gitBranch, sessionStats, attention, sync) instead of just context %.
   private lastStatusData: Record<string, any> | null = null;
   // Provider injected at construction — called when new clients connect to get the full chat state.
-  // Task 6 wires this into replayBuffers(); declared here so the field exists before that step.
+  // restoreClient() calls it once per restore; declared here so the field exists before that step.
   private requestSnapshot: () => Promise<SerializedChatState>;
   // Native runtime stack — injected by ipc-handlers via setNativeRuntime() AFTER
   // it constructs the instances (they can't be built at RemoteServer construction
@@ -689,7 +689,7 @@ export class RemoteServer {
    *  it, a phone reconnecting while a native permission ask was HELD got
    *  nothing, because PermissionHeld is one-shot and the reannounce heartbeat
    *  stops once an ask is held). Reusing hookBuffers — rather than a parallel
-   *  native-only map — means the existing replay loop in replayBuffers()
+   *  native-only map — means the existing replay loop in restoreClient()
    *  picks these up for free, in the same push order (request, then held). */
   bufferHookEvent(event: HookEvent): void {
     const sessionId = event.sessionId || '';
@@ -1065,6 +1065,24 @@ export class RemoteServer {
     client.phase = 'readying';
     if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
     client.queue ??= [];
+    try {
+      await this.runRestore(client, opts);
+    } catch (err) {
+      // Whatever failed, the client must not stay `readying` with a queue that fills
+      // forever (review of T1, finding 4): flush what was held and go live; the phone's
+      // strip reports an incomplete restore and offers Refresh.
+      console.error('[remote-server] restore failed:', err);
+      this.flushRestoreQueue(client, { sessions: [] }, [], true);
+    } finally {
+      client.phase = 'live';
+    }
+  }
+
+  private async runRestore(
+    client: AuthenticatedClient,
+    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean },
+  ): Promise<void> {
+    const ws = client.ws;
     const send = (msg: { type: string; payload: any }) => {
       if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
     };
@@ -1096,7 +1114,7 @@ export class RemoteServer {
       console.error('[remote-server] snapshot request failed:', err);
       snapshot = { sessions: [], degraded: true };
     }
-    if (ws.readyState !== WebSocket.OPEN) { client.phase = 'live'; return; }
+    if (ws.readyState !== WebSocket.OPEN) return;
     // A queue that overflowed lost events the snapshot may not hold either — the phone
     // must be told its copy may be behind (the strip offers Refresh).
     if (client.queueDegraded) snapshot = { ...snapshot, degraded: true };
@@ -1133,7 +1151,6 @@ export class RemoteServer {
     }
 
     this.flushRestoreQueue(client, snapshot, sessions.map((s) => s.id), opts.reconnect);
-    client.phase = 'live';
   }
 
   /** Transcript-shaped broadcasts: in the snapshot when queued below the cut line. The
