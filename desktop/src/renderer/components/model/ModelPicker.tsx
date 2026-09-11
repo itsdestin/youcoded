@@ -293,31 +293,37 @@ export default function ModelPicker({
   // stay tied to its field rather than appearing as a viewport-centred modal.
   const measure = useCallback(() => {
     const el = triggerRef.current;
-    if (!el) return;
-    const r = el.getBoundingClientRect();
-    const gap = 4;
-    const edge = 8;
-    // WHY the Math.min (2026-09-10): the 320 floor is a readability minimum, but
-    // it was applied unconditionally, so in a viewport NARROWER than 320+gutters
-    // the panel was wider than the window and clipped on the right — with no
-    // scrollbar and no visual tell. That is exactly the buddy floater's chat
-    // window, which is 320px wide, so the model list arrived there missing its
-    // right edge. A panel must never exceed the viewport it is clamped into.
-    // No-op in the main window and on Android, where innerWidth far exceeds 336.
-    const width = Math.min(Math.max(r.width, 320), window.innerWidth - edge * 2);
-    const centred = r.left + r.width / 2 - width / 2;
-    const spaceBelow = window.innerHeight - r.bottom - edge;
-    const spaceAbove = r.top - edge;
-    const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
-    setPanelPos({
-      // WHY: A New Session menu can put this field near the bottom of a short
-      // window. Choose the side with usable room instead of forcing a panel
-      // below the field where the viewport clips its search and model rows.
-      ...(opensUpward ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),
-      left: Math.max(edge, Math.min(centred, window.innerWidth - width - edge)),
-      width,
-      maxHeight: Math.max(180, (opensUpward ? spaceAbove : spaceBelow) - gap),
-    });
+    // WHY the panel half is conditional instead of an early return (UX tester
+    // 2026-09-11, U2): the 'inline' layout has no trigger at all, and returning here
+    // also skipped positioning the FILTER popover below — so in the status bar's
+    // Model dialog the filter button lit up and no panel ever opened. The panel
+    // half needs the trigger; the filter half does not.
+    if (el) {
+      const r = el.getBoundingClientRect();
+      const gap = 4;
+      const edge = 8;
+      // WHY the Math.min (2026-09-10): the 320 floor is a readability minimum, but
+      // it was applied unconditionally, so in a viewport NARROWER than 320+gutters
+      // the panel was wider than the window and clipped on the right — with no
+      // scrollbar and no visual tell. That is exactly the buddy floater's chat
+      // window, which is 320px wide, so the model list arrived there missing its
+      // right edge. A panel must never exceed the viewport it is clamped into.
+      // No-op in the main window and on Android, where innerWidth far exceeds 336.
+      const width = Math.min(Math.max(r.width, 320), window.innerWidth - edge * 2);
+      const centred = r.left + r.width / 2 - width / 2;
+      const spaceBelow = window.innerHeight - r.bottom - edge;
+      const spaceAbove = r.top - edge;
+      const opensUpward = spaceBelow < 180 && spaceAbove > spaceBelow;
+      setPanelPos({
+        // WHY: A New Session menu can put this field near the bottom of a short
+        // window. Choose the side with usable room instead of forcing a panel
+        // below the field where the viewport clips its search and model rows.
+        ...(opensUpward ? { bottom: window.innerHeight - r.top + gap } : { top: r.bottom + gap }),
+        left: Math.max(edge, Math.min(centred, window.innerWidth - width - edge)),
+        width,
+        maxHeight: Math.max(180, (opensUpward ? spaceAbove : spaceBelow) - gap),
+      });
+    }
     // The filter popover is PORTALED too. `.layer-surface` sets
     // `overflow: hidden` (unlayered, globals.css:886) to clip scroll-fades to
     // its rounded corners, so a popover rendered inside the panel gets cut off
@@ -894,13 +900,31 @@ export default function ModelPicker({
                       </div>
                     ))}
 
-                  {rows.length === 0 && anyPickable && (
+                  {rows.length === 0 && anyPickable && (activeFilters > 0 ? (
+                    // WHY (UX tester 2026-09-11, U3): with filters on, an empty list is
+                    // about the filters — "No favorites yet" told someone with nine
+                    // favourites they had none. Design guide G-18: no results after
+                    // filtering offers Clear filters.
+                    <div className="py-4 px-4 text-center space-y-2">
+                      <p className="text-xs text-fg-muted leading-relaxed">No models match these filters.</p>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => {
+                          setSources(new Set()); setLocalOnly(false);
+                          setGreatValueOnly(false); setSmartOnly(false); setFastOnly(false);
+                        }}
+                      >
+                        Clear filters
+                      </Button>
+                    </div>
+                  ) : (
                     <p className="text-xs text-fg-muted text-center py-4 px-4 leading-relaxed">
                       {searching
                         ? 'No models match.'
                         : 'No favorites yet. Search for a model, then star it to keep it here.'}
                     </p>
-                  )}
+                  ))}
                 </>
               )}
             </div>
