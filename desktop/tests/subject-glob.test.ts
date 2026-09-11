@@ -70,6 +70,10 @@ describe('ruleMatches — safety rule 1: a wildcard never swallows a second comm
     'npm run build < /etc/passwd',
     'npm run build `id`',
     'npm run build $(id)',
+    // A single '&' starts the next command immediately (2026-09-10 security review).
+    'npm run build & rm -rf /',
+    'npm run build &rm -rf /',
+    'npm run build & sudo x &',
     'npm run build\nrm -rf /',
   ])('refuses %j', (evil) => {
     expect(ruleMatches(grant('npm run*'), evil)).toBe(false);
@@ -78,6 +82,18 @@ describe('ruleMatches — safety rule 1: a wildcard never swallows a second comm
   it('still covers the plain forms', () => {
     expect(ruleMatches(grant('npm run*'), 'npm run build')).toBe(true);
     expect(ruleMatches(grant('npm run*'), 'npm run build --prod')).toBe(true);
+  });
+
+  it('a lone trailing & only backgrounds the command — still covered', () => {
+    expect(ruleMatches(grant('npm run*'), 'npm run dev &')).toBe(true);
+    expect(ruleMatches(grant('npm run*'), 'npm run dev & ')).toBe(true);
+  });
+
+  it('a trailing && or a second & is still a second command', () => {
+    expect(ruleMatches(grant('npm run*'), 'npm run dev &&')).toBe(false);
+    expect(ruleMatches(grant('npm run*'), 'npm run dev & &')).toBe(false);
+    // The exact shape the review reproduced against a remembered "git status" grant.
+    expect(ruleMatches(grant('git status*'), 'git status & rm -rf ~')).toBe(false);
   });
 
   it('does NOT apply to ask/deny rules — the deny-list must keep crossing operators', () => {
@@ -118,5 +134,55 @@ describe('ruleMatches — safety rule 2: a middle wildcard never swallows a dest
   it('an OPEN-ENDED rung is exempt — "any npm run command" says what it means', () => {
     const open: PermissionRule = { tool: 'Bash', pattern: 'npm run*', action: 'allow', match: 'glob' };
     expect(ruleMatches(open, 'npm run build --force')).toBe(true);
+  });
+});
+
+describe("ruleMatches — holes found by the fix's own review (2026-09-10)", () => {
+  const grant = (pattern: string): PermissionRule =>
+    ({ tool: 'Bash', pattern, action: 'allow', match: 'glob' });
+
+  it('an operator stored inside the pattern no longer lets it cover a chain', () => {
+    // `cd src;ls` used to store the grant `cd src;ls*`, and an operator the pattern
+    // itself carried was exempt from rule 1.
+    expect(ruleMatches(grant('cd src;ls*'), 'cd src;ls; rm -rf ~')).toBe(false);
+    expect(ruleMatches(grant('echo $(date)*'), 'echo $(date) $(rm -rf ~)')).toBe(false);
+  });
+
+  it('a trailing wildcard starts on a word boundary — another file or package is not covered', () => {
+    expect(ruleMatches(grant('node scripts/x.mjs*'), 'node scripts/x.mjs --watch')).toBe(true);
+    expect(ruleMatches(grant('node scripts/x.mjs*'), 'node scripts/x.mjs_evil')).toBe(false);
+    expect(ruleMatches(grant('npx prettier*'), 'npx prettier-evil')).toBe(false);
+    expect(ruleMatches(grant('ls*'), 'lsblk')).toBe(false);
+    expect(ruleMatches(grant('ls*'), 'ls')).toBe(true);
+  });
+
+  it('a middle wildcard is bounded on both sides', () => {
+    const push = grant('git push*origin feat/x');
+    expect(ruleMatches(push, 'git push -u origin feat/x')).toBe(true);
+    expect(ruleMatches(push, 'git push --repo=xorigin feat/x')).toBe(false);
+  });
+
+  it('a stored grant that covers a code-running command covers nothing at all', () => {
+    // A grant saved before this change ("Any node command") stops matching rather
+    // than keeping its reach; the user is asked again and offered a narrower choice.
+    expect(ruleMatches(grant('node*'), 'node -e "require(1)"')).toBe(false);
+    expect(ruleMatches(grant('node*'), 'node scripts/x.mjs')).toBe(false);
+    expect(ruleMatches(grant('python*'), 'python build.py')).toBe(false);
+    expect(ruleMatches(grant('npx*'), 'npx prettier --write .')).toBe(false);
+    // An ordinary grant is untouched.
+    expect(ruleMatches(grant('npm run*'), 'npm run build')).toBe(true);
+  });
+
+  it('PowerShell sessions also refuse code inside arguments', () => {
+    const ps = { powershell: true };
+    expect(ruleMatches(grant('git status*'), 'git status (Remove-Item -Recurse ~)', ps)).toBe(false);
+    expect(ruleMatches(grant('git status*'), 'git status @{a=Remove-Item ~}', ps)).toBe(false);
+    expect(ruleMatches(grant('git status*'), 'git status --short', ps)).toBe(true);
+    // In bash, parentheses inside a quoted message are just text — no grant lost.
+    expect(ruleMatches(grant('git commit*'), 'git commit -m "fix (x)"')).toBe(true);
+  });
+
+  it('a lone carriage return is refused everywhere — PowerShell reads it as a new line', () => {
+    expect(ruleMatches(grant('git status*'), 'git status\rRemove-Item ~')).toBe(false);
   });
 });
