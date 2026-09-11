@@ -75,7 +75,11 @@ const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> =
   'FirstRunView.tsx': { count: 1, why: 'first-run setup screen, not a settings menu' },
   'ShareSheet.tsx': { count: 2, why: 'share flow' },
   'ThemeShareSheet.tsx': { count: 1, why: 'theme share flow' },
-  'BugReportPopup.tsx': { count: 1, why: 'bug-report flow' },
+  // 'BugReportPopup.tsx' was here with count 1 — the legacy review screen's amber
+  // "High Claude usage" caption. That screen was deleted on 2026-09-10 when the
+  // approved ticket screen replaced it for every user, so the exemption goes with
+  // it. Removing the entry rather than lowering it to 0 is deliberate: a future
+  // centred status line in this file should be caught, not pre-approved.
 };
 
 // `someError || 'A hardcoded guess'`. THIS IS THE v1.3.1 ERROR AUDIT, which is
@@ -87,7 +91,11 @@ const CENTRED_STATUS_ELSEWHERE: Record<string, { count: number; why: string }> =
 // layer, or is this genuinely a general error?
 const HARDCODED_ERROR_FALLBACK: Record<string, { count: number; why: string }> = {
   'AccountSection.tsx': { count: 1, why: "'Could not export data'" },
-  'SettingsPanel.tsx': { count: 1, why: "'Installation failed' — the local-models installer, not remote access" },
+  // SettingsPanel.tsx is off this list as of the remote-access batch. Its one entry was
+  // recorded as "the local-models installer, not remote access" — it was in fact remote
+  // access's own Tailscale install (`result?.error || 'Installation failed'`), so the
+  // batch that rewrote that flow was the right place to fix it. It now reports the
+  // installer's own reason, or the general error when the installer gave none.
   'SyncPanel.tsx': { count: 1, why: "'Could not remove this device.'" },
   'SyncSetupWizard.tsx': { count: 6, why: 'six sign-in / install / repo-create branches' },
 };
@@ -131,7 +139,7 @@ describe('status adoption', () => {
     }
     expect(
       drift,
-      'Show the real error, or say you do not have one and offer Report bug / Diagnose with Claude '
+      'Show the real error, or say you do not have one and offer Report bug / Diagnose with the assistant '
         + '(<ErrorState mode="general">). A hardcoded fallback asserts a cause nobody verified. '
         + 'The counts above are the v1.3.1 audit backlog — they may shrink, never grow.',
     ).toEqual([]);

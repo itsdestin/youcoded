@@ -56,7 +56,15 @@ describe('Assistant Settings — Step guard', () => {
   it('invalid text does not save null and visibly restores the saved value', async () => {
     const save = installNative(async () => 20);
     render(<StepGuardRow />);
-    await waitFor(() => expect(input()).toBeEnabled());
+    // WHY the VALUE and not just toBeEnabled() (2026-09-10): the row enables as
+    // soon as the initial get() settles, but React can commit the loaded 20 into
+    // the field AFTER a change event fired in the same tick — so the Enter handler
+    // read 20 and saved 20. Green when idle, red under a loaded suite: three full
+    // runs on 2026-09-10, always [[20],…] where [[30],…] was expected. Waiting on
+    // the loaded value is waiting for the thing itself
+    // (.claude/rules/test-suite-hygiene.md).
+    await waitFor(() => expect(input()).toHaveValue('20'));
+    expect(input()).toBeEnabled();
     commit('not a number');
     expect(await screen.findByText(/positive whole number/i)).toBeInTheDocument();
     expect(input()).toHaveValue('20');
@@ -83,7 +91,15 @@ describe('Assistant Settings — Step guard', () => {
       .mockResolvedValueOnce(50);
     installNative(async () => 20, save);
     render(<StepGuardRow />);
-    await waitFor(() => expect(input()).toBeEnabled());
+    // WHY the VALUE and not just toBeEnabled() (2026-09-10): the row enables as
+    // soon as the initial get() settles, but React can commit the loaded 20 into
+    // the field AFTER a change event fired in the same tick — so the Enter handler
+    // read 20 and saved 20. Green when idle, red under a loaded suite: three full
+    // runs on 2026-09-10, always [[20],…] where [[30],…] was expected. Waiting on
+    // the loaded value is waiting for the thing itself
+    // (.claude/rules/test-suite-hygiene.md).
+    await waitFor(() => expect(input()).toHaveValue('20'));
+    expect(input()).toBeEnabled();
     commit('50');
     await screen.findByText(/previous setting is kept/i);
     await waitFor(() => expect(input()).toHaveValue('20'));
@@ -99,7 +115,15 @@ describe('Assistant Settings — Step guard', () => {
       .mockResolvedValueOnce(40);
     installNative(async () => 20, save);
     render(<StepGuardRow />);
-    await waitFor(() => expect(input()).toBeEnabled());
+    // WHY the VALUE and not just toBeEnabled() (2026-09-10): the row enables as
+    // soon as the initial get() settles, but React can commit the loaded 20 into
+    // the field AFTER a change event fired in the same tick — so the Enter handler
+    // read 20 and saved 20. Green when idle, red under a loaded suite: three full
+    // runs on 2026-09-10, always [[20],…] where [[30],…] was expected. Waiting on
+    // the loaded value is waiting for the thing itself
+    // (.claude/rules/test-suite-hygiene.md).
+    await waitFor(() => expect(input()).toHaveValue('20'));
+    expect(input()).toBeEnabled();
     commit('30');
     commit('40');
     expect(save).toHaveBeenCalledTimes(1);
@@ -116,7 +140,15 @@ describe('Assistant Settings — Step guard', () => {
       .mockResolvedValueOnce(40);
     installNative(async () => 20, save);
     render(<StepGuardRow />);
-    await waitFor(() => expect(input()).toBeEnabled());
+    // WHY the VALUE and not just toBeEnabled() (2026-09-10): the row enables as
+    // soon as the initial get() settles, but React can commit the loaded 20 into
+    // the field AFTER a change event fired in the same tick — so the Enter handler
+    // read 20 and saved 20. Green when idle, red under a loaded suite: three full
+    // runs on 2026-09-10, always [[20],…] where [[30],…] was expected. Waiting on
+    // the loaded value is waiting for the thing itself
+    // (.claude/rules/test-suite-hygiene.md).
+    await waitFor(() => expect(input()).toHaveValue('20'));
+    expect(input()).toBeEnabled();
     commit('30');
     commit('40');
     first.reject(new Error('disk full'));

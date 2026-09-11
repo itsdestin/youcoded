@@ -79,7 +79,10 @@ export function FilepathToken({ path, sessionId, variant = 'pill', label }: Prop
         type="button"
         // Dotted underline rather than a solid link: it reads as "there is more
         // behind this word" without turning the label into prose-styled link text.
-        className="underline decoration-dotted underline-offset-2 decoration-fg-muted hover:decoration-fg transition-colors"
+        // select-text: globals.css makes every <button> unselectable chrome, but
+        // this label is a word of the message. Without it, a copied sentence
+        // would come out with the file name missing (Destin, 2026-09-10).
+        className="underline decoration-dotted underline-offset-2 decoration-fg-muted hover:decoration-fg transition-colors select-text"
         onClick={onClick}
         data-file-path={menuPath || undefined}
       >
@@ -97,7 +100,9 @@ export function FilepathToken({ path, sessionId, variant = 'pill', label }: Prop
       // lifts out of the bg-inset chat bubble. (Before this, the chip was also
       // bg-inset — same color as the bubble, so it read as flat text, not a
       // clickable file.) Monospace basename keeps the "this is a file" signal.
-      className="group inline-flex items-center gap-1.5 align-middle px-2 py-0.5 rounded-md bg-well border border-edge hover:border-fg-muted transition-colors"
+      // select-text: same reason as the inline variant above. The file name is
+      // part of the message, even though the pill is a <button>.
+      className="group inline-flex items-center gap-1.5 align-middle px-2 py-0.5 rounded-md bg-well border border-edge hover:border-fg-muted transition-colors select-text"
       onClick={onClick}
       // Right-click menu recovers the path here (left-click still opens the drawer).
       data-file-path={menuPath || undefined}

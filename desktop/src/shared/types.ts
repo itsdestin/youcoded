@@ -1687,7 +1687,10 @@ export const IPC = {
   REMOTE_DETECT_TAILSCALE: 'remote:detect-tailscale',
   REMOTE_GET_CLIENT_COUNT: 'remote:get-client-count',
   REMOTE_GET_CLIENT_LIST: 'remote:get-client-list',
-  REMOTE_DISCONNECT_CLIENT: 'remote:disconnect-client',
+  REMOTE_STATUS: 'remote:status',
+  REMOTE_DEVICES_LIST: 'remote:devices:list',
+  REMOTE_DEVICES_RENAME: 'remote:devices:rename',
+  REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
   REMOTE_INSTALL_TAILSCALE: 'remote:install-tailscale',
   REMOTE_AUTH_TAILSCALE: 'remote:auth-tailscale',
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
@@ -1950,6 +1953,11 @@ export const IPC = {
   DEV_SUMMARIZE_ISSUE: 'dev:summarize-issue',
   DEV_SUBMIT_ISSUE: 'dev:submit-issue',
   DEV_INSTALL_WORKSPACE: 'dev:install-workspace',
+  // Managed development workspace (contract R9/R10). Separate from install-workspace
+  // above, which targets a fixed folder and pulls into an existing one.
+  DEV_SETUP_WORKSPACE: 'dev:setup-workspace',
+  DEV_SETUP_STATUS: 'dev:setup-status',
+  DEV_SETUP_CLEAR: 'dev:setup-clear',
   DEV_INSTALL_PROGRESS: 'dev:install-progress',
   DEV_OPEN_SESSION_IN: 'dev:open-session-in',
   // Performance / GPU settings — not app:restart because future restart-required

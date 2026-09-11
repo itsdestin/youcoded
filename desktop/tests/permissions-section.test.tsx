@@ -476,7 +476,7 @@ describe('PermissionsSection — behavioural contracts', () => {
     // <ErrorState mode="general"> — never a hand-rolled card, never a guessed cause.
     expect(await screen.findByRole('alert')).toBeTruthy();
     expect(screen.getByRole('button', { name: 'Report bug' })).toBeTruthy();
-    expect(screen.getByRole('button', { name: 'Diagnose with Claude' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Diagnose with the assistant' })).toBeTruthy();
   });
 });
 

@@ -603,7 +603,7 @@ function AppInner() {
   const notifyIfPtyBlocked = useCallback((sid: string): boolean => {
     const session = chatStateMapRef.current.get(sid);
     if (session && hasPendingInteraction(session)) {
-      setToast('Claude is waiting for your response — answer the prompt first.');
+      setToast('Your assistant is waiting for your response — answer the prompt first.');
       return true;
     }
     return false;
@@ -3436,7 +3436,9 @@ function AppInner() {
               {!sessionInitialized && sessionId && currentViewMode !== 'terminal' && !movedGate && (
                 <div className="absolute inset-0 z-10 flex flex-col items-center justify-center bg-canvas">
                   <ThemeMascot small={false} variant="idle" fallback={AppIcon} className="w-16 h-16 text-fg-dim mb-6 animate-pulse" />
-                  <p className="text-sm text-fg-dim font-medium">Initializing session...</p>
+                  {/* select-none: a status line, not content. Ctrl+A must not
+                      paint it (Destin, 2026-09-10). */}
+                  <p className="text-sm text-fg-dim font-medium select-none">Initializing session...</p>
                   {initSlowWarning && (
                     <div className="mt-4 text-xs text-fg-muted text-center max-w-xs flex flex-col items-center gap-2">
                       <p>Something may be wrong. The terminal may show what it is waiting on.</p>
@@ -3514,7 +3516,7 @@ function AppInner() {
                     ChatInputBar when minimal={isTerminalTouch}, slotted in
                     the QuickChips position so both modes share one container. */}
                 {!isShellSession && (<>
-                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Claude is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
+                <ChatInputBar ref={inputBarRef} sessionId={sessionId} view={currentViewMode} onOpenDrawer={handleOpenDrawer} onCloseDrawer={handleCloseDrawer} onDrawerSearch={setDrawerFilter} disabled={trustGateActive || !!movedGate || !sessionInitialized} minimal={isTerminalTouch} onResumeCommand={() => setResumeRequested(true)} getUsageSnapshot={getUsageSnapshot} onOpenPreferences={() => setPreferencesOpen(true)} onToast={(msg) => setToast(msg)} onSendBlocked={(retry) => setToast({ message: 'Your assistant is waiting for your response — answer the prompt first.', durationMs: 8000, action: { label: 'Send anyway', onClick: () => { setToast(null); retry(); } } })} getSessionState={(sid) => chatStateMapRef.current.get(sid)} onOpenModelPicker={() => setModelPickerOpen(true)} onModelSwitchCommand={handleModelSwitchCommand} initialInput={currentSession?.initialInput} provider={currentSession?.provider} />
                 <StatusBar
                   statusData={{
                     usage: onChatGptPlan ? statusData.chatgptUsage : statusData.usage,
@@ -3622,14 +3624,17 @@ function AppInner() {
           >
             {/* First-time version (deck 2026-09-10, Q-8): "No Active Session"
                 reads like an error to someone who has never had one. Once a
-                session exists to resume, this is the everyday screen again. */}
+                session exists to resume, this is the everyday screen again.
+                select-none: a screen title, not content. Ctrl+A must not paint
+                it (Destin, 2026-09-10); the buttons below are covered by
+                globals.css. */}
             {firstTimeWelcome ? (
-              <div className="flex flex-col items-center gap-1 text-center max-w-sm">
+              <div className="flex flex-col items-center gap-1 text-center max-w-sm select-none">
                 <p className="text-xl text-fg">Start your first session</p>
                 <p className="text-sm text-fg-muted">A session is one conversation with the assistant, working in one folder.</p>
               </div>
             ) : (
-              <p className="text-xl text-fg-muted">No Active Session</p>
+              <p className="text-xl text-fg-muted select-none">No Active Session</p>
             )}
             {/* scene: the hero surface renders the theme's companions (sun,
                 motes, sparkles) orbiting the mascot — big canvas, no clipping.

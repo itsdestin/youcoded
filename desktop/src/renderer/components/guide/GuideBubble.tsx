@@ -41,7 +41,8 @@ export default function GuideBubble({ eyebrow, children, buttons, pose, label }:
       role="dialog"
       aria-label={label}
       data-guide-bubble=""
-      className="fixed flex items-end gap-1 pointer-events-none"
+      // select-none: the bubble is chrome, not content (rules: react-renderer).
+      className="fixed flex items-end gap-1 pointer-events-none select-none"
       style={{
         right: 16,
         // Above whichever bottom chrome is there: the input bar in a session,

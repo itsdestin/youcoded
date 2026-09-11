@@ -1341,9 +1341,13 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
   const cardBorder = isCompactSkill
     ? 'border border-dashed border-edge-dim/60'
     : 'border border-edge';
+  // select-none: the title row is chrome, not highlightable or copyable
+  // (Destin, 2026-09-10). The expandable header is a <button>, which
+  // globals.css already covers; the compact-skill header is a <div>, so the
+  // class is what covers it. The card's BODY (commands, output) stays selectable.
   const headerClass = isCompactSkill
-    ? 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left'
-    : 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors';
+    ? 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left select-none'
+    : 'w-full flex items-center gap-1.5 px-3 py-1.5 text-left hover:bg-inset/50 transition-colors select-none';
   const headerContent = (
     <>
       {/* Status indicator — a Task card with a run record shows the RUN's

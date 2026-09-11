@@ -498,7 +498,7 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'context',
         label: 'Context %',
         defaultVisible: true,
-        description: 'How much of Claude\'s conversation memory remains. Lower means Claude may forget earlier context.',
+        description: 'How much of your assistant\'s conversation memory remains. Lower means it may forget earlier context.',
         bestFor: 'Everyone. When this drops below 20%, consider starting a new session to avoid lost context.',
       },
       {
@@ -512,15 +512,15 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'session-time',
         label: 'Session Duration',
         defaultVisible: false,
-        description: 'Total session time and how much of it Claude spent thinking (API time). Helps you understand your workflow pace.',
-        bestFor: 'Power users who want to see how much of a session is active Claude work vs your own thinking/typing time.',
+        description: 'Total session time and how much of it your assistant spent thinking (API time). Helps you understand your workflow pace.',
+        bestFor: 'Power users who want to see how much of a session is active assistant work vs your own thinking/typing time.',
       },
       {
         id: 'active-ratio',
         label: 'Active Ratio',
         defaultVisible: false,
-        description: 'What percentage of the session was Claude actively thinking (API time / wall time). Low means you\'re mostly reading; high means Claude is doing heavy lifting.',
-        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means Claude is cranking.',
+        description: 'What percentage of the session your assistant was actively thinking (API time / wall time). Low means you\'re mostly reading; high means it is doing heavy lifting.',
+        bestFor: 'Understanding your workflow rhythm. A 5% ratio on a long session means you\'re mostly reviewing; 50%+ means it is working hard.',
       },
     ],
   },
@@ -531,15 +531,15 @@ const WIDGET_CATEGORIES: WidgetCategory[] = [
         id: 'tokens-in',
         label: 'Input Tokens',
         defaultVisible: false,
-        description: 'Cumulative input tokens sent to Claude this session. Includes your messages, files, and system context.',
+        description: 'Cumulative input tokens sent to your assistant this session. Includes your messages, files, and system context.',
         bestFor: 'Power users monitoring how much context is being sent. Helpful for optimizing large-file workflows.',
       },
       {
         id: 'tokens-out',
         label: 'Output Tokens',
         defaultVisible: false,
-        description: 'Cumulative output tokens Claude has generated this session. Higher means more verbose responses.',
-        bestFor: 'Users who want to understand how much Claude is writing. Useful for gauging response verbosity.',
+        description: 'Cumulative output tokens your assistant has generated this session. Higher means more verbose responses.',
+        bestFor: 'Users who want to understand how much your assistant is writing. Useful for gauging response verbosity.',
       },
       {
         id: 'cache-stats',
@@ -1034,7 +1034,12 @@ export default function StatusBar({
   const speedIsSessionAverage = outTokens != null && ss?.apiDuration != null && ss.apiDuration > 0;
 
   return (
-    <div className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-3xs text-fg-muted">
+    <div
+      // select-none: every chip and label here is chrome, not highlightable or
+      // copyable (Destin, 2026-09-10). Its dialogs and hover hints portal out
+      // of this subtree, so their text is unaffected.
+      className="status-bar flex flex-wrap items-center gap-x-2 gap-y-1 px-2 sm:px-3 py-1 text-3xs text-fg-muted select-none"
+    >
       {/* Combined model + effort pill — clicking opens the full picker (same as /effort).
          Shift+Space still cycles models via the keyboard shortcut in App.tsx.
 

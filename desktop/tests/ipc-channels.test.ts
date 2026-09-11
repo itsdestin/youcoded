@@ -133,15 +133,49 @@ describe('IPC channel consistency', () => {
 // Settings → Development feature. All three platforms must carry identical
 // type strings.
 describe('dev:* channel parity', () => {
-  const NEW_TYPES = [
-    'dev:log-tail',
-    'dev:diagnostics',
-    'dev:summarize-issue',
-    'dev:submit-issue',
-    'dev:install-workspace',
-    'dev:install-progress',
-    'dev:open-session-in',
-  ];
+  // WHY derived, not hand-listed (2026-09-10): this was a fixed array, so the two
+  // channels added for managed workspace setup escaped every assertion below
+  // silently — the suite stayed green while the new channels were on no platform
+  // but desktop. The list now comes from shared/types.ts, so a dev:* channel
+  // cannot be added without this test having an opinion about it.
+  const ALL_DEV_TYPES = [...ipcConstants(
+    readSource('src', 'shared', 'types.ts'),
+    /export const IPC\s*=\s*\{([\s\S]*?)\n\} as const;/,
+  ).values()].filter(v => v.startsWith('dev:'));
+
+  // Desktop-only by decision, not by omission: setting up a development workspace
+  // needs git and a shell on the machine the app runs on. Remote already answers
+  // "Developer tools isn't available via remote access yet"
+  // (renderer/remote-unsupported.ts maps the whole 'dev:' namespace), and Android
+  // has no shell to clone into. Adding one here is a deliberate act.
+  const DESKTOP_ONLY = new Set(['dev:setup-workspace', 'dev:setup-status', 'dev:setup-clear']);
+  const NEW_TYPES = ALL_DEV_TYPES.filter(t => !DESKTOP_ONLY.has(t));
+
+  // WHY the previous version of this test was deleted (code review C9): it asserted
+  // `NEW_TYPES.includes(t) || DESKTOP_ONLY.has(t)`, and NEW_TYPES is DEFINED as
+  // ALL_DEV_TYPES minus DESKTOP_ONLY — so it was true for every possible input,
+  // including the undecided channel its own comment claimed to catch. Worse, when it
+  // was "proven" by adding a dummy channel, four tests went red and none of them was
+  // this one; the pre-existing parity tests did all the work.
+  //
+  // What actually needs asserting is the thing C6 got wrong in the shipped code:
+  // desktop-only must be a REFUSAL, not an omission. The renderer's `dev` namespace
+  // in remote-shim.ts is HAND-BUILT, so a channel merely left out of it is
+  // `undefined`, and calling it throws "…is not a function" — which a phone user then
+  // reads as the explanation for why setup failed.
+  it('a desktop-only dev channel is refused on remote, never merely missing', () => {
+    const preload = readSource('src', 'main', 'preload.ts');
+    const shim = readSource('src', 'renderer', 'remote-shim.ts');
+    const unsupported = readSource('src', 'renderer', 'remote-unsupported.ts');
+    for (const t of DESKTOP_ONLY) {
+      expect(preload, `${t} must exist on desktop`).toContain(`'${t}'`);
+      // Present in the shim = it reaches invoke(), so the server answers
+      // `unsupported` and the shim rejects with a message plainMessage can read.
+      expect(shim, `${t} must route through the shim so remote REFUSES it`).toContain(`'${t}'`);
+    }
+    // …and the namespace has a plain-language name, or the refusal is a channel id.
+    expect(unsupported).toContain("'dev:'");
+  });
 
   it('all dev:* types are declared in preload.ts', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'src', 'main', 'preload.ts'), 'utf8');
@@ -1117,8 +1151,12 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch)');
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, repo, quant)');
   });
-  // Android answers these six — and ONLY these six — with `unsupported`, not the
-  // plain not-implemented error every other desktop-only channel sends.
+  // Android NAMES these six — and only these six — as `unsupported` inside the
+  // not-implemented list; every other desktop-only channel listed there sends the
+  // plain not-implemented error. (Since 2026-09-10 the dispatcher's final `else`
+  // ALSO answers `unsupported`, for channels it has no branch for at all — that is
+  // the catch-all, not a seventh label, and it is pinned in
+  // android-honest-build.test.ts.)
   //
   // WHY the set has to be checked for EQUALITY and not just for presence: a
   // Kotlin `when` branch runs from its FIRST comma-separated value down to the

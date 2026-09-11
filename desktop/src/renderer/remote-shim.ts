@@ -8,7 +8,7 @@ import type { VoiceReadiness } from '../shared/voice-types';
 
 // ── Marketplace types re-declared locally ─────────────────────────────────────
 // WHY: remote-shim.ts lives in renderer/ and cannot import from main/ (Node.js
-import { REMOTE_UNSUPPORTED_EVENT, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
+import { REMOTE_UNSUPPORTED_EVENT, hasFeatureName, remoteFeatureName, remoteUnsupportedMessage } from './remote-unsupported';
 import type { FirstRunState } from '../shared/first-run-types';
 // boundary). These interfaces mirror marketplace-auth-store.ts and
 // marketplace-api-handlers.ts exactly — keep in sync if those change.
@@ -26,12 +26,37 @@ interface PendingRequest {
   resolve: (value: any) => void;
   reject: (reason: any) => void;
   timeout: ReturnType<typeof setTimeout>;
+  type: string;
+  /** Sent, no reply, timed out: it MAY have run. Asked about on reconnect, never retried. */
+  outcomeUnknown?: boolean;
 }
+
+/**
+ * Ids whose fate the host could not tell us, announced as a window event.
+ *
+ * NOTHING LISTENS TO THIS YET. The sentence here used to read "The UI reads this to say so
+ * plainly", which was not true: the reconciliation runs and the event fires, and the person
+ * is told nothing either way. Sending is still safe — a request is never re-run — but the
+ * "we don't know whether that happened" state has no screen. Filed as an open item in
+ * docs/roadmap/remote-access.md rather than invented at review time.
+ */
+export const OUTCOME_UNKNOWN_EVENT = 'youcoded:outcome-unknown';
 
 export type RemoteConnectionState = 'disconnected' | 'connecting' | 'authenticating' | 'connected';
 
 let ws: WebSocket | null = null;
 let messageId = 0;
+/**
+ * Bumped on every socket. Request ids were `msg-N` from a per-page-load counter, so two
+ * devices — or the same device after a reload — produced the same ids, and a host answering
+ * "did this run?" could answer about somebody else's request.
+ */
+let connectionGeneration = 0;
+/** Rehydration is for coming BACK: on a first connect the caller's own queued mount-time
+ *  fetches already flush, and re-asking would double every connection's traffic. */
+let hasConnectedBefore = false;
+/** Set from auth:ok, so an id names the device it came from. */
+let myDeviceId = '';
 const pending = new Map<string, PendingRequest>();
 const listeners = new Map<string, Set<Callback>>();
 let connectionState: RemoteConnectionState = 'disconnected';
@@ -85,7 +110,20 @@ function isAndroidLocal(): boolean {
 // appear in the command drawer." Bound at MAX_QUEUE to prevent unbounded
 // growth if a real flow ever fans out faster than the auth handshake.
 const MAX_QUEUE = 256;
-let pendingSendQueue: string[] = [];
+/** How long a request waits for an answer, and therefore how long a queued message can
+ *  still have somebody waiting on it. The two must be the same number. */
+const REQUEST_TIMEOUT_MS = 30_000;
+/**
+ * Queued while the socket is down, with the time each was queued.
+ *
+ * WHY the timestamp: the queue is what makes a FIRST connect work — mount-time reads fire
+ * before auth and would otherwise be lost — but it was also replaying requests whose caller
+ * had already been told, thirty seconds earlier, that they failed. So an action you were
+ * told did not happen could happen minutes later. Anything older than the request timeout
+ * is dropped at flush instead: nobody is still waiting on it, and the honest outcome for a
+ * caller that already gave up is nothing at all.
+ */
+let pendingSendQueue: { data: string; at: number }[] = [];
 
 function setConnectionState(state: RemoteConnectionState) {
   connectionState = state;
@@ -112,21 +150,117 @@ function getWsUrl(): string {
   return `${proto}//${location.host}/ws`;
 }
 
-function send(msg: any): void {
+/**
+ * What each outbound channel is, and therefore what happens to it while the socket is down.
+ *
+ * Contract row R2: a message typed while the connection is down waits as a draft until you
+ * press Send yourself; nothing runs again on its own. The old behaviour was the opposite —
+ * everything queued and the queue was flushed on the next auth:ok, so a request that had
+ * already timed out and told the user it failed could execute minutes later.
+ *
+ *   'user-action' — something the person did. Refused while disconnected; the composer keeps
+ *                   the text. NEVER queued, because queueing is what makes it run twice.
+ *   'read'        — safe to SEND again, because sending it twice lands where sending it once
+ *                   does. Usually because it asks rather than changes; `session:resize` is
+ *                   the exception that made the older wording ("asking changes nothing")
+ *                   false, since a resize does change the host and is still safe to repeat.
+ *   'transport'   — the connection talking about itself.
+ *
+ * An unclassified channel fails remote-message-kinds.test.ts. That is deliberate: the way
+ * this goes wrong again is a new channel quietly defaulting to the queue.
+ */
+export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'transport'>> = {
+  'session:input': 'user-action',
+  'session:resize': 'read',
+  'session:terminal-ready': 'transport',
+  'native:interrupt': 'user-action',
+  'native:retry': 'user-action',
+  'ui:action': 'user-action',
+  'system:notify-stack-state': 'transport',
+};
+
+/**
+ * Re-issued once on reconnect. WHY this exists at all: deleting the flush queue would
+ * otherwise bring back the cold-start bug where installed plugins never appeared in the
+ * command drawer — the mount-time fetches fired before auth and were lost. Reads only, and
+ * a test asserts that.
+ */
+export const REHYDRATE_ON_RECONNECT: readonly string[] = [
+  'skills:list',
+  'commands:list',
+  'remote:get-config',
+  'remote:status',
+];
+
+function send(msg: any): boolean {
   const data = JSON.stringify(msg);
   // Only send directly when both the socket is OPEN AND auth has completed.
   // If OPEN but still 'authenticating', the auth message has been sent but
-  // 'auth:ok' hasn't arrived — the bridge rejects application messages here,
-  // so we still queue.
+  // 'auth:ok' hasn't arrived — the bridge rejects application messages here.
   if (ws?.readyState === WebSocket.OPEN && connectionState === 'connected') {
     ws.send(data);
-    return;
+    return true;
   }
+  // A person's action is never held for later: the composer keeps the text and they send it
+  // when they choose. Everything else waits for auth, which lands within the connect.
+  if (MESSAGE_KIND[msg?.type] === 'user-action') return false;
   if (pendingSendQueue.length >= MAX_QUEUE) {
     console.warn('[remote-shim] send queue overflow — dropping oldest');
     pendingSendQueue.shift();
   }
-  pendingSendQueue.push(data);
+  pendingSendQueue.push({ data, at: Date.now() });
+  return true;
+}
+
+/**
+ * The stored credential is `<deviceId>:<secret>`.
+ *
+ * WHY a value with no colon is sent as a device id with no secret: that is a credential from
+ * the retired token file. The host answers "unknown", which is terminal, so the client stops
+ * and asks for the password once rather than retrying a credential that can never work.
+ */
+function splitCredential(stored: string): { deviceId: string; secret?: string } {
+  const at = stored.indexOf(':');
+  return at === -1 ? { deviceId: stored } : { deviceId: stored.slice(0, at), secret: stored.slice(at + 1) };
+}
+
+/** A name for this device's row in the host's list — never its address. */
+function describeThisDevice(): string {
+  const ua = typeof navigator === 'undefined' ? '' : navigator.userAgent;
+  const os = /Android/i.test(ua) ? 'Android' : /iPhone|iPad/i.test(ua) ? 'iPhone' : /Mac/i.test(ua) ? 'Mac' : /Windows/i.test(ua) ? 'Windows' : /Linux/i.test(ua) ? 'Linux' : '';
+  const browser = /Edg\//.test(ua) ? 'Edge' : /Chrome\//.test(ua) ? 'Chrome' : /Firefox\//.test(ua) ? 'Firefox' : /Safari\//.test(ua) ? 'Safari' : 'Browser';
+  return os ? `${browser} on ${os}` : browser;
+}
+
+/**
+ * Ask the host whether the requests we lost the answers to actually ran.
+ *
+ * WHY it can answer "unknown" and that is not a bug: the host keeps a short ring of
+ * completed ids, so anything older — or anything at all after the host restarted — is
+ * genuinely not knowable. Saying so is the honest option; guessing "done" or silently
+ * retrying are both worse.
+ */
+function reconcileUnknownOutcomes(): void {
+  const ids = [...pending.entries()].filter(([, e]) => e.outcomeUnknown).map(([id]) => id);
+  if (ids.length === 0) return;
+  invoke('remote:request-outcome', { ids }).then((res: { outcomes?: Record<string, string> }) => {
+    const outcomes = res?.outcomes ?? {};
+    for (const id of ids) {
+      const entry = pending.get(id);
+      if (!entry) continue;
+      pending.delete(id);
+      window.dispatchEvent(new CustomEvent(OUTCOME_UNKNOWN_EVENT, {
+        detail: { id, type: entry.type, outcome: outcomes[id] === 'completed' ? 'completed' : 'unknown' },
+      }));
+    }
+  }).catch(() => { /* still unknown; the entries stay marked */ });
+}
+
+/** Ask again for the state a fresh mount would have fetched. Reads only. */
+function rehydrate(): void {
+  for (const channel of REHYDRATE_ON_RECONNECT) {
+    invoke(channel).catch(() => { /* a reconnect is not the place to surface a read failure */ });
+  }
 }
 
 // Flush queued application messages once auth:ok has resolved.
@@ -134,9 +268,12 @@ function send(msg: any): void {
 // the bridge rejects application traffic before auth completes.
 function flushSendQueue(): void {
   if (!ws || ws.readyState !== WebSocket.OPEN) return;
-  const queued = pendingSendQueue;
+  const cutoff = Date.now() - REQUEST_TIMEOUT_MS;
+  const queued = pendingSendQueue.filter(item => item.at >= cutoff);
+  const dropped = pendingSendQueue.length - queued.length;
+  if (dropped > 0) console.warn(`[remote-shim] dropped ${dropped} queued message(s) older than the request timeout`);
   pendingSendQueue = [];
-  for (const data of queued) {
+  for (const { data } of queued) {
     try { ws.send(data); } catch (e) {
       console.error('[remote-shim] flush failed:', e);
     }
@@ -156,16 +293,19 @@ async function unwrapRemote(p: Promise<any>): Promise<void> {
 }
 
 function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Promise<any> {
-  const timeoutMs = opts?.timeoutMs ?? 30_000;
+  const timeoutMs = opts?.timeoutMs ?? REQUEST_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
-    const id = `msg-${++messageId}`;
+    const id = `${myDeviceId || 'anon'}:${connectionGeneration}:${++messageId}`;
     const timeout = setTimeout(() => {
-      if (pending.has(id)) {
-        pending.delete(id);
-        reject(new Error(`Request ${type} timed out`));
-      }
+      const entry = pending.get(id);
+      if (!entry) return;
+      // WHY the entry stays: the request was SENT, so it may have run. Dropping it here is
+      // what let the app tell you an action failed when it had actually succeeded and only
+      // the reply was lost. It is now marked, asked about on reconnect, and never retried.
+      entry.outcomeUnknown = true;
+      reject(new Error(`Request ${type} timed out`));
     }, timeoutMs);
-    pending.set(id, { resolve, reject, timeout });
+    pending.set(id, { resolve, reject, timeout, type });
     send({ type, id, payload });
   });
 }
@@ -184,6 +324,27 @@ function invoke(type: string, payload?: any, opts?: { timeoutMs?: number }): Pro
 // useAttentionClassifier polls terminal:get-screen-text every second — and a
 // toast per poll would be unusable.
 const announced = new Set<string>();
+
+/**
+ * When this connection finished authenticating, and how long after that we stay quiet.
+ *
+ * WHY a quiet window at all: connecting a phone announced TEN of these at once, because
+ * mounting the app fetches skills, commands, themes, the marketplace, project files and
+ * presence before the person has looked at anything. None of it was asked for, none of it
+ * was actionable, and the first thing a new phone did was list what does not work.
+ *
+ * This notice earns its place LATER — when someone opens a panel and it is empty, the
+ * explanation is worth having. So: the boot fetches go to the console, and anything after
+ * the app has settled goes on screen, because by then it followed something the user did.
+ */
+let connectedAt = 0;
+const BOOT_QUIET_MS = 4000;
+
+/** Called when auth completes, so the quiet window is measured from a real connection
+ *  rather than from page load — a slow tailnet hop would otherwise spend it waiting. */
+export function markConnectedForNotices(): void {
+  connectedAt = Date.now();
+}
 
 /** Channels whose `{ ok:false, error }` answer is a FAILURE to re-throw, not a
  *  value to hand back.
@@ -209,6 +370,18 @@ const announced = new Set<string>();
  *  `{ ok:false }` object and is NOT in this list, and LocalModelsSection casts
  *  its answer straight to an array and filters it. That predates this list. */
 export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
+  // Host administration is refused over the remote socket (desktop IPC only). Without
+  // these the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
+  // tried to change the host password saw the field's success tick for a change that never
+  // happened — a false success on the one surface where it matters most.
+  'remote:set-password',
+  'remote:set-config',
+  // Same refusal, same reason: renaming and unpairing decide who may reach this computer.
+  // Left out of this set, an unpair on a phone removed the row from the list while the
+  // device kept full access — the false success this list exists to prevent, on the one
+  // action where believing it is most dangerous.
+  'remote:devices:rename',
+  'remote:devices:unpair',
   // Success is `{ sessionId }`.
   'engine:run-in-terminal',
   // Success is the engine STATUS object. Without this a failed speed-switch
@@ -248,13 +421,39 @@ export function responseOutcome(channel: string, payload: unknown): 'unsupported
 }
 
 function noteUnsupported(channel: string): void {
+  // WHY an unnamed channel says nothing at all: the fallback name IS the channel id, and a
+  // toast reading "terminal:get-screen-text isn't available via remote access yet." tells a
+  // non-developer nothing they can act on — it only says something is broken. The console
+  // warning below still names it for whoever is fixing it.
+  if (!hasFeatureName(channel)) {
+    console.warn(`[remote-shim] not available over remote access (unnamed): ${channel}`);
+    return;
+  }
   const feature = remoteFeatureName(channel);
   if (announced.has(feature)) return;
   announced.add(feature);
-  console.warn(`[remote-shim] not available over remote access: ${channel}`);
+  // WHY the host matters: the phone's own bridge answers `unsupported` too
+  // (since 2026-09-10, for any channel it has no handler for), and a phone
+  // doing no remote access must not be told "via remote access".
+  const host = isAndroidLocal() ? 'phone' : 'remote';
+  console.warn(`[remote-shim] not available on this host (${host}): ${channel}`);
+  // The app's own boot fetches are not something the person did. Recorded, not announced.
+  if (connectedAt === 0 || Date.now() - connectedAt < BOOT_QUIET_MS) return;
   window.dispatchEvent(new CustomEvent(REMOTE_UNSUPPORTED_EVENT, {
-    detail: { channel, feature, message: remoteUnsupportedMessage(channel) },
+    detail: { channel, feature, message: remoteUnsupportedMessage(channel, host) },
   }));
+}
+
+/** A rejection shaped exactly like the host's `unsupported` refusal, minus the
+ *  notice. WHY: a few channels are asked for AUTOMATICALLY — on launch, on
+ *  opening Settings — and the phone's bridge cannot answer them until the
+ *  rebuild. Every caller already handles the rejection; what none of them
+ *  wants is a toast about it on an ordinary screen. Until 2026-09-10 the
+ *  bridge answered these with a bare `{error}` object that RESOLVED, which
+ *  crashed Project View (a status object with no `spaces`) and threw inside
+ *  the chat reducer on every launch. */
+function refuseQuietlyOnPhone(channel: string): Promise<never> {
+  return Promise.reject(new Error(`remote-unsupported: ${channel}`));
 }
 
 /** Settle one pending request from the host's answer. THE only place a
@@ -287,8 +486,10 @@ export function applyResponse(
   }
 }
 
-function fire(type: string, payload: any): void {
-  send({ type, payload });
+/** Returns false when the action was refused because the connection is down, so the caller
+ *  can keep what the person typed instead of clearing it. */
+function fire(type: string, payload: any): boolean {
+  return send({ type, payload });
 }
 
 function addListener(channel: string, cb: Callback): Callback {
@@ -531,6 +732,7 @@ function handleMessage(data: string): void {
 
 export function connect(passwordOrToken: string, isToken = false): Promise<string> {
   return new Promise((resolve, reject) => {
+    const generation = ++connectionGeneration;
     setConnectionState('connecting');
     ws = new WebSocket(getWsUrl());
 
@@ -564,8 +766,8 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       const authMsg = isLocalBridge && bridgeToken
         ? { type: 'auth', token: bridgeToken }
         : isToken
-          ? { type: 'auth', token: passwordOrToken }
-          : { type: 'auth', password: passwordOrToken };
+          ? { type: 'auth', ...splitCredential(passwordOrToken) }
+          : { type: 'auth', password: passwordOrToken, deviceName: describeThisDevice() };
       ws!.send(JSON.stringify(authMsg));
     };
 
@@ -577,18 +779,48 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
         try { msg = JSON.parse(event.data); } catch { return; }
 
         if (msg.type === 'auth:ok') {
+          // WHY the guard: without it a late auth:ok from a socket we already replaced
+          // rebinds the CURRENT connection's handlers to the dead one.
+          if (generation !== connectionGeneration) return;
+          myDeviceId = msg.deviceId ?? myDeviceId;
           authResolved = true;
           reconnectDelay = 1000; // Reset backoff on success
           reconnectAttempts = 0;
           console.log('[remote-shim] auth:ok from', getWsUrl());
           setConnectionState('connected');
+          markConnectedForNotices();
+          // WHY remote mode is declared HERE and not only in connectToHost: that function is
+          // the ANDROID pairing path, and it was the only thing that ever set 'remote'. A
+          // plain phone BROWSER opening the host's address goes through connect() instead,
+          // so isRemoteMode() stayed false on the one surface the flag exists to describe.
+          //
+          // Everything keyed on it was therefore inert there: the attention classifier kept
+          // polling the host for terminal text (which is what still put a channel id on
+          // Destin's screen after I had "fixed" it), the theme kept trying to load a
+          // wallpaper that only exists on the host, and Unpair stayed enabled on a phone.
+          //
+          // The test is the local bridge, not the platform string: an Android WebView on
+          // file:// talks to a runtime on the same device and is genuinely local, while the
+          // server tells every client `platform: 'desktop'`, so getPlatform() cannot answer
+          // this. connectToHost still declares it explicitly for the Android-paired case,
+          // which IS file:// and IS remote.
+          if (!isAndroidLocal()) {
+            void import('./platform').then(({ setConnectionMode }) => setConnectionMode('remote'));
+          }
+
           // Fix: drain any messages queued during the cold-start window
           // (mount-time fetches that fired before auth completed). Must be
           // here, not in ws.onopen — the bridge rejects pre-auth traffic.
           flushSendQueue();
-          // Store token for reconnection
-          const token = msg.token;
-          localStorage.setItem('youcoded-remote-token', token);
+          if (hasConnectedBefore) rehydrate();
+          hasConnectedBefore = true;
+          reconcileUnknownOutcomes();
+          // The secret comes back exactly once, at pairing; later connections answer with
+          // the device id alone, so keep what is already stored.
+          const token = msg.secret
+            ? `${msg.deviceId}:${msg.secret}`
+            : (localStorage.getItem('youcoded-remote-token') ?? msg.deviceId ?? '');
+          if (token) localStorage.setItem('youcoded-remote-token', token);
           // Preserve __PLATFORM__ when connecting to a remote desktop from Android —
           // the desktop server responds with platform:"electron" but we're still on a phone
           if (!preservePlatform) {
@@ -650,6 +882,11 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
       const isLocalBridge = location.protocol === 'file:' && !targetUrl;
       if (isLocalBridge) {
         retryLocalBridge();
+      } else if (isTerminalClose(event.code)) {
+        // Unpaired or retired: the credential can never work again. Forget it so the next
+        // attempt asks for the password once, rather than retrying forever.
+        localStorage.removeItem('youcoded-remote-token');
+        console.warn('[remote-shim] host refused this device permanently:', event.code, event.reason);
       } else {
         const storedToken = localStorage.getItem('youcoded-remote-token');
         if (storedToken) {
@@ -664,9 +901,27 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
   });
 }
 
+/**
+ * A close code the host uses to say "do not come back with this credential": unpaired,
+ * retired, or a version it cannot serve. Retrying any of these is guaranteed to fail, and
+ * on upgrade day every device retrying at once is what would trip the host's own limiter.
+ */
+function isTerminalClose(code: number): boolean {
+  return code === 4003 || code === 4004 || code === 4005;
+}
+
 function scheduleReconnect(token: string): void {
-  // After too many failures, give up and fall back to local mode
-  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+  // WHY only a real local bridge falls back: this path deleted the saved address and
+  // credential and connected to 'android-local', which does not exist in a browser. A phone
+  // that lost signal in a lift came back unpaired.
+  const hasLocalBridge = location.protocol === 'file:';
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && !hasLocalBridge) {
+    // Keep retrying, slowly, and keep the pairing. Disconnected is a state to show, not a
+    // reason to forget who you are.
+    reconnectDelay = Math.min(reconnectDelay * 2, 60_000);
+    reconnectAttempts = MAX_RECONNECT_ATTEMPTS;
+  }
+  if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS && hasLocalBridge) {
     // Reconnect-fallback: switching to local bridge means any messages
     // queued for the prior remote host are wrong-destination. Drop them
     // here — disconnect() isn't on this path (ws.onclose only schedules
@@ -985,6 +1240,7 @@ export function installShim(): void {
         invoke('session:set-note', { sessionId, note }),
       // Read a session's applied tag ids + note (used by the in-session Tag chip).
       getMeta: (sessionId: string) => invoke('session:get-meta', { sessionId }),
+      canSend: () => ws?.readyState === WebSocket.OPEN && connectionState === 'connected',
       sendInput: (sessionId: string, text: string) => fire('session:input', { sessionId, text }),
       resize: (sessionId: string, cols: number, rows: number) => fire('session:resize', { sessionId, cols, rows }),
       signalReady: (sessionId: string) => fire('session:terminal-ready', { sessionId }),
@@ -1239,8 +1495,8 @@ export function installShim(): void {
         window.open('https://github.com/itsdestin/youcoded/blob/master/CHANGELOG.md', '_blank');
       },
       // On the ANDROID host, go through the bridge: React runs under file://
-      // there, and window.open from a promise callback is a no-op (the same
-      // trap SessionService.kt's sync:restore:browse-url comment records) — a
+      // there, and window.open from a promise callback is a no-op (a trap the
+      // old restore wizard's browse-url handler hit first, 2026-05) — a
       // link tile in the Deliverables card would be a dead button. The bridge
       // fires Intent.ACTION_VIEW, which always works. `targetUrl` means we are
       // a REMOTE browser talking to a desktop server instead, where opening a
@@ -1288,12 +1544,21 @@ export function installShim(): void {
     remote: {
       getConfig: () => invoke('remote:get-config'),
       setPassword: (password: string) => invoke('remote:set-password', password),
-      setConfig: (updates: { enabled?: boolean; trustTailscale?: boolean }) =>
+      setConfig: (updates: { enabled?: boolean }) =>
         invoke('remote:set-config', updates),
       detectTailscale: () => invoke('remote:detect-tailscale'),
       getClientCount: () => invoke('remote:get-client-count'),
       getClientList: () => invoke('remote:get-client-list'),
-      disconnectClient: (clientId: string) => invoke('remote:disconnect-client', clientId),
+      getStatus: () => invoke('remote:status'),
+      // No push channel over the socket yet: a remote client reads the state when it opens
+      // the panel. Returning a no-op unsubscribe keeps the caller's cleanup honest.
+      onStatus: () => () => {},
+      // Renaming and unpairing are refused over this socket by design; list is read-only.
+      devices: {
+        list: () => invoke('remote:devices:list').then((r: { devices?: unknown[] }) => r?.devices ?? []),
+        rename: (deviceId: string, name: string) => invoke('remote:devices:rename', { deviceId, name }),
+        unpair: (deviceId: string) => invoke('remote:devices:unpair', { deviceId }),
+      },
       broadcastAction: (action: any) => fire('ui:action', action),
     },
     model: {
@@ -1370,7 +1635,10 @@ export function installShim(): void {
     // browsers + Android (PITFALLS parity rule). onEvent returns an
     // unsubscribe function to match preload's shape.
     syncSpaces: {
-      status: () => invoke('syncspaces:status'),
+      // The phone has no Sync Spaces engine (audit 2026-09-10); status is polled
+      // on mount by Settings, Project View and the folder switcher, so it is
+      // refused without a notice — see refuseQuietlyOnPhone.
+      status: () => (isAndroidLocal() ? refuseQuietlyOnPhone('syncspaces:status') : invoke('syncspaces:status')),
       enable: (enabled: boolean) => invoke('syncspaces:enable', { enabled }),
       // Optional spaceId narrows to one space (Project View "Sync now"); omit for all.
       syncNow: (spaceId?: string) => invoke('syncspaces:sync-now', { spaceId }),
@@ -1639,6 +1907,21 @@ export function installShim(): void {
       },
       openSessionIn: (args: { cwd: string; initialInput?: string }) =>
         invoke('dev:open-session-in', args),
+      // WHY these are here even though the server has no handler for them
+      // (code review C6): this namespace is HAND-BUILT, so a member that is
+      // merely absent is `undefined`, and calling it throws
+      // "window.claude.dev.setupWorkspace is not a function" — a raw JavaScript
+      // error shown to a phone user as the explanation for why setup failed.
+      // Routing them through invoke() means the server answers `unsupported`,
+      // the shim rejects with `remote-unsupported: dev:setup-workspace`, and
+      // plainMessage turns that into "Developer tools isn't available via remote
+      // access yet." Desktop-only has to be a REFUSAL, not an omission.
+      setupWorkspace: () =>
+        invoke('dev:setup-workspace'),
+      setupStatus: () =>
+        invoke('dev:setup-status'),
+      clearSetupStatus: () =>
+        invoke('dev:setup-clear'),
     },
     // First-run is desktop-only — return COMPLETE so the renderer never enters first-run mode
     firstRun: {
@@ -1742,12 +2025,16 @@ export function installShim(): void {
       // TypeError, not a no-op.
       claimPending: () => Promise.resolve([] as any[]),
       replayLiveState: (_sid: string) => Promise.resolve(),
-      // A REAL call, not a stub. requestTranscriptReplay above shipped as a
-      // no-op and silently gave the phone no history for months; paging is the
-      // phone's only way back through a long conversation, so it must reach the
-      // desktop.
+      // A REAL call, not a stub, when a desktop is on the other end.
+      // requestTranscriptReplay above shipped as a no-op and silently gave the
+      // phone no history for months; paging is the only way back through a long
+      // conversation, so it must reach the desktop.
+      // On the phone's OWN bridge there is no pager (deliberately absent since
+      // 2026-08-27, see tests/transcript-page-channel-parity.test.ts): App.tsx
+      // asks for the first page of every session on launch, so the refusal is
+      // quiet — the callers already treat it as "no older messages".
       requestTranscriptPage: (req: { sessionId: string; beforeCursor?: unknown; claudeSessionId?: string; projectSlug?: string }) =>
-        invoke('transcript:page', {
+        isAndroidLocal() ? refuseQuietlyOnPhone('transcript:page') : invoke('transcript:page', {
           sessionId: req.sessionId,
           beforeCursor: req.beforeCursor ?? null,
           claudeSessionId: req.claudeSessionId,

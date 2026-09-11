@@ -106,7 +106,7 @@ import { getConfig as getMarketplaceConfig, setConfig as setMarketplaceConfig } 
 import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
-import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn } from './dev-tools';
+import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
 import type { UpdateProgressEvent } from '../shared/update-install-types';
 import { getChangelog } from './changelog-service';
@@ -1789,10 +1789,9 @@ export function registerIpcHandlers(
       return true;
     });
 
-    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; trustTailscale?: boolean; keepAwakeHours?: number }) => {
+    ipcMain.handle(IPC.REMOTE_SET_CONFIG, async (_event, updates: { enabled?: boolean; keepAwakeHours?: number }) => {
       const wasEnabled = remoteConfig.enabled;
       if (typeof updates.enabled === 'boolean') remoteConfig.enabled = updates.enabled;
-      if (typeof updates.trustTailscale === 'boolean') remoteConfig.trustTailscale = updates.trustTailscale;
       if (typeof updates.keepAwakeHours === 'number') {
         remoteConfig.keepAwakeHours = updates.keepAwakeHours;
         applyKeepAwake(updates.keepAwakeHours);
@@ -1842,8 +1841,22 @@ export function registerIpcHandlers(
       return remoteServer?.getClientList() ?? [];
     });
 
-    ipcMain.handle(IPC.REMOTE_DISCONNECT_CLIENT, async (_event, clientId: string) => {
-      return remoteServer?.disconnectClient(clientId) ?? false;
+    // WHY these are desktop IPC and have no remote equivalent: renaming and unpairing decide
+    // who may reach this computer. The remote socket refuses them (HOST_ADMIN_REFUSAL).
+    ipcMain.handle(IPC.REMOTE_STATUS, async () => {
+      return remoteServer?.getStatus() ?? { state: 'stopped', port: 0 };
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_LIST, async () => {
+      return remoteServer?.getDeviceList() ?? [];
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_RENAME, async (_event, deviceId: string, name: string) => {
+      return remoteServer?.renameDevice(deviceId, name) ?? false;
+    });
+
+    ipcMain.handle(IPC.REMOTE_DEVICES_UNPAIR, async (_event, deviceId: string) => {
+      return remoteServer?.unpairDevice(deviceId) ?? false;
     });
 
     ipcMain.handle(IPC.REMOTE_INSTALL_TAILSCALE, async () => {
@@ -4372,6 +4385,31 @@ export function registerIpcHandlers(
       return { error: String(e?.message || e) };
     }
   });
+
+  // Managed development workspace (contract R9/R10). Setup lives in the main
+  // process on purpose: the screen tells the user "you can close this — setup
+  // keeps going", which is only true if closing the dialog cannot cancel it.
+  ipcMain.handle(IPC.DEV_SETUP_WORKSPACE, async () =>
+    setupManagedWorkspace((absPath) => {
+      // Register it the same way the legacy install does — as a saved project
+      // folder, NOT a sync space. A space under ~/YouCoded/Projects would push
+      // this ~1GB tree to the user's backup with `git add -A`, unannounced.
+      try {
+        const normalized = path.resolve(absPath);
+        const folders = readFolders();
+        if (!folders.some((f) => path.resolve(f.path) === normalized)) {
+          folders.unshift({ path: normalized, nickname: path.basename(normalized), addedAt: Date.now() } as SavedFolder);
+          writeFolders(folders);
+        }
+      } catch (e) {
+        log('WARN', 'dev', 'folders.add post-setup failed', { error: String(e) });
+      }
+    }),
+  );
+
+  ipcMain.handle(IPC.DEV_SETUP_STATUS, async () => workspaceSetupStatus());
+
+  ipcMain.handle(IPC.DEV_SETUP_CLEAR, async () => { clearWorkspaceSetupStatus(); });
 
   ipcMain.handle(IPC.DEV_OPEN_SESSION_IN, async (_event, args: { cwd: string; initialInput?: string }) => {
     // Delegate to the exported helper so the logic is independently testable.

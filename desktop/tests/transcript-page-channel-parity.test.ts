@@ -10,6 +10,11 @@ import * as path from 'node:path';
  * pages through the remote bridge when connected to a desktop, so the Kotlin
  * surface has nothing to answer yet. When on-device paging lands, this block
  * grows a SessionService.kt assertion.
+ *
+ * Until then the shim refuses the call QUIETLY on the phone's own bridge
+ * (remote-shim.ts requestTranscriptPage, 2026-09-10): App.tsx asks for every
+ * session's first page on launch, and before this the bridge's bare `{error}`
+ * reply resolved into the chat reducer as junk.
  */
 const read = (rel: string) => fs.readFileSync(path.join(__dirname, '..', rel), 'utf8');
 

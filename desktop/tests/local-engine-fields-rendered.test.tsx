@@ -521,7 +521,7 @@ describe('the engine card', () => {
     expect(cause).toBeTruthy();
     expect(cause.className).toContain('break-words');
     // A cause we HAVE is the specific+accurate shape — no Report bug / Diagnose.
-    expect(screen.queryByText('Diagnose with Claude')).toBeNull();
+    expect(screen.queryByText('Diagnose with the assistant')).toBeNull();
   });
 
   it('T7: with NO reason available, stays non-committal and offers the two standard actions', async () => {
@@ -532,21 +532,22 @@ describe('the engine card', () => {
     render(<EngineCard showDetails />);
     await waitFor(() => expect(screen.getByText(NOT_IN_FORCE)).toBeTruthy());
     expect(screen.getByText('Report bug')).toBeTruthy();
-    expect(screen.getByText('Diagnose with Claude')).toBeTruthy();
+    expect(screen.getByText('Diagnose with the assistant')).toBeTruthy();
     expect(screen.getByText(/gave no reason we can show you/)).toBeTruthy();
   });
 
   it('T7: the two actions on the no-reason message actually DO something', async () => {
     // Wired to nothing, this is a general error with no next step — which the
     // standard disallows just as firmly as an invented cause. Making
-    // "Diagnose with Claude" a no-op left every other assertion green.
+    // "Diagnose with the assistant" a no-op left every other assertion green.
     mountEngine({ ...RUNNING, modelSettingsInForce: false, modelSettingsError: null });
     render(<EngineCard showDetails />);
-    await waitFor(() => expect(screen.getByText('Diagnose with Claude')).toBeTruthy());
-    await act(async () => { fireEvent.click(screen.getByText('Diagnose with Claude')); });
+    await waitFor(() => expect(screen.getByText('Diagnose with the assistant')).toBeTruthy());
+    await act(async () => { fireEvent.click(screen.getByText('Diagnose with the assistant')); });
     // The app's one bug-report surface opens — its own dialog title, which
-    // nothing else on this card renders.
-    await waitFor(() => expect(screen.getByText('Report a bug')).toBeTruthy());
+    // nothing else on this card renders. Renamed 2026-09-10 when the approved
+    // screen replaced the legacy one for every user: one heading, both kinds.
+    await waitFor(() => expect(screen.getByText('Submit a ticket')).toBeTruthy());
   });
 
   it('T7: the message is NOT hidden behind the expanded details panel', async () => {
@@ -587,7 +588,7 @@ describe('the engine card', () => {
     render(<EngineCard showDetails />);
     await waitFor(() => expect(screen.getByText('Advanced')).toBeTruthy());
     expect(screen.queryByText(NOT_IN_FORCE)).toBeNull();
-    expect(screen.queryByText('Diagnose with Claude')).toBeNull();
+    expect(screen.queryByText('Diagnose with the assistant')).toBeNull();
   });
 
   it('§B: says a saved setting waits for the reply on screen', async () => {

@@ -19,7 +19,7 @@
 export function SkipPermissionsCaption() {
   return (
     <p className="text-3xs text-destructive-fg m-0">
-      Claude will execute tools without asking for approval.
+      Your assistant will execute tools without asking for approval.
     </p>
   );
 }
