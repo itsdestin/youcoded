@@ -292,6 +292,13 @@ const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, s
     knownSessionIds: () => sessionManager.listSessions().map((s) => s.id),
   }),
   getFocusSessionId: () => windowRegistry.getFocusSessionId(),
+  // A theme change made on a phone reaches every window here, the same message a peer
+  // window sends (tests/remote-appearance-relay.test.ts).
+  onAppearanceBroadcast: (prefs) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
+    }
+  },
 });
 
 // WHY push and not poll: a bind failure happens once, seconds after launch, and a panel
@@ -1225,6 +1232,9 @@ function registerDetachIpc() {
       if (win.isDestroyed() || win.webContents.id === evt.sender.id) continue;
       win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
     }
+    // WHY phones too: a phone read the computer's theme once, at page load, and kept it until
+    // reloaded (Destin, 2026-09-11). The computer's change reaches phones already open.
+    remoteServer.broadcast({ type: IPC.APPEARANCE_SYNC, payload: prefs });
   });
 
   // Transfer a session from its current owner window to a target window.

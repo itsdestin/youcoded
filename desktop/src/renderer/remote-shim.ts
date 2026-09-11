@@ -357,6 +357,10 @@ export const MESSAGE_KIND: Readonly<Record<string, 'user-action' | 'read' | 'tra
   // Batch 2: the readiness handshake is the connection talking about itself. Sent only
   // while connected (maybeSendClientReady checks), so it is never queued anyway.
   'client:ready': 'transport',
+  // A theme change made on this phone, told to the computer and other phones. The change is
+  // already saved (appearance:set); a copy queued while offline could replay an old theme over
+  // a newer one chosen on the computer meanwhile, so it is never queued.
+  'appearance:broadcast': 'user-action',
 };
 
 /**
@@ -936,6 +940,9 @@ function handleMessage(data: string, generation: number): void {
       // Full chat state snapshot sent by the host when a remote client connects.
       // Dispatched into the chat reducer via window.claude.on.chatHydrate in App.tsx.
       dispatchEvent('chat:hydrate', payload);
+      break;
+    case 'appearance:sync':
+      dispatchEvent('appearance:sync', payload);
       break;
     case 'theme:reload':
       // Fix: without this case, Android theme installs never refreshed the
@@ -1915,10 +1922,15 @@ export function installShim(): void {
       favoriteTheme: (slug: string, favorited: boolean) =>
         invoke('appearance:favorite-theme', { slug, favorited }),
       getFavoriteThemes: () => invoke('appearance:get-favorite-themes', {}),
-      // Cross-window appearance sync is Electron-only; single-window hosts
-      // don't need these but renderer code calls them unconditionally.
-      broadcast: (_prefs: Record<string, any>) => {},
-      onSync: (_cb: (prefs: Record<string, any>) => void) => () => {},
+      // WHY these are real now (Destin, 2026-09-11: the phone kept an old theme until it was
+      // reloaded): a phone is one more window on the computer's appearance. A change here
+      // goes to the computer to pass on; a change there arrives as appearance:sync.
+      // tests/remote-appearance-sync.test.ts.
+      broadcast: (prefs: Record<string, any>) => { fire('appearance:broadcast', prefs); },
+      onSync: (cb: (prefs: Record<string, any>) => void) => {
+        const handler = addListener('appearance:sync', cb);
+        return () => removeListener('appearance:sync', handler);
+      },
     },
     defaults: {
       get: () => invoke('defaults:get'),

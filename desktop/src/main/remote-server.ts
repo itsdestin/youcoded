@@ -290,13 +290,14 @@ export class RemoteServer {
     private hookRelay: HookRelay,
     private config: RemoteConfig,
     private skillProvider?: LocalSkillProvider,
-    opts?: { requestSnapshot?: () => Promise<SerializedChatState>; getFocusSessionId?: () => string | null },
+    opts?: { requestSnapshot?: () => Promise<SerializedChatState>; getFocusSessionId?: () => string | null; onAppearanceBroadcast?: (prefs: Record<string, unknown>) => void },
   ) {
     this.devices = new RemoteDeviceStore();
     // Default is a no-op that returns an empty snapshot — allows the server to
     // be constructed before the main window exists (e.g. during first-run setup).
     this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
     this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
+    this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
   }
   // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
   // Rides session:destroyed so a phone whose conversation went away opens that one.
@@ -304,6 +305,8 @@ export class RemoteServer {
   // changes its selection — and the design puts that fallback on the phone (first
   // remaining session), so the host reports the cache as it is.
   private getFocusSessionId: () => string | null;
+  /** Hands a phone's appearance change to the computer's windows (main owns BrowserWindow). */
+  private onAppearanceBroadcast: (prefs: Record<string, unknown>) => void;
 
   /** Injected by main.ts. Read-only access to the marketplace auth session so
    *  remote clients can see whether the host is signed in — the game lobby
@@ -2641,6 +2644,22 @@ export class RemoteServer {
           this.respond(client.ws, type, id, true);
         } catch {
           this.respond(client.ws, type, id, false);
+        }
+        break;
+      }
+      // A theme or display change made on a phone (remote-appearance-relay.test.ts). WHY: a
+      // phone used to read the computer's theme once, at page load, and never hear a change
+      // after that in either direction (Destin, 2026-09-11: "dev is on meadow mist and remote
+      // chose golden daybreak"). The phone has already saved it with appearance:set; this
+      // only tells everyone else, the way a desktop window tells its peer windows.
+      case 'appearance:broadcast': {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) break;
+        this.onAppearanceBroadcast(payload);
+        const msg = { type: 'appearance:sync', payload };
+        for (const c of this.clients) {
+          if (c === client) continue;
+          if (c.phase && c.phase !== 'live') { this.enqueueForRestoring(c, msg); continue; }
+          if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(msg));
         }
         break;
       }
