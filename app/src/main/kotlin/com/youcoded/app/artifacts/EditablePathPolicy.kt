@@ -139,6 +139,23 @@ object EditablePathPolicy {
         FileRead.Unreadable(e.message?.takeIf { it.isNotBlank() } ?: "the file could not be read")
     }
 
+    /**
+     * Read at most `maxBytes` from the start of a file, keeping the reason when that fails.
+     * The over-cap branch of artifacts:get reads a head and a text window this way. WHY
+     * (code review 2026-09-11, F6): it used readFully, which throws for the same "exists
+     * but can't be read" file readWhole handles, so an unreadable file over the size cap
+     * got no answer — or took the bridge handler down.
+     */
+    fun readPrefix(f: java.io.File, maxBytes: Int): FileRead = try {
+        val buf = ByteArray(maxBytes)
+        val n = readFully(f, buf)
+        FileRead.Bytes(buf.copyOf(n))
+    } catch (e: java.io.IOException) {
+        FileRead.Unreadable(e.message?.takeIf { it.isNotBlank() } ?: "the file could not be read")
+    } catch (e: SecurityException) {
+        FileRead.Unreadable(e.message?.takeIf { it.isNotBlank() } ?: "the file could not be read")
+    }
+
     /** git-style sniff: NUL byte in the head slice means not-text. */
     fun looksBinary(head: ByteArray): Boolean {
         val n = minOf(head.size, 8192)

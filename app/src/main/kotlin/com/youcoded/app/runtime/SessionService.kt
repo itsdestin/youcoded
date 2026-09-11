@@ -3600,20 +3600,35 @@ class SessionService : Service() {
                 val wantsFull = wantsFullFlag &&
                     resolved.length() <= EditablePathPolicy.FULL_READ_MAX_BYTES
                 if (resolved.length() > EditablePathPolicy.EDIT_MAX_BYTES && !wantsFull) {
-                    val head = ByteArray(8192)
-                    val headLen = EditablePathPolicy.readFully(resolved, head)
+                    // Both reads go through readPrefix, the guarded twin of readWhole below:
+                    // an unreadable file answers { ok: false, error } here too, instead of
+                    // throwing out of the handler (code review 2026-09-11, F6).
+                    val head = when (val read = EditablePathPolicy.readPrefix(resolved, 8192)) {
+                        is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                        is EditablePathPolicy.FileRead.Unreadable -> {
+                            msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                                .put("ok", false).put("error", read.reason)) }
+                            return@handleBridgeMessage
+                        }
+                    }
                     val out = org.json.JSONObject()
                         .put("ok", true).put("artifact", artifact.toJson()).put("orphan", false)
                         .put("sizeBytes", resolved.length())
                         .put("mtimeMs", resolved.lastModified().toDouble())
-                    if (EditablePathPolicy.looksBinary(head.copyOf(headLen))) {
+                    if (EditablePathPolicy.looksBinary(head)) {
                         out.put("content", org.json.JSONObject.NULL)
                            .put("binary", true).put("truncated", false)
                     } else {
                         val cap = EditablePathPolicy.EDIT_MAX_BYTES.toInt()
-                        val win = ByteArray(cap)
-                        val winLen = EditablePathPolicy.readFully(resolved, win)
-                        out.put("content", EditablePathPolicy.textPrefix(win, winLen, cap))
+                        val win = when (val read = EditablePathPolicy.readPrefix(resolved, cap)) {
+                            is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                            is EditablePathPolicy.FileRead.Unreadable -> {
+                                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                                    .put("ok", false).put("error", read.reason)) }
+                                return@handleBridgeMessage
+                            }
+                        }
+                        out.put("content", EditablePathPolicy.textPrefix(win, win.size, cap))
                            .put("binary", false).put("truncated", true)
                     }
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, out) }

@@ -45,4 +45,28 @@ class EditablePathPolicyReadTest {
             f.setReadable(true, false)
         }
     }
+
+    // Code review 2026-09-11, F6: the over-cap branch of artifacts:get read its head and its
+    // text window with readFully, which throws for the same "exists but can't be read" file.
+    @Test
+    fun aPrefixOfAReadableFileComesBackAsThoseBytes() {
+        val f = File.createTempFile("prefix", ".md").apply { writeText("hello world"); deleteOnExit() }
+        val read = EditablePathPolicy.readPrefix(f, 5)
+        assertIs<EditablePathPolicy.FileRead.Bytes>(read)
+        assertEquals("hello", String(read.bytes, Charsets.UTF_8))
+    }
+
+    @Test
+    fun aPrefixOfAnExistingUnreadableFileComesBackUnreadable() {
+        val f = File.createTempFile("unreadable-prefix", ".md").apply { writeText("secret"); deleteOnExit() }
+        f.setReadable(false, false)
+        assumeFalse("this user can still read a file with no read permission", f.canRead())
+        try {
+            val read = EditablePathPolicy.readPrefix(f, 8192)
+            assertIs<EditablePathPolicy.FileRead.Unreadable>(read)
+            assertTrue(read.reason.isNotBlank(), "the reason is kept, not dropped")
+        } finally {
+            f.setReadable(true, false)
+        }
+    }
 }

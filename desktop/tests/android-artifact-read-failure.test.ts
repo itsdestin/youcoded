@@ -36,4 +36,11 @@ describe('Android artifacts:get — an unreadable file is not "no longer on disk
   it('no longer turns a caught read failure into a null that becomes orphan', () => {
     expect(artifactsGetHandler()).not.toMatch(/readBytes\(\)\s*\}\s*catch\s*\(_:\s*java\.io\.IOException\)\s*\{\s*null\s*\}/);
   });
+
+  // Code review 2026-09-11, F6: the over-cap branch read with the throwing readFully, so the
+  // same unreadable file over the size cap got no answer at all (or took the handler down).
+  it('reads an over-cap file through the guarded prefix helper, never the throwing one', () => {
+    expect(artifactsGetHandler()).toContain('EditablePathPolicy.readPrefix(');
+    expect(artifactsGetHandler()).not.toContain('EditablePathPolicy.readFully(');
+  });
 });
