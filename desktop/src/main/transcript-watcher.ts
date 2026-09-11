@@ -369,6 +369,14 @@ function extractToolResultContent(content: any): string {
 // wider than the old exact-500 prune, strictly safer for dedup correctness.
 const DEDUP_CAP = 500;
 
+// WHY (2026-09-10): a /compact rewrite, a paste of a huge tool result, or a
+// transcript that grew while the app was suspended arrives as ONE delta.
+// Buffer.alloc(delta) + one decode + one synchronous parse loop over the whole
+// thing is a single long task on the main thread. Cap each read; the
+// serialized runner below loops immediately until the file is drained, and
+// every await in between lets timers and IPC run.
+const MAX_TAIL_READ_BYTES = 1024 * 1024;
+
 interface WatchedSession {
   desktopSessionId: string;
   claudeSessionId: string;
@@ -732,8 +740,16 @@ export class TranscriptWatcher extends EventEmitter {
     }
     if (fileSize <= session.offset) return; // No new data
 
-    const bytesToRead = fileSize - session.offset;
+    const remaining = fileSize - session.offset;
+    const bytesToRead = Math.min(remaining, MAX_TAIL_READ_BYTES);
     const buffer = Buffer.alloc(bytesToRead);
+    // Ask the serialized runner (readNewLines' do…while) for another pass if
+    // this read cannot reach EOF. Set BEFORE any early return below — a
+    // capped read may end mid-line and return through the "no complete line
+    // yet" branch — and set here because the do…while clears rerunQueued
+    // BEFORE each call, so a flag raised inside this pass is still standing
+    // when the loop checks it after the pass returns.
+    if (remaining > bytesToRead) session.rerunQueued = true;
 
     let handle: fs.promises.FileHandle;
     try {
