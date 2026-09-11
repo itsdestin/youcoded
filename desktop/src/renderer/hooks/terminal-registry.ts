@@ -48,6 +48,25 @@ export function notifyBufferReady(sessionId: string) {
   }
 }
 
+// WHY (2026-09-10): rig instrument; the heal costs every open terminal a
+// re-rasterize, so the rig counts clears per switch. TerminalView's glyph-atlas
+// heal clears the texture atlas SHARED by every open terminal, and nothing
+// measured how often that happens. The perf rig
+// (youcoded-dev scripts/perf-lab/scenario-terminal.mjs) reads this through
+// window.__terminalRegistry.atlasClears before and after each session switch.
+// A plain module counter: no timers, no allocation, no effect on rendering.
+let atlasClears = 0;
+
+/** Record one clearTextureAtlas() call. Called from BOTH heal sites in TerminalView. */
+export function noteAtlasClear(): void {
+  atlasClears++;
+}
+
+/** How many times any terminal has cleared the shared glyph atlas since load. */
+export function getAtlasClears(): number {
+  return atlasClears;
+}
+
 export function registerTerminal(sessionId: string, terminal: Terminal) {
   terminals.set(sessionId, terminal);
 }
