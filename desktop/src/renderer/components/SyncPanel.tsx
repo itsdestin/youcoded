@@ -10,7 +10,9 @@
  */
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { Button, Dialog, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { Button, Dialog, ErrorState, FieldError, TextInput, Toggle, LoadingState, SettingRow } from './ui';
+import { BugReportPopup } from './development/BugReportPopup';
+import type { ReportContext } from './development/ReportDesign';
 import type { SyncWarning } from '../../main/sync-state';
 import { deriveSettingsRowState, type SyncDisplayState } from '../state/sync-display-state';
 import { createPortal } from 'react-dom';
@@ -481,6 +483,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   const logScrollRef = useScrollFade<HTMLDivElement>();
   // Per-backend action feedback
   const [actionFeedback, setActionFeedback] = useState<Record<string, string>>({});
+  // A failed upload per backend: the sentence to show, and whether Report bug applies (it does
+  // not for a skipped upload — nothing went wrong, it simply hasn't run).
+  const [uploadFailure, setUploadFailure] = useState<Record<string, { message: string; reportable: boolean }>>({});
+  const [reportContext, setReportContext] = useState<ReportContext | null>(null);
   // Confirmation dialog state
   const [confirmRemoveId, setConfirmRemoveId] = useState<string | null>(null);
   // Cross-device sync spaces (spec 2026-07-03) — separate from the backend backups
@@ -598,29 +604,32 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
   }, [claude]);
 
   // Per-backend actions
-  // A row's feedback is 'uploading', 'uploaded', or the failure sentence itself.
-  // WHY (Destin, batch 1 deck E-1): a bare "Error" that vanished after two seconds told the
-  // user nothing. A failure now says what happened and stays until the next upload; only a
-  // success clears itself. An empty reason means the upload was skipped (another backup held
-  // the lock), and no answer at all is "couldn't confirm", never a guessed failure.
+  // WHY (Destin, batch 1 deck E-1 then E-1b): a bare "Error" that vanished after two seconds
+  // told the user nothing, and every error state must offer an action. A failure is now a full
+  // error block under its row — Retry always, Report bug whenever the cause is not known — and
+  // stays until the next upload; only a success clears itself. An empty reason means the upload
+  // was skipped (another backup held the lock), and no answer at all is "couldn't confirm",
+  // never a guessed failure.
   const handlePushBackend = useCallback(async (id: string) => {
+    setUploadFailure(prev => { if (!prev[id]) return prev; const n = { ...prev }; delete n[id]; return n; });
     setActionFeedback(prev => ({ ...prev, [id]: 'uploading' }));
-    let failure: string | null = null;
+    let failure: { message: string; reportable: boolean } | null = null;
     try {
       const result = await claude.sync.pushBackend(id);
       if (!result.success) {
         failure = result.error
-          ? `Upload failed: ${plainMessage(result.error)}`
-          : "Upload hasn't run yet — try again in a moment.";
+          ? { message: `Upload failed: ${plainMessage(result.error)}`, reportable: true }
+          : { message: "Upload hasn't run yet — try again in a moment.", reportable: false };
       }
     } catch {
-      failure = "Couldn't confirm the upload finished.";
+      failure = { message: "Couldn't confirm the upload finished.", reportable: true };
     }
     // Refreshed separately, so a failed refresh can't turn a finished upload into a failure.
     try { await refreshStatus(); } catch { /* the row keeps its last status */ }
     if (failure) {
-      const text = failure;
-      setActionFeedback(prev => ({ ...prev, [id]: text }));
+      const f = failure;
+      setActionFeedback(prev => { const n = { ...prev }; delete n[id]; return n; });
+      setUploadFailure(prev => ({ ...prev, [id]: f }));
       return;
     }
     setActionFeedback(prev => ({ ...prev, [id]: 'uploaded' }));
@@ -1351,9 +1360,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                           : b.lastError ? 'bg-red-500 ring-2 ring-red-500/25'
                           : (b.syncEnabled && b.connected) ? 'bg-green-500 ring-2 ring-green-500/25'
                           : 'bg-fg-muted/40';
+                        const failure = uploadFailure[b.id];
                         return (
+                          <React.Fragment key={b.id}>
                           <div
-                            key={b.id}
                             className={`flex items-center gap-3 rounded-lg border px-3 py-2.5 ${
                               b.lastError ? 'border-red-500/20 bg-red-500/5' :
                               b.syncEnabled && b.connected ? 'border-green-500/20 bg-green-500/5' :
@@ -1377,14 +1387,10 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                                 <span className="text-4xs font-medium text-amber-400">Changes pending upload</span>
                               )}
                               {actionFeedback[b.id] && (
-                                <span className={`text-4xs font-medium break-words ${
-                                  actionFeedback[b.id] === 'uploading' ? 'text-blue-400' :
-                                  actionFeedback[b.id] === 'uploaded' ? 'text-green-400' :
-                                  'text-destructive-fg'
+                                <span className={`text-4xs font-medium ${
+                                  actionFeedback[b.id] === 'uploading' ? 'text-blue-400' : 'text-green-400'
                                 }`}>
-                                  {actionFeedback[b.id] === 'uploading' ? 'Uploading...' :
-                                   actionFeedback[b.id] === 'uploaded' ? 'Uploaded!' :
-                                   actionFeedback[b.id]}
+                                  {actionFeedback[b.id] === 'uploading' ? 'Uploading...' : 'Uploaded!'}
                                 </span>
                               )}
                             </div>
@@ -1418,6 +1424,17 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
                               )}
                             </div>
                           </div>
+                          {failure && (
+                            <ErrorState
+                              variant="inline"
+                              message={failure.message}
+                              onRetry={() => handlePushBackend(b.id)}
+                              onReportBug={failure.reportable
+                                ? () => setReportContext({ surface: `Backup & Sync → ${b.label}`, error: failure.message })
+                                : undefined}
+                            />
+                          )}
+                          </React.Fragment>
                         );
                       })}
                     </div>
@@ -1637,6 +1654,9 @@ function SyncPopup({ popupRef, initialStatus, onClose, onRefresh }: SyncPopupPro
 
       {/* The "Download from backup" confirmation dialog was removed in
           sync-legacy-demolition — there is no pull/restore path anymore. */}
+
+      {/* Report bug from a failed upload's error block. */}
+      <BugReportPopup open={!!reportContext} onClose={() => setReportContext(null)} context={reportContext ?? undefined} />
     </>
   );
 }

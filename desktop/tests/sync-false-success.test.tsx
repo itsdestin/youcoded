@@ -20,7 +20,7 @@
  */
 import React from 'react';
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { render, screen, cleanup, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import SyncSection from '../src/renderer/components/SyncPanel';
 
@@ -91,30 +91,50 @@ describe('Backup & Sync reports only what the backend confirmed', () => {
     expect(screen.queryByText('Uploaded!')).toBeNull();
   });
 
-  // Destin, batch 1 deck (E-1): a bare "Error" is unhelpful. The row says what happened, and a
-  // failure stays until the next upload instead of vanishing after two seconds.
-  it('a failed upload stays on the row with its reason', async () => {
-    stub({ pushBackend: vi.fn(async () => ({ success: false, error: "Some files didn't upload." })) }, [RETRY_WARNING]);
+  // Destin, batch 1 deck (E-1, then E-1b): a bare "Error" is unhelpful, and every error state
+  // offers an action — a failed upload is a full error block with Retry, plus Report bug
+  // wherever the cause is not known. It stays until the next upload.
+  async function retryAndFindAlert(pushBackend: ReturnType<typeof vi.fn>, text: RegExp) {
+    const api = stub({ pushBackend }, [RETRY_WARNING]);
     render(<SyncSection autoOpen />);
     fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
-    const label = await screen.findByText("Upload failed: Some files didn't upload.");
+    const alert = await waitFor(() => {
+      const hit = screen.getAllByRole('alert').find((a) => text.test(a.textContent ?? ''));
+      if (!hit) throw new Error('no alert matching ' + text);
+      return hit;
+    });
+    return { api, alert };
+  }
+
+  it('a failed upload is an error block with its reason, Retry and Report bug, and it stays', async () => {
+    const { api, alert } = await retryAndFindAlert(
+      vi.fn(async () => ({ success: false, error: "Some files didn't upload." })),
+      /Upload failed: Some files didn.t upload\./,
+    );
+    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
     await new Promise((r) => setTimeout(r, 2300));
-    expect(label).toBeInTheDocument();
+    expect(alert).toBeInTheDocument();
     expect(screen.queryByText('Error')).toBeNull();
+
+    // Retry in the block runs the upload again.
+    fireEvent.click(within(alert).getByRole('button', { name: 'Retry' }));
+    await waitFor(() => expect(api.pushBackend).toHaveBeenCalledTimes(2));
   });
 
-  it('an upload that was skipped says it has not run yet', async () => {
-    stub({ pushBackend: vi.fn(async () => ({ success: false, error: '' })) }, [RETRY_WARNING]);
-    render(<SyncSection autoOpen />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText(/upload hasn.t run yet/i)).toBeInTheDocument();
+  it('an upload that was skipped offers Retry only — nothing to report', async () => {
+    const { alert } = await retryAndFindAlert(vi.fn(async () => ({ success: false, error: '' })), /upload hasn.t run yet/i);
+    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).queryByRole('button', { name: 'Report bug' })).toBeNull();
   });
 
-  it('an upload with no answer says it could not confirm', async () => {
-    stub({ pushBackend: vi.fn(async () => { throw new Error('Request sync:push-backend timed out'); }) }, [RETRY_WARNING]);
-    render(<SyncSection autoOpen />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry' }));
-    expect(await screen.findByText(/couldn.t confirm the upload finished/i)).toBeInTheDocument();
+  it('an upload with no answer says it could not confirm, with Retry and Report bug', async () => {
+    const { alert } = await retryAndFindAlert(
+      vi.fn(async () => { throw new Error('Request sync:push-backend timed out'); }),
+      /couldn.t confirm the upload finished/i,
+    );
+    expect(within(alert).getByRole('button', { name: 'Retry' })).toBeInTheDocument();
+    expect(within(alert).getByRole('button', { name: 'Report bug' })).toBeInTheDocument();
   });
 
   it('a backup that could not be saved keeps the wizard open and says why', async () => {
