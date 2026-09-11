@@ -570,6 +570,17 @@ contextBridge.exposeInMainWorld('claude', {
     ptyRawBytesForSession: (_sessionId: string, _cb: (data: string) => void) => {
       return () => {};
     },
+    // Remote access batch 2 (§7): the host tells a reconnecting phone to clear its
+    // terminal before a full redraw. A desktop terminal is never reset this way —
+    // shape parity with remote-shim only, never fires here.
+    ptyResetForSession: (_sessionId: string, _cb: () => void) => {
+      return () => {};
+    },
+    // Remote access batch 2 (§7): the host's list of still-open permission asks
+    // after a reconnect replay. Desktop cards are answered in place — never fires.
+    hookReplayComplete: (_cb: (payload: { sessionId: string; pendingRequestIds: string[] }) => void) => {
+      return () => {};
+    },
     hookEvent: (cb: (event: any) => void) => {
       const handler = (_e: IpcRendererEvent, event: any) => cb(event);
       ipcRenderer.on(IPC.HOOK_EVENT, handler);

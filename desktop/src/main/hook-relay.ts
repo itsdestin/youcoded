@@ -162,6 +162,18 @@ export class HookRelay extends EventEmitter {
     pending.socket.write(JSON.stringify(decision) + '\n');
     pending.socket.end();
     this.pendingSockets.delete(requestId);
+    // Remote access batch 2 (§7): say the ask is closed, the way the native
+    // permission broker does (permission-broker.ts removeEntry). RemoteServer
+    // purges its replay buffer on this and a phone that could not see the
+    // answer clears its card with a neutral note. Without it a Claude Code ask
+    // answered on the computer was replayed to every reconnecting phone as a
+    // live question.
+    this.emit('hook-event', {
+      sessionId: pending.sessionId,
+      type: 'PermissionResolved',
+      payload: { _requestId: requestId },
+      timestamp: Date.now(),
+    });
     return true;
   }
 

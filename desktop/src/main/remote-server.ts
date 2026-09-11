@@ -62,7 +62,9 @@ import { combinedGithubStatus } from './github-client';
 import { getGithubConnect, disconnectGithub } from './github-connect';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 
-const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
+// 4M UTF-16 units per session — enough for full conversation replay. Named for what it
+// counts (batch 2): JavaScript string length, not bytes.
+const PTY_BUFFER_UNITS = 4 * 1024 * 1024;
 // Perf (2026-09-03): the rolling PTY replay buffer is a LIST OF OUTPUT CHUNKS,
 // not one big string, so appending costs O(chunk) instead of O(whole buffer).
 // `length` is the running total of `chunks` measured in JavaScript string length
@@ -70,7 +72,15 @@ const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full 
 // `buf.length > PTY_BUFFER_SIZE` cap counted, so the effective cap size does not
 // silently change. (It is a character count, not a byte count: a non-ASCII char
 // can cost 2 units and a UTF-8 byte count would differ — exactly as before.)
-interface PtyBuffer { chunks: string[]; length: number; }
+//
+// Remote access batch 2 (design §7): the buffer is a window onto a monotonic STREAM.
+// `epoch` names the stream (random per buffer, so a host restart or a destroyed-and-
+// recreated session gets a new one); `base` is how many units have been trimmed off
+// the head, so a chunk's stream position is `base + length` at the moment it is
+// appended and the window covers `[base, base + length)`. A phone reports the stream
+// position it has drawn up to; a matching epoch and a position inside the window get
+// exactly the units past it, anything else gets a reset and the whole window.
+interface PtyBuffer { chunks: string[]; length: number; epoch: string; base: number; }
 // Perf: a PTY can emit a single keystroke at a time, and 4 MB of 1-char chunks
 // would be millions of array entries (each JS string carries tens of bytes of
 // overhead). So while the newest chunk is still small, append INTO it rather than
@@ -103,6 +113,14 @@ const OLD_CLIENT_FALLBACK_MS = 5000;
 // Broadcasts queued for a client that is still restoring. Overflow drops the oldest and
 // marks that client's hydrate `degraded`, so the phone knows to offer Refresh.
 const RESTORE_QUEUE_MAX = 2000;
+// Backpressure (design §7): ws.send never blocks, so a stalled phone grew the host's
+// socket buffer until the liveness ping closed it. While the socket holds more than
+// this, the restore's sends pause and poll; above the close mark the client is closed
+// with a code the strip renders as reconnecting.
+const BACKPRESSURE_PAUSE_BYTES = 8 * 1024 * 1024;
+const BACKPRESSURE_CLOSE_BYTES = 32 * 1024 * 1024;
+const BACKPRESSURE_POLL_MS = 50;
+const CLOSE_TOO_SLOW = 4009;
 
 /** Where a remote client stands between auth and the live stream (design §1 B).
  *  `restoring`: queue every broadcast until the phone says it is ready.
@@ -130,6 +148,10 @@ interface AuthenticatedClient {
   hookPassIndex?: number;
   /** Runs the restore for a client that never sends client:ready. */
   fallbackTimer?: ReturnType<typeof setTimeout> | null;
+  /** What the phone said it had drawn per session, from client:ready (§7). */
+  ptyOffsets?: Record<string, { epoch: string; units: number }>;
+  /** Stream position sent so far per session during THIS restore — the replay cursor. */
+  ptyCursor?: Map<string, number>;
 }
 
 export interface ClientInfo {
@@ -637,7 +659,9 @@ export class RemoteServer {
     // rebuilding the whole string — see PtyBuffer for the 4 MB-per-chunk copy
     // this replaces.
     let buf = this.ptyBuffers.get(sessionId);
-    if (!buf) { buf = { chunks: [], length: 0 }; this.ptyBuffers.set(sessionId, buf); }
+    if (!buf) { buf = { chunks: [], length: 0, epoch: randomUUID().slice(0, 8), base: 0 }; this.ptyBuffers.set(sessionId, buf); }
+    // The chunk's stream position, read BEFORE the append (see PtyBuffer).
+    const offset = buf.base + buf.length;
     // An empty chunk adds nothing to the replayed text but WOULD add an array
     // entry, so skip it here. The live broadcast below is deliberately untouched —
     // a client that is listening still sees exactly the frames it saw before.
@@ -656,22 +680,96 @@ export class RemoteServer {
       // now lands on a chunk boundary, which means the buffer can hold slightly
       // LESS than the cap. That is the intended trade — the replayed tail is
       // otherwise identical, and it is strictly less likely to start mid-escape.
-      while (buf.length > PTY_BUFFER_SIZE && buf.chunks.length > 1) {
-        buf.length -= buf.chunks.shift()!.length;
+      while (buf.length > PTY_BUFFER_UNITS && buf.chunks.length > 1) {
+        const dropped = buf.chunks.shift()!.length;
+        buf.length -= dropped;
+        buf.base += dropped;             // every head trim advances the window's start
       }
       // A single chunk larger than the entire cap cannot be dropped without losing
       // everything, so trim its tail instead — the one copy left in this path, and
       // it only happens when one read delivers more than 4 MB at once.
-      if (buf.length > PTY_BUFFER_SIZE) {
+      if (buf.length > PTY_BUFFER_UNITS) {
         const only = buf.chunks[0];
-        buf.chunks[0] = only.slice(only.length - PTY_BUFFER_SIZE);
+        buf.base += only.length - PTY_BUFFER_UNITS;   // this slice is a head trim too
+        buf.chunks[0] = only.slice(only.length - PTY_BUFFER_UNITS);
         buf.length = buf.chunks[0].length;
       }
     }
 
-    // Broadcast live
-    this.broadcast({ type: 'pty:output', payload: { sessionId, data } });
+    // Broadcast live. A client that is not live yet does not get this (see
+    // enqueueForRestoring): the cursor replay covers it up to the moment it goes live.
+    this.broadcast({ type: 'pty:output', payload: { sessionId, data, epoch: buf.epoch, offset } });
   };
+
+  /** The window's text from stream position `from` (>= base) to its end, without
+   *  joining chunks the caller already has. */
+  private static sliceFrom(buf: PtyBuffer, from: number): string {
+    let skip = from - buf.base;
+    const parts: string[] = [];
+    for (const chunk of buf.chunks) {
+      if (skip >= chunk.length) { skip -= chunk.length; continue; }
+      parts.push(skip > 0 ? chunk.slice(skip) : chunk);
+      skip = 0;
+    }
+    return parts.join('');
+  }
+
+  /**
+   * One replay pass for a client (design §7): for every session buffer, send what lies
+   * past the client's cursor. The first pass seeds the cursor from what the phone said
+   * it had drawn — an exact continuation when the epoch matches and the position is
+   * inside the window, otherwise a reset and the whole window. Returns true when
+   * anything was sent, so the caller can pass again until nothing is new: output that
+   * arrives while a send is paused is picked up by the next pass, never lost, and the
+   * live broadcast takes over with no gap and no overlap.
+   */
+  private async ptyPass(client: AuthenticatedClient): Promise<boolean> {
+    const cursor = (client.ptyCursor ??= new Map());
+    let sent = false;
+    for (const [sessionId, buf] of this.ptyBuffers) {
+      const total = buf.base + buf.length;
+      let from = cursor.get(sessionId);
+      if (from === undefined) {
+        const reported = client.ptyOffsets?.[sessionId];
+        if (reported && reported.epoch === buf.epoch && reported.units >= buf.base && reported.units <= total) {
+          from = reported.units;
+        } else {
+          from = buf.base;
+          if (reported) {
+            // The phone drew a terminal this window cannot continue: start it over.
+            if (!(await this.sendGated(client, { type: 'pty:reset', payload: { sessionId, epoch: buf.epoch } }))) return sent;
+            sent = true;
+          }
+        }
+      }
+      if (from < total) {
+        const data = RemoteServer.sliceFrom(buf, from);
+        if (!(await this.sendGated(client, { type: 'pty:output', payload: { sessionId, data, epoch: buf.epoch, offset: from } }))) return sent;
+        sent = true;
+      }
+      cursor.set(sessionId, buf.base + buf.length);   // re-read: output may have arrived during the send
+    }
+    return sent;
+  }
+
+  /**
+   * Send with the backpressure gate (design §7). Returns false when the client is gone
+   * or was closed for being too slow, so a caller can stop its pass.
+   */
+  private async sendGated(client: AuthenticatedClient, msg: { type: string; payload: any }): Promise<boolean> {
+    const ws = client.ws;
+    while (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > BACKPRESSURE_PAUSE_BYTES) {
+      if (ws.bufferedAmount > BACKPRESSURE_CLOSE_BYTES) {
+        ws.close(CLOSE_TOO_SLOW, 'Too slow');
+        return false;
+      }
+      // `ws` exposes no drain event on bufferedAmount; a short poll is the signal.
+      await new Promise((r) => setTimeout(r, BACKPRESSURE_POLL_MS));
+    }
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(msg));
+    return true;
+  }
 
   private onHookEvent = (event: any) => {
     this.bufferHookEvent(event);
@@ -1072,7 +1170,7 @@ export class RemoteServer {
       // forever (review of T1, finding 4): flush what was held and go live; the phone's
       // strip reports an incomplete restore and offers Refresh.
       console.error('[remote-server] restore failed:', err);
-      this.flushRestoreQueue(client, { sessions: [] }, [], true);
+      await this.flushRestoreQueue(client, { sessions: [] }, [], true).catch(() => { /* the socket is gone */ });
     } finally {
       client.phase = 'live';
     }
@@ -1083,30 +1181,29 @@ export class RemoteServer {
     opts: { seq?: number; reconnect: boolean; replayBuffers: boolean },
   ): Promise<void> {
     const ws = client.ws;
-    const send = (msg: { type: string; payload: any }) => {
-      if (ws.readyState === WebSocket.OPEN) ws.send(JSON.stringify(msg));
-    };
+    const queue = (client.queue ??= []);
+    const send = (msg: { type: string; payload: any }) => this.sendGated(client, msg);
 
     // Session list — sent so the client can initialize chat state. (The old
     // `session:list:response` with id `_replay` is gone; nothing ever read it.)
     const sessions = this.sessionManager.listSessions();
-    for (const session of sessions) send({ type: 'session:created', payload: session });
+    for (const session of sessions) if (!(await send({ type: 'session:created', payload: session }))) return;
 
     // Current topic names for all mapped sessions.
     for (const [desktopId, name] of this.lastTopics) {
-      send({ type: 'session:renamed', payload: { sessionId: desktopId, name } });
+      if (!(await send({ type: 'session:renamed', payload: { sessionId: desktopId, name } }))) return;
     }
 
     // The last status payload, so a client connecting between the 10s polls renders a
     // populated status bar immediately. Same shape the poll broadcasts.
-    if (this.lastStatusData) send({ type: 'status:data', payload: this.lastStatusData });
+    if (this.lastStatusData && !(await send({ type: 'status:data', payload: this.lastStatusData }))) return;
 
     // THE CUT LINE. Everything queued before this index reaches the desktop window
     // before the export request does (same ordered IPC channel), and the exporter
     // flushes its transcript batch before serializing (RemoteSnapshotExporter.tsx) —
     // so every transcript-shaped entry below the index IS in the snapshot, and nothing
     // above it is. flushRestoreQueue skips exactly those.
-    client.snapshotIndex = client.queue.length;
+    client.snapshotIndex = queue.length;
     let snapshot: SerializedChatState;
     try {
       snapshot = await this.requestSnapshot();
@@ -1120,37 +1217,65 @@ export class RemoteServer {
     if (client.queueDegraded) snapshot = { ...snapshot, degraded: true };
     // `seq` echoes the client's request so the shim applies only the hydrate it last
     // asked for; the old-client fallback has none to echo.
-    send({ type: 'chat:hydrate', payload: opts.seq === undefined ? snapshot : { ...snapshot, seq: opts.seq } });
+    if (!(await send({ type: 'chat:hydrate', payload: opts.seq === undefined ? snapshot : { ...snapshot, seq: opts.seq } }))) return;
 
+    // Permission asks this restore replayed, so the queue flush does not send the same
+    // ask a second time when its live broadcast was also queued.
+    const replayedAsks = new Set<string>();
     if (opts.replayBuffers) {
-      // PTY buffers. Perf: join the chunks only HERE, at replay time — the buffer is
-      // stored chopped up precisely so that arriving output never re-copies the whole
-      // 4 MB (see PtyBuffer).
-      for (const [sessionId, buf] of this.ptyBuffers) {
-        if (buf.length > 0) send({ type: 'pty:output', payload: { sessionId, data: buf.chunks.join('') } });
-      }
+      // The terminal, from where the phone left off (§7). The final passes below, after
+      // the queue, are what let the client go live with no gap.
+      if (!(await this.ptyPass(client)) && ws.readyState !== WebSocket.OPEN) return;
 
       // Hook event buffers (also carries buffered NATIVE hook events — see
-      // bufferHookEvent's own comment). On a first connect, a live hook event that
-      // arrived before this pass is already reflected here, so the flush skips those
-      // (hookPassIndex); from this point on they are queued and flushed.
-      client.hookPassIndex = client.queue.length;
+      // bufferHookEvent's own comment). Only unresolved asks are here: the broker and
+      // the relay both emit PermissionResolved when an ask closes, and bufferHookEvent
+      // purges on it. On a first connect, a live hook event that arrived before this
+      // pass is already reflected here, so the flush skips those (hookPassIndex); from
+      // this point on they are queued and flushed.
+      client.hookPassIndex = queue.length;
       for (const [_sessionId, events] of this.hookBuffers) {
-        for (const event of events) send({ type: 'hook:event', payload: event });
+        for (const event of events) {
+          const requestId = (event.payload as Record<string, unknown> | undefined)?._requestId;
+          if (event.type === 'PermissionRequest' && typeof requestId === 'string') replayedAsks.add(requestId);
+          if (!(await send({ type: 'hook:event', payload: event }))) return;
+        }
+      }
+      // Consent does not lie (§7): for EVERY session, which asks are still open. The
+      // phone clears any awaiting card not named — it was answered while it was away —
+      // with a neutral note, never a failure.
+      for (const session of sessions) {
+        const pendingRequestIds = (this.hookBuffers.get(session.id) ?? [])
+          .filter((e) => e.type === 'PermissionRequest')
+          .map((e) => (e.payload as Record<string, unknown> | undefined)?._requestId)
+          .filter((id): id is string => typeof id === 'string');
+        if (!(await send({ type: 'hook:replay-complete', payload: { sessionId: session.id, pendingRequestIds } }))) return;
       }
 
       // Task 9 (plan 1c): latest specialist run per helper, so a reconnecting client's
       // card comes back with a status instead of blank.
       for (const [_sessionId, byChild] of this.specialistRunBuffers) {
-        for (const event of byChild.values()) send({ type: 'specialists:event', payload: event });
+        for (const event of byChild.values()) if (!(await send({ type: 'specialists:event', payload: event }))) return;
       }
       // G-1: latest shell run per command, same position as the specialist replay.
       for (const [_sessionId, byShell] of this.shellRunBuffers) {
-        for (const event of byShell.values()) send({ type: 'native:shell-event', payload: event });
+        for (const event of byShell.values()) if (!(await send({ type: 'native:shell-event', payload: event }))) return;
       }
     }
 
-    this.flushRestoreQueue(client, snapshot, sessions.map((s) => s.id), opts.reconnect);
+    // The queue, then whatever was queued while the flush itself was paused, until
+    // nothing is left; only the first round has entries below the cut line.
+    let firstRound = true;
+    while (queue.length > 0) {
+      if (!(await this.flushRestoreQueue(client, snapshot, sessions.map((s) => s.id), opts.reconnect, replayedAsks, firstRound))) return;
+      firstRound = false;
+    }
+    // Live only after a terminal pass that found nothing new (§7). A pass that sends
+    // nothing awaits nothing, so no output can land between it and the phase change
+    // (PTY output arrives on the event loop, never as a microtask).
+    if (opts.replayBuffers) {
+      while (await this.ptyPass(client)) { /* until nothing is new */ }
+    }
   }
 
   /** Transcript-shaped broadcasts: in the snapshot when queued below the cut line. The
@@ -1168,16 +1293,19 @@ export class RemoteServer {
    * session the snapshot OMITTED (a window that did not answer, §2) nothing is skipped:
    * the client's copy is its own, and lacks them.
    */
-  private flushRestoreQueue(
+  private async flushRestoreQueue(
     client: AuthenticatedClient,
     snapshot: SerializedChatState,
     knownSessionIds: string[],
     reconnect: boolean,
-  ): void {
-    const queue = client.queue ?? [];
-    client.queue = [];
-    const cutLine = client.snapshotIndex ?? 0;
-    const hookPass = client.hookPassIndex;
+    replayedAsks: ReadonlySet<string> = new Set(),
+    firstRound = true,
+  ): Promise<boolean> {
+    // Take the round's entries out; anything broadcast while a send below is paused
+    // lands in the fresh array the caller loops back for.
+    const queue = (client.queue ?? []).splice(0);
+    const cutLine = firstRound ? (client.snapshotIndex ?? 0) : 0;
+    const hookPass = firstRound ? client.hookPassIndex : undefined;
     const held = new Set(snapshot.sessions.map(([id]) => id));
     void knownSessionIds; // a session the list has and the snapshot lacks is simply not in `held`
     for (let i = 0; i < queue.length; i++) {
@@ -1186,12 +1314,18 @@ export class RemoteServer {
         const sid = msg.payload?.sessionId;
         if (typeof sid === 'string' && held.has(sid)) continue;
       }
-      // First connect only: a hook event that arrived before the hook buffer pass is
-      // already reflected by the pass (a resolved ask is purged from the buffer; an open
-      // one is in it). A reconnecting phone keeps its cards, so it needs every one.
-      if (!reconnect && hookPass !== undefined && i < hookPass && msg.type === 'hook:event') continue;
-      if (client.ws.readyState === WebSocket.OPEN) client.ws.send(JSON.stringify(msg));
+      if (msg.type === 'hook:event') {
+        // First connect only: a hook event that arrived before the hook buffer pass is
+        // already reflected by the pass (a resolved ask is purged from the buffer; an
+        // open one is in it). A reconnecting phone keeps its cards, so it needs every
+        // one — except an ask this restore's pass already replayed.
+        if (!reconnect && hookPass !== undefined && i < hookPass) continue;
+        const requestId = msg.payload?.payload?._requestId;
+        if (msg.payload?.type === 'PermissionRequest' && typeof requestId === 'string' && replayedAsks.has(requestId)) continue;
+      }
+      if (!(await this.sendGated(client, msg))) return false;
     }
+    return true;
   }
 
   // --- Message routing ---
@@ -1224,6 +1358,8 @@ export class RemoteServer {
           break;
         }
         const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
+        client.ptyOffsets = payload?.ptyOffsets && typeof payload.ptyOffsets === 'object' ? payload.ptyOffsets : {};
+        client.ptyCursor = new Map();
         await this.restoreClient(client, { seq, reconnect: payload?.reconnect === true, replayBuffers: true });
         break;
       }
@@ -3197,6 +3333,12 @@ export class RemoteServer {
         continue;
       }
       if (client.ws.readyState === WebSocket.OPEN) {
+        // A live client that has stopped reading gets closed rather than buffered
+        // without bound (§7); the shim reconnects and the strip says so.
+        if (client.ws.bufferedAmount > BACKPRESSURE_CLOSE_BYTES) {
+          client.ws.close(CLOSE_TOO_SLOW, 'Too slow');
+          continue;
+        }
         data ??= JSON.stringify(msg);
         client.ws.send(data);
       }

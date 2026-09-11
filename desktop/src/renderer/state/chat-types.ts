@@ -671,6 +671,22 @@ export type ChatAction =
       requestId: string;
     }
   | {
+      // Remote access batch 2 (§7): the host says this ask was answered on
+      // another device (hook:event PermissionResolved). Clears the ask with a
+      // neutral note; a no-op unless the card is still awaiting.
+      type: 'PERMISSION_RESOLVED_ELSEWHERE';
+      sessionId: string;
+      requestId: string;
+    }
+  | {
+      // Remote access batch 2 (§7): the host finished replaying open asks on a
+      // reconnect and lists the ones still open — every awaiting card not in
+      // the list was answered while this client was away.
+      type: 'PERMISSION_REPLAY_COMPLETE';
+      sessionId: string;
+      pendingRequestIds: string[];
+    }
+  | {
       type: 'TRANSCRIPT_USER_MESSAGE';
       sessionId: string;
       uuid: string;

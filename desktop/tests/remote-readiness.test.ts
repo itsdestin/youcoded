@@ -70,7 +70,7 @@ describe('the phone says when it is ready', () => {
     vi.advanceTimersByTime(300);
     await server.handleMessage(client, ready(1));
 
-    expect(ws.types()).toEqual(['session:created', 'chat:hydrate', 'pty:output']);
+    expect(ws.types()).toEqual(['session:created', 'chat:hydrate', 'pty:output', 'hook:replay-complete']);
     expect(ws.ofType('chat:hydrate')[0].payload.seq).toBe(1);
     expect(ws.ofType('chat:hydrate')[0].payload.sessions.map(([id]: [string]) => id)).toEqual(['s1']);
 
@@ -93,7 +93,7 @@ describe('the phone says when it is ready', () => {
 
     vi.advanceTimersByTime(1);
     await tick(); await tick();
-    expect(ws.types()).toEqual(['session:created', 'chat:hydrate', 'pty:output', 'hook:event']);
+    expect(ws.types()).toEqual(['session:created', 'chat:hydrate', 'pty:output', 'hook:event', 'hook:replay-complete']);
     expect(ws.ofType('chat:hydrate')[0].payload.seq).toBeUndefined();   // an old client has no seq to echo
     expect(ws.types()).not.toContain('session:list:response');           // the `_replay` message nothing read
   });

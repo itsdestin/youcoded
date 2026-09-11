@@ -749,6 +749,11 @@ export interface ToolCallState {
   /** Argument characters generated so far — the preparing card's liveness
    *  counter. Meaningless once `preparing` is gone. */
   preparingChars?: number;
+  /** Remote access batch 2 (§7): the ask on this card was answered on another
+   *  device — the computer, or a phone — while this client could not see it.
+   *  The card returns to 'running' (never 'failed', never a claim about a
+   *  socket) and ToolCard shows a neutral note until the result lands. */
+  answeredElsewhere?: boolean;
   response?: string;
   error?: string;
   /** Set when the tool result carries a structuredPatch (Edit/MultiEdit). */

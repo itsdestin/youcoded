@@ -1596,8 +1596,9 @@ describe('RemoteServer replay buffers stay bounded and replay the same tail', ()
     server.onPtyOutput('s1', ''); // even an empty chunk is still forwarded, as before
 
     expect(sent).toHaveLength(2);
-    expect(sent[0]).toEqual({ type: 'pty:output', payload: { sessionId: 's1', data: 'hello' } });
-    expect(sent[1]).toEqual({ type: 'pty:output', payload: { sessionId: 's1', data: '' } });
+    // Batch 2: every live frame also carries the buffer epoch and the chunk's stream offset.
+    expect(sent[0]).toMatchObject({ type: 'pty:output', payload: { sessionId: 's1', data: 'hello', offset: 0 } });
+    expect(sent[1]).toMatchObject({ type: 'pty:output', payload: { sessionId: 's1', data: '', offset: 5 } });
   });
 
   it('broadcast() does no work at all when no client is connected', async () => {

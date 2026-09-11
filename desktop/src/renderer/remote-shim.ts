@@ -93,10 +93,54 @@ let readySentThisGeneration = false;
 let readyReconnect = false;
 let lastReadyHost: string | null = null;
 
-/** Per-session terminal offsets the host uses to send only what the phone has not drawn
- *  (design §7). Filled in by the terminal backlog; empty until then. */
+// Remote access batch 2 (design §7): how much of each session's terminal this page has
+// drawn, as the host's own stream positions. Every pty:output from a batch-2 host carries
+// the buffer's `epoch` and the chunk's `offset`; the end of the last chunk is what a
+// reconnect reports, and the host answers with exactly the units past it — or, when the
+// epoch changed (a host restart, a session recreated) or the offset is no longer held, a
+// pty:reset followed by the whole buffer. An older host sends neither field; nothing is
+// reported for it and a reconnect replays in full, as before.
+const ptyOffsets = new Map<string, { epoch: string; units: number }>();
+
 function collectPtyOffsets(): Record<string, { epoch: string; units: number }> {
-  return {};
+  return Object.fromEntries(ptyOffsets);
+}
+
+// Remote access batch 2 (design §1 C): terminal frames that arrive before the terminal
+// for that session has a listener. The restore sends the terminal replay the moment the
+// phone says it is ready, and TerminalView's listener is a React effect that registers
+// after commit — without a backlog the head of the replay was gone. Bounded per session
+// in UTF-16 units; overflow drops the oldest, so a long-idle tab still draws the tail.
+// `pty:raw-bytes` is deliberately not here: no desktop host emits it.
+const PTY_BACKLOG_MAX_UNITS = 256 * 1024;
+type PtyBacklogEntry = { kind: 'output'; data: string } | { kind: 'reset' };
+const ptyBacklog = new Map<string, { entries: PtyBacklogEntry[]; units: number }>();
+
+function backlogPty(sessionId: string, entry: PtyBacklogEntry): void {
+  let b = ptyBacklog.get(sessionId);
+  if (!b) { b = { entries: [], units: 0 }; ptyBacklog.set(sessionId, b); }
+  b.entries.push(entry);
+  if (entry.kind === 'output') b.units += entry.data.length;
+  while (b.units > PTY_BACKLOG_MAX_UNITS && b.entries.length > 1) {
+    const dropped = b.entries.shift()!;
+    if (dropped.kind === 'output') b.units -= dropped.data.length;
+  }
+}
+
+/** Hand a session's backlog to the listener that just registered, in arrival order. */
+function drainPtyBacklog(sessionId: string): void {
+  const b = ptyBacklog.get(sessionId);
+  if (!b) return;
+  ptyBacklog.delete(sessionId);
+  for (const entry of b.entries) {
+    if (entry.kind === 'reset') dispatchEvent(`pty:reset:${sessionId}`);
+    else dispatchEvent(`pty:output:${sessionId}`, entry.data);
+  }
+}
+
+function forgetPtySession(sessionId: string): void {
+  ptyOffsets.delete(sessionId);
+  ptyBacklog.delete(sessionId);
 }
 
 function maybeSendClientReady(): void {
@@ -540,6 +584,8 @@ function addListener(channel: string, cb: Callback): Callback {
   set.add(cb);
   // The hydrate handler is the last thing App mounts before it can apply a restore.
   if (channel === 'chat:hydrate') maybeSendClientReady();
+  // The terminal's first listener takes everything that arrived before it existed.
+  if (channel.startsWith('pty:output:') && set.size === 1) drainPtyBacklog(channel.slice('pty:output:'.length));
   return cb;
 }
 
@@ -608,9 +654,27 @@ function handleMessage(data: string, generation: number): void {
 
   // Push events — dispatch to registered listeners
   switch (type) {
-    case 'pty:output':
-      dispatchEvent('pty:output', payload.sessionId, payload.data);              // global (App.tsx mode detection)
-      dispatchEvent(`pty:output:${payload.sessionId}`, payload.data);            // per-session (TerminalView)
+    case 'pty:output': {
+      const sid: string = payload.sessionId;
+      if (typeof payload.epoch === 'string' && typeof payload.offset === 'number') {
+        ptyOffsets.set(sid, { epoch: payload.epoch, units: payload.offset + String(payload.data ?? '').length });
+      }
+      dispatchEvent('pty:output', sid, payload.data);                            // global (App.tsx mode detection)
+      if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:output:${sid}`, payload.data);   // per-session (TerminalView)
+      else backlogPty(sid, { kind: 'output', data: String(payload.data ?? '') });
+      break;
+    }
+    case 'pty:reset': {
+      // The host cannot continue this terminal from where we were: clear it, then the
+      // full buffer follows on the same ordered channel (and the same backlog).
+      const sid: string = payload.sessionId;
+      if (typeof payload.epoch === 'string') ptyOffsets.set(sid, { epoch: payload.epoch, units: 0 });
+      if (listeners.get(`pty:output:${sid}`)?.size) dispatchEvent(`pty:reset:${sid}`);
+      else backlogPty(sid, { kind: 'reset' });
+      break;
+    }
+    case 'hook:replay-complete':
+      dispatchEvent('hook:replay-complete', payload);
       break;
     case 'pty:raw-bytes':
       // Per-session dispatch only — no global consumer (xterm is per-session).
@@ -625,6 +689,7 @@ function handleMessage(data: string, generation: number): void {
       dispatchEvent('session:created', payload);
       break;
     case 'session:destroyed':
+      forgetPtySession(payload?.sessionId || payload);
       // Forward exitCode alongside id so the chat reducer can surface
       // 'session-died' when a turn was in flight. Default 0 for older bridges.
       dispatchEvent(
@@ -869,6 +934,9 @@ export function connect(passwordOrToken: string, isToken = false): Promise<strin
           // on a first connect App mounts after this, and addListener sends it.
           readySentThisGeneration = false;
           readyReconnect = hasConnectedBefore && lastReadyHost === getWsUrl();
+          // Terminal positions are the OLD host's stream positions — meaningless to a
+          // different host, which would only answer them with a reset anyway.
+          if (!readyReconnect) { ptyOffsets.clear(); ptyBacklog.clear(); }
           lastReadyHost = getWsUrl();
           maybeSendClientReady();
           hasConnectedBefore = true;
@@ -1329,6 +1397,18 @@ export function installShim(): void {
         const channel = `pty:raw-bytes:${sessionId}`;
         const handler = addListener(channel, cb);
         return () => removeListener(channel, handler);
+      },
+      // Batch 2 (§7): "clear the terminal, a full redraw follows". Register it BEFORE
+      // ptyOutputForSession — the backlog drains on the output listener.
+      ptyResetForSession: (sessionId: string, cb: () => void) => {
+        const channel = `pty:reset:${sessionId}`;
+        const handler = addListener(channel, cb);
+        return () => removeListener(channel, handler);
+      },
+      // Batch 2 (§7): the asks still open after a reconnect's hook replay.
+      hookReplayComplete: (cb: Callback) => {
+        const handler = addListener('hook:replay-complete', cb);
+        return () => removeListener('hook:replay-complete', handler);
       },
       hookEvent: (cb: Callback) => addListener('hook:event', cb),
       statusData: (cb: Callback) => addListener('status:data', cb),

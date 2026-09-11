@@ -1682,6 +1682,14 @@ function AppInner() {
     // remote client connects. Dispatches HYDRATE_CHAT_STATE so the reducer
     // pre-populates all session timelines without waiting for transcript replay.
     // Typed-optional on the shared surface — present only on remote-shim.
+    // Remote access batch 2 (§7): after a reconnect the host replays only the asks
+    // still open and then names them; every awaiting card not named was answered
+    // while this phone was away. Remote-only (preload's stub never fires).
+    const hookReplayCompleteOff = (window.claude.on as any).hookReplayComplete?.((p: { sessionId: string; pendingRequestIds: string[] }) => {
+      if (!p?.sessionId) return;
+      dispatch({ type: 'PERMISSION_REPLAY_COMPLETE', sessionId: p.sessionId, pendingRequestIds: Array.isArray(p.pendingRequestIds) ? p.pendingRequestIds : [] });
+    });
+
     // applyChatHydrate flushes this client's pending transcript batch FIRST —
     // the phone's half of the cut line (state/transcript-batch.ts).
     const chatHydrateHandler = window.claude.on.chatHydrate?.((payload: any) => {
@@ -1779,6 +1787,7 @@ function AppInner() {
       if (promptCompleteHandler) window.claude.off('prompt:complete', promptCompleteHandler);
       if (sessionPermissionModeHandler) window.claude.off('session:permission-mode', sessionPermissionModeHandler);
       if (chatHydrateHandler) window.claude.off('chat:hydrate', chatHydrateHandler);
+      if (typeof hookReplayCompleteOff === 'function') hookReplayCompleteOff();
       if (typeof conversationStatusOff === 'function') conversationStatusOff();
       if (artifactToolUseHandler) window.claude.off('transcript:event', artifactToolUseHandler);
       artifactTracker.dispose();

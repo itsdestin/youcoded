@@ -2333,6 +2333,47 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return next;
     }
 
+    case 'PERMISSION_RESOLVED_ELSEWHERE':
+    case 'PERMISSION_REPLAY_COMPLETE': {
+      // Remote access batch 2 (§7, "consent does not lie"): an ask the computer
+      // (or another phone) answered while this client could not see it. The
+      // card goes back to 'running' with `answeredElsewhere` — the same shape an
+      // overwritten ask takes (see PERMISSION_REQUEST's stale-binding loop) —
+      // never 'failed', never a message about a socket: nothing failed, and no
+      // socket closed. The result arrives through the transcript or a Refresh.
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const single = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' ? action.requestId : null;
+      const pending = action.type === 'PERMISSION_REPLAY_COMPLETE' ? new Set(action.pendingRequestIds) : null;
+      const isResolved = (requestId: string | undefined) =>
+        !!requestId && (single !== null ? requestId === single : !pending!.has(requestId));
+
+      let toolCalls: Map<string, ToolCallState> | null = null;
+      // Nested (specialist) asks first — same clearing PERMISSION_RESPONDED does.
+      if (single !== null) {
+        const nested = patchNestedAsk(session.toolCalls, single, (seg) => ({
+          ...seg, status: 'running', requestId: undefined, askHeld: undefined,
+        }));
+        if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
+      }
+      for (const [id, tool] of session.toolCalls) {
+        if (tool.status !== 'awaiting-approval' || !isResolved(tool.requestId)) continue;
+        toolCalls ??= new Map(session.toolCalls);
+        // A budget gate has no tool behind it and no result coming — close it, as
+        // PERMISSION_RESPONDED does, so endTurn cannot fail it later.
+        const isBudgetGate = tool.toolName === 'max_steps' || tool.toolName === 'doom_loop';
+        toolCalls.set(id, {
+          ...tool,
+          status: isBudgetGate ? 'complete' : 'running',
+          requestId: undefined,
+          answeredElsewhere: isBudgetGate ? undefined : true,
+        });
+      }
+      if (!toolCalls) return state;                 // nothing was awaiting: same reference, no re-render
+      next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
     case 'PERMISSION_HELD': {
       // Specialists 1c: the 5-minute hold elapsed — the ask stays answerable,
       // the row just says the helper carried on without it.
