@@ -256,7 +256,7 @@ dependencies {
     implementation("org.commonmark:commonmark:0.30.0")
 
     // WebSocket server for React UI bridge
-    implementation("com.squareup.okhttp3:okhttp:4.12.0")
+    implementation("com.squareup.okhttp3:okhttp:5.5.0")
     implementation("org.java-websocket:Java-WebSocket:1.6.0")
 
     // Security: encrypted credential storage for paired device passwords
@@ -280,7 +280,7 @@ dependencies {
     testImplementation(kotlin("test"))
     // MockWebServer for AnalyticsServiceTest — version matches the OkHttp
     // already on the main classpath (4.12.0).
-    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+    testImplementation("com.squareup.okhttp3:mockwebserver:5.5.0")
     // Mockito for stubbing Android Context in SkillScannerTest. Needed because
     // SkillScanner takes a Context to read web/data/skill-registry.json from
     // app assets — there's no in-memory fake equivalent (unlike SharedPreferences).
