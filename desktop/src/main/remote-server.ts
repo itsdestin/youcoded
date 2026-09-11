@@ -513,7 +513,7 @@ export class RemoteServer {
     const hasStaticBuild = choosePhonePageSource({ serveBuiltPage: this.serveBuiltPage, hasBuild: fs.existsSync(builtIndex) }) === 'built';
     // Say which, and how old a built copy is, so a stale copy shows in the log instead of hiding.
     if (hasStaticBuild) {
-      console.log(`[RemoteServer] phone page: built copy from ${fs.statSync(builtIndex).mtime.toLocaleString()} (${staticDir})`);
+      console.log(`[RemoteServer] phone page: built copy from ${fs.statSync(builtIndex).mtime.toISOString()} (${staticDir})`);
     } else {
       console.log(`[RemoteServer] phone page: live code from the dev server (${viteDevUrl})`);
     }
