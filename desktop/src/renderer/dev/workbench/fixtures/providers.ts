@@ -36,7 +36,14 @@ export function catalog(): CatalogRow[] {
     // costs or "free" tags anywhere in the picker (Destin: nothing faked there).
     { id: 'deepseek/deepseek-v3.2', providerId: 'pv-openrouter', label: 'DeepSeek V3.2' },
     { id: 'deepseek/deepseek-r1', providerId: 'pv-openrouter', label: 'DeepSeek R1' },
+    // Model-list tags (2026-09-11): a priced model with no intelligence score, so the
+    // price-level tag has a row to appear on (fixtures/model-facts.ts).
+    { id: 'google/gemini-3.8-flash', providerId: 'pv-openrouter', label: 'Gemini 3.8 Flash' },
     { id: 'qwen2.5-coder:14b', providerId: 'local', label: 'Qwen2.5 Coder 14B' },
     { id: 'llama3.1:8b', providerId: 'local', label: 'Llama 3.1 8B' },
+    // The two local models Destin measured on 2026-09-05 — the same size on disk, six
+    // times apart in speed — so the speed tag shows both ends with real numbers.
+    { id: 'qwen3.6-35b-a3b', providerId: 'local', label: 'Qwen3.6 35B A3B' },
+    { id: 'qwen3.8-27b', providerId: 'local', label: 'Qwen3.8 27B' },
   ];
 }

@@ -97,4 +97,8 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // The model list's value / intelligence / speed tags, designed ahead of the job that
+  // builds the scores file (docs/active/design/2026-09-11-model-picker-tags). Delete
+  // this row when `models:facts` lands on the real surfaces.
+  { channel: 'models.facts', feature: 'Model list cost, intelligence and speed tags' },
 ];

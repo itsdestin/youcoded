@@ -36,6 +36,7 @@ import type { VoiceEvent, VoiceReadiness } from '../../../shared/voice-types';
 // rule rather than a lookalike (it used to grey the last two words, full stop).
 import { splitAtLastSentenceEnd } from '../../../shared/voice-types';
 import { buildCatalog } from './fixtures/marketplace/catalog';
+import { modelFacts } from './fixtures/model-facts';
 // `?guide=tip:<id>` (below): fire one first-run tip on demand for a photograph.
 import { triggerTip } from '../../components/guide/tips';
 import { isNoFolderCwd } from '../../../shared/no-folder';
@@ -1172,6 +1173,10 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         detail: 'It should still run, just slower.',
       }
       : { verdict: 'ok' as const, headline: '', detail: '' }),
+
+    // MOCK_ONLY (mock-only.ts): the model-list tags' scores file has no backend yet.
+    // Real 2026-09-11 prices and scores for the fixture list, not invented ones.
+    facts: async () => modelFacts(),
 
     installed: async () => LOCAL_MODELS,
     // Two recommended cards so the redesigned size line (S-2) and the vision line

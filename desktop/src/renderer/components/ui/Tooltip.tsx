@@ -315,7 +315,10 @@ export function Tooltip({ text, placement = 'top', children }: TooltipProps) {
             id={id}
             // pointer-events-none so a hint can never swallow a click meant for
             // what is underneath it.
-            className="tooltip-in fixed pointer-events-none px-2 py-1 max-w-[min(20rem,calc(100vw-1.5rem))] text-2xs text-fg-2 leading-snug"
+            // whitespace-pre-line: a hint may carry a few short lines separated by
+            // "\n" (the model list's tags list a price, then the scores behind a
+            // number). Every existing hint is one line, so this changes none of them.
+            className="tooltip-in fixed pointer-events-none px-2 py-1 max-w-[min(20rem,calc(100vw-1.5rem))] text-2xs text-fg-2 leading-snug whitespace-pre-line"
             style={{ left: pos.left, top: pos.top }}
           >
             {text}

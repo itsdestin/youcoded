@@ -456,6 +456,11 @@ declare global {
         onDownloadProgress: (cb: (p: any) => void) => () => void;
         // Create-time / swap memory guard + [Reload Model] (2026-07-14).
         memoryCheck: (modelId: string) => Promise<{ verdict: 'ok' | 'tight' | 'too-large'; headline: string; detail: string }>;
+        /** Value, intelligence and speed facts for the model list's tags
+         *  (docs/active/design/2026-09-11-model-picker-tags). OPTIONAL because it is
+         *  designed ahead of its backend — only the workbench answers it today
+         *  (mock-only.ts) — and the list must draw plain rows when it is absent. */
+        facts?: () => Promise<import('../../shared/model-facts').ModelFactsSnapshot>;
         load: (modelId: string) => Promise<boolean>;
         // 2026-09-05 local-engine upgrades. Real on every surface now.
         /** One model's engine settings as STORED (deck Q-2). The stored shape,

@@ -1,5 +1,7 @@
-import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useContext, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
+import { ModelTags, ModelTagStyleContext, tagsFor, type TagSpec } from './ModelTags';
+import { factsKey, speedBand, type ModelFacts, type ModelFactsSnapshot } from '../../../shared/model-facts';
 import { Button, ErrorState, fieldClasses, Tooltip } from '../ui';
 import { plainMessage } from '../../utils/ipc-error';
 import { triggerTip } from '../guide/tips';
@@ -79,6 +81,11 @@ interface Entry {
   /** `unavailable` is specifically "Add an API key" — clicking it should open
    *  Settings' Cloud providers page instead of sitting there as inert text. */
   needsApiKey?: boolean;
+  /** What is known about this model's value, intelligence and speed; absent when
+   *  the facts never loaded or say nothing about it. Read by the filters. */
+  facts?: ModelFacts;
+  /** The row's tags, worked out once per list build rather than per render. */
+  tags: TagSpec[];
 }
 
 /** Which company mark + colour a row carries.
@@ -257,6 +264,14 @@ export default function ModelPicker({
   const [filterOpen, setFilterOpen] = useState(false);
   const [sources, setSources] = useState<Set<string>>(new Set());
   const [localOnly, setLocalOnly] = useState(false);
+  // The tag filters (questions deck Q-11, "filters").
+  const [greatValueOnly, setGreatValueOnly] = useState(false);
+  const [smartOnly, setSmartOnly] = useState(false);
+  const [fastOnly, setFastOnly] = useState(false);
+  /** The tags' facts. null until they load — and it STAYS null when they are not
+   *  available at all, so every row then draws plain, as before the tags existed. */
+  const [facts, setFacts] = useState<ModelFactsSnapshot | null>(null);
+  const tagStyle = useContext(ModelTagStyleContext);
   const [favorites, setFavorites] = useState<Set<string>>(loadFavorites);
   const [freeformFor, setFreeformFor] = useState<string | null>(null);
   const [freeformText, setFreeformText] = useState('');
@@ -398,6 +413,16 @@ export default function ModelPicker({
       if (!cancelled) setLoadError(plainMessage(e));
       setLoaded(true);
     });
+    // WHY beside the Promise.all and not inside it: a scores file that fails to load
+    // must leave the list itself working — the rows just draw without tags — rather
+    // than turning into "Couldn't load your models". Optional because only some
+    // surfaces serve it yet (useIpc.ts).
+    const loadFacts = window.claude?.models?.facts;
+    if (loadFacts) {
+      loadFacts()
+        .then((snap) => { if (!cancelled) setFacts(snap ?? null); })
+        .catch(() => { /* rows draw plain; nothing here is worth an error */ });
+    }
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, reload]);
@@ -456,6 +481,8 @@ export default function ModelPicker({
           key: choiceKey(choice), label: m.label, choice,
           sourceId: CLAUDE_SOURCE, sourceLabel: 'Claude Code', local: false,
           unavailable: unavailableReason(choice, data) ?? undefined,
+          facts: facts?.models[factsKey(choice)],
+          tags: tagsFor(facts?.models[factsKey(choice)], facts, 'Claude'),
         });
       }
     }
@@ -473,11 +500,19 @@ export default function ModelPicker({
           providerType: p.type,
           unavailable: unavailableReason(choice, data) ?? undefined,
           needsApiKey: nativeChoiceNeedsApiKey(choice, data),
+          // Keyed by provider TYPE, not this row's providerId: an id is a per-device
+          // ULID, the facts are the same on every device (shared/model-facts.ts).
+          facts: facts?.models[factsKey({ runtime: 'native', providerType: p.type, modelId: m.id })],
+          tags: tagsFor(
+            facts?.models[factsKey({ runtime: 'native', providerType: p.type, modelId: m.id })],
+            facts,
+            p.type === 'chatgpt' ? 'ChatGPT' : p.label,
+          ),
         });
       }
     }
     return out;
-  }, [providers, catalog, includeClaude, includeNative, claudeStatus]);
+  }, [providers, catalog, includeClaude, includeNative, claudeStatus, facts]);
 
   /** Nothing on this install can actually start a conversation. Drives the
    *  "You have not set up any model providers." block (P-3). */
@@ -504,6 +539,14 @@ export default function ModelPicker({
     [readyProviders, catalog],
   );
 
+  /** The tag filters (questions deck Q-11). A model with no facts can claim none of
+   *  them — an unknown value is not great value. */
+  const passesTagFilters = useCallback((e: Entry) =>
+    (!greatValueOnly || e.facts?.value === 'great')
+    && (!smartOnly || (e.facts?.intelligence?.score ?? 0) >= 80)
+    && (!fastOnly || (!!e.facts?.speed && speedBand(e.facts.speed.wordsPerSecond) === 'good')),
+  [greatValueOnly, smartOnly, fastOnly]);
+
   const q = search.trim().toLowerCase();
   const searching = q.length > 0;
 
@@ -519,6 +562,7 @@ export default function ModelPicker({
     const filtered = pool.filter((e) => {
       if (localOnly && !e.local) return false;
       if (sources.size && !sources.has(e.sourceId)) return false;
+      if (!passesTagFilters(e)) return false;
       // Word-by-word, punctuation-insensitive: "gpt 5.6" has to find "GPT-5.6".
       if (!matchesQuery(q, e.label, e.sourceLabel)) return false;
       return true;
@@ -541,11 +585,12 @@ export default function ModelPicker({
       const hit = entries.find((e) => e.key === currentKey);
       const passesFilters = hit
         && (!localOnly || hit.local)
-        && (!sources.size || sources.has(hit.sourceId));
+        && (!sources.size || sources.has(hit.sourceId))
+        && passesTagFilters(hit);
       if (passesFilters) return [hit, ...filtered];
     }
     return filtered;
-  }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value]);
+  }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value, passesTagFilters]);
 
   const toggleFavorite = (key: string) => {
     setFavorites((prev) => {
@@ -556,7 +601,8 @@ export default function ModelPicker({
     });
   };
 
-  const activeFilters = (sources.size ? 1 : 0) + (localOnly ? 1 : 0);
+  const activeFilters = (sources.size ? 1 : 0) + (localOnly ? 1 : 0)
+    + (greatValueOnly ? 1 : 0) + (smartOnly ? 1 : 0) + (fastOnly ? 1 : 0);
 
   const currentLabel = useMemo(() => {
     if (!value) return emptyLabel;
@@ -594,6 +640,18 @@ export default function ModelPicker({
     // marks-only, marks-plus-current, and every-row-coloured: a list of tinted
     // names reads as decoration rather than meaning.
     const markColor = selected ? undefined : brand?.color;
+    // The second-line layouts give a row with tags two lines; a row without tags
+    // (facts not loaded) keeps its one-line shape, so nothing moves for it.
+    const twoLine = tagStyle !== 'compact' && e.tags.length > 0;
+    const nameLine = (
+      <span className={`truncate block min-w-0 ${twoLine ? '' : 'flex-1'}`}>
+        {e.label}
+        {/* Divider dot + source, inline per row — this is what replaced the
+            per-provider sections. One flat list reads the same at 4 models
+            or 400. */}
+        <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
+      </span>
+    );
     return (
       // Two levels now: the OUTER div keeps the row's original left/right
       // margin (px-2, unhighlighted, same on every row) — the accent fill on
@@ -612,7 +670,7 @@ export default function ModelPicker({
             disabled={!!e.unavailable}
             onClick={() => pick(e.choice, { provider: e.sourceLabel, model: e.label })}
             aria-pressed={selected}
-            className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex items-center gap-2 ${
+            className={`flex-1 min-w-0 text-left text-xs rounded px-2 py-2 transition-colors flex ${twoLine ? 'items-start' : 'items-center'} gap-2 ${
               e.unavailable
                 ? 'text-fg-faint cursor-default'
                 : selected ? 'text-on-accent font-medium' : 'text-fg-2 hover:bg-inset'
@@ -620,22 +678,27 @@ export default function ModelPicker({
           >
             {/* The company mark. A fixed-width box whether or not a mark resolves,
                 so an unrecognised model's name still lines up with its neighbours'
-                instead of hanging one glyph-width to the left. */}
+                instead of hanging one glyph-width to the left. On a two-line row it
+                is one text line tall, so it sits beside the NAME, not between lines. */}
             <span
-              className={`w-[13px] shrink-0 inline-flex items-center justify-center ${e.unavailable ? 'opacity-45' : ''}`}
+              className={`w-[13px] ${twoLine ? 'h-4' : ''} shrink-0 inline-flex items-center justify-center ${e.unavailable ? 'opacity-45' : ''}`}
               style={markColor ? { color: markColor } : undefined}
             >
               {brand?.icon
                 ? <ProviderIcon icon={brand.icon} size={13} />
                 : <ModelIcon className="w-3 h-3 opacity-40" />}
             </span>
-            <span className="truncate block min-w-0">
-              {e.label}
-              {/* Divider dot + source, inline per row — this is what replaced the
-                  per-provider sections. One flat list reads the same at 4 models
-                  or 400. */}
-              <span className={selected ? 'opacity-70' : 'text-fg-muted'}> · {e.sourceLabel}</span>
-            </span>
+            {twoLine ? (
+              <span className="flex flex-col gap-1 min-w-0">
+                {nameLine}
+                <ModelTags tags={e.tags} selected={selected} className={e.unavailable ? 'opacity-45' : ''} />
+              </span>
+            ) : (
+              <>
+                {nameLine}
+                <ModelTags tags={e.tags} selected={selected} className={e.unavailable ? 'opacity-45' : ''} />
+              </>
+            )}
           </button>
           </Tooltip>
           {/* The one thing that would unlock this row, in its own words. Lives
@@ -944,11 +1007,24 @@ export default function ModelPicker({
             <Chip active={localOnly} onClick={() => setLocalOnly((v) => !v)}>
               Runs on this device
             </Chip>
+            {/* The tag filters (Q-11). Only offered once the facts have loaded — a
+                filter that can match nothing because nothing is known would look
+                like a list that emptied for no reason. */}
+            {facts && (
+              <>
+                <Chip active={greatValueOnly} onClick={() => setGreatValueOnly((v) => !v)}>Great value</Chip>
+                <Chip active={smartOnly} onClick={() => setSmartOnly((v) => !v)}>Intelligence 80+</Chip>
+                <Chip active={fastOnly} onClick={() => setFastOnly((v) => !v)}>Fast</Chip>
+              </>
+            )}
           </Group>
           {activeFilters > 0 && (
             <button
               type="button"
-              onClick={() => { setSources(new Set()); setLocalOnly(false); }}
+              onClick={() => {
+                setSources(new Set()); setLocalOnly(false);
+                setGreatValueOnly(false); setSmartOnly(false); setFastOnly(false);
+              }}
               className="self-start text-3xs text-fg-muted hover:text-fg"
             >Clear filters</button>
           )}

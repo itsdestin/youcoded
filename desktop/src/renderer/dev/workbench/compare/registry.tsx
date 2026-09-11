@@ -77,6 +77,8 @@ import {
   type PermissionModeDef,
 } from './permission-modes';
 import type { CompareSurface } from './types';
+// model-picker-tags round 1: the real ModelPicker under each tag layout.
+import { ModelTagsDemo } from './model-tags-demo';
 // session-strip-motion / session-switch-arrival: the REAL SessionStrip in a
 // demo host, so its motion is felt rather than watched. Every round has been
 // picked (2026-09-02) and each candidate now renders what shipped; they once
@@ -7095,6 +7097,24 @@ export const COMPARE_SURFACES: CompareSurface[] = [
             note: 'What the tap shows on a computer with no microphone: the specific reason and a Check again.',
             render: () => <VoiceComposerDemo state="unavailable" />,
           },
+        ],
+      },
+    ],
+  },
+  {
+    id: 'model-picker-tags',
+    label: 'Model list — value, intelligence and speed tags',
+    question: 'Where should the tags sit on a model row, and how should they look?',
+    frame: 'canvas',
+    paneWidth: 380,
+    rounds: [
+      {
+        n: 1,
+        basis: 'Questions decks 2026-09-11 (model-picker-tags-questions, -questions-2): value judged within an intelligence level, intelligence 0-100 from Epoch AI, speed for models on this computer only, all three coloured. Every figure is a real 2026-09-11 price or score.',
+        candidates: [
+          { id: 'tinted', label: 'A · Chips under the name', note: 'Words on a second line, each on a softly tinted chip.', render: () => <ModelTagsDemo style="tinted" /> },
+          { id: 'dot', label: 'B · Dots under the name', note: 'The same words on a second line, each behind a coloured dot, with no chip outline.', render: () => <ModelTagsDemo style="dot" /> },
+          { id: 'compact', label: 'C · Short, beside the name', note: 'Short forms on the same line, at the right: rows stay one line tall, and names are cut sooner.', render: () => <ModelTagsDemo style="compact" /> },
         ],
       },
     ],
