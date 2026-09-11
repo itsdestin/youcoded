@@ -3619,12 +3619,17 @@ class SessionService : Service() {
                     msg.id?.let { bridgeServer.respond(ws, msg.type, it, out) }
                     return@handleBridgeMessage
                 }
-                val bytes = try { resolved.readBytes() } catch (_: java.io.IOException) { null }
-                if (bytes == null) {
-                    msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
-                        .put("ok", true).put("artifact", artifact.toJson())
-                        .put("content", org.json.JSONObject.NULL).put("orphan", true)) }
-                    return@handleBridgeMessage
+                // A file that passed exists() but cannot be read is a read FAILURE:
+                // answer { ok: false, error } — the viewer shows "Couldn't read this
+                // file" with Retry — never orphan, which reads "no longer on disk".
+                // See EditablePathPolicy.readWhole (error inventory 2026-09-10, #13).
+                val bytes = when (val read = EditablePathPolicy.readWhole(resolved)) {
+                    is EditablePathPolicy.FileRead.Bytes -> read.bytes
+                    is EditablePathPolicy.FileRead.Unreadable -> {
+                        msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONObject()
+                            .put("ok", false).put("error", read.reason)) }
+                        return@handleBridgeMessage
+                    }
                 }
                 // NUL-sniff: binary bytes as UTF-8 turn into U+FFFD soup — return
                 // binary:true + null content so the renderer routes to its fallback.

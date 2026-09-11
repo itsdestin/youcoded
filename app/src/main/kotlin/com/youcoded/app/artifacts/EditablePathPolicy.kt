@@ -115,6 +115,30 @@ object EditablePathPolicy {
         }
     }
 
+    /** The result of reading a whole file: its bytes, or why it could not be read. */
+    sealed class FileRead {
+        class Bytes(val bytes: ByteArray) : FileRead()
+        data class Unreadable(val reason: String) : FileRead()
+    }
+
+    /**
+     * Read a whole file, keeping the reason when that fails.
+     *
+     * WHY (error inventory 2026-09-10, false message 13): artifacts:get did
+     * `try { readBytes() } catch (IOException) { null }` and answered the null as
+     * orphan — "This file is no longer on disk." — for a file that had just passed
+     * exists(). A failed read is a failure with a reason, which is what desktop reports.
+     * SecurityException is caught too: on Android it is the same "exists but may not be
+     * read" case, and left uncaught it would take the whole bridge handler down.
+     */
+    fun readWhole(f: java.io.File): FileRead = try {
+        FileRead.Bytes(f.readBytes())
+    } catch (e: java.io.IOException) {
+        FileRead.Unreadable(e.message?.takeIf { it.isNotBlank() } ?: "the file could not be read")
+    } catch (e: SecurityException) {
+        FileRead.Unreadable(e.message?.takeIf { it.isNotBlank() } ?: "the file could not be read")
+    }
+
     /** git-style sniff: NUL byte in the head slice means not-text. */
     fun looksBinary(head: ByteArray): Boolean {
         val n = minOf(head.size, 8192)
