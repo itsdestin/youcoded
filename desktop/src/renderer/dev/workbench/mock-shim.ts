@@ -772,7 +772,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // WHY (2026-09-11): the landing loops were 25–33 s, mostly spent watching a scripted reply
     // stream (the inbox reply alone is ~18 s); Destin asked for ~15 s clips "without losing real
     // content". Speeding playback keeps every word; editing the fixtures would change the copy.
-    const speed = Number(new URLSearchParams(location.search).get('replySpeed')) || 1;
+    // `location` is guarded like latencyFromQuery()'s: the shim also runs under the unit tests, which have none.
+    const speed = (typeof location !== 'undefined' && Number(new URLSearchParams(location.search).get('replySpeed'))) || 1;
     void playReply(sessionId, text, turns[n % turns.length], {
       transcript: (e) => subs.transcript.forEach((f) => f(e)),
       hook: (e) => subs.hook.forEach((f) => f(e)),
