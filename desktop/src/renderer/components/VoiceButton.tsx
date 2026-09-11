@@ -37,6 +37,7 @@ import { useEscClose } from '../hooks/use-esc-close';
 import { MicIcon } from './Icons';
 import type { VoiceReadiness } from '../../shared/voice-types';
 import type { VoicePhase } from '../hooks/useVoiceInput';
+import { Tooltip } from './ui';
 
 /** Round-2 alternatives (review deck 2026-09-05, V-1: "alternatives for the
  *  counter/feedback location and styling, and the animation on the mic icon").
@@ -281,6 +282,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
   return (
     <div className="relative shrink-0 flex items-center gap-2">
       {listening && style.feedback === 'beside' && <VoiceMeter level={level} seconds={seconds} />}
+      <Tooltip text={label}>
       <Button
         ref={triggerRef}
         type="button"
@@ -289,7 +291,6 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
         aria-label={label}
         aria-pressed={listening}
         aria-expanded={open || undefined}
-        title={label}
         disabled={disabled || phase === 'finishing'}
         onClick={handleClick}
         className={`relative rounded-full ${listening && style.motion === 'breathe' ? 'voice-mic-on' : ''}`}
@@ -303,6 +304,7 @@ export function VoiceButton({ phase, readiness, level, seconds, error, disabled,
           <span aria-hidden="true" className="voice-rec-dot absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-red-500 ring-2 ring-canvas" />
         )}
       </Button>
+      </Tooltip>
       {open && card &&
         createPortal(
           <OverlayPanel

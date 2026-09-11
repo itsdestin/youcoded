@@ -1117,8 +1117,12 @@ describe('models:* + engine:set-* channel parity (Plan C)', () => {
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_SET_SETTINGS, modelId, patch)');
     expect(src).toContain('ipcRenderer.invoke(IPC.MODELS_DOWNLOAD, repo, quant)');
   });
-  // Android answers these six — and ONLY these six — with `unsupported`, not the
-  // plain not-implemented error every other desktop-only channel sends.
+  // Android NAMES these six — and only these six — as `unsupported` inside the
+  // not-implemented list; every other desktop-only channel listed there sends the
+  // plain not-implemented error. (Since 2026-09-10 the dispatcher's final `else`
+  // ALSO answers `unsupported`, for channels it has no branch for at all — that is
+  // the catch-all, not a seventh label, and it is pinned in
+  // android-honest-build.test.ts.)
   //
   // WHY the set has to be checked for EQUALITY and not just for presence: a
   // Kotlin `when` branch runs from its FIRST comma-separated value down to the
@@ -1276,6 +1280,11 @@ describe('native:* channel parity', () => {
     'native:get-permission-mode',
     'native:sessions-list',
     'native:kill-shell',
+    // "What the assistant was given" — the on-demand read of one file's text.
+    // The session-context PUSH is pinned separately below: a push has no
+    // ipc-handlers request arm and no Kotlin case, so it does not belong in a
+    // list whose three tests all assert one.
+    'native:session-context-text',
   ];
 
   it('every native:* channel is declared in preload.ts', () => {

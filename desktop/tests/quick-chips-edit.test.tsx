@@ -60,7 +60,7 @@ async function mount() {
   });
 }
 
-const openEditor = () => fireEvent.click(screen.getByTitle('Edit quick chips'));
+const openEditor = () => fireEvent.click(screen.getByLabelText('Edit quick chips'));
 const row = (i: number) => document.querySelector(`[data-chip-idx="${i}"]`) as HTMLElement;
 
 // jsdom implements neither pointer-capture method, and the drag path calls
@@ -144,7 +144,7 @@ describe('quick chips — editing an existing chip', () => {
     openEditor();
     fireEvent.click(row(0));
     expect(screen.getByLabelText('Chip prompt')).toBeTruthy();
-    fireEvent.click(screen.getAllByTitle('Remove chip')[0]);
+    fireEvent.click(screen.getAllByLabelText('Remove chip')[0]);
     expect(screen.queryByLabelText('Chip prompt')).toBeNull();
   });
 
@@ -164,7 +164,7 @@ describe('quick chips — the row shows the store, not a hardcoded fallback', ()
     await mount();
     // Pre-load: the old code painted seven built-in chips here.
     expect(screen.queryByText('Journal')).toBeNull();
-    expect(screen.getByTitle('Edit quick chips')).toBeTruthy();
+    expect(screen.getByLabelText('Edit quick chips')).toBeTruthy();
     await act(async () => { release(CHIPS); });
     expect(screen.getByText('Journal')).toBeTruthy();
   });

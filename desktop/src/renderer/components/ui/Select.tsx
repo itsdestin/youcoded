@@ -1,4 +1,5 @@
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ChevronDown } from './ChevronDown';
 import { createPortal } from 'react-dom';
 import { OverlayPanel, POPOVER_Z } from '../overlays/Overlay';
 import { useEscClose } from '../../hooks/use-esc-close';
@@ -221,16 +222,7 @@ export function Select({
         <span className={`truncate ${selected ? '' : 'text-fg-muted'}`}>
           {selected?.label ?? placeholder}
         </span>
-        <svg
-          className="w-3 h-3 shrink-0 text-fg-muted"
-          fill="none"
-          viewBox="0 0 24 24"
-          stroke="currentColor"
-          strokeWidth={2}
-          aria-hidden="true"
-        >
-          <path strokeLinecap="round" strokeLinejoin="round" d="m6 9 6 6 6-6" />
-        </svg>
+        <ChevronDown className="w-3 h-3 shrink-0 text-fg-muted" />
       </button>
 
       {open &&

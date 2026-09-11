@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import type { EngineModelState } from '../../shared/engine-types';
-import { Button, ProgressBar } from './ui';
+import { Button, ProgressBar, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { resolveModelBrand } from './provider-brand';
 import { ProviderIcon } from './ProviderIcon';
@@ -139,12 +139,13 @@ const ModelLoadingBar = React.forwardRef<HTMLDivElement, Props>(function ModelLo
                   <span className="italic">Preparing</span>
                   {brand?.icon && <span className="inline-flex shrink-0" style={{ color: brand.color }}><ProviderIcon icon={brand.icon} size={12} /></span>}
                   <span className="font-medium">{name}</span>
+                  <Tooltip text="Weights are loaded — allocating memory and warming up the model">
                   <span
                     className="text-fg-dim text-xs"
-                    title="Weights are loaded — allocating memory and warming up the model"
                   >
                     · finishing up · {elapsed}s
                   </span>
+                  </Tooltip>
                 </>
               ) : (
                 <>

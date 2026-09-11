@@ -1,12 +1,10 @@
 import { useEffect } from 'react';
 import type { RefObject } from 'react';
-import { getPlatform } from '../platform';
 
 // Chrome geometry observers extracted from AppInner (tranche 1) — logic
 // unchanged. Publishes --bottom-chrome-height / --top-chrome-height /
 // --top-chrome-bottom CSS vars (glassmorphism scroll-behind + drawer
-// positioning) and reports header/bottom heights to native Android for
-// terminal-overlay sizing.
+// positioning).
 //
 // The [sessionId, currentViewMode] deps are re-run TRIGGERS (the chrome
 // remounts on view/session changes so the observers must re-attach), not
@@ -76,29 +74,9 @@ export function useChromeMeasurements(
     };
   }, [sessionId, currentViewMode]);
 
-  // Report header/bottom bar heights to native Android side for terminal overlay sizing.
-  // Must be before early returns to maintain consistent hook ordering across renders.
-  useEffect(() => {
-    if (getPlatform() !== 'android') return;
-    const header = headerRef.current;
-    const bottom = bottomBarRef.current;
-    if (!header && !bottom) return;
-
-    const report = () => {
-      const headerH = header?.getBoundingClientRect().height || 0;
-      const bottomH = bottom?.getBoundingClientRect().height || 0;
-      (window as any).claude?.remote?.broadcastAction?.({
-        action: 'layout-update',
-        headerHeight: Math.round(headerH),
-        bottomHeight: Math.round(bottomH),
-      });
-    };
-
-    const observer = new ResizeObserver(report);
-    if (header) observer.observe(header);
-    if (bottom) observer.observe(bottom);
-    // Report immediately on mount
-    report();
-    return () => observer.disconnect();
-  }, [sessionId, currentViewMode]);
+  // The Android "layout-update" report that used to live here (header/bottom
+  // heights broadcast to native for terminal-overlay sizing) was deleted on
+  // 2026-09-10: its only consumer was the native Compose terminal removed in
+  // Tier 2 (2026-07-22), so every ResizeObserver tick was a message into a flow
+  // nobody collected.
 }

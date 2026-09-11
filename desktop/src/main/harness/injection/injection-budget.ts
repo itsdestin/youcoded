@@ -11,18 +11,50 @@
 // no procedure at all. The model follows the half it received believing it has
 // the whole thing, and nothing anywhere signals that it is working from a
 // fragment. Saying so costs a line and turns a silent failure into a recoverable one.
+//
+// WHY the notice NAMES THE FILE (2026-09-10): "recoverable" was a claim the old
+// wording could not cash. It said "Ask for the rest if you need it" — naming no
+// file and no one to ask, so on a small model, where the model-invoked Skill tool
+// is not even attached, a cut skill was LOST rather than deferred. The root
+// project-instruction fitter below has always named its file; this one now does
+// too, which is the whole difference between a dead end and a next step.
+// error-message-standards.md: specific and accurate, or general and
+// non-committal — never advice the reader cannot act on. With no path to give,
+// it says only that the cut happened.
 const APPROX_CHARS_PER_TOKEN = 4;
-const NOTICE = "\n\n[...truncated to fit this model's context window. Ask for the rest if you need it.]";
 
-export function fitInjection(text: string, budgetTokens: number): { text: string; truncated: boolean } {
+function injectionNotice(sourcePath?: string): string {
+  return sourcePath
+    ? `\n\n[...truncated to fit this model's context window. Read ${sourcePath} for the rest.]`
+    : "\n\n[...truncated to fit this model's context window.]";
+}
+
+/** Cut back to a line boundary, preferring a paragraph break, with a 50% floor so
+ *  tidiness never costs most of the budget. Same rule as headCut() below, and for
+ *  the same reason: a slice at an exact character offset lands mid-word, and a
+ *  half-written instruction reads as a whole one. */
+function cutOnLineBoundary(text: string, room: number): string {
+  const candidate = text.slice(0, room);
+  for (const sep of ['\n\n', '\n']) {
+    const at = candidate.lastIndexOf(sep);
+    if (at > candidate.length * 0.5) return text.slice(0, at);
+  }
+  return candidate;
+}
+
+/** `sourcePath` is the file this text came from, named in the notice so the model
+ *  can go and read what it did not get. Optional only because a caller may
+ *  genuinely have no file to point at; prefer passing it. */
+export function fitInjection(text: string, budgetTokens: number, sourcePath?: string): { text: string; truncated: boolean } {
   const budgetChars = Math.max(0, budgetTokens) * APPROX_CHARS_PER_TOKEN;
   if (text.length <= budgetChars) return { text, truncated: false };
   // Reserve room for the notice itself, so the thing announcing the cut is never
   // the thing that gets cut, and the result still fits the budget it was given.
   // A budget too small to hold even the notice yields the notice alone — honest,
   // and never a bare empty string the caller would mistake for "nothing to say".
-  const room = Math.max(0, budgetChars - NOTICE.length);
-  return { text: text.slice(0, room) + NOTICE, truncated: true };
+  const notice = injectionNotice(sourcePath);
+  const room = Math.max(0, budgetChars - notice.length);
+  return { text: cutOnLineBoundary(text, room) + notice, truncated: true };
 }
 
 // --- Root project instructions (AGENTS.md / CLAUDE.md) ----------------------

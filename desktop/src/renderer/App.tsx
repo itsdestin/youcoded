@@ -1043,6 +1043,19 @@ function AppInner() {
     return () => { off?.(); };
   }, []);
 
+  // What this session was given — pushed once as the session opens, and again on
+  // resume. Drives the line above the conversation and the panel behind it
+  // (contract R23: EVERY chat carries the line, including one where everything
+  // fit). A remote client that connects later gets the same record inside
+  // chat:hydrate, so there is no replay buffer to keep in step.
+  useEffect(() => {
+    const off = window.claude.native?.onSessionContext?.((e: any) => {
+      if (!e?.sessionId) return;
+      dispatch({ type: 'SESSION_CONTEXT', sessionId: e.sessionId, context: e.context ?? null });
+    });
+    return () => { off?.(); };
+  }, []);
+
   useEffect(() => {
     const createdHandler = window.claude.on.sessionCreated((info) => {
       setSessions((prev) => {

@@ -12,6 +12,33 @@ import '@testing-library/jest-dom/vitest';
 import StatusBar from '../src/renderer/components/StatusBar';
 import { emptyTotals, addTurnUsage, addSubagentUsage } from '../src/renderer/state/session-totals';
 
+/**
+ * Find a chip by the words of its hover hint.
+ *
+ * These assertions used to be `screen.getByTitle(...)`. The hints are now the
+ * app's own `<Tooltip>` rather than the browser's `title=` bubble, so the copy
+ * lives on the control as `data-hint` and in a portal while the bubble is open.
+ * The assertions are unchanged in substance — still about the WORDS the chip
+ * offers, not about how it draws them.
+ */
+const hintNodes = () => Array.from(document.querySelectorAll('[data-hint]'));
+const matchHint = (re: RegExp | string) =>
+  hintNodes().filter((el) => {
+    const h = el.getAttribute('data-hint') ?? '';
+    return typeof re === 'string' ? h === re : re.test(h);
+  });
+function byHint(re: RegExp | string): HTMLElement {
+  const found = matchHint(re);
+  if (found.length !== 1) {
+    throw new Error(
+      `expected exactly one hint matching ${re}, found ${found.length}` +
+        (found.length ? '' : `\nhints present: ${hintNodes().map((e) => e.getAttribute('data-hint')).join(' | ')}`),
+    );
+  }
+  return found[0] as HTMLElement;
+}
+const queryByHint = (re: RegExp | string): HTMLElement | null => (matchHint(re)[0] as HTMLElement) ?? null;
+
 // Master added <SpecialistsChip> to the bar (useSpecialistSummary → useChatStore),
 // so StatusBar can no longer mount outside a ChatProvider. Every render here
 // goes through the REAL store + reducer this branch already uses for hook tests
@@ -141,8 +168,8 @@ describe('StatusBar session totals', () => {
     expect(screen.getByText('12.3k')).toBeInTheDocument();
     expect(screen.getByText('678')).toBeInTheDocument();
     // The exact count is still pinned somewhere: the tooltip.
-    expect(screen.getByTitle(/Input tokens: 12,345\./)).toBeInTheDocument();
-    expect(screen.getByTitle(/Output tokens: 678\./)).toBeInTheDocument();
+    expect(byHint(/Input tokens: 12,345\./)).toBeInTheDocument();
+    expect(byHint(/Output tokens: 678\./)).toBeInTheDocument();
   });
 
   it('renders a derived Code Changes count in a native session', () => {
@@ -170,7 +197,7 @@ describe('StatusBar session totals', () => {
     withWidgets(['tokens-in']);
     const totals = { ...emptyTotals(), inputTokens: 10, specialistRuns: 2 };
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} sessionId="s1" />);
-    expect(screen.getByTitle(/including specialists/i)).toBeInTheDocument();
+    expect(byHint(/including specialists/i)).toBeInTheDocument();
   });
 });
 
@@ -219,7 +246,7 @@ describe('StatusBar — a brand-new native session has measured nothing (Finding
     withWidgets(['cache-hit-rate']);
     const totals = { ...emptyTotals(), inputTokens: 1000, cacheReadTokens: 0 };
     render(<StatusBar statusData={statusData} provider="native" nativeTotals={totals} turnsWithUsage={2} sessionId="s1" />);
-    expect(screen.getByTitle(
+    expect(byHint(
       "None of this session's prompt tokens came from cache; all 1,000 were read fresh. Counts this session so far, including specialists."
     )).toBeInTheDocument();
   });
@@ -321,7 +348,7 @@ describe('Session Cost chip', () => {
     // fetch looks exactly like a model with no rate. Saying "no price is
     // published" states a cause that was never checked
     // (docs/error-message-standards.md). This wording is true either way.
-    expect(screen.getByTitle(
+    expect(byHint(
       "This provider bills for usage, but no price is available for this model here, so the session cost can't be totalled."
     )).toBeInTheDocument();
   });
@@ -350,7 +377,7 @@ describe('Session Cost chip', () => {
     expect(screen.getByText('$1.20')).toBeInTheDocument();
     expect(screen.getByText('· specialists')).toBeInTheDocument();
     // One specialist is "1 specialist", not "1 specialists".
-    expect(screen.getByTitle(/\$0\.30 of this was spent by 1 specialist this session delegated to\./)).toBeInTheDocument();
+    expect(byHint(/\$0\.30 of this was spent by 1 specialist this session delegated to\./)).toBeInTheDocument();
   });
 
   it('shows no specialist marker when the session delegated nothing', () => {
@@ -359,7 +386,7 @@ describe('Session Cost chip', () => {
       nativeTotals={costTotals({ costUsd: 0.42, anyPriced: true })} />);
     expect(screen.getByText('$0.42')).toBeInTheDocument();
     expect(screen.queryByText('· specialists')).toBeNull();
-    expect(screen.queryByTitle(/specialists this session delegated to/)).toBeNull();
+    expect(queryByHint(/specialists this session delegated to/)).toBeNull();
   });
 
   // The sub-cent guard from commit 4c5b06d3 must survive the new marker: the
@@ -373,7 +400,7 @@ describe('Session Cost chip', () => {
     expect(screen.queryByText('$0.00')).toBeNull();
     // The tooltip's split figure gets the same guard — a sub-cent split must
     // not read "$0.00 of this was spent by…".
-    expect(screen.getByTitle(/<\$0\.01 of this was spent by 1 specialist this session delegated to\./)).toBeInTheDocument();
+    expect(byHint(/<\$0\.01 of this was spent by 1 specialist this session delegated to\./)).toBeInTheDocument();
   });
 
   // A fraction of a cent is REAL money. toFixed(2) alone rounds it to "$0.00",
@@ -418,7 +445,7 @@ describe('Session Cost chip', () => {
     // that never loaded, so "published" asserted a cause nobody checked
     // (docs/error-message-standards.md).
     expect(
-      screen.getByTitle(/Models with no available price are not included in this total\./),
+      byHint(/Models with no available price are not included in this total\./),
     ).toBeInTheDocument();
   });
 });

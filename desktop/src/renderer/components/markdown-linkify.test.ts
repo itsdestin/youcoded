@@ -74,4 +74,28 @@ describe('detectLinkTokens', () => {
     expect(found.map((t) => t.kind)).toEqual(['url', 'path']);
     for (const t of found) expect(text.slice(t.start, t.end)).toBe(t.text);
   });
+
+  // GUARDS THE FAST PATH. detectLinkTokens returns early for text holding
+  // neither "/" nor "\", which is only sound while every token shape requires
+  // one. If a future change makes a bare `file.txt` or `www.example.com`
+  // linkable, this test goes red FIRST — and the early return has to go with
+  // it, or that new shape would silently never be found in ordinary prose.
+  it('no slash means no token — the fast path is sound', () => {
+    const slashless = [
+      'file.txt', 'a.b.c.d', 'README.md', 'const x = 1; // comment',
+      'http:', 'https:', 'www.example.com', 'C:', 'plain words here',
+      '~', '..', 'name.with.dots', 'v1.2.3', '',
+    ];
+    for (const s of slashless) {
+      expect(detectLinkTokens(s, { filepaths: true }), s).toEqual([]);
+      expect(detectLinkTokens(s, { filepaths: false }), s).toEqual([]);
+    }
+  });
+
+  it('still finds tokens when the slash is the only hint', () => {
+    // The other half of the same invariant: the early return must not swallow
+    // anything that DOES carry a slash.
+    expect(detectLinkTokens('src/a.ts', { filepaths: true }).map((t) => t.value)).toEqual(['src/a.ts']);
+    expect(detectLinkTokens('http://localhost:3000/x', { filepaths: false }).map((t) => t.kind)).toEqual(['url']);
+  });
 });

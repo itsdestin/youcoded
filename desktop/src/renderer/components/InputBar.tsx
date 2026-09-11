@@ -23,7 +23,7 @@ import { sendChatMessage } from './native-send';
 import type { NativeSendResult } from '../../shared/types';
 import type { ClaudeAlias } from '../../shared/model-ids';
 import { useScrollFade } from '../hooks/useScrollFade';
-import { useStreamingGate } from '../hooks/useStreamingGate';
+import { useStreamingGate, useTurnIsWorking } from '../hooks/useStreamingGate';
 import { isAndroid } from '../platform';
 
 // WHY: the composer auto-focus listener must leave controls and composite widgets
@@ -289,6 +289,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // `attentionState === 'ok'`, which used to hide the button for the whole
   // stall countdown (see useStreamingGate.ts).
   const showStop = useStreamingGate(sessionId);
+  // WHY a second gate: `showStop` keeps the button reachable through stalls and
+  // permission asks; `stopLive` only animates it while the turn is really working
+  // (stop-button-alive questions deck Q-1/Q-2, 2026-09-10). Same cheap selector.
+  const stopLive = useTurnIsWorking(sessionId);
 
   // Per-session draft store — keeps input text and attachments separate
   // across sessions so switching away and back preserves your draft.
@@ -366,6 +370,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     },
   }));
 
+  // True when the user's last press was a finger or pen. Shared by the
+  // auto-focus handler below and the idle unfocus timer after it.
+  const lastPointerWasTouch = useRef(false);
+
   // Auto-focus input when user starts typing anywhere in the app.
   // When Enter is pressed while the textarea is blurred, we must also
   // preventDefault and send — otherwise the browser inserts a newline
@@ -388,6 +396,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       }
       if (e.ctrlKey || e.metaKey || e.altKey) return;
       if (e.key !== 'Backspace' && e.key !== 'Enter' && e.key.length !== 1) return;
+      // WHY: a key arriving while no text field has focus came from a physical
+      // keyboard — an on-screen keyboard only exists while a field is focused.
+      // So the user has switched to real keys: let the idle unfocus run again.
+      lastPointerWasTouch.current = false;
       inputRef.current?.focus();
       if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
         e.preventDefault();
@@ -419,12 +431,27 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
   // platform string: it's the actual question being asked, and it correctly
   // keeps idle-blur ON for a desktop browser connecting remotely (real
   // keyboard, shortcuts useful, no soft keyboard to dismiss).
+  //
+  // Fix (2026-09-10): the coarse-pointer check still misses a touchscreen
+  // laptop. "pointer" describes the PRIMARY pointer, which Chromium reports as
+  // "fine" whenever any touchpad or mouse-like device is attached — on the ROG
+  // Flow Z13 it stayed "fine" with the keyboard cover detached, most likely
+  // because a ydotool virtual mouse counts. It was also read once at mount, so docking or
+  // undocking never changed it. So the per-pause decision follows how the user
+  // last pointed: a finger or pen tap keeps focus (that is what raises the
+  // on-screen keyboard), a touchpad/mouse click or physical typing restores
+  // the unfocus (see lastPointerWasTouch in the auto-focus handler above).
   const idleBlurTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   useEffect(() => {
     const el = inputRef.current;
     const hasSoftKeyboard = isAndroid()
       || window.matchMedia?.('(pointer: coarse)')?.matches === true;
     if (!el || hasSoftKeyboard) return;
+    // Capture phase on window, so no component's stopPropagation can hide a tap.
+    const notePointer = (e: PointerEvent) => {
+      lastPointerWasTouch.current = e.pointerType === 'touch' || e.pointerType === 'pen';
+    };
+    window.addEventListener('pointerdown', notePointer, true);
     const resetTimer = () => {
       if (idleBlurTimer.current) clearTimeout(idleBlurTimer.current);
       idleBlurTimer.current = setTimeout(() => {
@@ -435,6 +462,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         // a machine a walkie-talkie dictation would have been cut off silently,
         // three-quarters of a second in. Found reviewing T9, 2026-09-05.
         if (spaceHeld.current || spaceHoldTimer.current !== null) return;
+        if (lastPointerWasTouch.current) return;
         if (document.activeElement === el) el.blur();
       }, 750);
     };
@@ -442,6 +470,7 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     el.addEventListener('input', resetTimer);
     el.addEventListener('paste', resetTimer);
     return () => {
+      window.removeEventListener('pointerdown', notePointer, true);
       el.removeEventListener('keydown', resetTimer);
       el.removeEventListener('input', resetTimer);
       el.removeEventListener('paste', resetTimer);
@@ -533,6 +562,14 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           }
           return false;
         }
+      }
+
+      // Contract row R2: while the connection is down what you typed stays a draft and
+      // waits for you to press Send. It is NOT queued — queueing is what let a message the
+      // app had already reported as failed run minutes later, after a reconnect.
+      if (window.claude.session.canSend?.() === false) {
+        onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+        return false;
       }
 
       // Route slash commands through the central dispatcher BEFORE attachment
@@ -769,6 +806,11 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
       const val = inputRef.current?.value ?? text;
       // pty-worker auto-splits text+\r with a 600ms gap so Enter isn't
       // swallowed by Ink's paste buffer. No renderer-side setTimeout needed.
+      // A false return means the connection is down: keep the draft (R2).
+      if (window.claude.session.canSend?.() === false) {
+        onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+        return;
+      }
       window.claude.session.sendInput(sessionId, val + '\r');
       setText('');
       if (inputRef.current) {
@@ -1078,6 +1120,12 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           {/* Voice prompting: the mic sits where the eye already goes to
               send. Hidden entirely when the host has no speech engine
               (remote browser, older builds) and in terminal view. */}
+          {/* WHY a group: Destin asked for the mic "a smidge closer to the stop button"
+              (live deck L-2, 2026-09-10). gap-1 inside the pair tightens only that
+              space; Send keeps the form's own gap. Rendered only when one of them shows,
+              because an empty flex child would still claim a gap in the row. */}
+          {((!minimal && voice.supported) || showStop) && (
+          <div className="flex items-center gap-1 shrink-0">
           {!minimal && voice.supported && (
             <VoiceButton
               phase={voice.phase}
@@ -1094,7 +1142,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
               onReady={() => onToast?.('Voice is ready — tap the mic to talk.')}
             />
           )}
-          <StopButton sessionId={sessionId} provider={provider} visible={showStop} />
+          <StopButton sessionId={sessionId} provider={provider} visible={showStop} live={stopLive} />
+          </div>
+          )}
           {/* The app's most-used control. Geometry is unchanged — 28x28 is exactly
               what size="icon" emits — and it keeps `bg-accent`, which matters:
               community packs style the send button through `.bg-accent` (Halftone's

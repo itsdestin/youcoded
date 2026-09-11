@@ -6,7 +6,7 @@ import { SpecialistActions } from './specialists/SpecialistActions';
 import { RunStatusLine } from './specialists/RunStatusLine';
 import { AgentSections } from './tool-views/ToolBody';
 import { friendlyToolDisplay } from './ToolCard';
-import { Dialog } from './ui';
+import { Dialog, Tooltip } from './ui';
 import BrailleSpinner from './BrailleSpinner';
 import { CheckIcon, FailIcon, QuestionIcon, StoppedIcon } from './Icons';
 
@@ -49,6 +49,7 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
 
   return (
     <>
+      <Tooltip text={tooltip}>
       <button
         onClick={() => setOpen(true)}
         className="flex items-center gap-1 px-1.5 py-0.5 rounded-sm border cursor-pointer hover:brightness-125 transition-colors"
@@ -56,18 +57,18 @@ export default function SpecialistsChip({ sessionId }: { sessionId: string | nul
           // Amber = the same "waiting on you" tone the permission chip family uses.
           ? { backgroundColor: 'rgba(251,191,36,0.15)', color: '#fbbf24', borderColor: 'rgba(251,191,36,0.4)' }
           : { backgroundColor: 'var(--inset)', color: 'var(--fg-muted)', borderColor: 'var(--edge-dim)' }}
-        title={tooltip}
         aria-label={tooltip}
         data-testid="specialists-chip"
       >
         {needsYou > 0 ? <QuestionIcon className="w-3 h-3" /> : working > 0 ? <BrailleSpinner size="xs" /> : <CheckIcon className="w-3 h-3" />}
         <span>{label}</span>
       </button>
+      </Tooltip>
       {open && (
         <Dialog
           open
-          onClose={() => setOpen(false)}
           title={Noun}
+          onClose={() => setOpen(false)}
           subtitle={[
             needsYou > 0 ? `${needsYou} waiting on you` : null,
             working > 0 ? `${working} working` : null,
@@ -153,14 +154,15 @@ function HelperCard({ h, sessionId, onJump }: { h: HelperView; sessionId?: strin
           <div className="min-w-0 flex-1 text-2xs text-fg-muted leading-snug">
             {/* The name is the link to the card — dotted underline says "out-link"
                 (Destin, round 7); no separate Show-in-chat button. */}
+            <Tooltip text="Show this helper's card in the conversation">
             <button
               type="button"
               onClick={jump}
               className="text-sm font-semibold text-fg text-left align-baseline underline decoration-dotted decoration-fg-muted underline-offset-2 hover:decoration-fg"
-              title="Show this helper's card in the conversation"
             >
               {run.title}
             </button>
+            </Tooltip>
             {/* No role tag: "Wren the Whistling Worker" already says worker (Destin, round 8). */}
             {/* A CC subagent has no model line (Claude Code does not report which
                 model ran it), so its TYPE — Explore / Plan / general-purpose —

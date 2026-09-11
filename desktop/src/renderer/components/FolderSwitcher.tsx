@@ -11,7 +11,7 @@ import { createPortal } from 'react-dom';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { syncDotFor, findSpaceFor, type SyncStatusData } from './sync-dot-state';
-import { fieldClasses } from './ui';
+import { fieldClasses, Tooltip } from './ui';
 import { POPOVER_Z } from './overlays/Overlay';
 
 interface SavedFolder {
@@ -293,11 +293,12 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
                         sync; the tooltip carries the full phrase. Renders only
                         when syncSpaces.status() resolved (desktop). */}
                     {dot && (
+                      <Tooltip text={dot.label}>
                       <span
                         className={`w-2 h-2 rounded-full shrink-0 ${DOT_CLASS[dot.color]}`}
-                        title={dot.label}
                         aria-label={dot.label}
                       />
+                      </Tooltip>
                     )}
                   </div>
                 );

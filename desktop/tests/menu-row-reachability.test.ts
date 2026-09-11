@@ -63,7 +63,7 @@ describe('reference lists stay reachable', () => {
   it('a session name is one truncated line with the full name on hover', () => {
     const name = block(strip, 'function SessionName');
     expect(name).toMatch(/truncate/);
-    expect(name).toMatch(/title=\{name\}/);
+    expect(name).toMatch(/<Tooltip text=\{name\}>/);
     // The three-line clamp is what made the rows uneven.
     expect(name).not.toMatch(/WebkitLineClamp/);
   });

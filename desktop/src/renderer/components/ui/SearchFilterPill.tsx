@@ -108,7 +108,6 @@ export const SearchFilterPill = React.forwardRef<HTMLDivElement, SearchFilterPil
             onClick={onToggleFilter}
             aria-expanded={filterOpen}
             aria-label={filterLabel}
-            title={filterLabel}
           >
             <SlidersGlyph />
             {activeFilters > 0 && (

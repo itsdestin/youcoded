@@ -217,6 +217,14 @@ class MessageRouterTest {
     }
 
     @Test
+    fun `buildUnsupportedResponse carries the refusal shape the shim rejects on`() {
+        val result = MessageRouter.buildUnsupportedResponse("not-implemented-on-mobile (no handler for wibble:frob)")
+        assertEquals(false, result.getBoolean("ok"))
+        assertEquals(true, result.getBoolean("unsupported"))
+        assertEquals("not-implemented-on-mobile (no handler for wibble:frob)", result.getString("error"))
+    }
+
+    @Test
     fun `buildErrorResponse reflects different error messages`() {
         val result = MessageRouter.buildErrorResponse("Session not found")
         assertEquals("Session not found", result.getString("error"))

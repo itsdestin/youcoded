@@ -345,7 +345,10 @@ const mdComponents = {
       return <ConversationsFence body={codeText} />;
     }
     return (
-      <div className="relative group my-3">
+      // yc-code-block carries content-visibility so the browser can skip layout
+      // and paint for blocks scrolled out of view — see globals.css. A document
+      // with hundreds of fences is otherwise laid out in full before it paints.
+      <div className="yc-code-block relative group my-3">
         {/* yc-code is the hook the globals.css rule needs to out-specify
             highlight.js's own `pre code.hljs` box (see the .yc-code block
             there). Don't drop it. */}

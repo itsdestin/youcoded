@@ -195,6 +195,13 @@ const NOT_DIALOGS: Record<string, string> = {
   // control it belongs to (the first-run download card, the download progress,
   // the "no microphone" reason).
   'VoiceButton.tsx': 'first-run / download / no-mic card anchored above the mic via computed coordinates',
+  // Evidence, not a class string: position comes from placeBubble() against the
+  // trigger's own getBoundingClientRect(), it is written as plain left/top with
+  // no translate anywhere in the file, and it renders no <Scrim> — it is
+  // `pointer-events-none`, so it cannot even be clicked. The same shape as
+  // AnchorTip, whose positioning it shares: a bubble pinned to the control it
+  // describes.
+  'Tooltip.tsx': 'hover hint anchored to its control via computed coordinates',
 };
 
 describe('dialog shell adoption', () => {

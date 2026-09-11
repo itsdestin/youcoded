@@ -5,7 +5,7 @@ import { useSpecialistDefinition, useSpecialistRunByChild } from '../hooks/useSp
 import { TaskConsentBlock } from './SpecialistEnvelope';
 import { hasNestedAsk } from '../utils/specialist-cards';
 import { useArtifactOptional } from '../state/ArtifactContext';
-import { Button, Radio, RadioGroup, Textarea } from './ui';
+import { Button, Radio, RadioGroup, Textarea, Tooltip } from './ui';
 // The card renders the widths this SHARED derivation produced and sends back only
 // which one was chosen — it never builds a rule pattern of its own.
 import { bashGrantOptions, bashNoGrantNote, type GrantScope } from '../../shared/bash-grant-shapes';
@@ -1391,7 +1391,7 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         <span className="text-xs text-fg-muted truncate flex-1 min-w-0">{display.detail}</span>
       )}
       {run?.stale && run.status === 'running' && (
-        <span className="text-4xs uppercase tracking-wide text-amber-500 shrink-0" title="No activity for a while — may be stuck">may be stuck</span>
+        <Tooltip text="No activity for a while — may be stuck"><span className="text-4xs uppercase tracking-wide text-amber-500 shrink-0">may be stuck</span></Tooltip>
       )}
       {runIcon === 'stopped' && (
         <span className="text-4xs uppercase tracking-wide text-fg-muted shrink-0">stopped</span>

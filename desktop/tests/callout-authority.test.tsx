@@ -98,9 +98,15 @@ const TINT = /bg-(amber-500|accent|destructive|red-500|green-500|emerald-500)\/(
  */
 const NOT_CALLOUTS: Record<string, { count: number; why: string }> = {
   'Button.tsx': { count: 1, why: "danger-outline's hover fill — a control's own state" },
-  'ResumeBrowser.tsx': { count: 1, why: 'filter pill selected state (rounded-full, has an inactive branch)' },
   'ThemeShareSheet.tsx': { count: 1, why: 'an <a> styled as a button — it has a hover fill' },
   'AssistantTurnBubble.tsx': { count: 1, why: 'the Plan card in the chat timeline — not a menu surface at all' },
+  'SessionContextBanner.tsx': {
+    count: 1,
+    why: 'the strip above a conversation saying what the assistant started with — the whole row '
+      + 'IS the button into the panel (Destin, 2026-09-10), and that panel is the ONLY way in '
+      + '(review-5 Q-1 chose "never" for opening by itself), so it is a K5 status strip rather '
+      + 'than passive text',
+  },
   'SettingsPanel.tsx': {
     count: 3,
     why: 'the Remote setup banner and the "Connected to X" banner both carry buttons, so both are K5; '
