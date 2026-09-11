@@ -1,14 +1,21 @@
 import { createContext, useContext, useState, useEffect, useCallback, useMemo, ReactNode } from 'react';
 import type { SkillEntry, ChipConfig, MetadataOverride, CommandEntry } from '../../shared/types';
+import { plainMessage } from '../utils/ipc-error';
 
 interface SkillState {
   installed: SkillEntry[];
   favorites: string[];
   chips: ChipConfig[];
+  /** Why the last load of installed skills failed, in plain words; null once one works.
+   *  `installed` is [] both when nothing is installed and when loading failed — this is
+   *  the only way a screen can tell those apart. */
+  loadError: string | null;
 }
 
 interface SkillActions {
   refreshInstalled: () => Promise<void>;
+  /** Run the initial load again — what a Retry behind `loadError` calls. */
+  retryLoad: () => void;
   setFavorite: (id: string, favorited: boolean) => Promise<void>;
   setChips: (chips: ChipConfig[]) => Promise<void>;
   setOverride: (id: string, override: MetadataOverride) => Promise<void>;
@@ -37,6 +44,7 @@ export function SkillProvider({ children }: { children: ReactNode }) {
   const [favorites, setFavorites] = useState<string[]>([]);
   const [chips, setChipsState] = useState<ChipConfig[]>([]);
   const [drawerCommands, setDrawerCommands] = useState<CommandEntry[]>([]);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   // Fetch slash commands separately from skills — the remote-shim exposes
   // window.claude.commands only when the server supports it, so guard the
@@ -51,8 +59,12 @@ export function SkillProvider({ children }: { children: ReactNode }) {
     return () => { cancelled = true; };
   }, []);
 
-  // Load initial state
-  useEffect(() => {
+  // Load initial state.
+  // WHY the failure is kept (error inventory 2026-09-10, false message 10): this catch
+  // only logged, so one failed call left `installed` at [] for the whole app run and the
+  // command drawer told someone with skills "No skills installed yet." — with no way to
+  // try again short of restarting the app. `retryLoad` re-runs exactly this.
+  const load = useCallback(() => {
     Promise.all([
       window.claude.skills.list(),
       window.claude.skills.getFavorites(),
@@ -61,6 +73,7 @@ export function SkillProvider({ children }: { children: ReactNode }) {
     ]).then(async ([inst, favs, ch, defaults]) => {
       setInstalled(inst ?? []);
       setChipsState(ch ?? []);
+      setLoadError(null);
 
       // First-run seeding: for each curated default we haven't seeded before,
       // persist it as a favorite so the drawer is non-empty out of the box.
@@ -84,12 +97,17 @@ export function SkillProvider({ children }: { children: ReactNode }) {
       }
     }).catch((err) => {
       console.error('[SkillContext] Failed to load:', err);
+      setLoadError(plainMessage(err));
     });
   }, []);
+
+  useEffect(() => { load(); }, [load]);
 
   const refreshInstalled = useCallback(async () => {
     const inst = await window.claude.skills.list();
     setInstalled(inst);
+    // A list that loaded answers an earlier failed load.
+    setLoadError(null);
   }, []);
 
   const setFavoriteAction = useCallback(async (id: string, favorited: boolean) => {
@@ -118,11 +136,11 @@ export function SkillProvider({ children }: { children: ReactNode }) {
   const publish = useCallback((id: string) => window.claude.skills.publish(id), []);
 
   const value = useMemo<SkillContextValue>(() => ({
-    installed, favorites, chips, drawerSkills, drawerCommands,
-    refreshInstalled, setFavorite: setFavoriteAction, setChips: setChipsAction,
+    installed, favorites, chips, loadError, drawerSkills, drawerCommands,
+    refreshInstalled, retryLoad: load, setFavorite: setFavoriteAction, setChips: setChipsAction,
     setOverride: setOverrideAction, getShareLink, publish,
-  }), [installed, favorites, chips, drawerSkills, drawerCommands,
-       refreshInstalled, setFavoriteAction, setChipsAction, setOverrideAction,
+  }), [installed, favorites, chips, loadError, drawerSkills, drawerCommands,
+       refreshInstalled, load, setFavoriteAction, setChipsAction, setOverrideAction,
        getShareLink, publish]);
 
   return <SkillContext.Provider value={value}>{children}</SkillContext.Provider>;
