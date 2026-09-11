@@ -19,6 +19,7 @@
 import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import { pathToFileURL } from 'url';
 
 // Installer types we publish and the app can be asked to verify. The manifest
 // lists all of them so any platform's download can be checked; the app matches
@@ -126,6 +127,10 @@ function main(argv) {
 }
 
 // Run as a CLI only when invoked directly (not when imported by a test).
-if (import.meta.url === `file://${process.argv[1]}`) {
+// WHY pathToFileURL (2026-09-11): hand-built `file://` + a path is only right on
+// Unix. On Windows `process.argv[1]` is `D:\a\...`, whose real URL is
+// `file:///D:/a/...`, so the comparison failed, the CLI silently did nothing, and
+// the test that runs it went red on the Windows build leg.
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
   main(process.argv.slice(2));
 }
