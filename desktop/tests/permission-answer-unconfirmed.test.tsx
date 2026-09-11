@@ -46,7 +46,7 @@ const bashAsk = (): ToolCallState => ({
   input: { command: 'ls' },
   status: 'awaiting-approval',
   requestId: 'req-1',
-} as ToolCallState);
+} as unknown as ToolCallState);
 
 const questionAsk = (): ToolCallState => ({
   id: 'tool-q',
@@ -54,7 +54,7 @@ const questionAsk = (): ToolCallState => ({
   input: { questions: [{ question: 'Which color?', header: 'Color', multiSelect: false, options: [{ label: 'Blue' }, { label: 'Red' }] }] },
   status: 'awaiting-approval',
   requestId: 'req-q',
-} as ToolCallState);
+} as unknown as ToolCallState);
 
 const renderCard = (tool: ToolCallState) => render(<ChatProvider><ToolCard tool={tool} sessionId="s1" /></ChatProvider>);
 

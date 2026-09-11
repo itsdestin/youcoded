@@ -46,7 +46,15 @@ async function renderDrawer() {
   await act(async () => {
     render(
       <SkillProvider>
-        <CommandDrawer open searchMode={false} onSelect={() => {}} onClose={() => {}} onOpenMarketplace={() => {}} />
+        <CommandDrawer
+          open
+          searchMode={false}
+          onSelect={() => {}}
+          onSelectCommand={() => {}}
+          onClose={() => {}}
+          onOpenManager={() => {}}
+          onOpenMarketplace={() => {}}
+        />
       </SkillProvider>,
     );
   });

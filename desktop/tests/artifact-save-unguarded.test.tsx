@@ -44,7 +44,7 @@ function mountView() {
 }
 
 /** Enter edit mode with startEdit's own read FAILING, so no token is captured. */
-async function editWithoutToken(ref: React.RefObject<ActiveArtifactHandle>) {
+async function editWithoutToken(ref: React.RefObject<ActiveArtifactHandle | null>) {
   await act(async () => { ref.current!.startEdit(); });
   expect(ref.current!.editing).toBe(true);
 }
