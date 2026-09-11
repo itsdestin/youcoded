@@ -107,6 +107,36 @@ describe('RemoteConfig', () => {
     expect(result).toBe(false);
   });
 
+  it('flags a short password as weak, and a long one as not (2026-09-10 security review)', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => undefined as any);
+    const { RemoteConfig } = await import('../src/main/remote-config');
+    const config = new RemoteConfig();
+
+    await config.setPassword('short'); // 5 chars, under the 8-char minimum
+    expect(config.weakPassword).toBe(true);
+    expect(config.toSafeObject().weakPassword).toBe(true);
+
+    await config.setPassword('abcd-efgh-jkmn'); // >= 8
+    expect(config.weakPassword).toBe(false);
+    expect(config.toSafeObject().weakPassword).toBe(false);
+  });
+
+  it('learns a hand-edited short password is weak on a successful sign-in', async () => {
+    vi.mocked(fs.existsSync).mockReturnValue(false);
+    vi.mocked(fs.writeFileSync).mockImplementation(() => {});
+    vi.mocked(fs.mkdirSync).mockImplementation(() => undefined as any);
+    const { RemoteConfig } = await import('../src/main/remote-config');
+    const config = new RemoteConfig();
+
+    await config.setPassword('1'); // simulate a legacy one-char password
+    config.weakPassword = false;   // pretend we don't know its length yet (e.g. loaded from disk)
+    const ok = await config.verifyPassword('1');
+    expect(ok).toBe(true);
+    expect(config.weakPassword).toBe(true);
+  });
+
   it('no longer offers a way to trust an address instead of a password', async () => {
     // The removed check treated 100.64.0.0/10 as proof of Tailscale membership. That is the
     // carrier-grade NAT range, not one Tailscale owns, and membership was never authorization.

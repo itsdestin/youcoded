@@ -18,7 +18,7 @@ import { setPermissionOverrides } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
-import { RemoteConfig } from './remote-config';
+import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from './remote-config';
 import { RemoteServer } from './remote-server';
 import { TranscriptWatcher } from './transcript-watcher';
 import { readTranscriptPage } from './transcript-page';
@@ -1779,6 +1779,13 @@ export function registerIpcHandlers(
     });
 
     ipcMain.handle(IPC.REMOTE_SET_PASSWORD, async (_event, password: string) => {
+      // Backstop for the length rule the Settings UI enforces (2026-09-10 security
+      // review, #5): refuse a new password under the minimum rather than silently
+      // storing a one-character one. Returns false so the UI can show its message;
+      // the boolean contract is unchanged (this handler only ever returned true).
+      if (typeof password !== 'string' || password.length < MIN_REMOTE_PASSWORD_LENGTH) {
+        return false;
+      }
       await remoteConfig.setPassword(password);
       remoteServer?.invalidateTokens();
       return true;

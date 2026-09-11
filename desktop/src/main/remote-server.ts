@@ -15,6 +15,7 @@ import path from 'path';
 import os from 'os';
 import { randomUUID } from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
+import { isAllowedWsOrigin } from './remote-origin';
 import type { SessionManager } from './session-manager';
 // Value import (not type-only): the "Run in terminal" case below runs the SAME
 // validation the desktop handler runs — a remote client's payload is the least
@@ -97,6 +98,13 @@ const RATE_LIMIT_WINDOW_MS = 60_000;
 // out is the owner far more often than the attacker.
 const HOST_FAILURES_BEFORE_SLOWDOWN = 25;
 const HOST_SLOWDOWN_MS = 2_000;
+// The most sockets that may sit unauthenticated at once (2026-09-10 security
+// review, #5). An auth handshake resolves in milliseconds and the socket then
+// leaves this count, so a legitimate household never approaches it; the cap only
+// bounds a flood of half-open pre-auth sockets held open to exhaust memory.
+// A TOTAL cap, not per-IP: behind the loopback proxy every device shares
+// 127.0.0.1, so a per-IP cap would be one bucket for the whole household.
+const MAX_UNAUTH_SOCKETS = 64;
 // Enough to cover a reconnect, not a session. Older than this answers "unknown".
 const COMPLETED_RING_PER_DEVICE = 200;
 const COMPLETED_RING_MS = 10 * 60_000;
@@ -147,6 +155,10 @@ export class RemoteServer {
   private uploadCleanupTimer: ReturnType<typeof setInterval> | null = null;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private clients = new Set<AuthenticatedClient>();
+  // Sockets that have connected but not yet authenticated. Bounded by
+  // MAX_UNAUTH_SOCKETS so a flood of half-open pre-auth sockets can't exhaust
+  // memory (2026-09-10 security review, #5).
+  private unauthSockets = 0;
   private lastClientActivityMs = 0; // see getLastClientActivityMs()
   private devices: RemoteDeviceStore;
   // `${encoding}:${urlPath}` → compressed bytes. Safe to hold indefinitely
@@ -410,8 +422,26 @@ export class RemoteServer {
       }
     });
 
-    // Security: limit message size to 50MB to prevent memory exhaustion attacks
-    this.wss = new WebSocketServer({ server: this.httpServer, path: '/ws', maxPayload: 52428800 });
+    // Security: limit message size to 50MB to prevent memory exhaustion attacks.
+    // verifyClient (2026-09-10 security review, #5): reject a cross-origin upgrade
+    // before the socket opens, so a web page the user has open elsewhere cannot
+    // hijack this WebSocket (CSWSH). See remote-origin.ts for the rule.
+    this.wss = new WebSocketServer({
+      server: this.httpServer,
+      path: '/ws',
+      maxPayload: 52428800,
+      verifyClient: (info, cb) => {
+        if (isAllowedWsOrigin(info.origin, info.req.headers.host)) {
+          cb(true);
+          return;
+        }
+        // Log so a legitimate refusal (e.g. a nickname we didn't anticipate) is
+        // visible rather than a silent "it just won't connect".
+        console.warn('[remote-server] refused WS upgrade: origin', JSON.stringify(info.origin || null),
+          'host', JSON.stringify(info.req.headers.host || null));
+        cb(false, 403, 'Forbidden origin');
+      },
+    });
     this.wss.on('connection', (ws, req) => this.handleConnection(ws, req));
 
     // Dev mode: proxy WebSocket upgrades (non-/ws) to Vite for HMR
@@ -879,6 +909,19 @@ export class RemoteServer {
 
   private handleConnection(ws: WebSocket, req: http.IncomingMessage): void {
     const ip = req.socket.remoteAddress || '';
+
+    // Bound the number of sockets held open without authenticating (2026-09-10
+    // security review, #5). releaseUnauth() runs exactly once — on auth success
+    // below, or on close for every failure/timeout path — so an authenticated
+    // long-lived socket does not keep occupying a pre-auth slot.
+    if (this.unauthSockets >= MAX_UNAUTH_SOCKETS) {
+      ws.close(4009, 'Too many pending connections');
+      return;
+    }
+    this.unauthSockets++;
+    let releasedUnauth = false;
+    const releaseUnauth = () => { if (!releasedUnauth) { releasedUnauth = true; this.unauthSockets--; } };
+    ws.once('close', releaseUnauth);
     // ONE auth attempt per connection. The handler below detaches itself on the first
     // message and every failure path closes the socket, so a guesser pays a full
     // reconnect per try and cannot spend anyone else's budget.
@@ -952,6 +995,7 @@ export class RemoteServer {
           const result = this.devices.authenticate(msg.deviceId, msg.secret);
           if (result.ok) {
             this.clearFailedAttempts();
+            releaseUnauth(); // authenticated — free the pre-auth slot
             this.config.markPaired();
             this.addClient(ws, result.device.id, ip);
             // Same capability flag as the pairing path below — master's own note says the
@@ -982,6 +1026,7 @@ export class RemoteServer {
           // is unpaired, going cold in the Last seen column. Do not "deduplicate" it: that
           // would be the host guessing about identity, which is what the password is for.
           const paired = this.devices.pair(msg.deviceName);
+          releaseUnauth(); // authenticated — free the pre-auth slot
           this.config.markPaired();
           this.addClient(ws, paired.deviceId, ip);
           // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
