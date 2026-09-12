@@ -4902,13 +4902,25 @@ export function registerIpcHandlers(
       return { ok: false, error: 'no path' };
     }
     try {
-      const canon = canonicalize(absolutePath, null);
+      // Resolve symlinks BEFORE the policy decision (2026-09-11). The verdict was
+      // made about the path as TYPED while readFile follows links, so a link
+      // inside a project folder pointing at ~/.ssh/id_rsa was judged as the link
+      // and read as the key. artifacts:get has resolved first since 2026-07-22
+      // (write-authorization.ts); this is the same rule for the bytes path.
+      // ENOENT is the honest not-found answer; anything else unresolvable is
+      // judged as given, which can only be stricter.
+      const realPath = await fs.promises.realpath(absolutePath).catch((e: any) => (
+        e?.code === 'ENOENT' ? null : absolutePath
+      ));
+      if (realPath === null) return { ok: false, error: 'orphan' };
+      const canon = canonicalize(realPath, null);
       // Known roots: saved folders (the session-creation picker) + every
-      // central-index project path.
-      const roots = [
-        ...readFolders().map((f) => canonicalize(f.path, null)),
-        ...(await listProjects(CLAUDE_DIR)).map((p) => canonicalize(p.path, null)),
-      ];
+      // central-index project path. Resolved too — a saved folder that is itself
+      // a symlink would otherwise stop matching its own resolved files.
+      const roots = await Promise.all([
+        ...readFolders().map((f) => f.path),
+        ...(await listProjects(CLAUDE_DIR)).map((p) => p.path),
+      ].map(async (p) => canonicalize(await fs.promises.realpath(p).catch(() => p), null)));
       let verdict = evaluateBinaryRead(canon, roots, new Set());
       if (verdict === 'outside-roots') {
         // Second pass (rare): collect tracked EXTERNAL artifact paths + manual
@@ -4917,21 +4929,30 @@ export function registerIpcHandlers(
         for (const root of roots) {
           const sidecar = await readSidecarShared(root).catch(() => null);
           if (!sidecar || 'corrupted' in sidecar) continue;
+          // Both spellings: the record holds the path as recorded, but the verdict
+          // above is made about the RESOLVED path, so a tracked file reached
+          // through a symlink must still match its own record.
+          const addBoth = async (p: string) => {
+            tracked.add(canonicalize(p, null));
+            tracked.add(canonicalize(await fs.promises.realpath(p).catch(() => p), null));
+          };
           for (const a of sidecar.artifacts) {
-            if (a.kind === 'external' && a.absolutePath) tracked.add(canonicalize(a.absolutePath, null));
+            if (a.kind === 'external' && a.absolutePath) await addBoth(a.absolutePath);
           }
-          for (const inc of sidecar.manualIncludes) tracked.add(canonicalize(inc.path, null));
+          for (const inc of sidecar.manualIncludes) await addBoth(inc.path);
         }
         verdict = evaluateBinaryRead(canon, roots, tracked);
       }
       if (verdict !== 'allowed') return { ok: false, error: 'not-allowed' };
 
       // Size gate before reading — a huge file would freeze the renderer (and
-      // the WS transport) long before the viewer could reject it.
-      const st = await fs.promises.stat(absolutePath);
+      // the WS transport) long before the viewer could reject it. Everything
+      // below works on the RESOLVED path, so what is measured and read is what
+      // the policy above allowed.
+      const st = await fs.promises.stat(realPath);
       if (st.size > READ_BINARY_MAX_BYTES) return { ok: false, error: 'too-large' };
 
-      const buf = await fs.promises.readFile(absolutePath);
+      const buf = await fs.promises.readFile(realPath);
       return { ok: true, base64: buf.toString('base64') };
     } catch (e: any) {
       return { ok: false, error: e?.code === 'ENOENT' ? 'orphan' : String(e?.message ?? e) };

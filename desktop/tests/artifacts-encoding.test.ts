@@ -45,7 +45,8 @@ function handlerFor(channel: string) {
     install: vi.fn(), installMany: vi.fn(),
     ensureBundledPluginsInstalled: vi.fn(), ensureMigrated: vi.fn(),
   };
-  registerIpcHandlers(mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider);
+  const mockCommandProvider: any = { list: vi.fn(async () => []), invalidate: vi.fn() };
+  registerIpcHandlers(mockIpcMain, mockSessionManager, mockWindow, mockSkillProvider, mockCommandProvider);
   return mockIpcMain.handle.mock.calls.find((c: any) => c[0] === channel)[1];
 }
 

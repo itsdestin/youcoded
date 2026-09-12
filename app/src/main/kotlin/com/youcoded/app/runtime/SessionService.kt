@@ -3744,12 +3744,19 @@ class SessionService : Service() {
                         org.json.JSONObject().put("ok", false).put("error", "too-large")) }
                     return@handleBridgeMessage
                 }
-                val payload = try {
-                    val bytes = resolvedBin.readBytes()
-                    val b64 = android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)
-                    org.json.JSONObject().put("ok", true).put("base64", b64)
-                } catch (e: java.io.IOException) {
+                // Only a file that is genuinely absent answers "orphan" — the viewer
+                // words that as "isn't where it was saved". A file that exists but
+                // cannot be read is a read FAILURE with its reason: catching every
+                // IOException as orphan told the user an image they could not open
+                // had been deleted (2026-09-11; same fix artifacts:get had).
+                val payload = if (!resolvedBin.exists()) {
                     org.json.JSONObject().put("ok", false).put("error", "orphan")
+                } else when (val read = EditablePathPolicy.readWhole(resolvedBin)) {
+                    is EditablePathPolicy.FileRead.Bytes ->
+                        org.json.JSONObject().put("ok", true)
+                            .put("base64", android.util.Base64.encodeToString(read.bytes, android.util.Base64.NO_WRAP))
+                    is EditablePathPolicy.FileRead.Unreadable ->
+                        org.json.JSONObject().put("ok", false).put("error", read.reason)
                 }
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
             }
