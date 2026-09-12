@@ -46,6 +46,10 @@
   // the `binaries` category stays at its default (error), so a NEW unlisted
   // binary still fails CI.
   "ignoreBinaries": [
+    // Creates a named pipe for tests/remote-download.test.ts, which proves a pipe
+    // swapped in for a downloaded file cannot freeze a file thread on the host.
+    // A POSIX utility (coreutils), not an npm package: Node has no mkfifo API.
+    "mkfifo",
     // Linux socket-stats tool, engine-supervisor.ts: which process holds the port.
     "ss",
     // Windows process lister, sync-service.ts: is this sync PID still alive.

@@ -291,7 +291,7 @@ class ManagedSession(
                 // Forward to bridge server for React UI
                 bridgeServer?.let { server ->
                     val serialized = when (event) {
-                        is TranscriptEvent.UserMessage -> TranscriptSerializer.userMessage(event.sessionId, event.uuid, event.timestamp, event.text)
+                        is TranscriptEvent.UserMessage -> TranscriptSerializer.userMessage(event.sessionId, event.uuid, event.timestamp, event.text, event.slashCommand)
                         is TranscriptEvent.AssistantText -> TranscriptSerializer.assistantText(event.sessionId, event.uuid, event.timestamp, event.text, event.model, event.parentAgentToolUseId, event.agentId)
                         is TranscriptEvent.ToolUse -> TranscriptSerializer.toolUse(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.toolName, event.toolInput, event.parentAgentToolUseId, event.agentId)
                         is TranscriptEvent.ToolResult -> TranscriptSerializer.toolResult(event.sessionId, event.uuid, event.timestamp, event.toolUseId, event.result, event.isError, event.parentAgentToolUseId, event.agentId)

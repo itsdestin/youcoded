@@ -1,6 +1,18 @@
 import http from 'http';
 import zlib from 'zlib';
 import { listProjectsIndex } from './artifacts/projects-index';
+// Files over remote (batch 3): the same read bodies the Electron handlers
+// call, plus the phone's smaller preview ceilings.
+import {
+  listSessionFiles, listProjectFiles, listAllFiles, readArtifactText, readArtifactBytes,
+  searchArtifactContent, checkArtifactExistence, isKnownRoot, isKnownProjectRef,
+  resolveArtifactPath,
+} from './artifacts/read-service';
+import { listConversations, repoInfo, listContextFiles, readContext } from './project-read-service';
+import { watchProject, unwatchProject, dropSubscriber } from './artifacts/project-watcher';
+import { REMOTE_TEXT_PREVIEW_MAX_BYTES, REMOTE_BINARY_PREVIEW_MAX_BYTES } from '../shared/remote-file-limits';
+import { RemoteDownloads } from './remote-download';
+import { readSidecarShared } from './artifacts/artifact-store';
 import { readFileHead } from './fs-read-head';
 // Games arcade scores — remote browsers share the desktop's operations and
 // its stale-board cache (main/arcade-handlers.ts).
@@ -9,6 +21,7 @@ import { getArcadeOps } from './arcade-handlers';
 // can't drift from the synced registry's limit — same constant project-registry.ts
 // and ipc-handlers.ts use.
 import { PROJECT_DESCRIPTION_MAX } from '../shared/artifacts/types';
+import { listPickerFolders, addFolder, removeFolder, renameFolder, setFolderDescription } from './folders-service';
 import { staticAssetPolicy } from './remote-static-policy';
 import fs from 'fs';
 import path from 'path';
@@ -65,15 +78,25 @@ import { resolveConversations, readConversation } from './chatsearch-index/refs-
 import { getJsonPath, setJsonPath } from './safe-json-path';
 import { resolveStaticFile } from './remote-static-path';
 
-const PTY_BUFFER_SIZE = 4 * 1024 * 1024; // 4MB per session — enough for full conversation replay
+// 4M UTF-16 units per session — enough for full conversation replay. Named for what it
+// counts (batch 2): JavaScript string length, not bytes.
+const PTY_BUFFER_UNITS = 4 * 1024 * 1024;
 // Perf (2026-09-03): the rolling PTY replay buffer is a LIST OF OUTPUT CHUNKS,
 // not one big string, so appending costs O(chunk) instead of O(whole buffer).
 // `length` is the running total of `chunks` measured in JavaScript string length
 // (UTF-16 code units) — deliberately the SAME unit the old
-// `buf.length > PTY_BUFFER_SIZE` cap counted, so the effective cap size does not
+// 4 MB cap counted (`buf.length > cap`), so the effective cap size does not
 // silently change. (It is a character count, not a byte count: a non-ASCII char
 // can cost 2 units and a UTF-8 byte count would differ — exactly as before.)
-interface PtyBuffer { chunks: string[]; length: number; }
+//
+// Remote access batch 2 (design §7): the buffer is a window onto a monotonic STREAM.
+// `epoch` names the stream (random per buffer, so a host restart or a destroyed-and-
+// recreated session gets a new one); `base` is how many units have been trimmed off
+// the head, so a chunk's stream position is `base + length` at the moment it is
+// appended and the window covers `[base, base + length)`. A phone reports the stream
+// position it has drawn up to; a matching epoch and a position inside the window get
+// exactly the units past it, anything else gets a reset and the whole window.
+interface PtyBuffer { chunks: string[]; length: number; epoch: string; base: number; }
 // Perf: a PTY can emit a single keystroke at a time, and 4 MB of 1-char chunks
 // would be millions of array entries (each JS string carries tens of bytes of
 // overhead). So while the newest chunk is still small, append INTO it rather than
@@ -111,6 +134,40 @@ const COMPLETED_RING_MS = 10 * 60_000;
 // A half-open socket is invisible without this: the host keeps buffering for a client that
 // is gone, and the client waits the full request timeout to learn anything is wrong.
 const PING_INTERVAL_MS = 20_000;
+// How many of those checks may go unanswered before the host gives up on a client.
+// WHY more than one (Destin, 2026-09-11: "still flashes the password screen at me on
+// refresh/reconnect and takes a while to load back in/sync up"; the dev log showed his phone
+// dropping every 55-90 s): one missed check closed the connection after as little as 20 s of
+// silence, and a phone that locks for half a minute — or whose radio pauses mid-tap — is not a
+// phone that has gone away. Each reconnect then cost a full catch-up. Three gives roughly a
+// minute of grace, still far inside the 30 s a request waits.
+const MAX_MISSED_PINGS = 3;
+// Remote access batch 2 (design §1): a client that never says `client:ready` — an older
+// build of the phone page — gets the restore sequence after this long instead of never.
+const OLD_CLIENT_FALLBACK_MS = 5000;
+// The same fallback for a page that said at sign-in that it sends `client:ready`. WHY longer
+// (2026-09-11 phone pass, dev log "client:ready ignored in phase live"): a phone's page can take
+// more than 5 s from sign-in to listening, and the 5 s timer then ran the catch-up into a page
+// that could not hear it, so the phone said "may be out of date". A page that will announce
+// readiness is waited on; this timer only covers one that breaks before it can.
+const READY_CLIENT_FALLBACK_MS = 30_000;
+// Broadcasts queued for a client that is still restoring. Overflow drops the oldest and
+// marks that client's hydrate `degraded`, so the phone knows to offer Refresh.
+const RESTORE_QUEUE_MAX = 2000;
+// Backpressure (design §7): ws.send never blocks, so a stalled phone grew the host's
+// socket buffer until the liveness ping closed it. While the socket holds more than
+// this, the restore's sends pause and poll; above the close mark the client is closed
+// with a code the strip renders as reconnecting.
+const BACKPRESSURE_PAUSE_BYTES = 8 * 1024 * 1024;
+const BACKPRESSURE_CLOSE_BYTES = 32 * 1024 * 1024;
+const BACKPRESSURE_POLL_MS = 50;
+const CLOSE_TOO_SLOW = 4009;
+
+/** Where a remote client stands between auth and the live stream (design §1 B).
+ *  `restoring`: queue every broadcast until the phone says it is ready.
+ *  `readying`: the restore sequence is running (the snapshot may be in flight).
+ *  `live`: broadcasts go straight to the socket. */
+type ClientPhase = 'restoring' | 'readying' | 'live';
 
 interface AuthenticatedClient {
   id: string;
@@ -118,8 +175,43 @@ interface AuthenticatedClient {
   deviceId: string;
   ip: string;
   connectedAt: number;
-  awaitingPong?: boolean;
+  /** Checks sent since the client last said anything. Reset by any frame, pong or message. */
+  missedPings?: number;
+  /** When the client last said anything — reported on the drop, so a silent death is visible. */
+  lastHeardAt?: number;
+  // Optional because tests (and any record added straight to `clients`) predate the
+  // phases: a record with no phase is treated as live, which is what it always was.
+  phase?: ClientPhase;
+  /** Broadcasts held back while the client is not live, in arrival order. */
+  queue?: { type: string; payload: any }[];
+  /** True once the queue overflowed — the hydrate is then marked degraded. */
+  queueDegraded?: boolean;
+  /** Queue length at the moment the snapshot was requested: the cut line. */
+  snapshotIndex?: number;
+  /** Queue length when the hook buffer pass began (first connect only). */
+  hookPassIndex?: number;
+  /** Runs the restore for a client that never sends client:ready. */
+  fallbackTimer?: ReturnType<typeof setTimeout> | null;
+  /** A Refresh asked for while a restore was already running; it runs right after. */
+  pendingRehydrate?: { seq?: number };
+  /** What the phone said it had drawn per session, from client:ready (§7). */
+  ptyOffsets?: Record<string, { epoch: string; units: number }>;
+  /** Stream position sent so far per session during THIS restore — the replay cursor.
+   *  Keyed with the buffer's epoch, so a buffer recreated mid-restore is not read at the
+   *  old buffer's position (T2 review, 12). */
+  ptyCursor?: Map<string, { epoch: string; pos: number }>;
+  // The project watcher's subscriber id for this socket (batch 3, §8). Assigned
+  // on the first watch-project and dropped on close; negative so it can never
+  // collide with a webContents id, which is what the desktop subscribes with.
+  watchId?: number;
+  // Distinct roots this socket watches — capped (MAX_WATCHED_ROOTS_PER_SOCKET).
+  watchedRoots?: Set<string>;
 }
+
+// A phone shows one project's Files and one conversation's drawer at a time;
+// four leaves room for a switch mid-grace without letting a socket pin a
+// watcher per directory on the computer.
+const MAX_WATCHED_ROOTS_PER_SOCKET = 4;
 
 export interface ClientInfo {
   id: string;
@@ -140,6 +232,19 @@ interface SessionNamingWiring {
   set: (value: unknown) => Promise<{ ok: boolean; error?: string }>;
   title: (sessionId: string, fallback: string) => Promise<{ title: string; manual: boolean }>;
   rename: (sessionId: string, title: string) => Promise<{ ok: boolean; error?: string }>;
+}
+
+/**
+ * Which copy of the app a phone's browser is served.
+ *
+ * WHY (Destin, 2026-09-11: "still flashes the password screen at me on refresh/reconnect"): the
+ * server served a built copy whenever one existed on disk, and a dev window found one left by an
+ * Android test build the night before, so a whole day of phone-side fixes never reached the phone.
+ * The installed app serves its built copy; a dev window serves live code unless a fresh copy was
+ * built for the phone (run-dev.sh --phone-build). Pinned by tests/remote-page-source.test.ts.
+ */
+export function choosePhonePageSource(opts: { serveBuiltPage: boolean; hasBuild: boolean }): 'built' | 'dev-server' {
+  return opts.serveBuiltPage && opts.hasBuild ? 'built' : 'dev-server';
 }
 
 export class RemoteServer {
@@ -200,14 +305,14 @@ export class RemoteServer {
   // Last-known topic names, fed by ipc-handlers.ts via setLastTopic()
   private lastTopics = new Map<string, string>();
   // Last-known FULL status payload, fed by ipc-handlers.ts via broadcastStatusData(),
-  // replayed to each new client in replayBuffers(). Was previously `contextMap` — only
+  // replayed to each new client in restoreClient(). Was previously `contextMap` — only
   // the context-% slice was stored, and nothing ever read it, so a remote client that
   // connected between polls showed a blank status bar for up to 10s (the ipc-handlers
   // status interval). Storing the whole payload fixes that for every status field
   // (usage, gitBranch, sessionStats, attention, sync) instead of just context %.
   private lastStatusData: Record<string, any> | null = null;
   // Provider injected at construction — called when new clients connect to get the full chat state.
-  // Task 6 wires this into replayBuffers(); declared here so the field exists before that step.
+  // restoreClient() calls it once per restore; declared here so the field exists before that step.
   private requestSnapshot: () => Promise<SerializedChatState>;
   // Native runtime stack — injected by ipc-handlers via setNativeRuntime() AFTER
   // it constructs the instances (they can't be built at RemoteServer construction
@@ -235,13 +340,49 @@ export class RemoteServer {
     private hookRelay: HookRelay,
     private config: RemoteConfig,
     private skillProvider?: LocalSkillProvider,
-    opts?: { requestSnapshot?: () => Promise<SerializedChatState> },
+    opts?: {
+      requestSnapshot?: () => Promise<SerializedChatState>;
+      getFocusSessionId?: () => string | null;
+      onAppearanceBroadcast?: (prefs: Record<string, unknown>) => void;
+      /** The desktop's commands:list (CommandProvider.getCommands), for the phone's / menu. */
+      listCommands?: () => Promise<unknown[]>;
+      /** The desktop's theme:list. Injectable for tests; defaults to the same function. */
+      listThemes?: () => string[];
+      /** Serve the built copy of the app when one exists (see choosePhonePageSource). main.ts
+       *  passes app.isPackaged or run-dev.sh --phone-build; the default keeps the old behaviour. */
+      serveBuiltPage?: boolean;
+    },
   ) {
     this.devices = new RemoteDeviceStore();
     // Default is a no-op that returns an empty snapshot — allows the server to
     // be constructed before the main window exists (e.g. during first-run setup).
     this.requestSnapshot = opts?.requestSnapshot ?? (() => Promise.resolve({ sessions: [] }));
+    this.getFocusSessionId = opts?.getFocusSessionId ?? (() => null);
+    this.onAppearanceBroadcast = opts?.onAppearanceBroadcast ?? (() => {});
+    this.listCommands = opts?.listCommands ?? null;
+    this.listThemes = opts?.listThemes ?? (() => require('./theme-watcher').listUserThemes());
+    this.serveBuiltPage = opts?.serveBuiltPage ?? true;
   }
+  private serveBuiltPage: boolean;
+  private listCommands: (() => Promise<unknown[]>) | null;
+  private listThemes: () => string[];
+
+  /** One line per connection event in the host's log. WHY (2026-09-11 phone pass): an empty
+   *  project list and a flashing password screen could not be traced, because the host recorded
+   *  no connects, drops or catch-ups. A short device id only: never a secret, address or name. */
+  private logDevice(client: { deviceId: string }, event: string): void {
+    // WHY the time (2026-09-11): the log recorded seven drops in ten minutes with no way to
+    // tell which were the phone being locked or refreshed and which happened on their own.
+    console.log(`[remote-server] ${new Date().toISOString()} device ${client.deviceId.slice(0, 8)}: ${event}`);
+  }
+  // Batch 2 (§3): the session the desktop is showing, from main's per-window cache.
+  // Rides session:destroyed so a phone whose conversation went away opens that one.
+  // It can name the destroyed session itself — session-exit fires before any window
+  // changes its selection — and the design puts that fallback on the phone (first
+  // remaining session), so the host reports the cache as it is.
+  private getFocusSessionId: () => string | null;
+  /** Hands a phone's appearance change to the computer's windows (main owns BrowserWindow). */
+  private onAppearanceBroadcast: (prefs: Record<string, unknown>) => void;
 
   /** Injected by main.ts. Read-only access to the marketplace auth session so
    *  remote clients can see whether the host is signed in — the game lobby
@@ -387,6 +528,7 @@ export class RemoteServer {
     // Subscribe to events for buffering and broadcasting
     this.sessionManager.on('pty-output', this.onPtyOutput);
     this.hookRelay.on('hook-event', this.onHookEvent);
+    this.hookRelay.on('permission-expired', this.onPermissionExpired);
     this.sessionManager.on('session-exit', this.onSessionExit);
     this.sessionManager.on('session-created', this.onSessionCreated);
 
@@ -398,8 +540,14 @@ export class RemoteServer {
     // its dev URL from VITE_DEV_PORT; remote-server was the one place that
     // didn't. Never reintroduce a literal port here — import it from ports.ts.
     const viteDevUrl = process.env.VITE_DEV_SERVER_URL || `http://127.0.0.1:${VITE_DEV_PORT}`;
-    // In dev mode, dist/renderer/index.html doesn't exist — proxy to Vite
-    const hasStaticBuild = fs.existsSync(path.join(staticDir, 'index.html'));
+    const builtIndex = path.join(staticDir, 'index.html');
+    const hasStaticBuild = choosePhonePageSource({ serveBuiltPage: this.serveBuiltPage, hasBuild: fs.existsSync(builtIndex) }) === 'built';
+    // Say which, and how old a built copy is, so a stale copy shows in the log instead of hiding.
+    if (hasStaticBuild) {
+      console.log(`[RemoteServer] phone page: built copy from ${fs.statSync(builtIndex).mtime.toISOString()} (${staticDir})`);
+    } else {
+      console.log(`[RemoteServer] phone page: live code from the dev server (${viteDevUrl})`);
+    }
 
     this.httpServer = http.createServer((req, res) => {
       // WHY this endpoint exists: without it the sign-in screen has no way to know the host
@@ -415,6 +563,11 @@ export class RemoteServer {
         res.end(JSON.stringify({ needsSetup: !this.config.passwordHash }));
         return;
       }
+      // Download links (batch 3, §10) — matched before the static handler AND
+      // the Vite proxy: the SPA fallback would answer an expired link with
+      // index.html and a 200, and in dev the proxy would hand it to Vite. The
+      // 256-bit token in the path is the authorization; see remote-download.ts.
+      if (this.downloads.handleHttpRequest(req, res)) return;
       if (hasStaticBuild) {
         this.handleHttpRequest(req, res, staticDir);
       } else {
@@ -561,6 +714,7 @@ export class RemoteServer {
     this.lastStatusData = null;
     this.sessionManager.off('pty-output', this.onPtyOutput);
     this.hookRelay.off('hook-event', this.onHookEvent);
+    this.hookRelay.off('permission-expired', this.onPermissionExpired);
     this.sessionManager.off('session-exit', this.onSessionExit);
     this.sessionManager.off('session-created', this.onSessionCreated);
 
@@ -585,6 +739,7 @@ export class RemoteServer {
   /** Every device loses access — what a password change means. */
   invalidateTokens(): void {
     this.devices.revokeAll();
+    this.downloads.revokeAll();
     for (const client of this.clients) {
       client.ws.close(4001, 'Password changed');
     }
@@ -632,6 +787,8 @@ export class RemoteServer {
   unpairDevice(deviceId: string): boolean {
     const revoked = this.devices.revoke(deviceId);
     if (!revoked) return false;
+    // Contract R10 (batch 3): removing a device also ends its right to download.
+    this.downloads.revokeDevice(deviceId);
     for (const client of this.clients) {
       if (client.deviceId === deviceId) {
         client.ws.close(4003, 'Device unpaired');
@@ -648,7 +805,9 @@ export class RemoteServer {
     // rebuilding the whole string — see PtyBuffer for the 4 MB-per-chunk copy
     // this replaces.
     let buf = this.ptyBuffers.get(sessionId);
-    if (!buf) { buf = { chunks: [], length: 0 }; this.ptyBuffers.set(sessionId, buf); }
+    if (!buf) { buf = { chunks: [], length: 0, epoch: randomUUID().slice(0, 8), base: 0 }; this.ptyBuffers.set(sessionId, buf); }
+    // The chunk's stream position, read BEFORE the append (see PtyBuffer).
+    const offset = buf.base + buf.length;
     // An empty chunk adds nothing to the replayed text but WOULD add an array
     // entry, so skip it here. The live broadcast below is deliberately untouched —
     // a client that is listening still sees exactly the frames it saw before.
@@ -662,26 +821,147 @@ export class RemoteServer {
       buf.length += data.length;
 
       // Trim WHOLE chunks off the head until we are back under the cap.
-      // Behaviour note: the old code cut mid-chunk at exactly PTY_BUFFER_SIZE, so
+      // Behaviour note: the old code cut mid-chunk at exactly the cap, so
       // the replay could begin part-way through a terminal escape sequence; the cut
       // now lands on a chunk boundary, which means the buffer can hold slightly
       // LESS than the cap. That is the intended trade — the replayed tail is
       // otherwise identical, and it is strictly less likely to start mid-escape.
-      while (buf.length > PTY_BUFFER_SIZE && buf.chunks.length > 1) {
-        buf.length -= buf.chunks.shift()!.length;
+      while (buf.length > PTY_BUFFER_UNITS && buf.chunks.length > 1) {
+        const dropped = buf.chunks.shift()!.length;
+        buf.length -= dropped;
+        buf.base += dropped;             // every head trim advances the window's start
       }
       // A single chunk larger than the entire cap cannot be dropped without losing
       // everything, so trim its tail instead — the one copy left in this path, and
       // it only happens when one read delivers more than 4 MB at once.
-      if (buf.length > PTY_BUFFER_SIZE) {
+      if (buf.length > PTY_BUFFER_UNITS) {
         const only = buf.chunks[0];
-        buf.chunks[0] = only.slice(only.length - PTY_BUFFER_SIZE);
+        buf.base += only.length - PTY_BUFFER_UNITS;   // this slice is a head trim too
+        buf.chunks[0] = only.slice(only.length - PTY_BUFFER_UNITS);
         buf.length = buf.chunks[0].length;
       }
     }
 
-    // Broadcast live
-    this.broadcast({ type: 'pty:output', payload: { sessionId, data } });
+    // Broadcast live. A client that is not live yet does not get this (see
+    // enqueueForRestoring): the cursor replay covers it up to the moment it goes live.
+    this.broadcast({ type: 'pty:output', payload: { sessionId, data, epoch: buf.epoch, offset } });
+  };
+
+  /** The window's text from stream position `from` (>= base) to its end, without
+   *  joining chunks the caller already has. */
+  private static sliceFrom(buf: PtyBuffer, from: number): string {
+    let skip = from - buf.base;
+    const parts: string[] = [];
+    for (const chunk of buf.chunks) {
+      if (skip >= chunk.length) { skip -= chunk.length; continue; }
+      parts.push(skip > 0 ? chunk.slice(skip) : chunk);
+      skip = 0;
+    }
+    return parts.join('');
+  }
+
+  /**
+   * One replay pass for a client (design §7): for every session buffer, send what lies
+   * past the client's cursor. The first pass seeds the cursor from what the phone said
+   * it had drawn — an exact continuation when the epoch matches and the position is
+   * inside the window, otherwise a reset and the whole window. Returns true when
+   * anything was sent, so the caller can pass again until nothing is new: output that
+   * arrives while a send is paused is picked up by the next pass, never lost, and the
+   * live broadcast takes over with no gap and no overlap.
+   */
+  private async ptyPass(client: AuthenticatedClient): Promise<boolean> {
+    const cursor = (client.ptyCursor ??= new Map());
+    let sent = false;
+    for (const [sessionId, buf] of this.ptyBuffers) {
+      const prior = cursor.get(sessionId);
+      let from: number;
+      let reset = false;
+      if (prior && prior.epoch === buf.epoch) {
+        from = prior.pos;
+        // More output arrived while a send was paused than the window holds, so the head
+        // trim passed the cursor: what lies between is gone. Start the terminal over
+        // rather than skip it silently (T2 review, 4).
+        if (from < buf.base) { reset = true; from = buf.base; }
+      } else if (prior) {
+        // This session's buffer was destroyed and recreated during the restore.
+        reset = true;
+        from = buf.base;
+      } else {
+        const reported = client.ptyOffsets?.[sessionId];
+        const total = buf.base + buf.length;
+        if (reported && reported.epoch === buf.epoch && reported.units >= buf.base && reported.units <= total) {
+          from = reported.units;
+        } else {
+          from = buf.base;
+          // The phone drew a terminal this window cannot continue: start it over.
+          reset = !!reported;
+        }
+      }
+      if (reset) {
+        if (!(await this.sendGated(client, { type: 'pty:reset', payload: { sessionId, epoch: buf.epoch } }))) return sent;
+        sent = true;
+        from = Math.max(from, buf.base);          // the window may have moved during the send
+      }
+      if (from < buf.base + buf.length) {
+        // Sliced HERE, synchronously; the cursor advances by exactly what was sliced. It
+        // used to jump to the buffer's end after the send, which skipped any output that
+        // arrived while that send was paused.
+        const data = RemoteServer.sliceFrom(buf, from);
+        if (!(await this.sendGated(client, { type: 'pty:output', payload: { sessionId, data, epoch: buf.epoch, offset: from } }))) return sent;
+        sent = true;
+        from += data.length;
+      }
+      cursor.set(sessionId, { epoch: buf.epoch, pos: from });
+    }
+    return sent;
+  }
+
+  /** Permission asks the snapshot shows awaiting in one session, top-level and nested.
+   *  For a session the snapshot holds, the desktop's own copy is the truth about which
+   *  asks are open — the host buffer misses asks raised before remote access started. */
+  private static awaitingInSnapshot(snapshot: SerializedChatState, sessionId: string): string[] {
+    const held = snapshot.sessions.find(([id]) => id === sessionId)?.[1];
+    const out: string[] = [];
+    for (const [, tool] of held?.toolCalls ?? []) {
+      if (tool.status === 'awaiting-approval' && tool.requestId) out.push(tool.requestId);
+      for (const seg of tool.subagentSegments ?? []) {
+        if (seg.type === 'tool' && seg.status === 'awaiting-approval' && seg.requestId) out.push(seg.requestId);
+      }
+    }
+    return out;
+  }
+
+  /**
+   * Send with the backpressure gate (design §7). Returns false when the client is gone
+   * or was closed for being too slow, so a caller can stop its pass.
+   */
+  private async sendGated(client: AuthenticatedClient, msg: { type: string; payload: any }): Promise<boolean> {
+    const ws = client.ws;
+    while (ws.readyState === WebSocket.OPEN && ws.bufferedAmount > BACKPRESSURE_PAUSE_BYTES) {
+      if (ws.bufferedAmount > BACKPRESSURE_CLOSE_BYTES) {
+        ws.close(CLOSE_TOO_SLOW, 'Too slow');
+        return false;
+      }
+      // `ws` exposes no drain event on bufferedAmount; a short poll is the signal.
+      await new Promise((r) => setTimeout(r, BACKPRESSURE_POLL_MS));
+    }
+    if (ws.readyState !== WebSocket.OPEN) return false;
+    ws.send(JSON.stringify(msg));
+    return true;
+  }
+
+  /** A Claude Code ask whose hook socket closed before anyone answered (T2 review, 7).
+   *  main.ts tells the desktop windows; nothing told the host's replay buffer or a phone,
+   *  so a reconnecting phone was replayed the dead ask as open. Purge it from the buffer
+   *  (the same purge a resolution does) and tell connected clients it expired — for the
+   *  relay, "socket closed before a response was sent" is literally what happened. */
+  private onPermissionExpired = (sessionId: string, requestId: string) => {
+    this.bufferHookEvent({ type: 'PermissionResolved', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent);
+    const expired = { type: 'PermissionExpired', sessionId, payload: { _requestId: requestId }, timestamp: Date.now() } as HookEvent;
+    // Buffered too, so a phone that was away hears "expired" on reconnect instead of a
+    // replay-complete that would clear the card as answered (T2 re-review, 7).
+    this.bufferHookEvent(expired);
+    this.broadcast({ type: 'hook:event', payload: expired });
   };
 
   private onHookEvent = (event: any) => {
@@ -700,7 +980,7 @@ export class RemoteServer {
    *  it, a phone reconnecting while a native permission ask was HELD got
    *  nothing, because PermissionHeld is one-shot and the reannounce heartbeat
    *  stops once an ask is held). Reusing hookBuffers — rather than a parallel
-   *  native-only map — means the existing replay loop in replayBuffers()
+   *  native-only map — means the existing replay loop in restoreClient()
    *  picks these up for free, in the same push order (request, then held). */
   bufferHookEvent(event: HookEvent): void {
     const sessionId = event.sessionId || '';
@@ -778,7 +1058,7 @@ export class RemoteServer {
     this.shellRunBuffers.delete(sessionId);   // G-1
     // Forward exitCode so the remote shim can surface 'session-died' banners
     // when Claude's process dies mid-turn on the host machine.
-    this.broadcast({ type: 'session:destroyed', payload: { sessionId, exitCode } });
+    this.broadcast({ type: 'session:destroyed', payload: { sessionId, exitCode, focus: { sessionId: this.getFocusSessionId() } } });
   };
 
   // --- HTTP static file serving ---
@@ -997,13 +1277,11 @@ export class RemoteServer {
             this.clearFailedAttempts();
             releaseUnauth(); // authenticated — free the pre-auth slot
             this.config.markPaired();
-            this.addClient(ws, result.device.id, ip);
+            this.addClient(ws, result.device.id, ip, { sendsReady: msg.readyHandshake === true });
             // Same capability flag as the pairing path below — master's own note says the
             // two sites must stay in step, and a returning device paints the same UI.
             ws.send(JSON.stringify({ type: 'auth:ok', deviceId: result.device.id, platform: 'desktop', sessionNaming: true }));
-            this.replayBuffers(ws).catch((err) => {
-              console.error('[remote-server] replayBuffers failed:', err);
-            });
+            // The restore waits for client:ready (addClient armed the old-client fallback).
             return;
           }
           if (result.reason !== 'bad-secret') {
@@ -1018,23 +1296,22 @@ export class RemoteServer {
 
         if (msg.password && await this.config.verifyPassword(msg.password)) {
           this.clearFailedAttempts();
-          // The secret is returned exactly once, at pairing. A device that still HOLDS its
-          // credential re-authenticates with it above and keeps its row; arriving here
-          // with only the password means the credential is gone, and the host has no way
-          // to know which earlier row this is — matching on a name would merge two people
-          // with the same phone. So this is a new pairing, and the old row stays until it
-          // is unpaired, going cold in the Last seen column. Do not "deduplicate" it: that
-          // would be the host guessing about identity, which is what the password is for.
-          const paired = this.devices.pair(msg.deviceName);
+          // The secret is returned once per pairing. A device that still HOLDS its credential
+          // re-authenticates with it above. Arriving here with only the password means that
+          // credential is gone. The host still never GUESSES which row this is — matching on a
+          // name would merge two people with the same phone. The browser names its own row,
+          // remembered apart from its key, and the password proves it may have that row back
+          // with a new key (Destin, 2026-09-11: "each sign in seems to create a new device
+          // entry … even though all the same device"). An unpaired or unknown row is a new
+          // pairing, so an unpaired device never comes back by naming itself.
+          const paired = this.devices.pairAgain(msg.previousDeviceId) ?? this.devices.pair(msg.deviceName);
           releaseUnauth(); // authenticated — free the pre-auth slot
           this.config.markPaired();
-          this.addClient(ws, paired.deviceId, ip);
+          this.addClient(ws, paired.deviceId, ip, { sendsReady: msg.readyHandshake === true });
           // `sessionNaming` is a CAPABILITY the remote UI reads before first paint, added on
           // master while this branch was open. It rides on every auth:ok this host sends.
           ws.send(JSON.stringify({ type: 'auth:ok', deviceId: paired.deviceId, secret: paired.secret, platform: 'desktop', sessionNaming: true }));
-          this.replayBuffers(ws).catch((err) => {
-            console.error('[remote-server] replayBuffers failed:', err);
-          });
+          // The restore waits for client:ready (addClient armed the old-client fallback).
         } else {
           this.recordFailedAttempt();
           ws.send(JSON.stringify({ type: 'auth:failed', reason: 'invalid-credentials' }));
@@ -1055,115 +1332,314 @@ export class RemoteServer {
     if (this.pingTimer) return;
     this.pingTimer = setInterval(() => {
       for (const client of this.clients) {
-        if (client.awaitingPong) {
-          client.ws.close(4008, 'No response');
+        const missed = (client.missedPings ?? 0) + 1;
+        if (missed > MAX_MISSED_PINGS) {
+          this.logDevice(client, `no answer to ${MAX_MISSED_PINGS} checks; closing`);
+          // terminate(), not close(): a phone whose network vanished never completes a closing
+          // handshake, so close() waited out ws's own 30 s timer — the drop was logged, and the
+          // socket freed, half a minute after it actually happened. Test doubles without
+          // terminate() keep the old path.
+          const socket = client.ws as WebSocket & { terminate?: () => void };
+          if (typeof socket.terminate === 'function') socket.terminate();
+          else socket.close(4008, 'No response');
           this.clients.delete(client);
           continue;
         }
-        client.awaitingPong = true;
+        client.missedPings = missed;
         try { client.ws.ping(); } catch { /* closing anyway */ }
       }
     }, PING_INTERVAL_MS);
   }
 
-  private addClient(ws: WebSocket, deviceId: string, ip: string): void {
+  private addClient(ws: WebSocket, deviceId: string, ip: string, opts: { sendsReady?: boolean } = {}): void {
     // The per-connection id stays connection-scoped; the DEVICE id is the durable one the
     // panel lists. Two id spaces, deliberately not merged.
-    const client: AuthenticatedClient = { id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now() };
+    const client: AuthenticatedClient = {
+      id: randomUUID(), ws, deviceId, ip, connectedAt: Date.now(), lastHeardAt: Date.now(),
+      phase: 'restoring', queue: [], queueDegraded: false, fallbackTimer: null,
+    };
     this.clients.add(client);
+    this.logDevice(client, `connected (${opts.sendsReady ? 'page announces readiness' : 'older page'})`);
+    // WHY a fallback and not an immediate replay (design §1): the restore used to start
+    // the moment auth succeeded, before the page had mounted App, and guessed with a
+    // 500 ms timer how long React would take. Now the client says when it is ready
+    // (client:ready) and the queue holds everything until then. A client that never says
+    // so — an older page — still gets the whole sequence, after this timer.
+    client.fallbackTimer = setTimeout(() => {
+      client.fallbackTimer = null;
+      if (client.phase !== 'restoring') return;
+      this.logDevice(client, 'catch-up started by the fallback timer (no client:ready)');
+      void this.restoreClient(client, { reconnect: false, replayBuffers: true }).catch((err) => {
+        console.error('[remote-server] restore (fallback) failed:', err);
+      });
+    }, opts.sendsReady ? READY_CLIENT_FALLBACK_MS : OLD_CLIENT_FALLBACK_MS);
 
-    ws.on('pong', () => { client.awaitingPong = false; });
-    ws.on('message', (raw) => { client.awaitingPong = false; void this.handleMessage(client, raw as Buffer | string); });
-    ws.on('close', () => this.clients.delete(client));
-    ws.on('error', () => this.clients.delete(client));
+    const drop = () => {
+      if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
+      this.clients.delete(client);
+    };
+    ws.on('pong', () => { client.missedPings = 0; client.lastHeardAt = Date.now(); });
+    ws.on('message', (raw) => { client.missedPings = 0; client.lastHeardAt = Date.now(); void this.handleMessage(client, raw as Buffer | string); });
+    ws.on('close', (code: number, reason: Buffer) => {
+      const why = reason && reason.length ? ` (${reason.toString()})` : '';
+      // Silence before the drop separates "the phone went away" from "the phone was talking
+      // and the connection broke" — the two need different fixes.
+      const silent = Math.round((Date.now() - (client.lastHeardAt ?? client.connectedAt)) / 1000);
+      this.logDevice(client, `disconnected: code ${code}${why} after ${Math.round((Date.now() - client.connectedAt) / 1000)} s, phase ${client.phase}, silent for ${silent} s`);
+      drop();
+    });
+    ws.on('error', (err: Error) => {
+      this.logDevice(client, `socket error: ${err?.message ?? err}`);
+      drop();
+    });
   }
 
-  // --- Replay buffers on new connection ---
+  // --- The restore sequence (design §1 B, §6) ---
 
-  private async replayBuffers(ws: WebSocket): Promise<void> {
-    // Session list — sent immediately so client can initialize chat state
-    const sessions = this.sessionManager.listSessions();
-    ws.send(JSON.stringify({
-      type: 'session:list:response',
-      id: '_replay',
-      payload: sessions,
-    }));
-
-    for (const session of sessions) {
-      ws.send(JSON.stringify({ type: 'session:created', payload: session }));
-    }
-
-    // Send current topic names for all mapped sessions
-    for (const [desktopId, name] of this.lastTopics) {
-      ws.send(JSON.stringify({ type: 'session:renamed', payload: { sessionId: desktopId, name } }));
-    }
-
-    // Replay the last status payload so a client connecting between the 10s polls
-    // renders a populated status bar immediately instead of waiting for the next tick.
-    // Same shape the poll broadcasts, so the renderer's existing status:data handler
-    // merges it with no special-casing.
-    if (this.lastStatusData) {
-      ws.send(JSON.stringify({ type: 'status:data', payload: this.lastStatusData }));
-    }
-
-    // NEW: request a snapshot of the desktop's chat reducer state and push it
-    // to the connecting client so they see the full chat history immediately.
-    // Must happen before PTY/hook replay so the reducer has state to merge
-    // subsequent transcript events into.
+  /**
+   * Run the restore for one client: the session list, the snapshot, the buffer replays,
+   * then everything that was broadcast meanwhile — and only then go live.
+   *
+   * Called from `client:ready` (the phone said it has its listeners), from the old-client
+   * fallback timer, and (batch 2 §6) from `remote:rehydrate`, which skips the buffer
+   * replay because the phone's terminal and cards are already in step.
+   */
+  private async restoreClient(
+    client: AuthenticatedClient,
+    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean; ptyPasses?: boolean },
+  ): Promise<void> {
+    const ws = client.ws;
+    const startedAt = Date.now();
+    client.phase = 'readying';
+    if (client.fallbackTimer) { clearTimeout(client.fallbackTimer); client.fallbackTimer = null; }
+    client.queue ??= [];
     try {
-      const snapshot = await this.requestSnapshot();
-      if (ws.readyState === WebSocket.OPEN) {
-        ws.send(JSON.stringify({ type: 'chat:hydrate', payload: snapshot }));
-      }
+      await this.runRestore(client, opts);
     } catch (err) {
-      console.error('[remote-server] chat:hydrate failed:', err);
+      // Whatever failed, the client must not stay `readying` with a queue that fills
+      // forever (review of T1, finding 4): flush what was held and go live; the phone's
+      // strip reports an incomplete restore and offers Refresh.
+      console.error('[remote-server] restore failed:', err);
+      await this.flushRestoreQueue(client, { sessions: [] }, [], true).catch(() => { /* the socket is gone */ });
+    } finally {
+      client.phase = 'live';
+      this.logDevice(client, `caught up in ${Date.now() - startedAt} ms`);
+      // A Refresh that arrived while this restore ran: its seq is the one the phone is
+      // waiting for, so it runs now instead of being dropped (§6).
+      const next = client.pendingRehydrate;
+      if (next && client.ws.readyState === WebSocket.OPEN) {
+        client.pendingRehydrate = undefined;
+        void this.rehydrateClient(client, next.seq).catch((err) => console.error('[remote-server] rehydrate failed:', err));
+      }
+    }
+  }
+
+  /** Refresh (design §6): back to restoring with a fresh queue and cut line, the
+   *  snapshot, chat:hydrate { seq }, the flush — §1's sequence minus the terminal and
+   *  permission replays, which a connected phone already has in step. */
+  private async rehydrateClient(client: AuthenticatedClient, seq: number | undefined): Promise<void> {
+    this.logDevice(client, 'catch-up started (Refresh)');
+    client.phase = 'restoring';
+    client.queue = [];
+    client.queueDegraded = false;
+    client.snapshotIndex = undefined;
+    client.hookPassIndex = undefined;
+    // The phone has every terminal unit up to now (it was live), so the cursor starts at the
+    // buffers' current ends — but output produced DURING the Refresh is not broadcast to a
+    // restoring client, so the terminal passes must still run to send it (T4 review, 2).
+    client.ptyCursor = new Map([...this.ptyBuffers].map(([sid, buf]) => [sid, { epoch: buf.epoch, pos: buf.base + buf.length }]));
+    await this.restoreClient(client, { seq, reconnect: true, replayBuffers: false, ptyPasses: true });
+  }
+
+  private async runRestore(
+    client: AuthenticatedClient,
+    opts: { seq?: number; reconnect: boolean; replayBuffers: boolean; ptyPasses?: boolean },
+  ): Promise<void> {
+    const ws = client.ws;
+    const queue = (client.queue ??= []);
+    const send = (msg: { type: string; payload: any }) => this.sendGated(client, msg);
+
+    // Session list — sent so the client can initialize chat state. (The old
+    // `session:list:response` with id `_replay` is gone; nothing ever read it.)
+    const sessions = this.sessionManager.listSessions();
+    for (const session of sessions) if (!(await send({ type: 'session:created', payload: session }))) return;
+
+    // Current topic names for all mapped sessions.
+    for (const [desktopId, name] of this.lastTopics) {
+      if (!(await send({ type: 'session:renamed', payload: { sessionId: desktopId, name } }))) return;
     }
 
-    // Delay PTY + hook replay to give the client time to process SESSION_INIT.
-    // Without this delay, hook events arrive before the chat reducer has
-    // initialized the session state, and all events are silently dropped.
-    // Note: the preceding `requestSnapshot()` await can take up to 2000ms
-    // (its internal timeout), so the worst-case total delay before PTY/hook
-    // replay starts is ~2500ms for a connect when the renderer is unresponsive.
-    setTimeout(() => {
-      if (ws.readyState !== WebSocket.OPEN) return;
+    // The last status payload, so a client connecting between the 10s polls renders a
+    // populated status bar immediately. Same shape the poll broadcasts.
+    if (this.lastStatusData && !(await send({ type: 'status:data', payload: this.lastStatusData }))) return;
 
-      // PTY buffers. Perf: join the chunks only HERE, at connect time — the buffer
-      // is stored chopped up precisely so that arriving output never re-copies the
-      // whole 4 MB (see PtyBuffer). The joined text is what the old single-string
-      // buffer held, apart from the head trim now landing on a chunk boundary.
-      for (const [sessionId, buf] of this.ptyBuffers) {
-        if (buf.length > 0) {
-          ws.send(JSON.stringify({ type: 'pty:output', payload: { sessionId, data: buf.chunks.join('') } }));
-        }
-      }
+    // THE CUT LINE. Everything queued before this index reaches the desktop window
+    // before the export request does (same ordered IPC channel), and the exporter
+    // flushes its transcript batch before serializing (RemoteSnapshotExporter.tsx) —
+    // so every transcript-shaped entry below the index IS in the snapshot, and nothing
+    // above it is. flushRestoreQueue skips exactly those.
+    client.snapshotIndex = queue.length;
+    let snapshot: SerializedChatState;
+    try {
+      snapshot = await this.requestSnapshot();
+    } catch (err) {
+      console.error('[remote-server] snapshot request failed:', err);
+      snapshot = { sessions: [], degraded: true };
+    }
+    if (ws.readyState !== WebSocket.OPEN) return;
+    // A queue that overflowed lost events the snapshot may not hold either — the phone
+    // must be told its copy may be behind (the strip offers Refresh).
+    if (client.queueDegraded) snapshot = { ...snapshot, degraded: true };
+    // `seq` echoes the client's request so the shim applies only the hydrate it last
+    // asked for; the old-client fallback has none to echo.
+    if (!(await send({ type: 'chat:hydrate', payload: opts.seq === undefined ? snapshot : { ...snapshot, seq: opts.seq } }))) return;
 
-      // Hook event buffers (also carries buffered NATIVE hook events now —
-      // see bufferHookEvent's own comment for why those need to ride this
-      // same map instead of a parallel one).
-      for (const [_sessionId, events] of this.hookBuffers) {
+    // Permission asks this restore replayed, so the queue flush does not send the same
+    // ask a second time when its live broadcast was also queued.
+    const replayedAsks = new Set<string>();
+    if (opts.replayBuffers) {
+      // The terminal, from where the phone left off (§7). The final passes below, after
+      // the queue, are what let the client go live with no gap.
+      if (!(await this.ptyPass(client)) && ws.readyState !== WebSocket.OPEN) return;
+
+      // Hook event buffers (also carries buffered NATIVE hook events — see
+      // bufferHookEvent's own comment). Only unresolved asks are here: the broker and
+      // the relay both emit PermissionResolved when an ask closes, and bufferHookEvent
+      // purges on it. On a first connect, a live hook event that arrived before this
+      // pass is already reflected here, so the flush skips those (hookPassIndex); from
+      // this point on they are queued and flushed.
+      client.hookPassIndex = queue.length;
+      // A copy taken at the same instant as hookPassIndex: an event added while this
+      // pass is paused is in the queue (flushed later), and must not ALSO be picked up
+      // by the pass walking the live array — it went out twice (T2 review, 9).
+      const hookPass = [...this.hookBuffers].map(([sid, events]) => [sid, events.slice()] as const);
+      for (const [_sessionId, events] of hookPass) {
         for (const event of events) {
-          ws.send(JSON.stringify({ type: 'hook:event', payload: event }));
+          const requestId = (event.payload as Record<string, unknown> | undefined)?._requestId;
+          if (event.type === 'PermissionRequest' && typeof requestId === 'string') replayedAsks.add(requestId);
+          if (!(await send({ type: 'hook:event', payload: event }))) return;
         }
       }
+      // Consent does not lie (§7): for EVERY session, which asks are still open. The
+      // phone clears any awaiting card not named — it was answered while it was away —
+      // with a neutral note, never a failure.
+      for (const session of sessions) {
+        const fromBuffer = (this.hookBuffers.get(session.id) ?? [])
+          .filter((e) => e.type === 'PermissionRequest')
+          .map((e) => (e.payload as Record<string, unknown> | undefined)?._requestId)
+          .filter((id): id is string => typeof id === 'string');
+        // Plus what the snapshot shows awaiting (T2 review, 6): an ask raised before
+        // remote access was switched on, or trimmed from the buffer, is open on the
+        // desktop and must not be cleared on the phone.
+        // Minus any ask whose resolution or expiry is already waiting in the queue: the
+        // snapshot was taken before it closed (T2 re-review, 1).
+        const closedInQueue = new Set(queue
+          .filter((m) => m.type === 'hook:event' && (m.payload?.type === 'PermissionResolved' || m.payload?.type === 'PermissionExpired'))
+          .map((m) => m.payload?.payload?._requestId));
+        const pendingRequestIds = [...new Set([...fromBuffer, ...RemoteServer.awaitingInSnapshot(snapshot, session.id)])]
+          .filter((rid) => !closedInQueue.has(rid));
+        if (!(await send({ type: 'hook:replay-complete', payload: { sessionId: session.id, pendingRequestIds } }))) return;
+      }
 
-      // Task 9 (plan 1c): latest specialist run per helper, so a reconnecting
-      // client's card comes back with a status instead of blank. Same
-      // ordering position as the hook buffers just above — catch-up replay,
-      // then live events resume.
+      // Task 9 (plan 1c): latest specialist run per helper, so a reconnecting client's
+      // card comes back with a status instead of blank.
       for (const [_sessionId, byChild] of this.specialistRunBuffers) {
-        for (const event of byChild.values()) {
-          ws.send(JSON.stringify({ type: 'specialists:event', payload: event }));
-        }
+        for (const event of byChild.values()) if (!(await send({ type: 'specialists:event', payload: event }))) return;
       }
       // G-1: latest shell run per command, same position as the specialist replay.
       for (const [_sessionId, byShell] of this.shellRunBuffers) {
-        for (const event of byShell.values()) {
-          ws.send(JSON.stringify({ type: 'native:shell-event', payload: event }));
-        }
+        for (const event of byShell.values()) if (!(await send({ type: 'native:shell-event', payload: event }))) return;
       }
+    }
 
-    }, 500); // 500ms gives React time to render App and register SESSION_INIT
+    // The queue, then whatever was queued while the flush itself was paused, until
+    // nothing is left; only the first round has entries below the cut line.
+    //
+    // Queue and terminal passes ALTERNATE until a round finds neither (T2 review, 3): a
+    // terminal pass can pause on backpressure, and anything broadcast meanwhile lands in
+    // the queue — flushing the queue only once, before the passes, lost it when the
+    // client went live. Live only after a round that found nothing new (§7). A pass or
+    // flush that sends nothing awaits nothing, so no broadcast can land between the last
+    // check and the phase change (broadcasts arrive on the event loop, never as a
+    // microtask).
+    let firstRound = true;
+    for (;;) {
+      while (queue.length > 0) {
+        if (!(await this.flushRestoreQueue(client, snapshot, sessions.map((s) => s.id), opts.reconnect, replayedAsks, firstRound))) return;
+        firstRound = false;
+      }
+      // Entries queued from here on are all above the cut line.
+      firstRound = false;
+      if (!opts.replayBuffers && !opts.ptyPasses) break;
+      const sent = await this.ptyPass(client);
+      if (ws.readyState !== WebSocket.OPEN) return;
+      if (!sent && queue.length === 0) break;
+    }
+  }
+
+  /** Transcript-shaped broadcasts: in the snapshot when queued below the cut line. The
+   *  uuid dedup in the reducer does not cover the native harness's per-delta text, so
+   *  these must not be replayed on top of a snapshot that already holds them. */
+  private static isTranscriptShaped(type: string): boolean {
+    return type === 'transcript:event' || type === 'transcript:shrink'
+      || (type.startsWith('native:') && type !== 'native:shell-event');
+  }
+
+  /**
+   * Send what was broadcast while the client was restoring, in arrival order, minus what
+   * the snapshot already holds. Lifecycle entries (session:*, status:data, hook:event,
+   * specialists:event, native:shell-event) are flushed from the whole window. For a
+   * session the snapshot OMITTED (a window that did not answer, §2) nothing is skipped:
+   * the client's copy is its own, and lacks them.
+   */
+  private async flushRestoreQueue(
+    client: AuthenticatedClient,
+    snapshot: SerializedChatState,
+    knownSessionIds: string[],
+    reconnect: boolean,
+    replayedAsks: ReadonlySet<string> = new Set(),
+    firstRound = true,
+  ): Promise<boolean> {
+    // Take the round's entries out; anything broadcast while a send below is paused
+    // lands in the fresh array the caller loops back for.
+    const queue = (client.queue ?? []).splice(0);
+    const cutLine = firstRound ? (client.snapshotIndex ?? 0) : 0;
+    const hookPass = firstRound ? client.hookPassIndex : undefined;
+    const held = new Set(snapshot.sessions.map(([id]) => id));
+    void knownSessionIds; // a session the list has and the snapshot lacks is simply not in `held`
+    // Design test 7, "shows no card after the flush": an ask whose resolution is LATER in
+    // this same round was raised and answered while the client was restoring. Flushing
+    // the request would draw a card only to clear it. The resolution is still flushed —
+    // a card the snapshot did hold needs it, and it is a no-op otherwise.
+    const resolvedAt = new Map<string, number>();
+    queue.forEach((m, idx) => {
+      const rid = m.payload?.payload?._requestId;
+      if (m.type === 'hook:event' && m.payload?.type === 'PermissionResolved' && typeof rid === 'string') resolvedAt.set(rid, idx);
+    });
+    for (let i = 0; i < queue.length; i++) {
+      const msg = queue[i];
+      if (i < cutLine && RemoteServer.isTranscriptShaped(msg.type)) {
+        const sid = msg.payload?.sessionId;
+        if (typeof sid === 'string' && held.has(sid)) continue;
+      }
+      if (msg.type === 'hook:event') {
+        // First connect only: a hook event that arrived before the hook buffer pass is
+        // already reflected by the pass (a resolved ask is purged from the buffer; an
+        // open one is in it). A reconnecting phone keeps its cards, so it needs every
+        // one — except an ask this restore's pass already replayed.
+        // Never a resolution or an expiry (T2 re-review, 1): the snapshot can still show an
+        // ask that closed while it was being taken, and dropping the closure left live
+        // buttons for a dead question. Both are idempotent on a card that is not awaiting.
+        const closes = msg.payload?.type === 'PermissionResolved' || msg.payload?.type === 'PermissionExpired';
+        if (!reconnect && hookPass !== undefined && i < hookPass && !closes) continue;
+        const requestId = msg.payload?.payload?._requestId;
+        if (msg.payload?.type === 'PermissionRequest' && typeof requestId === 'string' && replayedAsks.has(requestId)) continue;
+        const asks = msg.payload?.type === 'PermissionRequest' || msg.payload?.type === 'PermissionHeld';
+        if (asks && typeof requestId === 'string' && (resolvedAt.get(requestId) ?? -1) > i) continue;
+      }
+      if (!(await this.sendGated(client, msg))) return false;
+    }
+    return true;
   }
 
   // --- Message routing ---
@@ -1184,6 +1660,47 @@ export class RemoteServer {
     const { type, id, payload } = msg;
 
     switch (type) {
+      // --- Readiness (design §1 A) ---
+      case 'client:ready': {
+        // Push, no reply. Only a restoring client can start the sequence: a second
+        // client:ready (an effect re-run on the phone) while readying is ignored, and so is
+        // one after the old-client fallback already ran or the client went live (R2-7,
+        // R3-4). Awaited so a test can observe the whole sequence; messages are handled
+        // concurrently anyway (`void this.handleMessage` per frame).
+        if (client.phase !== 'restoring') {
+          console.log('[remote-server] client:ready ignored in phase', client.phase);
+          break;
+        }
+        const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
+        this.logDevice(client, 'catch-up started (page ready)');
+        client.ptyOffsets = payload?.ptyOffsets && typeof payload.ptyOffsets === 'object' ? payload.ptyOffsets : {};
+        client.ptyCursor = new Map();
+        await this.restoreClient(client, { seq, reconnect: payload?.reconnect === true, replayBuffers: true });
+        break;
+      }
+      case 'remote:ping':
+        // The phone's wake check (remote-shim checkConnectionAfterWake): any answer proves the
+        // connection is alive. Answered at once and in every phase — a phone that is catching
+        // up is exactly the one most likely to be asking.
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      case 'remote:rehydrate': {
+        // Answered at once — the phone follows the result through chat:hydrate and its
+        // strip, not through this reply. Mid-restore, the Refresh runs right after.
+        const seq = typeof payload?.seq === 'number' ? payload.seq : undefined;
+        this.respond(client.ws, type, id, { ok: true });
+        if (client.phase && client.phase !== 'live') {
+          client.pendingRehydrate = { seq };
+          break;
+        }
+        await this.rehydrateClient(client, seq);
+        break;
+      }
+      case 'session:selected':
+        // Batch 2 (§2): desktop windows report their selection to main over IPC. A
+        // remote client has no desktop window, so it must never write that cache —
+        // and gets no answer, as a push never does.
+        break;
       // --- Request/response ---
       case 'session:create': {
         // This payload is passed to createSession unfiltered, so without this
@@ -1216,7 +1733,7 @@ export class RemoteServer {
         const result = this.sessionManager.destroySession(payload.sessionId || payload);
         this.respond(client.ws, type, id, result);
         if (result) {
-          this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload } });
+          this.broadcast({ type: 'session:destroyed', payload: { sessionId: payload.sessionId || payload, focus: { sessionId: this.getFocusSessionId() } } });
         }
         break;
       }
@@ -2084,6 +2601,30 @@ export class RemoteServer {
         this.respond(client.ws, type, id, result);
         break;
       }
+      // Read-only lists a phone's screens load at start. Each was "unhandled channel" in the
+      // 2026-09-11 phone pass log and its screen fell back to empty. The same functions the
+      // desktop handlers call, so the two cannot drift; a failure is answered as a failure
+      // (REJECT_ON_NOT_OK in the shim), never as an empty list.
+      case 'theme:list': {
+        try { this.respond(client.ws, type, id, this.listThemes()); }
+        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
+        break;
+      }
+      case 'commands:list': {
+        try { this.respond(client.ws, type, id, this.listCommands ? await this.listCommands() : []); }
+        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
+        break;
+      }
+      case 'appearance:get-favorite-themes': {
+        try { this.respond(client.ws, type, id, this.skillProvider ? this.skillProvider.configStore.getThemeFavorites() : []); }
+        catch (err) { this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) }); }
+        break;
+      }
+      case 'platform:get':
+        // The COMPUTER's platform. The screens that ask are about what can be installed or run
+        // there (Marketplace integrations; the Linux helper, which is also gated to a desktop).
+        this.respond(client.ws, type, id, process.platform);
+        break;
       case 'skills:list': {
         const skills = this.skillProvider ? await this.skillProvider.getInstalled() : [];
         this.respond(client.ws, type, id, skills);
@@ -2304,6 +2845,22 @@ export class RemoteServer {
         }
         break;
       }
+      // A theme or display change made on a phone (remote-appearance-relay.test.ts). WHY: a
+      // phone used to read the computer's theme once, at page load, and never hear a change
+      // after that in either direction (Destin, 2026-09-11: "dev is on meadow mist and remote
+      // chose golden daybreak"). The phone has already saved it with appearance:set; this
+      // only tells everyone else, the way a desktop window tells its peer windows.
+      case 'appearance:broadcast': {
+        if (!payload || typeof payload !== 'object' || Array.isArray(payload)) break;
+        this.onAppearanceBroadcast(payload);
+        const msg = { type: 'appearance:sync', payload };
+        for (const c of this.clients) {
+          if (c === client) continue;
+          if (c.phase && c.phase !== 'live') { this.enqueueForRestoring(c, msg); continue; }
+          if (c.ws.readyState === WebSocket.OPEN) c.ws.send(JSON.stringify(msg));
+        }
+        break;
+      }
       case 'defaults:get': {
         const defaultsPrefPath = path.join(os.homedir(), '.claude', 'youcoded-defaults.json');
         const DEFAULTS_INITIAL = { skipPermissions: false, model: 'sonnet', projectFolder: '' };
@@ -2391,101 +2948,36 @@ export class RemoteServer {
         }
         break;
       }
+      // The folder picker's five operations: the SAME functions the Electron handlers call
+      // (folders-service.ts). WHY: the hand-copied versions here had stopped listing synced
+      // projects, so a phone's new-session picker showed only the saved-folders file (Destin,
+      // 2026-09-11). The catch answers keep what a phone got before on a failed read or write.
       case 'folders:list': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
         try {
-          const raw = await fs.promises.readFile(foldersPrefPath, 'utf8');
-          let folders = JSON.parse(raw);
-          if (!Array.isArray(folders)) folders = [];
-          if (folders.length === 0) {
-            const home = os.homedir();
-            folders = [{ path: home, nickname: 'Home', addedAt: Date.now() }];
-            await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          }
-          const annotated = folders.map((f: any) => ({ ...f, exists: fs.existsSync(f.path) }));
-          this.respond(client.ws, type, id, annotated);
+          this.respond(client.ws, type, id, listPickerFolders());
         } catch {
-          const home = os.homedir();
-          const folders = [{ path: home, nickname: 'Home', addedAt: Date.now(), exists: true }];
-          this.respond(client.ws, type, id, folders);
+          this.respond(client.ws, type, id, [{ path: os.homedir(), nickname: 'Home', addedAt: Date.now(), exists: true }]);
         }
         break;
       }
       case 'folders:add': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          if (folders.some((f: any) => path.resolve(f.path) === normalized)) {
-            this.respond(client.ws, type, id, folders.find((f: any) => path.resolve(f.path) === normalized));
-            break;
-          }
-          const entry = { path: normalized, nickname: payload.nickname || path.basename(normalized), addedAt: Date.now() };
-          folders.unshift(entry);
-          await fs.promises.mkdir(path.dirname(foldersPrefPath), { recursive: true });
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          this.respond(client.ws, type, id, entry);
-        } catch {
-          this.respond(client.ws, type, id, null);
-        }
+        try { this.respond(client.ws, type, id, addFolder(payload.folderPath, payload.nickname)); }
+        catch { this.respond(client.ws, type, id, null); }
         break;
       }
       case 'folders:remove': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          const filtered = folders.filter((f: any) => path.resolve(f.path) !== normalized);
-          if (filtered.length === folders.length) { this.respond(client.ws, type, id, false); break; }
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(filtered, null, 2));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        try { this.respond(client.ws, type, id, removeFolder(payload.folderPath)); }
+        catch { this.respond(client.ws, type, id, false); }
         break;
       }
       case 'folders:rename': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          const entry = folders.find((f: any) => path.resolve(f.path) === normalized);
-          if (!entry) { this.respond(client.ws, type, id, false); break; }
-          entry.nickname = payload.nickname;
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        try { this.respond(client.ws, type, id, renameFolder(payload.folderPath, payload.nickname)); }
+        catch { this.respond(client.ws, type, id, false); }
         break;
       }
-      // Sibling of folders:rename above. DELIBERATELY duplicates that case's
-      // inline read/find/write instead of importing saved-folders.ts — this
-      // file already re-implements the folders store rather than sharing it,
-      // and unifying that is out of scope for a description-only change to a
-      // shipped, uncovered code path. Only the length cap is shared (imported
-      // above), so it can't drift from the other setters.
       case 'folders:set-description': {
-        const foldersPrefPath = path.join(os.homedir(), '.claude', 'youcoded-folders.json');
-        try {
-          let folders: any[] = [];
-          try { folders = JSON.parse(await fs.promises.readFile(foldersPrefPath, 'utf8')); } catch {}
-          if (!Array.isArray(folders)) folders = [];
-          const normalized = path.resolve(payload.folderPath);
-          const entry = folders.find((f: any) => path.resolve(f.path) === normalized);
-          if (!entry) { this.respond(client.ws, type, id, false); break; }
-          entry.description = String(payload.description ?? '').trim().slice(0, PROJECT_DESCRIPTION_MAX) || null;
-          await fs.promises.writeFile(foldersPrefPath, JSON.stringify(folders, null, 2));
-          this.respond(client.ws, type, id, true);
-        } catch {
-          this.respond(client.ws, type, id, false);
-        }
+        try { this.respond(client.ws, type, id, setFolderDescription(payload.folderPath, payload.description)); }
+        catch { this.respond(client.ws, type, id, false); }
         break;
       }
       case 'favorites:get': {
@@ -3024,6 +3516,89 @@ export class RemoteServer {
         break;
       }
 
+      // --- Files over remote (batch 3, design 2026-09-10 §8, §9) ---
+      // The SAME functions the Electron handlers call (artifacts/read-service.ts,
+      // project-read-service.ts): same roots, same denylist, same shape, so the
+      // phone's Files screens show what the desktop shows (contract R7, R16).
+      // The reads carry the phone's preview ceiling; over it the answer is
+      // `too-large` with the real size, decided from `stat` — never a prefix.
+      // The write channels (save, append-version, import, rename…) are not
+      // bridged: editing over remote is not in this batch.
+      case 'artifacts:list-session':
+      case 'artifacts:list-project':
+      case 'artifacts:list-all-files':
+      case 'artifacts:resolve-path':
+      case 'artifacts:get':
+      case 'artifacts:read-binary':
+      case 'artifacts:search-content':
+      case 'artifacts:check-existence':
+      case 'project:list-context':
+      case 'project:read-context-file':
+      case 'project:list-conversations':
+      case 'project:repo-info': {
+        try {
+          this.respond(client.ws, type, id, await this.readFileChannel(type, payload ?? {}));
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
+        }
+        break;
+      }
+      case 'artifacts:watch-project': {
+        // Live refresh (contract R12). The watcher refcounts subscribers by a
+        // numeric id; a WS client gets its own — negative, so it can never
+        // collide with a webContents id — and loses it when its socket closes,
+        // the way a destroyed renderer loses its refs. A reconnect is a NEW
+        // socket, so the phone re-subscribes (useProjectWatch).
+        const projectRoot = payload?.projectRoot;
+        // Same root gate as the reads: a watcher is a full tree walk on the
+        // main thread (project-watcher.ts measures 310-372 ms on a large
+        // folder) and holds OS watch handles, so a phone naming `/usr` or a
+        // hundred different roots must be refused (T6 review, finding 3).
+        const refused = await this.refuseUnknownRoot(projectRoot);
+        if (refused) { this.respond(client.ws, type, id, { ok: false, error: refused.error }); break; }
+        const watched = (client.watchedRoots ??= new Set<string>());
+        if (!watched.has(projectRoot) && watched.size >= MAX_WATCHED_ROOTS_PER_SOCKET) {
+          this.respond(client.ws, type, id, { ok: false, error: 'too-many' });
+          break;
+        }
+        watched.add(projectRoot);
+        this.respond(client.ws, type, id, await watchProject(projectRoot, this.watchSubscriberId(client)));
+        break;
+      }
+      case 'artifacts:unwatch-project': {
+        const projectRoot = payload?.projectRoot;
+        if (typeof projectRoot === 'string' && projectRoot.length > 0 && client.watchId !== undefined) {
+          unwatchProject(projectRoot, client.watchId);
+          client.watchedRoots?.delete(projectRoot);
+        }
+        this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      case 'artifacts:download': {
+        // Mint a short-lived link bound to THIS device and THIS socket (§10);
+        // the answer's `url` is host-relative and the shim makes it absolute.
+        // Refusals (`sensitive`, `outside-roots`, `busy`…) are data the card
+        // shows, so this channel must never join REJECT_ON_NOT_OK.
+        try {
+          // The record route (projectRoot + artifactId) is offered only for a
+          // folder the computer shows or a live session runs in; for any other
+          // folder the record is IGNORED and the path alone decides (T7 review,
+          // finding 4; re-review, finding 6). A session-only folder therefore
+          // reaches only files that session recorded (re-review, finding 1).
+          const recordRoot = typeof payload?.projectRoot === 'string' && typeof payload?.artifactId === 'string'
+            && await this.isKnownRootForRecords(payload.projectRoot);
+          const request = recordRoot
+            ? { absolutePath: payload.absolutePath, projectRoot: payload.projectRoot, artifactId: payload.artifactId }
+            : { absolutePath: payload?.absolutePath };
+          this.respond(client.ws, type, id,
+            await this.downloads.mint(request, { deviceId: client.deviceId, socketId: client.id }));
+        } catch (err: any) {
+          // The phone gets an answer instead of a request that never returns.
+          this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
+        }
+        break;
+      }
+
       // --- Games arcade scores (spec §6.1) ---
       // The SAME operations the Electron IPC path runs, including the shared
       // stale-board cache — a remote browser must never see a different
@@ -3103,6 +3678,142 @@ export class RemoteServer {
     }
   }
 
+  // --- Files over remote (batch 3) ---
+
+  /**
+   * Every root a phone names is checked against the roots the desktop itself
+   * shows (saved folders, indexed projects) before any read (design §8 "same
+   * roots"; 2026-09-10 review of T6, finding 2). The desktop's renderer only ever
+   * asks about roots it was given; a phone's payload is the phone's, and without
+   * this every read channel answered for any directory on the computer.
+   * Remote-only by design: the desktop's own transport keeps its behaviour.
+   *
+   * A folder a live session runs in counts ONLY for that session's recorded
+   * files (`records: true`): the drawer's list, the existence check, a record
+   * read by its id, and Download's record route. WHY: a phone can start a
+   * session in any folder — and "No folder" lands in the home folder — so a
+   * session folder counting as a full root handed out every file in it by path
+   * (T7 re-review, finding 1).
+   */
+  private sessionRoots(): string[] {
+    return this.sessionManager.listSessions().map((s: any) => s?.cwd).filter((c: unknown): c is string => typeof c === 'string' && c.length > 0);
+  }
+
+  private isKnownRootForRecords(root: string): Promise<boolean> {
+    return isKnownRoot(root, this.sessionRoots());
+  }
+
+  private async refuseUnknownRoot(root: unknown, opts: { records?: boolean } = {}): Promise<{ ok: false; error: string } | null> {
+    if (typeof root !== 'string' || root.length === 0) return { ok: false, error: 'bad-request' };
+    const known = opts.records ? await this.isKnownRootForRecords(root) : await isKnownRoot(root);
+    return known ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  private async refuseUnknownProject(projectId: unknown, opts: { records?: boolean } = {}): Promise<{ ok: false; error: string } | null> {
+    if (typeof projectId !== 'string' || projectId.length === 0) return { ok: false, error: 'bad-request' };
+    return (await isKnownProjectRef(projectId, opts.records ? this.sessionRoots() : [])) ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  /** A record id the folder's sidecar actually holds. */
+  private async refuseUnlessRecorded(root: string, artifactId: string): Promise<{ ok: false; error: string } | null> {
+    const sidecar = await readSidecarShared(root).catch(() => null);
+    const recorded = !!sidecar && !('corrupted' in sidecar) && sidecar.artifacts.some((a) => a.id === artifactId);
+    return recorded ? null : { ok: false, error: 'not-allowed' };
+  }
+
+  /**
+   * The read channels, answered from the shared services with the phone's
+   * preview ceilings applied (design §9) after the root gate above. Payloads
+   * are the shim's object form (`{ projectRoot, artifactId, full }`), never
+   * positional arguments; a malformed one answers `bad-request`, never a Node
+   * error's text.
+   *
+   * A lookup table, not a second `switch`: tests/remote-channel-parity.test.ts
+   * reads `case '<channel>':` out of this file to prove the handleMessage
+   * switch routes every read, and a `case` here would satisfy that guard for a
+   * channel the outer switch had dropped.
+   */
+  private readonly fileReads: Record<string, (payload: any) => Promise<unknown>> = {
+    'artifacts:list-session': async (p) => {
+      if (typeof p.sessionId !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? listSessionFiles(p.sessionId, p.projectRoot);
+    },
+    'artifacts:list-project': async (p) =>
+      (await this.refuseUnknownProject(p.projectId, { records: true })) ?? listProjectFiles(p.projectId, p.opts),
+    'artifacts:list-all-files': async (p) =>
+      (await this.refuseUnknownProject(p.projectId)) ?? listAllFiles(p.projectId, p.opts),
+    // One file path tapped in chat (2026-09-11). A phone can name ANY path
+    // here, so: the root gate runs first and nothing is looked up for a folder
+    // the computer never showed; and a folder known only because a chat runs
+    // there (a phone can start one anywhere, "No folder" lands in home) answers
+    // only files that chat recorded — the rule artifacts:get applies — with the
+    // same not-tracked whether or not any other path exists (trackedOnly).
+    // An unknown folder answers the gate's not-allowed: nothing in it is shared.
+    'artifacts:resolve-path': async (p) => {
+      if (typeof p.path !== 'string' || p.path.length === 0) return { ok: false, error: 'bad-request' };
+      const refused = await this.refuseUnknownRoot(p.projectRoot, { records: true });
+      if (refused) return refused;
+      const shownByComputer = await isKnownRoot(p.projectRoot);
+      return resolveArtifactPath(p.projectRoot, p.path, { trackedOnly: !shownByComputer });
+    },
+    'artifacts:get': async (p) => {
+      if (typeof p.artifactId !== 'string') return { ok: false, error: 'bad-request' };
+      // By path inside a folder the computer shows; inside a session-only folder,
+      // only a file that session recorded, named by its record id.
+      if (await this.refuseUnknownRoot(p.projectRoot)) {
+        const refused = (await this.refuseUnknownRoot(p.projectRoot, { records: true }))
+          ?? (await this.refuseUnlessRecorded(p.projectRoot, p.artifactId));
+        if (refused) return refused;
+      }
+      return readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES });
+    },
+    // read-binary carries its own roots check (authorizeBytesRead), on the file itself.
+    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
+    'artifacts:search-content': async (p) =>
+      (await this.refuseUnknownRoot(p.projectRoot)) ?? searchArtifactContent(p.projectRoot, p.query),
+    'artifacts:check-existence': async (p) =>
+      (await this.refuseUnknownRoot(p.projectRoot, { records: true })) ?? checkArtifactExistence(p.projectRoot, p.artifactIds),
+    'project:list-context': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? listContextFiles(p.projectPath),
+    'project:read-context-file': async (p) => {
+      if (typeof p.absolutePath !== 'string') return { ok: false, error: 'bad-request' };
+      return (await this.refuseUnknownRoot(p.projectPath)) ?? readContext(p.projectPath, p.absolutePath);
+    },
+    'project:list-conversations': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? listConversations(p.projectPath),
+    'project:repo-info': async (p) =>
+      (await this.refuseUnknownRoot(p.projectPath)) ?? repoInfo(p.projectPath),
+  };
+
+  private readFileChannel(type: string, payload: any): Promise<unknown> {
+    const read = this.fileReads[type];
+    return read ? read(payload) : Promise.resolve({ ok: false, error: `Not a file read channel (${type}).` });
+  }
+
+  // Negative and descending: never a webContents id (those are positive).
+  private nextWatchId = -1;
+
+  // Download links (§10). The revocation check reads the device store lazily,
+  // at each GET, so a device unpaired while its link was alive is refused.
+  readonly downloads = new RemoteDownloads({
+    isDeviceRevoked: (deviceId) => this.devices.isRevoked(deviceId),
+  });
+
+  /** This socket's project-watcher subscriber id, allocated on first use and released on close. */
+  private watchSubscriberId(client: AuthenticatedClient): number {
+    if (client.watchId === undefined) {
+      const watchId = this.nextWatchId--;
+      client.watchId = watchId;
+      // A phone that vanishes never sends unwatch — same as a crashed renderer,
+      // which the desktop handles with webContents 'destroyed'. Guarded because
+      // tests drive handleMessage with a bare `{ ws }`.
+      if (typeof (client.ws as any).once === 'function') {
+        client.ws.once('close', () => dropSubscriber(watchId));
+      }
+    }
+    return client.watchId;
+  }
+
   // --- Helpers ---
 
   private respond(ws: WebSocket, type: string, id: string, payload: any): void {
@@ -3144,11 +3855,38 @@ export class RemoteServer {
     // observes broadcast() as a side effect (`this.clients` is the same set
     // getClientCount() reports, and it is empty here).
     if (this.clients.size === 0) return;
-    const data = JSON.stringify(msg);
+    let data: string | null = null;
     for (const client of this.clients) {
+      // A client that is not live yet gets this after its restore (design §1 B) — except
+      // pty:output, which the PTY buffer replay covers up to the moment it goes live.
+      if (client.phase && client.phase !== 'live') {
+        this.enqueueForRestoring(client, msg);
+        continue;
+      }
       if (client.ws.readyState === WebSocket.OPEN) {
+        // A live client that has stopped reading gets closed rather than buffered
+        // without bound (§7); the shim reconnects and the strip says so.
+        if (client.ws.bufferedAmount > BACKPRESSURE_CLOSE_BYTES) {
+          this.logDevice(client, 'not reading fast enough; closing');
+          client.ws.close(CLOSE_TOO_SLOW, 'Too slow');
+          continue;
+        }
+        data ??= JSON.stringify(msg);
         client.ws.send(data);
       }
+    }
+  }
+
+  private enqueueForRestoring(client: AuthenticatedClient, msg: { type: string; payload: any }): void {
+    if (msg.type === 'pty:output') return;
+    const queue = (client.queue ??= []);
+    queue.push(msg);
+    if (queue.length > RESTORE_QUEUE_MAX) {
+      queue.shift();
+      client.queueDegraded = true;
+      // The cut line and the hook-pass mark index into this queue; both move with it.
+      if (client.snapshotIndex !== undefined && client.snapshotIndex > 0) client.snapshotIndex--;
+      if (client.hookPassIndex !== undefined && client.hookPassIndex > 0) client.hookPassIndex--;
     }
   }
 

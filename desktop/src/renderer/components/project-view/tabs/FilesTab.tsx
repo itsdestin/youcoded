@@ -25,12 +25,14 @@ import { fileTypeGroup, fileTypeLabel } from '../../../../shared/artifacts/categ
 import type { FileTypeGroup } from '../../../../shared/artifacts/categorization';
 import { ProjectDetailOverlay } from '../ProjectDetailOverlay';
 import {
-  TOOL_BTN_ACCENT, TOOL_BTN_NEUTRAL, PencilIcon, CheckIcon, FolderIcon, LinkIcon, ExternalLinkIcon,
+  TOOL_BTN_ACCENT, TOOL_BTN_NEUTRAL, PencilIcon, CheckIcon, FolderIcon, LinkIcon, ExternalLinkIcon, DownloadIcon,
 } from '../detail-tool-icons';
 
 // Compact relative-time for the detail meta strip (shared util).
 import { formatRelativeTime as relTime } from '../../../utils/format-time';
-import { getPlatform } from '../../../platform';
+import { getPlatform, isRemoteMode } from '../../../platform';
+import { downloadFile } from '../../artifact-views/download-file';
+import { useNarrowViewport } from '../../../hooks/use-narrow-viewport';
 
 // Is the project path a bare drive/filesystem root (vs. the home folder)?
 // Only used to pick the right word in the gated-folder message.
@@ -125,7 +127,7 @@ function listDir(artifacts: ArtifactRecord[], dir: string, sortBy: FileSortKey):
 // Reveal button above.
 import { FolderIcon as FolderCardIcon, DocIcon, ImageIcon, SheetIcon, CodeGlyphIcon, GridViewIcon, ListViewIcon } from '../icons';
 import { ChevronIcon } from '../../Icons';
-import { Button, EmptyState } from '../../ui';
+import { Button, EmptyState, ErrorState } from '../../ui';
 
 // The rounded box the list-view rows sit in — the same container language the
 // content-search groups already use. Module scope, NOT inside the component: a
@@ -235,6 +237,13 @@ export function FilesTab({
   // True until the first load for the current project resolves — gates the
   // empty-state message so it can't flash before data arrives.
   const [loading, setLoading] = useState(true);
+  // The real message when the list could not be fetched at all. WHY this exists:
+  // over remote access the host refused every file channel until batch 3, the
+  // refusal REJECTED, and this component had no catch — so `loading` never
+  // cleared and a phone saw "Loading files…" forever (found 2026-09-10). A
+  // failure is a state with a Retry, never a spinner that outlives its request.
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [retryToken, setRetryToken] = useState(0);
   // True when on-disk discovery hit a cap (folder too large) — surfaced as a note
   // so a partial list never silently reads as complete.
   const [truncated, setTruncated] = useState(false);
@@ -264,6 +273,7 @@ export function FilesTab({
   useEffect(() => {
     let cancelled = false;
     setLoading(true);
+    setLoadError(null);
     // Always the on-disk discovery scan now — the old ARTIFACTS branch
     // (listProject, tracked sidecar files) was dropped with the mode prop.
     const load = (window.claude as any).artifacts.listAllFiles(project.id, forceScan ? { force: true } : undefined);
@@ -273,9 +283,16 @@ export function FilesTab({
       setGated(!!res?.gated);
       if (res && res.ok) { setArtifacts(res.files ?? res.artifacts ?? []); setTruncated(!!res.truncated); }
       else { setArtifacts([]); setTruncated(false); }
+    }).catch((err: any) => {
+      if (cancelled) return;
+      setLoading(false);
+      setArtifacts([]);
+      setTruncated(false);
+      // The real message when there is one; never a guess about the cause.
+      setLoadError(err?.message ? String(err.message) : '');
     });
     return () => { cancelled = true; };
-  }, [project.id, refreshKey, forceScan]);
+  }, [project.id, refreshKey, forceScan, retryToken]);
 
   // Back to the project root — on a PROJECT SWITCH only. Deliberately its own
   // effect: the loader above also runs on refreshKey (every "+ Add file") and on
@@ -325,7 +342,9 @@ export function FilesTab({
   // mounted, and refresh the list when files appear/disappear on disk. Debounced
   // — a git checkout emits hundreds of add/remove events in a burst, and each
   // uncoalesced refresh would re-run the (cache-invalidated) discovery scan.
-  useProjectWatch(project.path);
+  // Over remote access, the changes made while the phone was disconnected never
+  // arrived as events — reload the list once the watch is back (batch 3, R12).
+  useProjectWatch(project.path, () => refreshRef.current());
   // This tab now stays mounted while another tab shows, so the refresh has to
   // know that. Refreshing while hidden would be a full uncached disk walk in the
   // main process (main drops the discovery cache on every add/remove) for a list
@@ -644,6 +663,15 @@ export function FilesTab({
       {loading && (
         <p className="text-sm text-fg-muted">Loading {noun}…</p>
       )}
+      {!loading && loadError !== null && (
+        <div className="max-w-md mt-4 mx-auto">
+          <ErrorState
+            mode="recoverable"
+            message={loadError ? `Couldn’t load your files: ${loadError}` : 'Couldn’t load your files.'}
+            onRetry={() => setRetryToken((t) => t + 1)}
+          />
+        </div>
+      )}
       {/* Gated root (home dir / drive root): no scan ran. Explain WHY and offer
           an explicit opt-in — showing an arbitrary truncated sample by default
           would read as "here are your files" when it isn't. */}
@@ -668,7 +696,7 @@ export function FilesTab({
       {!loading && !gated && flat && !searching && flatResults.length === 0 && (
         <p className="text-sm text-fg-muted">Nothing matches the current filters.</p>
       )}
-      {!loading && !gated && emptyHere && (
+      {!loading && !gated && loadError === null && emptyHere && (
         <p className="text-sm text-fg-muted">
           {/* When files EXIST but the type filter hid them all, say so — the
               bare "no files" empty state would lie about the project. */}
@@ -951,6 +979,9 @@ function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed 
   // the right action for formats the in-app viewer can't render (html) or only
   // renders partially (docx/xlsx). Desktop-only (shell.openPath); no-op on remote.
   const handleOpenExternal = () => (window.claude as any).shell?.openPath?.(absPath);
+  // Project and record along with the path (T7 review, finding 9).
+  const handleDownload = () => { void downloadFile(absPath, { projectRoot: project.path, artifactId: artifact.id }); };
+  const narrowViewport = useNarrowViewport();
   const handleCopyPath = () => {
     navigator.clipboard?.writeText(absPath).then(() => {
       setCopied(true);
@@ -991,6 +1022,17 @@ function ArtifactDetail({ artifact, project, initialLine, onInitialLineConsumed 
             Reveal
           </button>
         </>
+      )}
+      {/* Remote access batch 3 (questions deck 2026-09-10, Q-7 yes): a phone gets
+          Download where the desktop has Open and Reveal — the file lands in the
+          phone's own downloads folder, and the transfer does not block the chat. */}
+      {isRemoteMode() && (
+        <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleDownload} aria-label="Download" title="Download">
+          <DownloadIcon size={13} />
+          {/* Icon-only at phone width: with the label, Download and Copy path
+              left the file name one syllable ("latenc…") — tester U20. */}
+          {!narrowViewport && 'Download'}
+        </button>
       )}
       <button type="button" className={TOOL_BTN_NEUTRAL} onClick={handleCopyPath}>
         <LinkIcon size={13} />

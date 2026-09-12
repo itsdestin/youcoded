@@ -1,6 +1,7 @@
 // src/renderer/hooks/useSessionMeta.ts
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { META_UNSUPPORTED_FALLBACK, type SessionFlagName, type SessionMetaResult } from '../../shared/types';
+import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 import { plainMessage } from '../utils/ipc-error';
 
 export interface SessionMetaApi {
@@ -32,6 +33,11 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
   // Last value we believe the backend accepted — the rollback target for a
   // refused write. Kept in a ref so back-to-back setNote calls chain correctly.
   const savedNote = useRef('');
+  // Counts the person's note edits. A read that started before the latest edit must not put the
+  // older text back: the editor saves on every keystroke, and a re-read landing mid-typing (a
+  // reconnect's, or the change event after a save) snapped letters back (review of the
+  // 2026-09-11 reliability fixes, finding 5).
+  const noteEdits = useRef(0);
   const [unsupportedReason, setUnsupportedReason] = useState(META_UNSUPPORTED_FALLBACK);
 
   // Only a refusal that explicitly says `unsupported` may flip `supported`.
@@ -46,8 +52,9 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
     if (res.unsupportedReason) setUnsupportedReason(String(res.unsupportedReason));
   }, []);
 
-  const refetch = useCallback(() => {
+  const refetch = useCallback((opts?: { keepOnFailure?: boolean }) => {
     if (!sessionId) { setTags(new Set()); setFlags({}); setNoteState(''); savedNote.current = ''; setSupported(true); return; }
+    const editsAtStart = noteEdits.current;
     // WHY a failed read locks the editor (code review 2026-09-11, F1, on error inventory
     // false message 12): this used to load a failed read as an empty note with writes
     // still enabled — and setNote saves the WHOLE text, so typing replaced the stored note
@@ -64,17 +71,31 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
         setTags(new Set(m?.tags ?? []));
         // Missing is "none set" — an older peer omits the field entirely.
         setFlags(m?.flags ?? {});
-        setNoteState(m?.note ?? '');
-        // Server truth resets the rollback target too, or a later refusal would
-        // revert to a value the backend never held.
-        savedNote.current = m?.note ?? '';
+        if (noteEdits.current === editsAtStart) {
+          setNoteState(m?.note ?? '');
+          // Server truth resets the rollback target too, or a later refusal would
+          // revert to a value the backend never held.
+          savedNote.current = m?.note ?? '';
+        }
         // Older backends (remote peer on a previous build) omit the field entirely
         // — treat missing as supported so we never disable against an unknown host.
         setSupported(m?.supported !== false);
         setUnsupportedReason(m?.unsupportedReason || META_UNSUPPORTED_FALLBACK);
       })
-      .catch((err: unknown) => markUnreadable(plainMessage(err)));
+      .catch((err: unknown) => {
+        // A re-read of the session already on screen keeps what it shows when it fails
+        // (2026-09-11 phone pass: a lost request must not blank a conversation's tags).
+        // A read that had nothing on screen says it is unreadable, with the reason, which
+        // also disables writes — setNote saves the WHOLE text, so an empty editor over a
+        // failed read would replace a note nobody was shown.
+        if (opts?.keepOnFailure) return;
+        markUnreadable(plainMessage(err));
+      });
   }, [sessionId]);
+
+  // A tag or note changed on the computer while the phone was away sent no event this phone
+  // heard; read again after a reconnect (2026-09-11 phone pass sweep).
+  useOnRemoteReconnect(() => refetch({ keepOnFailure: true }));
 
   useEffect(() => {
     refetch();
@@ -110,6 +131,7 @@ export function useSessionMeta(sessionId: string | null): SessionMetaApi {
 
   const setNote = useCallback((text: string) => {
     if (!sessionId) return;
+    noteEdits.current++;
     // Revert target comes from a REF, not the render closure: two setNote calls
     // dispatched from the same callback instance would both capture the same
     // closure value, so a failed second write could roll back past the first.

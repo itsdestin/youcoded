@@ -9,6 +9,7 @@ import {
   deserializeChatState,
   HISTORY_EXPAND_PROMPT_ID,
   abnormalStopReason,
+  SerializedChatState,
 } from './chat-types';
 import { SubagentSegment, SpecialistNote, SpecialistRunView, ToolCallState, ToolGroupState } from '../../shared/types';
 import { pageEventToAction } from './transcript-page-actions';
@@ -49,6 +50,25 @@ function nextGroupId(): string {
 // its confirmation would strand it as permanently `pending`.
 function isCompactCommandEcho(text: string): boolean {
   return /^\/compact(\s|$)/.test(text.trim());
+}
+
+/**
+ * Whether a transcript user line is the message a pending bubble drew: the exact text, or, for a
+ * message sent with attachments, the same words once the bubble's attachment paths and Claude
+ * Code's `[Image #N]` placeholders are set aside. WHY (2026-09-11 order investigation): the bubble
+ * reads "<path> what is this" while Claude Code records "[Image #1] what is this", so it never
+ * confirmed and stayed pinned at the bottom beside the recorded copy.
+ */
+function sameUserMessage(message: { content: string; attachments?: string[] }, recorded: string): boolean {
+  if (message.content === recorded) return true;
+  const paths = message.attachments;
+  if (!paths?.length) return false;
+  const words = (s: string) => {
+    let out = s;
+    for (const p of paths) out = out.split(p).join(' ');
+    return out.replace(/\[Image #\d+\]/g, ' ').replace(/\s+/g, ' ').trim();
+  };
+  return words(message.content) === words(recorded);
 }
 
 let turnCounter = 0;
@@ -107,6 +127,28 @@ function mergesIntoOpenSegment(
 }
 
 /**
+ * Append a timeline entry ABOVE this device's still-pending user bubbles.
+ *
+ * WHY (Destin, 2026-09-11, phone test of remote access batches 2/3: messages and replies
+ * "interweave in different orders across the two platforms"): the device that sends a
+ * message draws it at once as a pending bubble, while every other device draws it only
+ * when the transcript records it. Anything that arrived in between — the reply to the
+ * PREVIOUS message, a message typed in the terminal — used to land below the pending
+ * bubble here and above it everywhere else. Keeping pending bubbles as the timeline's
+ * tail makes every device show transcript order; a pending bubble joins that order when
+ * TRANSCRIPT_USER_MESSAGE confirms it. Pinned by tests/chat-order-sender-matches-receiver.test.ts.
+ */
+function appendAbovePending(timeline: TimelineEntry[], entry: TimelineEntry): TimelineEntry[] {
+  let at = timeline.length;
+  while (at > 0) {
+    const prev = timeline[at - 1];
+    if (prev.kind !== 'user' || prev.pending !== true) break;
+    at--;
+  }
+  return [...timeline.slice(0, at), entry, ...timeline.slice(at)];
+}
+
+/**
  * Returns the current assistant turn (or creates a new one).
  * All assistant text and tool groups within a single turn accumulate here.
  */
@@ -134,7 +176,7 @@ function getOrCreateTurn(session: SessionChatState): {
     usage: null,
     anthropicRequestId: null,
   });
-  timeline = [...timeline, { kind: 'assistant-turn' as const, turnId: currentTurnId }];
+  timeline = appendAbovePending(timeline, { kind: 'assistant-turn' as const, turnId: currentTurnId });
   return { assistantTurns, timeline, currentTurnId };
 }
 
@@ -734,11 +776,15 @@ function patchNestedAsk(
   toolCalls: Map<string, ToolCallState>,
   requestId: string,
   patch: (seg: Extract<SubagentSegment, { type: 'tool' }>) => Extract<SubagentSegment, { type: 'tool' }>,
+  // Also match a running row a resolution already cleared of this id (batch 2: an expiry
+  // that follows the resolution must still reach it).
+  matchResolved = false,
 ): Map<string, ToolCallState> | null {
   for (const [id, tool] of toolCalls) {
     const segs = tool.subagentSegments;
     if (!segs) continue;
-    const idx = segs.findIndex(s => s.type === 'tool' && s.requestId === requestId);
+    const idx = segs.findIndex(s => s.type === 'tool'
+      && (s.requestId === requestId || (matchResolved && s.status === 'running' && s.resolvedRequestId === requestId)));
     if (idx < 0) continue;
     const seg = segs[idx] as Extract<SubagentSegment, { type: 'tool' }>;
     const nextSegs = [...segs];
@@ -748,6 +794,68 @@ function patchNestedAsk(
     return out;
   }
   return null;
+}
+
+/** A hydrated copy counts as empty when it carries no conversation at all — the blank
+ *  slot a window seeds for every session it has heard of. */
+function isEmptyCopy(ser: SerializedChatState['sessions'][number][1]): boolean {
+  return (ser.timeline?.length ?? 0) === 0 && (ser.assistantTurns?.length ?? 0) === 0;
+}
+
+/**
+ * Which of the phone's sessions a hydrate leaves as the phone's own copy (remote access
+ * batch 2, design §6). The shim turns a non-empty answer into "may be out of date",
+ * because a kept session's turn state is only as current as the phone's last event.
+ * The ONE definition, used by HYDRATE_CHAT_STATE and by App's report to the shim.
+ */
+export function keptByHydrate(prev: ChatState, snapshot: SerializedChatState): string[] {
+  if (snapshot.sessions.length === 0) return [...prev.keys()];
+  if (!snapshot.degraded) return [];
+  const replaced = new Set(snapshot.sessions.filter(([, ser]) => !isEmptyCopy(ser)).map(([id]) => id));
+  return [...prev.keys()].filter((id) => !replaced.has(id));
+}
+
+/**
+ * The phone's own unsent actions survive a hydrate (design §6, R2-13): pending user
+ * bubbles and queued messages. Only the ones the computer's copy has NOT already echoed
+ * — an echo the copy holds would otherwise show twice, because the reducer drops a
+ * transcript message whose uuid the copy has already seen, so that pending bubble would
+ * never clear.
+ *
+ * WHICH copy entries are unapplied echoes (T4 review, 4): user entries the phone never
+ * saw (by transcript uuid) that come AFTER the last user entry it did see. Counting all
+ * entries with the same text broke whenever the two copies had loaded older history to
+ * different depths — a phone that scrolled further showed an echoed "yes" twice, and a
+ * computer that scrolled further swallowed a freshly typed "continue". Unapplied echoes
+ * are consumed oldest-first by pending bubbles, then queued rows, matching text the way
+ * TRANSCRIPT_USER_MESSAGE confirms a bubble. A copy from a host that predates the uuid
+ * counts every entry, as the phone had nothing better to go on.
+ *
+ * A first copy (no phone copy yet) adopts NO queued rows: the computer's queue is the
+ * computer's own, not an action this phone took (T4 review, 12).
+ */
+function carryUnsent(prev: SessionChatState | undefined, copy: SessionChatState): SessionChatState {
+  if (!prev) return { ...copy, queuedMessages: [] };
+  const seen = prev.seenUuids;
+  let lastKnown = -1;
+  copy.timeline.forEach((e, i) => {
+    if (e.kind === 'user' && !e.pending && e.uuid && seen.has(e.uuid)) lastKnown = i;
+  });
+  const unapplied = new Map<string, number>();
+  copy.timeline.forEach((e, i) => {
+    if (i <= lastKnown || e.kind !== 'user' || e.pending || e.injected) return;
+    if (e.uuid && seen.has(e.uuid)) return;
+    unapplied.set(e.message.content, (unapplied.get(e.message.content) ?? 0) + 1);
+  });
+  const consume = (text: string) => {
+    const n = unapplied.get(text) ?? 0;
+    if (n <= 0) return false;
+    unapplied.set(text, n - 1);
+    return true;
+  };
+  const carried = prev.timeline.filter((e) => e.kind === 'user' && e.pending && !consume(e.message.content));
+  const queuedMessages = prev.queuedMessages.filter((q) => !consume(q.content));
+  return { ...copy, timeline: carried.length ? [...copy.timeline, ...carried] : copy.timeline, queuedMessages };
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -769,11 +877,32 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         return state;
       }
       try {
-        // Replace the entire ChatState with a deserialized snapshot from the
-        // desktop renderer. Fired once per remote-access connect so browser
-        // clients see the full chat history immediately instead of rebuilding
-        // it from replayed transcript events.
-        return deserializeChatState(action.sessions);
+        const copies = deserializeChatState(action.sessions);
+        const hydrated = (s: SessionChatState): SessionChatState => ({ ...s, history: { ...s.history, hydrated: true } });
+        // Remote access batch 2 (design §6, R1-1): a COMPLETE copy replaces the whole
+        // state — the computer's copy is the only source (§4). An INCOMPLETE one replaces
+        // only the sessions it holds with a non-empty copy, keeps the phone's copy of
+        // every other and deletes nothing: a window that did not answer must not empty
+        // the phone (contract R3). Both keep the phone's own unsent actions, and every
+        // delivered session is marked so the phone never loads a first page on top of it.
+        if (!action.sessions.degraded) {
+          const out: ChatState = new Map();
+          for (const [id, ser] of action.sessions.sessions) {
+            const merged = carryUnsent(state.get(id), copies.get(id)!);
+            // A blank copy is not a delivery (T4 review, 5): a window that gave up loading
+            // that conversation's first page sends it empty, and marking it would stop the
+            // phone from loading its own.
+            out.set(id, isEmptyCopy(ser) ? merged : hydrated(merged));
+          }
+          return out;
+        }
+        const out: ChatState = new Map(state);
+        for (const [id, ser] of action.sessions.sessions) {
+          const copy = copies.get(id)!;
+          if (!isEmptyCopy(ser)) out.set(id, hydrated(carryUnsent(state.get(id), copy)));
+          else if (!out.has(id)) out.set(id, copy);   // a blank slot, not a delivered copy
+        }
+        return out;
       } catch (err) {
         console.error('[chat-reducer] HYDRATE_CHAT_STATE deserialize failed:', err);
         return state;
@@ -821,8 +950,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...session,
         timeline: [...session.timeline, { kind: 'user', message, pending: true }],
         isThinking: true,
-        currentGroupId: null,
-        currentTurnId: null,
+        // A message sent while a reply is still streaming does not end that reply: Claude
+        // Code records the message at the next turn boundary, and TRANSCRIPT_USER_MESSAGE
+        // starts the new turn then. Clearing the turn here split the streaming reply in
+        // two on the sending device only (tests/chat-order-sender-matches-receiver.test.ts).
+        currentGroupId: session.currentTurnId ? session.currentGroupId : null,
+        currentTurnId: session.currentTurnId,
         // Typing again after a provider error is the retry — clear the banner
         // (attentionState + errorMessage) so a fresh turn starts clean.
         attentionState: 'ok',
@@ -882,18 +1015,18 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         next.set(action.sessionId, session);
       }
 
-      const timeline = session.timeline.filter(
-        (e) => !(e.kind === 'prompt' && e.prompt.promptId === action.promptId),
-      );
-      timeline.push({
-        kind: 'prompt',
-        prompt: {
-          promptId: action.promptId,
-          title: action.title,
-          description: action.description,
-          buttons: action.buttons,
+      const timeline = appendAbovePending(
+        session.timeline.filter((e) => !(e.kind === 'prompt' && e.prompt.promptId === action.promptId)),
+        {
+          kind: 'prompt',
+          prompt: {
+            promptId: action.promptId,
+            title: action.title,
+            description: action.description,
+            buttons: action.buttons,
+          },
         },
-      });
+      );
 
       next.set(action.sessionId, { ...session, timeline });
       return next;
@@ -1204,7 +1337,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         if (
           entry.kind === 'user' &&
           entry.pending === true &&
-          entry.message.content === action.text
+          sameUserMessage(entry.message, action.text)
         ) {
           confirmedIdx = i;
           break;
@@ -1223,21 +1356,27 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           kind: 'user',
           message: entry.message,
           pending: false,
+          uuid: action.uuid,
         };
-        const timeline = [
-          ...session.timeline.slice(0, confirmedIdx),
+        // Placed where the transcript recorded it — after everything already confirmed,
+        // above the bubbles still waiting — not left where it was drawn at send time
+        // (see appendAbovePending).
+        const timeline = appendAbovePending(
+          [...session.timeline.slice(0, confirmedIdx), ...session.timeline.slice(confirmedIdx + 1)],
           confirmed,
-          ...session.timeline.slice(confirmedIdx + 1),
-        ];
+        );
         next.set(action.sessionId, {
           ...session,
           timeline,
           seenUuids,
           queuedMessages,
-          isThinking: true,
-          currentGroupId: null,
-          currentTurnId: null,
-          attentionState: 'ok',
+          // A confirmed slash command leaves the turn state as the send left it (see below).
+          ...(action.slashCommand ? {} : {
+            isThinking: true,
+            currentGroupId: null,
+            currentTurnId: null,
+            attentionState: 'ok' as const,
+          }),
         });
         return next;
       }
@@ -1323,7 +1462,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // This sits BELOW the confirm arm on purpose: a bubble that already
       // exists optimistically must still be confirmed, or it stays `pending`
       // forever and useSubmitConfirmation fires a stray recovery keystroke.
-      const suppressBubble = isCompactCommandEcho(action.text);
+      // The /clear echo too, when read from its command tags: the clear draws its own marker.
+      const suppressBubble = isCompactCommandEcho(action.text)
+        || (action.slashCommand === true && /^\/clear(\s|$)/.test(action.text.trim()));
 
       // No pending match — a queued message being drained (Task 12's true-
       // position confirm: this is the ONLY place its timeline entry gets
@@ -1341,19 +1482,23 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // `injected` rides only this append path on purpose: a host-injected
         // turn never has an optimistic pending bubble to confirm (nobody typed
         // it), so it can only ever land here.
-        timeline: suppressBubble ? session.timeline : [...session.timeline, {
-          kind: 'user', message, pending: false,
+        timeline: suppressBubble ? session.timeline : appendAbovePending(session.timeline, {
+          kind: 'user', message, pending: false, uuid: action.uuid,
           ...(action.injected ? { injected: action.injected } : {}),
           ...(action.injectedMeta ? { injectedMeta: action.injectedMeta } : {}),
-        }],
+        }),
         seenUuids,
         queuedMessages,
-        isThinking: true,
-        currentGroupId: null,
-        currentTurnId: null,
-        // Fresh activity from the transcript → chat view is back in sync,
-        // so any stale attention banner should disappear.
-        attentionState: 'ok',
+        // A slash command starts no turn: many commands get no reply, and a device that did not
+        // send it would stay "thinking" with nothing to end it (2026-09-11 order investigation).
+        ...(action.slashCommand ? {} : {
+          isThinking: true,
+          currentGroupId: null,
+          currentTurnId: null,
+          // Fresh activity from the transcript → chat view is back in sync,
+          // so any stale attention banner should disappear.
+          attentionState: 'ok' as const,
+        }),
       });
       return next;
     }
@@ -1601,6 +1746,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             input: action.toolInput,
             status: synTool.status,
             requestId: synTool.requestId,
+            // Batch 2: a resolution recorded on the synthetic card survives the real
+            // tool-use replacing it — the note, and the id a later expiry needs.
+            answeredElsewhere: synTool.answeredElsewhere,
+            resolvedRequestId: synTool.resolvedRequestId,
             permissionSuggestions: synTool.permissionSuggestions,
             denyListed: synTool.denyListed,
             // Carried for the same reason as denyListed: ToolCard gates the
@@ -1679,7 +1828,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             external: superseded.external,
             permissionMode: superseded.permissionMode,
           }
-        : { status: 'running' as const };
+        : { status: 'running' as const, answeredElsewhere: superseded?.answeredElsewhere, resolvedRequestId: superseded?.resolvedRequestId };
       toolCalls.set(action.toolUseId, {
         toolUseId: action.toolUseId,
         toolName: action.toolName,
@@ -1800,7 +1949,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         // Belt-and-braces: a previous turn's prefill progress must not be
         // mistaken for this turn's (the next assistant-thinking event replaces it).
         promptProcessing: null,
-        timeline: [...session.timeline, {
+        timeline: appendAbovePending(session.timeline, {
           kind: 'skill-invocation' as const,
           id: `skill-${action.uuid}`,
           skillId: action.skillId,
@@ -1808,7 +1957,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...(action.args ? { args: action.args } : {}),
           ...(action.skillPath ? { skillPath: action.skillPath } : {}),
           timestamp: action.timestamp,
-        }],
+        }),
       });
       return next;
     }
@@ -2178,6 +2327,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...tool,
           status: 'awaiting-approval',
           requestId: action.requestId,
+          // A new ask on this card: the previous one's "answered elsewhere" note is
+          // about a different question (T2 review, 10).
+          answeredElsewhere: undefined,
+          resolvedRequestId: undefined,
           // Fix: the card must show the input THIS request is about. Tier 2
           // binds to a card matched only by NAME, so its input belongs to an
           // earlier call — that is how the second AskUserQuestion of a session
@@ -2276,6 +2429,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
 
       const toolCalls = new Map(session.toolCalls);
+      // Deliberately NO clearing of an "answered elsewhere" note here (T2 re-review, 2):
+      // every answering device BROADCASTS this action, and on a watching device it lands
+      // after the host's resolution — the note is true there. The answering device never
+      // gets the note in the first place: a native ask's resolution is hidden by the shim
+      // while the answer is in flight, and a Claude Code ask replies first.
       for (const [id, tool] of toolCalls) {
         if (tool.status === 'awaiting-approval' && tool.requestId === action.requestId) {
           // Fix: native budget gates (max_steps / doom_loop) are synthetic asks
@@ -2311,24 +2469,91 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...seg,
           status: 'failed',
           requestId: undefined,
+          resolvedRequestId: undefined,
           error: 'This request closed before an answer reached it.', // was transport jargon that also claimed no answer was sent — tests/permission-expired-wording.test.ts
-        }));
+        }), /* matchResolved */ true);
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
 
       const toolCalls = new Map(session.toolCalls);
       for (const [id, tool] of toolCalls) {
-        if (tool.status === 'awaiting-approval' && tool.requestId === action.requestId) {
+        const heldHere = tool.status === 'awaiting-approval' && tool.requestId === action.requestId;
+        // T2 review (2): a cancelled native ask arrives as Resolved THEN Expired, and the
+        // resolution has already moved the card to running with the "answered" note. The
+        // expiry is the truth — nobody answered — so it must still reach that card.
+        // Matched by the kept id alone: a desktop window clears a resolution silently (no
+        // note), and the expiry must reach that card too.
+        const clearedByResolution = tool.status === 'running' && tool.resolvedRequestId === action.requestId;
+        if (heldHere || clearedByResolution) {
           toolCalls.set(id, {
             ...tool,
             status: 'failed',
             requestId: undefined,
+            // The note and the kept id go with the truth: nobody answered (T2 review).
+            answeredElsewhere: undefined,
+            resolvedRequestId: undefined,
             error: 'This request closed before an answer reached it.', // was transport jargon that also claimed no answer was sent — tests/permission-expired-wording.test.ts
           });
           break;
         }
       }
 
+      next.set(action.sessionId, { ...session, toolCalls });
+      return next;
+    }
+
+    case 'PERMISSION_RESOLVED_ELSEWHERE':
+    case 'PERMISSION_REPLAY_COMPLETE': {
+      // Remote access batch 2 (§7, "consent does not lie"): an ask the computer
+      // (or another phone) answered while this client could not see it. The
+      // card goes back to 'running' with `answeredElsewhere` — the same shape an
+      // overwritten ask takes (see PERMISSION_REQUEST's stale-binding loop) —
+      // never 'failed', never a message about a socket: nothing failed, and no
+      // socket closed. The result arrives through the transcript or a Refresh.
+      const session = next.get(action.sessionId);
+      if (!session) return state;
+      const single = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' ? action.requestId : null;
+      const silent = action.type === 'PERMISSION_RESOLVED_ELSEWHERE' && action.silent === true;
+      const pending = action.type === 'PERMISSION_REPLAY_COMPLETE' ? new Set(action.pendingRequestIds) : null;
+      const isResolved = (requestId: string | undefined) =>
+        !!requestId && (single !== null ? requestId === single : !pending!.has(requestId));
+
+      let toolCalls: Map<string, ToolCallState> | null = null;
+      // Nested (specialist) asks first — same clearing PERMISSION_RESPONDED does.
+      if (single !== null) {
+        const nested = patchNestedAsk(session.toolCalls, single, (seg) => ({
+          ...seg, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: seg.requestId,
+        }));
+        if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
+      }
+      for (const [id, tool] of session.toolCalls) {
+        if (tool.status !== 'awaiting-approval' || !isResolved(tool.requestId)) continue;
+        toolCalls ??= new Map(session.toolCalls);
+        // A budget gate has no tool behind it and no result coming — close it, as
+        // PERMISSION_RESPONDED does, so endTurn cannot fail it later.
+        const isBudgetGate = tool.toolName === 'max_steps' || tool.toolName === 'doom_loop';
+        toolCalls.set(id, {
+          ...tool,
+          status: isBudgetGate ? 'complete' : 'running',
+          requestId: undefined,
+          answeredElsewhere: isBudgetGate || silent ? undefined : true,
+          resolvedRequestId: isBudgetGate ? undefined : tool.requestId,
+        });
+      }
+      // Replay-complete covers nested specialist asks too (T2 review, 8): a nested ask
+      // answered while the phone was away must not keep live-looking buttons.
+      if (pending) {
+        for (const tool of session.toolCalls.values()) {
+          for (const seg of tool.subagentSegments ?? []) {
+            if (seg.type !== 'tool' || seg.status !== 'awaiting-approval' || !seg.requestId || pending.has(seg.requestId)) continue;
+            const patched = patchNestedAsk(toolCalls ?? session.toolCalls, seg.requestId, (s) => ({
+              ...s, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: s.requestId,
+            }));
+            if (patched) toolCalls = patched;
+          }
+        }
+      }
+      if (!toolCalls) return state;                 // nothing was awaiting: same reference, no re-render
       next.set(action.sessionId, { ...session, toolCalls });
       return next;
     }
@@ -2496,7 +2721,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'usage-card', snapshot: action.snapshot }],
+        timeline: appendAbovePending(session.timeline, { kind: 'usage-card', snapshot: action.snapshot }),
       });
       return next;
     }
@@ -2578,7 +2803,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (!session) return state;
       next.set(action.sessionId, {
         ...session,
-        timeline: [...session.timeline, { kind: 'copy-picker', id: action.id, options: action.options }],
+        timeline: appendAbovePending(session.timeline, { kind: 'copy-picker', id: action.id, options: action.options }),
       });
       return next;
     }

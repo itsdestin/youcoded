@@ -248,6 +248,9 @@ export interface TranscriptEvent {
   timestamp: number;
   data: {
     text?: string;
+    /** user-message only: a slash command read from its command tags. The chat starts no turn for
+     *  it, because many commands get no reply (2026-09-11). */
+    slashCommand?: boolean;
     toolUseId?: string;
     toolName?: string;
     toolInput?: Record<string, unknown>;
@@ -555,6 +558,9 @@ export type SubagentSegment =
        *  specialist was told to carry on without this and the ask is STILL
        *  answerable — a late answer becomes a follow-up. The row says so. */
       askHeld?: boolean;
+      /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
+       *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
+      resolvedRequestId?: string;
     }
   | {
       /** A steer — "send a note" — from the user (card action) or the parent
@@ -749,6 +755,17 @@ export interface ToolCallState {
   /** Argument characters generated so far — the preparing card's liveness
    *  counter. Meaningless once `preparing` is gone. */
   preparingChars?: number;
+  /** Remote access batch 2 (§7): the ask on this card was answered on another
+   *  device — the computer, or a phone — while this client could not see it.
+   *  The card returns to 'running' (never 'failed', never a claim about a
+   *  socket) and ToolCard shows a neutral note until the result lands. */
+  answeredElsewhere?: boolean;
+  /** The request id the host said was resolved elsewhere, kept after `requestId` is
+   *  cleared, so an expiry or this device's own answer that arrives AFTER the
+   *  resolution still finds the card (T2 review: the broker emits Resolved, then
+   *  Expired, for a cancelled ask — without this the card read "Answered on the
+   *  computer" for an ask nobody answered). */
+  resolvedRequestId?: string;
   response?: string;
   error?: string;
   /** Set when the tool result carries a structuredPatch (Edit/MultiEdit). */
@@ -1616,6 +1633,8 @@ export const IPC = {
   SESSION_RESIZE: 'session:resize',
   SESSION_LIST: 'session:list',
   SESSION_SWITCH: 'session:switch',
+  // Remote access batch 2 (§2): a window tells main which session it shows.
+  SESSION_SELECTED: 'session:selected',
   SKILLS_LIST: 'skills:list',
   COMMANDS_LIST: 'commands:list',
   SKILLS_LIST_MARKETPLACE: 'skills:list-marketplace',
@@ -1700,6 +1719,8 @@ export const IPC = {
   REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
   REMOTE_INSTALL_TAILSCALE: 'remote:install-tailscale',
   REMOTE_AUTH_TAILSCALE: 'remote:auth-tailscale',
+  // Remote access batch 2 (§6): Refresh on a phone. The desktop answers not-remote.
+  REMOTE_REHYDRATE: 'remote:rehydrate',
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
   UI_ACTION_RECEIVED: 'ui:action:received',
   TRANSCRIPT_EVENT: 'transcript:event',

@@ -1462,6 +1462,15 @@ export default React.memo(function ToolCard({ tool, sessionId, inGroup = false }
         <TaskConsentBlock tool={tool} sessionId={sessionId} />
       )}
 
+      {/* Remote access batch 2 (§7): the ask was answered on another device while
+          this client could not see it. Neutral by design — nothing failed and no
+          socket closed; the result comes with the transcript or a Refresh. */}
+      {tool.status === 'running' && tool.answeredElsewhere && (
+        <div className="px-3 pb-2 text-xs text-fg-dim" data-testid="tool-card-answered-elsewhere">
+          Answered on the computer; Refresh to see the result
+        </div>
+      )}
+
       {/* Permission / AskUserQuestion / ExitPlanMode UI */}
       {tool.status === 'awaiting-approval' && tool.requestId && (() => {
         // AskUserQuestion needs its own UI with option selection instead of Yes/No

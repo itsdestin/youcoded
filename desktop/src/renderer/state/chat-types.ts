@@ -228,7 +228,10 @@ export type TimelineEntry =
   // (Destin, 1b hands-on: "these reports just shouldn't be rendering at all
   // in chat … should only register as a task completion toolcard").
   // `injectedMeta` is the structured header (who/what/status/steps).
-  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta }
+  // `uuid` (remote access batch 2): the transcript line this entry was confirmed or
+  // created from. A hydrate uses it to tell an echo the phone has not applied yet from
+  // older history the two copies simply loaded to different depths.
+  | { kind: 'user'; message: ChatMessage; pending?: boolean; injected?: string; injectedMeta?: InjectedMeta; uuid?: string }
   | { kind: 'assistant-turn'; turnId: string }
   | { kind: 'prompt'; prompt: InteractivePrompt }
   // /cost and /usage render a snapshot card inline. Permanent (not dismissible).
@@ -365,7 +368,7 @@ export interface SessionChatState {
    * screen; `loading` is the one-in-flight-page guard that makes paging
    * idempotent (a second request for the same page can never start).
    */
-  history: { cursor: PageCursor | null; hasMore: boolean; loading: boolean };
+  history: { cursor: PageCursor | null; hasMore: boolean; loading: boolean; hydrated?: boolean };
   seenUuids: Set<string>;
   /**
    * Task 12: messages the native host FIFO'd behind an in-flight turn
@@ -671,11 +674,33 @@ export type ChatAction =
       requestId: string;
     }
   | {
+      // Remote access batch 2 (§7): the host says this ask was answered on
+      // another device (hook:event PermissionResolved). Clears the ask with a
+      // neutral note; a no-op unless the card is still awaiting.
+      type: 'PERMISSION_RESOLVED_ELSEWHERE';
+      sessionId: string;
+      requestId: string;
+      // A desktop window clears the card without the "answered elsewhere" note — the
+      // note would name the wrong device there (T2 re-review, 4).
+      silent?: boolean;
+    }
+  | {
+      // Remote access batch 2 (§7): the host finished replaying open asks on a
+      // reconnect and lists the ones still open — every awaiting card not in
+      // the list was answered while this client was away.
+      type: 'PERMISSION_REPLAY_COMPLETE';
+      sessionId: string;
+      pendingRequestIds: string[];
+    }
+  | {
       type: 'TRANSCRIPT_USER_MESSAGE';
       sessionId: string;
       uuid: string;
       text: string;
       timestamp: number;
+      // A slash command read from its command tags (TranscriptEvent.data.slashCommand). It starts
+      // no turn: many commands get no reply, and a watching device would stay "thinking".
+      slashCommand?: boolean;
       // Host-injected user-role turn (TranscriptEvent.data.injected, e.g.
       // 'specialist-report') + its structured header. Carried onto the
       // timeline entry so the renderer draws a compact report card, not a bubble.
@@ -933,6 +958,10 @@ export interface SerializedChatState {
   // without it, both look like a valid empty snapshot. Optional so a payload
   // from a pre-field host still deserializes.
   degraded?: true;
+  // Remote access batch 2 (§2, R2): the session the desktop is showing (its
+  // last-focused main window's selection), so a phone with no place of its own
+  // opens it. Optional so a payload from a pre-field host still deserializes.
+  focus?: { sessionId: string | null };
 }
 
 export function serializeChatState(state: ChatState): SerializedChatState {

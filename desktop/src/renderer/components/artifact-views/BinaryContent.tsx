@@ -1,7 +1,8 @@
 import React from 'react';
 import { useArtifactBytes } from './useArtifactBytes';
-import { getPlatform } from '../../platform';
+import { getPlatform, isRemoteMode } from '../../platform';
 import { Button } from '../ui';
+import { RemoteFileCard } from './RemoteFileCard';
 
 // Shared loading/error shell for every binary viewer (pdf/docx/xlsx/image).
 // Each viewer previously re-wired useArtifactBytes + its own loading/error
@@ -42,8 +43,14 @@ export function BinaryContent({ absolutePath, noun, children }: {
   noun: string;
   children: (bytes: Uint8Array) => React.ReactElement;
 }) {
-  const { bytes, loading, error } = useArtifactBytes(absolutePath);
+  const { bytes, loading, error, sizeBytes } = useArtifactBytes(absolutePath);
   if (loading) return <CenterNote>Loading {noun}…</CenterNote>;
+  if (error === 'too-large' && isRemoteMode()) {
+    // Over remote access the host refuses a file over the phone's preview
+    // ceiling with its size; the phone offers Download instead of a preview
+    // (questions deck 2026-09-10, Q-6/Q-8). Desktop keeps the message below.
+    return <RemoteFileCard path={absolutePath} sizeBytes={sizeBytes} reason="too-large" />;
+  }
   if (error || !bytes) {
     // The action the old copy pointed at but never rendered. Desktop-only for
     // the same reason BinaryFallback gates it: shell.openPath is a no-op on

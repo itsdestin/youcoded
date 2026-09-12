@@ -4,6 +4,7 @@
 // null, the effect resolves + re-renders with the real value on next tick.
 
 import { useEffect, useState } from 'react';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 
 export type Platform = 'darwin' | 'win32' | 'linux' | 'android';
 
@@ -24,6 +25,11 @@ async function fetchPlatform(): Promise<Platform> {
     cached = p;
     inflight = null;
     return p;
+  }, (err: unknown) => {
+    // A failed read must not be the answer for the page's life: the rejected promise used to
+    // stay in `inflight`, so every later call got the same failure (2026-09-11 phone pass sweep).
+    inflight = null;
+    throw err;
   });
   inflight = promise;
   return promise;
@@ -34,8 +40,13 @@ export function useCurrentPlatform(): Platform | null {
   useEffect(() => {
     if (cached) { setPlatform(cached); return; }
     let active = true;
-    fetchPlatform().then((p) => { if (active) setPlatform(p); });
+    fetchPlatform().then((p) => { if (active) setPlatform(p); }).catch(() => { /* unknown until a retry */ });
     return () => { active = false; };
   }, []);
+  // Still unknown after a remote reconnect: ask again. Unmounting removes the listener.
+  useOnRemoteReconnect(() => {
+    if (cached) return;
+    fetchPlatform().then(setPlatform).catch(() => { /* still unknown */ });
+  });
   return platform;
 }

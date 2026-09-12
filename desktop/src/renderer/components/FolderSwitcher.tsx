@@ -11,7 +11,8 @@ import { createPortal } from 'react-dom';
 import { useScrollFade } from '../hooks/useScrollFade';
 import { useEscClose } from '../hooks/use-esc-close';
 import { syncDotFor, findSpaceFor, type SyncStatusData } from './sync-dot-state';
-import { fieldClasses, Tooltip } from './ui';
+import { fieldClasses, Tooltip, ErrorState } from './ui';
+import { useOnRemoteReconnect } from '../hooks/useOnRemoteReconnect';
 import { NO_FOLDER_CWD, NO_FOLDER_DIR_NAME } from '../../shared/no-folder';
 import { isAndroid } from '../platform';
 import { POPOVER_Z } from './overlays/Overlay';
@@ -55,6 +56,8 @@ const DOT_CLASS: Record<'green' | 'red' | 'gray', string> = {
 
 export default function FolderSwitcher({ value, onChange, autoSelect = true, onManageProjects, panelMatchesTrigger = false }: Props) {
   const [folders, setFolders] = useState<SavedFolder[]>([]);
+  // The last read failed. Shown only when there is no list to show (see the panel below).
+  const [loadFailed, setLoadFailed] = useState(false);
   const [open, setOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<SyncStatusData | null>(null);
   const wrapperRef = useRef<HTMLDivElement>(null);
@@ -71,15 +74,30 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
   const load = useCallback(async () => {
     try {
       const list = await (window as any).claude.folders.list();
+      if (!Array.isArray(list)) throw new Error('folders.list did not answer a list');
       setFolders(list);
+      setLoadFailed(false);
       // Auto-select the first folder (home) when no value is set
       if (autoSelect && !value && list.length > 0) {
         onChange(list[0].path);
       }
-    } catch {}
+    } catch {
+      // Keep any list already shown. WHY not swallow it (it was `catch {}`): an empty picker
+      // then looked exactly like having no projects (Destin, 2026-09-11 phone pass).
+      setLoadFailed(true);
+    }
   }, [value, onChange, autoSelect]);
 
   useEffect(() => { load(); }, [load]);
+
+  // Ask again each time the list opens, and after a remote reconnect. Loaded only on mount, one
+  // request lost while a phone slept left the picker empty until the form happened to remount
+  // (Destin, 2026-09-11: the projects "randomly popped back in"). Through a ref, so neither
+  // re-runs because `load` got a new identity when the selection changed.
+  const loadRef = useRef(load);
+  loadRef.current = load;
+  useEffect(() => { if (open) void loadRef.current(); }, [open]);
+  useOnRemoteReconnect(() => { void loadRef.current(); });
 
   // Fetch sync state when the dropdown opens. catch → null: on Android the
   // shim has no syncspaces handlers (30s reject) — rows simply render no dot.
@@ -256,6 +274,11 @@ export default function FolderSwitcher({ value, onChange, autoSelect = true, onM
               </div>
             </div>
           </div>
+          )}
+          {loadFailed && folders.length === 0 && (
+            <div className="p-2">
+              <ErrorState variant="inline" message="Couldn't load your projects." onRetry={() => { void load(); }} />
+            </div>
           )}
           {/* Saved folders list — min-h-0 lets flexbox shrink the list first
               when the viewport-clamped panel height is tight. */}

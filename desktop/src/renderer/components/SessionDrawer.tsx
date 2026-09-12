@@ -31,7 +31,8 @@ import { runGuardedDiscard } from './git/discard-guard';
 import type { ArtifactRecord, VersionEvent } from '../../shared/artifacts/types';
 import { fileTypeGroup } from '../../shared/artifacts/categorization';
 import type { FileTypeGroup } from '../../shared/artifacts/categorization';
-import { getPlatform } from '../platform';
+import { getPlatform, isRemoteMode } from '../platform';
+import { downloadFile } from './artifact-views/download-file';
 import { formatRelativeTime } from '../utils/format-time';
 import { Button, CloseButton, EmptyState, ErrorState, FieldError, SearchFilterPill, Tooltip } from './ui';
 import { FileFilterPopover } from './project-view/FileFilterPopover';
@@ -96,6 +97,9 @@ const PATHS: Record<string, string> = {
   folder: 'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z',
   // External-link (box + arrow-out) — "Open externally" (OS default app).
   external: 'M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6M15 3h6v6M10 14 21 3',
+  // Tray + arrow-down — "Download" (remote access batch 3, 2026-09-10): the
+  // phone's stand-in for Open externally / Reveal, which have no meaning there.
+  download: 'M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3',
   // Four standalone corner arrows (approved mockup 12, stems shortened) —
   // the old bare brackets did not read as expand/contract.
   expand: 'M9 4.5H4.5V9M15 4.5h4.5V9M9 19.5H4.5V15M15 19.5h4.5V15M5 5l4.2 4.2M19 5l-4.2 4.2M5 19l4.2-4.2M19 19l-4.2-4.2',
@@ -242,9 +246,13 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const previewResumeLabel = previewNative ? COPY.resumeNative : COPY.resume;
   // Live external-change events while the drawer is actually visible — the
   // watcher in main is refcounted, so open drawers on the same project share one.
-  useProjectWatch(drawerOpen && projectRoot ? projectRoot : null);
+  // (Subscribed below, after listRetry exists: a reconnect re-lists through it.)
   // Set when a pill click couldn't resolve; cleared on next click/selection/close.
   const pillError = state.pillError?.[sessionId] ?? null;
+  // Set while a tapped file is still being looked up (the file's name). WHY:
+  // the drawer used to open onto "Nothing here yet" for the whole lookup — up
+  // to seconds on a phone — contradicting the file just tapped (2026-09-11).
+  const pillPending = state.pillPending?.[sessionId] ?? null;
 
   // Re-list this session's files whenever the drawer opens against a resolved
   // project root.
@@ -258,17 +266,33 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   // Opening the Files drawer should show what is on disk NOW, and it should key
   // off the RESOLVED projectRoot (useActiveProject), which is not always the raw
   // cwd ChatView used.
+  // The real message when the list could not be fetched. WHY: over remote access
+  // the host refused this channel until batch 3, the refusal rejected, and the
+  // catch below swallowed it — so a phone read "Nothing here yet" for a session
+  // with thirteen files (found 2026-09-10). A failure is a state with a Retry,
+  // never an empty state that claims to know.
+  const [listError, setListError] = useState<string | null>(null);
+  const [listRetry, setListRetry] = useState(0);
+  // Over remote access the files the assistant touched while the phone was
+  // disconnected never arrived as events — re-list once the watch is back
+  // (batch 3, R12). The desktop never fires the reconnect.
+  useProjectWatch(drawerOpen && projectRoot ? projectRoot : null, () => setListRetry((n) => n + 1));
   useEffect(() => {
     if (!drawerOpen || !projectRoot || !sessionId) return;
     let cancelled = false;
+    setListError(null);
     (window.claude as any).artifacts?.listSession?.(sessionId, projectRoot)
       .then((r: any) => {
         if (cancelled || !r?.ok || !Array.isArray(r.artifacts)) return;
         dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: r.artifacts });
       })
-      .catch(() => { /* the drawer keeps whatever it already had */ });
+      .catch((err: any) => {
+        // The drawer keeps whatever rows it already had, and says why it could
+        // not refresh them — never a guess about the cause.
+        if (!cancelled) setListError(err?.message ? String(err.message) : '');
+      });
     return () => { cancelled = true; };
-  }, [drawerOpen, projectRoot, sessionId, dispatch]);
+  }, [drawerOpen, projectRoot, sessionId, dispatch, listRetry]);
 
   // Multi-select type filter; EMPTY set = all types. Matches Project View
   // (Destin, 2026-07-23 — the drawer gained the Type group).
@@ -460,8 +484,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
     : '';
 
   // ── Toolbar actions ──
+  // A tick for a moment after Copy path, because on a phone the hover hint that
+  // used to be the only acknowledgement never shows (tester U5, 2026-09-10).
+  const [copiedPath, setCopiedPath] = useState(false);
   const handleCopyPath = useCallback(() => {
-    if (absolutePath) navigator.clipboard?.writeText(absolutePath).catch(() => {});
+    if (!absolutePath) return;
+    navigator.clipboard?.writeText(absolutePath).then(() => {
+      setCopiedPath(true);
+      window.setTimeout(() => setCopiedPath(false), 1500);
+    }).catch(() => {});
   }, [absolutePath]);
 
   const handleReveal = useCallback(() => {
@@ -474,6 +505,15 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
   const handleOpenExternal = useCallback(() => {
     if (absolutePath) (window.claude as any).shell?.openPath?.(absolutePath);
   }, [absolutePath]);
+
+  // Remote access batch 3 (questions deck 2026-09-10, Q-7 yes): a phone cannot
+  // reveal or open a file that lives on another computer, so it gets Download —
+  // the file lands in the phone's own downloads folder without blocking the chat.
+  // The project and record go along so the host can authorize a tracked file
+  // through its record (T7 review, finding 9).
+  const handleDownload = useCallback(() => {
+    if (absolutePath) void downloadFile(absolutePath, active ? { projectRoot, artifactId: active.id } : undefined);
+  }, [absolutePath, active, projectRoot]);
 
   // Rows to render: the filtered set, narrowed by the search box and sorted.
   // Search/sort affect ONLY the rendered list — not `artifacts`, which still
@@ -663,13 +703,35 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
       <div className="flex-1 overflow-y-auto">
         {/* A pill click that couldn't resolve — shown INSTEAD of letting the
             generic empty state contradict the file the user just clicked. */}
+        {/* break-words on both notes: a long unbroken file name otherwise forces
+            the drawer to scroll sideways on a phone (review 2026-09-11). */}
         {pillError && (
-          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well">
+          <div className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words">
             {pillError}
           </div>
         )}
-        {listSettling ? null : listedArtifacts.length === 0 ? (
-          pillError ? null /* the note above already explains the state */ : (
+        {/* A tapped file still being looked up — the same place and box as the
+            note above, so the drawer never says "Nothing here yet" while it is
+            fetching the file the person just tapped. Only while no file is
+            showing: a file already open stays open until the new one lands. */}
+        {!pillError && pillPending && !active && (
+          <div aria-live="polite" className="mx-2 mt-2 px-2.5 py-2 text-2xs text-fg rounded-md border border-edge bg-well break-words">
+            {`Opening ${pillPending}…`}
+          </div>
+        )}
+        {/* While a tap is pending, neither the load-error state nor the empty
+            state renders underneath the note: both would describe the LIST,
+            and the person is waiting on a FILE. */}
+        {listSettling ? null : listError !== null && listedArtifacts.length === 0 && !pillPending ? (
+          <div className="px-3 pt-2">
+            <ErrorState
+              mode="recoverable"
+              message={listError ? `Couldn’t load this chat’s files: ${listError}` : 'Couldn’t load this chat’s files.'}
+              onRetry={() => setListRetry((t) => t + 1)}
+            />
+          </div>
+        ) : listedArtifacts.length === 0 ? (
+          pillError || pillPending ? null /* the note above already explains the state */ : (
             /* Same EmptyState + way-out pattern as the Project View files tab and
                the Resume browser (change 32). A search that matched nothing gets a
                Clear search button; the filtered-empty case points at the filter
@@ -713,11 +775,16 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
                 // Cancel any in-progress rename first so its open field doesn't
                 // bleed onto the newly-selected artifact.
                 if (renameActiveRef.current || renaming) cancelRename();
+                // On a phone the list and the file take turns (stack navigation,
+                // see drawer-body below), so a tap must SHOW the file — the first
+                // phone tester (2026-09-10, U3) tapped a row, saw only a title
+                // bar appear above the same list, and assumed the tap had failed.
+                const keepListOpen = !narrowViewport;
                 // Re-selecting the open file never discards anything — skip the guard.
-                if (a.id === activeArtifactId) { setListOpen(true); return; }
+                if (a.id === activeArtifactId) { setListOpen(keepListOpen); return; }
                 guardUnsaved(() => {
                   dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId, artifactId: a.id });
-                  setListOpen(true);
+                  setListOpen(keepListOpen);
                 });
               }}
               // Discovered records have no sidecar entry to remove.
@@ -855,7 +922,16 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
           second title/close row in its body; that was the "two X's" bug
           Destin flagged, so it no longer renders one. Don't add one back. */}
       <div className="flex items-center gap-1 px-2 py-1.5 border-b border-edge shrink-0">
-        <IconBtn name="list" title={listOpen ? 'Hide list' : 'Show list'} active={listOpen} onClick={() => setListOpen((v) => !v)} />
+        {narrowViewport && active && !listOpen ? (
+          // A phone has no hover hint to explain a bare list glyph, and a file
+          // that has replaced the list needs a way BACK that reads as one
+          // (tester U3, 2026-09-10): a labelled button, like every phone app.
+          <Button variant="ghost" size="sm" className="shrink-0 px-1.5" onClick={() => setListOpen(true)} aria-label="Back to the file list">
+            ‹ Files
+          </Button>
+        ) : (
+          <IconBtn name="list" title={listOpen ? 'Hide list' : 'Show list'} active={listOpen} onClick={() => setListOpen((v) => !v)} />
+        )}
         {active ? (renaming ? (
           <div className="flex items-center gap-2 min-w-0 px-1 relative">
             <span className={`inline-flex items-center border rounded-md overflow-hidden ${renameError ? 'border-red-500' : 'border-accent'}`}>
@@ -962,9 +1038,14 @@ export const SessionDrawer = React.memo(function SessionDrawer({ sessionId, proj
         {/* Edit/Save moved to the floating button at the bottom-right of the
             doc pane (Destin, 2026-07-22) — see the cluster below the content div. */}
         {active && isElectron && <IconBtn name="external" title="Open with the default app" onClick={handleOpenExternal} />}
-        {active && <IconBtn name="copypath" title="Copy path" onClick={handleCopyPath} />}
+        {active && isRemoteMode() && <IconBtn name="download" title="Download" onClick={handleDownload} />}
+        {active && <IconBtn name={copiedPath ? 'check' : 'copypath'} title={copiedPath ? 'Copied' : 'Copy path'} onClick={handleCopyPath} />}
         {active && isElectron && <IconBtn title="Reveal in folder" glyph={<RevealFolderIc />} onClick={handleReveal} />}
-        <IconBtn name={expanded ? 'shrink' : 'expand'} title={expanded ? 'Shrink panel' : 'Expand panel'} active={expanded} onClick={() => dispatch({ type: 'DRAWER_EXPAND_TOGGLED' })} />
+        {/* Expand is a no-op at phone width — the drawer is already the whole
+            screen — so it is not offered there (tester U6, 2026-09-10). */}
+        {!narrowViewport && (
+          <IconBtn name={expanded ? 'shrink' : 'expand'} title={expanded ? 'Shrink panel' : 'Expand panel'} active={expanded} onClick={() => dispatch({ type: 'DRAWER_EXPAND_TOGGLED' })} />
+        )}
         {/* Resume sits between expand and close — Destin, 2026-08-27 gate
             (M-header): "i want resume to be between expand and X button."
             It no longer resumes on click; it opens the options popover below,

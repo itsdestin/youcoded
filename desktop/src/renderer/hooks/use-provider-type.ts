@@ -6,6 +6,7 @@
 // report. The status bar already accepted a `modelProviderType` prop that
 // nothing filled — this is what fills it.
 import { useEffect, useState } from 'react';
+import { REMOTE_RECONNECTED_EVENT } from '../remote-events';
 
 interface ProviderRow { id: string; type: string; label: string; ready: boolean }
 interface CatalogRow { id: string; providerId: string; label: string }
@@ -52,9 +53,10 @@ export function invalidateProviderTypeCache(): void {
  *  world while it was in the air (see `generation` above). */
 function fetchLists(): Promise<Lists> {
   const startedAt = generation;
+  let failed = false;
   return Promise.all([
-    window.claude.providers.list().catch(() => []),
-    window.claude.providers.catalog().catch(() => []),
+    window.claude.providers.list().catch(() => { failed = true; return []; }),
+    window.claude.providers.catalog().catch(() => { failed = true; return []; }),
   ]).then(([providers, catalog]) => {
     const next: Lists = {
       providers: Array.isArray(providers) ? providers as ProviderRow[] : [],
@@ -62,7 +64,12 @@ function fetchLists(): Promise<Lists> {
     };
     // A late reply from before the last invalidation is stale by definition —
     // return it to whoever awaited it, but never let it become the cache.
-    if (startedAt === generation) cache = next;
+    // A FAILED read is handed back but never cached, and the next load reads again: cached, one
+    // lost request meant "no providers" until something invalidated it (2026-09-11 phone pass).
+    if (startedAt === generation) {
+      if (failed) inflight = null;
+      else cache = next;
+    }
     return next;
   });
 }
@@ -82,6 +89,15 @@ function refetch(): Promise<Lists> {
   generation++;
   inflight = fetchLists();
   return inflight;
+}
+
+let reconnectHooked = false;
+/** After a remote reconnect, lists that never loaded are read again and every mounted hook
+ *  re-resolves; lists that did load are kept. Registered once per page, not per hook. */
+function hookReconnectOnce(): void {
+  if (reconnectHooked || typeof window === 'undefined') return;
+  reconnectHooked = true;
+  window.addEventListener(REMOTE_RECONNECTED_EVENT, () => { if (!cache) invalidateProviderTypeCache(); });
 }
 
 /** Synchronous read for callers outside React (the /usage snapshot factory).
@@ -137,6 +153,7 @@ export function useModelProviderType(
     // The session told us who it belongs to: nothing to look up, and no
     // listener to register (a stamped session can never be re-answered).
     if (providerType) { setType(providerType); return; }
+    hookReconnectOnce();
     let alive = true;
     const read = () => {
       void load().then(() => {

@@ -19,6 +19,12 @@ import type {
 
 export type WindowKind = 'main' | 'buddy';
 
+// Remote access batch 2 (§2): how long a transfer counts as "the copy is still arriving"
+// for the remote snapshot. The inheriting window requests its first page as soon as it
+// acquires the session (tens of milliseconds); 10 s leaves wide margin under load.
+const PENDING_TRANSFER_MS = 10_000;
+const MAX_SESSION_ID_LENGTH = 256;
+
 interface WindowEntry {
   id: number;
   createdAt: number;
@@ -82,8 +88,15 @@ export class WindowRegistry extends EventEmitter {
     // A window that closed before reading its inherited page leaves a mark that
     // would otherwise outlive it and mis-serve whoever inherits that id later.
     for (const [sessionId, winId] of this.inheritedByTransfer) {
-      if (winId === id) this.inheritedByTransfer.delete(sessionId);
+      if (winId === id) {
+        this.inheritedByTransfer.delete(sessionId);
+        this.transferMarkedAt.delete(sessionId);
+      }
     }
+    // A closed window shows nothing: drop its selection and, if it was the last one
+    // focused, fall back to the leader for the remote snapshot's focus.
+    this.selected.delete(id);
+    if (this.lastFocusedMain === id) this.lastFocusedMain = undefined;
     this.emit('changed');
   }
 
@@ -99,6 +112,10 @@ export class WindowRegistry extends EventEmitter {
   /** Release ownership of a session (if any). Always emits 'changed'. */
   releaseSession(sessionId: string): void {
     this.ownership.delete(sessionId);
+    // Called when the session exits or is destroyed: nothing will read its first page
+    // again, so a transfer gap left behind would degrade the remote snapshot for good.
+    this.inheritedByTransfer.delete(sessionId);
+    this.transferMarkedAt.delete(sessionId);
     this.emit('changed');
   }
 
@@ -172,9 +189,15 @@ export class WindowRegistry extends EventEmitter {
   // the first page read, so paging further back behaves normally.
   private readonly inheritedByTransfer = new Map<string, number>();
 
+  // When each mark was set — the remote snapshot counts a mark as "pending" only for a
+  // bounded time (see isPendingTransfer). The one-shot read-to-EOF mark itself never
+  // expires.
+  private readonly transferMarkedAt = new Map<string, number>();
+
   /** Mark a session as inherited by `windowId`, so its first page reads to EOF. */
-  markInheritedByTransfer(sessionId: string, windowId: number): void {
+  markInheritedByTransfer(sessionId: string, windowId: number, now: number = Date.now()): void {
     this.inheritedByTransfer.set(sessionId, windowId);
+    this.transferMarkedAt.set(sessionId, now);
   }
 
   /**
@@ -185,7 +208,85 @@ export class WindowRegistry extends EventEmitter {
   consumeInheritedByTransfer(sessionId: string, windowId: number): boolean {
     if (this.inheritedByTransfer.get(sessionId) !== windowId) return false;
     this.inheritedByTransfer.delete(sessionId);
+    this.transferMarkedAt.delete(sessionId);
     return true;
+  }
+
+  /**
+   * Remote access batch 2 (design §2): is this session's copy in its new window still
+   * arriving? A NON-consuming read of the same mark consumeInheritedByTransfer spends —
+   * the remote snapshot asks it on every connect and must never steal the mark that
+   * makes the inheriting window's first page read to EOF. While it is set, that
+   * window's copy stops at the moment the session was resumed, so the snapshot omits
+   * the session and says it is degraded rather than hand a phone a stale copy.
+   */
+  //
+  // BOUNDED (T3 review, 3): the mark only has to cover the moments between the transfer
+  // and the inheriting window asking for its first page — from then on that window's own
+  // `history.loading`, which the exporter reports, covers the incomplete copy through
+  // every retry. A session whose page can never resolve (a shell, an exited session with
+  // no transcript) re-marks on each failed read and then gives up, and an unbounded mark
+  // degraded every snapshot for the life of that window.
+  isPendingTransfer(sessionId: string, now: number = Date.now()): boolean {
+    const markedAt = this.transferMarkedAt.get(sessionId);
+    return this.inheritedByTransfer.has(sessionId) && markedAt !== undefined && now - markedAt < PENDING_TRANSFER_MS;
+  }
+
+  /**
+   * Move a session from the window that owns it to another, and mark the gap. Returns
+   * false (and changes nothing) when `fromWindowId` is not the current owner — the
+   * race protection main.ts's transferOwnership relied on. One method so the pending
+   * state the remote snapshot reads is produced by the real transfer path, never by a
+   * second copy of its two steps.
+   */
+  transferSession(sessionId: string, fromWindowId: number, toWindowId: number, now: number = Date.now()): boolean {
+    if (this.ownership.get(sessionId) !== fromWindowId) return false;
+    this.assignSession(sessionId, toWindowId);
+    this.markInheritedByTransfer(sessionId, toWindowId, now);
+    return true;
+  }
+
+  // Remote access batch 2 (design §2, R2): which session each MAIN window shows, as
+  // reported by its renderer (session:selected), and which main window was focused
+  // last. Nothing else under main/ knows a window's selection, and a phone connecting
+  // for the first time opens what the desktop is showing.
+  //
+  // LAST focused, not currently focused: while someone is using the phone, no desktop
+  // window has focus at all, and BrowserWindow.getFocusedWindow() would always be null.
+  // Selection changes do not emit 'changed' — that event rebroadcasts the directory to
+  // every renderer, and nothing there depends on another window's selection.
+  private readonly selected = new Map<number, string>();
+  private lastFocusedMain: number | undefined;
+
+  setSelectedSession(windowId: number, sessionId: string | null): void {
+    if (this.windows.get(windowId)?.kind !== 'main') return;
+    // A renderer can send anything; no session id is this long, and the value rides every
+    // snapshot and session:destroyed to phones.
+    if (sessionId && sessionId.length > MAX_SESSION_ID_LENGTH) return;
+    if (sessionId) this.selected.set(windowId, sessionId);
+    else this.selected.delete(windowId);
+  }
+
+  noteFocused(windowId: number): void {
+    if (this.windows.get(windowId)?.kind === 'main') this.lastFocusedMain = windowId;
+  }
+
+  /** The last-focused main window's selection, else the leader's, else null. */
+  getFocusSessionId(): string | null {
+    if (this.lastFocusedMain !== undefined) {
+      const sel = this.selected.get(this.lastFocusedMain);
+      if (sel) return sel;
+    }
+    const leader = this.getLeaderId();
+    return leader !== undefined ? this.selected.get(leader) ?? null : null;
+  }
+
+  /** Main (non-buddy) window ids, oldest first — the windows that hold chat copies. */
+  getMainWindowIds(): number[] {
+    return Array.from(this.windows.values())
+      .filter((e) => e.kind === 'main')
+      .sort((a, b) => a.createdAt - b.createdAt)
+      .map((e) => e.id);
   }
 
   /**

@@ -78,7 +78,7 @@ import { reconcileInstalls } from './install-reconcile';
 import { registerSocialHandlers, destroySocialHandlers } from './social-handlers';
 import { registerArcadeHandlers } from './arcade-handlers';
 import { registerVoiceHandlers, shutdownVoiceHandlers } from './voice/voice-handlers';
-import { requestChatSnapshot } from './chat-snapshot';
+import { requestMergedChatSnapshot } from './chat-snapshot';
 import { BuddyWindowManager } from './buddy-window-manager';
 import { BuddyOverlayManager, OVERLAY_TITLE } from './buddy-overlay-manager';
 import { chooseBuddyStrategy } from './buddy-manager';
@@ -284,14 +284,32 @@ const commandProvider = new CommandProvider(
 // When skills change (plugin install/uninstall), invalidate the command
 // cache so skill-name dedup re-evaluates.
 skillProvider.setCacheInvalidationListener(() => commandProvider.invalidateCache());
-// Pass a snapshot provider so RemoteServer can request the full chat state from
-// the renderer when new remote clients connect. The closure captures mainWindow
-// by reference — mainWindow is null here but will be set before any client
-// can connect (the server only starts after the window is created).
+// Pass a snapshot provider so RemoteServer can request the full chat state when a
+// remote client restores. Batch 2 (§2): from EVERY main window, each session from its
+// owner — see requestMergedChatSnapshot. The closures read mainWindow by reference; it
+// is null here and set before any client can connect.
 const remoteServer = new RemoteServer(sessionManager, hookRelay, remoteConfig, skillProvider, {
-  requestSnapshot: () => {
-    if (!mainWindow || mainWindow.isDestroyed()) return Promise.resolve({ sessions: [] });
-    return requestChatSnapshot(mainWindow.webContents);
+  // The installed app serves the phone its built copy; a dev window serves live code unless
+  // run-dev.sh --phone-build made a fresh copy (see choosePhonePageSource).
+  serveBuiltPage: app.isPackaged || process.env.YOUCODED_REMOTE_BUILT === '1',
+  // The phone's / menu: the same list the desktop's commands:list handler returns.
+  listCommands: () => commandProvider.getCommands(),
+  requestSnapshot: () => requestMergedChatSnapshot({
+    registry: windowRegistry,
+    webContentsFor: (id) => {
+      const wc = webContents.fromId(id);
+      return wc && !wc.isDestroyed() ? wc : null;
+    },
+    fallbackWindowId: () => (mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents.id : undefined),
+    knownSessionIds: () => sessionManager.listSessions().map((s) => s.id),
+  }),
+  getFocusSessionId: () => windowRegistry.getFocusSessionId(),
+  // A theme change made on a phone reaches every window here, the same message a peer
+  // window sends (tests/remote-appearance-relay.test.ts).
+  onAppearanceBroadcast: (prefs) => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (!win.isDestroyed()) win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
+    }
   },
 });
 
@@ -852,6 +870,9 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
   // work (subscribe() rejects unknown ids).
   const wid = win.webContents.id;
   windowRegistry.registerWindow(wid, Date.now(), opts?.buddy ? 'buddy' : 'main');
+  // Batch 2 (§2): the remote snapshot's focus follows the LAST focused main window
+  // (the registry ignores buddies) — while someone is on the phone nothing is focused.
+  win.on('focus', () => windowRegistry.noteFocused(wid));
   win.on('closed', () => {
     // Drop attention reports contributed by this window so stale session
     // states from a closed window don't persist in the aggregated summary.
@@ -1228,6 +1249,9 @@ function registerDetachIpc() {
       if (win.isDestroyed() || win.webContents.id === evt.sender.id) continue;
       win.webContents.send(IPC.APPEARANCE_SYNC, prefs);
     }
+    // WHY phones too: a phone read the computer's theme once, at page load, and kept it until
+    // reloaded (Destin, 2026-09-11). The computer's change reaches phones already open.
+    remoteServer.broadcast({ type: IPC.APPEARANCE_SYNC, payload: prefs });
   });
 
   // Transfer a session from its current owner window to a target window.
@@ -1236,13 +1260,13 @@ function registerDetachIpc() {
   function transferOwnership(sessionId: string, srcWindowId: number, targetWindowId: number, freshWindow: boolean) {
     const info = sessionManager.getSession(sessionId);
     if (!info) return;
-    const currentOwner = windowRegistry.getOwner(sessionId);
-    if (currentOwner !== srcWindowId) return; // stale — another event already moved it
-    windowRegistry.assignSession(sessionId, targetWindowId);
-    // The target has not been receiving this session's live transcript stream,
-    // so its first page of history must read to EOF rather than stopping at the
-    // watcher's startOffset. See WindowRegistry.markInheritedByTransfer.
-    windowRegistry.markInheritedByTransfer(sessionId, targetWindowId);
+    // Stale (another event already moved it) → transferSession refuses and changes
+    // nothing. Otherwise it assigns the target AND marks the gap: the target has not
+    // been receiving this session's live transcript stream, so its first page of
+    // history must read to EOF rather than stopping at the watcher's startOffset
+    // (WindowRegistry.markInheritedByTransfer), and the remote snapshot omits the
+    // session until that page is read (isPendingTransfer).
+    if (!windowRegistry.transferSession(sessionId, srcWindowId, targetWindowId)) return;
     const src = windowFromWcId(srcWindowId);
     const tgt = windowFromWcId(targetWindowId);
     src?.webContents.send(IPC.SESSION_OWNERSHIP_LOST, { sessionId });

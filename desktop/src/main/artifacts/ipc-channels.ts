@@ -61,6 +61,12 @@ export const ARTIFACT_IPC = {
   // Project-wide content search over bundled ripgrep (desktop-only; the Files
   // tab ranks these hits BELOW filename matches in one unified list).
   SEARCH_CONTENT: 'artifacts:search-content',
+  // Resolve ONE file path tapped in chat to the record the drawer opens (a
+  // tracked record, or the discovered record for an on-disk file inside the
+  // folder). Replaces downloading the whole project list to find one file;
+  // see resolveArtifactPath in read-service.ts. A read, bridged over remote.
+  // (No apostrophes in this comment — the parity test reads quoted strings.)
+  RESOLVE_PATH: 'artifacts:resolve-path',
 } as const;
 
 export type ArtifactIpcChannel = typeof ARTIFACT_IPC[keyof typeof ARTIFACT_IPC];

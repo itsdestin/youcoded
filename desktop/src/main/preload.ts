@@ -106,6 +106,8 @@ const IPC = {
   REMOTE_DEVICES_UNPAIR: 'remote:devices:unpair',
   REMOTE_INSTALL_TAILSCALE: 'remote:install-tailscale',
   REMOTE_AUTH_TAILSCALE: 'remote:auth-tailscale',
+  // Remote access batch 2 (§6): Refresh on a phone. The desktop answers not-remote.
+  REMOTE_REHYDRATE: 'remote:rehydrate',
   UI_ACTION_BROADCAST: 'ui:action:broadcast',
   UI_ACTION_RECEIVED: 'ui:action:received',
   TRANSCRIPT_EVENT: 'transcript:event',
@@ -198,6 +200,8 @@ const IPC = {
   MODES_GET: 'modes:get',
   MODES_SET: 'modes:set',
   SESSION_SWITCH: 'session:switch',
+  // Remote access batch 2 (§2): a window tells main which session it shows.
+  SESSION_SELECTED: 'session:selected',
   // Sync management
   SYNC_GET_STATUS: 'sync:get-status',
   SYNC_GET_CONFIG: 'sync:get-config',
@@ -521,6 +525,10 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke(IPC.SESSION_HISTORY, sessionId, projectSlug, count || 10, all || false),
     switch: (sessionId: string) =>
       ipcRenderer.invoke(IPC.SESSION_SWITCH, sessionId),
+    // Remote access batch 2 (§2): report this window's selection to main, which
+    // caches it per window so a phone's first connect opens what the desktop shows.
+    noteSelected: (sessionId: string | null) =>
+      ipcRenderer.send(IPC.SESSION_SELECTED, sessionId),
     // Mark/unmark a session flag (complete, priority, helpful, …).
     // Persists in conversation-index.json and rides the existing sync pipeline.
     setFlag: (sessionId: string, flag: string, value: boolean) =>
@@ -548,7 +556,9 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.on(IPC.SESSION_CREATED, handler);
       return handler;
     },
-    sessionDestroyed: (cb: (id: string, exitCode: number) => void) => {
+    // The third argument (the desktop's focus, batch 2 §3) only ever comes from the remote
+    // shim; a desktop window never receives it.
+    sessionDestroyed: (cb: (id: string, exitCode: number, focusSessionId?: string | null) => void) => {
       // exitCode piped in so the chat reducer can classify this as a clean
       // exit vs. 'session-died'. Default to 0 when absent (older bridges).
       const handler = (_e: IpcRendererEvent, id: string, exitCode: number = 0) => cb(id, exitCode);
@@ -573,6 +583,20 @@ contextBridge.exposeInMainWorld('claude', {
     ptyRawBytesForSession: (_sessionId: string, _cb: (data: string) => void) => {
       return () => {};
     },
+    // Remote access batch 2 (§7): the host tells a reconnecting phone to clear its
+    // terminal before a full redraw. A desktop terminal is never reset this way —
+    // shape parity with remote-shim only, never fires here.
+    ptyResetForSession: (_sessionId: string, _cb: () => void) => {
+      return () => {};
+    },
+    // Remote access batch 2 (§7): the host's list of still-open permission asks
+    // after a reconnect replay. Desktop cards are answered in place — never fires.
+    hookReplayComplete: (_cb: (payload: { sessionId: string; pendingRequestIds: string[] }) => void) => {
+      return () => {};
+    },
+    // Remote access batch 2 (§6): where a phone's copy of the conversation stands. Only
+    // the remote shim ever pushes it — declared, never fires here.
+    remoteConversationStatus: (_cb: unknown) => () => {},
     hookEvent: (cb: (event: any) => void) => {
       const handler = (_e: IpcRendererEvent, event: any) => cb(event);
       ipcRenderer.on(IPC.HOOK_EVENT, handler);
@@ -669,7 +693,7 @@ contextBridge.exposeInMainWorld('claude', {
     ipcRenderer.on(IPC.CHAT_EXPORT_SNAPSHOT, handler);
     return () => ipcRenderer.off(IPC.CHAT_EXPORT_SNAPSHOT, handler);
   },
-  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown }) =>
+  sendChatSnapshotResponse: (payload: { requestId: string; snapshot: unknown; loadingSessionIds?: string[] }) =>
     ipcRenderer.send(IPC.CHAT_SNAPSHOT_RESPONSE, payload),
   fireRemoteAttentionChanged: (payload: { sessionId: string; state: string }) =>
     ipcRenderer.send(IPC.REMOTE_ATTENTION_CHANGED, payload),
@@ -907,6 +931,10 @@ contextBridge.exposeInMainWorld('claude', {
     installTailscale: () => ipcRenderer.invoke(IPC.REMOTE_INSTALL_TAILSCALE),
     authTailscale: () => ipcRenderer.invoke(IPC.REMOTE_AUTH_TAILSCALE),
     broadcastAction: (action: any) => ipcRenderer.send(IPC.UI_ACTION_BROADCAST, action),
+    // Batch 2 (§6): shape parity with the remote shim. The strip that calls these only
+    // shows on a remote client; the desktop has no remote copy to refresh or report.
+    rehydrate: () => ipcRenderer.invoke(IPC.REMOTE_REHYDRATE),
+    reportHydrate: (_report: { seq?: number; kept: string[] }) => {},
   },
   model: {
     getPreference: (): Promise<string> => ipcRenderer.invoke(IPC.MODEL_GET_PREFERENCE),
@@ -1677,6 +1705,12 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('artifacts:list-project', projectId, opts),
     listAllFiles: (projectId: string, opts?: { force?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-all-files', projectId, opts),
+    // Resolve ONE file path tapped in chat to the record the drawer opens — a
+    // tracked record, or the on-disk file inside the folder. Replaces
+    // downloading the whole project list to find one file (read-service.ts
+    // resolveArtifactPath). Answers { ok:true, artifact } or { ok:false, error }.
+    resolvePath: (projectRoot: string, filePath: string) =>
+      ipcRenderer.invoke('artifacts:resolve-path', projectRoot, filePath),
     listProjectsIndex: (opts?: { withCounts?: boolean }) =>
       ipcRenderer.invoke('artifacts:list-projects-index', opts),
     // opts: { full? } — full opts into reading up to FULL_READ_MAX_BYTES for a
@@ -1687,6 +1721,12 @@ contextBridge.exposeInMainWorld('claude', {
     // to bytes (renderer can't fetch a file:// URL from the http/app origin).
     readBinary: (absolutePath: string) =>
       ipcRenderer.invoke('artifacts:read-binary', absolutePath),
+    // Save a copy to THIS device — a remote-access channel (batch 3). The
+    // desktop answers { ok:false, code:'not-remote' }: a file on this computer
+    // is opened or revealed, never downloaded to itself. Declared so the shared
+    // renderer has one shape on both transports.
+    download: (absolutePath: string, opts?: { projectRoot?: string; artifactId?: string }) =>
+      ipcRenderer.invoke('artifacts:download', absolutePath, opts),
     // opts: { baseMtimeMs?, confirmed? } — concurrency token + confirm-tier ack
     save: (projectRoot: string, projectId: string, projectName: string,
            artifactId: string, content: string, sessionId: string,

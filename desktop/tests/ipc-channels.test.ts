@@ -583,6 +583,8 @@ describe('artifact IPC parity', () => {
     WATCH_PROJECT: 'artifacts:watch-project',
     UNWATCH_PROJECT: 'artifacts:unwatch-project',
     SEARCH_CONTENT: 'artifacts:search-content',
+    // One tapped chat path resolved on the host (read-service.ts resolveArtifactPath).
+    RESOLVE_PATH: 'artifacts:resolve-path',
   }).reduce<Record<string, string>>((acc, [name, value]) => {
     acc[value] = `ARTIFACT_IPC.${name}`;
     return acc;

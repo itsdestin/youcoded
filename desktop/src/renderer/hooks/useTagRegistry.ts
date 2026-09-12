@@ -3,6 +3,7 @@
 // refetches whenever a tags:changed push arrives (any window/device mutation).
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import type { TagRecord, TagColor } from '../../shared/tags';
+import { useOnRemoteReconnect } from './useOnRemoteReconnect';
 import { plainMessage } from '../utils/ipc-error';
 
 export interface TagRegistryApi {
@@ -37,6 +38,8 @@ export function useTagRegistry(): TagRegistryApi {
     // `{ ok: false, error }` when the registry cannot be read (listTagsForHost). A
     // missing namespace still resolves [] exactly as before — out of scope here.
     Promise.resolve((window as any).claude?.tags?.list?.() ?? [])
+      // A failed re-read reports itself and KEEPS what is on screen — never an empty
+      // registry (error inventory 2026-09-10 false message 16; 2026-09-11 phone pass).
       .then((list: unknown) => {
         if (Array.isArray(list)) {
           setTags(list as TagRecord[]);
@@ -55,6 +58,7 @@ export function useTagRegistry(): TagRegistryApi {
     const off = (window as any).claude.on?.tagsChanged?.(() => reload());
     return () => { if (typeof off === 'function') off(); };
   }, [reload]);
+  useOnRemoteReconnect(reload);
 
   const create = useCallback(async (label: string, color: TagColor) => {
     const res: any = await (window as any).claude.tags.create(label, color);

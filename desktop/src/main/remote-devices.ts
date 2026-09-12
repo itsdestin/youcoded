@@ -91,6 +91,27 @@ export class RemoteDeviceStore {
   }
 
   /**
+   * A password sign-in from a device that names the row it already has: the same row, a new key.
+   *
+   * WHY (Destin, 2026-09-11: "each sign in seems to create a new device entry in the remote access
+   * menu? even though all the same device"): every password sign-in used to pair a NEW row, so a
+   * phone that lost its key a few times was listed several times. The device, not the host, says
+   * which row is its own (the host still never matches by name), and the password proves it may
+   * have it. The old key stops working. The name stays, in case the owner renamed the row. An
+   * unpaired or unknown row is not reused: null, and the caller pairs a new one.
+   */
+  pairAgain(deviceId: unknown, now = Date.now()): PairedCredential | null {
+    if (typeof deviceId !== 'string') return null;
+    const device = this.devices.get(deviceId);
+    if (!device || device.revokedAt !== null) return null;
+    const secret = crypto.randomBytes(32).toString('base64url');
+    device.secretHash = hash(secret);
+    device.lastSeenAt = now;
+    this.save();
+    return { deviceId: device.id, secret };
+  }
+
+  /**
    * WHY this returns a reason rather than a boolean: a revoked device must be told it was
    * unpaired so its client can stop retrying, and an unknown id must be told its credential was
    * retired — the migration case. Both are terminal; a wrong secret is not.
@@ -127,6 +148,13 @@ export class RemoteDeviceStore {
     device.name = cleanName(name);
     this.save();
     return true;
+  }
+
+  /** A device the computer removed — or never knew. The download route checks
+   *  this per GET (batch 3, R10), so a link minted before an unpair dies with it. */
+  isRevoked(deviceId: string): boolean {
+    const device = this.devices.get(deviceId);
+    return !device || device.revokedAt !== null;
   }
 
   /** Contract row R11: every device that has paired stays listed until it is unpaired. */
