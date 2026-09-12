@@ -133,7 +133,17 @@ function sendFailureCopy(result: NativeSendResult | undefined): string {
   if (result?.status === 'failed' && result.reason === 'not-live') {
     return 'This session is no longer running. Start or resume it to send messages.';
   }
-  return 'The message could not be sent — no response from the session host.';
+  // WHY two sentences where there was one (error inventory 2026-09-10, false message 5):
+  // this said "could not be sent — no response from the session host" for an ack that
+  // never came back too. Over remote access that is the 30-second timeout, and
+  // remote-shim.ts documents such a request as one that MAY have run — so the message
+  // could already be in the conversation while the restored draft invited a second send.
+  // No ack → say it could not be confirmed. A host that answered "failed" for a reason
+  // with no sentence of its own did refuse it — say only that, without guessing why.
+  if (!result) {
+    return "YouCoded couldn't confirm your message was sent — check the conversation before sending it again.";
+  }
+  return 'The message could not be sent.';
 }
 
 const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId, disabled, minimal, compact, view, onOpenDrawer, onCloseDrawer, onDrawerSearch, onResumeCommand, getUsageSnapshot, onOpenPreferences, onToast, onSendBlocked, getSessionState, onOpenModelPicker, onModelSwitchCommand, initialInput, provider }, ref) {
@@ -641,8 +651,10 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
           // nothing and silently vanish the draft, so a rejection is routed
           // through the EXACT same failure branch as a failed/undefined ack
           // (same toast copy, same guarded draft restore) rather than treated
-          // as a distinct case — from the user's point of view a refused send
-          // and a lost send look identical: their message didn't go anywhere.
+          // as a distinct case. NOTE (error inventory 2026-09-10, false message 5):
+          // that a rejected send "didn't go anywhere" is NOT known — over remote
+          // access a rejection is the timeout and the send may still have run —
+          // so sendFailureCopy words an unanswered send as "couldn't confirm".
           let result: NativeSendResult | undefined;
           try {
             result = await sendChatMessage('native', sessionId, outgoing.ptyText, files.map((f) => f.path));
@@ -1057,6 +1069,15 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
                 // of those into a stop — a button that says Send and doesn't.
                 if (voiceListening) { void voice.stop(); return; }
                 if (minimal && sessionId) {
+                  // WHY ask canSend first (error inventory 2026-09-10, false message 6):
+                  // this branch sent and cleared unconditionally. Over remote access
+                  // session:input is refused while the connection is down, so the box
+                  // emptied as if the line had gone through and the words were lost.
+                  // Same check, same sentence as the composer's own send path.
+                  if (window.claude.session.canSend?.() === false) {
+                    onToast?.('Not connected — your message is still here. Send it again when you reconnect.');
+                    return;
+                  }
                   // Terminal mode: send text + Enter directly to PTY.
                   // pty-worker auto-splits text+\r with a 600ms gap so Ink
                   // sees Enter as a distinct keystroke after paste commits.

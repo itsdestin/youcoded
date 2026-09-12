@@ -8,7 +8,7 @@
 // panel instead — the behaviour those two would otherwise have silently
 // stopped covering when the panel shipped.
 import { describe, it, expect, vi, beforeAll, afterEach } from 'vitest';
-import { render, screen, fireEvent, cleanup, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup, waitFor, act } from '@testing-library/react';
 import '@testing-library/jest-dom/vitest';
 import ResumeBrowser from '../src/renderer/components/ResumeBrowser';
 
@@ -111,6 +111,58 @@ describe('Resume browser — the preview panel', () => {
     await waitFor(() => expect(container.querySelector('.switch-arrival')).not.toBeNull());
     // …and the bubbles are already there when it starts, which is the point.
     expect(container.querySelector('.switch-arrival')!.textContent).toContain('why did the ask time out');
+  });
+
+  // Destin, 2026-09-11: "when scrolling up through a conversation preview in
+  // resume browser, the top card should slide up and hide. it should slide
+  // back down when i scroll down". jsdom lays nothing out, so the scroller's
+  // position and height are driven by hand.
+  const pickAndGrabScroller = async () => {
+    const { container } = open();
+    fireEvent.click(await screen.findByText('Permission ask timeout'));
+    await waitFor(() => expect(container.querySelector('.preview-header-slide')).not.toBeNull());
+    const strip = container.querySelector('.preview-header-slide')!;
+    const scroller = container.querySelector('[data-preview-id] .overflow-y-auto') as HTMLElement;
+    const pos = { top: 1000, height: 3000 };
+    Object.defineProperty(scroller, 'scrollTop', { configurable: true, get: () => pos.top });
+    Object.defineProperty(scroller, 'scrollHeight', { configurable: true, get: () => pos.height });
+    const scrollTo = (top: number, height = pos.height) => { pos.top = top; pos.height = height; fireEvent.scroll(scroller); };
+    scrollTo(1000); // the first scroll only takes a bearing
+    return { strip, scrollTo };
+  };
+
+  it('tucks the header card away while you scroll up, and brings it back as you scroll down', async () => {
+    setViewport(false);
+    mockClaude([row()]);
+    const { strip, scrollTo } = await pickAndGrabScroller();
+    expect(strip).not.toHaveAttribute('data-tucked');
+    scrollTo(900);
+    expect(strip).toHaveAttribute('data-tucked');
+    scrollTo(903); // a nudge under the threshold moves nothing
+    expect(strip).toHaveAttribute('data-tucked');
+    scrollTo(1000);
+    expect(strip).not.toHaveAttribute('data-tucked');
+  });
+
+  it('keeps the card tucked when Load older pushes the conversation down without anyone scrolling', async () => {
+    setViewport(false);
+    mockClaude([row()]);
+    const { strip, scrollTo } = await pickAndGrabScroller();
+    scrollTo(0);
+    expect(strip).toHaveAttribute('data-tucked');
+    // Older messages land above: taller content, position pushed down to match.
+    scrollTo(2000, 5000);
+    expect(strip).toHaveAttribute('data-tucked');
+  });
+
+  it('brings a tucked card back when keyboard focus lands on it', async () => {
+    setViewport(false);
+    mockClaude([row()]);
+    const { strip, scrollTo } = await pickAndGrabScroller();
+    scrollTo(0);
+    expect(strip).toHaveAttribute('data-tucked');
+    act(() => { (strip.querySelector('button') as HTMLButtonElement).focus(); });
+    expect(strip).not.toHaveAttribute('data-tucked');
   });
 
   it('reads the conversation ONCE per row, not on every keystroke in the search box', async () => {

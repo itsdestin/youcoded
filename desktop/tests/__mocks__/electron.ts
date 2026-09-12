@@ -74,8 +74,15 @@ export const safeStorage = {
   },
 };
 
+// crash-diagnostics.ts starts this at import time; without a stub every test
+// that pulls in main.ts throws before reaching its own assertions.
+export const crashReporter = {
+  start: vi.fn(),
+};
+
 export default {
   app,
+  crashReporter,
   protocol,
   ipcMain,
   BrowserWindow,

@@ -736,7 +736,7 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
       expect(sent[0].payload).toEqual({ tags: ['tag_n'], note: 'from peer', supported: true });
     });
 
-    it('falls back to an empty-but-supported result when no Conversation Store is up', async () => {
+    it('reports the tags and note as unreadable when no Conversation Store is up', async () => {
       const { RemoteServer } = await import('../src/main/remote-server');
       const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
       mockConversationsService.getConversationStore.mockReturnValue(null);
@@ -745,7 +745,10 @@ describe('RemoteServer session meta + browse (Task 5 M2 wiring)', () => {
         type: 'session:get-meta', id: 'r3', payload: { sessionId: 'x' },
       });
 
-      expect(sent[0].payload).toEqual({ tags: [], note: '', supported: true });
+      // Was `{ tags: [], note: '', supported: true }` — identical to a conversation with no
+      // note, which the close prompt showed as "No note" and then overwrote (error inventory
+      // 2026-09-10, false message 12). With no store the tags and note are unknown, not none.
+      expect(sent[0].payload).toEqual({ tags: [], note: '', supported: true, unreadable: expect.any(String) });
     });
   });
 

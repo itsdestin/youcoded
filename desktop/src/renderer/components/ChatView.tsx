@@ -77,6 +77,8 @@ interface Props {
   /** Plan-limit card's Switch Providers button (Sign in with ChatGPT): opens
    *  the model picker. The banner shows it only for a plan-limit error. */
   onSwitchProviders?: () => void;
+  /** Plan-limit card's Upgrade plan button: opens OpenAI's upgrade page. */
+  onUpgradePlan?: () => void;
   // Task 12 (docked strip, replaces Task 11's UserMessage-bubble affordances):
   // App owns the native:queue-remove invoke, the QUEUED_MESSAGE_REMOVED
   // dispatch, the toast state, and the input-bar ref the Edit flow refills —
@@ -96,7 +98,7 @@ interface Props {
   onRefreshConversation?: () => void;
 }
 
-export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
+export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
   const dispatch = useChatDispatch();
 
@@ -1333,6 +1335,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                     // "Open Settings" button that deep-links to Model Providers.
                     onOpenProviderSettings={onOpenProviderSettings}
                     onSwitchProviders={onSwitchProviders}
+                    onUpgradePlan={onUpgradePlan}
                     // Stalled card only. Retry re-runs the PARKED STEP — it is
                     // deliberately NOT the native-send helper the old TODO here
                     // pointed at, which sends a new user message and would fork

@@ -68,4 +68,44 @@ describe('a single connection cannot be used as an unlimited guessing channel', 
     expect(closes).toHaveLength(1);
     expect(socket.listenerCount('message')).toBe(0);
   });
+
+  it('refuses new sockets once too many sit unauthenticated (2026-09-10 security review, #5)', async () => {
+    const { EventEmitter } = await import('node:events');
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const sessionManager: any = new EventEmitter();
+    Object.assign(sessionManager, { listSessions: () => [] });
+    const server: any = new RemoteServer(sessionManager, new EventEmitter() as any, {
+      enabled: true, port: 9900, passwordHash: 'x', toSafeObject: () => ({}),
+    } as any);
+
+    const makeSocket = () => {
+      const s: any = new EventEmitter();
+      Object.assign(s, {
+        readyState: 1, send: () => {}, closes: [] as number[],
+        close: (code: number) => s.closes.push(code),
+        off: EventEmitter.prototype.off.bind(s),
+      });
+      return s;
+    };
+
+    // Open 64 sockets that never authenticate — each holds a pre-auth slot.
+    const held = [];
+    for (let i = 0; i < 64; i++) {
+      const s = makeSocket();
+      server.handleConnection(s, { socket: { remoteAddress: '127.0.0.1' } });
+      held.push(s);
+    }
+    expect(held.every((s) => s.closes.length === 0)).toBe(true);
+
+    // The 65th is refused immediately with 4009, without consuming a slot.
+    const overflow = makeSocket();
+    server.handleConnection(overflow, { socket: { remoteAddress: '127.0.0.1' } });
+    expect(overflow.closes).toEqual([4009]);
+
+    // When one held socket closes, a slot frees and a new socket is accepted again.
+    held[0].emit('close');
+    const afterFree = makeSocket();
+    server.handleConnection(afterFree, { socket: { remoteAddress: '127.0.0.1' } });
+    expect(afterFree.closes).toHaveLength(0);
+  });
 });

@@ -9,14 +9,45 @@ import type { UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
 import { Button, Dialog, LoadingState, ProgressBar } from './ui';
+import { stripInvokeWrapper } from '../utils/ipc-error';
 
 // Error codes where a fresh download might succeed (transient or file-level).
 // The complement (dmg-corrupt, appimage-not-writable, unsupported-platform,
-// remote-unsupported, url-rejected, spawn-failed, busy) won't benefit from retry —
-// the user's best move is the browser fallback link.
-const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing']);
+// remote-unsupported, url-rejected, spawn-failed, busy, signature-invalid) won't
+// benefit from retry — the user's best move is the browser fallback link.
+// 'verify-failed' IS retriable: a corrupted download can succeed next time (the
+// main process deletes the bad file so Retry re-downloads it). 2026-09-10 #7.
+const RETRIABLE_ERROR_CODES = new Set(['network-failed', 'disk-full', 'file-missing', 'verify-failed']);
 function isRetriableErrorCode(code: string): boolean {
   return RETRIABLE_ERROR_CODES.has(code);
+}
+
+/**
+ * The installer's code from a rejected download. Main throws UpdateInstallError, whose
+ * message is `<code>: <detail>` (update-installer.ts).
+ *
+ * WHY strip the wrapper first (error inventory 2026-09-10, false message 17): on desktop
+ * the rejection arrives as "Error invoking remote method 'update:download': <code>: …",
+ * so the text before the first colon was "Error invoking remote method 'update". No code
+ * matched, every download failure lost its Retry, and the button called it a launch
+ * failure. Only the wrapper is removed — not plainMessage's full rewrite, which turns
+ * "remote-unsupported: …" into a sentence and would hide that code.
+ * Text with no code-shaped prefix (a remote timeout, say) keeps the old fallback of
+ * network-failed: a fresh download is the one attempt that cannot hurt.
+ */
+function downloadErrorCode(e: unknown): string {
+  const raw = (e as { message?: unknown } | null | undefined)?.message;
+  const match = /^([a-z][a-z-]*)(?::|$)/.exec(stripInvokeWrapper(typeof raw === 'string' ? raw : ''));
+  return match ? match[1] : 'network-failed';
+}
+
+// Codes with their own message. Everything else falls back to 'Launch failed'.
+// 2026-09-10 security review #7: verification failures get honest, specific copy
+// instead of the generic launch error.
+function updateErrorMessage(code: string): string {
+  if (code === 'signature-invalid') return "This update couldn't be verified, so it wasn't installed. Your current version still works.";
+  if (code === 'verify-failed') return 'The download looked corrupted — Retry';
+  return 'Launch failed';
 }
 
 interface UpdateStatus {
@@ -75,7 +106,10 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     | { kind: 'downloading'; jobId: string | null; percent: number }
     | { kind: 'ready'; jobId: string; filePath: string }
     | { kind: 'launching' }
-    | { kind: 'error'; code: string };
+    // `stage` is which step failed. WHY (error inventory 2026-09-10, false message 17):
+    // the label used to be chosen by retriability alone, so every failure retry could
+    // not fix — including a refused or busy DOWNLOAD — read "Launch failed".
+    | { kind: 'error'; code: string; stage: 'download' | 'launch' };
 
   const [installState, setInstallState] = useState<InstallState>({ kind: 'idle' });
   // Ref rather than state because the progress handler fires asynchronously and
@@ -146,7 +180,7 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
     setInstallState({ kind: 'launching' });
     const result: UpdateLaunchResult = await window.claude.update.launch(jobId, filePath);
     if (!result.success) {
-      setInstallState({ kind: 'error', code: result.error });
+      setInstallState({ kind: 'error', code: result.error, stage: 'launch' });
       return;
     }
     if ('fallback' in result && result.fallback === 'browser') {
@@ -174,10 +208,9 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
       if (abortedRef.current) return;
       activeJobIdRef.current = result.jobId;
       setInstallState({ kind: 'ready', jobId: result.jobId, filePath: result.filePath });
-    } catch (e: any) {
+    } catch (e: unknown) {
       if (abortedRef.current) return;
-      const code = typeof e?.message === 'string' ? (e.message.split(':')[0] || 'network-failed') : 'network-failed';
-      setInstallState({ kind: 'error', code });
+      setInstallState({ kind: 'error', code: downloadErrorCode(e), stage: 'download' });
     }
   }, [installState, runLaunch]);
 
@@ -288,23 +321,38 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
               {installState.kind === 'ready' && 'Launch Installer'}
               {installState.kind === 'launching' && 'Launching…'}
               {installState.kind === 'error' && (
-                // Retriable errors (network/disk/file-missing) can be fixed by
-                // a fresh download; the rest (dmg-corrupt, appimage-not-writable,
-                // unsupported-platform, remote-unsupported) can't — the user's
-                // best option is the browser fallback link below.
-                isRetriableErrorCode(installState.code)
-                  ? 'Download failed — Retry'
-                  : 'Launch failed'
+                // A blocked/unverifiable update and a corrupt download read differently
+                // (security review #7, 2026-09-10). Every other failure names the step
+                // that failed. WHY the stage picks the WORD (error inventory 2026-09-10,
+                // false message 17): retriability alone chose between "Download failed —
+                // Retry" and "Launch failed", so a download that retry could not fix
+                // (busy, url-rejected) was reported as a launch that never happened.
+                installState.code === 'signature-invalid' ? 'Update blocked'
+                  : installState.code === 'verify-failed' ? 'Retry download'
+                  : installState.stage === 'launch'
+                    ? (isRetriableErrorCode(installState.code) ? 'Launch failed — Retry' : 'Launch failed')
+                    : (isRetriableErrorCode(installState.code) ? 'Download failed — Retry' : 'Download failed')
               )}
             </Button>
-            {installState.kind === 'error' && (
-              <div className="text-xs text-fg-dim mt-2">
-                <button
-                  onClick={handleFallbackBrowser}
-                  className="underline hover:text-fg"
-                >
-                  Open in browser instead
-                </button>
+            {/* No browser fallback for a VERIFICATION failure: handleFallbackBrowser
+                opens download_url — the raw installer binary — which for a
+                verify-failed (sha256/size mismatch, i.e. the installer was swapped
+                after signing) is the very tampered file the gate just refused.
+                Offering it there would reopen the attack outside the app. Retry
+                (which re-downloads and re-verifies) is the only safe move; a
+                signature-invalid shows an explanation instead. 2026-09-10 #7 review. */}
+            {installState.kind === 'error' && installState.code !== 'verify-failed' && (
+              <div className="text-xs mt-2">
+                {installState.code === 'signature-invalid' ? (
+                  <p className="text-amber-400">{updateErrorMessage('signature-invalid')}</p>
+                ) : (
+                  <button
+                    onClick={handleFallbackBrowser}
+                    className="text-fg-dim underline hover:text-fg"
+                  >
+                    Open in browser instead
+                  </button>
+                )}
               </div>
             )}
           </footer>

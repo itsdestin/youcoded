@@ -294,6 +294,63 @@ interface Props {
   defaultSkipPermissions?: boolean;
 }
 
+// How many previewed conversations stay built (the one on screen, recent ones,
+// and one being warmed), and how long the pointer must rest on a row before
+// its conversation starts building — long enough that sweeping across the list
+// warms nothing, short enough to finish before a deliberate click.
+const PANES_KEPT = 4;
+const WARM_AFTER_MS = 150;
+// How far the previewed conversation must scroll one way before the header card
+// tucks away or comes back. Small enough that a short flick counts, big enough
+// that touchpad jitter at rest moves nothing.
+const TUCK_MIN_PX = 6;
+
+type RowActions = {
+  select: (s: PastSession) => void;
+  toggleFlag: (sessionId: string, flag: FlagName, next: boolean) => unknown;
+  warmSoon: (s: PastSession, e: React.PointerEvent) => void;
+  warmNow: (s: PastSession) => void;
+  cancelWarm: () => void;
+};
+
+// A list card that re-renders only when something it draws changes. A click
+// here used to re-render every revealed card (~50) five or six times — 13–90 ms
+// a commit (measured 2026-09-11) to move one highlight. `deps` is the complete
+// list of what a CLOSED card reads from the browser's state (see rowDeps); its
+// handlers go through a ref (rowActions), so skipping a render can never leave
+// a card calling an old render's function. The same idea as SkillCard's memo.
+const RowMemo = React.memo(
+  function RowMemo({ render }: { render: () => React.ReactNode; deps: readonly unknown[] }) {
+    return <>{render()}</>;
+  },
+  (a, b) => a.deps.length === b.deps.length && a.deps.every((d, i) => Object.is(d, b.deps[i])),
+);
+
+// One previewed conversation, kept built. A hidden layer uses `visibility`, not
+// unmounting or display:none — the choice ChatView makes for background
+// sessions (ChatView.tsx): its bubbles stay formatted and laid out, so bringing
+// it on screen is a paint, and hidden text is out of tab order and
+// find-in-page. Addressed by primitives so a keystroke in the search box
+// re-renders no layer — and so re-reads nothing.
+const PreviewLayer = React.memo(function PreviewLayer({ id, provider, title, projectSlug, visible, onSettled, onGone }: {
+  id: string;
+  provider: ChatsearchProvider;
+  title: string;
+  projectSlug?: string;
+  visible: boolean;
+  onSettled: (id: string) => void;
+  onGone: (id: string) => void;
+}) {
+  useEffect(() => () => onGone(id), [id, onGone]);
+  return (
+    // data-preview-id: lets the header card's scroll handler tell the layer on
+    // screen from the hidden ones (see onPreviewScroll).
+    <div className="absolute inset-0 flex flex-col" data-preview-id={id} style={{ visibility: visible ? 'visible' : 'hidden' }}>
+      <SessionPreviewPane provider={provider} id={id} title={title} projectSlug={projectSlug} onSettled={onSettled} />
+    </div>
+  );
+});
+
 export default function ResumeBrowser({ open, onClose, onResume, defaultModel, defaultSkipPermissions }: Props) {
   // Live tag registry — drives the Tag Picker, chips, and custom-tag filter.
   const registry = useTagRegistry();
@@ -344,8 +401,9 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   //
   // So the sheet renders `shownId`, which LAGS `previewId` until the read
   // settles. The click's acknowledgement is the row lighting up in the list,
-  // which is instant; the pane holds the previous conversation meanwhile
-  // (holdWhileLoading) rather than blanking under a name that already changed.
+  // which is instant; the previous conversation stays on screen meanwhile,
+  // because the new one is built in its own hidden layer (paneIds, below)
+  // rather than in place of it.
   //
   // `staged` is the frame in between: the new content is committed and laid
   // out while the sheet is still transparent, so the expensive paint happens
@@ -353,10 +411,110 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // paint after the animation has begun, which is the third beat above.
   const [shownId, setShownId] = useState<string | null>(null);
   const [arrival, setArrival] = useState<'staged' | 'run' | null>(null);
-  const onPreviewSettled = useCallback((id: string) => {
+  // ── The header card tucks away while you read back (Destin, 2026-09-11) ──
+  // A preview opens on the NEWEST message, so reading it means scrolling UP,
+  // and the floating card covered the top of what you were reading. Scrolling
+  // up slides it out through the top of the sheet; scrolling down brings it
+  // back. `tuckMark` is the position the last decision was made from, so slow
+  // moves add up against it instead of each being judged alone.
+  const [headerTucked, setHeaderTucked] = useState(false);
+  const tuckMark = useRef<{ el: EventTarget | null; top: number; height: number }>({ el: null, top: 0, height: 0 });
+  // ── Conversations kept built ────────────────────────────────────────────
+  // A click used to read and format its conversation from scratch every time,
+  // even one previewed a moment ago: 0.6–1 s from click to settled on large
+  // conversations (measured 2026-09-11). The main chat switches in half a
+  // millisecond because every open conversation stays built and merely hidden;
+  // this keeps the last few previewed the same way, plus the one the pointer is
+  // resting on or pressing (warmPane), so most clicks only reveal a layer that
+  // is already there.
+  //
+  // `paneIds` is in INSERTION order and never reordered — React moving a
+  // layer's DOM node would reset its scroll position. Recency is paneUsedAt.
+  const [paneIds, setPaneIds] = useState<string[]>([]);
+  const paneUsedAt = useRef(new Map<string, number>());
+  // Mounted layers whose first read has finished. A layer that unmounts drops
+  // out (onPreviewGone), so a remounted one is waited on again, not revealed
+  // over its loading line.
+  const settledRef = useRef(new Set<string>());
+  const previewIdRef = useRef<string | null>(null);
+  previewIdRef.current = previewId;
+  const shownIdRef = useRef<string | null>(null);
+  shownIdRef.current = shownId;
+  const reveal = useCallback((id: string) => {
     setShownId(id);
     setArrival('staged');
+    // A newly picked conversation always arrives with its card showing — it
+    // is the only thing that says which conversation this is.
+    setHeaderTucked(false);
+    tuckMark.current.el = null;
   }, []);
+  const warmPane = useCallback((id: string) => {
+    paneUsedAt.current.set(id, performance.now());
+    setPaneIds((prev) => {
+      if (prev.includes(id)) return prev;
+      const next = [...prev, id];
+      // Least recently used goes first — never the conversation on screen,
+      // the one just picked, or the one being warmed.
+      const pinned = new Set([id, previewIdRef.current, shownIdRef.current]);
+      while (next.length > PANES_KEPT) {
+        const victims = next.filter((p) => !pinned.has(p));
+        if (!victims.length) break;
+        const oldest = victims.reduce((a, b) => ((paneUsedAt.current.get(a) ?? 0) <= (paneUsedAt.current.get(b) ?? 0) ? a : b));
+        next.splice(next.indexOf(oldest), 1);
+      }
+      return next;
+    });
+  }, []);
+  const onPreviewSettled = useCallback((id: string) => {
+    settledRef.current.add(id);
+    // A layer warmed by a resting pointer settles silently; only the
+    // conversation the user actually picked is brought on screen.
+    if (id === previewIdRef.current && id !== shownIdRef.current) reveal(id);
+  }, [reveal]);
+  const onPreviewGone = useCallback((id: string) => {
+    settledRef.current.delete(id);
+  }, []);
+  // Moves the header card (headerTucked, above). Caught on the layers' wrapper
+  // in the CAPTURE phase: scroll does not bubble, and the element that scrolls
+  // is inside SessionPreviewPane.
+  const onPreviewScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.target;
+    if (!(el instanceof HTMLElement)) return;
+    // Only the conversation on screen counts. A hidden layer jumps itself to
+    // its newest message when its read lands, and that is not the reader moving.
+    if (el.closest('[data-preview-id]')?.getAttribute('data-preview-id') !== shownIdRef.current) return;
+    const mark = tuckMark.current;
+    // The content changed height under the reader: Load older adds messages
+    // ABOVE, and the browser pushes the position down to keep the same message
+    // in view. Nobody scrolled, so take a new bearing and decide nothing —
+    // otherwise pressing Load older would drop the card back over the top.
+    if (mark.el !== el || mark.height !== el.scrollHeight) {
+      tuckMark.current = { el, top: el.scrollTop, height: el.scrollHeight };
+      return;
+    }
+    const moved = el.scrollTop - mark.top;
+    if (Math.abs(moved) < TUCK_MIN_PX) return;
+    mark.top = el.scrollTop;
+    // Its tags/note sheet is open: leave it where it is rather than slide the
+    // thing being edited away.
+    if (cloneOrganizeId) return;
+    setHeaderTucked(moved < 0);
+  };
+  // Closing the browser unmounts every layer. Keep only the one that was on
+  // screen, so reopening re-reads one conversation rather than four. The card
+  // comes back with it rather than reopening tucked away.
+  useEffect(() => {
+    if (!open) {
+      setPaneIds((prev) => prev.filter((id) => id === shownIdRef.current));
+      setHeaderTucked(false);
+      tuckMark.current.el = null;
+    }
+  }, [open]);
+  // Cards are memoised (RowMemo), so they reach this render's handlers through
+  // a ref that is reassigned every render, never through a captured closure.
+  const rowActions = useRef<RowActions | null>(null);
+  const warmTimer = useRef<number | null>(null);
+  useEffect(() => () => { if (warmTimer.current !== null) clearTimeout(warmTimer.current); }, []);
   useEffect(() => {
     if (arrival !== 'staged') return;
     // Two frames: the first lets React's commit lay the new bubbles out, the
@@ -413,7 +571,16 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
   // mount per expansion is what actually resets ITS internal state; this just
   // keeps the Resume-button gate and the value threaded through onResume in
   // sync with that same lifecycle.
-  const [nativeResumeBinding, setNativeResumeBinding] = useState<ModelBinding | null>(null);
+  //
+  // OWNED by the conversation it was picked for. In the preview panel the reset
+  // lands one render AFTER the next conversation's picker has mounted — and that
+  // picker only pre-fills when it sees no value. Unowned, it saw the PREVIOUS
+  // conversation's model, skipped its own pre-fill, and then the reset left it
+  // on "Choose a model…" (Destin, 2026-09-11). Read it only through
+  // nativeBindingFor, which never hands one conversation another's pick.
+  const [nativeResumeBinding, setNativeResumeBinding] = useState<{ sessionId: string; binding: ModelBinding } | null>(null);
+  const nativeBindingFor = (s: PastSession): ModelBinding | null =>
+    (nativeResumeBinding && nativeResumeBinding.sessionId === s.sessionId ? nativeResumeBinding.binding : null);
   // Launch the resumed session in a new peer window (multi-window only).
   const [resumeLaunchInNewWindow, setResumeLaunchInNewWindow] = useState(false);
   // Sesion id currently resuming — keeps its Resume button busy + the browser open
@@ -623,35 +790,15 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     return applyFilters(sessions, state);
   }, [sessions, search, showComplete, stickyComplete, selectedProjects, selectedTagIds, registry.tags]);
 
-  // Two different rows, deliberately: `selectedSession` is what the user just
-  // clicked (it drives the list's highlight and the read); `previewSession` is
-  // what the sheet is currently showing, which lags it until that read settles.
-  const selectedSession = previewOn && previewId
-    ? filtered.find((r) => r.sessionId === previewId) ?? null
-    : null;
+  // What the sheet is currently showing — it lags the clicked row (previewId,
+  // which drives the list's highlight) until that conversation has been read.
+  // Looked up in `filtered`, so a search that hides it empties the sheet.
   const previewSession = previewOn && shownId
     ? filtered.find((r) => r.sessionId === shownId) ?? null
     : null;
-
-  // PERF: the transcript pane is memoised on the three values that actually
-  // address it. Without this, EVERY state change in this component — a
-  // keystroke in the search box, a filter pill, a hover — re-rendered the pane
-  // and with it one MarkdownContent per message. MarkdownContent is React.memo'd
-  // on its own content, so each one bailed out, but React still walked the whole
-  // subtree on every keypress. Nothing below the memo depends on this
-  // component's state, so there is no correctness cost.
-  const previewPane = useMemo(
-    () => (selectedSession ? (
-      <SessionPreviewPane
-        provider={(selectedSession.provider === 'native' ? 'native' : 'claude') as ChatsearchProvider}
-        id={selectedSession.sessionId}
-        title={selectedSession.name}
-        onSettled={onPreviewSettled}
-        holdWhileLoading
-      />
-    ) : null),
-    [selectedSession?.provider, selectedSession?.sessionId, selectedSession?.name, onPreviewSettled],
-  );
+  // The layers look their rows up in ALL sessions, not `filtered`: a search
+  // that hides a row must not throw away its built conversation.
+  const sessionsById = useMemo(() => new Map(sessions.map((r) => [r.sessionId, r])), [sessions]);
 
   // Group by project path ONLY when the user has narrowed via the Projects
   // pill — the default view is pure chronological (each row carries its own
@@ -960,6 +1107,11 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       setPreviewSheetOpen(false);
       setCloneOrganizeId(null);
       setOrganizeId(null);
+      warmPane(s.sessionId);
+      // Already built — warmed by a resting pointer, or previewed recently:
+      // there is nothing to wait for, so it arrives on this click. Otherwise
+      // onPreviewSettled brings it on screen when its read finishes.
+      if (settledRef.current.has(s.sessionId) && shownIdRef.current !== s.sessionId) reveal(s.sessionId);
       // NOT the resume state — the action card still belongs to the
       // conversation on screen until this one has loaded. It is reset in the
       // settle effect below, with the row the card is about to show.
@@ -981,21 +1133,51 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     }
   };
 
+  const clearWarmTimer = () => {
+    if (warmTimer.current !== null) { clearTimeout(warmTimer.current); warmTimer.current = null; }
+  };
+  rowActions.current = {
+    select: handleSelectSession,
+    toggleFlag,
+    // Resting the pointer on a row starts building its conversation, so the
+    // click that follows finds it ready. Touch has no hover — a finger warms on
+    // press instead (warmNow), which still starts the read before the click.
+    warmSoon: (s, e) => {
+      if (!previewOn || s.notSyncedYet || e.pointerType === 'touch') return;
+      clearWarmTimer();
+      warmTimer.current = window.setTimeout(() => { warmTimer.current = null; warmPane(s.sessionId); }, WARM_AFTER_MS);
+    },
+    warmNow: (s) => {
+      if (!previewOn || s.notSyncedYet) return;
+      clearWarmTimer();
+      warmPane(s.sessionId);
+    },
+    cancelWarm: clearWarmTimer,
+  };
+  // Everything a CLOSED list card reads from this component, for RowMemo.
+  // An OPEN card — its tag sheet or resume options showing — reads a great deal
+  // more, so it gets a value that differs every render and is never skipped.
+  // Adding a read of component state to renderSessionRow means adding it here.
+  const renderStamp = {};
+  const rowDeps = (s: PastSession, showPath: boolean): readonly unknown[] => {
+    const opened = organizeId === s.sessionId || expandedId === s.sessionId;
+    return [s, showPath, previewOn, previewOn && previewId === s.sessionId, registry.byId, !!namingApi(), opened ? renderStamp : null];
+  };
+
   // Bridge the unified <ModelPicker> onto the two pieces of resume state that
   // already existed: `resumeModel` (a Claude alias) and `nativeResumeBinding`.
   // Which one a row uses is decided by its own provider, so the picker is
   // scoped and only one can ever be in play.
   const resumeChoice = (s: PastSession): ModelChoice | null => {
     if (s.provider === 'native') {
-      return nativeResumeBinding
-        ? { runtime: 'native', providerId: nativeResumeBinding.providerId, modelId: nativeResumeBinding.modelId }
-        : null;
+      const b = nativeBindingFor(s);
+      return b ? { runtime: 'native', providerId: b.providerId, modelId: b.modelId } : null;
     }
     return resumeModel ? { runtime: 'claude', alias: resumeModel } : null;
   };
 
-  const applyResumeChoice = (_s: PastSession, c: ModelChoice) => {
-    if (c.runtime === 'native') setNativeResumeBinding({ providerId: c.providerId, modelId: c.modelId });
+  const applyResumeChoice = (s: PastSession, c: ModelChoice) => {
+    if (c.runtime === 'native') setNativeResumeBinding({ sessionId: s.sessionId, binding: { providerId: c.providerId, modelId: c.modelId } });
     else setResumeModel(c.alias);
   };
 
@@ -1013,7 +1195,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
     // browser open (App has toasted the honest reason) so the user can retry or
     // pick another row, rather than closing over a silent failure.
     setResumingId(s.sessionId);
-    const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow, s.provider, nativeResumeBinding ?? undefined);
+    const result = await onResume(s.sessionId, s.projectSlug, s.projectPath, resumeModel, resumeDangerous, resumeLaunchInNewWindow, s.provider, nativeBindingFor(s) ?? undefined);
     setResumingId(null);
     if (result !== false) onClose(); // undefined (non-awaiting wiring) or true → close
   };
@@ -1088,6 +1270,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         <div onClick={(e) => e.stopPropagation()}>
           <label className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-1 block">Model</label>
           <ModelPicker
+            // One picker per conversation. The preview's action card stays
+            // mounted while you move between conversations, and the picker fills
+            // in `prefill` only once per mount — so without this key only the
+            // FIRST conversation previewed got its last-used model, and every
+            // later one opened on "Choose a model…" (Destin, 2026-09-11).
+            key={s.sessionId}
             value={resumeChoice(s)}
             onSelect={(c) => applyResumeChoice(s, c)}
             includeClaude={s.provider !== 'native'}
@@ -1150,7 +1338,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           // binding exists (manual pick or a prefill auto-select). Never lets
           // resume proceed with no binding to launch — that would be exactly
           // the auto-launch Destin's ruling forbids.
-          const nativeNeedsPick = s.provider === 'native' && !nativeResumeBinding;
+          const nativeNeedsPick = s.provider === 'native' && !nativeBindingFor(s);
           const busy = resumingId === s.sessionId; // create in flight — keep the button busy (ack-gap)
           return (
             /* Filled danger for skip-permissions — same call as SessionStrip's
@@ -1230,6 +1418,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
           The card wraps BOTH the trigger and the expanded panel so an open row
           reads as one object instead of a row with a detached box under it. */}
       <div
+        // Start building this conversation before the click lands (warmSoon /
+        // warmNow). Not on the header clone: its conversation is already shown.
+        {...(clone ? {} : {
+          onPointerEnter: (e: React.PointerEvent) => rowActions.current?.warmSoon(s, e),
+          onPointerLeave: () => rowActions.current?.cancelWarm(),
+          onPointerDown: () => rowActions.current?.warmNow(s),
+        })}
         // `relative` is load-bearing: the icon cluster is positioned against
         // this card, not the panel. The icon buttons are SIBLINGS of the expand
         // trigger, never nested — a button inside a button is invalid HTML and
@@ -1241,7 +1436,20 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
       {/* WHY: match SessionDrawer's filename rename classes and Ic pencil, not
           the organize icons. Keep the viewer unchanged and retain this dialog's
           separate keyboard handling. R5-1 keeps both edit cues visible even at rest. */}
-      <div className={`flex items-center gap-1 px-3 pt-2 ${ICON_GUTTER}`}>
+      <div
+        className={`flex items-center gap-1 px-3 pt-2 ${ICON_GUTTER}`}
+        // The empty space between the name and the tag/complete icons was a
+        // dead zone: the name opens Rename, the icons float over the corner, and
+        // only the lower half of the card was the select button. Clicking there
+        // did nothing (Destin, 2026-09-11). Clicks INSIDE a button are left to
+        // that button — without the check the no-rename fallback button would
+        // select twice, which on a narrow screen expands the card and
+        // immediately collapses it again.
+        onClick={(e) => {
+          if (inert || (e.target as HTMLElement).closest('button')) return;
+          rowActions.current?.select(s);
+        }}
+      >
         {namingApi() ? <Button variant="ghost" size="sm"
           // -ml-2 cancels the button's own px-2 so the NAME's first letter lands
           // on the same left edge as the metadata line below it, while the hover
@@ -1263,7 +1471,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
             </svg>
           </span>
         </Button> : <button type="button" className="text-sm truncate text-left min-w-0 focus-visible:ring-2 focus-visible:ring-accent"
-          onClick={() => { if (!inert) handleSelectSession(s); }} aria-disabled={inert || undefined}>
+          onClick={() => { if (!inert) rowActions.current?.select(s); }} aria-disabled={inert || undefined}>
           {s.name}
         </button>}
       </div>
@@ -1272,7 +1480,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         // this device (synced in from elsewhere) OR whose transcript hasn't
         // synced here yet — either way there's nothing to resume into, so the
         // row shows a plain-words note instead of expanding.
-        onClick={() => { if (!inert) handleSelectSession(s); }}
+        onClick={() => { if (!inert) rowActions.current?.select(s); }}
         aria-disabled={inert || undefined}
         aria-expanded={inert ? undefined : isExpanded}
         // WHY an explicit label: the session name used to be this button's only
@@ -1438,7 +1646,7 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         return (
           <button
             type="button"
-            onClick={(e) => { e.stopPropagation(); toggleFlag(s.sessionId, 'complete', !done); }}
+            onClick={(e) => { e.stopPropagation(); rowActions.current?.toggleFlag(s.sessionId, 'complete', !done); }}
             aria-pressed={done}
             title={done ? 'Marked complete — hidden unless Show Complete is on. Click to undo.' : 'Mark this session complete?'}
             aria-label={done ? `Mark ${s.name} not complete` : `Mark ${s.name} complete`}
@@ -1607,7 +1815,12 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
               className="layer-surface w-52 max-w-[calc(100vw-1rem)] overflow-hidden"
               style={{ position: 'fixed', top: tagsDropdownPos.top, left: tagsDropdownPos.left, zIndex: 60 }}
             >
-              {liveTags.length === 0 ? (
+              {/* A failed tag read is not "No tags yet" (code review 2026-09-11, F5). */}
+              {registry.error && registry.tags.length === 0 ? (
+                <div className="px-3 py-3">
+                  <ErrorState variant="inline" message={`Couldn't load your tags: ${registry.error}`} onRetry={registry.reload} />
+                </div>
+              ) : liveTags.length === 0 ? (
                 <div className="px-3 py-3">
                   <EmptyState variant="inline" message="No tags yet" />
                 </div>
@@ -1825,7 +2038,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                           {item.label}
                         </span>
                       </div>
-                    ) : renderSessionRow(item.session, item.showPath)
+                    ) : (
+                      <RowMemo
+                        key={item.session.sessionId}
+                        render={() => renderSessionRow(item.session, item.showPath)}
+                        deps={rowDeps(item.session, item.showPath)}
+                      />
+                    )
                   ))}
                   {/* Top-up trigger. Rendered only while rows remain, so the
                       observer effect above tears down once the list is whole. */}
@@ -1838,20 +2057,13 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
         </div>
         {/* The transcript column. */}
         {previewOn && (() => {
-          if (!selectedSession && !previewSession) {
-            return (
-              <div className="flex-1 min-w-0 flex items-center justify-center px-8">
-                {/* Plain words, no invented benefit: the panel is empty because
-                    nothing is picked, and that is the whole message. */}
-                <EmptyState message="Pick a conversation to read it here before you resume." />
-              </div>
-            );
-          }
-          // `s` is what the sheet SHOWS; null while the first conversation of
-          // the session is still being read. The sheet is mounted either way —
-          // the pane inside it is what does the reading, so it cannot be
-          // withheld until the read finishes. It just stays invisible, with the
-          // empty state over it, until there is something to show.
+          // `s` is what the sheet SHOWS; null until a picked conversation has
+          // been read, and null again if a search hides it. The sheet is
+          // mounted either way — its layers do the reading, including warming
+          // a row before anything is picked, so they cannot wait for a pick.
+          // It just stays invisible, with the empty state over it, until there
+          // is something to show. Plain words, no invented benefit: the panel
+          // is empty because nothing is picked, and that is the whole message.
           const s = previewSession;
           return (
             <div className="relative flex-1 min-w-0 flex flex-col min-h-0 p-3">
@@ -1870,19 +2082,47 @@ export default function ResumeBrowser({ open, onClose, onResume, defaultModel, d
                         the top of the window inside the container". Floating, not
                         welded: older messages pass under it as you scroll back.
                         pointer-events-none on the strip, auto on the card, so the
-                        gutter beside it does not swallow scroll wheels. */}
-                    <div className="absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none">
+                        gutter beside it does not swallow scroll wheels.
+                        preview-header-slide / data-tucked: it slides up out of the
+                        sheet while you scroll back, and down again when you scroll
+                        toward the newest message (onPreviewScroll). data-still on
+                        the staged frame, so a card coming back for a newly picked
+                        conversation is simply there, not sliding in under the
+                        arrival. The open tags/note sheet holds it on screen. */}
+                    <div
+                      className="preview-header-slide absolute inset-x-0 top-0 z-10 pt-2 pointer-events-none"
+                      data-tucked={headerTucked && !cloneOrganizeId ? '' : undefined}
+                      data-still={arrival === 'staged' ? '' : undefined}
+                    >
                       {/* PERF: box-shadow, not `drop-shadow-[…]`. drop-shadow is a CSS
                           FILTER — it traces the alpha of the whole subtree and re-runs
                           on every paint, and this card floats over a scrolling
-                          transcript, so it repaints constantly. */}
-                      <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
+                          transcript, so it repaints constantly.
+                          onFocusCapture: Tab can still land on a tucked card's
+                          buttons, so focus brings it back into view. */}
+                      <div className="pointer-events-auto [&>div>div]:shadow-[0_6px_16px_rgba(0,0,0,0.35)]" onFocusCapture={() => setHeaderTucked(false)}>
                         {renderSessionRow(s, true, true)}
                       </div>
                     </div>
                   </>
                 )}
-                <div className="flex-1 min-h-0 flex flex-col">{previewPane}</div>
+                <div className="relative flex-1 min-h-0" onScrollCapture={onPreviewScroll}>
+                  {paneIds.map((id) => {
+                    const r = sessionsById.get(id);
+                    return r ? (
+                      <PreviewLayer
+                        key={id}
+                        id={id}
+                        provider={r.provider === 'native' ? 'native' : 'claude'}
+                        title={r.name}
+                        projectSlug={r.projectSlug || undefined}
+                        visible={id === shownId}
+                        onSettled={onPreviewSettled}
+                        onGone={onPreviewGone}
+                      />
+                    ) : null;
+                  })}
+                </div>
                 {s && renderActionCard(s)}
               </div>
             </div>

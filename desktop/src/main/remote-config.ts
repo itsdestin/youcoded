@@ -11,6 +11,12 @@ const execFileAsync = promisify(execFile);
 
 const BCRYPT_ROUNDS = 10;
 
+// Minimum length for a NEW remote-access password (2026-09-10 security review, #5).
+// The old server accepted a one-character password. New passwords set through the
+// UI must be at least this long; an existing shorter password keeps working (see
+// `weakPassword`) so nobody is locked out of their own phone by the upgrade.
+export const MIN_REMOTE_PASSWORD_LENGTH = 8;
+
 // Fix: dev instances get their OWN remote config file. Previously every profile
 // read and wrote ~/.claude/youcoded-remote.json — the built app's file — so
 // save() had to be a hard no-op to avoid clobbering the real app's port and
@@ -65,6 +71,11 @@ export class RemoteConfig {
   passwordHash: string | null;
   keepAwakeHours: number;
   everPaired: boolean;
+  // True once we've seen that the current password is shorter than
+  // MIN_REMOTE_PASSWORD_LENGTH — set at setPassword time and on a successful
+  // sign-in with a short password (the hash alone doesn't reveal length). Drives
+  // a gentle "short password" note in Settings; never forces a change.
+  weakPassword = false;
 
   constructor() {
     const defaults: ConfigData = {
@@ -108,12 +119,18 @@ export class RemoteConfig {
 
   async setPassword(plaintext: string): Promise<void> {
     this.passwordHash = await bcrypt.hash(plaintext, BCRYPT_ROUNDS);
+    this.weakPassword = plaintext.length < MIN_REMOTE_PASSWORD_LENGTH;
     this.save();
   }
 
   async verifyPassword(plaintext: string): Promise<boolean> {
     if (!this.passwordHash) return false;
-    return bcrypt.compare(plaintext, this.passwordHash);
+    const ok = await bcrypt.compare(plaintext, this.passwordHash);
+    // Only a correct password tells us the real length; record it so Settings can
+    // surface the short-password note for a password set before the minimum, or
+    // by hand-editing the config file.
+    if (ok) this.weakPassword = plaintext.length < MIN_REMOTE_PASSWORD_LENGTH;
+    return ok;
   }
 
   save(): void {
@@ -133,7 +150,7 @@ export class RemoteConfig {
   }
 
   /** Return config data safe for the renderer (no password hash, no plaintext password). */
-  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: null; keepAwakeHours: number; everPaired: boolean } {
+  toSafeObject(): { enabled: boolean; port: number; hasPassword: boolean; password: null; keepAwakeHours: number; everPaired: boolean; weakPassword: boolean } {
     return {
       enabled: this.enabled,
       port: this.port,
@@ -141,6 +158,7 @@ export class RemoteConfig {
       password: null, // Security: never expose plaintext password over IPC or WebSocket
       keepAwakeHours: this.keepAwakeHours,
       everPaired: this.everPaired,
+      weakPassword: this.weakPassword,
     };
   }
 

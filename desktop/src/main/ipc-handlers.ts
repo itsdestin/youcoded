@@ -19,7 +19,7 @@ import { setPermissionOverrides } from './main';
 import { LocalSkillProvider } from './skill-provider';
 import { CommandProvider } from './command-provider';
 import { IntegrationInstaller, listWithState } from './integration-installer';
-import { RemoteConfig } from './remote-config';
+import { RemoteConfig, MIN_REMOTE_PASSWORD_LENGTH } from './remote-config';
 import { RemoteServer } from './remote-server';
 import { TranscriptWatcher } from './transcript-watcher';
 import { readTranscriptPage } from './transcript-page';
@@ -107,8 +107,11 @@ import { readComponent, type ComponentKind } from './marketplace-file-reader';
 import { checkSyncPrereqs, installRclone, checkGdriveRemote, authGdrive, authGithub, createGithubRepo } from './sync-setup-handlers';
 import { log } from './logger';
 import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWorkspace, openDevSessionIn, setupManagedWorkspace, workspaceSetupStatus, clearWorkspaceSetupStatus } from './dev-tools';
-import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError } from './update-installer';
-import type { UpdateProgressEvent } from '../shared/update-install-types';
+import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
+import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
+import { verifyDownloadedUpdate } from './update-manifest-verify';
+import { readReleaseStatus, type UpdateStatus } from './update-release-status';
+import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
 // Analytics opt-out — Phase 6. The two exported functions read/write
 // ~/.claude/youcoded-analytics.json; runAnalyticsOnLaunch (wired in main.ts)
@@ -179,7 +182,7 @@ import type { PortableModelRef } from './conversations/store-core';
 // Plan 2b Task 8: holder-side takeover — when another device requests a session
 // this device holds, cleanly interrupt/flush/release/move/destroy it.
 import { createHolderTakeover } from './conversations/takeover';
-import { getTagRegistry } from './conversations/tag-registry-service';
+import { getTagRegistry, listTagsForHost } from './conversations/tag-registry-service';
 import { tagFlagKey, isTagColor, TagColor } from '../shared/tags';
 import { writeContextFile } from './project-context';
 
@@ -1712,6 +1715,13 @@ export function registerIpcHandlers(
     });
 
     ipcMain.handle(IPC.REMOTE_SET_PASSWORD, async (_event, password: string) => {
+      // Backstop for the length rule the Settings UI enforces (2026-09-10 security
+      // review, #5): refuse a new password under the minimum rather than silently
+      // storing a one-character one. Returns false so the UI can show its message;
+      // the boolean contract is unchanged (this handler only ever returned true).
+      if (typeof password !== 'string' || password.length < MIN_REMOTE_PASSWORD_LENGTH) {
+        return false;
+      }
       await remoteConfig.setPassword(password);
       remoteServer?.invalidateTokens();
       return true;
@@ -1938,7 +1948,11 @@ export function registerIpcHandlers(
 
   // --- YouCoded app update checker via GitHub Releases API ---
   // Caches the latest release info and refreshes every 30 minutes.
-  let cachedUpdateStatus: { current: string; latest: string; update_available: boolean; download_url: string | null } | null = null;
+  // manifest_url/signature_url/tag are captured for the 2026-09-10 signed-update
+  // verification (#7): the app fetches the signed manifest + signature at launch
+  // time and refuses any installer that doesn't match. tag is the FULL tag
+  // (e.g. `v1.3.0`) the manifest's version must equal.
+  let cachedUpdateStatus: UpdateStatus | null = null;
   let lastReleaseCheck = 0;
   const RELEASE_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
@@ -1966,62 +1980,26 @@ export function registerIpcHandlers(
     });
   }
 
+  function currentOnlyStatus(): UpdateStatus {
+    return { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null, manifest_url: null, signature_url: null, tag: null };
+  }
+
   function parseReleaseResponse(body: string) {
     try {
-      const release = JSON.parse(body);
-      const tagName: string = release.tag_name || '';
-      const latestVersion = tagName.replace(/^v/, '');
-      const currentVersion = app.getVersion();
-      const isNewer = compareVersions(latestVersion, currentVersion) > 0;
-
-      // Find the right installer asset for the current platform
-      const assets: Array<{ name: string; browser_download_url: string }> = release.assets || [];
-      let downloadUrl: string | null = null;
-      const platform = process.platform;
-      if (platform === 'win32') {
-        // Prefer .exe installer
-        const exe = assets.find(a => a.name.endsWith('.exe'));
-        downloadUrl = exe?.browser_download_url || null;
-      } else if (platform === 'darwin') {
-        // Prefer .dmg matching the current arch. electron-builder produces both
-        // `YouCoded-<ver>-arm64.dmg` and `YouCoded-<ver>.dmg` (x64, no suffix),
-        // and GitHub returns them in non-deterministic order — so a plain
-        // `.endsWith('.dmg')` would hand Intel Macs the arm64 DMG (or vice
-        // versa), which Gatekeeper refuses to mount. Match by arch first, then
-        // fall back to any .dmg if a matching one isn't in the release.
-        const wantArm = process.arch === 'arm64';
-        const archDmg = assets.find(a => a.name.endsWith('.dmg') && a.name.includes('arm64') === wantArm);
-        const anyDmg = assets.find(a => a.name.endsWith('.dmg'));
-        downloadUrl = archDmg?.browser_download_url || anyDmg?.browser_download_url || null;
-      } else {
-        // Linux — prefer .AppImage, fallback to .deb
-        const appImage = assets.find(a => a.name.endsWith('.AppImage'));
-        const deb = assets.find(a => a.name.endsWith('.deb'));
-        downloadUrl = appImage?.browser_download_url || deb?.browser_download_url || null;
-      }
-      // Fallback to release page if no matching asset found
-      if (!downloadUrl) downloadUrl = release.html_url || null;
-
-      cachedUpdateStatus = { current: currentVersion, latest: latestVersion, update_available: isNewer, download_url: downloadUrl };
+      // WHY the decision moved out (2026-09-11): the private compare that lived
+      // here read `1.3.0-beta.76` as HIGHER than `1.3.0`, so a beta was never told
+      // the full release existed. update-release-status.ts decides newer / which
+      // file / signed, with tests that walk a beta through to the full release.
+      const next = readReleaseStatus(JSON.parse(body), app.getVersion(), process.platform, process.arch);
+      if (next) cachedUpdateStatus = next;
+      else if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
+      // Stamped even for a reply that is not a release (GitHub's rate-limit body),
+      // as before, so a rate limit is not re-asked on every status poll.
       lastReleaseCheck = Date.now();
     } catch {
       // Parse failed — keep previous cache or set current version only
-      if (!cachedUpdateStatus) {
-        cachedUpdateStatus = { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null };
-      }
+      if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
     }
-  }
-
-  /** Simple semver compare: returns >0 if a > b, <0 if a < b, 0 if equal */
-  function compareVersions(a: string, b: string): number {
-    const pa = a.split('.').map(Number);
-    const pb = b.split('.').map(Number);
-    for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
-      const na = pa[i] || 0;
-      const nb = pb[i] || 0;
-      if (na !== nb) return na - nb;
-    }
-    return 0;
   }
 
   function getUpdateStatus() {
@@ -2087,6 +2065,77 @@ export function registerIpcHandlers(
   // env var is somehow set.
   const devFakeUpdate = !app.isPackaged && process.env.YOUCODED_DEV_FAKE_UPDATE === '1';
 
+  // Fetch a small HTTPS body (the release manifest ~1 KB, its signature ~64 B)
+  // into a Buffer, following redirects and re-checking the host on each hop.
+  // Byte-capped so a hostile response can't balloon memory. 2026-09-10 security
+  // review #7.
+  function fetchUrlToBuffer(url: string, maxBytes: number): Promise<Buffer> {
+    return new Promise((resolve, reject) => {
+      const step = (current: string, depth: number) => {
+        if (!isAllowedUpdateHost(current)) { reject(new UpdateInstallError('url-rejected', `host not allowed: ${current}`)); return; }
+        if (depth > 5) { reject(new UpdateInstallError('network-failed', 'too many redirects')); return; }
+        const req = https.get(current, { headers: { 'User-Agent': 'YouCoded' }, timeout: 10000 }, (res) => {
+          const code = res.statusCode ?? 0;
+          if ((code === 301 || code === 302 || code === 307 || code === 308) && res.headers.location) {
+            res.resume();
+            step(new URL(res.headers.location, current).toString(), depth + 1);
+            return;
+          }
+          if (code !== 200) { res.resume(); reject(new UpdateInstallError('network-failed', `status ${code}`)); return; }
+          const chunks: Buffer[] = [];
+          let total = 0;
+          res.on('data', (c: Buffer) => {
+            total += c.length;
+            if (total > maxBytes) { req.destroy(); reject(new UpdateInstallError('verify-failed', 'metadata too large')); return; }
+            chunks.push(c);
+          });
+          res.on('end', () => resolve(Buffer.concat(chunks)));
+          res.on('error', (e: Error) => reject(new UpdateInstallError('network-failed', e.message)));
+        });
+        req.on('error', (e: Error) => reject(new UpdateInstallError('network-failed', e.message)));
+        req.on('timeout', () => { req.destroy(); reject(new UpdateInstallError('network-failed', 'timeout')); });
+      };
+      step(url, 0);
+    });
+  }
+
+  // Verify a downloaded installer against the release's signed manifest before we
+  // run it (2026-09-10 security review #7). Returns an error code to refuse, or
+  // null to proceed. A release with no signed manifest is REFUSED
+  // ('signature-invalid') rather than run unverified — that is the whole point of
+  // the fix. Reads cachedUpdateStatus directly (the dev-fake override never
+  // reaches here; dev short-circuits before this).
+  async function verifyBeforeLaunch(filePath: string): Promise<UpdateInstallErrorCode | null> {
+    const status = cachedUpdateStatus;
+    const manifestUrl = status?.manifest_url;
+    const signatureUrl = status?.signature_url;
+    const tag = status?.tag;
+    if (!manifestUrl || !signatureUrl || !tag) {
+      console.error('[update] refusing launch: this release has no signed manifest to verify against');
+      return 'signature-invalid';
+    }
+    try {
+      const [manifestBytes, signatureBytes] = await Promise.all([
+        fetchUrlToBuffer(manifestUrl, 1024 * 1024),
+        fetchUrlToBuffer(signatureUrl, 8 * 1024),
+      ]);
+      await verifyDownloadedUpdate({
+        filePath,
+        fileName: path.basename(filePath),
+        manifestBytes,
+        signatureBytes,
+        tag,
+        currentVersion: app.getVersion(),
+        publicKeyPem: UPDATE_SIGNING_PUBLIC_KEY_PEM,
+      });
+      return null;
+    } catch (err) {
+      if (err instanceof UpdateInstallError) return err.code;
+      console.error('[update] verification error:', err);
+      return 'verify-failed'; // a transient fetch failure is retriable
+    }
+  }
+
   ipcMain.handle('update:download', async () => {
     if (devFakeUpdate) {
       // Copy the bundled dummy installer into the cache dir so the launch path
@@ -2131,6 +2180,14 @@ export function registerIpcHandlers(
       // Return the fallback: 'browser' shape so the renderer flips out of launching
       // state and calls onClose() — do NOT schedule app.quit() (that would kill the dev session).
       return { success: true, quitPending: false, fallback: 'browser' as const };
+    }
+    // Gate: never run an installer we can't prove is genuine (2026-09-10 security
+    // review #7). On verify-failed, delete the cached file so a Retry re-downloads
+    // a clean copy rather than re-verifying the same corrupt bytes.
+    const verifyError = await verifyBeforeLaunch(payload.filePath);
+    if (verifyError) {
+      if (verifyError === 'verify-failed') { try { fs.unlinkSync(payload.filePath); } catch { /* ignore */ } }
+      return { success: false, error: verifyError };
     }
     const result = await launchInstaller({ jobId: payload.jobId, filePath: payload.filePath });
     if (result.success && result.quitPending) {
@@ -3859,11 +3916,8 @@ export function registerIpcHandlers(
   });
 
   // --- Tag registry CRUD ---
-  ipcMain.handle(IPC.TAGS_LIST, async () => {
-    const reg = getTagRegistry();
-    if (!reg) return [];
-    try { return await reg.list(); } catch { return []; }
-  });
+  // A failed read answers { ok: false, error }, never [] — see listTagsForHost for why.
+  ipcMain.handle(IPC.TAGS_LIST, () => listTagsForHost());
 
   ipcMain.handle(IPC.TAGS_CREATE, async (_e, label: string, color: string) => {
     const reg = getTagRegistry();
@@ -4074,7 +4128,12 @@ export function registerIpcHandlers(
     // Task 5: read from whichever provider bucket this session actually writes
     // to — native records are real now, so there's no more up-front refusal.
     // `supported` stays in the result shape (Android still answers false).
-    if (!store) return { tags: [], note: '', supported: true };
+    // WHY `unreadable` (error inventory 2026-09-10, false message 12): a missing store
+    // and a failed read both used to answer blank tags and note — indistinguishable
+    // from a conversation that has none. The close prompt showed "No note" for a
+    // conversation that had one and used that blank as the baseline for a note
+    // write. A record that is simply absent (`!rec`) is still a real "none".
+    if (!store) return { tags: [], note: '', supported: true, unreadable: "conversation storage isn't available" };
     try {
       const rec = await store.get(await sessionProviderFor(resolved), resolved);
       if (!rec) return { tags: [], note: '', supported: true };
@@ -4089,7 +4148,7 @@ export function registerIpcHandlers(
         else if (v.value && (SESSION_FLAG_NAMES as string[]).includes(k)) reserved[k] = true;
       }
       return { tags, note: rec.note || '', supported: true, flags: reserved };
-    } catch { return { tags: [], note: '', supported: true }; }
+    } catch (e) { return { tags: [], note: '', supported: true, unreadable: e instanceof Error && e.message ? e.message : "the conversation's record could not be read" }; }
   });
 
   // --- Sync management ---

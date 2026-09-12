@@ -1826,7 +1826,7 @@ contextBridge.exposeInMainWorld('claude', {
   // into conversations, and read a bounded slice of one for the preview pane.
   chatsearch: {
     resolve: (shortIds: string[]) => ipcRenderer.invoke('chatsearch:resolve', shortIds),
-    read: (req: { provider: string; id: string; tail: number; before?: number }) =>
+    read: (req: { provider: string; id: string; tail: number; before?: number; projectSlug?: string }) =>
       ipcRenderer.invoke('chatsearch:read', req),
   },
 });

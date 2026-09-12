@@ -1525,6 +1525,13 @@ export interface SessionMetaResult {
    *  built yet), and showing one host's reason on another would be a misleading
    *  error message. Renderers display this and fall back to the generic constant. */
   unsupportedReason?: string;
+  /** Set when the tags and note could NOT be read — the store is missing or the read
+   *  failed — with the reason. Absent means they were read (possibly as none).
+   *  WHY separate from `supported` (error inventory 2026-09-10, false message 12): a
+   *  failed read is not a refusal to store. Without this field it was identical to a
+   *  conversation with no note, which the close prompt showed as "No note" and then
+   *  used as the baseline for a note write that replaced the real one. */
+  unreadable?: string;
 }
 
 export interface PastSession {

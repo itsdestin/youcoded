@@ -34,7 +34,9 @@ import { IPC, PermissionOverrides, PERMISSION_OVERRIDES_DEFAULT, type AttentionS
 import { VITE_DEV_PORT } from '../shared/ports';
 import { MOUNT_PROBE_JS } from './dev-mount-probe';
 import { log, rotateLog } from './logger';
+import { installCrashDiagnostics, reportPreviousCrashes, wireWindowHangDiagnostics } from './crash-diagnostics';
 import { registerThemeProtocol } from './theme-protocol';
+import { isAppPageUrl } from './app-navigation';
 import { FirstRunManager, markSetupCompleted, setupIsUsable } from './first-run';
 import type { FirstRunState } from '../shared/first-run-types';
 // Sign in with ChatGPT (backend design 2026-09-05 §1): the account object is
@@ -122,6 +124,11 @@ process.on('unhandledRejection', (reason) => {
     reason: reason instanceof Error ? (reason.stack ?? reason.message) : String(reason),
   });
 });
+
+// Crash + hang capture. Must run before app.whenReady(): Crashpad has to be
+// live before the child processes it watches are spawned. Dumps stay on the
+// machine — see crash-diagnostics.ts.
+installCrashDiagnostics();
 
 // macOS and Linux Electron apps may inherit a minimal PATH that's missing
 // common tool locations (Homebrew, nvm, Volta, pipx, cargo). macOS Finder/Dock
@@ -740,6 +747,11 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     },
   });
 
+  // Record beachballs. A hung window is otherwise invisible: it keeps servicing
+  // background work, so nothing in the app, the OS, or this log says anything is
+  // wrong — which is exactly why the 2026-09-03 force quit was unexplainable.
+  wireWindowHangDiagnostics(win, opts?.buddy ? `buddy:${opts.buddy}` : 'main');
+
   // Lift alwaysOnTop to 'screen-saver' level for buddy windows after construction.
   // 'screen-saver' is the highest reliable always-on-top level; floats over
   // minimized apps on Win/Mac/Linux. Applied after construction because
@@ -791,10 +803,10 @@ function createAppWindow(opts?: { x?: number; y?: number; width?: number; height
     });
   }
 
-  // Security: block navigation to external origins (prevents preload API exposure)
+  // Security: allow navigation only to the app's own page (prevents preload API
+  // exposure). Any file:// used to pass — see isAppPageUrl for why that was not enough.
   win.webContents.on('will-navigate', (event, url) => {
-    const isAppOrigin = url.startsWith('file://') || url.startsWith(DEV_SERVER_URL);
-    if (!isAppOrigin) event.preventDefault();
+    if (!isAppPageUrl(url, path.join(__dirname, '../renderer/index.html'), DEV_SERVER_URL)) event.preventDefault();
   });
   // Security: deny window.open() but route safe http(s)/mailto to the OS browser
   win.webContents.setWindowOpenHandler(({ url }) => {
@@ -1549,6 +1561,9 @@ void app.whenReady().then(async () => {
   perfMark('main:when-ready');
   await rotateLog();
   perfMark('main:chore:rotate-log:done');
+
+  // After rotateLog so the line survives the trim, not before it.
+  reportPreviousCrashes();
 
   // Fire-and-forget: never await. Respects the opt-out in About → Privacy
   // internally and fails silently on any network issue.

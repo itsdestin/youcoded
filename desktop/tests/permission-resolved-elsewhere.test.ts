@@ -70,7 +70,9 @@ describe('hook:replay-complete clears every card not in the pending list', () =>
 
 // Review of T2 (2026-09-10): the note must never outlive the truth.
 describe('answered elsewhere, against the events that follow it', () => {
-  const EXPIRED = 'Permission request expired — socket closed before a response was sent';
+  // Master's wording (error inventory): the old text was transport jargon that also claimed
+  // no answer had been sent. Pinned as copy by tests/permission-expired-wording.test.ts.
+  const EXPIRED = 'This request closed before an answer reached it.';
 
   it('a cancelled native ask (broker order: Resolved, then Expired) ends failed as expired, with no note', () => {
     let s = withAsk('r1');

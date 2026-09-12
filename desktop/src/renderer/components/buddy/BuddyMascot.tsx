@@ -3,6 +3,7 @@ import { useTheme } from '../../state/theme-context';
 import { useThemeMascot } from '../../hooks/useThemeMascot';
 import { useAnyAttentionNeeded } from '../../hooks/useAnyAttentionNeeded';
 import { MascotRig, type RigMotion } from '../mascot/MascotRig';
+import { purifySvgMarkup } from '../mascot/sanitize-rig-svg';
 import type { PoseName } from '../mascot/mascot-poses';
 import { defaultMascotPaint } from '../mascot/default-mascot-paint';
 
@@ -146,11 +147,14 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   const hoverArmedRef = useRef(true);
   const onPointerEnter = useCallback(() => {
     if (dock.mode !== 'peeking') return;
+    // Already out for attention (see `peeking` below) — a swing-out whip here
+    // would jerk an upright buddy sideways for no reason.
+    if (attention) return;
     if (!hoverArmedRef.current) return; // still holding the post-drag/press state
     // Side peeks whip upright through the lean on the way out; top/bottom slide.
     if (dock.edge === 'left' || dock.edge === 'right') triggerSwing(dock.edge);
     setHopping(true);
-  }, [dock.mode, dock.edge, triggerSwing]);
+  }, [dock.mode, dock.edge, attention, triggerSwing]);
   const onPointerLeave = useCallback(() => {
     hoverArmedRef.current = true; // a real leave — the next enter is a genuine hover
     setHopping(false);
@@ -166,7 +170,17 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
   // A hop temporarily renders him as if he were docked: sink released, peek
   // pose dropped, grip mittens gone. Everything downstream reads `peeking`
   // rather than dock.mode so the three can't disagree mid-hop.
-  const peeking = dock.mode === 'peeking' && !hopping;
+  //
+  // Attention does the same, and must: the pose below lets attention win
+  // ('shocked'), so if the sink, lean and mittens still followed dock.mode he
+  // drew BOTH at once — raised arms flailing out of a body sunk and tipped into
+  // the edge, between the edge-pinned grip hands (Destin 2026-09-11: "I can see
+  // both the docked pose and the notification pose overlapping"). Main's own
+  // pop-out can't be relied on to arrive first: the attention broadcast lands a
+  // message ahead of it, and a buddy dragged onto an edge while something
+  // already needs you stays 'peeking' in main until attention next changes.
+  // Window position is flush to the edge in both states, so only this differs.
+  const peeking = dock.mode === 'peeking' && !hopping && !attention;
   const sidePeek = peeking && (dock.edge === 'left' || dock.edge === 'right');
   // Resting = 'idle' (open-eyed welcome face); the rig-authored chevron-eye
   // face lives in 'pressed', shown only while held (Destin 2026-07-16).
@@ -386,7 +400,8 @@ export function BuddyMascot({ overlayDrive }: { overlayDrive?: OverlayDrive } = 
         // kept him pinned in the sunk position and only the pose changed (Destin
         // 2026-07-17: "swaps between peek and idle despite staying in the same
         // position"). The 380ms transform+rotate transitions carry the move.
-        data-dock-mode={hopping ? 'free' : dock.mode}
+        // Attention releases it the same way (see `peeking` above).
+        data-dock-mode={dock.mode === 'peeking' && !peeking ? 'free' : dock.mode}
         data-dock-edge={dock.edge ?? ''}
         data-swing={swing ?? ''}
       >
@@ -471,10 +486,12 @@ function PeekHands({ side, rigHostRef }: { side: 'left' | 'right'; rigHostRef: R
       clone.style.display = '';
       clone.removeAttribute('id'); // no duplicate ids in the document
       const pad = 0.4; // breathing room for the stroke
-      // Content comes from the already-sanitized inlined rig — safe to re-inline.
-      setHandSvg(
+      // Content comes from the already-sanitized inlined rig, but re-serializing
+      // live DOM and parsing it again is exactly where markup can change meaning
+      // (2026-09-10 security review), so it goes back through the final pass.
+      setHandSvg(purifySvgMarkup(
         `<svg xmlns="http://www.w3.org/2000/svg" viewBox="${bbox.x - pad} ${bbox.y - pad} ${bbox.width + pad * 2} ${bbox.height + pad * 2}" width="100%" height="100%">${clone.outerHTML}</svg>`,
-      );
+      ));
     };
     extract(); // the rig may already be present (peek toggled with a stable rig)
     const obs = new MutationObserver(extract);

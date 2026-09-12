@@ -18,6 +18,7 @@ import type { ArtifactRecord } from '../../shared/artifacts/types';
 import { findBestMatch, buildArtifactifyArgs } from '../components/filepath-match';
 import { describeReadError } from '../components/artifact-views/read-error-copy';
 import { isRemoteMode } from '../platform';
+import { plainMessage } from '../utils/ipc-error';
 
 export interface OpenFilepathCtx {
   state: ArtifactState;
@@ -150,6 +151,21 @@ export async function openFilepath(
   // the drawer even on a path someone adds later without an isCurrent check.
   const dispatch = (action: ArtifactAction) => { if (isCurrent()) ctx.dispatch(action); };
 
+  // `why` is what is actually known about the failure, or nothing.
+  // WHY each call site passes its own (error inventory 2026-09-10, false message 8):
+  // every failure used to read "Couldn't open X — the file wasn't found in this
+  // project." — for an unknown folder, a ~ path, a record that did not list back and
+  // a bridge call that threw. None of those four checks whether the file exists, so
+  // "wasn't found" was a guess at a cause. Each now says only what it knows.
+  const failed = (why?: string) => {
+    if (!drawerOpensImmediately) return; // deferred mode: silent no-op, nothing was ever shown
+    dispatch({
+      type: 'PILL_RESOLVE_FAILED',
+      sessionId,
+      message: why ? `Couldn’t open ${name} — ${why}` : `Couldn’t open ${name}.`,
+    });
+  };
+
   try {
     // Open the drawer first so there's an immediate response regardless of how
     // the lookup below resolves. If resolution fails, set a pill-error note —
@@ -167,7 +183,6 @@ export async function openFilepath(
       if (!drawerOpensImmediately) return; // deferred mode: silent no-op, nothing was ever shown
       dispatch({ type: 'PILL_RESOLVE_FAILED', sessionId, message });
     };
-    const failed = () => failWith(`Couldn’t open ${name} — the file wasn’t found in this project.`);
     // Show a record that is not (necessarily) in the session's list yet.
     const show = (artifact: ArtifactRecord) => {
       if (!drawerOpensImmediately) dispatch({ type: 'DRAWER_OPENED', sessionId });
@@ -190,25 +205,29 @@ export async function openFilepath(
       return;
     }
 
-    if (!cwd) { failed(); return; } // nothing to resolve without a root — say so
+    // 3. Nothing matched anywhere — ARTIFACTIFY the path: a file visible in chat must open no
+    //    matter how it was created or where it lives. appendVersion records it (author 'user',
+    //    type 'read'); this is the only path that PERSISTS a brand-new artifact. A WRITE — not
+    //    bridged over remote access, which is why the host lookup below never reaches here in
+    //    remote mode. `unrecordable` is what is known about a path buildArtifactifyArgs cannot
+    //    record, so the failure never guesses a cause (error inventory, false message 8).
+    // Nothing to resolve without a root — and that is all this failure claims.
+    if (!cwd) { failed('YouCoded doesn’t know which folder this conversation is in.'); return; }
     const folder: string = cwd;
 
-    // ARTIFACTIFY the path: a file visible in chat must open no matter how it
-    // was created or where it lives. appendVersion records it (author 'user',
-    // type 'read'); this is the only path that PERSISTS a brand-new artifact.
-    // A WRITE — not bridged over remote access, which is why the host lookup
-    // below never reaches here in remote mode. `unrecordable` is the note for a
-    // path buildArtifactifyArgs can't record (a `~/` path); without it the
-    // older lookup's "wasn't found" wording is kept.
     const artifactify = async (unrecordable?: string): Promise<void> => {
       const args = buildArtifactifyArgs(path, folder);
-      if (!args) { if (unrecordable) failWith(unrecordable); else failed(); return; }
+      // Null for exactly one case: a path starting with ~, which the renderer has no home
+      // directory to expand against.
+      if (!args) { failed(unrecordable ?? 'paths that start with ~ can’t be opened from chat yet.'); return; }
       await (window.claude as any).artifacts.appendVersion(folder, sessionId, args);
       if (!isCurrent()) return;
       const refreshed = await (window.claude as any).artifacts.listSession(sessionId, folder);
       if (!isCurrent()) return;
       let selected = false;
       if (refreshed?.ok && Array.isArray(refreshed.artifacts)) {
+        // The folder is REQUIRED here: without it a same-named file elsewhere could be opened
+        // in this one's place (the wrong-CLAUDE.md bug, 2026-09-11).
         const added = findBestMatch(refreshed.artifacts as ArtifactRecord[], path, folder);
         if (added) {
           // Deferred mode: hold SESSION_ARTIFACTS_LOADED back too — dispatching
@@ -222,6 +241,7 @@ export async function openFilepath(
           dispatch({ type: 'SESSION_ARTIFACTS_LOADED', sessionId, artifacts: refreshed.artifacts });
         }
       }
+      // Recorded, but it did not come back in the list: nothing more is known.
       if (!selected) failed();
     };
 
@@ -317,7 +337,10 @@ export async function openFilepath(
 
       // 4. Nothing matched anywhere — artifactify (above).
       await artifactify();
-    } catch { failed(); }
+    } catch (e) {
+      // A bridge call failed, so no search result exists at all — name the reason.
+      failed(plainMessage(e, 'something went wrong while looking for it.'));
+    }
   } finally {
     // This tap is no longer looking anything up, so auto-opens may run again —
     // unless a newer tap has taken its place.

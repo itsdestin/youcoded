@@ -215,6 +215,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'remote.getConfig', 'remote.setConfig', 'remote.setPassword', 'remote.detectTailscale',
   'remote.getClientCount', 'remote.getClientList', 'remote.devices', 'remote.getStatus', 'remote.onStatus',
   'syncSpaces.leaseQuery', 'syncSpaces.leaseTakeover', 'syncSpaces.leaseForce',
+  // ?update=available (error-state review, 2026-09-11) — the real update:* channels, so the
+  // Update panel can be opened and its download made to fail. onProgress is left to the
+  // catch-all on purpose: it must return its unsubscribe synchronously.
+  'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
 ];
 
 const warned = new Set<string>();
@@ -443,6 +447,42 @@ const NAMESPACES = [
 
 import { createNamingPreview } from './naming-preview';
 
+/** `?fail=<ns.method>[,…]` — those channels REJECT from the first call.
+ *
+ *  WHY (error-state review, 2026-09-11): a read the app makes when it starts (the skills
+ *  list, the installed plugins, the tag registry) cannot be failed by a shot's `eval`, which
+ *  runs after boot — so its "couldn't load" state was unreachable in the workbench. Applied
+ *  to the hand-written table BEFORE withCatchAll wraps it, so a failing member replaces the
+ *  fixture (or the catch-all's `[]`) and every sibling keeps answering. Nested paths work:
+ *  `theme.marketplace.list`. The copies along the path keep the store-backed originals intact. */
+function applyFailSwitch(impls: Record<string, Record<string, unknown>>): void {
+  const raw = typeof location !== 'undefined' ? new URLSearchParams(location.search).get('fail') : null;
+  if (!raw) return;
+  for (const path of raw.split(',').map((x) => x.trim()).filter(Boolean)) {
+    const parts = path.split('.');
+    if (parts.length < 2) continue;
+    let parent: Record<string, unknown> = impls;
+    for (const key of parts.slice(0, -1)) {
+      const current = parent[key];
+      const copy = current && typeof current === 'object' ? { ...(current as Record<string, unknown>) } : {};
+      parent[key] = copy;
+      parent = copy;
+    }
+    parent[parts[parts.length - 1]] = async () => { throw new Error(`Mock failure (${path})`); };
+  }
+}
+
+/** `?update=available` — the status pill's update, which no scenario otherwise sends. */
+function updateStatusSwitch(): { current: string; latest: string; update_available: true; download_url: string } | null {
+  if (typeof location === 'undefined' || new URLSearchParams(location.search).get('update') !== 'available') return null;
+  return {
+    current: '1.2.4',
+    latest: '1.3.0',
+    update_available: true,
+    download_url: 'https://github.com/itsdestin/youcoded/releases/tag/v1.3.0',
+  };
+}
+
 export function createMockShim(store: MockStore): Window['claude'] {
   const impls = handWritten(store);
 
@@ -488,6 +528,7 @@ export function createMockShim(store: MockStore): Window['claude'] {
   // hand-written syncSpaces.status still crashed Project View with
   // "Cannot read properties of undefined (reading 'find')". Driving the impl
   // keys means a new namespace works the moment it is written.
+  applyFailSwitch(impls);
   for (const ns of new Set([...NAMESPACES, ...Object.keys(impls)])) {
     bridge[ns] = withCatchAll(ns, impls[ns] ?? {});
   }
@@ -771,9 +812,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     // through this path too: the first message TYPED into an autoplayed window
     // plays turn 2 — intended for the sync row's phone half.
     if (!isControl(text)) replyCursor.set(sessionId, n + 1);
+    // `?replySpeed=<k>` plays the reply k times faster — text AND the pauses between lines.
+    // WHY (2026-09-11): the landing loops were 25–33 s, mostly spent watching a scripted reply
+    // stream (the inbox reply alone is ~18 s); Destin asked for ~15 s clips "without losing real
+    // content". Speeding playback keeps every word; editing the fixtures would change the copy.
+    // `location` is guarded like latencyFromQuery()'s: the shim also runs under the unit tests, which have none.
+    const speed = (typeof location !== 'undefined' && Number(new URLSearchParams(location.search).get('replySpeed'))) || 1;
     void playReply(sessionId, text, turns[n % turns.length], {
       transcript: (e) => subs.transcript.forEach((f) => f(e)),
       hook: (e) => subs.hook.forEach((f) => f(e)),
+      speed,
     });
   };
 
@@ -1546,6 +1594,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   // catch-all rather than hand-written for no behavioural gain.
   const shell: Ns<'shell'> = {
     openPath: async () => '',
+    // Real open so workbench clicks visibly do something: mirror the remote
+    // shim's browser behaviour (window.open in a new tab) instead of silently
+    // resolving [] through the catch-all. Only called on a user click (never
+    // by the model), so the new tab/popup is not a surprise.
+    openExternal: async (url: string) => { window.open(url, '_blank', 'noopener'); },
   };
 
   // Specialists 1c — roster, model tiers, and the two card actions. Real
@@ -1758,12 +1811,17 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       `[${new Date(SYNC_NOW - 120_000).toISOString()}] INFO  pushed project:youcoded (1 file)`,
       `[${new Date(SYNC_NOW - 300_000).toISOString()}] INFO  backup -> Google Drive complete`,
     ].slice(0, n),
-    force: async () => ({ ok: true }),
+    // WHY the real shapes (sync-state.ts forceSync/pushBackend/addBackend): since error
+    // inventory 2026-09-10 Backup & Sync READS these answers instead of assuming success —
+    // `success` on an upload, the saved instance's `id` after an add. The old `{ ok: true }`
+    // carried neither, so the workbench would have shown "didn't finish" / "couldn't
+    // confirm" for a backup that worked — a fake that lies the other way.
+    force: async () => ({ success: true, output: 'Google Drive', error: '' }),
     dismissWarning: async () => ({ ok: true }),
-    pushBackend: async () => ({ ok: true }),
+    pushBackend: async () => ({ success: true, error: '' }),
     updateBackend: async () => ({ ok: true }),
     removeBackend: async () => ({ ok: true }),
-    addBackend: async () => ({ ok: true }),
+    addBackend: async (instance: { type: string; label: string }) => ({ ...instance, id: `${instance.type}-new` }),
   };
 
   // Real channel (folders:set-description) — the LOCAL-folder half of the same
@@ -1861,6 +1919,23 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     ['fine, leave it. run the tests',
      'All 41 in that file pass, plus the new one. Types and lint are clean.'],
   ];
+  // The student persona's conversation (`&student=1`, the promo film and site clips). WHY
+  // (2026-09-10): the film opens "econ midterm brief" in the Resume preview, and the coding
+  // chat above under that title read as a mistake on camera. Same shape as CHAT_TURNS.
+  const STUDENT_TURNS: [string, string, string?][] = [
+    ['what is on the econ midterm?',
+     'Chapters 4 to 7: elasticity, consumer choice, production costs and perfect competition. The syllabus says half the marks are short graphs.',
+     'Let me check the syllabus first.'],
+    ['which one should I study first',
+     'Elasticity. It shows up in the other three chapters, and your problem set 3 answers had the most corrections there.'],
+    ['explain elasticity like I have five minutes',
+     'It is how much people change what they buy when the price changes. If a small price rise makes sales drop a lot, demand is elastic. If sales barely move, it is inelastic.'],
+    ['make me three practice questions',
+     'Done — they are in midterm-practice.md, each with a graph to sketch and the answer on the next page.',
+     'Pulling the examples from your lecture notes.'],
+    ['ask about the demand curve on Thursday',
+     'Added to your note for this conversation, so it shows under All Sessions.'],
+  ];
 
   const chatsearch = {
     resolve: async (shortIds: string[]) => ({ ok: true as const, results: shortIds.map(resolveFixture) }),
@@ -1879,7 +1954,8 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       const push = (role: string, content: string, droppedToolCalls = 0) =>
         all.push({ role, content, timestamp: 0, seq: all.length, droppedToolCalls });
       while (all.length < 60) {
-        const turn = CHAT_TURNS[Math.floor(all.length / 2.5) % CHAT_TURNS.length];
+        const turns = studentSwitch ? STUDENT_TURNS : CHAT_TURNS;
+        const turn = turns[Math.floor(all.length / 2.5) % turns.length];
         push('user', turn[0]);
         if (turn[2]) {
           push('assistant', turn[2]);
@@ -2537,7 +2613,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
           usage: fixture.usage,
           chatgptUsage: chatgptUsageFixture(),
           announcement: null,
-          updateStatus: null,
+          updateStatus: updateStatusSwitch(),
           syncWarnings: [],
           contextMap: {},
           gitBranchMap: {},
@@ -2819,6 +2895,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     },
   };
 
+  // The app's own update flow (UpdatePanel). Only reachable with ?update=available — without
+  // it no pill renders. WHY hand-written: the catch-all's `[]` from getCachedDownload is
+  // TRUTHY, so the panel jumped straight to "Launch Installer" and never downloaded.
+  const update = {
+    changelog: async () => ({
+      markdown: '## 1.3.0\n\n- Clearer messages when something goes wrong.',
+      entries: [{ version: '1.3.0', date: '2026-09-11', body: '- Clearer messages when something goes wrong.' }],
+      fromCache: false,
+    }),
+    getCachedDownload: async () => null,
+    download: async () => ({ jobId: 'wb-update-1', filePath: '/home/destin/Downloads/YouCoded-1.3.0.AppImage' }),
+    cancel: async () => undefined,
+    launch: async () => ({ success: true as const, quitPending: false as const, fallback: 'browser' as const }),
+  };
+
   return {
     // Marketplace feedback (overhaul §1.7). PARTIAL on purpose: only these three
     // are hand-written; `install`, `rate`, `deleteRating`, `likeTheme` and
@@ -2851,7 +2942,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     session, providers, permissions, models, engine, defaults, native, detach, tags, on, theme, firstRun,
     terminal, artifacts, syncSpaces, sync, project, account, social, appearance, specialists, shell,
     skills, marketplace, folders, fs, modes, chatsearch, window: windowNs, arcade, buddy, voice, chatgpt, claudeCode, search,
-    dev: devMock, ...(remote ? { remote } : {}),
+    update, dev: devMock, ...(remote ? { remote } : {}),
   } as unknown as Record<string, Record<string, unknown>>;
 }
 

@@ -163,10 +163,12 @@ describe('InputBar native send — failure keeps the draft (reviewer Critical fi
 
     rejectAck!(new Error('invoke rejected'));
 
-    // Falls back to the same undefined-result copy as the other failure branch.
+    // A rejected invoke is an UNANSWERED send, not a refused one: over remote access it
+    // is the timeout, and the request may still have run (error inventory 2026-09-10,
+    // false message 5). Same copy as an empty ack; the draft is still restored below.
     await waitFor(() => {
       expect(onToast).toHaveBeenCalledWith(
-        'The message could not be sent — no response from the session host.',
+        "YouCoded couldn't confirm your message was sent — check the conversation before sending it again.",
       );
     });
     await waitFor(() => {

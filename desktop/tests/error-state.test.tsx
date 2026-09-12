@@ -67,7 +67,9 @@ describe('ErrorState — what the widening adds', () => {
       />,
     );
     const names = screen.getAllByRole('button').map(b => b.textContent);
-    expect(names).toEqual(['Retry', 'Report bug']);
+    // Destin, batch 1 deck (E-1c): "switch retry/bug positions" — Retry, the primary, sits
+    // last, at the right-hand end of the row.
+    expect(names).toEqual(['Report bug', 'Retry']);
     expect(screen.getByRole('button', { name: 'Retry' }).className).toContain('bg-accent');
     expect(screen.getByRole('button', { name: 'Report bug' }).className).toContain('border-edge-dim');
     fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
@@ -76,7 +78,7 @@ describe('ErrorState — what the widening adds', () => {
     expect(onReportBug).toHaveBeenCalledTimes(1);
   });
 
-  it('orders three actions the same way every time, with Retry leading', () => {
+  it('orders three actions the same way every time, with Retry last', () => {
     render(
       <ErrorState
         title="Sync failed"
@@ -87,7 +89,7 @@ describe('ErrorState — what the widening adds', () => {
       />,
     );
     expect(screen.getAllByRole('button').map(b => b.textContent))
-      .toEqual(['Retry', 'Report bug', 'Diagnose with the assistant']);
+      .toEqual(['Report bug', 'Diagnose with the assistant', 'Retry']);
   });
 
   it('renders only the actions it was given', () => {

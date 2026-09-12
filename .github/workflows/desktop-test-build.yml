@@ -11,8 +11,8 @@ on:
           then sorts above the previous one with nobody typing a number.
           The prefix MUST still sort ABOVE the latest published release, or the
           installed build will offer to "update" itself back to that release
-          (compareVersions in ipc-handlers.ts parses naively: `1.2.4-beta` ->
-          [1,2,0], which is LOWER than 1.2.4). Bump the minor and suffix, e.g.
+          (compareVersions in update-manifest-verify.ts orders semver-style, so
+          `1.2.4-beta.N` is LOWER than 1.2.4). Bump the minor and suffix, e.g.
           1.3.0-beta, rather than patching the current version.
         required: false
         default: '1.3.0-beta'
@@ -164,4 +164,53 @@ jobs:
         with:
           name: youcoded-desktop-${{ matrix.name }}
           path: ${{ matrix.artifact }}
+          retention-days: 7
+
+  # Signs this beta's installers with the release key exactly as a tagged release
+  # is signed, and checks the result against the public key built into the app.
+  # WHY (2026-09-11): the key otherwise runs only at release time, so a wrong or
+  # missing UPDATE_SIGNING_KEY secret would first show up as the full release's
+  # Update button refusing to install for everyone on a 1.3 beta. Running it on
+  # each beta proves the secret long before that, and the two files it makes can
+  # be attached to the beta pre-release so its downloads can be checked too.
+  # Master only: a build of some other branch should not carry the release key's
+  # signature.
+  sign:
+    needs: build
+    if: github.ref == 'refs/heads/master'
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Download installers
+        uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+          pattern: youcoded-desktop-*
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22
+
+      - name: Sign and verify the manifest
+        working-directory: desktop
+        env:
+          UPDATE_SIGNING_KEY: ${{ secrets.UPDATE_SIGNING_KEY }}
+        run: |
+          if [ -z "$UPDATE_SIGNING_KEY" ]; then
+            echo "::error::UPDATE_SIGNING_KEY is not set, so a tagged release would ship with nothing the in-app Update button accepts."
+            exit 1
+          fi
+          node scripts/generate-release-manifest.mjs --dir "$GITHUB_WORKSPACE/artifacts" \
+            --version "${{ inputs.base }}.${{ github.run_number }}" \
+            --verify-with src/main/update-signing-key.ts
+
+      - name: Upload manifest
+        uses: actions/upload-artifact@v7
+        with:
+          name: youcoded-release-manifest
+          path: |
+            artifacts/youcoded-release.json
+            artifacts/youcoded-release.json.sig
           retention-days: 7

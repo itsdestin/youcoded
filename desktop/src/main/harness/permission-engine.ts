@@ -9,7 +9,7 @@
 // is only safe because remembered rules are allow-originated today (the "Always
 // allow" flow persists only allow rules); a future feature persisting remembered
 // ask/deny rules must revisit this consequence-warning logic.
-import { ruleMatches } from '../../shared/subject-glob';
+import { ruleMatches, type MatchContext } from '../../shared/subject-glob';
 import type { PermissionDecision, PermissionRule } from '../../shared/permission-types';
 
 export interface PermissionLayers {
@@ -23,6 +23,9 @@ export function decidePermission(
   tool: string,
   subject: string | undefined,
   layers: PermissionLayers,
+  // What ruleMatches needs to know about the session: whether its Bash tool runs
+  // PowerShell, which also executes code inside arguments (subject-glob.ts).
+  context: MatchContext = {},
 ): PermissionDecision {
   // Concatenate lowest → highest precedence. `deny: true` tags only the
   // deny-list layer so denyListed reflects the WINNING rule's origin.
@@ -38,7 +41,7 @@ export function decidePermission(
     // ruleMatches owns what a WHOLE rule means — exact vs glob, plus the two
     // safety rules that keep a wildcard grant from swallowing a second command
     // or a destructive flag. Never call subjectMatches from a decision path.
-    if (!ruleMatches(entry.r, subject ?? '')) continue;
+    if (!ruleMatches(entry.r, subject ?? '', context)) continue;
     winner = entry; // last match wins
   }
   if (!winner) return { action: 'ask', denyListed: false }; // safe default — never silent-allow

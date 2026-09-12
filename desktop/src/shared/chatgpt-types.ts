@@ -10,6 +10,12 @@
 
 import { formatTime12, formatDayLong, formatMonthDay } from './time-format';
 
+/** Where a used-up ChatGPT plan sends the user to raise the window: OpenAI's
+ *  own upgrade page, the URL the Codex CLI's own limit error names when it
+ *  says "Upgrade to Pro (https://chatgpt.com/explore/pro)". The plan-limit
+ *  card's "Upgrade plan" button opens this. */
+export const CHATGPT_UPGRADE_URL = 'https://chatgpt.com/explore/pro';
+
 /** One rolling usage window of the ChatGPT plan, as OpenAI reports it. Same
  *  shape as the Claude subscription windows (`SubscriptionUsage` in
  *  usage-snapshot.ts) on purpose, so the /usage card and the status-bar chips
