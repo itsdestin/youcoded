@@ -2,7 +2,7 @@
 
 **Your AI assistant, on your terms.** An open-source, cross-platform agent for Windows, macOS, Linux, and Android — with remote access from any web browser.
 
-> Built entirely without coding experience, using Claude Code itself.
+> Built entirely without coding experience, using Claude Code itself. Download the app at https://youcoded.ai.
 
 ---
 
