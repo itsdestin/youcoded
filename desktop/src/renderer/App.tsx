@@ -3215,7 +3215,9 @@ function AppInner() {
   // (now-dead) chat/terminal view.
   const movedGate = sessionId ? movedSessions.get(sessionId) : undefined;
 
-  // Show a "something may be wrong" hint after 15s of waiting on initialization.
+  // Show a "something may be wrong" hint after 6s of waiting on initialization.
+  // WHY 6s (was 15s, shortened 2026-09-14): 15s was a long wait before the way
+  // out (the terminal view) was offered when a start really is stuck.
   // Resets whenever the active session changes or the session becomes initialized.
   const [initSlowWarning, setInitSlowWarning] = useState(false);
   // The init warning's button is a one-way door: switching to terminal view also
@@ -3224,7 +3226,7 @@ function AppInner() {
   useEffect(() => {
     if (sessionInitialized) { setInitSlowWarning(false); return; }
     setInitSlowWarning(false);
-    const t = setTimeout(() => setInitSlowWarning(true), 15000);
+    const t = setTimeout(() => setInitSlowWarning(true), 6000);
     return () => clearTimeout(t);
   }, [sessionId, sessionInitialized]);
 
