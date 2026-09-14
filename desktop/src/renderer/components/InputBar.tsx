@@ -7,6 +7,7 @@ import { AttachmentChip } from './AttachmentChip';
 import { AttachIcon, CompassIcon } from './Icons';
 import { VoiceButton, VoiceMeter, VoiceStyleContext } from './VoiceButton';
 import { StatusStrip } from './ui/StatusStrip';
+import { LocalModelDownloadStrip } from './LocalModelDownloadStrip';
 import { useVoiceInput } from '../hooks/useVoiceInput';
 import BrailleBurst from './BrailleBurst';
 import FlowingKeywordsText from './FlowingKeywords';
@@ -923,6 +924,9 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
         </div>
       )}
 
+      {/* A model chosen at setup that is still downloading (first-run local
+          models, Q-4/Q-7): the same thin band, above the box. */}
+      {!minimal && <LocalModelDownloadStrip sessionId={sessionId} />}
       {/* Feedback B: the app's thin status band, above the box, while listening. */}
       {voiceListening && voiceStyle.feedback === 'strip' && (
         <div className="px-2 sm:px-3 pb-1.5">

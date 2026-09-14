@@ -658,6 +658,22 @@ export default function ModelPicker({
               >
                 {e.unavailable}
               </button>
+            ) : e.sourceId === CLAUDE_SOURCE && claudeStatus?.state === 'not-installed' ? (
+              // First-run local models (F-5): Claude Code installs on demand now,
+              // so its greyed rows carry the fix — the Claude card in Cloud
+              // providers, which holds the Install button.
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  if (onManageModels) onManageModels();
+                  else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                }}
+                aria-label="Install Claude Code"
+                className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
+              >
+                Install Claude Code
+              </button>
             ) : (
               <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>
             )

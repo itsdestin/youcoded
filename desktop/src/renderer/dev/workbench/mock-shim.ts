@@ -158,6 +158,9 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'on.sessionMetaChanged',
   'theme.list', 'theme.readFile', 'theme.writeFile', 'theme.onReload',
   'firstRun.getState', 'terminal.getScreenText',
+  // First-run local models (2026-09-14) — no backend yet, registered in mock-only.ts.
+  'firstRun.localSetup', 'firstRun.startLocal', 'firstRun.localDownload',
+  'firstRun.resumeLocalDownload', 'claudeCode.install',
   'artifacts.listProjectsIndex', 'artifacts.listSession', 'artifacts.listProject',
   'artifacts.listAllFiles', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
@@ -1027,13 +1030,22 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const claudeCodePin = typeof location !== 'undefined'
     ? new URLSearchParams(location.search).get('claudeCode')
     : null;
-  const claudeCodeStatus: ClaudeAccountStatus =
+  let claudeCodeStatus: ClaudeAccountStatus =
     claudeCodePin === 'signed-out' ? { state: 'signed-out' }
     : claudeCodePin === 'not-installed' ? { state: 'not-installed' }
     : claudeCodePin === 'unknown' ? { state: 'unknown' }
     : claudeCodePin === 'apikey' ? { state: 'signed-in', apiKey: true }
     : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false };
-  const claudeCode = { status: async () => claudeCodeStatus };
+  const claudeCode = {
+    status: async () => claudeCodeStatus,
+    // First-run local models (F-5): a short wait, then installed but signed out —
+    // what a real install leaves behind before the Claude sign-in.
+    install: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      claudeCodeStatus = { state: 'signed-out' };
+      return true;
+    },
+  };
 
   // Web search backends: two rows, neither keyed, as a fresh install has them.
   // `test` accepts any key so the Save path can be walked; `setKey`/`removeKey`
@@ -2476,10 +2488,42 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }
     } catch { /* the workbench can live without it */ }
   }
+  // First-run local models (2026-09-14). `?claudeInstall=installing` puts Claude
+  // Code's on-demand install on the sign-in card (S-1); `?localFit=tight` is a
+  // computer too small to run a model well (Q-6); `?localDownload=downloading|stopped`
+  // is the band above the message box (Q-4/Q-7). Sizes and names are fixtures.
+  const firstRunParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+  const localFitTight = firstRunParams.get('localFit') === 'tight';
+  const localDownloadPin = firstRunParams.get('localDownload');
+  const localSetupModel = (id: string, label: string, notes: string, sizeBytes: number, fitLabel: string) =>
+    ({ id, label, notes, sizeBytes, fitLabel });
   const firstRun = {
+    localSetup: async () => ({
+      suggested: localFitTight
+        ? localSetupModel('qwen35-4b', 'Qwen3.5 4B', 'Fast all-rounder for chat and quick questions.', 2_580_000_000, 'Will be slow on this computer')
+        : localSetupModel('qwen35-9b', 'Qwen3.5 9B', 'A capable everyday model for writing, research and questions.', 5_900_000_000, 'Runs fast — fits on your graphics card'),
+      others: [
+        localSetupModel('qwen35-4b', 'Qwen3.5 4B', 'Fast all-rounder for chat and quick questions.', 2_580_000_000, localFitTight ? 'Will be slow on this computer' : 'Runs fast — fits on your graphics card'),
+        localSetupModel('gemma4-e4b', 'Gemma 4 E4B', 'Strong small model from Google — sees images.', 3_200_000_000, localFitTight ? 'Will be slow on this computer' : 'Runs fast — fits on your graphics card'),
+        localSetupModel('qwen35-9b', 'Qwen3.5 9B', 'A capable everyday model for writing, research and questions.', 5_900_000_000, localFitTight ? 'Too large for this computer' : 'Runs fast — fits on your graphics card'),
+        localSetupModel('gemma4-12b', 'Gemma 4 12B', 'Google’s larger model — slower, more thorough.', 7_900_000_000, localFitTight ? 'Too large for this computer' : 'Will be tight — close other apps first'),
+      ],
+      memoryWarning: localFitTight
+        ? 'This computer has 8 GB of memory, so a model here will answer slowly. Signing in with an account is much faster.'
+        : null,
+    }),
+    startLocal: async () => true,
+    localDownload: async () => (localDownloadPin === 'downloading'
+      ? { state: 'downloading', modelLabel: 'Qwen3.5 9B', percent: 42, minutesLeft: 6 }
+      : localDownloadPin === 'stopped'
+        ? { state: 'stopped', modelLabel: 'Qwen3.5 9B', percent: 42, minutesLeft: null }
+        : null),
+    resumeLocalDownload: async () => true,
     getState: async () => ({
       currentStep: firstRunStep,
-      prerequisites: [],
+      prerequisites: firstRunParams.get('claudeInstall') === 'installing'
+        ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
+        : [],
       overallProgress: 100,
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight

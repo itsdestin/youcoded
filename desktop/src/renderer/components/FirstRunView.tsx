@@ -4,7 +4,10 @@ import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
-import { Button, TextInput } from './ui';
+import { Button, Select, TextInput } from './ui';
+import { StatusStrip } from './ui/StatusStrip';
+import { LocalModelSetup } from './first-run/LocalModelSetup';
+import { KEY_SERVICES, KEY_SERVICE_LABEL, recogniseKey, type KeyService } from './first-run/recognise-key';
 
 // The ChatGPT kill switch (design §6): main sets `chatgpt.supported` false
 // under YOUCODED_CHATGPT=0, and the button must vanish with it — a button whose
@@ -85,6 +88,8 @@ function ProgressBar({ percent }: { percent: number }) {
 
 function AuthScreen({
   authMode,
+  claudeInstalling,
+  onLocal,
   onOAuth,
   onChatGpt,
   onOpenRouter,
@@ -99,14 +104,44 @@ function AuthScreen({
   // 2026-08-31-openrouter-connection-trust-design.md, not yet built). Review
   // 2026-09-05 P-5: it belongs on this screen beside the other two plans.
   onOpenRouter: () => void;
-  onApiKey: (key: string) => void;
+  // F-1/F-2: any key the app supports, run on YouCoded's own assistant.
+  onApiKey: (key: string, service: KeyService) => void;
+  // Q-1/Q-2: the fourth button opens local model setup on this card.
+  onLocal: (modelId: string) => void;
+  // S-1: Claude Code installs after "Log in with Claude", not before the screen.
+  claudeInstalling: boolean;
 }) {
   const [showApiKey, setShowApiKey] = useState(false);
   const [apiKey, setApiKey] = useState('');
+  const [localOpen, setLocalOpen] = useState(authMode === 'local');
+  // F-1 "recognise it": the prefix names the service; only a key the prefixes
+  // cannot place asks which service it is for.
+  const [pickedService, setPickedService] = useState<KeyService>('openai');
+  const recognised = recogniseKey(apiKey);
+  const unrecognised = !recognised && apiKey.trim().length >= 8;
+  const keyService: KeyService | null = recognised ?? (unrecognised ? pickedService : null);
 
   // The waiting line keeps the card around it (P-6): the screen does not
   // change shape between pressing a button and coming back from the browser.
   const card = 'mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4';
+
+  if (authMode === 'oauth' && claudeInstalling) {
+    return (
+      <div className={card}>
+        <StatusStrip tone="busy" className="w-full" detail="Your browser opens to sign in as soon as it finishes.">
+          Installing Claude Code…
+        </StatusStrip>
+      </div>
+    );
+  }
+
+  if (localOpen) {
+    return (
+      <div className={card}>
+        <LocalModelSetup onBack={() => setLocalOpen(false)} onStart={onLocal} />
+      </div>
+    );
+  }
 
   if (authMode === 'oauth' || authMode === 'chatgpt' || authMode === 'openrouter') {
     const where = authMode === 'chatgpt' ? 'ChatGPT' : authMode === 'openrouter' ? 'OpenRouter' : 'Claude';
@@ -154,6 +189,9 @@ function AuthScreen({
         <Button variant="secondary" onClick={onOpenRouter} className="px-6 py-3 rounded-full font-semibold text-base w-full">
           Log in with OpenRouter
         </Button>
+        <Button variant="secondary" onClick={() => setLocalOpen(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+          Use a local model
+        </Button>
       </div>
 
       {!showApiKey ? (
@@ -161,7 +199,7 @@ function AuthScreen({
           onClick={() => setShowApiKey(true)}
           className="text-xs text-fg-muted hover:text-fg-dim underline transition-colors"
         >
-          Use an API key or local model
+          Use an API key
         </button>
       ) : (
         <div className="flex flex-col items-center gap-3 w-full">
@@ -173,19 +211,32 @@ function AuthScreen({
           <TextInput
             type="password"
             size="md"
-            aria-label="Anthropic API key"
+            aria-label="API key"
             className="w-full"
-            placeholder="sk-ant-..."
+            placeholder="Paste your API key"
             value={apiKey}
             onChange={(e) => setApiKey(e.target.value)}
           />
+          {recognised && (
+            <p className="text-xs text-fg-dim text-center">{KEY_SERVICE_LABEL[recognised]} key</p>
+          )}
+          {unrecognised && (
+            <div className="w-full flex flex-col gap-1.5">
+              <span className="text-xs text-fg-dim">Which service is this key for?</span>
+              <Select
+                size="md"
+                options={KEY_SERVICES.map((s) => ({ value: s, label: KEY_SERVICE_LABEL[s] }))}
+                value={pickedService}
+                onChange={(v) => setPickedService(v as KeyService)}
+              />
+            </div>
+          )}
           <p className="text-xs text-fg-muted text-center leading-relaxed">
-            Your key is passed directly to Claude Code and stored in its secure config.
-            YouCoded never stores, logs, or backs up your key.
+            Works with Anthropic, OpenAI, Google and OpenRouter keys.
           </p>
           <Button
-            onClick={() => onApiKey(apiKey)}
-            disabled={!apiKey.trim()}
+            onClick={() => { if (keyService) onApiKey(apiKey, keyService); }}
+            disabled={!keyService}
             className="px-4 py-2 rounded-full text-sm"
           >
             Verify &amp; Continue
@@ -347,8 +398,14 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     (window as any).claude.firstRun.startAuth('openrouter');
   }, []);
 
-  const handleApiKey = useCallback((key: string) => {
-    (window as any).claude.firstRun.submitApiKey(key);
+  // F-2: the service travels with the key, because a key now runs on YouCoded's
+  // own assistant rather than being handed to Claude Code.
+  const handleApiKey = useCallback((key: string, service: KeyService) => {
+    (window as any).claude.firstRun.submitApiKey(key, service);
+  }, []);
+
+  const handleLocal = useCallback((modelId: string) => {
+    (window as any).claude.firstRun.startLocal?.(modelId);
   }, []);
 
   const handleDevMode = useCallback(() => {
@@ -409,6 +466,8 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               onChatGpt={handleChatGpt}
               onOpenRouter={handleOpenRouter}
               onApiKey={handleApiKey}
+              onLocal={handleLocal}
+              claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
             />
           )}
 

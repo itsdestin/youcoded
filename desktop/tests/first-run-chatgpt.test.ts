@@ -504,7 +504,7 @@ describe('FirstRunView — Try Again is offered only when something actually fai
     expect(screen.queryByText('Try Again')).toBeNull();
     // …and the headline stays the step's own line, not "Something went wrong".
     expect(screen.queryByText(/Something went wrong/)).toBeNull();
-    expect(screen.getByText('Sign in with your Claude, ChatGPT or OpenRouter account to finish setup.')).toBeTruthy();
+    expect(screen.getByText('Sign in with an account, or run a model on this computer, to finish setup.')).toBeTruthy();
   });
 
   it('a ChatGPT sign-in that timed out keeps its Try Again button', async () => {

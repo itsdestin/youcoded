@@ -97,6 +97,14 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // First-run local models (docs/active/design/2026-09-14-first-run-local-models): the
+  // local setup card, the download band above the message box and the on-demand Claude
+  // Code install are designed ahead of their backend. Delete each row as it ships.
+  { channel: 'firstRun.localSetup', feature: 'First-run local models — suggested model for this computer' },
+  { channel: 'firstRun.startLocal', feature: 'First-run local models — install the runner and start the download' },
+  { channel: 'firstRun.localDownload', feature: 'First-run local models — download band above the message box' },
+  { channel: 'firstRun.resumeLocalDownload', feature: 'First-run local models — Resume download' },
+  { channel: 'claudeCode.install', feature: 'First-run local models — install Claude Code on demand' },
   // Remote access batches 2 and 3 (questions deck 2026-09-10) designed three channels
   // ahead of their backend; all three came off on 2026-09-10 when the real channels
   // landed. Batch 2: `on.remoteConversationStatus` (the host tells the phone where its
