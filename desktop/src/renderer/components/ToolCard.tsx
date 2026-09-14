@@ -15,6 +15,7 @@ import { isAndroid } from '../platform';
 import ToolBody from './tool-views/ToolBody';
 import { useExpandAllToggle, getInitialExpanded } from '../hooks/useExpandAllToggle';
 import { isTypingTarget } from '../utils/is-typing-target';
+import { useCardKeysLive } from '../state/card-keys-context';
 import { asString } from '../utils/tool-input';
 // Full-auto safety stop (spec 2026-08-12, M5 2b): per-family copy + the
 // status-bar chip colors, so the footer band can never drift from the chip.
@@ -586,9 +587,11 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   const chosenScope: GrantScope = grantOptions.length === 1 ? grantOptions[0].scope : grantPick;
   const chosen = grantOptions.find((o) => o.scope === chosenScope) ?? grantOptions[0];
   const canAlwaysAllow = (hasSuggestions || isNative) && !suppressAlwaysAllow && !noGrantPossible;
-  // Safety-stop default is Run it (the primary verb, index 0); the generic
-  // row keeps its shipped default (Always Allow when present).
-  const [focusIdx, setFocusIdx] = useState(fullAutoStop ? 0 : canAlwaysAllow ? 1 : 0);
+  // Both layouts start on index 0 — Yes / Run it, a one-time allow.
+  // WHY: the generic row used to start on Always Allow, so any Enter the card
+  // caught saved a lasting rule; a stray key must never be able to do that
+  // (2026-09-14). Always Allow stays one arrow press away.
+  const [focusIdx, setFocusIdx] = useState(0);
   const buttonsRef = useRef<(HTMLButtonElement | null)[]>([]);
 
   // Set when an answer got NO reply (the call rejected); cleared on the next try.
@@ -663,10 +666,15 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
   const count = actions.current.length;
 
   // Global keyboard navigation: arrows cycle, Enter activates. Suspended while
-  // the consequence confirm is open so arrow/Enter don't drive the hidden row.
+  // the consequence confirm is open so arrow/Enter don't drive the hidden row,
+  // and while this card's chat is not the one on screen.
+  const keysLive = useCardKeysLive();
   useEffect(() => {
-    if (responding || confirmingAlways) return;
+    if (responding || confirmingAlways || !keysLive) return;
     const handler = (e: KeyboardEvent) => {
+      // WHY: InputBar sends on an Enter that reaches the page body and marks it
+      // handled. That one keypress is the message, not an answer to this card.
+      if (e.defaultPrevented) return;
       // Don't steal keyboard events when user is typing in an input
       if (isTypingTarget(e.target as Element)) return;
 
@@ -684,7 +692,7 @@ export function PermissionButtons({ requestId, suggestions, denyListed, command,
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, confirmingAlways, focusIdx, count]);
+  }, [responding, confirmingAlways, keysLive, focusIdx, count]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1';
   const ring = 'ring-2 ring-white/40';
@@ -1157,10 +1165,14 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
   ]);
   const optionCount = allOptions.length;
 
-  // Keyboard: Arrow Up/Down cycles options, Enter toggles selection, Ctrl+Enter submits
+  // Keyboard: Arrow Up/Down cycles options, Enter toggles selection, Ctrl+Enter submits.
+  // Off while this card's chat is not the one on screen (state/card-keys-context.ts).
+  const keysLive = useCardKeysLive();
   useEffect(() => {
-    if (responding) return;
+    if (responding || !keysLive) return;
     const handler = (e: KeyboardEvent) => {
+      // An Enter InputBar already sent as a message is not an answer here.
+      if (e.defaultPrevented) return;
       if (isTypingTarget(e.target as Element)) return;
 
       if (e.key === 'ArrowUp' || e.key === 'ArrowDown') {
@@ -1183,7 +1195,7 @@ function AskUserQuestionCard({ tool, requestId, onResponded, onFailed }: {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [responding, focusedOption, optionCount, allOptions, handleSelect, handleSubmit]);
+  }, [responding, keysLive, focusedOption, optionCount, allOptions, handleSelect, handleSubmit]);
 
   const pad = isAndroid() ? 'py-2' : 'py-1.5';
   let flatIdx = 0; // Running index across all questions' options for keyboard focus
