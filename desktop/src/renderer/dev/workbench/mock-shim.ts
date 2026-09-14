@@ -160,7 +160,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'firstRun.getState', 'terminal.getScreenText',
   // First-run local models (2026-09-14) — no backend yet, registered in mock-only.ts.
   'firstRun.localSetup', 'firstRun.startLocal', 'firstRun.localDownload',
-  'firstRun.resumeLocalDownload', 'claudeCode.install',
+  'firstRun.resumeLocalDownload', 'firstRun.connectLocalApp', 'claudeCode.install',
   'artifacts.listProjectsIndex', 'artifacts.listSession', 'artifacts.listProject',
   'artifacts.listAllFiles', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
@@ -1311,7 +1311,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       });
       return true;
     },
-    detectEndpoints: async () => [],
+    // `?localApps=found` (first-run local models, 2026-09-14): two model apps
+    // already running, so the connect screen can be seen with results. Every
+    // other load keeps the empty answer the Local Models panel was shot with.
+    detectEndpoints: async () => (typeof location !== 'undefined' && new URLSearchParams(location.search).get('localApps') === 'found'
+      ? [
+        { kind: 'ollama' as const, label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1', modelCount: 3, alreadyAdded: false },
+        { kind: 'lmstudio' as const, label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1', modelCount: 1, alreadyAdded: false },
+      ]
+      : []),
   };
 
   // The local llama.cpp engine card (EngineCard.tsx). Without a hand-written
@@ -2513,6 +2521,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         : null,
     }),
     startLocal: async () => true,
+    connectLocalApp: async () => true,
     localDownload: async () => (localDownloadPin === 'downloading'
       ? { state: 'downloading', modelLabel: 'Qwen3.5 9B', percent: 42, minutesLeft: 6 }
       : localDownloadPin === 'stopped'

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Button, Callout, LoadingState, Radio, RadioGroup } from '../ui';
 import { StatusStrip } from '../ui/StatusStrip';
+import { LocalAppConnect } from './LocalAppConnect';
 
 /**
  * "Use a local model" on the first-run sign-in card (design
@@ -40,6 +41,9 @@ export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onSta
   const [choosing, setChoosing] = useState(false);
   const [picked, setPicked] = useState('');
   const [starting, setStarting] = useState(false);
+  // Destin, 2026-09-14: local setup also points YouCoded at a model app that is
+  // already running (Ollama, LM Studio, another llama.cpp server…).
+  const [connectOpen, setConnectOpen] = useState(false);
 
   useEffect(() => {
     let alive = true;
@@ -54,6 +58,8 @@ export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onSta
   }, []);
 
   const chosen = info ? (info.others.find((m) => m.id === picked) ?? info.suggested) : null;
+
+  if (connectOpen) return <LocalAppConnect onBack={() => setConnectOpen(false)} />;
 
   return (
     <div className="w-full flex flex-col items-center gap-4">
@@ -119,6 +125,9 @@ export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onSta
                 Choose a different model
               </Button>
             )}
+            <Button variant="secondary" onClick={() => setConnectOpen(true)} className={PILL}>
+              Connect to an app on this computer
+            </Button>
             <Button variant="secondary" onClick={onBack} className={PILL}>
               Back to sign-in
             </Button>

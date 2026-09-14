@@ -105,6 +105,7 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   { channel: 'firstRun.localDownload', feature: 'First-run local models — download band above the message box' },
   { channel: 'firstRun.resumeLocalDownload', feature: 'First-run local models — Resume download' },
   { channel: 'claudeCode.install', feature: 'First-run local models — install Claude Code on demand' },
+  { channel: 'firstRun.connectLocalApp', feature: 'First-run local models — finish setup on a model app already running' },
   // Remote access batches 2 and 3 (questions deck 2026-09-10) designed three channels
   // ahead of their backend; all three came off on 2026-09-10 when the real channels
   // landed. Batch 2: `on.remoteConversationStatus` (the host tells the phone where its
