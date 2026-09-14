@@ -4,10 +4,11 @@ import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
-import { Button, Select, TextInput } from './ui';
+import { Button } from './ui';
 import { StatusStrip } from './ui/StatusStrip';
+import { ApiKeySetup } from './first-run/ApiKeySetup';
 import { LocalModelSetup } from './first-run/LocalModelSetup';
-import { KEY_SERVICES, KEY_SERVICE_LABEL, recogniseKey, type KeyService } from './first-run/recognise-key';
+import type { KeyService } from './first-run/recognise-key';
 
 // The ChatGPT kill switch (design §6): main sets `chatgpt.supported` false
 // under YOUCODED_CHATGPT=0, and the button must vanish with it — a button whose
@@ -89,7 +90,6 @@ function ProgressBar({ percent }: { percent: number }) {
 function AuthScreen({
   authMode,
   claudeInstalling,
-  onLocal,
   onOAuth,
   onChatGpt,
   onOpenRouter,
@@ -106,20 +106,12 @@ function AuthScreen({
   onOpenRouter: () => void;
   // F-1/F-2: any key the app supports, run on YouCoded's own assistant.
   onApiKey: (key: string, service: KeyService) => void;
-  // Q-1/Q-2: the fourth button opens local model setup on this card.
-  onLocal: (modelId: string) => void;
   // S-1: Claude Code installs after "Log in with Claude", not before the screen.
   claudeInstalling: boolean;
 }) {
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [apiKey, setApiKey] = useState('');
   const [localOpen, setLocalOpen] = useState(authMode === 'local');
-  // F-1 "recognise it": the prefix names the service; only a key the prefixes
-  // cannot place asks which service it is for.
-  const [pickedService, setPickedService] = useState<KeyService>('openai');
-  const recognised = recogniseKey(apiKey);
-  const unrecognised = !recognised && apiKey.trim().length >= 8;
-  const keyService: KeyService | null = recognised ?? (unrecognised ? pickedService : null);
+  // Round 3 review (A-7): the API key opens its own page, like Use a local model.
+  const [keyOpen, setKeyOpen] = useState(authMode === 'apikey');
 
   // The waiting line keeps the card around it (P-6): the screen does not
   // change shape between pressing a button and coming back from the browser.
@@ -138,7 +130,15 @@ function AuthScreen({
   if (localOpen) {
     return (
       <div className={card}>
-        <LocalModelSetup onBack={() => setLocalOpen(false)} onStart={onLocal} />
+        <LocalModelSetup onBack={() => setLocalOpen(false)} />
+      </div>
+    );
+  }
+
+  if (keyOpen) {
+    return (
+      <div className={card}>
+        <ApiKeySetup onBack={() => setKeyOpen(false)} onSubmit={onApiKey} />
       </div>
     );
   }
@@ -194,57 +194,13 @@ function AuthScreen({
         <Button variant="secondary" onClick={() => setLocalOpen(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
           Use a local model
         </Button>
-      </div>
-
-      {!showApiKey ? (
-        // WHY a button, not an underlined link (Destin, 2026-09-14): "use an api
-        // key should be the same as the other buttons, not a link thing".
-        <Button variant="secondary" onClick={() => setShowApiKey(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+        {/* WHY a button, not an underlined link (Destin, 2026-09-14): "use an api
+            key should be the same as the other buttons, not a link thing". It
+            opens its own page (ApiKeySetup), like Use a local model (A-7). */}
+        <Button variant="secondary" onClick={() => setKeyOpen(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
           Use an API key
         </Button>
-      ) : (
-        <div className="flex flex-col items-center gap-3 w-full">
-          {/* Change 20: bg-well + rounded-md → the shared FIELD surface (password
-              fields route through TextInput too; type is preserved). NOT an
-              InputGroup — the Verify button sits below, with the key-handling
-              disclaimer between it and the field. aria-label added: the field had
-              only a placeholder for a name. */}
-          <TextInput
-            type="password"
-            size="md"
-            aria-label="API key"
-            className="w-full"
-            placeholder="Paste your API key"
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-          {recognised && (
-            <p className="text-xs text-fg-dim text-center">{KEY_SERVICE_LABEL[recognised]} key</p>
-          )}
-          {unrecognised && (
-            <div className="w-full flex flex-col gap-1.5">
-              <span className="text-xs text-fg-dim">Which service is this key for?</span>
-              <Select
-                size="md"
-                options={KEY_SERVICES.map((s) => ({ value: s, label: KEY_SERVICE_LABEL[s] }))}
-                value={pickedService}
-                onChange={(v) => setPickedService(v as KeyService)}
-              />
-            </div>
-          )}
-          <p className="text-xs text-fg-muted text-center leading-relaxed">
-            Works with Anthropic, OpenAI, Google and OpenRouter keys.
-          </p>
-          <Button
-            onClick={() => { if (keyService) onApiKey(apiKey, keyService); }}
-            disabled={!keyService}
-            variant="secondary"
-            className="px-6 py-3 rounded-full font-semibold text-base w-full"
-          >
-            Verify &amp; Continue
-          </Button>
-        </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -405,11 +361,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   const handleApiKey = useCallback((key: string, service: KeyService) => {
     (window as any).claude.firstRun.submitApiKey(key, service);
   }, []);
-
-  const handleLocal = useCallback((modelId: string) => {
-    (window as any).claude.firstRun.startLocal?.(modelId);
-  }, []);
-
   const handleDevMode = useCallback(() => {
     (window as any).claude.firstRun.devModeDone();
   }, []);
@@ -434,7 +385,12 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
           {/* Prerequisite checklist — rounded pills */}
           {state && (
             <ul className="w-full space-y-2">
-              {state.prerequisites.map((p) => {
+              {state.prerequisites
+                // Round 3 review (B-9, "two separate installing cards?"): Claude
+                // Code's on-demand install is shown once, on the sign-in card —
+                // this checklist no longer lists it on the sign-in step.
+                .filter((p) => !(state.currentStep === 'AUTHENTICATE' && p.name === 'claude'))
+                .map((p) => {
                 const active = p.status === 'installing' || p.status === 'checking';
                 return (
                   <li
@@ -468,7 +424,6 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               onChatGpt={handleChatGpt}
               onOpenRouter={handleOpenRouter}
               onApiKey={handleApiKey}
-              onLocal={handleLocal}
               claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
             />
           )}

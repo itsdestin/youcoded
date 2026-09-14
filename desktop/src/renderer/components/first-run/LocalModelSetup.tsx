@@ -1,65 +1,72 @@
-import { useEffect, useState } from 'react';
-import { Button, Callout, LoadingState, Radio, RadioGroup } from '../ui';
-import { StatusStrip } from '../ui/StatusStrip';
+import { useEffect, useRef, useState } from 'react';
+import type { CuratedModel, DownloadProgress, FitEstimate, QuantOption } from '../../../shared/model-manager-types';
+import { LocalModelBrowser, RepoCard } from '../LocalModelsSection';
+import { Button, LoadingState } from '../ui';
 import { LocalAppConnect } from './LocalAppConnect';
 
 /**
  * "Use a local model" on the first-run sign-in card (design
  * 2026-09-14-first-run-local-models):
  *  - Q-2 set up inside setup, not by sending a new user to Settings;
- *  - Q-3 one model suggested for this computer, with the full list one link away;
- *  - Q-6 the option is always offered, with a warning on a computer too small to
- *    run a model well;
- *  - Q-4 pressing Download hands off to the app, which keeps downloading.
+ *  - Q-3 one model suggested for this computer, with the full list one press away;
+ *  - Q-6 the option is always offered, with a warning on a small computer;
+ *  - Destin's note: or use a model app already running on this computer.
+ *
+ * WHY the suggestion is a Local models row and the full list IS the Local models
+ * browser (round 3 review B-3/B-4, Destin 2026-09-14: "this list should match the
+ * search/list provided in the assistant settings -> local models download screen",
+ * "warnings should match existing styling"): one list and one warning style for
+ * the same thing, so setup and Settings cannot drift apart. A download started
+ * from either is what finishes setup.
  */
 
-export interface LocalSetupModel {
-  id: string;
-  label: string;
-  notes: string;
-  sizeBytes: number;
-  /** The fit verdict in words, e.g. "Runs fast — fits on your graphics card". */
-  fitLabel: string;
-}
+type QuantWithFit = QuantOption & { fit: FitEstimate };
 
 export interface LocalSetupInfo {
-  suggested: LocalSetupModel;
-  others: LocalSetupModel[];
+  /** One of the curated models, chosen for this computer. */
+  suggested: CuratedModel;
   /** Set only when this computer will run every model slowly. */
   memoryWarning: string | null;
 }
 
-const gb = (bytes: number) => `${(bytes / 1_000_000_000).toFixed(1)} GB`;
-
-// WHY every action here is the sign-in card's outlined pill (Destin,
-// 2026-09-14): all buttons on this screen are one colour with a hover, and none
-// is an underlined link.
+// WHY every action is the card's outlined pill: first-run rule, Destin 2026-09-14.
 const PILL = 'px-6 py-3 rounded-full font-semibold text-base w-full';
 
-export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onStart: (modelId: string) => void }) {
+export function LocalModelSetup({ onBack }: { onBack: () => void }) {
   const [info, setInfo] = useState<LocalSetupInfo | null>(null);
-  const [choosing, setChoosing] = useState(false);
-  const [picked, setPicked] = useState('');
-  const [starting, setStarting] = useState(false);
-  // Destin, 2026-09-14: local setup also points YouCoded at a model app that is
-  // already running (Ollama, LM Studio, another llama.cpp server…).
-  const [connectOpen, setConnectOpen] = useState(false);
+  const [view, setView] = useState<'suggested' | 'browse' | 'connect'>('suggested');
+  const [expanded, setExpanded] = useState(false);
+  // The suggested row needs what RepoCard needs inside Local models: live
+  // download progress and the resolved quant options.
+  const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
+  const quantOptsByKeyRef = useRef<Record<string, QuantWithFit>>({});
 
   useEffect(() => {
     let alive = true;
     Promise.resolve((window as any).claude?.firstRun?.localSetup?.())
-      .then((i: LocalSetupInfo | undefined) => {
-        if (!alive || !i) return;
-        setInfo(i);
-        setPicked(i.suggested.id);
-      })
+      .then((i: LocalSetupInfo | undefined) => { if (alive && i) setInfo(i); })
       .catch(() => { /* build stage: an ErrorState with Retry belongs here */ });
-    return () => { alive = false; };
+    const off = (window as any).claude?.models?.onDownloadProgress?.((p: DownloadProgress) => {
+      setDownloads((prev) => ({ ...prev, [p.downloadId]: p }));
+    });
+    return () => { alive = false; if (typeof off === 'function') off(); };
   }, []);
 
-  const chosen = info ? (info.others.find((m) => m.id === picked) ?? info.suggested) : null;
+  if (view === 'connect') return <LocalAppConnect onBack={() => setView('suggested')} />;
 
-  if (connectOpen) return <LocalAppConnect onBack={() => setConnectOpen(false)} />;
+  if (view === 'browse') {
+    return (
+      <div className="w-full flex flex-col items-center gap-4">
+        <p className="text-base font-medium text-fg text-center">Choose a model</p>
+        <div className="w-full text-left">
+          <LocalModelBrowser />
+        </div>
+        <Button variant="secondary" onClick={() => setView('suggested')} className={PILL}>
+          Back
+        </Button>
+      </div>
+    );
+  }
 
   return (
     <div className="w-full flex flex-col items-center gap-4">
@@ -70,70 +77,42 @@ export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onSta
         </p>
       </div>
 
-      {!info || !chosen ? (
+      {!info ? (
         <LoadingState what="this computer" verb="Checking" />
-      ) : starting ? (
-        <StatusStrip tone="busy" className="w-full" detail="YouCoded opens in a moment and keeps downloading there.">
-          Getting {chosen.label} ready…
-        </StatusStrip>
       ) : (
         <>
+          {/* The same amber the Local models rows give a tight fit. */}
           {info.memoryWarning && (
-            <Callout tone="warning" className="w-full">{info.memoryWarning}</Callout>
+            <p className="w-full text-2xs text-amber-500 text-left">{info.memoryWarning}</p>
           )}
-
-          {!choosing ? (
-            <div className="w-full rounded-lg bg-inset px-4 py-3 text-left">
-              <p className="text-2xs uppercase tracking-wide text-fg-muted">Suggested for this computer</p>
-              <p className="mt-1 text-sm font-medium text-fg">{info.suggested.label}</p>
-              <p className="text-xs text-fg-2">{info.suggested.notes}</p>
-              <p className="mt-1.5 text-2xs text-fg-muted">
-                {gb(info.suggested.sizeBytes)} download · {info.suggested.fitLabel}
-              </p>
-            </div>
-          ) : (
-            <RadioGroup
-              options={info.others.map((m) => m.id)}
-              value={picked}
-              onChange={setPicked}
-              aria-label="Choose a model"
-              className="w-full flex flex-col gap-2"
-            >
-              {info.others.map((m) => (
-                <label
-                  key={m.id}
-                  className="w-full flex items-start gap-3 rounded-md border border-edge-dim bg-inset px-3 py-2.5 text-left cursor-pointer"
-                >
-                  <Radio checked={picked === m.id} onChange={() => setPicked(m.id)} className="mt-1" aria-label={m.label} />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium text-fg">{m.label}</span>
-                    <span className="block text-2xs text-fg-muted">{gb(m.sizeBytes)} · {m.fitLabel}</span>
-                  </span>
-                </label>
-              ))}
-            </RadioGroup>
-          )}
-
-          {/* Documented pill exception: the first-run card's hero actions keep
-              rounded-full and their larger padding (see AuthScreen). */}
-          <div className="flex flex-col items-stretch gap-3 w-full">
-            <Button variant="secondary" onClick={() => { setStarting(true); onStart(chosen.id); }} className={PILL}>
-              Download {chosen.label}
-            </Button>
-            {!choosing && (
-              <Button variant="secondary" onClick={() => setChoosing(true)} className={PILL}>
-                Choose a different model
-              </Button>
-            )}
-            <Button variant="secondary" onClick={() => setConnectOpen(true)} className={PILL}>
-              Use an app on this computer
-            </Button>
-            <Button variant="secondary" onClick={onBack} className={PILL}>
-              Back to sign-in
-            </Button>
+          <div className="w-full text-left">
+            <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Suggested for this computer</p>
+            <RepoCard
+              repo={info.suggested.hfRepo}
+              label={info.suggested.label}
+              sub={info.suggested.notes}
+              preferredQuant={info.suggested.quantDefault}
+              autoResolve
+              downloads={downloads}
+              quantOptsByKeyRef={quantOptsByKeyRef}
+              expanded={expanded}
+              onToggle={() => setExpanded((e) => !e)}
+            />
           </div>
         </>
       )}
+
+      <div className="flex flex-col items-stretch gap-3 w-full">
+        <Button variant="secondary" onClick={() => setView('browse')} className={PILL}>
+          Choose a different model
+        </Button>
+        <Button variant="secondary" onClick={() => setView('connect')} className={PILL}>
+          Use an app on this computer
+        </Button>
+        <Button variant="secondary" onClick={onBack} className={PILL}>
+          Back to sign-in
+        </Button>
+      </div>
     </div>
   );
 }

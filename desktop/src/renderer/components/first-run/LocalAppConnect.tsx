@@ -67,9 +67,7 @@ export function LocalAppConnect({ onBack }: { onBack: () => void }) {
 
       {hits === null ? (
         <LoadingState what="model apps on this computer" verb="Looking for" />
-      ) : hits.length === 0 ? (
-        <p className="text-sm text-fg-dim text-center">No model apps found running right now.</p>
-      ) : (
+      ) : hits.length === 0 ? null : (
         <div className="flex flex-col items-stretch gap-3 w-full">
           <p className="text-2xs uppercase tracking-wide text-fg-muted text-center">Found on this computer</p>
           {hits.map((hit) => (
@@ -81,7 +79,11 @@ export function LocalAppConnect({ onBack }: { onBack: () => void }) {
       )}
 
       <div className="w-full flex flex-col gap-1.5">
-        <label htmlFor="first-run-local-app-address" className="text-xs text-fg-dim">Or enter its address</label>
+        {/* Round 3 review (C-13): with nothing found, no "none found, or enter"
+            framing — the box simply asks for the address. */}
+        <label htmlFor="first-run-local-app-address" className="text-xs text-fg-dim">
+          {hits !== null && hits.length === 0 ? 'Enter the address for your local endpoint' : 'Or enter its address'}
+        </label>
         <TextInput
           id="first-run-local-app-address"
           size="md"

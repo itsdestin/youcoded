@@ -11,6 +11,11 @@ import { StatusStrip } from './ui/StatusStrip';
  *
  * One strip, two states, because they are the same fact at two moments: this
  * conversation's model is not on the computer yet.
+ *
+ * Round 3 review (B-5/B-6, Destin 2026-09-14): ONLY for the first download, when
+ * the app would otherwise be unusable. If any other model or provider can already
+ * answer, main reports null and this strip never appears — an ordinary download
+ * started from Local models is not announced here.
  */
 
 export interface SetupDownloadStatus {

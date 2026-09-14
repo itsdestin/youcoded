@@ -159,7 +159,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'theme.list', 'theme.readFile', 'theme.writeFile', 'theme.onReload',
   'firstRun.getState', 'terminal.getScreenText',
   // First-run local models (2026-09-14) — no backend yet, registered in mock-only.ts.
-  'firstRun.localSetup', 'firstRun.startLocal', 'firstRun.localDownload',
+  'firstRun.localSetup', 'firstRun.localDownload',
   'firstRun.resumeLocalDownload', 'firstRun.connectLocalApp', 'claudeCode.install',
   'artifacts.listProjectsIndex', 'artifacts.listSession', 'artifacts.listProject',
   'artifacts.listAllFiles', 'artifacts.get', 'artifacts.checkExistence',
@@ -1217,7 +1217,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // (R1-25). One row carries it so the wording can be reviewed on screen.
       (f16.fit.breakdown as Record<string, unknown>).contextBytesIsUpperBound = true;
       return [
-        row('UD-Q4_K_XL', 'Balanced quality and size — recommended', 2_580_000_000, 'fits', 'Runs fast — fits on your GPU'),
+        // `?localFit=tight` (first-run local models): a small computer, where the
+        // recommended quant is tight — the verdict the Local models row colours.
+        localFitTight
+          ? row('UD-Q4_K_XL', 'Balanced quality and size — recommended', 2_580_000_000, 'tight', 'Will be tight — close other apps first')
+          : row('UD-Q4_K_XL', 'Balanced quality and size — recommended', 2_580_000_000, 'fits', 'Runs fast — fits on your GPU'),
         row('Q8_0', 'Highest quality quantization — near-original output', 4_280_000_000, 'fits', 'Runs fast — fits on your GPU'),
         f16,
       ];
@@ -2503,24 +2507,18 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const firstRunParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
   const localFitTight = firstRunParams.get('localFit') === 'tight';
   const localDownloadPin = firstRunParams.get('localDownload');
-  const localSetupModel = (id: string, label: string, notes: string, sizeBytes: number, fitLabel: string) =>
-    ({ id, label, notes, sizeBytes, fitLabel });
   const firstRun = {
+    // The suggestion is one of the curated cards (the same two `models.curated`
+    // serves), so setup can show it with the Local models row — round 3 review
+    // B-3/B-4 asked for that row and its warning styling, not a new card.
     localSetup: async () => ({
       suggested: localFitTight
-        ? localSetupModel('qwen35-4b', 'Qwen3.5 4B', 'Fast all-rounder for chat and quick questions.', 2_580_000_000, 'Will be slow on this computer')
-        : localSetupModel('qwen35-9b', 'Qwen3.5 9B', 'A capable everyday model for writing, research and questions.', 5_900_000_000, 'Runs fast — fits on your graphics card'),
-      others: [
-        localSetupModel('qwen35-4b', 'Qwen3.5 4B', 'Fast all-rounder for chat and quick questions.', 2_580_000_000, localFitTight ? 'Will be slow on this computer' : 'Runs fast — fits on your graphics card'),
-        localSetupModel('gemma4-e4b', 'Gemma 4 E4B', 'Strong small model from Google — sees images.', 3_200_000_000, localFitTight ? 'Will be slow on this computer' : 'Runs fast — fits on your graphics card'),
-        localSetupModel('qwen35-9b', 'Qwen3.5 9B', 'A capable everyday model for writing, research and questions.', 5_900_000_000, localFitTight ? 'Too large for this computer' : 'Runs fast — fits on your graphics card'),
-        localSetupModel('gemma4-12b', 'Gemma 4 12B', 'Google’s larger model — slower, more thorough.', 7_900_000_000, localFitTight ? 'Too large for this computer' : 'Will be tight — close other apps first'),
-      ],
+        ? { id: 'qwen35-4b', label: 'Qwen3.5 4B', tier: 'small', hfRepo: 'unsloth/Qwen3.5-4B-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Fast all-rounder for chat and quick questions.' }
+        : { id: 'gemma4-e4b', label: 'Gemma 4 E4B', tier: 'small', hfRepo: 'unsloth/gemma-4-E4B-it-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Strong small model from Google — sees images.' },
       memoryWarning: localFitTight
         ? 'This computer has 8 GB of memory, so a model here will answer slowly. Signing in with an account is much faster.'
         : null,
     }),
-    startLocal: async () => true,
     connectLocalApp: async () => true,
     localDownload: async () => (localDownloadPin === 'downloading'
       ? { state: 'downloading', modelLabel: 'Qwen3.5 9B', percent: 42, minutesLeft: 6 }
