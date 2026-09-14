@@ -2515,9 +2515,6 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       suggested: localFitTight
         ? { id: 'qwen35-4b', label: 'Qwen3.5 4B', tier: 'small', hfRepo: 'unsloth/Qwen3.5-4B-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Fast all-rounder for chat and quick questions.' }
         : { id: 'gemma4-e4b', label: 'Gemma 4 E4B', tier: 'small', hfRepo: 'unsloth/gemma-4-E4B-it-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Strong small model from Google — sees images.' },
-      memoryWarning: localFitTight
-        ? 'This computer has 8 GB of memory, so a model here will answer slowly. Signing in with an account is much faster.'
-        : null,
     }),
     connectLocalApp: async () => true,
     localDownload: async () => (localDownloadPin === 'downloading'

@@ -25,8 +25,6 @@ type QuantWithFit = QuantOption & { fit: FitEstimate };
 export interface LocalSetupInfo {
   /** One of the curated models, chosen for this computer. */
   suggested: CuratedModel;
-  /** Set only when this computer will run every model slowly. */
-  memoryWarning: string | null;
 }
 
 // WHY every action is the card's outlined pill: first-run rule, Destin 2026-09-14.
@@ -81,10 +79,8 @@ export function LocalModelSetup({ onBack }: { onBack: () => void }) {
         <LoadingState what="this computer" verb="Checking" />
       ) : (
         <>
-          {/* The same amber the Local models rows give a tight fit. */}
-          {info.memoryWarning && (
-            <p className="w-full text-2xs text-amber-500 text-left">{info.memoryWarning}</p>
-          )}
+          {/* Round 4 review (B-4): no separate warning above the card — on a small
+              computer the row's own amber fit line is the warning. */}
           <div className="w-full text-left">
             <p className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-2">Suggested for this computer</p>
             <RepoCard
