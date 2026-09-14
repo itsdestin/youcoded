@@ -2227,6 +2227,15 @@ export function installShim(): void {
         error: 'remote-unsupported' as const,
       }),
       getCachedDownload: async (_version: string) => null,
+      // Unlike download/launch, the channel is a HOST setting, not a local
+      // process — a paired desktop can answer both, so these go over the socket
+      // instead of stubbing. Android has no in-app updater and no branch for
+      // them, so it answers `{ok:false, unsupported:true}`; the About toggle is
+      // desktop-gated and never calls them there.
+      getBetaChannel: (): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+        invoke('update:get-beta-channel'),
+      setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+        invoke('update:set-beta-channel', { enabled }),
       onProgress: (_handler: (ev: any) => void) => {
         // No-op on remote browsers — they never emit progress.
         return () => {};

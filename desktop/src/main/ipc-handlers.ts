@@ -110,7 +110,8 @@ import { readLogTail, gatherDiagnostics, summarizeIssue, submitIssue, installWor
 import { createUpdateInstaller, findCachedDownload, makeLaunchInstaller, UpdateInstallError, isAllowedUpdateHost } from './update-installer';
 import type { UpdateProgressEvent, UpdateInstallErrorCode } from '../shared/update-install-types';
 import { verifyDownloadedUpdate } from './update-manifest-verify';
-import { readReleaseStatus, type UpdateStatus } from './update-release-status';
+import { readReleaseStatus, selectRelease, type UpdateStatus } from './update-release-status';
+import { UpdateSettings } from './update-settings';
 import { UPDATE_SIGNING_PUBLIC_KEY_PEM } from './update-signing-key';
 import { getChangelog } from './changelog-service';
 // Analytics opt-out — Phase 6. The two exported functions read/write
@@ -1956,9 +1957,28 @@ export function registerIpcHandlers(
   let lastReleaseCheck = 0;
   const RELEASE_CHECK_INTERVAL = 30 * 60 * 1000; // 30 minutes
 
+  // WHY its own NativeHome and not the shared `nativeHome` below: that const is
+  // declared ~600 lines further down, and the first update check fires before it
+  // is initialised — reading it here would hit the temporal dead zone. A second
+  // instance is safe because NativeHome.mutateJson serialises through a FILE
+  // lock, not in-process state, so the two never race on config.json.
+  const updateSettings = new UpdateSettings(new NativeHome());
+
+  /** The listing to ask for, and how to read it, for this install's channel. */
+  function releaseEndpoint(): { url: string; listing: boolean } {
+    // WHY two endpoints (2026-09-13): GitHub defines /releases/latest as the
+    // newest STABLE release and omits pre-releases entirely. A stable install
+    // must keep seeing exactly that — it is what stops ordinary users being
+    // pulled onto beta software. Only the beta channel pays for the listing.
+    return updateSettings.resolve(app.getVersion())
+      ? { url: 'https://api.github.com/repos/itsdestin/youcoded/releases?per_page=20', listing: true }
+      : { url: 'https://api.github.com/repos/itsdestin/youcoded/releases/latest', listing: false };
+  }
+
   function fetchLatestRelease(): Promise<void> {
+    const { url, listing } = releaseEndpoint();
     return new Promise((resolve) => {
-      const req = https.get('https://api.github.com/repos/itsdestin/youcoded/releases/latest', {
+      const req = https.get(url, {
         headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' },
         timeout: 10000,
       }, (res) => {
@@ -1967,13 +1987,13 @@ export function registerIpcHandlers(
           https.get(res.headers.location!, { headers: { 'User-Agent': 'YouCoded', 'Accept': 'application/vnd.github.v3+json' }, timeout: 10000 }, (rRes) => {
             let body = '';
             rRes.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-            rRes.on('end', () => { parseReleaseResponse(body); resolve(); });
+            rRes.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
           }).on('error', () => { resolve(); });
           return;
         }
         let body = '';
         res.on('data', (chunk: Buffer) => { body += chunk.toString(); });
-        res.on('end', () => { parseReleaseResponse(body); resolve(); });
+        res.on('end', () => { parseReleaseResponse(body, listing); resolve(); });
       });
       req.on('error', () => { resolve(); });
       req.on('timeout', () => { req.destroy(); resolve(); });
@@ -1984,13 +2004,20 @@ export function registerIpcHandlers(
     return { current: app.getVersion(), latest: app.getVersion(), update_available: false, download_url: null, manifest_url: null, signature_url: null, tag: null };
   }
 
-  function parseReleaseResponse(body: string) {
+  function parseReleaseResponse(body: string, listing: boolean) {
     try {
       // WHY the decision moved out (2026-09-11): the private compare that lived
       // here read `1.3.0-beta.76` as HIGHER than `1.3.0`, so a beta was never told
       // the full release existed. update-release-status.ts decides newer / which
       // file / signed, with tests that walk a beta through to the full release.
-      const next = readReleaseStatus(JSON.parse(body), app.getVersion(), process.platform, process.arch);
+      const parsed: unknown = JSON.parse(body);
+      // On the beta channel the body is an ARRAY of releases, newest-published
+      // first; selectRelease picks the highest VERSION carrying this computer's
+      // installer, so the full 1.3.0 ends a beta run without a special case.
+      const release = listing
+        ? selectRelease(parsed, { includePrereleases: true, platform: process.platform, arch: process.arch })
+        : (parsed as Parameters<typeof readReleaseStatus>[0]);
+      const next = readReleaseStatus(release, app.getVersion(), process.platform, process.arch);
       if (next) cachedUpdateStatus = next;
       else if (!cachedUpdateStatus) cachedUpdateStatus = currentOnlyStatus();
       // Stamped even for a reply that is not a release (GitHub's rate-limit body),
@@ -2032,6 +2059,25 @@ export function registerIpcHandlers(
 
     return status;
   }
+
+  function betaChannelState(): { betaChannel: boolean | null; effective: boolean } {
+    const saved = updateSettings.read().betaChannel;
+    return { betaChannel: saved, effective: updateSettings.resolve(app.getVersion()) };
+  }
+
+  // Registered here rather than beside the other update:* handlers so they sit
+  // in the same scope as updateSettings and the cache they have to invalidate.
+  ipcMain.handle('update:get-beta-channel', () => betaChannelState());
+  ipcMain.handle('update:set-beta-channel', async (_event, enabled: unknown) => {
+    await updateSettings.setBetaChannel(enabled);
+    // WHY re-check immediately: the status cache holds one answer for 30 minutes,
+    // and it was computed against the OTHER channel. Without this, turning the
+    // channel on leaves "you're up to date" on screen for up to half an hour —
+    // which reads as the toggle having done nothing.
+    lastReleaseCheck = 0;
+    await fetchLatestRelease();
+    return betaChannelState();
+  });
 
   // -------------------------------------------------------------------------
   // In-app update installer — download + launch the platform installer.

@@ -1700,6 +1700,8 @@ export const IPC = {
   UPDATE_LAUNCH: 'update:launch',
   UPDATE_PROGRESS: 'update:progress',
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
+  UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',   // () -> { betaChannel, effective }
+  UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',   // (enabled: boolean)
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
   // Open a local file with the OS default app (HTML→browser, .docx→Word, etc.).

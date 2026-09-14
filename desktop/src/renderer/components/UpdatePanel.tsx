@@ -9,6 +9,7 @@ import type { UpdateLaunchResult } from '../../shared/update-install-types';
 import { createPortal } from 'react-dom';
 import MarkdownContent from './MarkdownContent';
 import { Button, Dialog, LoadingState, ProgressBar } from './ui';
+import { BetaChannelRow } from './BetaChannelToggle';
 import { stripInvokeWrapper } from '../utils/ipc-error';
 
 // Error codes where a fresh download might succeed (transient or file-level).
@@ -287,7 +288,18 @@ export default function UpdatePanel({ open, onClose, updateStatus }: Props) {
         title={updateStatus.update_available ? 'Update available' : "What's new"}
         scrollBody={false}
       >
-        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">{body}</div>
+        {/* The beta switch rides at the END of the scrolling body, so it appears
+            in BOTH modes — under "what's new" when you are current, and under the
+            release notes when an update is waiting (Destin, 2026-09-13 deck, S-1:
+            "should also appear somewhere on the version chip popup modal with the
+            changelog"). It renders nothing where the channel is unavailable —
+            Android and a remote browser refuse the call — so no gate is needed
+            here. Inside the scroll rather than the footer: the footer only exists
+            in the update-available mode, and it belongs to the Update button. */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4">
+          {body}
+          <BetaChannelRow separated />
+        </div>
         {updateStatus.update_available && (
           <footer className="px-5 py-3 border-t border-edge-dim flex flex-col items-end">
             {/* Change 46: download progress gets a real bar. It used to live only

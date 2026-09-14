@@ -219,6 +219,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   // Update panel can be opened and its download made to fail. onProgress is left to the
   // catch-all on purpose: it must return its unsubscribe synchronously.
   'update.changelog', 'update.download', 'update.cancel', 'update.launch', 'update.getCachedDownload',
+  'update.getBetaChannel', 'update.setBetaChannel',
 ];
 
 const warned = new Set<string>();
@@ -2905,6 +2906,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       fromCache: false,
     }),
     getCachedDownload: async () => null,
+    // The About → Updates toggle reads this on mount. `effective: false` is the
+    // ordinary case (a release build that never chose), so the workbench shows
+    // the row in the state most people see.
+    getBetaChannel: async () => ({ betaChannel: null, effective: false }),
+    setBetaChannel: async (enabled: boolean) => ({ betaChannel: enabled, effective: enabled }),
     download: async () => ({ jobId: 'wb-update-1', filePath: '/home/destin/Downloads/YouCoded-1.3.0.AppImage' }),
     cancel: async () => undefined,
     launch: async () => ({ success: true as const, quitPending: false as const, fallback: 'browser' as const }),

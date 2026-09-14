@@ -2,8 +2,8 @@ import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 
-// These five strings are the entire in-app-update IPC surface. If you add a
-// sixth, add it here first and the test will tell you which files haven't
+// These seven strings are the entire in-app-update IPC surface. If you add an
+// eighth, add it here first and the test will tell you which files haven't
 // been updated yet.
 const CHANNELS = [
   'update:download',
@@ -11,6 +11,8 @@ const CHANNELS = [
   'update:launch',
   'update:progress',
   'update:get-cached-download',
+  'update:get-beta-channel',
+  'update:set-beta-channel',
 ];
 
 const ROOT = path.join(__dirname, '..');

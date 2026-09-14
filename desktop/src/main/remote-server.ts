@@ -58,7 +58,9 @@ import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { ClaudeAccount } from './providers/claude-account';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, app } from 'electron';
+import { NativeHome } from './native-home';
+import { UpdateSettings } from './update-settings';
 import { readTranscriptMeta } from './transcript-utils';
 import { listPastSessions, loadHistory, SAFE_ID_RE } from './session-browser';
 import { readTranscriptPage } from './transcript-page';
@@ -2144,6 +2146,32 @@ export class RemoteServer {
         // the payload and refetch meta).
         this.broadcast({ type: 'session:meta-changed', payload: { sessionId: resolved, flag: tagFlagKey(tagId), value: !!payload?.value } });
         this.respond(client.ws, type, id, { ok: true });
+        break;
+      }
+      // Update channel. A remote browser cannot install anything (download and
+      // launch are stubbed in the shim), but the channel is the HOST's setting
+      // and reads/writes the host's config.json, so both work over the socket.
+      // Constructed per call rather than held: NativeHome.mutateJson serialises
+      // through a file lock, and this is a once-in-a-while click, not a poll.
+      case 'update:get-beta-channel': {
+        const settings = new UpdateSettings(new NativeHome());
+        this.respond(client.ws, type, id, {
+          betaChannel: settings.read().betaChannel,
+          effective: settings.resolve(app.getVersion()),
+        });
+        break;
+      }
+      case 'update:set-beta-channel': {
+        const settings = new UpdateSettings(new NativeHome());
+        try {
+          await settings.setBetaChannel(payload?.enabled);
+          this.respond(client.ws, type, id, {
+            betaChannel: settings.read().betaChannel,
+            effective: settings.resolve(app.getVersion()),
+          });
+        } catch (err) {
+          this.respond(client.ws, type, id, { ok: false, error: String((err as Error)?.message ?? err) });
+        }
         break;
       }
       // Session naming. `unavailable` is answered as a refusal, not silence:

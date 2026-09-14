@@ -89,6 +89,8 @@ const IPC = {
   UPDATE_LAUNCH: 'update:launch',
   UPDATE_PROGRESS: 'update:progress',
   UPDATE_GET_CACHED_DOWNLOAD: 'update:get-cached-download',
+  UPDATE_GET_BETA_CHANNEL: 'update:get-beta-channel',   // () -> { betaChannel, effective }
+  UPDATE_SET_BETA_CHANNEL: 'update:set-beta-channel',   // (enabled: boolean)
   OPEN_EXTERNAL: 'shell:open-external',
   SHOW_ITEM_IN_FOLDER: 'shell:show-item-in-folder',
   OPEN_PATH: 'shell:open-path',
@@ -903,6 +905,13 @@ contextBridge.exposeInMainWorld('claude', {
     cancel: (jobId: string) => ipcRenderer.invoke(IPC.UPDATE_CANCEL, { jobId }),
     launch: (jobId: string, filePath: string) => ipcRenderer.invoke(IPC.UPDATE_LAUNCH, { jobId, filePath }),
     getCachedDownload: (version: string) => ipcRenderer.invoke(IPC.UPDATE_GET_CACHED_DOWNLOAD, { version }),
+    // `betaChannel` is the saved answer (null = never chosen); `effective` is what
+    // the next check will actually use, which for an unchosen install is whether
+    // this build is itself a beta. The toggle renders `effective`.
+    getBetaChannel: (): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+      ipcRenderer.invoke(IPC.UPDATE_GET_BETA_CHANNEL),
+    setBetaChannel: (enabled: boolean): Promise<{ betaChannel: boolean | null; effective: boolean }> =>
+      ipcRenderer.invoke(IPC.UPDATE_SET_BETA_CHANNEL, enabled),
     onProgress: (handler: (ev: { jobId: string; bytesReceived: number; bytesTotal: number; percent: number }) => void) => {
       const wrap = (_event: unknown, ev: any) => handler(ev);
       ipcRenderer.on(IPC.UPDATE_PROGRESS, wrap);
