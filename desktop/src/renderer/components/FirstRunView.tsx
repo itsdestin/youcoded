@@ -173,12 +173,14 @@ function AuthScreen({
       {/* Documented pill exception: first-run hero CTAs keep rounded-full and
           their own larger padding. Only the hover and the focus ring normalize —
           hover:opacity-90 faded the label along with the fill.
-          One primary per view (G-4): Claude Code is the default engine, so its
-          button is the filled one; the other two plans are outlined peers. */}
-      {/* Three full-width pills, the filled Claude one first. Side by side the
-          two outlined labels wrapped onto two lines at the card's width. */}
+          WHY every way in is the same outlined button (Destin, review of the
+          first-run local models mockups, 2026-09-14): "log in with claude should
+          not be a unique button" — no way in is presented as the default, and
+          G-4 allows a view with no filled button at all. */}
+      {/* Full-width pills, one per way in. Side by side the outlined labels
+          wrapped onto two lines at the card's width. */}
       <div className="flex flex-col items-stretch gap-3 w-full">
-        <Button onClick={onOAuth} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+        <Button variant="secondary" onClick={onOAuth} className="px-6 py-3 rounded-full font-semibold text-base w-full">
           Log in with Claude
         </Button>
         {isChatGptSupported() && (
@@ -195,12 +197,11 @@ function AuthScreen({
       </div>
 
       {!showApiKey ? (
-        <button
-          onClick={() => setShowApiKey(true)}
-          className="text-xs text-fg-muted hover:text-fg-dim underline transition-colors"
-        >
+        // WHY a button, not an underlined link (Destin, 2026-09-14): "use an api
+        // key should be the same as the other buttons, not a link thing".
+        <Button variant="secondary" onClick={() => setShowApiKey(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
           Use an API key
-        </button>
+        </Button>
       ) : (
         <div className="flex flex-col items-center gap-3 w-full">
           {/* Change 20: bg-well + rounded-md → the shared FIELD surface (password
@@ -237,7 +238,8 @@ function AuthScreen({
           <Button
             onClick={() => { if (keyService) onApiKey(apiKey, keyService); }}
             disabled={!keyService}
-            className="px-4 py-2 rounded-full text-sm"
+            variant="secondary"
+            className="px-6 py-3 rounded-full font-semibold text-base w-full"
           >
             Verify &amp; Continue
           </Button>

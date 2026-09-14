@@ -30,9 +30,10 @@ export interface LocalSetupInfo {
 
 const gb = (bytes: number) => `${(bytes / 1_000_000_000).toFixed(1)} GB`;
 
-// The card's existing text links ("Use an API key") — kept identical so the
-// two links on one card read as one kind of thing.
-const LINK = 'text-xs text-fg-muted hover:text-fg-dim underline transition-colors';
+// WHY every action here is the sign-in card's outlined pill (Destin,
+// 2026-09-14): all buttons on this screen are one colour with a hover, and none
+// is an underlined link.
+const PILL = 'px-6 py-3 rounded-full font-semibold text-base w-full';
 
 export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onStart: (modelId: string) => void }) {
   const [info, setInfo] = useState<LocalSetupInfo | null>(null);
@@ -109,22 +110,18 @@ export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onSta
 
           {/* Documented pill exception: the first-run card's hero actions keep
               rounded-full and their larger padding (see AuthScreen). */}
-          <Button
-            onClick={() => { setStarting(true); onStart(chosen.id); }}
-            className="px-6 py-3 rounded-full font-semibold text-base w-full"
-          >
-            Download {chosen.label}
-          </Button>
-
-          <div className="flex items-center justify-center gap-4">
+          <div className="flex flex-col items-stretch gap-3 w-full">
+            <Button variant="secondary" onClick={() => { setStarting(true); onStart(chosen.id); }} className={PILL}>
+              Download {chosen.label}
+            </Button>
             {!choosing && (
-              <button type="button" className={LINK} onClick={() => setChoosing(true)}>
+              <Button variant="secondary" onClick={() => setChoosing(true)} className={PILL}>
                 Choose a different model
-              </button>
+              </Button>
             )}
-            <button type="button" className={LINK} onClick={onBack}>
+            <Button variant="secondary" onClick={onBack} className={PILL}>
               Back to sign-in
-            </button>
+            </Button>
           </div>
         </>
       )}
