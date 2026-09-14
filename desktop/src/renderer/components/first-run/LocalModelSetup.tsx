@@ -126,7 +126,7 @@ export function LocalModelSetup({ onBack, onStart }: { onBack: () => void; onSta
               </Button>
             )}
             <Button variant="secondary" onClick={() => setConnectOpen(true)} className={PILL}>
-              Connect to an app on this computer
+              Use an app on this computer
             </Button>
             <Button variant="secondary" onClick={onBack} className={PILL}>
               Back to sign-in
