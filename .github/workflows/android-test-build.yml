@@ -2,6 +2,16 @@ name: Android Test Build
 
 on:
   workflow_dispatch:
+    inputs:
+      base:
+        description: >-
+          Version PREFIX to stamp into the dogfood APKs. This workflow's run
+          counter is appended automatically (e.g. 1.3.0-beta.12), and the build
+          type adds its own suffix on top, so the APKs report
+          1.3.0-beta.12-dev and 1.3.0-beta.12-releasetest. Leave it alone
+          unless the release line changes.
+        required: false
+        default: '1.3.0-beta'
 
 jobs:
   build:
@@ -9,6 +19,27 @@ jobs:
 
     steps:
       - uses: actions/checkout@v7
+
+      # WHY (2026-09-13): this workflow never stamped a version, so its APKs
+      # inherited the hand-set versionName in app/build.gradle.kts — `1.2.4`,
+      # the May release — and every dogfood build reported itself to analytics
+      # (AnalyticsService.kt sends BuildConfig.VERSION_NAME) as a 1.2.4 build.
+      # A 1.3 beta then showed up in the version breakdown as last spring's
+      # release. android-release.yml has stamped since 2026-09-10 and
+      # desktop-test-build.yml since 2026-08-15; this was the last build path
+      # that did not, which is exactly why it was the one telling lies.
+      #
+      # versionCode is deliberately NOT stamped. These APKs install as separate
+      # apps (.dev / .releasetest), so Play never sees the number, and raising
+      # it here would block installing a LOCAL build (still the hand-set 20)
+      # over a CI one — Android refuses a lower versionCode. The analytics
+      # problem is versionName's alone, so versionName is all this touches.
+      - name: Stamp dogfood version
+        shell: bash
+        run: |
+          NAME="${{ inputs.base }}.${{ github.run_number }}"
+          sed -i -E "s/versionName = \"[^\"]+\"/versionName = \"${NAME}\"/" app/build.gradle.kts
+          grep -nE 'versionCode|versionName' app/build.gradle.kts | head -2
 
       - name: Set up JDK 17
         uses: actions/setup-java@v6

@@ -4,6 +4,7 @@
 // picks up theme tokens automatically — no hardcoded colors, blur, or z-indexes
 // (PITFALLS overlay invariant).
 import { Dialog, SettingRow } from '../ui';
+import { BetaChannelRow } from '../BetaChannelToggle';
 
 import { useEscClose } from '../../hooks/use-esc-close';
 
@@ -63,6 +64,14 @@ export function DevelopmentPopup({ open, onClose, onOpenBug, onOpenContribute }:
           />
           {/* WHY: navigating public pages is not submission; these normal links stay usable. */}
           <SettingRow icon={<ClipboardListIcon />} title="Roadmap" description="See what’s planned on GitHub" onClick={() => window.open('https://github.com/itsdestin/youcoded-dev/blob/master/ROADMAP.md', '_blank', 'noopener,noreferrer')} />
+          {/* Beta builds. WHY here and not in About (Destin, 2026-09-13 deck):
+              every row above is someone choosing to help with the app rather
+              than just use it, which is the same person who wants pre-release
+              builds. It is the fifth card in the same list rather than its own
+              headed section ("remove the header/copy, leave just the card
+              thing") — it carries an icon because the four above it do, and a
+              card with an empty icon column reads as a broken one. */}
+          <BetaChannelRow variant="nav" icon={<FlaskIcon />} />
         </div>
       </div>
     </Dialog>
@@ -98,6 +107,21 @@ function CodeBracketsIcon() {
       <path d="M9 7 L4 12 L9 17" />
       <path d="M15 7 L20 12 L15 17" />
       <path d="M14 5 L10 19" />
+    </svg>
+  );
+}
+
+function FlaskIcon() {
+  // Lab flask — "a build that is still being tested". Same stroke weight and
+  // 24×24 box as the three above so the icon column stays even.
+  return (
+    <svg className="w-4 h-4 text-fg-muted" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
+      {/* Neck */}
+      <path d="M10 3 V9 L5 18 a2 2 0 0 0 1.8 3 h10.4 a2 2 0 0 0 1.8 -3 L14 9 V3" />
+      {/* Lip */}
+      <path d="M9 3 H15" />
+      {/* Liquid line */}
+      <path d="M7.2 14 H16.8" />
     </svg>
   );
 }

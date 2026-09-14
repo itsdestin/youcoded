@@ -19,6 +19,10 @@ export interface ReleaseJson {
   tag_name?: unknown;
   html_url?: unknown;
   assets?: unknown;
+  /** GitHub's own flag. A beta published by hand carries `prerelease: true`. */
+  prerelease?: unknown;
+  /** A draft is invisible to everyone and has no tag yet — never an offer. */
+  draft?: unknown;
 }
 
 export interface UpdateStatus {
@@ -50,10 +54,70 @@ export function pickInstallerAsset(
   return assets.find((a) => a.name.endsWith('.AppImage')) ?? assets.find((a) => a.name.endsWith('.deb'));
 }
 
+/** The well-formed assets of a release, ignoring anything GitHub shaped oddly. */
+export function readAssets(release: ReleaseJson | null | undefined): ReleaseAssetJson[] {
+  return Array.isArray(release?.assets)
+    ? (release!.assets as unknown[]).filter((a): a is ReleaseAssetJson =>
+        !!a && typeof (a as ReleaseAssetJson).name === 'string'
+        && typeof (a as ReleaseAssetJson).browser_download_url === 'string')
+    : [];
+}
+
 /**
- * Read one `/releases/latest` response. Returns null when the body is not a
- * release at all (GitHub's rate-limit reply has no tag) so the caller keeps what
- * it already knew instead of announcing a blank version.
+ * Is this version a pre-release? `1.3.0-beta.77` yes, `1.3.0` no — the same
+ * `-suffix` rule `compareVersions` sorts by, so "is a beta" and "sorts below
+ * its release" can never disagree.
+ */
+export function isPreRelease(version: string): boolean {
+  return version.replace(/^v/, '').split('+')[0].includes('-');
+}
+
+/**
+ * Pick the release this computer should be offered out of a `/releases` listing.
+ *
+ * WHY a listing and not `/releases/latest` (2026-09-13): GitHub defines "latest"
+ * as the newest STABLE release and omits pre-releases entirely, so someone on
+ * `1.3.0-beta.71` was never told `1.3.0-beta.72` existed — the semver fix let a
+ * beta accept the full release, but nothing ever offered it another beta. Only
+ * callers on the beta channel pass `includePrereleases`, so an ordinary install
+ * still sees exactly what it saw before.
+ *
+ * Highest version wins rather than newest-published, so re-publishing an old tag
+ * cannot walk anyone backwards; `compareVersions` already sorts `1.3.0` above
+ * every `1.3.0-beta.N`, which is what makes the full release end a beta run.
+ */
+export function selectRelease(
+  releases: unknown,
+  opts: { includePrereleases: boolean; platform: NodeJS.Platform; arch: string },
+): ReleaseJson | null {
+  if (!Array.isArray(releases)) return null;
+  let best: ReleaseJson | null = null;
+  let bestVersion = '';
+  for (const entry of releases) {
+    if (!entry || typeof entry !== 'object') continue;
+    const release = entry as ReleaseJson;
+    const tagName = typeof release.tag_name === 'string' ? release.tag_name : '';
+    if (!tagName) continue;
+    if (release.draft === true) continue;
+    if (release.prerelease === true && !opts.includePrereleases) continue;
+    // Same bar the pill uses below: a release carrying no installer for THIS
+    // computer is not an offer yet. One tag starts the Android and desktop
+    // workflows separately, so a fresh tag is briefly assets-less.
+    if (!pickInstallerAsset(readAssets(release), opts.platform, opts.arch)) continue;
+    const version = tagName.replace(/^v/, '');
+    if (!best || compareVersions(version, bestVersion) > 0) {
+      best = release;
+      bestVersion = version;
+    }
+  }
+  return best;
+}
+
+/**
+ * Read one release object into the status the pill and the Update button act on.
+ * Returns null when the body is not a release at all (GitHub's rate-limit reply
+ * has no tag) so the caller keeps what it already knew instead of announcing a
+ * blank version.
  */
 export function readReleaseStatus(
   release: ReleaseJson | null | undefined,
@@ -64,11 +128,7 @@ export function readReleaseStatus(
   const tagName = typeof release?.tag_name === 'string' ? release.tag_name : '';
   if (!tagName) return null;
   const latestVersion = tagName.replace(/^v/, '');
-  const assets: ReleaseAssetJson[] = Array.isArray(release?.assets)
-    ? (release!.assets as unknown[]).filter((a): a is ReleaseAssetJson =>
-        !!a && typeof (a as ReleaseAssetJson).name === 'string'
-        && typeof (a as ReleaseAssetJson).browser_download_url === 'string')
-    : [];
+  const assets = readAssets(release);
   const htmlUrl = typeof release?.html_url === 'string' ? release.html_url : null;
   const installer = pickInstallerAsset(assets, platform, arch);
 

@@ -111,6 +111,11 @@ declare global {
         cancel: (jobId: string) => Promise<{ success: boolean }>;
         launch: (jobId: string, filePath: string) => Promise<import('../../shared/update-install-types').UpdateLaunchResult>;
         getCachedDownload: (version: string) => Promise<import('../../shared/update-install-types').UpdateCachedDownload | null>;
+        // Beta update channel. `betaChannel` is the saved answer (null = never
+        // chosen); `effective` is what the next check will use, which for an
+        // unchosen install is whether this build is itself a pre-release.
+        getBetaChannel: () => Promise<{ betaChannel: boolean | null; effective: boolean }>;
+        setBetaChannel: (enabled: boolean) => Promise<{ betaChannel: boolean | null; effective: boolean }>;
         onProgress: (handler: (ev: import('../../shared/update-install-types').UpdateProgressEvent) => void) => () => void;
       };
       remote: {

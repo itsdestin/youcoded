@@ -3459,10 +3459,16 @@ class SessionService : Service() {
                 }
             }
 
-            // Desktop in-app update installer stubs (Android uses Play Store / direct APK sideload)
+            // Desktop in-app update installer stubs (Android uses Play Store / direct APK sideload).
+            // The beta CHANNEL is stubbed for the same reason the installer is: with no in-app
+            // updater there is no channel to choose, so answering anything else would be a
+            // setting that silently does nothing. The About toggle is desktop-gated and never
+            // calls these here.
             "update:download",
             "update:cancel",
             "update:launch",
+            "update:get-beta-channel",
+            "update:set-beta-channel",
             "update:get-cached-download" -> {
                 msg.id?.let {
                     bridgeServer.respond(ws, msg.type, it, UpdateInstallerStub.unsupported())
