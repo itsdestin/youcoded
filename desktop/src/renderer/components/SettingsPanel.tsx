@@ -195,6 +195,8 @@ interface Props {
   // Providers section isn't mounted in AndroidSettings).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
+  specialistsAutoOpen?: boolean;
+  onSpecialistsAutoOpenHandled?: () => void;
   // Help & feedback → "Show me around" replays the buddy's tour (first-run
   // guide design 2026-09-10 §1.6). Desktop-only: the tour does not ship on the
   // phone or in the browser, so those variants leave it undefined and the row
@@ -256,7 +258,7 @@ function ShortcutsPopup({ open, onClose }: { open: boolean; onClose: () => void 
   );
 }
 
-export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, onShowMeAround }: Props) {
+export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, specialistsAutoOpen, onSpecialistsAutoOpenHandled, onShowMeAround }: Props) {
   useEscClose(open, onClose);
   // Slide polish: track animation window so CSS can reduce backdrop-filter cost
   // and suppress scrollbar-thumb while the 300ms transform is running. Also
@@ -365,6 +367,8 @@ export default function SettingsPanel({ open, onClose, onSendInput, onRunCommand
                 onSyncAutoOpenHandled={onSyncAutoOpenHandled}
                 providersAutoOpen={providersAutoOpen}
                 onProvidersAutoOpenHandled={onProvidersAutoOpenHandled}
+                specialistsAutoOpen={specialistsAutoOpen}
+                onSpecialistsAutoOpenHandled={onSpecialistsAutoOpenHandled}
                 onShowMeAround={onShowMeAround}
               />
             )}
@@ -2759,7 +2763,7 @@ function AndroidSettings({ open, onSendInput, onRunCommand, onOpenThemeMarketpla
 
 // ─── Desktop Settings (existing, unchanged) ─────────────────────────────────
 
-function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, onShowMeAround }: {
+function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, activeSessionCwd, onOpenThemeMarketplace, onPublishTheme, onOpenClaudePreferences, syncAutoOpen, onSyncAutoOpenHandled, providersAutoOpen, onProvidersAutoOpenHandled, specialistsAutoOpen, onSpecialistsAutoOpenHandled, onShowMeAround }: {
   open: boolean;
   onClose: () => void;
   onSendInput: (text: string) => void;
@@ -2777,6 +2781,8 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
   // Deep-link the Model Providers popup open (provider-error bubble jump).
   providersAutoOpen?: boolean;
   onProvidersAutoOpenHandled?: () => void;
+  specialistsAutoOpen?: boolean;
+  onSpecialistsAutoOpenHandled?: () => void;
   // Help & feedback → Show me around (see Props above).
   onShowMeAround?: () => void;
 }) {
@@ -3022,9 +3028,9 @@ function DesktopSettings({ open, onSendInput, onRunCommand, hasActiveSession, ac
           onDefaultsChange={handleDefaultsChange}
           cwd={activeSessionCwd}
           onOpenClaudePreferences={onOpenClaudePreferences}
-          autoOpen={providersAutoOpen}
-          autoOpenPage="cloud"
-          onAutoOpenHandled={onProvidersAutoOpenHandled}
+          autoOpen={providersAutoOpen || specialistsAutoOpen}
+          autoOpenPage={specialistsAutoOpen ? 'specialists' : 'cloud'}
+          onAutoOpenHandled={specialistsAutoOpen ? onSpecialistsAutoOpenHandled : onProvidersAutoOpenHandled}
         />
 
         <ThemeButton onSendInput={onSendInput} onRunCommand={onRunCommand} onOpenMarketplace={onOpenThemeMarketplace} onPublishTheme={onPublishTheme} />

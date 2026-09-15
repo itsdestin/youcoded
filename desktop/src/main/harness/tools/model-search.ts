@@ -20,15 +20,15 @@ const MAX_RESULTS = 20;
 const MIN_QUERY_CHARS = 2;
 
 const NO_CATALOG_TEXT = 'Model list is unavailable right now (catalog not loaded). '
-  + 'Delegate with "budget"/"frontier" or the conversation\'s model instead.';
+  + 'Use the automatic Budget/Frontier tier, or explicitly request the conversation model.';
 
 export const ModelSearchTool = defineTool<z.infer<typeof inputSchema>>({
   name: 'ModelSearch',
   description:
     'Look up available model ids by name, for delegating a Task to a SPECIFIC model. '
     + 'Only use this when the user asked for a particular model — routine delegation should '
-    + 'use "budget" or "frontier" (the tiers the user designated in Settings), or omit the model '
-    + 'entirely to run on this conversation\'s model. Returns up to 20 matches, cheapest first, '
+    + 'use "budget" or "frontier" (the user\'s choices or safe provider defaults), or omit the model '
+    + 'for the automatic Budget tier. Returns up to 20 matches, cheapest first, '
     + 'with id, display name, price per million tokens, and context length.',
   shortDescription: 'Find a specific model id, for delegating a Task to it by name (user-directed only).',
   inputSchema,

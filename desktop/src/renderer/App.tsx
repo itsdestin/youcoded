@@ -79,6 +79,7 @@ import ModelPicker, { type ModelChoice } from './components/model/ModelPicker';
 import ModelPickerPopup from './components/ModelPickerPopup';
 import type { ModelBinding } from '../shared/provider-types';
 import OpenTasksPopup from './components/OpenTasksPopup';
+import { SPECIALIST_SETTINGS_EVENT } from './components/SpecialistModelUnavailable';
 import { useSessionTasks } from './hooks/useSessionTasks';
 import MarketplaceScreen from './components/marketplace/MarketplaceScreen';
 import LibraryScreen from './components/library/LibraryScreen';
@@ -318,6 +319,7 @@ function AppInner() {
   // Deep-link flag for the Model Providers popup — set by a provider-error
   // bubble's "Open Settings" jump so Settings opens straight to that section.
   const [providersAutoOpen, setProvidersAutoOpen] = useState(false);
+  const [specialistsAutoOpen, setSpecialistsAutoOpen] = useState(false);
 
   // "Manage models…" in the unified ModelPicker. The picker renders inside
   // SessionStrip (which HeaderBar owns) and inside ResumeBrowser, so a prop
@@ -328,6 +330,13 @@ function AppInner() {
     const open = () => { setProvidersAutoOpen(true); setSettingsOpen(true); };
     window.addEventListener('youcoded:open-model-providers', open);
     return () => window.removeEventListener('youcoded:open-model-providers', open);
+  }, []);
+  useEffect(() => {
+    // WHY the destination is owned here: App owns the outer Settings drawer;
+    // AssistantSettingsRow owns the page inside it, so both flags must move.
+    const open = () => { setSpecialistsAutoOpen(true); setSettingsOpen(true); };
+    window.addEventListener(SPECIALIST_SETTINGS_EVENT, open);
+    return () => window.removeEventListener(SPECIALIST_SETTINGS_EVENT, open);
   }, []);
   // Track which sessions the user has "seen" (switched to after activity completed)
   const [viewedSessions, setViewedSessions] = useState<Set<string>>(new Set());
@@ -3997,7 +4006,7 @@ function AppInner() {
           artifact drawer's framed chrome instead of being a separate slide-out. */}
       <SettingsPanel
         open={settingsOpen}
-        onClose={() => { setSettingsOpen(false); setSyncAutoOpen(false); setProvidersAutoOpen(false); }}
+        onClose={() => { setSettingsOpen(false); setSyncAutoOpen(false); setProvidersAutoOpen(false); setSpecialistsAutoOpen(false); }}
         onSendInput={(text) => {
           // Guarded: with a permission/question pending, the text would land on
           // CC's live Ink menu and the trailing \r would answer it.
@@ -4042,6 +4051,8 @@ function AppInner() {
         onSyncAutoOpenHandled={() => setSyncAutoOpen(false)}
         providersAutoOpen={providersAutoOpen}
         onProvidersAutoOpenHandled={() => setProvidersAutoOpen(false)}
+        specialistsAutoOpen={specialistsAutoOpen}
+        onSpecialistsAutoOpenHandled={() => setSpecialistsAutoOpen(false)}
         // Help & feedback → Show me around: replays the tour from stop one.
         onShowMeAround={() => { setSettingsOpen(false); setTourOpen(true); }}
       />

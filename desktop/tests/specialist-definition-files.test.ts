@@ -241,7 +241,14 @@ describe('loadClaudeCodeDefinition', () => {
     expect(result.value.definition.allowedTools).toEqual(['Read', 'Write', 'Edit']);
   });
 
-  it('cc: model haiku→budget, opus→frontier, sonnet→parent, weird→parent+warning', () => {
+  it('missing model stays implicit so Task can apply the safe Budget default', () => {
+    const personal = loadPersonalDefinition('/specialists/a.md', '---\nname: A\ndescription: Test.\ntools: [Read]\n---\nDo it.');
+    const cc = loadClaudeCodeDefinition('/agents/b.md', '---\nname: B\ndescription: Test.\n---\nDo it.', 'user');
+    expect(personal.ok && personal.value.definition.modelPreference).toBeUndefined();
+    expect(cc.ok && cc.value.definition.modelPreference).toBeUndefined();
+  });
+
+  it('cc: model haiku/sonnet→budget, opus→frontier, inherit→parent, weird→implicit+warning', () => {
     const haiku = loadClaudeCodeDefinition('/agents/a.md', '---\nname: A\ndescription: Test.\nmodel: haiku\n---\nDo it.', 'user');
     const opus = loadClaudeCodeDefinition('/agents/b.md', '---\nname: B\ndescription: Test.\nmodel: opus\n---\nDo it.', 'user');
     const sonnet = loadClaudeCodeDefinition('/agents/c.md', '---\nname: C\ndescription: Test.\nmodel: sonnet\n---\nDo it.', 'user');
@@ -249,16 +256,13 @@ describe('loadClaudeCodeDefinition', () => {
     const weird = loadClaudeCodeDefinition('/agents/d.md', '---\nname: D\ndescription: Test.\nmodel: gpt-5\n---\nDo it.', 'user');
     expect(haiku.ok && haiku.value.definition.modelPreference).toBe('budget');
     expect(opus.ok && opus.value.definition.modelPreference).toBe('frontier');
-    expect(sonnet.ok && sonnet.value.definition.modelPreference).toBe('parent');
+    expect(sonnet.ok && sonnet.value.definition.modelPreference).toBe('budget');
     expect(inherit.ok && inherit.value.definition.modelPreference).toBe('parent');
-    expect(weird.ok && weird.value.definition.modelPreference).toBe('parent');
-    // Fix 4 (review): "using the default (parent)" is meaningless jargon to a
-    // non-developer reading only this string — it must spell out what
-    // "parent" means, same gloss as the starter file uses.
+    expect(weird.ok && weird.value.definition.modelPreference).toBeUndefined();
     expect(
       weird.ok &&
         weird.value.warnings.some(
-          (w) => w.includes('gpt-5') && w.includes('the same model your main assistant is already running on'),
+          (w) => w.includes('gpt-5') && w.includes('automatic Budget model'),
         ),
     ).toBe(true);
   });

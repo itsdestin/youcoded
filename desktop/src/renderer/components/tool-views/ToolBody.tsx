@@ -25,6 +25,7 @@ import ChatsearchShowCard from './ChatsearchShowCard';
 import { asString } from '../../utils/tool-input';
 // G-1: the running-in-the-background strip and its Stop button.
 import { StatusStrip, Button, Tooltip } from '../ui';
+import SpecialistModelUnavailable, { parseSpecialistModelUnavailable } from '../SpecialistModelUnavailable';
 import { useSpecialistRunByChild, useSpecialistDefinition } from '../../hooks/useSpecialists';
 import { hasNestedAsk } from '../../utils/specialist-cards';
 import { SpecialistActions } from '../specialists/SpecialistActions';
@@ -706,6 +707,7 @@ function AgentView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
   // The consent envelope for an awaiting Task call renders in ToolCard (above
   // the buttons, visible without expanding) — not here, or it would double.
   const awaiting = tool.status === 'awaiting-approval';
+  const unavailableTier = isNative ? parseSpecialistModelUnavailable(tool.error) : null;
 
   return (
     <div className="space-y-2">
@@ -732,7 +734,16 @@ function AgentView({ tool, sessionId }: { tool: ToolCallState; sessionId?: strin
           <SpecialistActions sessionId={sessionId} run={run} />
         )}
       </AgentSections>
-      {tool.error && <ErrorBlock error={tool.error} />}
+      {unavailableTier ? (
+        <SpecialistModelUnavailable
+          sessionId={sessionId}
+          tier={unavailableTier}
+          agent={subagent}
+          description={desc}
+          prompt={asString(tool.input.prompt)}
+          workDir={asString(tool.input.work_dir)}
+        />
+      ) : tool.error ? <ErrorBlock error={tool.error} /> : null}
     </div>
   );
 }

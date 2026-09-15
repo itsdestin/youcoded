@@ -27,8 +27,9 @@ const WORKER_SRC = fs
   .replace(/^#![^\n]*\n/, '');
 
 /** Load the real pty-worker with a fake node-pty, and spawn its PTY. */
-function loadWorker() {
+function loadWorker(subagentModel?: string) {
   const writes: string[] = [];
+  let spawnedEnv: Record<string, string | undefined> = {};
   const fakePty = {
     pid: 1234,
     write: (d: string) => { writes.push(d); },
@@ -39,7 +40,7 @@ function loadWorker() {
   };
   const fakeProcess: any = new EventEmitter();
   Object.assign(fakeProcess, {
-    env: { ...process.env },
+    env: { ...process.env, CLAUDE_CODE_SUBAGENT_MODEL: subagentModel },
     platform: process.platform,
     pid: 4242,
     hrtime: process.hrtime,
@@ -47,7 +48,10 @@ function loadWorker() {
     exit: vi.fn(),
   });
   const fakeRequire = (id: string) => {
-    if (id === 'node-pty') return { spawn: () => fakePty };
+    if (id === 'node-pty') return { spawn: (_shell: string, _args: string[], opts: { env: Record<string, string | undefined> }) => {
+      spawnedEnv = opts.env;
+      return fakePty;
+    } };
     if (id === 'path') return path;
     if (id === 'fs') return fs;
     if (id === 'os') return os;
@@ -62,14 +66,24 @@ function loadWorker() {
   const listeners = fakeProcess.listeners('message');
   expect(listeners).toHaveLength(1);
   const deliver = listeners[0] as (msg: any) => void;
-  deliver({ type: 'spawn', command: '/bin/sh', args: [], cwd: '/tmp', cols: 120, rows: 30 });
+  deliver({ type: 'spawn', command: '/bin/sh', args: [], cwd: '/tmp', cols: 120, rows: 30, sessionId: 'test-claude-session' });
   writes.length = 0;   // drop anything the spawn itself wrote
-  return { deliver, writes };
+  return { deliver, writes, spawnedEnv };
 }
 
 /** Let the worker's promise-based input queue, and its inter-chunk timers, run
  *  out. Real timers: the chunk gap is 30 ms and these strings are short. */
 const drain = (ms = 400) => new Promise((r) => setTimeout(r, ms));
+
+describe('Claude Code specialist model launch default', () => {
+  it('defaults subagents to Sonnet instead of inheriting an expensive conversation model', () => {
+    expect(loadWorker().spawnedEnv.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
+  });
+
+  it('preserves an explicit subagent model from the launch environment', () => {
+    expect(loadWorker('sonnet').spawnedEnv.CLAUDE_CODE_SUBAGENT_MODEL).toBe('sonnet');
+  });
+});
 
 describe('pty-worker writes', () => {
   let deliver: (msg: any) => void;

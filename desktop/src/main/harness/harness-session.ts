@@ -3439,10 +3439,9 @@ export class HarnessSession extends EventEmitter {
       // createChild's future parentToolCallId so the host can stamp the
       // child's display events with the launch card they belong under.
       toolCallId: call.toolCallId,
-      // Task 14: this session's CURRENT binding — the `parent` fallback
-      // resolveDelegatedBinding needs for a tier that isn't set (or a bare
-      // "run on this conversation's model" request). Reads this.binding, not
-      // opts.binding, so a mid-session setBinding() swap is reflected on the
+      // This session's CURRENT binding identifies the provider for automatic
+      // specialist defaults and serves an explicit `model: "parent"` request.
+      // Reads this.binding, not opts.binding, so a mid-session swap is reflected on the
       // very next tool call, same as every other live-state field here.
       binding: this.binding,
       readRegistry: this.readRegistry,

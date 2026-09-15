@@ -795,12 +795,15 @@ surface: `harness/specialists/delegation-ledger.ts`, `child-ask-router.ts` (repl
   longer cascades to a BACKGROUND child — stopping the parent's own turn should not fire a
   researcher still working — but `destroy`/`quiesce` (teardown, takeover) still take every child
   down regardless of foreground/background, and mark its ledger record `interrupted`.
-- **Delegated model tiers — user-designated, never auto-priced.** Two named tiers, `budget` and
-  `frontier`, each bound to a concrete model via `DelegatedModels` (`~/.youcoded/delegated-models.json`,
-  1c ships the Settings picker). An unset tier falls back to the parent's own model with an honest
-  "(No ${tier} model is set — using this conversation's model.)" note, never a silent substitution.
-  The orchestrating model can also name a specific model id per hire, but ONLY when the user asked
-  for one — an id absent from the live catalog refuses the Task call rather than guessing. The
+- **Delegated model tiers — global user overrides, then reviewed provider defaults.** Two named
+  tiers, `budget` and `frontier`, may each be bound to a concrete model via `DelegatedModels`
+  (`~/.youcoded/delegated-models.json`; Settings owns the picker). An unset tier resolves to a
+  reviewed model for the conversation provider: ChatGPT Plan uses Terra/Sol and OpenRouter uses
+  DeepSeek V4 Flash 0731/Kimi K3. The live catalog must still contain that exact row; otherwise the
+  Task refuses with `SPECIALIST_MODEL_UNAVAILABLE:<tier>` and never inherits the parent model.
+  Omission means Budget. An explicit `parent`, tier binding, or user-requested model remains
+  authoritative. The orchestrating model can name a specific model id per hire only when the user
+  asked for one — an id absent from the live catalog refuses rather than guessing. The
   `ModelSearch` tool (catalog lookup by substring, price-sorted) rides the identical `canDelegate`
   gate as `Task` and exists only to find ids for that per-hire override.
 - **Weak-model hardening, three independent guards.** A single JSON-string tool-arg (`"{\"prompt\":

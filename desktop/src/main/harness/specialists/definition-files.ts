@@ -135,20 +135,18 @@ function capDescription(description: string): { description: string; fullDescrip
 function mapModelPreference(
   raw: string | undefined,
   normalize: (v: string) => 'parent' | 'budget' | 'frontier' | undefined,
-): { modelPreference: 'parent' | 'budget' | 'frontier'; warning?: string } {
+): { modelPreference?: 'parent' | 'budget' | 'frontier'; warning?: string } {
   if (raw === undefined || raw.trim() === '') {
-    return { modelPreference: 'parent' };
+    return {};
   }
   const mapped = normalize(raw.trim());
   if (mapped !== undefined) {
     return { modelPreference: mapped };
   }
   return {
-    modelPreference: 'parent',
-    // WHY: "using the default (parent)" is meaningless to a reader who
-    // hasn't seen this codebase's internal name for the setting — spell out
-    // what "parent" means, the same gloss the starter file uses.
-    warning: `model: "${raw.trim()}" isn't recognized — using the default: the same model your main assistant is already running on`,
+    // WHY an unrecognized value stays unset: manufacturing `parent` here
+    // turns invalid frontmatter into permission to inherit an expensive model.
+    warning: `model: "${raw.trim()}" isn't recognized — using the automatic Budget model`,
   };
 }
 
@@ -352,8 +350,8 @@ export function loadClaudeCodeDefinition(
 
   // --- model ---
   const { modelPreference, warning: modelWarning } = mapModelPreference(asString(data.model), (v) => {
-    if (v === 'inherit' || v === 'sonnet') return 'parent';
-    if (v === 'haiku') return 'budget';
+    if (v === 'inherit') return 'parent';
+    if (v === 'haiku' || v === 'sonnet') return 'budget';
     if (v === 'opus') return 'frontier';
     return undefined;
   });
