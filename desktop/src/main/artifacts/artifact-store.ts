@@ -1,4 +1,5 @@
 import { promises as fs, constants as fsConstants } from 'fs';
+import { readPath, pathAvailability } from '../cloud-files/path-access';
 import { join, dirname, extname } from 'path';
 import { ProjectSidecar } from '../../shared/artifacts/types';
 import { newArtifactId, newVersionId } from '../../shared/artifacts/ulid';
@@ -17,7 +18,14 @@ export async function readSidecar(projectRoot: string): Promise<ReadResult> {
   const path = join(projectRoot, SIDECAR_RELATIVE);
   let raw: string;
   try {
-    raw = await fs.readFile(path, 'utf8');
+    // WHY: unavailable metadata is NOT an absent sidecar. Writers must stop,
+    // never initialize/migrate over a cloud placeholder they could not read.
+    const guarded = await readPath(path, { intent: 'preview' });
+    if (guarded && !guarded.ok) {
+      if (guarded.error === 'orphan') return null;
+      throw new Error('sidecar-unavailable');
+    }
+    raw = guarded?.ok ? guarded.bytes.toString('utf8') : await fs.readFile(path, 'utf8');
   } catch (e: any) {
     if (e.code === 'ENOENT') return null;
     throw e;
@@ -99,6 +107,9 @@ function touch(entry: SharedSidecar): void {
  */
 export async function readSidecarShared(projectRoot: string): Promise<ReadResult> {
   const path = sidecarPath(projectRoot);
+  // WHY: a display-only reader may omit unavailable metadata, but may neither
+  // cache it as absence nor feed that absence to a sidecar writer/migration.
+  if (process.platform === 'win32' && (await pathAvailability(path)).residency !== 'local') return null;
   let stat: { mtimeMs: number; size: number };
   try {
     stat = await fs.stat(path);

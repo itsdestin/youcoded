@@ -12,9 +12,14 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 
+vi.mock('fs', async importOriginal => {
+  const actual = await importOriginal<typeof import('fs')>();
+  return { ...actual, readFileSync: vi.fn(actual.readFileSync) };
+});
+
 const scanSkills = vi.hoisted(() => vi.fn(() => [] as any[]));
 const scanProjectSkills = vi.hoisted(() => vi.fn(() => [] as any[]));
-vi.mock('../src/main/skill-scanner', () => ({ scanSkills, scanProjectSkills }));
+vi.mock('../src/main/skill-scanner', () => ({ scanSkills, scanProjectSkills, scanProjectSkillsAsync: scanProjectSkills }));
 
 import { buildClaudeCodeContext, readWholeContextFile } from '../src/main/claude-code-context';
 
@@ -28,8 +33,8 @@ beforeEach(() => {
 afterEach(() => { fs.rmSync(dir, { recursive: true, force: true, maxRetries: 3 }); vi.clearAllMocks(); });
 
 describe('what a Claude Code chat is allowed to claim', () => {
-  it('never claims a system prompt, a tool list, or a context window', () => {
-    const ctx = buildClaudeCodeContext(dir, 'claude-sonnet-4-6');
+  it('never claims a system prompt, a tool list, or a context window', async () => {
+    const ctx = await buildClaudeCodeContext(dir, 'claude-sonnet-4-6');
     expect(ctx.assembledBy).toBe('claude-code');
     expect(ctx.systemPrompt).toBeNull();
     expect(ctx.systemPromptSections).toBeNull();
@@ -40,25 +45,34 @@ describe('what a Claude Code chat is allowed to claim', () => {
     expect(ctx.contextWindowTokens).toBeNull();
   });
 
-  it('names the instruction file Claude Code actually reads', () => {
+  it('does not read instruction contents merely to name them in the context banner', async () => {
+    const file = path.join(dir, 'CLAUDE.md');
+    fs.writeFileSync(file, '# Rules');
+    const read = vi.mocked(fs.readFileSync);
+    read.mockClear();
+    expect((await buildClaudeCodeContext(dir, null)).projectInstructions?.path).toBe(file);
+    expect(read.mock.calls.some(args => args[0] === file)).toBe(false);
+  });
+
+  it('names the instruction file Claude Code actually reads', async () => {
     fs.writeFileSync(path.join(dir, 'CLAUDE.md'), '# Rules');
-    const ctx = buildClaudeCodeContext(dir, 'claude-sonnet-4-6');
+    const ctx = await buildClaudeCodeContext(dir, 'claude-sonnet-4-6');
     expect(ctx.projectInstructions?.path).toBe(path.join(dir, 'CLAUDE.md'));
     // False means "YouCoded did not shorten it" — the only thing we can know.
     expect(ctx.projectInstructions?.truncated).toBe(false);
   });
 
-  it('reports nothing dropped, because nothing was dropped by us', () => {
-    expect(buildClaudeCodeContext(dir, null).droppedMcpServers).toEqual([]);
+  it('reports nothing dropped, because nothing was dropped by us', async () => {
+    expect((await buildClaudeCodeContext(dir, null)).droppedMcpServers).toEqual([]);
     // Claude Code tells itself about its skills — that is what the registries
     // the app writes are for — so this is not a "not told" state.
-    expect(buildClaudeCodeContext(dir, null).skillsOffered).toBe(true);
+    expect((await buildClaudeCodeContext(dir, null)).skillsOffered).toBe(true);
   });
 
-  it('lists installed skills AND this project’s own', () => {
+  it('lists installed skills AND this project’s own', async () => {
     scanSkills.mockReturnValue([{ id: 'a:one', displayName: 'one', description: 'first' }]);
     scanProjectSkills.mockReturnValue([{ id: 'proj', displayName: 'proj', description: 'local' }]);
-    expect(buildClaudeCodeContext(dir, null).skills?.map((s) => s.id)).toEqual(['a:one', 'proj']);
+    expect((await buildClaudeCodeContext(dir, null)).skills?.map((s) => s.id)).toEqual(['a:one', 'proj']);
   });
 
   it('reads a file whole, with both sides equal so no cut is implied', () => {

@@ -8,7 +8,6 @@
 // walk-up-to-git-root that the assembled prompt needs, so this owns its own IO.
 import * as fs from 'fs';
 import * as path from 'path';
-import { execFileSync } from 'child_process';
 import type { PromptVariant } from './capability-profile';
 import { variantOverlay } from './prompts/variants';
 import { fitProjectInstructions } from './injection/injection-budget';
@@ -34,16 +33,33 @@ const DEFAULT_INSTRUCTION_BUDGET_TOKENS = 20_000;
 // presetName is LABEL-ONLY: it names the preset in the session-context panel and
 // never reaches the model, so passing it cannot change a single byte of the
 // assembled prompt. Optional so every existing caller assembles unchanged.
-export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string }
+export interface ProjectInstructions { path: string; name: string; text: string }
+export interface PromptInputs { presetBody: string; cwd: string; appVersion: string; promptVariant?: PromptVariant; hasTools?: boolean; instructionBudgetTokens?: number; supportsParallelToolCalls?: boolean; audience?: 'user' | 'parent'; presetName?: string; projectInstructions?: ProjectInstructions | null }
 
-function gitSnapshot(cwd: string): string {
-  try {
-    // stdio ignores stderr so a non-git cwd doesn't spam the main-process log
-    // with `fatal: not a repository`; stdout is still captured, catch still fires.
-    const branch = execFileSync('git', ['-C', cwd, 'rev-parse', '--abbrev-ref', 'HEAD'], { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-    const dirty = execFileSync('git', ['-C', cwd, 'status', '--porcelain'], { timeout: 3000, stdio: ['ignore', 'pipe', 'ignore'] }).toString().trim();
-    return `Git branch: ${branch}${dirty ? ` (${dirty.split('\n').length} uncommitted change(s))` : ' (clean)'}`;
-  } catch { return 'Git: not a repository'; }
+/** WHY: production startup performs asynchronous discovery and supplies an approved
+ * read function. A denied/unreadable required file must not become missing instructions. */
+export async function findProjectInstructionsAsync(cwd: string, read: (file: string) => Promise<string>): Promise<ProjectInstructions | null> {
+  let dir = cwd;
+  const exists = async (file: string, requireFile = false) => {
+    try {
+      if (requireFile) return (await fs.promises.stat(file)).isFile();
+      await fs.promises.access(file); return true;
+    }
+    catch (error) {
+      if (['ENOENT', 'ENOTDIR'].includes((error as NodeJS.ErrnoException).code ?? '')) return false;
+      throw error;
+    }
+  };
+  while (true) {
+    for (const name of ['AGENTS.md', 'CLAUDE.md']) {
+      const file = path.join(dir, name);
+      if (await exists(file, true)) return { path: file, name, text: await read(file) };
+    }
+    if (await exists(path.join(dir, '.git'))) return null;
+    const parent = path.dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
 }
 
 /** The root instruction file this cwd resolves to, if any: its absolute path and
@@ -53,17 +69,19 @@ function gitSnapshot(cwd: string): string {
  *
  *  Walk up from cwd to the git root (or filesystem root), first hit wins:
  *  AGENTS.md is the cross-tool standard; CLAUDE.md read as fallback (§3.4). */
-export function findProjectInstructions(cwd: string): { path: string; name: string; text: string } | null {
+export function findProjectInstructions(cwd: string): ProjectInstructions | null {
+  const found = findProjectInstructionPath(cwd);
+  if (!found) return null;
+  try { return { ...found, text: fs.readFileSync(found.path, 'utf8') }; } catch { return null; }
+}
+
+/** WHY: context banners name instruction files; they must not download their bodies. */
+export function findProjectInstructionPath(cwd: string): Pick<ProjectInstructions, 'path' | 'name'> | null {
   let dir = cwd;
   while (true) {
     for (const name of ['AGENTS.md', 'CLAUDE.md']) {
       const p = path.join(dir, name);
-      // Read inside the existsSync branch and tolerate a failure: a file that
-      // exists but cannot be read (a permission bite, a race with an editor)
-      // must not take the whole session down before it opens.
-      if (fs.existsSync(p)) {
-        try { return { path: p, name, text: fs.readFileSync(p, 'utf8') }; } catch { return null; }
-      }
+      if (fs.existsSync(p)) return { path: p, name };
     }
     // .git check runs AFTER trying the files, so a root-level AGENTS.md is found
     // before we stop; then break so the walk never escapes the repo.
@@ -75,8 +93,9 @@ export function findProjectInstructions(cwd: string): { path: string; name: stri
   return null;
 }
 
-function projectInstructions(cwd: string, budgetTokens: number): string | null {
-  const found = findProjectInstructions(cwd);
+function projectInstructions(cwd: string, budgetTokens: number, prepared?: ProjectInstructions | null): string | null {
+  // WHY: production supplies approved bytes; never reopen them just to build a prompt.
+  const found = prepared === undefined ? findProjectInstructions(cwd) : prepared;
   if (!found) return null;
   // The budget bounds the FILE BODY only — the wrapping tag is added after,
   // so a cut can never leave <project-instructions> unterminated. Until
@@ -135,12 +154,14 @@ export function assembleSystemPromptParts(i: PromptInputs): PromptPart[] {
         `Working directory: ${i.cwd}`,
         `Platform: ${process.platform} (${process.arch})`,
         `Date: ${new Date().toDateString()}`,
-        gitSnapshot(i.cwd),
+        // WHY: optional startup enrichment must neither recall cloud files via Git
+        // status nor block Electron main. Explicit user/assistant Git tools stay unchanged.
+        'Git: not checked automatically',
         `YouCoded version: ${i.appVersion}`,
         '</env>',
       ].join('\n'),
     },
-    partOrNull('project', 'Your project instructions', projectInstructions(i.cwd, i.instructionBudgetTokens ?? DEFAULT_INSTRUCTION_BUDGET_TOKENS)),
+    partOrNull('project', 'Your project instructions', projectInstructions(i.cwd, i.instructionBudgetTokens ?? DEFAULT_INSTRUCTION_BUDGET_TOKENS, i.projectInstructions)),
     {
       id: 'doctrine',
       label: 'How it works',

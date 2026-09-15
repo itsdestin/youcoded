@@ -1,3 +1,4 @@
+import { cloudConsentPreview } from './cloud-consent-preview';
 import { MARKETPLACE_API_HOST } from '../../state/marketplace-api-client';
 import type { ChatGptAccountStatus } from '../../../shared/chatgpt-types';
 import type { ClaudeAccountStatus } from '../../../shared/claude-account-types';
@@ -166,6 +167,7 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'artifacts.listAllFiles', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
   'artifacts.readBinary', 'artifacts.save',
+  'artifacts.instructionDownloads', 'artifacts.answerInstructionDownload', 'artifacts.onInstructionDownloadsChanged',
   'syncSpaces.status', 'syncSpaces.syncNow', 'syncSpaces.stopProject',
   'syncSpaces.renameProject', 'syncSpaces.setProjectDescription',
   'syncSpaces.listDevices', 'syncSpaces.renameDevice', 'syncSpaces.removeDevice',
@@ -2298,6 +2300,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     isRemoteMode() ? [...rows, REMOTE_BIG_PDF as unknown as T] : rows;
 
   const artifacts = {
+    instructionDownloads: async (_sessionId: string) => [],
+    answerInstructionDownload: async (_id: string, _sessionId: string, _action: string) => ({ ok: false }),
+    onInstructionDownloadsChanged: (_cb: () => void) => () => {},
+    // WHY: MOCK_ONLY proposal, not a protection claim or a real IPC channel.
+    cloudPreview: () => cloudConsentPreview(new URLSearchParams(typeof location === 'undefined' ? '' : location.search)),
     listProjectsIndex: async (opts?: { withCounts?: boolean }) => ({
       ok: true,
       // MOCKUP: descriptions edited in-session override the seeded ones, so the

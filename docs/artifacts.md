@@ -105,6 +105,35 @@ Guards: `tests/missing-artifacts-cache.test.tsx`, `tests/session-drawer-settle-h
 - **Android `get`/`save`/`read-binary` are REAL implementations (SessionService.kt), NOT stubs — any new guard on the desktop handlers must be mirrored in Kotlin.** The 2026-07-22 lesson: Kotlin save wrote `absolutePath!!` unchecked while desktop grew a boundary. Parity pinned by `ipc-channels.test.ts`.
 - **`EXCLUDE` (`manualExcludes` write) has NO renderer caller** — the button went with the 2026-07-23 External Artifacts section. The handler is kept for legacy round-trip + visibility rule 2. In-folder files can't be excluded at all — hiding a file the user sees in their file manager would be a lie.
 
+## Windows cloud-file preflight (current implementation)
+
+`artifacts:get` and `artifacts:read-binary` keep their existing resolved-path authorization,
+then use `cloud-files/path-access.ts`. Their default intent is **preview**: a partial,
+unknown, offline or unsupported observation returns `needs-download` without opening
+content. Only an explicit viewer operation receives an expiring, one-use server token,
+bound to transport owner, resolved pathname, observed size/mtime and read ceiling.
+`io-worker.ts` runs GetFileAttributesW and bounded handle reads in supervised utility
+processes; it rechecks before opening. This is **not atomic no-recall enforcement or
+stable file identity**: a path/provider can change between metadata, authorization and
+content opening. No Windows VM/provider validation has established race-free behavior.
+The older stable-identity T0 commands remain unsupported, deliberately separate.
+
+Thumbnails and HTML dependencies never consent. Sidecar writers reject unavailable
+metadata rather than initialize/migrate over it; passive lists may omit its records.
+Project descriptions and repository metadata use passive reads. Discovery omits
+unavailable directories and marks the listing incomplete. Windows currently uses
+filename-only search and disables recursive project watching rather than let those
+background facilities bypass preflight. Windows text previews use the existing bounded
+prefix/full-opt-in policy in the worker, retaining real size and remote refusal ceilings.
+Discovery checks its deadline between files and bounds each probe to the remaining scan
+budget. Context rules remain in the metadata allow-list when unavailable; explicit
+Context opens use the same exact-operation consent flow. Non-Windows artifact reads
+and Android local file guards retain their existing paths.
+
+Required native instructions use the same operation service, with a per-conversation
+inline card and pull-plus-invalidation delivery. Not now parks that conversation;
+`releaseInstructionRequests` drops only its interest, not an OS download already started.
+
 ## Android parity
 
 - **Android `artifacts:list-project`/`:list-all-files`/`:resolve-path`/`:list-projects-index`/`:include-external`/`:exclude`/`:delete-project`/`:rename`/`:remove-record` are no-op stubs** returning `{ok:false,error:'not-implemented-on-mobile'}` — the CONTRACT, not a bug. `read-binary`, `get`, `save`, `append-version`, `list-session` ARE real on Android; `check-existence` is a stub that returns an empty `missingIds` (a damaged record looks normal there — see Known gaps below); `import-file`, `search-content` and `watch-project`/`unwatch-project` are `not-implemented-on-mobile` too. Mobile Project View is v2. (`canonicalize()` runs on both platforms via the shared fixture; Kotlin `ProjectManager.kt`/`ProjectView` count mirrors pending an Android cleanup pass.)

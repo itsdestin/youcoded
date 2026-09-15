@@ -57,6 +57,8 @@ export interface ArtifactRecord {
   // resolve their content by PATH (id == canonical relative path), not by sidecar
   // lookup.
   discovered?: boolean;
+  /** Advisory listing metadata only; every content read rechecks in the backend. */
+  availability?: 'local' | 'partial' | 'unknown' | 'absent';
 }
 
 export interface ManualInclude {

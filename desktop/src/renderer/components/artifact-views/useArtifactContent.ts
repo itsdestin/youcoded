@@ -6,6 +6,7 @@
 // flashed "This file is no longer on disk." for the read's duration.
 // This hook keeps them apart via ArtifactContentState (see ActiveArtifactView).
 import { useCallback, useEffect, useState } from 'react';
+import { readWithCloudConsent, dismissCloudRead } from '../project-view/CloudReadDialog';
 import type { ArtifactContentInfo, ArtifactContentState } from './ActiveArtifactView';
 import { rendersFromBytesOnly } from './RendererRegistry';
 // The handler's error codes → specific, accurate words. Shared with the tapped-
@@ -76,7 +77,7 @@ export function useArtifactContent(
     setContent(null);
     setContentInfo(null);
     setContentState({ phase: 'loading' });
-    (window.claude as any).artifacts.get(projectRoot, artifactId).then((res: any) => {
+    readWithCloudConsent(opts => (window.claude as any).artifacts.get(projectRoot, artifactId, opts), () => cancelled).then((res: any) => {
       if (cancelled) return;
       if (res && res.ok) {
         setContent(res.content ?? null);
@@ -97,7 +98,7 @@ export function useArtifactContent(
         setContentState({ phase: 'error', message: describeReadError(e?.message ?? e) });
       }
     });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; dismissCloudRead(); };
   }, [projectRoot, artifactId, artifactPath, retryToken]);
 
   const retryRead = useCallback(() => setRetryToken((t) => t + 1), []);

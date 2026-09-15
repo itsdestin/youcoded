@@ -2412,6 +2412,13 @@ export function installShim(): void {
         invoke('folders:set-description', { folderPath, description }),
     },
     artifacts: {
+      instructionDownloads: (sessionId: string) => invoke('cloud:instructions-list', { sessionId }),
+      answerInstructionDownload: (id: string, sessionId: string, action: string) => invoke('cloud:instructions-answer', { id, sessionId, action }),
+      onInstructionDownloadsChanged: (cb: () => void) => {
+        const handler: Callback = () => cb();
+        addListener('cloud:instructions-changed', handler);
+        return () => removeListener('cloud:instructions-changed', handler);
+      },
       listSession: (sessionId: string, projectRoot: string) =>
         invoke('artifacts:list-session', { sessionId, projectRoot }),
       listProject: (projectId: string, opts?: { withCount?: boolean }) =>
@@ -2429,12 +2436,12 @@ export function installShim(): void {
         invoke('artifacts:list-projects-index', opts ?? {}),
       // This transport sends an OBJECT payload, not positional args — `full`
       // has to be spread in by name or it is dropped silently.
-      get: (projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
-        invoke('artifacts:get', { projectRoot, artifactId, full: opts?.full }),
+      get: (projectRoot: string, artifactId: string, opts?: { full?: boolean; intent?: 'preview' | 'explicit'; operationToken?: string }) =>
+        invoke('artifacts:get', { projectRoot, artifactId, full: opts?.full, intent: opts?.intent, operationToken: opts?.operationToken }),
       // Bridged by remote-server.ts since batch 3 (with the phone's smaller
       // preview ceiling — over it the host answers too-large with the size).
-      readBinary: (absolutePath: string) =>
-        invoke('artifacts:read-binary', { absolutePath }),
+      readBinary: (absolutePath: string, opts?: { intent?: 'preview' | 'explicit'; operationToken?: string }) =>
+        invoke('artifacts:read-binary', { absolutePath, intent: opts?.intent, operationToken: opts?.operationToken }),
       // Save a copy to this device (batch 3, §10). The host mints a short-lived
       // link bound to this socket; the link is opened through an <a download>
       // so the browser's own download UI shows progress and the finished file,
@@ -2529,8 +2536,8 @@ export function installShim(): void {
         invoke('project:repo-info', { projectPath }),
       listContext: (projectPath: string) =>
         invoke('project:list-context', { projectPath }),
-      readContextFile: (projectPath: string, absolutePath: string) =>
-        invoke('project:read-context-file', { projectPath, absolutePath }),
+      readContextFile: (projectPath: string, absolutePath: string, opts?: { intent?: 'preview' | 'explicit'; operationToken?: string }) =>
+        invoke('project:read-context-file', { projectPath, absolutePath, intent: opts?.intent, operationToken: opts?.operationToken }),
       writeContextFile: (projectPath: string, absolutePath: string, content: string) =>
         invoke('project:write-context-file', { projectPath, absolutePath, content }),
     },

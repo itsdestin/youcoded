@@ -9,7 +9,12 @@
 //     that must never start travelling with every session.
 //  3. The text the panel shows is what the MODEL would receive — same fitter,
 //     same budget — never a second implementation's idea of it.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+vi.mock('../src/main/cloud-files/production-access', async importOriginal => {
+  const actual = await importOriginal<typeof import('../src/main/cloud-files/production-access')>();
+  return { ...actual, readRequiredInstructionFile: vi.fn(actual.readRequiredInstructionFile) };
+});
+import { readRequiredInstructionFile } from '../src/main/cloud-files/production-access';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { NativeHome } from '../src/main/native-home';
 import { SessionStore } from '../src/main/harness/session-store';
@@ -109,6 +114,70 @@ describe('what the assistant was given', () => {
     expect(res.full).toBe(body);
     expect(res.text.length).toBeGreaterThan(0);
     expect(res.truncated).toBe(false);
+  });
+
+  it('does not enter the required reader when closed during earlier profile work', async () => {
+    fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'instructions');
+    let proceed!: () => void;
+    let entered!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    host = new NativeSessionHost(new SessionStore(new NativeHome(root)), factory, NO_CONTEXT,
+      () => { entered(); return new Promise<null>(resolve => { proceed = () => resolve(null); }); }, async () => null);
+    vi.mocked(readRequiredInstructionFile).mockClear();
+    const creating = host.create({ sessionId: 's-early-close', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    await reached;
+    await host.destroy('s-early-close');
+    proceed();
+    await expect(creating).rejects.toThrow('closed');
+    expect(readRequiredInstructionFile).not.toHaveBeenCalled();
+  });
+
+  it('Stop prevents a waiting specialist from starting after late instruction approval', async () => {
+    await contextFor(host, 's-parent', root);
+    const childDir = path.join(root, 'child');
+    fs.mkdirSync(childDir);
+    fs.writeFileSync(path.join(childDir, 'CLAUDE.md'), 'child instructions');
+    let finish!: (text: string) => void;
+    let entered!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    vi.mocked(readRequiredInstructionFile).mockImplementationOnce(() => {
+      entered(); return new Promise<string>(resolve => { finish = resolve; });
+    });
+    const creating = host.createChild('s-parent', {
+      specialist: { id: 'explorer', displayName: 'Explorer', description: 'Read files', systemPrompt: 'Read files',
+        allowedTools: ['Read'], charter: 'read-only', reportBudgetTokens: 500, source: 'builtin', grantScope: 'builtin' },
+      prompt: 'Read files', workDir: childDir, parentToolCallId: 'call-1',
+    });
+    await reached;
+    host.interrupt('s-parent');
+    finish('child instructions');
+    await expect(creating).rejects.toThrow('stopped');
+    expect(host.getHistory('s-parent')).not.toBeNull();
+  });
+
+  it('does not resurrect a conversation closed while its required instructions were waiting', async () => {
+    fs.writeFileSync(path.join(root, 'CLAUDE.md'), 'instructions');
+    let finish!: (text: string) => void;
+    let entered!: () => void;
+    const reached = new Promise<void>(resolve => { entered = resolve; });
+    vi.mocked(readRequiredInstructionFile).mockImplementationOnce(() => {
+      entered();
+      return new Promise<string>(resolve => { finish = resolve; });
+    });
+    const creating = host.create({ sessionId: 's-closed', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    await reached;
+    await host.destroy('s-closed');
+    finish('instructions');
+    await expect(creating).rejects.toThrow('closed');
+    expect(host.getHistory('s-closed')).toBeNull();
+  });
+
+  it('shows approved startup instructions without reopening them for the context panel', async () => {
+    const file = path.join(root, 'CLAUDE.md');
+    fs.writeFileSync(file, 'approved startup body');
+    await contextFor(host, 's-cached', root);
+    fs.unlinkSync(file);
+    expect(host.sessionContextText('s-cached', 'project')).toMatchObject({ full: 'approved startup body', path: file });
   });
 
   it('refuses honestly rather than inventing a file', async () => {

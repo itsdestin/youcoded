@@ -101,6 +101,7 @@ import { APP_NOTICE_EVENT, type AppNoticeDetail } from './utils/announce';
 type ConversationStatus = 'reconnecting' | 'restoring' | 'incomplete' | 'complete';
 import type { SessionStatusColor } from './components/StatusDot';
 import { ThemeProvider } from './state/theme-context';
+import { CloudReadDialog } from './components/project-view/CloudReadDialog';
 import { SkillProvider } from './state/skill-context';
 import { AccountProvider } from './state/account-context';
 import HandlePrompt from './components/HandlePrompt';
@@ -4567,6 +4568,7 @@ export default function App() {
           windows (early-returned above) don't need it. */}
       <EscCloseProvider>
       <ThemeProvider>
+        <CloudReadDialog />
         <ThemeBg />
         <ThemeEffects />
         {/* Fix: AccountProvider sits outside SkillProvider so marketplace-

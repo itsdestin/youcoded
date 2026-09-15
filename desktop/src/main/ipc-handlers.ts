@@ -6,6 +6,7 @@ import { resolveNoFolderCwd } from './no-folder';
 import { randomUUID } from 'crypto';
 import { CHATSEARCH_IPC } from './chatsearch-index/ipc-channels';
 import { buildClaudeCodeContext, readWholeContextFile } from './claude-code-context';
+import { instructionDownloadEvents, listInstructionDownloads, answerInstructionDownload } from './cloud-files/production-access';
 import { resolveConversations, readConversation } from './chatsearch-index/refs-service';
 import type { ChatsearchReadRequest } from '../shared/chatsearch-refs';
 import https from 'https';
@@ -1023,13 +1024,15 @@ export function registerIpcHandlers(
       // renderer must have the session in state before a record about it lands.
       // Never fatal — a chat that will not start is worse than an unexplained one.
       process.nextTick(() => {
+        void (async () => {
         try {
-          const payload = { sessionId: info.id, context: buildClaudeCodeContext(info.cwd, info.model ?? null) };
+          const payload = { sessionId: info.id, context: await buildClaudeCodeContext(info.cwd, info.model ?? null) };
           sendForSession(info.id, IPC.NATIVE_SESSION_CONTEXT, payload);
           remoteServer?.broadcast({ type: 'native:session-context', payload });
         } catch (err) {
           log('ERROR', 'ipc-handlers', 'could not describe a Claude Code session context', { sessionId: info.id, error: String(err) });
         }
+        })();
       });
     }
     return info;
@@ -4631,8 +4634,8 @@ export function registerIpcHandlers(
   });
   ipcMain.handle(PROJECT_IPC.REPO_INFO, (_e, projectPath: string) => repoInfo(projectPath));
   ipcMain.handle(PROJECT_IPC.LIST_CONTEXT, (_e, projectPath: string) => listContextFiles(projectPath));
-  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (_e, projectPath: string, absolutePath: string) =>
-    readContext(projectPath, absolutePath));
+  ipcMain.handle(PROJECT_IPC.READ_CONTEXT_FILE, (e, projectPath: string, absolutePath: string, opts?: { intent?: 'preview' | 'explicit'; operationToken?: string }) =>
+    readContext(projectPath, absolutePath, { intent: opts?.intent === 'explicit' ? 'explicit' : 'preview', operationToken: opts?.operationToken, owner: e?.sender ? `window:${e.sender.id}:context` : undefined }));
   ipcMain.handle(PROJECT_IPC.WRITE_CONTEXT_FILE, async (_e, projectPath: string, absolutePath: string, content: string) => {
     return writeContextFile(projectPath, absolutePath, content);
   });
@@ -4691,15 +4694,22 @@ export function registerIpcHandlers(
   // full: the user clicked "Load the whole file" on the partial-view bar. Still
   // refused above FULL_READ_MAX_BYTES — the flag opts into a BIGGER read, not an
   // unbounded one. No `maxBytes` here: the desktop's own limits are untouched.
-  ipcMain.handle(ARTIFACT_IPC.GET, (_e, projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
-    readArtifactText(projectRoot, artifactId, opts));
+  // WHY: pull plus invalidation survives cards mounting after startup is parked.
+  ipcMain.handle('cloud:instructions-list', (_e, sessionId: string) => listInstructionDownloads(sessionId));
+  ipcMain.handle('cloud:instructions-answer', (_e, id: string, sessionId: string, action: string) => answerInstructionDownload(id, sessionId, action));
+  instructionDownloadEvents.on('changed', () => {
+    for (const window of BrowserWindow.getAllWindows()) if (!window.isDestroyed()) window.webContents.send('cloud:instructions-changed');
+    remoteServer?.broadcast({ type: 'cloud:instructions-changed', payload: {} });
+  });
+  ipcMain.handle(ARTIFACT_IPC.GET, (e, projectRoot: string, artifactId: string, opts?: { full?: boolean; intent?: 'preview' | 'explicit'; operationToken?: string }) =>
+    readArtifactText(projectRoot, artifactId, { full: opts?.full === true, intent: opts?.intent === 'explicit' ? 'explicit' : 'preview', operationToken: opts?.operationToken, owner: e?.sender ? `window:${e.sender.id}:text` : undefined }));
 
   // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image).
   // SECURITY: this IPC RETURNS file contents, and over remote access it is
   // reachable from a phone. read-service.ts resolves symlinks FIRST, then
   // restricts reads to the user's project roots and tracked artifacts, refusing
   // well-known secret locations even inside those roots.
-  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, (_e, absolutePath: string) => readArtifactBytes(absolutePath));
+  ipcMain.handle(ARTIFACT_IPC.READ_BINARY, (e, absolutePath: string, opts?: { intent?: 'preview' | 'explicit'; operationToken?: string }) => readArtifactBytes(absolutePath, { intent: opts?.intent === 'explicit' ? 'explicit' : 'preview', operationToken: opts?.operationToken, owner: e?.sender ? `window:${e.sender.id}:binary` : undefined }));
 
   // First bytes of a user-chosen file, for the composer's attachment cards
   // (rendered markdown / mono text preview). The cap, the deny list and the

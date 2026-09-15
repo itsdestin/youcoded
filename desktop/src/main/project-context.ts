@@ -1,4 +1,5 @@
 import fs from 'fs';
+import { passiveRead, readPath, type PathReadOptions } from './cloud-files/path-access';
 import os from 'os';
 import path from 'path';
 import { discoverContext, RuleEntry } from './project/context-discovery';
@@ -50,7 +51,7 @@ export function parseRulePaths(frontmatter: string): string[] {
   return out;
 }
 
-async function readRules(rulesDir: string): Promise<RuleEntry[]> {
+async function readRules(rulesDir: string, enrich: boolean): Promise<RuleEntry[]> {
   let files: string[];
   try { files = (await fs.promises.readdir(rulesDir)).filter(f => f.endsWith('.md')); }
   catch { return []; }
@@ -59,7 +60,10 @@ async function readRules(rulesDir: string): Promise<RuleEntry[]> {
     const absolutePath = path.join(rulesDir, file);
     let glob: string | undefined;
     try {
-      const head = (await fs.promises.readFile(absolutePath, 'utf8')).slice(0, 2000);
+      // WHY: a metadata-discovered rule remains selectable even when its content
+      // is unavailable. The authorization path must never read rule contents.
+      const bytes = enrich ? await passiveRead(absolutePath) : null;
+      const head = bytes?.toString('utf8').slice(0, 2000) ?? '';
       const fm = /^---\s*([\s\S]*?)\s*---/.exec(head)?.[1] ?? '';
       const paths = parseRulePaths(fm);
       const isEager = paths.length === 0 || (paths.length === 1 && paths[0] === '**');
@@ -74,17 +78,17 @@ async function readRules(rulesDir: string): Promise<RuleEntry[]> {
 // listContext (which enriches for display) and the isAllowed guard (which only
 // needs the path set; enriching there made every single context-file read do a
 // full stat+read sweep of the project's context files).
-async function discoverContextGroups(projectPath: string): Promise<ContextGroup[]> {
+async function discoverContextGroups(projectPath: string, enrichRules = false): Promise<ContextGroup[]> {
   // CC slugs realpath(cwd) (see slug-encoding.ts fixture "symlink resolves to
   // realpath"). Resolve the same way, falling back exactly as CC's Px() does,
   // so a symlinked project folder finds CC's real directory.
   let resolved: string;
-  try { resolved = fs.realpathSync.native(projectPath); } catch { resolved = projectPath; }
+  try { resolved = await fs.promises.realpath(projectPath); } catch { resolved = projectPath; }
   const slug = ccProjectSlug(resolved);
   const projInstr = await findInstructionFiles([projectPath, path.join(projectPath, '.claude')]);
   const globalInstr = await findInstructionFiles([CLAUDE_DIR]);
-  const projRules = await readRules(path.join(projectPath, '.claude', 'rules'));
-  const globalRules = await readRules(path.join(CLAUDE_DIR, 'rules'));
+  const projRules = await readRules(path.join(projectPath, '.claude', 'rules'), enrichRules);
+  const globalRules = await readRules(path.join(CLAUDE_DIR, 'rules'), enrichRules);
 
   const memoryDir = path.join(CLAUDE_DIR, 'projects', slug, 'memory');
   let memoryFiles: string[] = [];
@@ -106,7 +110,7 @@ async function discoverContextGroups(projectPath: string): Promise<ContextGroup[
 }
 
 export async function listContext(projectPath: string): Promise<ContextGroup[]> {
-  const groups = await discoverContextGroups(projectPath);
+  const groups = await discoverContextGroups(projectPath, true);
   // Enrich each file with a one-line description + formatted size for the rows
   // (the prototype's ctxRow shows both). Cheap — a handful of files per project.
   await Promise.all(groups.flatMap((g) => g.files).map(enrichContextFile));
@@ -145,8 +149,9 @@ async function enrichContextFile(f: ContextFile): Promise<void> {
     f.size = formatBytes(stat.size);
   } catch { /* leave size undefined */ }
   try {
-    const head = (await fs.promises.readFile(f.absolutePath, 'utf8')).slice(0, 4000);
-    f.description = deriveDescription(head);
+    // WHY: descriptions never justify downloading a context file.
+    const bytes = await passiveRead(f.absolutePath);
+    if (bytes) f.description = deriveDescription(bytes.toString('utf8').slice(0, 4000));
   } catch { /* leave description undefined */ }
 }
 
@@ -161,9 +166,14 @@ async function isAllowed(projectPath: string, absolutePath: string): Promise<boo
   return groups.some(g => g.files.some(f => canonicalize(f.absolutePath, null) === target));
 }
 
-export async function readContextFile(projectPath: string, absolutePath: string): Promise<{ ok: boolean; content?: string; error?: string }> {
+export async function readContextFile(projectPath: string, absolutePath: string, options: PathReadOptions = {}) {
   if (!await isAllowed(projectPath, absolutePath)) return { ok: false, error: 'not-a-context-file' };
-  try { return { ok: true, content: await fs.promises.readFile(absolutePath, 'utf8') }; }
+  try {
+    const resolved = await fs.promises.realpath(absolutePath);
+    const guarded = await readPath(resolved, { ...options, intent: options.intent ?? 'preview' });
+    if (guarded) return guarded.ok ? { ok: true, content: guarded.bytes.toString('utf8') } : guarded;
+    return { ok: true, content: await fs.promises.readFile(resolved, 'utf8') };
+  }
   catch (e: any) { return { ok: false, error: String(e?.message ?? e) }; }
 }
 

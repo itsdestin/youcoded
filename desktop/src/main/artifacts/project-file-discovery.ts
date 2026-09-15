@@ -11,6 +11,7 @@
 //   - results cached briefly so the hero count + the tab don't double-scan, and
 //     rapid project re-switches are free.
 import fs from 'fs';
+import { pathAvailability } from '../cloud-files/path-access';
 import path from 'path';
 import { ArtifactRecord } from '../../shared/artifacts/types';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
@@ -106,6 +107,20 @@ export async function discoverProjectFiles(projectRoot: string): Promise<Discove
   let truncated = false;
   const deadline = now + TIME_BUDGET_MS;
 
+  // WHY: check between files, not merely directories. Even one provider query
+  // can stall; release the listing at its remaining budget and mark incomplete.
+  async function withinBudget<T>(work: (remaining: number) => Promise<T>): Promise<T | undefined> {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) { truncated = true; return undefined; }
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        work(remaining),
+        new Promise<undefined>(resolve => { timer = setTimeout(() => { truncated = true; resolve(undefined); }, remaining); }),
+      ]);
+    } finally { if (timer) clearTimeout(timer); }
+  }
+
   async function walk(dir: string, depth: number): Promise<void> {
     if (truncated || depth > MAX_DEPTH) return;
     if (Date.now() > deadline) { truncated = true; return; }
@@ -113,13 +128,18 @@ export async function discoverProjectFiles(projectRoot: string): Promise<Discove
 
     let entries: fs.Dirent[];
     try {
-      entries = await fs.promises.readdir(dir, { withFileTypes: true });
+      // WHY: directory metadata can itself be online-only. Do not enumerate it
+      // just to produce previews or counts; mark the bounded listing incomplete.
+      if (process.platform === 'win32' && (await withinBudget(remaining => pathAvailability(dir, remaining)))?.residency !== 'local') { truncated = true; return; }
+      const found = await withinBudget(() => fs.promises.readdir(dir, { withFileTypes: true }));
+      if (!found) return;
+      entries = found;
     } catch {
       return; // unreadable (permissions, gone) — skip silently
     }
 
     for (const e of entries) {
-      if (truncated) return;
+      if (truncated || Date.now() >= deadline) { truncated = true; return; }
       if (e.isSymbolicLink()) continue; // never follow symlinks — loop-safe
       const full = path.join(dir, e.name);
 
@@ -137,15 +157,24 @@ export async function discoverProjectFiles(projectRoot: string): Promise<Discove
         // `truncated` is false (the UI surfaces a truncation note). The root is
         // always walked (we start at it directly), so a project that is itself
         // a repo still lists its files.
-        if (await isGitRepo(full)) continue;
+        const nested = await withinBudget(() => isGitRepo(full));
+        if (nested === undefined) return;
+        if (nested) continue;
         await walk(full, depth + 1);
       } else if (e.isFile()) {
         if (isNoiseFile(e.name)) continue;
         if (files.length >= MAX_FILES) { truncated = true; return; }
-        let lastModified = '';
-        try { lastModified = (await fs.promises.stat(full)).mtime.toISOString(); } catch { /* leave blank */ }
-        const rel = canonicalize(full, projectRoot);
-        files.push(discoveredFileRecord(rel, lastModified));
+        const record = discoveredFileRecord(canonicalize(full, projectRoot), '');
+        if (process.platform === 'win32') {
+          const observation = await withinBudget(remaining => pathAvailability(full, remaining));
+          if (!observation) return;
+          record.availability = observation.residency;
+          if (observation.mtimeMs >= 0) record.lastModified = new Date(observation.mtimeMs).toISOString();
+        } else {
+          try { record.lastModified = (await withinBudget(() => fs.promises.stat(full)))?.mtime.toISOString() ?? ''; } catch { /* leave blank */ }
+        }
+        if (truncated) return;
+        files.push(record);
       }
     }
   }

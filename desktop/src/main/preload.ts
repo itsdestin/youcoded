@@ -1725,6 +1725,13 @@ contextBridge.exposeInMainWorld('claude', {
     },
   },
   artifacts: {
+    instructionDownloads: (sessionId: string) => ipcRenderer.invoke('cloud:instructions-list', sessionId),
+    answerInstructionDownload: (id: string, sessionId: string, action: string) => ipcRenderer.invoke('cloud:instructions-answer', id, sessionId, action),
+    onInstructionDownloadsChanged: (cb: () => void) => {
+      const listener = () => cb();
+      ipcRenderer.on('cloud:instructions-changed', listener);
+      return () => ipcRenderer.removeListener('cloud:instructions-changed', listener);
+    },
     listSession: (sessionId: string, projectRoot: string) =>
       ipcRenderer.invoke('artifacts:list-session', sessionId, projectRoot),
     listProject: (projectId: string, opts?: { withCount?: boolean }) =>
@@ -1741,12 +1748,12 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('artifacts:list-projects-index', opts),
     // opts: { full? } — full opts into reading up to FULL_READ_MAX_BYTES for a
     // file the pane is currently showing as a prefix.
-    get: (projectRoot: string, artifactId: string, opts?: { full?: boolean }) =>
+    get: (projectRoot: string, artifactId: string, opts?: { full?: boolean; intent?: 'preview' | 'explicit'; operationToken?: string }) =>
       ipcRenderer.invoke('artifacts:get', projectRoot, artifactId, opts),
     // Read a file as base64 — binary viewers (xlsx/docx/pdf/image) decode this
     // to bytes (renderer can't fetch a file:// URL from the http/app origin).
-    readBinary: (absolutePath: string) =>
-      ipcRenderer.invoke('artifacts:read-binary', absolutePath),
+    readBinary: (absolutePath: string, opts?: { intent?: 'preview' | 'explicit'; operationToken?: string }) =>
+      ipcRenderer.invoke('artifacts:read-binary', absolutePath, opts),
     // Save a copy to THIS device — a remote-access channel (batch 3). The
     // desktop answers { ok:false, code:'not-remote' }: a file on this computer
     // is opened or revealed, never downloaded to itself. Declared so the shared
@@ -1843,8 +1850,8 @@ contextBridge.exposeInMainWorld('claude', {
       ipcRenderer.invoke('project:repo-info', projectPath),
     listContext: (projectPath: string) =>
       ipcRenderer.invoke('project:list-context', projectPath),
-    readContextFile: (projectPath: string, absolutePath: string) =>
-      ipcRenderer.invoke('project:read-context-file', projectPath, absolutePath),
+    readContextFile: (projectPath: string, absolutePath: string, opts?: { intent?: 'preview' | 'explicit'; operationToken?: string }) =>
+      ipcRenderer.invoke('project:read-context-file', projectPath, absolutePath, opts),
     writeContextFile: (projectPath: string, absolutePath: string, content: string) =>
       ipcRenderer.invoke('project:write-context-file', projectPath, absolutePath, content),
   },

@@ -3703,6 +3703,15 @@ class SessionService : Service() {
                 msg.id?.let { bridgeServer.respond(ws, msg.type, it, payload) }
             }
 
+            // Android local files do not use the Windows cloud provider lane.
+            // Optional read intent is ignored; existing path/size checks below stay authoritative.
+            "cloud:instructions-list" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it, org.json.JSONArray()) }
+            }
+            "cloud:instructions-answer" -> {
+                msg.id?.let { bridgeServer.respond(ws, msg.type, it,
+                    org.json.JSONObject().put("ok", false).put("error", "not-implemented-on-mobile")) }
+            }
             "artifacts:read-binary" -> {
                 // Read a file as base64 for the binary viewers (xlsx/docx/pdf/image).
                 // The WebView can't fetch a file:// URL from the asset origin, so

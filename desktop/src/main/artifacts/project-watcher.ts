@@ -84,12 +84,24 @@ export function isWatchIgnoredPath(root: string, absPath: string): boolean {
 /**
  * Is `dirPath` itself a git repository? A `.git` DIRECTORY, or a `.git` FILE
  * (git worktrees and submodules use a file). Mirrors `isGitRepo` in
- * project-file-discovery — sync here because chokidar's `ignored` matcher is
- * synchronous.
+ * project-file-discovery. Precomputed asynchronously because chokidar's
+ * `ignored` matcher must remain synchronous and must not perform disk I/O.
  */
-function isNestedRepoDir(dirPath: string): boolean {
-  try { fs.accessSync(path.join(dirPath, '.git')); return true; }
-  catch { return false; }
+async function collectRepoBoundaries(root: string): Promise<Map<string, boolean>> {
+  const result = new Map<string, boolean>();
+  async function walk(dir: string, depth: number): Promise<void> {
+    if (depth > WATCH_DEPTH || result.size >= 4000) return;
+    const children = await fs.promises.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const child of children) {
+      const full = path.join(dir, child.name);
+      if (!child.isDirectory() || child.name.startsWith('.') || WATCH_SKIP_DIRS.has(child.name)) continue;
+      const nested = await fs.promises.access(path.join(full, '.git')).then(() => true, () => false);
+      result.set(canonicalize(full, null), nested);
+      if (!nested) await walk(full, depth + 1);
+    }
+  }
+  await walk(root, 0);
+  return result;
 }
 
 interface WatchEntry {
@@ -192,6 +204,9 @@ async function resolveArtifactId(projectRoot: string, absPath: string): Promise<
  * "no live refresh" rather than throwing (theme-watcher precedent).
  */
 export async function watchProject(projectRoot: string, subscriberId: number): Promise<{ ok: boolean }> {
+  // WHY: chokidar recursively probes directories outside our preflight lane.
+  // Windows uses refresh-on-open until a bounded metadata-only watcher is ready.
+  if (process.platform === 'win32') return { ok: false };
   const key = canonicalize(projectRoot, null);
   let entry = entries.get(key);
   if (entry) {
@@ -220,7 +235,7 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
     // do: APPEND_VERSION broadcasts artifacts:changed itself, and the viewer
     // refetches on any changed event for its id regardless of `by`.
     const canonRoot = canonicalize(projectRoot, null);
-    const nestedRepoCache = new Map<string, boolean>();
+    const nestedRepoCache = await collectRepoBoundaries(projectRoot);
     const watcher = chokidar.watch(projectRoot, {
       ignored: (p: string, stats?: Stats) => {
         if (isWatchIgnoredPath(projectRoot, p)) return true;
@@ -230,13 +245,9 @@ export async function watchProject(projectRoot: string, subscriberId: number): P
         // even though it is normally a repo — ignoring it would watch NOTHING, silently.
         const cached = nestedRepoCache.get(canon);
         if (cached !== undefined) return cached;
-        const nested = isNestedRepoDir(p);
-        // Cache DIRECTORY answers only. chokidar also calls this with no stats for
-        // every raw event path, and caching those would grow the map by one entry
-        // per file the watcher ever sees — for the whole of its now-longer life.
-        // The initial walk does supply stats, which is the pass worth caching.
-        if (stats?.isDirectory()) nestedRepoCache.set(canon, nested);
-        return nested;
+        // WHY: never call synchronous filesystem APIs from chokidar's matcher.
+        // New/uncatalogued directories wait until the next watcher rebuild.
+        return !!stats?.isDirectory();
       },
       ignoreInitial: true,
       followSymlinks: false,

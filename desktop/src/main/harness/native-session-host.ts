@@ -30,7 +30,9 @@ import { resolvePreset, type ResolvedPreset } from './preset-registry';
 import { decidePermission } from './permission-engine';
 import { getShell } from './tools/bash';
 import { rulesForMode, sameRule, isCrossProjectRule, CROSS_PROJECT_SLUG, DESTRUCTIVE_DENY_LIST, type NativePermissionMode, type PermissionRule } from '../../shared/permission-types';
-import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructions } from './prompt-assembly';
+import { assembleSystemPrompt, assembleSystemPromptParts, findProjectInstructionsAsync, type ProjectInstructions } from './prompt-assembly';
+import { readRequiredInstructionFile, readPassiveFileText, releaseInstructionRequests } from '../cloud-files/production-access';
+import { scanProjectSkillsAsync, scanSkills } from '../skill-scanner';
 import { resolveProfile, effectiveContextForModel, type CapabilityProfile, type ProfileProviderType } from './capability-profile';
 import { CORE_TOOLS } from './tools';
 import type { ToolServices, SpecialistReservation, SpecialistSpawnOpts, SpecialistManageOutcome, SpecialistResumeOutcome } from './tools/types';
@@ -341,6 +343,14 @@ function skillLabel(id: string): string {
 
 export class NativeSessionHost extends EventEmitter {
   private live = new Map<string, LiveEntry>();
+  // WHY: context UI must use the same approved bytes as startup, not read cloud files again.
+  private readonly instructionSnapshots = new WeakMap<HarnessSession, ProjectInstructions | null>();
+  private readonly instructionWaitGenerations = new WeakMap<LiveEntry, number>();
+  private invalidateInstructionWaits(sessionId: string): void {
+    const entry = this.live.get(sessionId);
+    if (entry) this.instructionWaitGenerations.set(entry, (this.instructionWaitGenerations.get(entry) ?? 0) + 1);
+    releaseInstructionRequests(sessionId);
+  }
   // Reverse index: modelId → sessionIds currently bound to it. The ONLY
   // session→model usage tracking in the app. Drives "unload a model when no
   // session is using it" (#1) — when a model's set empties, onModelReleased
@@ -878,6 +888,7 @@ export class NativeSessionHost extends EventEmitter {
     // production — but "shouldn't happen" still needs a real answer here
     // rather than a crash a few lines down on `parent.cwd`.
     if (!parent) throw new Error(`Cannot resume a specialist: parent session ${parentId} is not live.`);
+    const parentGeneration = this.instructionWaitGenerations.get(parent) ?? 0;
 
     const loc = this.locateOwnChild(parentId, opts.childId);
     if (!loc) return { status: 'not-yours' };
@@ -915,8 +926,8 @@ export class NativeSessionHost extends EventEmitter {
     const { contextLength, profile, pricing, free } = await this.resolveContextAndProfile(binding);
     const title = header.title ?? record.title;
 
-    const session = this.buildSpecialistSession(
-      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+    const session = await this.buildSpecialistSession(
+      parentId, opts.childId, workDir, title, specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, parentGeneration,
     );
     // Cold state rebuilt from the child's OWN transcript — seedHistory resets
     // readRegistry + todos too (the same reset-on-resume contract root
@@ -2506,7 +2517,8 @@ export class NativeSessionHost extends EventEmitter {
    *  `profile` is accepted here so Task 6 can add a prompt variant without another
    *  signature change; this task doesn't use it yet (the session itself carries it
    *  via opts.profile). */
-  private toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile): Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'> {
+  private async toolWiring(sessionId: string, cwd: string, preset: ResolvedPreset, profile: CapabilityProfile, projectInstructions: ProjectInstructions | null): Promise<Pick<HarnessSessionOpts, 'tools' | 'decide' | 'askUser' | 'systemPrompt' | 'promptParts' | 'toolServices' | 'skillCatalog' | 'triggers' | 'internalReadRoots' | 'specialistRoster' | 'shells'>> {
+    const projectSkills = this.skillCatalog ? [] : await scanProjectSkillsAsync(cwd, readPassiveFileText);
     return {
       // G-1: this session's background-command registry, host-owned.
       shells: this.shellsFor(sessionId),
@@ -2546,7 +2558,7 @@ export class NativeSessionHost extends EventEmitter {
       // and the session agree on one source, and a test can inject a fake.
       // Fix: project .claude/skills are session-scoped. Build their catalog from
       // this session's cwd so one workspace's workflows never appear in another.
-      skillCatalog: this.skillCatalog ?? createSkillCatalog(undefined, cwd),
+      skillCatalog: this.skillCatalog ?? createSkillCatalog([...projectSkills, ...scanSkills()].filter((entry, index, all) => all.findIndex(other => other.id === entry.id) === index)),
       decide: this.buildDecide(sessionId, cwd, preset.presetRules),
       // Stamp the CURRENT mode on every ask (read at call time, not wiring
       // time — a mid-session mode flip must show on the next ask). The
@@ -2634,7 +2646,7 @@ export class NativeSessionHost extends EventEmitter {
       // timeouts) and could land on a different date or branch than the prompt the
       // model actually got. presetName is label-only and reaches no model.
       ...(() => {
-        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name });
+        const promptParts = assembleSystemPromptParts({ presetBody: preset.body, cwd, projectInstructions, appVersion: this.appVersion, promptVariant: profile.promptVariant, hasTools: profile.supportsTools, instructionBudgetTokens: profile.injectionBudgetTokens, supportsParallelToolCalls: profile.supportsParallelToolCalls, audience: 'user', presetName: preset.manifest.name });
         return { promptParts, systemPrompt: promptParts.map((p) => p.text).join('\n\n') };
       })(),
     };
@@ -3009,9 +3021,9 @@ export class NativeSessionHost extends EventEmitter {
    *  a small model — the skill catalog itself, which the model is simply never
    *  told about. A skill being too long to fit is a thing that has not happened
    *  yet, so it is reported on the skill's own row and never in this summary. */
-  private buildSessionContext(cwd: string, session: HarnessSession): SessionContext {
+  private buildSessionContext(_cwd: string, session: HarnessSession): SessionContext {
     const inv = session.contextInventory();
-    const found = findProjectInstructions(cwd);
+    const found = this.instructionSnapshots.get(session) ?? null;
     const fitted = found ? fitProjectInstructions(found.text, inv.injectionBudgetTokens, found.name) : null;
     return {
       modelLabel: session.binding.modelId,
@@ -3041,7 +3053,7 @@ export class NativeSessionHost extends EventEmitter {
     if (!entry) return { error: 'not-live' };
     const budget = entry.session.profileSnapshot.injectionBudgetTokens;
     if (kind === 'project') {
-      const found = findProjectInstructions(entry.cwd);
+      const found = this.instructionSnapshots.get(entry.session) ?? null;
       if (!found) return { error: 'not-found' };
       const fitted = fitProjectInstructions(found.text, budget, found.name);
       return { path: found.path, text: fitted.text, full: found.text, truncated: fitted.truncated };
@@ -3081,7 +3093,9 @@ export class NativeSessionHost extends EventEmitter {
     if (this.live.has(opts.sessionId)) {
       log('WARN', 'NativeSessionHost', 'create found a live session under the same id — destroying the orphan first', { sessionId: opts.sessionId });
       await this.destroy(opts.sessionId);
+      this.beginStarting(opts.sessionId);
     }
+    const startingToken = this.startingSends.get(opts.sessionId);
     const preset = resolvePreset(opts.presetId);
     const stepGuard = this.readStepGuard();
     const harness = stepGuard === null
@@ -3106,6 +3120,13 @@ export class NativeSessionHost extends EventEmitter {
     // must not be called before ensureFresh() has resolved at least once for
     // this cwd. Awaited here so no session ever ships the model an empty
     // roster on its very first turn.
+    // Required instruction reads are asynchronous and pause here for exact-file consent.
+    const projectInstructions = await findProjectInstructionsAsync(opts.cwd, file => {
+      if (this.startingSends.get(opts.sessionId) !== startingToken) throw new Error('Conversation closed before loading instructions.');
+      return readRequiredInstructionFile(file, opts.sessionId);
+    });
+    // WHY: cloud waits can outlive the conversation; late bytes must not recreate it.
+    if (this.startingSends.get(opts.sessionId) !== startingToken) throw new Error('Conversation closed while instructions were loading.');
     await this.specialistCatalog.ensureFresh(opts.cwd);
     // Acquire this session's MCP servers (Task 6) BEFORE constructing the
     // session, so mcpServers is available for the very first buildAiTools().
@@ -3121,16 +3142,19 @@ export class NativeSessionHost extends EventEmitter {
       // (and the pooled server's spawned child process) for the rest of the
       // app's lifetime. Release the hold and rethrow the ORIGINAL error
       // unchanged (never guess/replace a cause — error-message-standards.md).
+      const wiring = await this.toolWiring(opts.sessionId, opts.cwd, preset, profile, projectInstructions);
+      if (this.startingSends.get(opts.sessionId) !== startingToken) throw new Error('Conversation closed while starting.');
       session = new HarnessSession(
         { sessionId: opts.sessionId, cwd: opts.cwd, harness, binding: opts.binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(opts.sessionId, opts.cwd, preset, profile) },
+          ...wiring },
         this.modelFactory,
       );
     } catch (err) {
       await mcpLease?.release();
       throw err;
     }
+    this.instructionSnapshots.set(session, projectInstructions);
     this.presetIdFor.set(opts.sessionId, preset.manifest.id);
     this.wire(opts.sessionId, opts.cwd, session, mcpLease);
   }
@@ -3168,6 +3192,7 @@ export class NativeSessionHost extends EventEmitter {
     // A child with no live parent has nobody to report to and nobody to tear it
     // down — refuse loudly rather than orphan a session.
     if (!parent) throw new Error(`Cannot start a specialist: parent session ${parentId} is not live.`);
+    const parentGeneration = this.instructionWaitGenerations.get(parent) ?? 0;
 
     // Containment: the child may work in the parent's directory or a
     // subdirectory of it, never outside. Canonicalized through the SAME helper
@@ -3201,12 +3226,12 @@ export class NativeSessionHost extends EventEmitter {
     takenNames.add(name);
 
     // Build the session BEFORE writing the header: everything inside
-    // buildSpecialistSession is fallible synchronous work (assembleSystemPrompt
-    // shells out to git, buildTriggerIndex walks the tree), and a throw after
+    // buildSpecialistSession awaits required instructions and discovers rules;
+    // either can fail, and a throw after
     // the header write would leave a session file on disk for a child that
     // never existed.
-    const session = this.buildSpecialistSession(
-      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent,
+    const session = await this.buildSpecialistSession(
+      parentId, childId, workDir, title, opts.specialist, binding, contextLength, profile, pricing, free, opts.parentToolCallId, preset, parent, parentGeneration,
     );
 
     // `title` was drawn earlier (before this session was built — see that
@@ -3247,15 +3272,26 @@ export class NativeSessionHost extends EventEmitter {
    *  pulled out so the two paths cannot silently drift apart on allowlists,
    *  permission posture, or ask routing — the exact bug class a hand-copied
    *  second construction site would eventually reintroduce. */
-  private buildSpecialistSession(
+  private async buildSpecialistSession(
     parentId: string, childId: string, workDir: string, title: string, specialist: SpecialistDefinition,
     binding: ModelBinding, contextLength: number | null, profile: CapabilityProfile,
     // A specialist can run on a DIFFERENT model from its parent, so it carries
     // its own price — that is the whole reason a free local parent can still
     // ring up real money through a metered specialist (spec §5).
     pricing: ModelPricing | null, free: boolean,
-    parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry,
-  ): HarnessSession {
+    parentToolCallId: string, preset: ResolvedPreset, parent: LiveEntry, parentGeneration: number,
+  ): Promise<HarnessSession> {
+    // WHY: Stop/quiesce can happen before discovery reaches the reader. Check both
+    // before entering its wait and after it settles; a stopped child is not registered yet.
+    const assertParent = () => {
+      if (this.live.get(parentId) !== parent || (this.instructionWaitGenerations.get(parent) ?? 0) !== parentGeneration)
+        throw new Error('Parent conversation closed or stopped while instructions were loading.');
+    };
+    const projectInstructions = await findProjectInstructionsAsync(workDir, file => {
+      assertParent();
+      return readRequiredInstructionFile(file, parentId);
+    });
+    assertParent();
     const allowed = new Set(specialist.allowedTools);
     return new HarnessSession(
       {
@@ -3278,7 +3314,7 @@ export class NativeSessionHost extends EventEmitter {
         // parent's conversation crosses over — the brief in the first user turn
         // is the entire context the child gets.
         systemPrompt: assembleSystemPrompt({
-          presetBody: specialist.systemPrompt, cwd: workDir, appVersion: this.appVersion,
+          presetBody: specialist.systemPrompt, cwd: workDir, projectInstructions, appVersion: this.appVersion,
           promptVariant: profile.promptVariant, hasTools: profile.supportsTools,
           instructionBudgetTokens: profile.injectionBudgetTokens,
           // audience 'parent': the shared doctrine's writing-for-the-user block is
@@ -3541,7 +3577,9 @@ export class NativeSessionHost extends EventEmitter {
     if (this.live.has(sessionId)) {
       log('WARN', 'NativeSessionHost', 'resume found a live session under the same id — destroying the orphan first', { sessionId });
       await this.destroy(sessionId);
+      this.beginStarting(sessionId);
     }
+    const startingToken = this.startingSends.get(sessionId);
     const header = this.store.readHeader(sessionId, cwd);
     if (!header) return false;
     // Task 6 — a specialist child can never come back through the ROOT resume
@@ -3570,6 +3608,11 @@ export class NativeSessionHost extends EventEmitter {
     // Task 4 (plan 1c) — same reasoning as create()'s own call: awaited BEFORE
     // toolWiring() reads this.specialistCatalog.roster(cwd) below, so a
     // resumed session's first turn never ships an empty roster either.
+    const projectInstructions = await findProjectInstructionsAsync(cwd, file => {
+      if (this.startingSends.get(sessionId) !== startingToken) throw new Error('Conversation closed before loading instructions.');
+      return readRequiredInstructionFile(file, sessionId);
+    });
+    if (this.startingSends.get(sessionId) !== startingToken) throw new Error('Conversation closed while instructions were loading.');
     await this.specialistCatalog.ensureFresh(cwd);
     // Acquire this session's MCP servers (Task 6). A RESUMED session reuses its
     // old sessionId, so this acquire() can overlap a release() still in flight
@@ -3593,11 +3636,13 @@ export class NativeSessionHost extends EventEmitter {
       // catch — would strand the acquired MCP hold permanently (destroy()
       // early-returns for a non-live id). Release and rethrow the ORIGINAL
       // error unchanged (error-message-standards.md).
+      const wiring = await this.toolWiring(sessionId, cwd, preset, profile, projectInstructions);
+      if (this.startingSends.get(sessionId) !== startingToken) throw new Error('Conversation closed while starting.');
       session = new HarnessSession(
         // `binding` (not header.binding) — same override reason as above.
         { sessionId, cwd, harness, binding, contextLength, profile, pricing, free,
           ...(mcpServers ? { mcpServers } : {}),
-          ...this.toolWiring(sessionId, cwd, preset, profile) },
+          ...wiring },
         this.modelFactory,
       );
       // Full history rebuild (spec §2.5): rebuildHistory reconstructs the assistant
@@ -3611,6 +3656,7 @@ export class NativeSessionHost extends EventEmitter {
       await mcpLease?.release();
       throw err;
     }
+    this.instructionSnapshots.set(session, projectInstructions);
     this.presetIdFor.set(sessionId, preset.manifest.id);
     this.wire(sessionId, cwd, session, mcpLease);
     // Task 9 — AFTER wire(), not before: reconcileDelegations's own
@@ -4267,6 +4313,7 @@ export class NativeSessionHost extends EventEmitter {
     // permission await unwinds cleanly before the stream is aborted underneath
     // it (spec pending-ask ruling). Also expires the renderer's approval cards.
     this.broker.cancelSession(sessionId);
+    this.invalidateInstructionWaits(sessionId);
     entry?.session.interrupt();
     // Stop means quiet until the user speaks again (LiveEntry.holdDeliveries).
     // Root sessions only: a child's own deliveries go to its parent, not to it.
@@ -4311,6 +4358,8 @@ export class NativeSessionHost extends EventEmitter {
    *   5. Await the append chain (drain) so every already-enqueued append lands on
    *      disk before the caller flushes the transcript to the space. */
   async quiesce(sessionId: string): Promise<void> {
+    this.endStarting(sessionId);
+    this.invalidateInstructionWaits(sessionId);
     const entry = this.live.get(sessionId);
     if (!entry) return;
     entry.queue.length = 0;                        // (1) no post-flush turn can start
@@ -4535,6 +4584,8 @@ export class NativeSessionHost extends EventEmitter {
     // A session torn down while it was still starting has nowhere to deliver a
     // held message, so drop it here rather than leave it stranded in memory.
     this.endStarting(sessionId);
+    // Release this conversation's waiters, not the cloud provider's download.
+    this.invalidateInstructionWaits(sessionId);
     // Specialist children go next, and unconditionally — before the not-live
     // early return, because a child must never outlive its parent even if the
     // parent's own entry is already gone (a double destroy, or a teardown
@@ -4616,7 +4667,8 @@ export class NativeSessionHost extends EventEmitter {
     // Cancel every pending ask up front (covers asks whose session is no longer
     // live, which the per-session destroy loop below would miss).
     this.broker.cancelAll();
-    for (const id of [...this.live.keys()]) {
+    // WHY: conversations parked before construction are absent from live.
+    for (const id of new Set([...this.startingSends.keys(), ...this.live.keys()])) {
       // keepShells: the app-quit sweep below kills EVERY registry with the
       // honest reason, including orphans from earlier takeovers that no live
       // session still points at.
