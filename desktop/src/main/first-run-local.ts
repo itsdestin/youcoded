@@ -1,4 +1,4 @@
-// First-run local models (design docs/active/design/2026-09-14-first-run-local-models).
+// First-run local models (design youcoded-dev docs/archive/design/2026-09-14-first-run-local-models).
 //
 // The pure decisions behind "Use a local model" on the setup card, kept apart
 // from FirstRunManager and ipc-handlers so a test can pin them without a
