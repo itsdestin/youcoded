@@ -1,1 +1,1 @@
-2026-05-22: Local Models Coming Soon :)
+2026-09-17: If using version 1.2.4, please download version 1.3.0 from youcoded.ai. This will also enable in-app updates.
