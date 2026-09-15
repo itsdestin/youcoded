@@ -56,6 +56,7 @@ import type { PermissionRule } from '../shared/permission-types';
 import type { SpecialistCatalog } from './harness/specialists/catalog';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
 import type { ClaudeAccount } from './providers/claude-account';
+import { installClaude } from './prerequisite-installer';
 import { toListResult } from './harness/specialists/catalog';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { BrowserWindow, app } from 'electron';
@@ -1948,6 +1949,19 @@ export class RemoteServer {
           const account = this.nativeRuntime?.claudeAccount ?? null;
           if (payload?.refresh) account?.invalidate();
           this.respond(client.ws, type, id, account ? await account.status() : { state: 'unknown' });
+        } catch (err: any) {
+          this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
+        }
+        break;
+      }
+      // Install Claude Code on this desktop (first-run local models, F-5) — the
+      // same installer and the same answer as the desktop IPC handler, then the
+      // cached "not-installed" is dropped so the card re-reads it.
+      case 'claude-code:install': {
+        try {
+          const result = await installClaude();
+          this.nativeRuntime?.claudeAccount?.invalidate();
+          this.respond(client.ws, type, id, result);
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: err?.message ?? String(err) });
         }

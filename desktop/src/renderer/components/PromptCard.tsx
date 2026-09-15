@@ -5,6 +5,7 @@ import { CheckIcon } from './Icons';
 import { Button, ButtonVariant } from './ui/Button';
 import { isAndroid } from '../platform';
 import { isTypingTarget } from '../utils/is-typing-target';
+import { useCardKeysLive } from '../state/card-keys-context';
 
 export type PromptCardButton = InteractivePrompt['buttons'][number];
 
@@ -104,10 +105,16 @@ export default React.memo(function PromptCard({ prompt, onSelect, keyboardShortc
   // renders this same prompt's options as its own buttons. This card is mounted
   // BEHIND that overlay, so leaving the shortcuts live would let a stray "1"
   // trust a folder without the user ever seeing what they answered.
-  const shortcutsOn = keyboardShortcuts && prompt.title !== TRUST_PROMPT_TITLE;
+  // A card in a hidden chat (every session's ChatView stays mounted) must not
+  // answer keys meant for the chat on screen — see state/card-keys-context.ts.
+  const keysLive = useCardKeysLive();
+  const shortcutsOn = keyboardShortcuts && keysLive && prompt.title !== TRUST_PROMPT_TITLE;
   useEffect(() => {
     if (completed || !shortcutsOn) return;
     const handler = (e: KeyboardEvent) => {
+      // A key InputBar already acted on (it sends on a body-level Enter) is not
+      // an answer to this card.
+      if (e.defaultPrevented) return;
       if (isTypingTarget(e.target as Element)) return;
       if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
         e.preventDefault();

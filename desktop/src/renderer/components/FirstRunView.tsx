@@ -4,7 +4,11 @@ import type { CatalogModel } from '../../shared/provider-types';
 import BrailleSpinner from './BrailleSpinner';
 import { canRetry, describeStep } from './first-run/describe-step';
 import { persistLastBinding, persistRuntimeDefault } from './RuntimeBinding';
-import { Button, TextInput } from './ui';
+import { Button } from './ui';
+import { StatusStrip } from './ui/StatusStrip';
+import { ApiKeySetup } from './first-run/ApiKeySetup';
+import { LocalModelSetup } from './first-run/LocalModelSetup';
+import type { KeyService } from './first-run/recognise-key';
 
 // The ChatGPT kill switch (design §6): main sets `chatgpt.supported` false
 // under YOUCODED_CHATGPT=0, and the button must vanish with it — a button whose
@@ -85,6 +89,7 @@ function ProgressBar({ percent }: { percent: number }) {
 
 function AuthScreen({
   authMode,
+  claudeInstalling,
   onOAuth,
   onChatGpt,
   onOpenRouter,
@@ -99,14 +104,44 @@ function AuthScreen({
   // 2026-08-31-openrouter-connection-trust-design.md, not yet built). Review
   // 2026-09-05 P-5: it belongs on this screen beside the other two plans.
   onOpenRouter: () => void;
-  onApiKey: (key: string) => void;
+  // F-1/F-2: any key the app supports, run on YouCoded's own assistant.
+  onApiKey: (key: string, service: KeyService) => void;
+  // S-1: Claude Code installs after "Log in with Claude", not before the screen.
+  claudeInstalling: boolean;
 }) {
-  const [showApiKey, setShowApiKey] = useState(false);
-  const [apiKey, setApiKey] = useState('');
+  const [localOpen, setLocalOpen] = useState(authMode === 'local');
+  // Round 3 review (A-7): the API key opens its own page, like Use a local model.
+  const [keyOpen, setKeyOpen] = useState(authMode === 'apikey');
 
   // The waiting line keeps the card around it (P-6): the screen does not
   // change shape between pressing a button and coming back from the browser.
   const card = 'mt-6 w-full max-w-md rounded-2xl bg-panel border border-edge p-6 flex flex-col items-center gap-4';
+
+  if (authMode === 'oauth' && claudeInstalling) {
+    return (
+      <div className={card}>
+        <StatusStrip tone="busy" className="w-full" detail="Your browser opens to sign in as soon as it finishes.">
+          Installing Claude Code…
+        </StatusStrip>
+      </div>
+    );
+  }
+
+  if (localOpen) {
+    return (
+      <div className={card}>
+        <LocalModelSetup onBack={() => setLocalOpen(false)} />
+      </div>
+    );
+  }
+
+  if (keyOpen) {
+    return (
+      <div className={card}>
+        <ApiKeySetup onBack={() => setKeyOpen(false)} onSubmit={onApiKey} />
+      </div>
+    );
+  }
 
   if (authMode === 'oauth' || authMode === 'chatgpt' || authMode === 'openrouter') {
     const where = authMode === 'chatgpt' ? 'ChatGPT' : authMode === 'openrouter' ? 'OpenRouter' : 'Claude';
@@ -138,12 +173,14 @@ function AuthScreen({
       {/* Documented pill exception: first-run hero CTAs keep rounded-full and
           their own larger padding. Only the hover and the focus ring normalize —
           hover:opacity-90 faded the label along with the fill.
-          One primary per view (G-4): Claude Code is the default engine, so its
-          button is the filled one; the other two plans are outlined peers. */}
-      {/* Three full-width pills, the filled Claude one first. Side by side the
-          two outlined labels wrapped onto two lines at the card's width. */}
+          WHY every way in is the same outlined button (Destin, review of the
+          first-run local models mockups, 2026-09-14): "log in with claude should
+          not be a unique button" — no way in is presented as the default, and
+          G-4 allows a view with no filled button at all. */}
+      {/* Full-width pills, one per way in. Side by side the outlined labels
+          wrapped onto two lines at the card's width. */}
       <div className="flex flex-col items-stretch gap-3 w-full">
-        <Button onClick={onOAuth} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+        <Button variant="secondary" onClick={onOAuth} className="px-6 py-3 rounded-full font-semibold text-base w-full">
           Log in with Claude
         </Button>
         {isChatGptSupported() && (
@@ -154,44 +191,16 @@ function AuthScreen({
         <Button variant="secondary" onClick={onOpenRouter} className="px-6 py-3 rounded-full font-semibold text-base w-full">
           Log in with OpenRouter
         </Button>
+        <Button variant="secondary" onClick={() => setLocalOpen(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+          Use a local model
+        </Button>
+        {/* WHY a button, not an underlined link (Destin, 2026-09-14): "use an api
+            key should be the same as the other buttons, not a link thing". It
+            opens its own page (ApiKeySetup), like Use a local model (A-7). */}
+        <Button variant="secondary" onClick={() => setKeyOpen(true)} className="px-6 py-3 rounded-full font-semibold text-base w-full">
+          Use an API key
+        </Button>
       </div>
-
-      {!showApiKey ? (
-        <button
-          onClick={() => setShowApiKey(true)}
-          className="text-xs text-fg-muted hover:text-fg-dim underline transition-colors"
-        >
-          Use an API key or local model
-        </button>
-      ) : (
-        <div className="flex flex-col items-center gap-3 w-full">
-          {/* Change 20: bg-well + rounded-md → the shared FIELD surface (password
-              fields route through TextInput too; type is preserved). NOT an
-              InputGroup — the Verify button sits below, with the key-handling
-              disclaimer between it and the field. aria-label added: the field had
-              only a placeholder for a name. */}
-          <TextInput
-            type="password"
-            size="md"
-            aria-label="Anthropic API key"
-            className="w-full"
-            placeholder="sk-ant-..."
-            value={apiKey}
-            onChange={(e) => setApiKey(e.target.value)}
-          />
-          <p className="text-xs text-fg-muted text-center leading-relaxed">
-            Your key is passed directly to Claude Code and stored in its secure config.
-            YouCoded never stores, logs, or backs up your key.
-          </p>
-          <Button
-            onClick={() => onApiKey(apiKey)}
-            disabled={!apiKey.trim()}
-            className="px-4 py-2 rounded-full text-sm"
-          >
-            Verify &amp; Continue
-          </Button>
-        </div>
-      )}
     </div>
   );
 }
@@ -300,21 +309,25 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   // back to the first ready provider's first model, which is the same thing.
   // Neither write may delay the hand-off to the app, so the catalog lookup is
   // fire-and-forget and every failure is swallowed. Runs once per mount.
+  // First-run local models (2026-09-14): the same seeding for every native way in —
+  // a local model ('local'), a model app already running, or an API key — through
+  // `setupProvider`, which main sets to the provider setup finished on.
   const seededChatGpt = useRef(false);
   useEffect(() => {
     if (!state || seededChatGpt.current) return;
     const done = state.currentStep === 'LAUNCH_WIZARD' || state.currentStep === 'COMPLETE';
-    if (!done || state.authMode !== 'chatgpt') return;
+    const providerId = state.authMode === 'chatgpt' ? 'chatgpt' : state.setupProvider;
+    if (!done || !providerId) return;
     seededChatGpt.current = true;
     persistRuntimeDefault('native');
     Promise.resolve()
       .then(() => (window as any).claude?.providers?.catalog?.() as Promise<CatalogModel[]> | undefined)
       .then((rows) => {
-        const first = Array.isArray(rows) ? rows.find((r) => r?.providerId === 'chatgpt') : undefined;
-        if (first?.id) persistLastBinding({ providerId: 'chatgpt', modelId: first.id });
+        const first = Array.isArray(rows) ? rows.find((r) => r?.providerId === providerId) : undefined;
+        if (first?.id) persistLastBinding({ providerId, modelId: first.id });
       })
       .catch(() => { /* the catalog is a nicety here; the forms fall back on their own */ });
-  }, [state?.currentStep, state?.authMode]);
+  }, [state?.currentStep, state?.authMode, state?.setupProvider]);
 
   // Busy while any prerequisite is actively installing or being checked. The
   // retry path is guarded against re-entry in the main process too, but
@@ -347,10 +360,11 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
     (window as any).claude.firstRun.startAuth('openrouter');
   }, []);
 
-  const handleApiKey = useCallback((key: string) => {
-    (window as any).claude.firstRun.submitApiKey(key);
+  // F-2: the service travels with the key, because a key now runs on YouCoded's
+  // own assistant rather than being handed to Claude Code.
+  const handleApiKey = useCallback((key: string, service: KeyService) => {
+    (window as any).claude.firstRun.submitApiKey(key, service);
   }, []);
-
   const handleDevMode = useCallback(() => {
     (window as any).claude.firstRun.devModeDone();
   }, []);
@@ -375,7 +389,14 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
           {/* Prerequisite checklist — rounded pills */}
           {state && (
             <ul className="w-full space-y-2">
-              {state.prerequisites.map((p) => {
+              {state.prerequisites
+                // Round 3 review (B-9, "two separate installing cards?"): Claude
+                // Code's on-demand install is shown once, on the sign-in card —
+                // this checklist no longer lists it on the sign-in step.
+                // Nor while it waits or was skipped: setup no longer installs it
+                // for everyone (Q-5), so a "waiting" Claude Code row would never move.
+                .filter((p) => !(p.name === 'claude' && (state.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')))
+                .map((p) => {
                 const active = p.status === 'installing' || p.status === 'checking';
                 return (
                   <li
@@ -409,6 +430,7 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
               onChatGpt={handleChatGpt}
               onOpenRouter={handleOpenRouter}
               onApiKey={handleApiKey}
+              claudeInstalling={state.prerequisites.some((p) => p.name === 'claude' && p.status === 'installing')}
             />
           )}
 

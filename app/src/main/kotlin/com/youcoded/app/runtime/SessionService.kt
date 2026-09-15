@@ -4256,6 +4256,10 @@ class SessionService : Service() {
             "engine:models",
             "models:memory-check",
             "models:load",
+            // Install Claude Code on demand (first-run local models, 2026-09-14) —
+            // desktop-only: Bootstrap installs it on Android, so the phone never
+            // reports "not-installed" and the Settings button never shows here.
+            "claude-code:install",
             // Cross-device project rename (display-name) + stop-syncing (2026-07-12)
             // are desktop-only (Phase 3 on Android).
             "syncspaces:rename-project",

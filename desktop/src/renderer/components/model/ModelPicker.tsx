@@ -528,23 +528,29 @@ export default function ModelPicker({
     // get here first) should lead with what's actually selected, not require
     // typing to find it. Skipped while searching: the whole catalogue is
     // already the result there, and reordering a search result is surprising.
-    if (!pinSelectedToTop || searching || !value) return filtered;
-    const currentKey = choiceKey(value);
-    const idx = filtered.findIndex((e) => e.key === currentKey);
-    if (idx > 0) {
-      const reordered = filtered.slice();
-      const [current] = reordered.splice(idx, 1);
-      reordered.unshift(current);
-      return reordered;
+    let ordered = filtered;
+    if (pinSelectedToTop && !searching && value) {
+      const currentKey = choiceKey(value);
+      const idx = filtered.findIndex((e) => e.key === currentKey);
+      if (idx > 0) {
+        const reordered = filtered.slice();
+        const [current] = reordered.splice(idx, 1);
+        ordered = [current, ...reordered];
+      } else if (idx === -1) {
+        const hit = entries.find((e) => e.key === currentKey);
+        const passesFilters = hit
+          && (!localOnly || hit.local)
+          && (!sources.size || sources.has(hit.sourceId));
+        if (passesFilters) ordered = [hit, ...filtered];
+      }
     }
-    if (idx === -1) {
-      const hit = entries.find((e) => e.key === currentKey);
-      const passesFilters = hit
-        && (!localOnly || hit.local)
-        && (!sources.size || sources.has(hit.sourceId));
-      if (passesFilters) return [hit, ...filtered];
-    }
-    return filtered;
+    // WHY partition rather than sort: `unavailable` already drives the disabled
+    // state, so this promotes rows the user can choose without re-checking
+    // provider readiness or disturbing catalogue/pinned order within either group.
+    return [
+      ...ordered.filter((e) => e.unavailable === undefined),
+      ...ordered.filter((e) => e.unavailable !== undefined),
+    ];
   }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value]);
 
   const toggleFavorite = (key: string) => {
@@ -657,6 +663,22 @@ export default function ModelPicker({
                 className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
               >
                 {e.unavailable}
+              </button>
+            ) : e.sourceId === CLAUDE_SOURCE && claudeStatus?.state === 'not-installed' ? (
+              // First-run local models (F-5): Claude Code installs on demand now,
+              // so its greyed rows carry the fix — the Claude card in Cloud
+              // providers, which holds the Install button.
+              <button
+                type="button"
+                onClick={() => {
+                  setOpen(false);
+                  if (onManageModels) onManageModels();
+                  else window.dispatchEvent(new CustomEvent('youcoded:open-model-providers'));
+                }}
+                aria-label="Install Claude Code"
+                className="ml-auto shrink-0 pl-2 pr-1 text-3xs text-fg-faint hover:text-fg-2 hover:underline focus-visible:underline transition-colors coarse-hit"
+              >
+                Install Claude Code
               </button>
             ) : (
               <span className="ml-auto shrink-0 pl-2 text-3xs text-fg-faint">{e.unavailable}</span>

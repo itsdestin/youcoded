@@ -2047,7 +2047,7 @@ Contract: mascots/README.md (from the repo root)
         <a data-dl="dl-ios" class="dlbtn" href="#"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg><span>iOS<sup>*</sup></span></a>
     </div>
     <div class="hero-app"><div class="frame embed"><div class="embed-stage">
-      <img class="embed-poster" src="media/embed.webp" alt="YouCoded Assistant chat window">
+      <img class="embed-poster" src="media/embed-desktop-cotton-candy-sky.webp" alt="YouCoded Assistant chat window">
       <button class="embed-start" type="button">Start the demo &rarr;</button>
       <button class="embed-interact" type="button" hidden>Click to try it</button>
       <iframe class="embed-iframe" title="YouCoded Assistant live demo" loading="lazy" data-src="site/index.html?mode=workbench&amp;child=1&amp;scenario=site&amp;latency=0&amp;reply=site"></iframe>
@@ -2357,25 +2357,28 @@ function applyTheme(slug){
   if (typeof maskEmbed === 'function') maskEmbed();
 }
 
-// The still behind the "Start the demo" button, on a phone, is a picture of the
-// app IN THE THEME THE PAGE IS CURRENTLY WEARING (Destin 2026-09-03: "the
-// unstarted window should still be an image with the correct/current webpage
-// theme applied"). It matters more than it used to: on a phone the demo now
-// waits for a tap, so the still is what most visitors actually see, and a
-// picture of some other theme made the mascot picker look broken.
+// The still in the demo window is a picture of the app IN THE THEME THE PAGE IS
+// CURRENTLY WEARING (Destin 2026-09-03: "the unstarted window should still be an
+// image with the correct/current webpage theme applied"). On a phone the demo
+// waits for a tap, so the still is what most visitors see.
 //
-// One file per picker theme, shot 2:3 from this very embed so the still and the
-// live thing behind it are the same shape and the same app. Desktop keeps the
-// single wide embed.webp -- its box is a different shape and it boots on its own
-// anyway, so the still is barely on screen.
-var PHONE_POSTERS = ['cotton-candy-sky', 'meadow-mist', 'halftone-dimension', 'golden-sunbreak'];
+// Desktop needs it just as much (2026-09-14): its demo boots on its own, but only
+// after the intro, so the still sits there for ~3 seconds plus the app's download.
+// It used to be one grey Midnight shot of a differently shaped window, and the
+// themed app then "popped in" over it -- "this feels like it's broken."
+//
+// One file per theme per layout, shot out of the built embed at the box's own
+// shape by scripts/ui-review/embed-posters.mjs, which reads this list, the box
+// and PHONE_EMBED_CSS off this page. These are the only themes the page can
+// wear before the demo starts (it opens on Cotton Candy Sky; the intro and the
+// mascot picker use the other three).
+var POSTER_THEMES = ['cotton-candy-sky', 'meadow-mist', 'halftone-dimension', 'golden-sunbreak'];
 var posterPhoneMQ = matchMedia('(max-width: 760px)');
 function setEmbedPoster(){
   var img = embed && embed.querySelector('.embed-poster');
   if (!img) return;
-  var want = (posterPhoneMQ.matches && PHONE_POSTERS.indexOf(currentTheme) >= 0)
-    ? 'media/embed-phone-' + currentTheme + '.webp'
-    : 'media/embed.webp';
+  var theme = POSTER_THEMES.indexOf(currentTheme) >= 0 ? currentTheme : POSTER_THEMES[0];
+  var want = 'media/embed-' + (posterPhoneMQ.matches ? 'phone' : 'desktop') + '-' + theme + '.webp';
   // Never re-assign the same src: that restarts the decode and flashes.
   if (img.getAttribute('src') !== want) img.setAttribute('src', want);
 }
@@ -2524,11 +2527,46 @@ function stripEmbedChrome(f){
     (d.head || d.documentElement).appendChild(st);
   } catch (e) { /* cross-origin one day: leave the chrome alone */ }
 }
+// WHY wait past `load` (2026-09-14): the iframe's load event means the app's
+// script has run, not that it has drawn. React mounts a beat later, the theme's
+// web font and wallpaper arrive after that, so swapping on `load` could fade in
+// a half-built app over a still that shows the finished one -- a second pop.
+// Hold the swap until the window, its font and its wallpaper are all there,
+// capped so a slow wallpaper can never leave the visitor on the still.
+var EMBED_PAINT_MAX = 4000;
+function whenEmbedPainted(f, done){
+  var t0 = Date.now(), wall = null, wallDone = false;
+  (function poll(){
+    var ready = false;
+    try {
+      var d = f.contentDocument, w = f.contentWindow;
+      if (d && d.querySelector('.input-bar-container') && d.fonts.status === 'loaded') {
+        var bg = d.getElementById('theme-bg');
+        var m = bg && /url\("?([^")]+)"?\)/.exec(w.getComputedStyle(bg).backgroundImage);
+        if (m && wall !== m[1]) {
+          // A decode in THIS document reuses the iframe's cached file.
+          wall = m[1]; wallDone = false;
+          var im = new Image(); im.src = m[1];
+          (im.decode ? im.decode() : Promise.resolve()).then(function(){ wallDone = true; }, function(){ wallDone = true; });
+        }
+        ready = !m || wallDone;
+      }
+    } catch (e) { ready = true; /* cross-origin one day: nothing to wait for */ }
+    if (ready || Date.now() - t0 > EMBED_PAINT_MAX) {
+      // Two frames: the first lets the iframe commit what it just decoded.
+      requestAnimationFrame(function(){ requestAnimationFrame(done); });
+    } else setTimeout(poll, 50);
+  })();
+}
 function bootEmbed(){
   if (!embed || embedLive) return; embedLive = true;
   var f = embed.querySelector('.embed-iframe'), start = embed.querySelector('.embed-start'), inter = embed.querySelector('.embed-interact');
   start.hidden = true;
-  f.addEventListener('load', function(){ embed.classList.add('live'); inter.hidden = false; syncEmbedTheme(); stripEmbedChrome(f); chainWheel(f); });
+  f.addEventListener('load', function(){
+    // Wiring that doesn't show goes on at once; only the swap itself waits.
+    stripEmbedChrome(f); chainWheel(f);
+    whenEmbedPainted(f, function(){ embed.classList.add('live'); inter.hidden = false; syncEmbedTheme(); });
+  });
   f.src = f.dataset.src + '#t=' + currentTheme;
 }
 // --- The download pill: floats over the embed's dissolve, then docks to the

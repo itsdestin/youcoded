@@ -97,6 +97,10 @@ export const MOCK_ONLY: ReadonlyArray<{ channel: string; feature: string }> = [
   // Browser encryption is an approved design with no backend: the Advanced section and its
   // screen render only under the workbench preview. Delete this row when it ships.
   { channel: 'remote.preview', feature: 'Remote access secure setup — UI mockup only' },
+  // First-run local models (2026-09-14): `firstRun.localSetup`, `.localDownload`,
+  // `.resumeLocalDownload`, `.connectLocalApp` and `claudeCode.install` were designed
+  // here ahead of their backend and came off when the real channels landed. The fakes
+  // in mock-shim.ts stay so the setup card and the band stay reviewable.
   // Remote access batches 2 and 3 (questions deck 2026-09-10) designed three channels
   // ahead of their backend; all three came off on 2026-09-10 when the real channels
   // landed. Batch 2: `on.remoteConversationStatus` (the host tells the phone where its

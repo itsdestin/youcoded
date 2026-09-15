@@ -97,6 +97,40 @@ const key = (repo: string, quant: string) => `${repo}::${quant}`;
 export default function LocalModelsSection({ embedded = false }: { embedded?: boolean } = {}) {
   // Gate the ENTIRE section on native support (same pattern as ProvidersSection).
   const supported = window.claude?.native?.supported === true;
+  if (!supported) return null;
+
+  return (
+    <section>
+      {!embedded && (
+        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Local Models</h3>
+      )}
+
+      <div className="space-y-4">
+        {/* Engine controls (install / backend / context length). */}
+        <EngineCard showDetails />
+
+        {/* One search-driven browser: installed + recommended by default, then
+            filters those AND searches Hugging Face as the user types. Replaces
+            the old separate Recommended / Installed / Add-from-HF sections. */}
+        <LocalModelBrowser />
+
+        {/* Other local apps (Ollama / LM Studio). */}
+        <OtherLocalApps />
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The Models card — search, installed and recommended, with its own data.
+ *
+ * WHY it is its own export (first-run local models, round 3 review B-3, Destin
+ * 2026-09-14: "this list should match the search/list provided in the assistant
+ * settings -> local models download screen"): first-run's "Choose a different
+ * model" renders THIS component, so the two lists cannot drift apart.
+ */
+export function LocalModelBrowser() {
+  const supported = window.claude?.native?.supported === true;
 
   // One download subscription for the whole section; routed to rows by downloadId.
   const [downloads, setDownloads] = useState<Record<string, DownloadProgress>>({});
@@ -136,30 +170,13 @@ export default function LocalModelsSection({ embedded = false }: { embedded?: bo
   if (!supported) return null;
 
   return (
-    <section>
-      {!embedded && (
-        <h3 className="text-3xs font-medium text-fg-muted tracking-wider uppercase mb-3">Local Models</h3>
-      )}
-
-      <div className="space-y-4">
-        {/* Engine controls (install / backend / context length). */}
-        <EngineCard showDetails />
-
-        {/* One search-driven browser: installed + recommended by default, then
-            filters those AND searches Hugging Face as the user types. Replaces
-            the old separate Recommended / Installed / Add-from-HF sections. */}
-        <ModelBrowser
-          curated={curated}
-          installed={installed}
-          downloads={downloads}
-          quantOptsByKeyRef={quantOptsByKeyRef}
-          onRefreshInstalled={refreshInstalled}
-        />
-
-        {/* Other local apps (Ollama / LM Studio). */}
-        <OtherLocalApps />
-      </div>
-    </section>
+    <ModelBrowser
+      curated={curated}
+      installed={installed}
+      downloads={downloads}
+      quantOptsByKeyRef={quantOptsByKeyRef}
+      onRefreshInstalled={refreshInstalled}
+    />
   );
 }
 
