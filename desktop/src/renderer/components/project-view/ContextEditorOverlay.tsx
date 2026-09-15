@@ -12,6 +12,7 @@
 // write path (the main-process allow-list can reject) surface inline rather
 // than being swallowed.
 import { useEffect, useState } from 'react';
+import { readWithCloudConsent, dismissCloudRead } from './CloudReadDialog';
 import type { ContextFile, ContextScope } from '../../../shared/project-context-types';
 import { ProjectDetailOverlay } from './ProjectDetailOverlay';
 import MarkdownContent from '../MarkdownContent';
@@ -69,9 +70,9 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
     setConfirming(false);
     (async () => {
       try {
-        const res = await (window.claude as any).project.readContextFile(
-          project.path, file.absolutePath,
-        );
+        const res = await readWithCloudConsent(opts => (window.claude as any).project.readContextFile(
+          project.path, file.absolutePath, opts,
+        ), () => cancelled);
         if (cancelled) return;
         if (res && res.ok) {
           const text = res.content ?? '';
@@ -89,7 +90,7 @@ export function ContextEditorOverlay({ project, file, onClose }: ContextEditorOv
         if (!cancelled) setLoading(false);
       }
     })();
-    return () => { cancelled = true; };
+    return () => { cancelled = true; dismissCloudRead(); };
   }, [project.path, file.absolutePath]);
 
   const dirty = content !== null && draft !== content;

@@ -270,10 +270,14 @@ async function runSessionCreate(opts: any, senderWindowId = 2) {
     });
   });
 
-  // Drain the nextTick queue and any trailing microtasks/macrotasks so a send
-  // that merely ran LATE isn't mistaken for a send that never happened.
-  await new Promise((r) => setTimeout(r, 0));
-  await new Promise((r) => setTimeout(r, 0));
+  // WHY: CC context now performs asynchronous passive filesystem reads. Two
+  // zero-delay timers do not drain that work: its late send used to land in the
+  // NEXT test's shared buffer, falsely reporting a CC banner on a native chat.
+  // Wait for the actual event before allowing this case's world to be discarded.
+  await vi.waitFor(() => expect(rec.order).toContain('SESSION_CREATED send'));
+  if (sessionInfo.provider === 'claude') {
+    await vi.waitFor(() => expect(rec.sends.some(s => s.channel === IPC.NATIVE_SESSION_CONTEXT)).toBe(true));
+  }
 
   return { order: [...rec.order], sends: [...rec.sends], assignSession };
 }
@@ -330,7 +334,7 @@ describe('session:create — assignSession must precede the SESSION_CREATED forw
 
   it('claude-code create: assigns ownership before forwarding SESSION_CREATED (control — this path has no intervening await)', async () => {
     const { order, sends } = await runSessionCreate({
-      provider: 'claude-code',
+      provider: 'claude',
       cwd: '/tmp',
       name: 'New chat',
       skipPermissions: false,

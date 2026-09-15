@@ -2,6 +2,8 @@ import React, { useEffect, useLayoutEffect, useRef, useState, useCallback, useMe
 import { useChatState, useChatDispatch } from '../state/chat-context';
 import { HISTORY_EXPAND_PROMPT_ID, shouldRenderAssistantTurn } from '../state/chat-types';
 import UserMessage from './UserMessage';
+import { CloudInstructionsCard } from './CloudInstructionsCard';
+import type { CloudConsentPreview } from './project-view/CloudFileConsent';
 import SpecialistReportCard from './SpecialistReportCard';
 import QueuedMessagesStrip from './QueuedMessagesStrip';
 import AssistantTurnBubble from './AssistantTurnBubble';
@@ -20,6 +22,7 @@ import ModelLoadingBar from './ModelLoadingBar';
 import { useObservedRef } from '../hooks/use-observed-ref';
 import { useEntryFolding } from '../hooks/use-entry-folding';
 import { SessionContextBanner } from './SessionContextBanner';
+import { RequiredInstructionsCard } from './RequiredInstructionsCard';
 import SessionContextPopup from './SessionContextPopup';
 import { useAttentionClassifier } from '../hooks/useAttentionClassifier';
 import { useTheme } from '../state/theme-context';
@@ -101,6 +104,12 @@ interface Props {
 
 export default function ChatView({ sessionId, visible, sessionActive, cwd, gamePane, provider, onOpenProviderSettings, onSwitchProviders, onUpgradePlan, onCancelQueued, onEditQueued, conversationStatus, onRefreshConversation }: Props) {
   const state = useChatState(sessionId);
+  // WHY: this registered accessor exists only in the workbench. Its empty-chat
+  // fixture demonstrates required instructions without touching real startup.
+  const [cloudPreview] = useState(() => {
+    const preview = (window.claude as unknown as { artifacts?: { cloudPreview?: () => CloudConsentPreview | null } })?.artifacts?.cloudPreview?.();
+    return preview?.initial.purpose === 'instructions' ? preview : null;
+  });
   const dispatch = useChatDispatch();
 
   // What the conversation strip shows: the live status, plus a 2.5 s "Up to
@@ -1023,7 +1032,7 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
               which sits below --top-chrome-height by its own margin; otherwise
               the text tucked slightly behind the pill. Provider-aware: native
               sessions must not be told to talk to a vendor's name. */}
-          {state.timeline.length === 0 && !state.isThinking && (
+          {!cloudPreview && state.timeline.length === 0 && !state.isThinking && (
             <div
               // select-none: a hint, not content. Ctrl+A must not paint it
               // (Destin, 2026-09-10).
@@ -1099,6 +1108,8 @@ export default function ChatView({ sessionId, visible, sessionActive, cwd, gameP
                animating transform on the scroll container would make it a
                containing block and disturb useStickToBottom's measurements. */}
            <div ref={contentRef} className={arriving ? 'switch-arrival' : undefined}>
+        <RequiredInstructionsCard sessionId={sessionId} />
+        {cloudPreview && <CloudInstructionsCard key={sessionId} preview={cloudPreview} />}
         {/* Step 3 (2026-08-17, broadened): the session's starting-context strip
             — every session shows one, and clicking it opens the full accounting
             (SessionContextPopup). Mounted above the first message so it also

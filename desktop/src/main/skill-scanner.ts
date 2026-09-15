@@ -238,6 +238,30 @@ export function scanProjectSkills(projectCwd: string): SkillEntry[] {
   return skills;
 }
 
+/** WHY: project skill descriptions are optional startup decoration. Keep filenames
+ * discoverable, but only read bodies through the passive (never download) guard. */
+export async function scanProjectSkillsAsync(projectCwd: string, read: (file: string) => Promise<string | null>): Promise<SkillEntry[]> {
+  const directory = path.join(projectCwd, '.claude', 'skills');
+  let entries: fs.Dirent[];
+  try { entries = await fs.promises.readdir(directory, { withFileTypes: true }); } catch { return []; }
+  const skills: SkillEntry[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const skillDir = path.join(directory, entry.name);
+    const file = path.join(skillDir, 'SKILL.md');
+    try { if (!(await fs.promises.stat(file)).isFile()) continue; } catch { continue; }
+    const raw = await read(file);
+    const meta = raw === null ? {} : parseSkillMeta(raw);
+    skills.push({
+      id: entry.name,
+      displayName: meta.name || entry.name.split('-').map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' '),
+      description: meta.description || '', category: 'other', prompt: `/${entry.name}`,
+      source: 'project', type: 'plugin', visibility: 'private', skillDir,
+    });
+  }
+  return skills;
+}
+
 function loadCuratedRegistry(): Record<string, Omit<SkillEntry, 'id'>> {
   try {
     const registryPath = path.join(__dirname, '..', 'renderer', 'data', 'skill-registry.json');
@@ -260,13 +284,16 @@ function readdirSafe(dir: string): fs.Dirent[] {
 /** Minimal SKILL.md frontmatter reader — just `name` and `description`. */
 function readSkillMeta(skillMdPath: string): { name?: string; description?: string } {
   try {
-    const raw = fs.readFileSync(skillMdPath, 'utf8');
-    const fm = /^---\s*\n([\s\S]*?)\n---/m.exec(raw);
-    if (!fm) return {};
-    const body = fm[1];
-    const name = /^name:\s*["']?([^"'\n]+)["']?\s*$/m.exec(body)?.[1]?.trim();
-    return { name, description: readFrontmatterDescription(body) };
+    return parseSkillMeta(fs.readFileSync(skillMdPath, 'utf8'));
   } catch { return {}; }
+}
+
+function parseSkillMeta(raw: string): { name?: string; description?: string } {
+  const fm = /^---\s*\n([\s\S]*?)\n---/m.exec(raw);
+  if (!fm) return {};
+  const body = fm[1];
+  const name = /^name:\s*["']?([^"'\n]+)["']?\s*$/m.exec(body)?.[1]?.trim();
+  return { name, description: readFrontmatterDescription(body) };
 }
 
 // `description:` is sometimes a YAML folded/literal block scalar

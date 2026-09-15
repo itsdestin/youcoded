@@ -1,4 +1,5 @@
 import http from 'http';
+import { listInstructionDownloads, answerInstructionDownload } from './cloud-files/production-access';
 import zlib from 'zlib';
 import { listProjectsIndex } from './artifacts/projects-index';
 // Files over remote (batch 3): the same read bodies the Electron handlers
@@ -3587,6 +3588,12 @@ export class RemoteServer {
       // `too-large` with the real size, decided from `stat` — never a prefix.
       // The write channels (save, append-version, import, rename…) are not
       // bridged: editing over remote is not in this batch.
+      case 'cloud:instructions-list':
+        this.respond(client.ws, type, id, listInstructionDownloads(payload?.sessionId));
+        break;
+      case 'cloud:instructions-answer':
+        this.respond(client.ws, type, id, await answerInstructionDownload(payload?.id, payload?.sessionId, payload?.action));
+        break;
       case 'artifacts:list-session':
       case 'artifacts:list-project':
       case 'artifacts:list-all-files':
@@ -3600,7 +3607,7 @@ export class RemoteServer {
       case 'project:list-conversations':
       case 'project:repo-info': {
         try {
-          this.respond(client.ws, type, id, await this.readFileChannel(type, payload ?? {}));
+          this.respond(client.ws, type, id, await this.readFileChannel(type, { ...(payload ?? {}), cloudOwner: `remote:${client.id}:${type}` }));
         } catch (err: any) {
           this.respond(client.ws, type, id, { ok: false, error: String(err?.message ?? err) });
         }
@@ -3828,10 +3835,10 @@ export class RemoteServer {
           ?? (await this.refuseUnlessRecorded(p.projectRoot, p.artifactId));
         if (refused) return refused;
       }
-      return readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES });
+      return readArtifactText(p.projectRoot, p.artifactId, { full: p.full === true, maxBytes: REMOTE_TEXT_PREVIEW_MAX_BYTES, intent: p.intent === 'explicit' ? 'explicit' : 'preview', operationToken: p.operationToken, owner: p.cloudOwner });
     },
     // read-binary carries its own roots check (authorizeBytesRead), on the file itself.
-    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES }),
+    'artifacts:read-binary': (p) => readArtifactBytes(p.absolutePath, { maxBytes: REMOTE_BINARY_PREVIEW_MAX_BYTES, intent: p.intent === 'explicit' ? 'explicit' : 'preview', operationToken: p.operationToken, owner: p.cloudOwner }),
     'artifacts:search-content': async (p) =>
       (await this.refuseUnknownRoot(p.projectRoot)) ?? searchArtifactContent(p.projectRoot, p.query),
     'artifacts:check-existence': async (p) =>
@@ -3840,7 +3847,7 @@ export class RemoteServer {
       (await this.refuseUnknownRoot(p.projectPath)) ?? listContextFiles(p.projectPath),
     'project:read-context-file': async (p) => {
       if (typeof p.absolutePath !== 'string') return { ok: false, error: 'bad-request' };
-      return (await this.refuseUnknownRoot(p.projectPath)) ?? readContext(p.projectPath, p.absolutePath);
+      return (await this.refuseUnknownRoot(p.projectPath)) ?? readContext(p.projectPath, p.absolutePath, { intent: p.intent === 'explicit' ? 'explicit' : 'preview', operationToken: p.operationToken, owner: p.cloudOwner });
     },
     'project:list-conversations': async (p) =>
       (await this.refuseUnknownRoot(p.projectPath)) ?? listConversations(p.projectPath),

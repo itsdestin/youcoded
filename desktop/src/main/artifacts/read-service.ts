@@ -15,6 +15,7 @@
 // `{ ok:false, error:'too-large', sizeBytes, limitBytes }` decided from `stat`
 // alone — never a prefix, never a read (§9).
 import fs from 'fs';
+import { readPath, type PathReadOptions } from '../cloud-files/path-access';
 import os from 'os';
 import path from 'path';
 import { canonicalize } from '../../shared/artifacts/canonicalize';
@@ -35,7 +36,7 @@ import { readFolders } from '../saved-folders';
 const CLAUDE_DIR = path.join(os.homedir(), '.claude');
 
 /** The phone's ceiling for one read; absent on the desktop's own transport. */
-export interface ReadCeiling {
+export interface ReadCeiling extends PathReadOptions {
   maxBytes?: number;
 }
 
@@ -278,6 +279,21 @@ export async function readArtifactText(
     return { ok: false, error: readAuth.error };
   }
   const realPath = readAuth.realPath;
+  // WHY: background/default callers never authorize cloud hydration. The same
+  // service and security check handle explicit retries carrying a one-use token.
+  const guarded = await readPath(realPath, { ...opts, intent: opts?.intent ?? 'preview',
+    prefix: { bytes: EDIT_MAX_BYTES, ...(opts?.full ? { fullUpTo: FULL_READ_MAX_BYTES } : {}) } });
+  if (guarded) {
+    if (!guarded.ok) return guarded;
+    const head = guarded.bytes.subarray(0, 8192);
+    const binary = looksBinary(head);
+    const partial = guarded.sizeBytes > EDIT_MAX_BYTES && !(opts?.full && guarded.sizeBytes <= FULL_READ_MAX_BYTES);
+    const display = partial ? decideOverCapRead(head, binary ? Buffer.alloc(0) : guarded.bytes) : {
+      binary, content: binary ? null : guarded.bytes.toString('utf8'), truncated: false,
+    };
+    return { ok: true, artifact: artifact ?? null, orphan: false, ...display,
+      sizeBytes: guarded.sizeBytes, mtimeMs: guarded.mtimeMs };
+  }
 
   // Size gate BEFORE reading: a multi-MB readFile blocks the main thread,
   // ships whole over IPC/WS, then blocks the renderer rendering it.
@@ -466,6 +482,8 @@ export async function readArtifactBytes(absolutePath: unknown, opts?: ReadCeilin
     // the WS transport) long before the viewer could reject it. The phone's
     // ceiling, when given, is the smaller number.
     const limit = Math.min(opts?.maxBytes ?? READ_BINARY_MAX_BYTES, READ_BINARY_MAX_BYTES);
+    const guarded = await readPath(auth.realPath, { ...opts, intent: opts?.intent ?? 'preview', maxBytes: limit });
+    if (guarded) return guarded.ok ? { ok: true, base64: guarded.bytes.toString('base64'), sizeBytes: guarded.sizeBytes } : guarded;
     const st = await fs.promises.stat(auth.realPath);
     if (st.size > limit) return tooLarge(st.size, limit);
     const buf = await fs.promises.readFile(auth.realPath);

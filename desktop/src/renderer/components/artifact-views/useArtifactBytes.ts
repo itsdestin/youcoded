@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { readWithCloudConsent, dismissCloudRead } from '../project-view/CloudReadDialog';
 
 export interface ArtifactBytesState {
   bytes: Uint8Array | null;
@@ -33,7 +34,7 @@ export function useArtifactBytes(absolutePath: string): ArtifactBytesState {
       setState({ bytes: null, loading: false, error: 'unavailable' });
       return;
     }
-    readBinary(absolutePath)
+    readWithCloudConsent(opts => readBinary(absolutePath, opts), () => cancelled)
       .then((res: any) => {
         if (cancelled) return;
         if (res?.ok && typeof res.base64 === 'string') {
@@ -45,7 +46,7 @@ export function useArtifactBytes(absolutePath: string): ArtifactBytesState {
       .catch((e: any) => {
         if (!cancelled) setState({ bytes: null, loading: false, error: String(e?.message ?? e) });
       });
-    return () => { cancelled = true; };
+    return () => { cancelled = true; dismissCloudRead(); };
   }, [absolutePath]);
 
   return state;

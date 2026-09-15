@@ -127,13 +127,12 @@ describe('assembleSystemPrompt — fixture .git containment', () => {
 
 describe('assembleSystemPrompt — byte stability (KV-cache pin)', () => {
   it('is byte-identical across two calls with the same inputs (non-git dir)', () => {
-    // Non-git tmp dir → gitSnapshot returns the stable "not a repository" line,
-    // and the date string is stable within a single test run.
+    // Startup never runs Git; its omission and the date are stable within the run.
     const inputs = { presetBody: PRESET, cwd: dir, appVersion: '2.3.4' };
     const a = assembleSystemPrompt(inputs);
     const b = assembleSystemPrompt(inputs);
     expect(a).toBe(b);
-    expect(a).toContain('Git: not a repository');
+    expect(a).toContain('Git: not checked automatically');
   });
 });
 

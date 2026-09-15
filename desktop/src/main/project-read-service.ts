@@ -7,6 +7,7 @@
 import { listProjectConversations } from './project-conversations';
 import { getRepoInfo } from './project-repo';
 import { listContext, readContextFile } from './project-context';
+import type { PathReadOptions } from './cloud-files/path-access';
 
 export async function listConversations(projectPath: string) {
   return { ok: true, conversations: await listProjectConversations(projectPath) };
@@ -21,6 +22,6 @@ export async function listContextFiles(projectPath: string) {
 }
 
 /** Allow-listed to the discovered context set — project-context.ts refuses anything else. */
-export function readContext(projectPath: string, absolutePath: string) {
-  return readContextFile(projectPath, absolutePath);
+export function readContext(projectPath: string, absolutePath: string, options?: PathReadOptions) {
+  return readContextFile(projectPath, absolutePath, options);
 }

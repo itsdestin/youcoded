@@ -21,6 +21,7 @@ import type { ActiveArtifactHandle } from '../../artifact-views/ActiveArtifactVi
 import { useArtifactContent } from '../../artifact-views/useArtifactContent';
 import { useUnsavedGuard } from '../../artifact-views/UnsavedChangesDialog';
 import { ArtifactThumbnail } from '../../ArtifactThumbnail';
+import { CloudFileConsent, type CloudConsentPreview, type CloudConsentState, type CloudConsentAction } from '../CloudFileConsent';
 import { fileTypeGroup, fileTypeLabel } from '../../../../shared/artifacts/categorization';
 import type { FileTypeGroup } from '../../../../shared/artifacts/categorization';
 import { ProjectDetailOverlay } from '../ProjectDetailOverlay';
@@ -179,6 +180,7 @@ function MiniTypeIcon({ path, size = 12 }: { path: string; size?: number }) {
 // folder navigation, and the detail overlay all live here (mode collapsed
 // 2026-07-23; see the header comment).
 export function FilesTab({
+  cloudPreview,
   project,
   search,
   types,
@@ -191,6 +193,11 @@ export function FilesTab({
   onClearSearch,
   hidden,
 }: {
+  cloudPreview?: CloudConsentPreview & {
+    state: CloudConsentState;
+    onAction: (action: CloudConsentAction) => void;
+    onSelect: (path: string) => void;
+  };
   project: CentralIndexProject;
   search: string;     // lifted to ProjectView — lives on the shared seg-row now
   // Multi-select type filter; EMPTY set = all types (filter popover).
@@ -379,6 +386,7 @@ export function FilesTab({
   // Kotlin side is a stub and remote rejects as unsupported — both settle to
   // an empty hit list and the search stays names-only there).
   const [contentHits, setContentHits] = useState<RankableHit[]>([]);
+  const [filenameOnly, setFilenameOnly] = useState(false);
   const [contentTruncated, setContentTruncated] = useState(false);
   // True from the moment a content search is queued until it settles. Gates the
   // no-results empty state so it never flashes mid-search.
@@ -416,6 +424,7 @@ export function FilesTab({
       Promise.resolve((window.claude as any).artifacts.searchContent?.(project.path, q))
         .then((res: any) => {
           if (cancelled) return;
+          setFilenameOnly(res?.scope === 'filenames-only');
           setContentHits(res?.ok ? (res.hits ?? []) : []);
           setContentTruncated(!!res?.truncated);
           setContentSearching(false);
@@ -468,6 +477,15 @@ export function FilesTab({
     && !contentSearching;
   const segments = currentDir ? currentDir.split('/') : [];
 
+  // WHY: a fixture's cloud/unknown tile never mounts a content-reading thumbnail,
+  // even after folder approval. Selecting it demonstrates a pending operation;
+  // local fixtures still use the existing viewer. Not a production read guard.
+  const availability = (a: ArtifactRecord) => cloudPreview?.availability(a.path) ?? 'local';
+  const openFile = (a: ArtifactRecord) => {
+    if (cloudPreview && availability(a) !== 'local') { cloudPreview.onSelect(a.path); return; }
+    dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: a.id });
+  };
+
   // One file card — reused by both the flat search results and the folder view.
   const renderFileCard = (a: ArtifactRecord) => {
     const filename = a.path.split('/').pop() ?? a.path;
@@ -490,14 +508,20 @@ export function FilesTab({
         // as inconsistent (user feedback 2026-07-08). Same override the seg
         // control uses on its .layer-surface.
         style={{ boxShadow: 'none' }}
-        onClick={() => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: a.id })}
+        onClick={() => openFile(a)}
         title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
       >
-        <ArtifactThumbnail
+        {availability(a) === 'local' ? <ArtifactThumbnail
           artifact={a}
           projectPath={project.path}
           className={`flex-1 min-h-0 w-full border-b border-edge-dim ${isDeleted ? 'grayscale' : ''}`}
-        />
+        /> : <span className="flex-1 min-h-0 w-full border-b border-edge-dim bg-well text-fg-2 flex flex-col items-center justify-center gap-2 px-3" data-testid="cloud-file-placeholder">
+          {/* WHY: online-only is a storage state, not a generic document type. */}
+          {availability(a) === 'cloud' ? <svg data-testid="cloud-storage-icon" aria-hidden="true" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M6 18a4 4 0 0 1-1-7.87A7 7 0 0 1 18.7 9 4.5 4.5 0 0 1 18 18H6Z" /></svg> : <DocIcon size={18} />}
+          <span className="text-xs">{availability(a) === 'cloud' ? 'Online-only' : 'Availability unknown'}</span>
+          {/* WHY: U5 explains the next step without inventing why availability is unknown. */}
+          <span className="text-2xs text-center">{availability(a) === 'cloud' ? 'Opening needs a download' : 'Opening may need a download'}</span>
+        </span>}
         {isDeleted && (
           <span
             className="absolute top-2 right-2 px-1.5 py-0.5 text-3xs font-semibold bg-canvas/80 border border-edge rounded text-fg-2"
@@ -550,7 +574,7 @@ export function FilesTab({
         key={a.id}
         type="button"
         className={`${ROW_CLS} ${isActive ? 'bg-inset text-fg' : 'hover:bg-well'} ${isDeleted ? 'opacity-60' : ''}`}
-        onClick={() => dispatch({ type: 'ACTIVE_ARTIFACT_SET', sessionId: PV_SESSION, artifactId: a.id })}
+        onClick={() => openFile(a)}
         title={isDeleted ? `${a.path}\nDeleted (file is no longer on disk)` : a.path}
       >
         <span className={`shrink-0 ${isActive ? 'text-accent' : 'text-fg-muted'}`}>
@@ -564,6 +588,10 @@ export function FilesTab({
             deleted
           </span>
         )}
+        {/* WHY: changing to list view must not hide why a fixture file cannot open. */}
+        {availability(a) !== 'local' && <span className="text-2xs text-fg-2 shrink-0">
+          {availability(a) === 'cloud' ? 'Online-only' : 'Availability unknown'}
+        </span>}
         <span className="max-sm:hidden shrink-0 w-32 truncate text-[10.5px] text-fg-muted">{secondary}</span>
         <span className="max-sm:hidden shrink-0 w-20 text-right text-[10.5px] text-fg-muted">
           {relTime(a.lastModified)}
@@ -660,6 +688,8 @@ export function FilesTab({
         </div>
       </div>
 
+      {cloudPreview && <CloudFileConsent folder={project.path} provider={cloudPreview.state.file && cloudPreview.availability(cloudPreview.state.file) === 'unknown' ? undefined : cloudPreview.provider} state={cloudPreview.state} onAction={cloudPreview.onAction} />}
+
       {loading && (
         <p className="text-sm text-fg-muted">Loading {noun}…</p>
       )}
@@ -728,6 +758,7 @@ export function FilesTab({
               {/* Nothing matched anywhere: one empty state WITH a way out, instead
                   of two bare "(0)" headers over blank space (Destin, 2026-07-23).
                   Same EmptyState + action pattern as the Resume browser. */}
+              {searching && filenameOnly && <p className={`${fullW} text-sm text-fg-muted`}>Searching file names only. File contents are not searched on Windows to avoid downloading online-only files.</p>}
               {noSearchResults && (
                 <div className={fullW}>
                   <EmptyState
@@ -744,7 +775,7 @@ export function FilesTab({
               {isList
                 ? <div className={fullW}><ListBox>{flatResults.map(renderFileRow)}</ListBox></div>
                 : flatResults.map(renderFileCard)}
-              {searching && !noSearchResults && (() => {
+              {searching && !filenameOnly && !noSearchResults && (() => {
                 const rows = contentRows;
                 // Group + sort BEFORE capping, so the biggest groups survive the cut.
                 const all = groupContentHits(rows);

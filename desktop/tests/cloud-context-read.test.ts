@@ -1,0 +1,23 @@
+import { afterEach, expect, it, vi } from 'vitest';
+const io = vi.hoisted(() => ({ passive: vi.fn(async () => null), read: vi.fn() }));
+vi.mock('../src/main/cloud-files/path-access', () => ({ passiveRead: io.passive, readPath: io.read }));
+import fs from 'fs';
+import { listContext, readContextFile } from '../src/main/project-context';
+afterEach(() => vi.restoreAllMocks());
+it('keeps an unavailable rule in metadata listing and authorizes its explicit consent retry', async () => {
+  vi.spyOn(fs.promises, 'access').mockRejectedValue(Object.assign(new Error(), { code: 'ENOENT' }));
+  vi.spyOn(fs.promises, 'realpath').mockImplementation(async p => String(p));
+  vi.spyOn(fs.promises, 'readdir').mockImplementation(async p => String(p) === '/project/.claude/rules' ? ['online.md'] as any : []);
+  vi.spyOn(fs.promises, 'stat').mockResolvedValue({ size: 4 } as any);
+  const groups = await listContext('/project');
+  expect(groups.flatMap(g => g.files).some(f => f.absolutePath === '/project/.claude/rules/online.md')).toBe(true);
+  io.passive.mockClear();
+  io.read.mockResolvedValueOnce({ ok: false, error: 'needs-download', operationToken: 'exact-rule', path: '/project/.claude/rules/online.md' });
+  expect(await readContextFile('/project', '/project/.claude/rules/online.md', { intent: 'explicit', owner: 'window:1' } as any)).toMatchObject({ error: 'needs-download' });
+  io.read.mockResolvedValueOnce({ ok: true, bytes: Buffer.from('rule') });
+  expect(await readContextFile('/project', '/project/.claude/rules/online.md', { intent: 'explicit', owner: 'window:1', operationToken: 'exact-rule' } as any)).toMatchObject({ ok: true, content: 'rule' });
+  expect(io.read).toHaveBeenLastCalledWith('/project/.claude/rules/online.md', expect.objectContaining({ operationToken: 'exact-rule', owner: 'window:1' }));
+  expect(io.passive).not.toHaveBeenCalled();
+  expect(await readContextFile('/project', '/outside/secret.md', { intent: 'explicit', owner: 'window:1' })).toMatchObject({ error: 'not-a-context-file' });
+  expect(io.read).toHaveBeenCalledTimes(2);
+});

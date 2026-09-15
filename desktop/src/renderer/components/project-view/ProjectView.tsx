@@ -30,6 +30,7 @@ import type { FileSortKey, FileViewMode } from './tabs/FilesTab';
 // see project-conversations.ts for why there's no message count).
 type ConversationSummary = PastSession & { preview?: string };
 import { FilesTab } from './tabs/FilesTab';
+import { cloudConsentSelect, cloudConsentTransition, type CloudConsentState, type CloudConsentPreview } from './CloudFileConsent';
 import { ConversationsTab } from './tabs/ConversationsTab';
 import { ContextTab } from './tabs/ContextTab';
 import { ConversationPreview } from './ConversationPreview';
@@ -163,6 +164,16 @@ export function ProjectView(props: ProjectViewProps) {
   // index answers. False until phase 1 of the load below resolves.
   const [indexLoaded, setIndexLoaded] = useState(false);
   const [activeProject, setActiveProject] = useState<CentralIndexProject | null>(null);
+  // WHY: this accessor exists ONLY in the workbench. Normal app behavior stays
+  // unchanged until design approval; only selected operations carry mock consent.
+  const [cloudPreview] = useState(() => (window.claude as unknown as {
+    artifacts?: { cloudPreview?: () => CloudConsentPreview | null };
+  }).artifacts?.cloudPreview?.() ?? null);
+  const [cloudStates, setCloudStates] = useState<Record<string, CloudConsentState>>({});
+  const cloudState: CloudConsentState | null = cloudPreview && activeProject ? cloudStates[activeProject.id] ?? { ...cloudPreview.initial, purpose: 'file', file: null } : null;
+  const setCloudState = (next: CloudConsentState) => {
+    if (activeProject) setCloudStates((prev) => ({ ...prev, [activeProject.id]: next }));
+  };
   // Latest focused-conversation cwd, held in a ref so the load effect can read
   // it WITHOUT depending on it. A dep would re-run the whole open-time load —
   // and re-home the selection — if the focused session's cwd changed while the
@@ -777,7 +788,11 @@ export function ProjectView(props: ProjectViewProps) {
                 stats={heroStats}
                 repo={heroRepo}
                 onOpenSwitcher={() => setSwitcherOpen(true)}
-                onNewConversation={props.onNewConversation}
+                onNewConversation={cloudPreview ? () => {
+                  // WHY: simulate the affected native startup only, never launch or
+                  // gate an external program from this renderer-only proposal.
+                  cloudPreview.openConversation?.(activeProject.path);
+                } : props.onNewConversation}
                 sync={heroSync}
                 onTurnOnSync={() => setTurnOnSyncFor({ path: activeProject.path, name: activeProject.name })}
                 // .catch: the phone's bridge refuses sync-now (no engine there), and a
@@ -944,7 +959,13 @@ export function ProjectView(props: ProjectViewProps) {
                 conditional. Side benefit: the folder you were browsing and the
                 file you had open are still there when you come back. */}
             {activeProject && (
-              <FilesTab hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={() => setCountsKey((k) => k + 1)} onClearSearch={() => setArtifactSearch('')} onCurrentDirChange={setCurrentRelDir} />
+              <FilesTab cloudPreview={cloudPreview && cloudState ? {
+                ...cloudPreview, state: cloudState,
+                onAction: (action) => {
+                  setCloudState(cloudConsentTransition(cloudState, action));
+                },
+                onSelect: (file) => setCloudState(cloudConsentSelect(cloudState, file)),
+              } : undefined} hidden={tab !== 'files'} project={activeProject} search={artifactSearch} types={types} sortBy={fileSort} view={fileView} onViewChange={setFileView} refreshKey={refreshKey} onMutated={() => setCountsKey((k) => k + 1)} onClearSearch={() => setArtifactSearch('')} onCurrentDirChange={setCurrentRelDir} />
             )}
             {activeProject && tab === 'conversations' && (
               <ConversationsTab conversations={conversations} onOpenPreview={setPreviewSession} />

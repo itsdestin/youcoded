@@ -33,8 +33,9 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import type { SessionContext } from '../shared/types';
-import { findProjectInstructions } from './harness/prompt-assembly';
-import { scanSkills, scanProjectSkills } from './skill-scanner';
+import { findProjectInstructionPath, findProjectInstructionsAsync } from './harness/prompt-assembly';
+import { scanSkills, scanProjectSkills, scanProjectSkillsAsync } from './skill-scanner';
+import { readPassiveFileText } from './cloud-files/production-access';
 
 /** `~/.claude/CLAUDE.md` — your instructions for every project. Claude Code
  *  reads it; the native harness does not (it only walks up from the working
@@ -44,15 +45,17 @@ export function userInstructionsPath(): string | null {
   try { return fs.existsSync(p) ? p : null; } catch { return null; }
 }
 
-export function buildClaudeCodeContext(cwd: string, modelLabel: string | null): SessionContext {
+export async function buildClaudeCodeContext(cwd: string, modelLabel: string | null): Promise<SessionContext> {
   // The SAME walk-up prompt-assembly uses, which is the one Claude Code
   // documents — so the file named here is the file it reads.
-  const project = findProjectInstructions(cwd);
-  const user = userInstructionsPath();
+  // WHY: naming an instruction file is not permission to download its contents.
+  const project = await findProjectInstructionsAsync(cwd, async () => '');
+  const userFile = path.join(os.homedir(), '.claude', 'CLAUDE.md');
+  const user = await fs.promises.stat(userFile).then(s => s.isFile(), () => false) ? userFile : null;
 
   // Installed skills plus this project's own `.claude/skills`, which is exactly
   // what Claude Code can reach. scanProjectSkills tolerates a missing folder.
-  const skills = [...scanSkills(), ...scanProjectSkills(cwd)].map((s) => ({
+  const skills = [...scanSkills(), ...await scanProjectSkillsAsync(cwd, readPassiveFileText)].map((s) => ({
     id: s.id,
     label: s.displayName || s.id,
     description: s.description,
@@ -105,7 +108,7 @@ export function readWholeContextFile(
   } else if (kind === 'project') {
     const cwd = sessions.getSession(sessionId)?.cwd;
     if (!cwd) return { error: 'not-live' };
-    file = findProjectInstructions(cwd)?.path ?? null;
+    file = findProjectInstructionPath(cwd)?.path ?? null;
   } else {
     const cwd = sessions.getSession(sessionId)?.cwd;
     const found = [...scanSkills(), ...(cwd ? scanProjectSkills(cwd) : [])].find((s) => s.id === id);

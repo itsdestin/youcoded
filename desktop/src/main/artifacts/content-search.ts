@@ -28,6 +28,7 @@ export interface ContentHit {
 
 export interface ContentSearchResult {
   ok: boolean;
+  scope?: 'filenames-only';
   hits: ContentHit[];
   /** True when a cap cut the result set — the UI should say "showing first N". */
   truncated: boolean;
@@ -83,6 +84,10 @@ export function parseRgJsonLine(line: string): ContentHit | null {
 }
 
 export function searchProjectContent(projectRoot: string, query: string): Promise<ContentSearchResult> {
+  // WHY: recursive rg opens content and ignore files before we can preflight
+  // them. Until an enumerated local-only search lane is wired, Windows retains
+  // filename matching in Files, but never starts a recursive content read.
+  if (process.platform === 'win32') return Promise.resolve({ ok: true, hits: [], truncated: false, scope: 'filenames-only' });
   const q = query.trim();
   if (!q) return Promise.resolve({ ok: true, hits: [], truncated: false });
 

@@ -1,4 +1,4 @@
-import fs from 'fs';
+import { passiveRead } from './cloud-files/path-access';
 import path from 'path';
 import { normalizeRepoUrl, RepoUrlInfo } from './project/repo-url';
 
@@ -9,7 +9,10 @@ export interface RepoInfo extends Partial<RepoUrlInfo> { hasRepo: boolean; remot
 // is not a GitHub URL we can build a webUrl for.
 export async function getRepoInfo(projectPath: string): Promise<RepoInfo> {
   try {
-    const cfg = await fs.promises.readFile(path.join(projectPath, '.git', 'config'), 'utf8');
+    // WHY: opening Project is not consent to download repository metadata.
+    const bytes = await passiveRead(path.join(projectPath, '.git', 'config'));
+    if (!bytes) return { hasRepo: false };
+    const cfg = bytes.toString('utf8');
     // Find [remote "origin"] ... url = <value>
     const block = /\[remote "origin"\][^[]*/s.exec(cfg)?.[0] ?? '';
     // WHY: anchor to line start so this matches `url =` only, not `pushurl =`

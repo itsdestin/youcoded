@@ -75,6 +75,8 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
   const [inView, setInView] = useState(false);
   const [content, setContent] = useState<string | null>(null);
   const [imgFailed, setImgFailed] = useState(false);
+  const [cloudBlocked, setCloudBlocked] = useState(false);
+  const cloud = cloudBlocked || (!!artifact.availability && artifact.availability !== 'local');
   // blob: URL for image thumbnails (read-binary → Blob). Revoked on change/unmount.
   const [imgUrl, setImgUrl] = useState<string | null>(null);
   // Measured container size, used to scale the HTML iframe preview down so the
@@ -110,7 +112,7 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
   // why file:// doesn't work). Any failure (guarded path, too-large, orphan)
   // falls back to the ext-letter glyph via imgFailed.
   useEffect(() => {
-    if (kind !== 'image' || !inView || !absolutePath) return;
+    if (cloud || kind !== 'image' || !inView || !absolutePath) return;
     let cancelled = false;
     let url: string | null = null;
     const readBinary = (window.claude as any)?.artifacts?.readBinary;
@@ -118,6 +120,7 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
     readBinary(absolutePath)
       .then((res: any) => {
         if (cancelled) return;
+        if (res?.error === 'needs-download') setCloudBlocked(true);
         if (res?.ok && typeof res.base64 === 'string') {
           const bin = atob(res.base64);
           const bytes = new Uint8Array(bin.length);
@@ -140,11 +143,12 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
   // Fetch content once visible. Refetch when the artifact's lastModified
   // changes so an edit in another window updates the thumbnail.
   useEffect(() => {
-    if (!inView || (kind !== 'text' && kind !== 'markdown' && kind !== 'html')) return;
+    if (cloud || !inView || (kind !== 'text' && kind !== 'markdown' && kind !== 'html')) return;
     let cancelled = false;
     (window.claude as any).artifacts.get(projectPath, artifact.id)
       .then((res: any) => {
         if (cancelled) return;
+        if (res?.error === 'needs-download') setCloudBlocked(true);
         // A thumbnail shows a few lines. Over-cap files now return a real
         // multi-MB prefix instead of null, so slice before it lands in state —
         // otherwise every visible tile parks megabytes in React.
@@ -192,11 +196,12 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
       ref={containerRef}
       className={`relative flex items-center justify-center ${bgClass} overflow-hidden ${className}`}
     >
-      {showFallbackGlyph && (
+      {cloud && <svg aria-label="File may need downloading" role="img" viewBox="0 0 24 24" className="w-9 h-9 text-fg-muted" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M7 18a5 5 0 0 1-1-9.9A6 6 0 0 1 17.7 7 5.5 5.5 0 0 1 18 18H7Z" /></svg>}
+      {!cloud && showFallbackGlyph && (
         <span className="text-2xl font-mono text-fg-muted">{ext ? ext.toUpperCase() : '—'}</span>
       )}
 
-      {kind === 'image' && imgUrl && !imgFailed && (
+      {!cloud && kind === 'image' && imgUrl && !imgFailed && (
         <img
           src={imgUrl}
           alt=""
@@ -206,7 +211,7 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
         />
       )}
 
-      {kind === 'markdown' && content !== null && (
+      {!cloud && kind === 'markdown' && content !== null && (
         // Rendered, not raw: the same scaled MarkdownContent the composer's
         // attachment card uses, over the first ~600 bytes.
         <div className="absolute inset-0">
@@ -214,7 +219,7 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
         </div>
       )}
 
-      {kind === 'text' && content !== null && (
+      {!cloud && kind === 'text' && content !== null && (
         // First ~8 lines, monospace, very small — readable enough to identify
         // a plan / walkthrough / note at a glance. whitespace-pre-wrap so long
         // lines wrap inside the card instead of overflowing horizontally.
@@ -223,7 +228,7 @@ export function ArtifactThumbnail({ artifact, projectPath, className = '', bgCla
         </pre>
       )}
 
-      {kind === 'html' && content !== null && (
+      {!cloud && kind === 'html' && content !== null && (
         // Render the page at a desktop logical width (HTML_DESIGN_WIDTH) and
         // scale it down to the card so the WHOLE page is visible as a zoomed-out
         // thumbnail, instead of a 1:1 cropped top-left fragment. Empty sandbox =
