@@ -209,6 +209,7 @@ export class McpManager {
   // awaits), so only one connect() ever runs no matter how many sessions ask
   // at once.
   //
+  // Except for a credential-error placeholder whose secrets now resolve (below),
   // WHY no retry: if `entry` already exists — even in `error` or
   // `needs-setup` state — it is returned as-is; connect() is never retried
   // while the entry stays pooled (i.e. while any holder remains). This is
@@ -219,6 +220,14 @@ export class McpManager {
   // isn't silent.
   private ensureConnected(server: ResolvedMcpServer, leaseId: string): PooledEntry {
     let entry = this.pool.get(server.id);
+    let recoveredHolders: Set<string> | undefined;
+    if (entry?.server.credentialError && !server.credentialError) {
+      // WHY: this entry was a resource-free error placeholder, never a live
+      // connection. Retry after wallet recovery without discarding older leases.
+      recoveredHolders = entry.holders;
+      this.pool.delete(server.id);
+      entry = undefined;
+    }
     if (!entry) {
       // Fix (Finding 6): a server synced from another device without its
       // secret ciphertext (`missingSecrets`, populated by
@@ -235,25 +244,27 @@ export class McpManager {
       // case in mcp-client.ts); this reuses that same state value rather than
       // inventing a parallel one, so acquire()'s ready-check and status()
       // both treat it exactly like any other not-ready server.
-      const conn: McpConnectionLike = server.missingSecrets.length > 0
+      const credentialFailure = server.credentialError || (server.missingSecrets.length > 0
+        ? `${server.label} needs setup — missing secret(s): ${server.missingSecrets.join(', ')}.` : null);
+      const conn: McpConnectionLike = credentialFailure
         ? {
-            state: 'needs-setup',
-            lastError: `${server.label} needs setup — missing secret(s): ${server.missingSecrets.join(', ')}.`,
+            state: server.credentialError ? 'error' : 'needs-setup',
+            lastError: credentialFailure,
             // Never actually invoked (no retry while pooled — see this
             // method's own "WHY no retry" note above) but kept as a real
             // no-op so this object satisfies McpConnectionLike structurally.
             connect: async () => {},
             listTools: () => [],
             callTool: async () => ({
-              text: `${server.label} needs setup — missing secret(s): ${server.missingSecrets.join(', ')}.`,
+              text: credentialFailure,
               isError: true,
             }),
             close: async () => {},
           }
         : this.connectionFactory(server);
-      entry = { server, conn, holders: new Set() };
+      entry = { server, conn, holders: recoveredHolders ?? new Set() };
       this.pool.set(server.id, entry);
-      if (server.missingSecrets.length === 0) {
+      if (!credentialFailure) {
         entry.connecting = conn.connect().finally(() => {
           entry!.connecting = undefined;
         });

@@ -40,7 +40,7 @@ import * as fs from 'fs';
 import * as http from 'http';
 import * as path from 'path';
 import { randomBytes as nodeRandomBytes } from 'crypto';
-import { safeStorage } from 'electron';
+import { SECRET_STORAGE_UNAVAILABLE_MESSAGE } from './secret-storage-errors';
 import type { CatalogModel } from '../../shared/provider-types';
 import type { ChatGptAccountStatus, ChatGptUsage, ChatGptUsageWindow } from '../../shared/chatgpt-types';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
@@ -107,11 +107,7 @@ const LOCK_MAX_RETRIES = 5;
 export const CHATGPT_PORT_IN_USE_MESSAGE =
   'Port 1455 is already in use on this computer, so YouCoded cannot receive the sign-in. ' +
   'Close the other program using it (often the Codex CLI) and try again.';
-/** SecretsStore's own sentence, verbatim (its `assertAvailable` is private).
- *  Pinned equal to what `SecretsStore.set` throws in tests/chatgpt-auth.test.ts,
- *  so the two cannot drift apart unnoticed. */
-export const CHATGPT_KEYCHAIN_UNAVAILABLE_MESSAGE =
-  'Secure key storage is not available on this system, so YouCoded cannot save API keys. (Your OS keychain/libsecret is required.)';
+export const CHATGPT_KEYCHAIN_UNAVAILABLE_MESSAGE = SECRET_STORAGE_UNAVAILABLE_MESSAGE;
 export const CHATGPT_LOCK_HELD_MESSAGE =
   "Could not update the ChatGPT sign-in — another YouCoded process is holding the account file's lock. Try again in a moment.";
 
@@ -206,7 +202,7 @@ export interface ChatGptAuthDeps {
   pollUsage?: boolean;
   fetch?: typeof fetch;
   listen?: ListenFn;
-  isEncryptionAvailable?: () => boolean;
+  isEncryptionAvailable?: () => boolean | Promise<boolean>;
   now?: () => number;
   timers?: TimerFns;
   randomBytes?: RandomBytesFn;
@@ -305,7 +301,11 @@ function parseTokenBlob(raw: string | null): TokenBlob | null {
   if (raw === null) return null;
   try {
     const parsed: unknown = JSON.parse(raw);
-    if (!isRecord(parsed) || typeof parsed.access_token !== 'string' || !parsed.access_token) return null;
+    // A partial blob cannot safely drive refresh; report saved-data failure
+    // rather than sending an empty refresh token and calling it expired.
+    if (!isRecord(parsed) || typeof parsed.access_token !== 'string' || !parsed.access_token
+      || typeof parsed.refresh_token !== 'string' || !parsed.refresh_token
+      || typeof parsed.expires_at !== 'number' || !Number.isFinite(parsed.expires_at)) return null;
     return {
       access_token: parsed.access_token,
       refresh_token: typeof parsed.refresh_token === 'string' ? parsed.refresh_token : '',
@@ -379,7 +379,7 @@ export class ChatGptAuth {
   private readonly openExternal: (url: string) => Promise<void>;
   private readonly realFetch: typeof fetch;
   private readonly listen: ListenFn;
-  private readonly isEncryptionAvailable: () => boolean;
+  private readonly isEncryptionAvailable?: () => boolean | Promise<boolean>;
   private readonly now: () => number;
   private readonly timers: TimerFns;
   private readonly randomBytes: RandomBytesFn;
@@ -404,9 +404,28 @@ export class ChatGptAuth {
   private lastOutcome: SignInOutcome | null = null;
   /** The single in-flight refresh (§3): concurrent steps share one request. */
   private refreshing: Promise<TokenBlob> | null = null;
+  private refreshingOwner: ReturnType<ChatGptAuth['credentialOwner']> | null = null;
   /** Serialises `mutate()` calls in this process, so the three writers never
    *  contend for the on-disk lock with each other — only with a crash's leftover. */
   private writeChain: Promise<unknown> = Promise.resolve();
+  // WHY: an async keychain set must finish before sign-out deletes its ref.
+  private credentialChain: Promise<unknown> = Promise.resolve();
+  private clearing = 0;
+
+  private credentialsMutation<T>(fn: () => Promise<T>): Promise<T> {
+    const p = this.credentialChain.then(fn);
+    this.credentialChain = p.catch(() => undefined);
+    return p;
+  }
+
+  private credentialOwner() {
+    return { generation: this.generation, secretRef: this.account?.secretRef };
+  }
+
+  private assertCredentialOwner(owner: { generation: number; secretRef?: string }): void {
+    if (this.disposed || this.clearing || !owner.secretRef || owner.generation !== this.generation
+      || owner.secretRef !== this.account?.secretRef) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
+  }
   private pollTimer: TimerHandle | null = null;
   private debounceTimer: TimerHandle | null = null;
   private lastUsagePollAt = Number.NEGATIVE_INFINITY;
@@ -423,7 +442,7 @@ export class ChatGptAuth {
     this.openExternal = deps.openExternal;
     this.realFetch = deps.fetch ?? ((input, init) => fetch(input, init));
     this.listen = deps.listen ?? ((port, host, handler) => defaultListen(port, host, handler, this.log));
-    this.isEncryptionAvailable = deps.isEncryptionAvailable ?? (() => safeStorage.isEncryptionAvailable());
+    this.isEncryptionAvailable = deps.isEncryptionAvailable;
     this.now = deps.now ?? (() => Date.now());
     this.timers = deps.timers ?? defaultTimers;
     this.randomBytes = deps.randomBytes ?? ((n) => nodeRandomBytes(n));
@@ -514,9 +533,17 @@ export class ChatGptAuth {
   }
 
   private async startRound(opts?: { timeoutMs?: number }): Promise<boolean> {
+    const generation = this.generation;
+    if (this.disposed) return false;
     // (1) Pre-flight the keychain BEFORE any browser opens: a store that
     // throws after the exchange would waste the user's whole sign-in.
-    if (!this.isEncryptionAvailable()) throw new Error(CHATGPT_KEYCHAIN_UNAVAILABLE_MESSAGE);
+    // The store owns platform recovery; a direct Electron probe can retain
+    // Linux's unavailable-at-startup result even after the wallet unlocks.
+    if (this.isEncryptionAvailable) {
+      if (!await this.isEncryptionAvailable()) throw new Error(CHATGPT_KEYCHAIN_UNAVAILABLE_MESSAGE);
+    } else {
+      await this.secrets.assertAvailable();
+    }
 
     const { verifier, challenge } = generatePkce(this.randomBytes);
     const state = generateState(this.randomBytes);
@@ -525,6 +552,9 @@ export class ChatGptAuth {
     // close it first so the EADDRINUSE sentence is only ever true of another
     // process (§3, pinned).
     await this.closeLingering();
+    // WHY: unlocking a wallet can take time. Cancel/sign-out/quit during that
+    // wait must not open a browser or resurrect a listener when it completes.
+    if (generation !== this.generation || this.disposed) return false;
 
     const round: SignInRound = {
       state, verifier, url: '', server: null as unknown as CallbackServerLike,
@@ -535,6 +565,11 @@ export class ChatGptAuth {
     } catch (e) {
       if (errorCode(e) === 'EADDRINUSE') throw new Error(CHATGPT_PORT_IN_USE_MESSAGE);
       throw e;
+    }
+
+    if (generation !== this.generation || this.disposed) {
+      await this.closeServer(round.server);
+      return false;
     }
 
     // The generation moves only once the round is real: a bind that threw
@@ -570,7 +605,10 @@ export class ChatGptAuth {
 
   async cancelSignIn(): Promise<boolean> {
     const round = this.round;
-    if (!round || round.timedOut) return true;
+    if (!round || round.timedOut) {
+      if (this.starting) this.generation += 1;
+      return true;
+    }
     this.generation += 1;
     await this.finishRound(round, 'cancelled');
     return true;
@@ -581,10 +619,12 @@ export class ChatGptAuth {
    *  ciphertext blob would be unreachable forever, an orphaned account row is
    *  just re-deletable (§2, the same order ProviderRegistry.remove uses). */
   async signOut(): Promise<boolean> {
-    this.generation += 1;
+    const cleared = this.clearAccount();
+    // Observe deletion failures even while the callback listener is closing.
+    void cleared.catch(() => undefined);
     if (this.round && !this.round.timedOut) await this.finishRound(this.round, 'cancelled');
     await this.closeLingering();
-    await this.clearAccount();
+    await cleared;
     return true;
   }
 
@@ -682,37 +722,46 @@ export class ChatGptAuth {
       return;
     }
 
-    let secretRef: string;
     // A re-sign-in (IPC only; the card offers Sign out instead) or a sign-in
     // from `blocked` replaces an account that is still there. The new pair
     // gets a FRESH ref, the file is switched to it, and only then is the old
     // ref deleted — so a cancel that lands mid-write puts the user back where
     // they started, not signed out, and no ciphertext is orphaned either way.
-    const previousRef = this.account?.secretRef;
     try {
-      secretRef = await this.secrets.set(JSON.stringify(tokens));
-      const written = await this.mutate((cur) => {
-        // A cancel that landed while the secret was being written wins; the
-        // secret is removed again below so nothing survives it.
-        if (round.generation !== this.generation) return null;
-        return {
-          v: 1, secretRef, accountId: claims.accountId, email: claims.email,
-          // Keep the plan the last poll reported if the claim has none.
-          plan: claims.plan || cur?.plan || '',
-          // WHY: this IS the "a sign-in round writes a NEW account row" branch
-          // (Task 1) — first sign-in AND every re-sign-in on the same account
-          // land here, so each one mints a fresh durable epoch. Token refresh,
-          // usage polls and model-cache writes go through `{ ...cur, ... }`
-          // elsewhere in this file and so carry the existing epoch forward
-          // unchanged; this is the one place that overwrites it.
-          credentialEpoch: Buffer.from(this.randomBytes(16)).toString('hex'),
-          ...(cur?.usage ? { usage: cur.usage } : {}),
-          ...(cur?.models ? { models: cur.models } : {}),
-        };
+      const saved = await this.credentialsMutation(async () => {
+        if (round.generation !== this.generation) return false;
+        const previousRef = this.account?.secretRef;
+        const secretRef = await this.secrets.set(JSON.stringify(tokens));
+        const written = await this.mutate((cur) => {
+          // A cancel that landed while the secret was being written wins; the
+          // secret is removed again below so nothing survives it.
+          if (round.generation !== this.generation) return null;
+          return {
+            v: 1, secretRef, accountId: claims.accountId, email: claims.email,
+            // Keep the plan the last poll reported if the claim has none.
+            plan: claims.plan || cur?.plan || '',
+            // WHY: this IS the "a sign-in round writes a NEW account row" branch
+            // (Task 1) — first sign-in AND every re-sign-in on the same account
+            // land here, so each one mints a fresh durable epoch. Token refresh,
+            // usage polls and model-cache writes go through `{ ...cur, ... }`
+            // elsewhere in this file and so carry the existing epoch forward
+            // unchanged; this is the one place that overwrites it.
+            credentialEpoch: Buffer.from(this.randomBytes(16)).toString('hex'),
+            ...(cur?.usage ? { usage: cur.usage } : {}),
+            ...(cur?.models ? { models: cur.models } : {}),
+          };
+        });
+        if (round.generation !== this.generation || !written || written.secretRef !== secretRef) {
+          await this.secrets.delete(secretRef).catch(() => undefined);
+          this.log('info', 'sign-in cancelled while the account was being saved; tokens discarded');
+          return false;
+        }
+        if (previousRef && previousRef !== secretRef) {
+          await this.secrets.delete(previousRef).catch((e) => this.log('warn', 'could not remove the previous sign-in\'s secret', { reason: errorMessage(e) }));
+        }
+        return round.generation === this.generation;
       });
-      if (round.generation !== this.generation || !written || written.secretRef !== secretRef) {
-        await this.secrets.delete(secretRef).catch(() => undefined);
-        this.log('info', 'sign-in cancelled while the account was being saved; tokens discarded');
+      if (!saved || round.generation !== this.generation) {
         reply(res, 200, CALLBACK_PAGE_FAILED);
         return;
       }
@@ -725,9 +774,6 @@ export class ChatGptAuth {
       return;
     }
 
-    if (previousRef && previousRef !== secretRef) {
-      await this.secrets.delete(previousRef).catch((e) => this.log('warn', 'could not remove the previous sign-in\'s secret', { reason: errorMessage(e) }));
-    }
     reply(res, 200, CALLBACK_PAGE_DONE);
     await this.finishRound(round, 'signed-in');
     this.startPoll();
@@ -793,36 +839,49 @@ export class ChatGptAuth {
    *  signed out, the expired sentence when OpenAI refuses the renewal (the
    *  account is signed out first), and the real reason for anything else. */
   async accessToken(): Promise<string> {
-    const blob = await this.readTokens();
-    if (blob.expires_at - this.now() > REFRESH_MARGIN_MS) return blob.access_token;
-    return (await this.refresh(blob)).access_token;
+    const owner = this.credentialOwner();
+    const blob = await this.readTokens(owner);
+    this.assertCredentialOwner(owner);
+    const next = blob.expires_at - this.now() > REFRESH_MARGIN_MS ? blob : await this.refresh(blob, owner);
+    this.assertCredentialOwner(owner);
+    return next.access_token;
   }
 
-  private async readTokens(): Promise<TokenBlob> {
-    const a = this.account;
-    if (!a) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
-    const blob = parseTokenBlob(await this.secrets.get(a.secretRef));
-    if (!blob) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
+  private async readTokens(owner: ReturnType<ChatGptAuth['credentialOwner']>): Promise<TokenBlob> {
+    this.assertCredentialOwner(owner);
+    const raw = await this.secrets.get(owner.secretRef!);
+    this.assertCredentialOwner(owner);
+    if (raw === null) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
+    const blob = parseTokenBlob(raw);
+    // Unreadable is not absent: retain the account and saved value for retry,
+    // and never include the token JSON (or its parser exception) in the error.
+    if (!blob) throw new Error('Saved ChatGPT credentials could not be read. Retry, or reconnect ChatGPT in Settings → Model Providers if this continues.');
     return blob;
   }
 
   /** After a 401: the token we sent may already have been replaced by a
    *  refresh another step finished — use that one; otherwise refresh. */
-  private async tokenAfter401(used: string): Promise<string> {
-    const blob = await this.readTokens();
-    if (blob.access_token !== used) return blob.access_token;
-    return (await this.refresh(blob)).access_token;
+  private async tokenAfter401(used: string, owner: ReturnType<ChatGptAuth['credentialOwner']>): Promise<string> {
+    const blob = await this.readTokens(owner);
+    this.assertCredentialOwner(owner);
+    const next = blob.access_token !== used ? blob : await this.refresh(blob, owner);
+    this.assertCredentialOwner(owner);
+    return next.access_token;
   }
 
-  private refresh(current: TokenBlob): Promise<TokenBlob> {
-    if (this.refreshing) return this.refreshing;
-    const p = this.doRefresh(current).finally(() => { if (this.refreshing === p) this.refreshing = null; });
+  private refresh(current: TokenBlob, owner: ReturnType<ChatGptAuth['credentialOwner']>): Promise<TokenBlob> {
+    this.assertCredentialOwner(owner);
+    if (this.refreshing && this.refreshingOwner?.generation === owner.generation
+      && this.refreshingOwner.secretRef === owner.secretRef) return this.refreshing;
+    this.refreshingOwner = owner;
+    const p = this.doRefresh(current, owner).finally(() => { if (this.refreshing === p) this.refreshing = null; });
     this.refreshing = p;
     return p;
   }
 
-  private async doRefresh(current: TokenBlob): Promise<TokenBlob> {
-    const generation = this.generation;
+  private async doRefresh(current: TokenBlob, owner: ReturnType<ChatGptAuth['credentialOwner']>): Promise<TokenBlob> {
+    this.assertCredentialOwner(owner);
+    const { generation } = owner;
     const account = this.account;
     if (!account) throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
     let r: Response;
@@ -843,7 +902,8 @@ export class ChatGptAuth {
       // OpenAI will not renew this pair: the sign-in is over. Delete the
       // secret (generation-checked) and tell the caller in the approved words.
       this.log('warn', 'token refresh refused; signing out', { status: r.status });
-      if (generation === this.generation) await this.clearAccount();
+      this.assertCredentialOwner(owner);
+      await this.clearAccount();
       throw expiredError();
     }
     const json: unknown = await r.json().catch(() => null);
@@ -863,29 +923,40 @@ export class ChatGptAuth {
     if (generation !== this.generation || this.account?.secretRef !== account.secretRef) {
       throw new Error(CHATGPT_SIGN_IN_REQUIRED_MESSAGE);
     }
-    await this.secrets.set(JSON.stringify(next), account.secretRef);
-    // The renewed token's claims may name a new plan or email; keep the file
-    // honest without a poll. One write, only when something changed.
-    const claims = accountFromTokens({ accessToken: next.access_token, idToken: next.id_token });
-    if (claims && (claims.email !== account.email || (claims.plan && claims.plan !== account.plan) || claims.accountId !== account.accountId)) {
-      await this.mutate((cur) => {
-        if (!cur || generation !== this.generation) return null;
-        return { ...cur, accountId: claims.accountId, email: claims.email || cur.email, plan: claims.plan || cur.plan };
-      });
-    }
+    await this.credentialsMutation(async () => {
+      this.assertCredentialOwner(owner);
+      await this.secrets.set(JSON.stringify(next), account.secretRef);
+      this.assertCredentialOwner(owner);
+      // The renewed token's claims may name a new plan or email; keep the file
+      // honest without a poll. One write, only when something changed.
+      const claims = accountFromTokens({ accessToken: next.access_token, idToken: next.id_token });
+      if (claims && (claims.email !== account.email || (claims.plan && claims.plan !== account.plan) || claims.accountId !== account.accountId)) {
+        await this.mutate((cur) => {
+          if (!cur || generation !== this.generation || cur.secretRef !== owner.secretRef) return null;
+          return { ...cur, accountId: claims.accountId, email: claims.email || cur.email, plan: claims.plan || cur.plan };
+        });
+      }
+    });
+    this.assertCredentialOwner(owner);
     return next;
   }
 
   /** Secret first, then the file (§2); the poll stops with the account. */
-  private async clearAccount(): Promise<void> {
-    this.stopPoll();
-    // A fresh sign-in is a fresh start: a network blip before sign-out must
-    // not leave the next account's picker empty for five minutes (F3).
-    this.lastModelsAttemptAt = 0;
-    const a = this.account;
-    if (a) await this.secrets.delete(a.secretRef);
-    await this.mutate(() => null, { remove: true });
-    this.account = null;
+  private clearAccount(): Promise<void> {
+    this.generation += 1;
+    this.refreshing = null;
+    this.clearing += 1;
+    const pending = this.credentialsMutation(async () => {
+      this.stopPoll();
+      // A fresh sign-in is a fresh start: a network blip before sign-out must
+      // not leave the next account's picker empty for five minutes (F3).
+      this.lastModelsAttemptAt = 0;
+      const a = this.account;
+      if (a) await this.secrets.delete(a.secretRef);
+      await this.mutate(() => null, { remove: true });
+      this.account = null;
+    });
+    return pending.finally(() => { this.clearing -= 1; });
   }
 
   // ----- the credential-owning fetch (§4.1, §4.5, §4.6) ----------------------
@@ -944,19 +1015,22 @@ export class ChatGptAuth {
         throw error;
       }
     };
+    const owner = this.credentialOwner();
     const first = await this.liveCredentials();
     let res = await send(first);
+    this.assertCredentialOwner(owner);
     if (res.status === 401) {
       // Refresh once and re-send the SAME body with the new bearer; a second
       // 401 means the sign-in is over. Keep the refresh scoped to the same
       // account generation that received the 401.
-      const secondToken = await this.tokenAfter401(first.token);
+      const secondToken = await this.tokenAfter401(first.token, owner);
       const secondAccount = this.signedInAccount();
       if (secondAccount.accountId !== first.accountId || secondAccount.authGeneration !== first.authGeneration
         || (expected && (secondAccount.accountId !== expected.accountId || secondAccount.authGeneration !== expected.authGeneration))) {
         throw new Error('The ChatGPT account changed while preparing this request. Try again.');
       }
       res = await send({ ...first, token: secondToken });
+      this.assertCredentialOwner(owner);
       if (res.status === 401) {
         this.log('warn', 'request refused twice with 401; signing out');
         await this.clearAccount();
@@ -1217,7 +1291,7 @@ export class ChatGptAuth {
     this.stopPoll();
     if (this.round) await this.finishRound(this.round, 'cancelled');
     await this.closeLingering();
-    await Promise.allSettled([this.writeChain, this.refreshing, this.modelsRefresh, this.exchangeInFlight, this.starting]);
+    await Promise.allSettled([this.credentialChain, this.writeChain, this.refreshing, this.modelsRefresh, this.exchangeInFlight, this.starting]);
     await this.writeChain;
   }
 

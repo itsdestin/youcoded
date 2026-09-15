@@ -23,6 +23,25 @@ describe('SearchService', () => {
     expect(out.source).toBe('exa');
     expect(out.results).toEqual(R);
   });
+  it('continues to keyless search when a stored key cannot be read', async () => {
+    const s = new SearchService(chain([
+      { backend: 'tavily', requiresKey: true }, { backend: 'ddg', requiresKey: false },
+    ]), { getKey: async () => { throw new Error('Secure key storage is currently unavailable. Retry.'); } }, {
+      tavily: backend('tavily', async () => { throw new Error('must not call'); }),
+      exa: backend('exa', async () => R), ddg: backend('ddg', async () => R),
+    });
+    expect((await s.search('q', sig())).source).toBe('ddg');
+  });
+  it('retains a credential-read reason without claiming no API key or a network failure', async () => {
+    const s = new SearchService(chain([{ backend: 'tavily', requiresKey: true }]), {
+      getKey: async () => { throw new Error('Secure key storage is currently unavailable. Retry.'); },
+    }, { tavily: backend('tavily', async () => R), exa: backend('exa', async () => R), ddg: backend('ddg', async () => R) });
+    const error = await s.search('q', sig()).catch((e: Error) => e.message);
+    expect(error).toContain('tavily: Secure key storage is currently unavailable. Retry.');
+    expect(error).not.toContain('no API key configured');
+    expect(error).not.toContain('Could not reach the service');
+  });
+
   it('falls through on backend failure and reports the winning source', async () => {
     const s = new SearchService(chain([
       { backend: 'exa', requiresKey: false }, { backend: 'ddg', requiresKey: false },

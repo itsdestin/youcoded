@@ -345,6 +345,159 @@ const modelsCalls = () => h.fetch.calls.filter((c) => c.url === chatGptModelsUrl
 // The sign-in round (§3)
 // ---------------------------------------------------------------------------
 
+describe('ChatGptAuth: credential ownership races', () => {
+  it.each([0, 10 * DAY])('signout during decrypt rejects without fetching (expiry %s)', async (expiresInMs) => {
+    const ref = await h.seedSignedIn({ expiresInMs });
+    const raw = await h.secrets.get(ref);
+    const gate = deferred<string | null>();
+    vi.spyOn(h.secrets, 'get').mockReturnValueOnce(gate.promise);
+    const auth = h.build({ pollUsage: false });
+    const pending = auth.accessToken().then(() => 'usable', () => 'rejected');
+    await auth.signOut();
+    gate.resolve(raw);
+    expect(await pending).toBe('rejected');
+    expect(h.fetch.calls).toHaveLength(0);
+  });
+
+  it.each([200, 401])('replacement during decrypt cannot refresh or delete the new account (%s)', async (status) => {
+    const ref = await h.seedSignedIn({ expiresInMs: 0 });
+    const raw = await h.secrets.get(ref);
+    const gate = deferred<string | null>();
+    vi.spyOn(h.secrets, 'get').mockReturnValueOnce(gate.promise);
+    const auth = h.build({ pollUsage: false });
+    const pending = auth.accessToken().then(() => 'usable', () => 'rejected');
+    await completeSignIn(auth);
+    const account = fs.readFileSync(h.file, 'utf8');
+    const secrets = h.secretsFile();
+    h.fetch.routes.push(tokenRoute({ refreshStatus: status === 401 ? 401 : undefined }));
+    gate.resolve(raw);
+    expect(await pending).toBe('rejected');
+    expect(refreshCalls()).toHaveLength(0);
+    expect(fs.readFileSync(h.file, 'utf8')).toBe(account);
+    expect(h.secretsFile()).toEqual(secrets);
+  });
+
+  it('signout drains a paused sign-in write before returning', async () => {
+    const auth = h.build({ pollUsage: false });
+    const entered = deferred<void>();
+    const gate = deferred<void>();
+    const realSet = h.secrets.set.bind(h.secrets);
+    vi.spyOn(h.secrets, 'set').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await gate.promise;
+      return realSet(...args);
+    });
+    await auth.signIn();
+    const outcome = auth.waitForSignIn();
+    const callback = hit(h.port, `/auth/callback?state=${h.stateFromOpened()}&code=code-1`).catch(() => undefined);
+    await entered.promise;
+    let completed = false;
+    const stopped = auth.signOut().then(() => { completed = true; });
+    await callback;
+    const earlyCompletion = completed;
+    gate.resolve();
+    await stopped;
+    expect(earlyCompletion).toBe(false);
+    expect(await outcome).toBe('cancelled');
+    expect(h.secretsFile()).toEqual({});
+    expect(fs.existsSync(h.file)).toBe(false);
+  });
+
+  it('signout waits for paused refresh persistence and leaves no usable token or secret', async () => {
+    await h.seedSignedIn({ expiresInMs: 0 });
+    const auth = h.build({ pollUsage: false });
+    const entered = deferred<void>();
+    const gate = deferred<void>();
+    const realSet = h.secrets.set.bind(h.secrets);
+    vi.spyOn(h.secrets, 'set').mockImplementationOnce(async (...args) => {
+      entered.resolve();
+      await gate.promise;
+      return realSet(...args);
+    });
+    const pending = auth.accessToken().then(() => 'usable', () => 'rejected');
+    await entered.promise;
+    let completed = false;
+    const stopped = auth.signOut().then(() => { completed = true; });
+    // Race against actual deletion, not elapsed time: deletion cannot start before set finishes.
+    const deletion = vi.spyOn(h.secrets, 'delete');
+    await settle();
+    const earlyCompletion = completed;
+    const earlyDeletes = deletion.mock.calls.length;
+    gate.resolve();
+    await stopped;
+    const outcome = await pending;
+    expect(earlyCompletion).toBe(false);
+    expect(earlyDeletes).toBe(0);
+    expect(outcome).toBe('rejected');
+    expect(h.secretsFile()).toEqual({});
+    expect(fs.existsSync(h.file)).toBe(false);
+  });
+});
+
+describe('ChatGptAuth: saved credential recovery', () => {
+  it('temporary decrypt failure preserves the account and recovers on the same instance', async () => {
+    await h.seedSignedIn();
+    const auth = h.build({ pollUsage: false });
+    const account = fs.readFileSync(h.file, 'utf8');
+    const ciphertext = h.secretsFile();
+    const decrypt = vi.spyOn(safeStorage, 'decryptString').mockImplementation(() => { throw new Error(TOKEN_MARKER); });
+    await expect(auth.accessToken()).rejects.toThrow('Saved credentials could not be decrypted.');
+    expect(auth.isSignedIn()).toBe(true);
+    expect(fs.readFileSync(h.file, 'utf8')).toBe(account);
+    expect(h.secretsFile()).toEqual(ciphertext);
+    decrypt.mockRestore();
+    expect(await auth.accessToken()).toContain(TOKEN_MARKER);
+  });
+
+  it.each(['not-json', '{"access_token":"private-marker"}'])('malformed saved tokens are unreadable, not signed out: %s', async (raw) => {
+    const ref = await h.seedSignedIn();
+    await h.secrets.set(raw, ref);
+    const auth = h.build({ pollUsage: false });
+    await expect(auth.accessToken()).rejects.toThrow('Saved ChatGPT credentials could not be read.');
+    expect(auth.isSignedIn()).toBe(true);
+    expect(await h.secrets.get(ref)).toBe(raw);
+  });
+
+  it('default preflight awaits the store and retries after temporary unavailability', async () => {
+    const probe = vi.spyOn(h.secrets, 'assertAvailable').mockRejectedValueOnce(new Error('temporary storage failure')).mockResolvedValue(undefined);
+    const auth = h.build({ isEncryptionAvailable: undefined });
+    await expect(auth.signIn()).rejects.toThrow('temporary storage failure');
+    expect(h.opened).toHaveLength(0);
+    expect(await auth.signIn()).toBe(true);
+    expect(probe).toHaveBeenCalledTimes(2);
+    expect(h.opened).toHaveLength(1);
+  });
+
+  it('async preflight override refuses unavailable storage then retries', async () => {
+    const available = vi.fn().mockResolvedValueOnce(false).mockResolvedValue(true);
+    const auth = h.build({ isEncryptionAvailable: available });
+    await expect(auth.signIn()).rejects.toThrow(CHATGPT_KEYCHAIN_UNAVAILABLE_MESSAGE);
+    expect(h.opened).toHaveLength(0);
+    expect(await auth.signIn()).toBe(true);
+  });
+
+  it.each(['signOut', 'cancelSignIn', 'dispose'] as const)('%s during a wallet wait prevents a late browser launch', async (action) => {
+    const gate = deferred<boolean>();
+    const auth = h.build({ isEncryptionAvailable: () => gate.promise });
+    const pending = auth.signIn();
+    const stopped = auth[action]();
+    gate.resolve(true);
+    await stopped;
+    expect(await pending).toBe(false);
+    expect(h.opened).toHaveLength(0);
+    expect(await portOpen(h.port)).toBe(false);
+  });
+
+  it('signOut deletes credentials even while the keychain is unavailable', async () => {
+    const ref = await h.seedSignedIn();
+    const auth = h.build({ pollUsage: false });
+    vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(false);
+    expect(await auth.signOut()).toBe(true);
+    expect(auth.isSignedIn()).toBe(false);
+    expect(h.secrets.has(ref)).toBe(false);
+  });
+});
+
 describe('ChatGptAuth: the sign-in round', () => {
   it('signIn opens the authorize URL, reads as waiting, and a good callback signs in — nothing token-shaped touches the account file', async () => {
     const auth = h.build();

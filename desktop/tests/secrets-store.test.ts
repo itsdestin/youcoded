@@ -10,6 +10,7 @@ import * as os from 'os';
 // the store imports, so spying here affects the store's calls.
 import { safeStorage } from 'electron';
 import { SecretsStore } from '../src/main/providers/secrets-store';
+import { KeychainHelperError } from '../src/main/providers/keychain-client';
 
 describe('SecretsStore', () => {
   let dir: string;
@@ -67,15 +68,28 @@ describe('SecretsStore', () => {
     expect(await store.get(b)).toBe('sk-b');
   });
 
-  it('get returns null for an undecryptable blob (keychain mismatch)', async () => {
-    // Simulates a store file copied from another machine: the entry exists
-    // but decryptString throws. get() must degrade to null, never throw.
-    fs.writeFileSync(
-      path.join(dir, 'native-secrets.json'),
-      JSON.stringify({ ref1: Buffer.from('garbage', 'utf8').toString('base64') }),
-      'utf8'
-    );
-    expect(await store.get('ref1')).toBeNull();
+  it('get reports undecryptable credentials without deleting or exposing them', async () => {
+    const ref = await store.set('sk-private');
+    const file = path.join(dir, 'native-secrets.json');
+    const before = fs.readFileSync(file, 'utf8');
+    vi.spyOn(safeStorage, 'decryptString').mockImplementation(() => { throw new Error(before + 'sk-private'); });
+    await expect(store.get(ref)).rejects.toThrow('Saved credentials could not be decrypted.');
+    const error = await store.get(ref).catch((e: Error) => e.message);
+    expect(error).not.toContain('sk-private');
+    expect(error).not.toContain(before);
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+  });
+
+  it('get reports unavailable storage and recovers without replacing ciphertext', async () => {
+    const ref = await store.set('sk-recover');
+    const file = path.join(dir, 'native-secrets.json');
+    const before = fs.readFileSync(file, 'utf8');
+    const available = vi.spyOn(safeStorage, 'isEncryptionAvailable').mockReturnValue(false);
+    await expect(store.get(ref)).rejects.toThrow(/Unlock your system keychain.*retry/);
+    expect(await store.get('missing')).toBeNull();
+    expect(fs.readFileSync(file, 'utf8')).toBe(before);
+    available.mockReturnValue(true);
+    expect(await store.get(ref)).toBe('sk-recover');
   });
 
   it('set throws a user-showable error when the OS keychain is unavailable', async () => {
@@ -84,6 +98,35 @@ describe('SecretsStore', () => {
     await expect(store.set('sk-nope')).rejects.toThrow(/Secure key storage/);
     // Nothing may have been written on the refused path.
     expect(fs.existsSync(path.join(dir, 'native-secrets.json'))).toBe(false);
+  });
+
+  it('does not launch another wallet probe while reporting a known helper failure', async () => {
+    const ref = await store.set('private');
+    const crypto = {
+      isEncryptionAvailable: vi.fn(async () => true),
+      encryptString: vi.fn(),
+      decryptString: vi.fn(async () => { throw new KeychainHelperError('unavailable'); }),
+    };
+    const recoverable = new SecretsStore(dir, crypto);
+    await expect(recoverable.get(ref)).rejects.toThrow(/Secure key storage is currently unavailable/);
+    expect(crypto.isEncryptionAvailable).toHaveBeenCalledOnce();
+    expect(store.has(ref)).toBe(true);
+  });
+
+  it('awaits the recoverable crypto adapter for reads, writes and availability', async () => {
+    const crypto = {
+      isEncryptionAvailable: vi.fn(async () => false),
+      encryptString: vi.fn(async (value: string) => safeStorage.encryptString(value)),
+      decryptString: vi.fn(async (value: Buffer) => safeStorage.decryptString(value)),
+    };
+    const recoverable = new SecretsStore(dir, crypto);
+    await expect(recoverable.set('recoverable-token')).rejects.toThrow(/Secure key storage/);
+    expect(crypto.encryptString).not.toHaveBeenCalled();
+    crypto.isEncryptionAvailable.mockResolvedValue(true);
+    const ref = await recoverable.set('recoverable-token');
+    expect(await recoverable.get(ref)).toBe('recoverable-token');
+    expect(crypto.decryptString).toHaveBeenCalledOnce();
+    expect(fs.readFileSync(path.join(dir, 'native-secrets.json'), 'utf8')).not.toContain('recoverable-token');
   });
 
   // Contention: cas-write's lock is a <target>.lock DIRECTORY. Pre-creating it
