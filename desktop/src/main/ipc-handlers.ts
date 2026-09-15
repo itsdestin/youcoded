@@ -62,6 +62,7 @@ import { SpecialistCatalog, toListResult } from './harness/specialists/catalog';
 import type { ProfileProviderType } from './harness/capability-profile';
 import { PermissionStore } from './harness/permission-store';
 import { StepGuardSettings } from './harness/step-guard-settings';
+import { ContextSettingsStore } from './harness/context-settings-store';
 // Type-only: the payload the permissions:remove handler forwards to the host.
 import type { PermissionRule } from '../shared/permission-types';
 // Task 7b: the MCP registry (WHICH servers ~/.youcoded/mcp.json configures)
@@ -2582,6 +2583,7 @@ export function registerIpcHandlers(
   // "one store" invariant a coincidence rather than a fact.
   const permissionStore = new PermissionStore(nativeHome);
   const stepGuardSettings = new StepGuardSettings(nativeHome);
+  const contextSettings = new ContextSettingsStore(nativeHome);
   const secretsStore = new SecretsStore(app.getPath('userData'));
   // Plan B: the local engine. EngineManager owns acquisition + supervision; its
   // hook makes the 'local' provider real and its listModels feeds the model
@@ -2605,6 +2607,8 @@ export function registerIpcHandlers(
   const providerRegistry = new ProviderRegistry(nativeHome, secretsStore, engineManager.registryHook(), chatgptForUi);
   void providerRegistry.init();
   const modelCatalog = new ModelCatalog(app.getPath('userData'), undefined, {
+    // WHY read defaults at resolution time, never mutate budgets of active sessions.
+    contextPreferences: () => contextSettings.read(),
     localModels: () => engineManager.catalogModels(),
     // The plan's models come from ChatGptAuth's manifest cache (§4.2); absent
     // under the kill switch so the catalog contributes nothing for 'chatgpt'.
@@ -3064,7 +3068,7 @@ export function registerIpcHandlers(
   // stale data relative to whichever surface wrote last.
   // chatgptAuth (Sign in with ChatGPT §5): the remote chatgpt:* WS cases read
   // the SAME account object, already kill-switched (null → signed-out/false).
-  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount });
+  remoteServer?.setNativeRuntime({ nativeHost, providerRegistry, modelCatalog, engineManager, modelManager, searchKeyStore, searchService, permissionStore, stepGuardSettings, contextSettings, specialistCatalog, chatgptAuth: chatgptForUi, claudeAccount });
 
   // Plan 2b Task 11: give the remote server the SAME lease client/requester +
   // deviceId so its WS clients reach the identical lease/device state the
@@ -3314,6 +3318,14 @@ export function registerIpcHandlers(
   // (getPermissionMode falls back to 'ask' for an unknown/non-live id).
   ipcMain.handle(IPC.NATIVE_GET_PERMISSION_MODE, async (_e, sessionId: string) =>
     nativeHost.getPermissionMode(sessionId));
+  ipcMain.handle(IPC.NATIVE_GET_CONTEXT_PREFERENCES, () => {
+    if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
+    return contextSettings.read();
+  });
+  ipcMain.handle(IPC.NATIVE_SET_CONTEXT_PREFERENCES, async (_e, patch: unknown) => {
+    if (process.env.YOUCODED_NATIVE === '0') throw new Error('Native context preferences are not supported');
+    return contextSettings.update(patch);
+  });
   ipcMain.handle(IPC.NATIVE_GET_STEP_GUARD, () => stepGuardSettings.read());
   ipcMain.handle(IPC.NATIVE_SET_STEP_GUARD, async (_e, value: number | null) => stepGuardSettings.update(value));
   ipcMain.handle(IPC.NATIVE_SESSIONS_LIST, async () => nativeHost.list());

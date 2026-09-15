@@ -4,6 +4,8 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs'; import * as path from 'path'; import * as os from 'os';
 import { ModelCatalog } from '../src/main/providers/model-catalog';
+import type { ContextPreferences } from '../src/shared/context-preferences';
+import type { ProviderStatus } from '../src/shared/provider-types';
 
 const OPENROUTER_PAYLOAD = { data: [
   { id: 'meta-llama/llama-3-8b', name: 'Llama 3 8B', context_length: 8192, pricing: { prompt: '0.00000005', completion: '0.0000001' } },
@@ -137,6 +139,45 @@ describe('ModelCatalog', () => {
     await cat.get(providers);
     expect(await cat.contextLengthFor({ providerId: 'openrouter', modelId: 'meta-llama/llama-3-8b' }, providers)).toBe(8192);
     expect(await cat.contextLengthFor({ providerId: 'openrouter', modelId: 'unknown' }, providers)).toBeNull();
+  });
+
+  it('uses current cloud preferences by provider type without rewriting or refetching catalog metadata', async () => {
+    let preferences: ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
+    const providers: ProviderStatus[] = [
+      { id: 'my-router', type: 'openrouter', label: 'Router', enabled: true, builtIn: false, hasKey: true, ready: true },
+      { id: 'chatgpt', type: 'chatgpt', label: 'Plan', enabled: true, builtIn: true, hasKey: false, ready: true },
+    ];
+    const planRow = { id: 'plan-model', providerId: 'chatgpt', label: 'Plan model', contextLength: 272000, maxContextLength: 872000 };
+    const fetch = vi.fn(async (url: string) => ({ ok: true, json: async () => url.includes('openrouter')
+      ? { data: [{ id: 'large', name: 'Large', context_length: 1048576 }] } : {} }));
+    const catalog = new ModelCatalog(dir, fetch, {
+      chatgptModels: async () => [planRow], contextPreferences: () => preferences,
+    });
+    const router = { providerId: 'my-router', modelId: 'large' };
+    const plan = { providerId: 'chatgpt', modelId: 'plan-model' };
+    expect(await catalog.contextLengthFor(router, providers)).toBe(272000);
+    expect(await catalog.contextLengthFor(plan, providers)).toBe(272000);
+    preferences = { openrouter: 'long', chatgpt: 'standard' };
+    expect(await catalog.contextLengthFor(router, providers)).toBe(1048576);
+    expect(await catalog.contextLengthFor(plan, providers)).toBe(272000);
+    preferences = { openrouter: 'standard', chatgpt: 'long' };
+    expect(await catalog.contextLengthFor(router, providers)).toBe(272000);
+    expect(await catalog.contextLengthFor(plan, providers)).toBe(872000);
+    expect(await catalog.get(providers)).toEqual([
+      { id: 'large', providerId: 'my-router', label: 'Large', contextLength: 1048576 }, planRow,
+    ]);
+    expect(fetch).toHaveBeenCalledTimes(2); // Only the initial two-source discovery.
+    expect(planRow.contextLength).toBe(272000);
+  });
+
+  it('uses lower cloud defaults with no preference getter and preserves local-model windows', async () => {
+    const cloud = { id: 'openrouter', type: 'openrouter', label: 'Router', enabled: true, builtIn: true, hasKey: true, ready: true } as const;
+    const local = { id: 'local', type: 'local-engine', label: 'Local', enabled: true, builtIn: true, hasKey: false, ready: true } as const;
+    const catalog = new ModelCatalog(dir, async () => ({ ok: true, json: async () => ({ data: [{ id: 'large', context_length: 2000000 }] }) }), {
+      localModels: async () => [{ id: 'local-model', label: 'Local model', providerId: 'local', contextLength: 2000000 }],
+    });
+    expect(await catalog.contextLengthFor({ providerId: 'openrouter', modelId: 'large' }, [cloud])).toBe(272000);
+    expect(await catalog.contextLengthFor({ providerId: 'local', modelId: 'local-model' }, [local])).toBe(2000000);
   });
 
   it('malformed upstream rows are skipped, not crashed on', async () => {

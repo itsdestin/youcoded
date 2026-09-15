@@ -390,6 +390,8 @@ const IPC = {
   NATIVE_SET_BINDING: 'native:set-binding',
   NATIVE_SET_PERMISSION_MODE: 'native:set-permission-mode',
   NATIVE_GET_PERMISSION_MODE: 'native:get-permission-mode',
+  NATIVE_GET_CONTEXT_PREFERENCES: 'native:get-context-preferences',
+  NATIVE_SET_CONTEXT_PREFERENCES: 'native:set-context-preferences',
   NATIVE_GET_STEP_GUARD: 'native:get-step-guard',
   NATIVE_SET_STEP_GUARD: 'native:set-step-guard',
   NATIVE_SESSIONS_LIST: 'native:sessions-list',
@@ -1493,6 +1495,8 @@ contextBridge.exposeInMainWorld('claude', {
     setPermissionMode: (sessionId: string, mode: string) => ipcRenderer.invoke(IPC.NATIVE_SET_PERMISSION_MODE, sessionId, mode),
     // Read the session's current permission mode — seeds the chip on create/resume.
     getPermissionMode: (sessionId: string) => ipcRenderer.invoke(IPC.NATIVE_GET_PERMISSION_MODE, sessionId),
+    getContextPreferences: () => ipcRenderer.invoke(IPC.NATIVE_GET_CONTEXT_PREFERENCES),
+    setContextPreferences: (patch: unknown) => ipcRenderer.invoke(IPC.NATIVE_SET_CONTEXT_PREFERENCES, patch),
     getStepGuard: () => ipcRenderer.invoke(IPC.NATIVE_GET_STEP_GUARD),
     setStepGuard: (value: number | null) => ipcRenderer.invoke(IPC.NATIVE_SET_STEP_GUARD, value),
     sessionsList: () => ipcRenderer.invoke(IPC.NATIVE_SESSIONS_LIST),
