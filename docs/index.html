@@ -1741,6 +1741,7 @@ html{-webkit-tap-highlight-color:transparent}
 .mascot:active{transform:scale(.96)}
 .trypill:active,.embed-start:active{filter:brightness(.94)}
 </style>
+<script type="module" src="site-analytics-ui.mjs"></script>
 </head>
 <body class="intro-mode fade-d pill-accent legend-on h1-md">
 
@@ -3861,6 +3862,11 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       // handler needs it to re-render the right body.
       var openPlatformKey = null;
 
+      // WHY dispatch behind a catch: analytics failure must never interrupt installation.
+      function siteAnalyticsSignal(type, detail) {
+        try { window.dispatchEvent(new CustomEvent('youcoded:site-analytics', { detail: Object.assign({ type: type }, detail || {}) })); } catch (_) {}
+      }
+
       function openModal(platformKey) {
         var p = platforms[platformKey];
         if (!p) return;
@@ -3872,6 +3878,7 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
         modal.setAttribute('data-open', '');
         modal.setAttribute('aria-hidden', 'false');
         document.body.style.overflow = 'hidden';
+        siteAnalyticsSignal('instructions');
       }
 
       // Picking a variant (distro on Linux, chip on Mac) swaps the steps and
@@ -3906,9 +3913,23 @@ document.getElementById('topcta').onclick = function(){ scrollTo({ top: 0, behav
       // Download Now click: flip the button to "Download Initiated" *before*
       // the default navigation runs. We don't preventDefault — the anchor's
       // native click-to-download (or new-tab) is what actually starts the file.
-      downloadBtn.addEventListener('click', function() {
+      function recordInstallerActivation(e) {
+        if (e.defaultPrevented || !openPlatformKey || platforms[openPlatformKey].noDownload) return;
+        // The selected asset and actual href must agree; releases-list fallback is not a file click.
+        var key = downloadKeyFor(openPlatformKey);
+        var asset = (window.__youcodedReleaseAssets || {})[key];
+        if (asset && asset.url === downloadBtn.href) {
+          siteAnalyticsSignal('download', { key: downloadKeyFor(openPlatformKey), href: downloadBtn.href });
+        }
+      }
+      downloadBtn.addEventListener('click', function(e) {
+        if (e.button !== 0) return;
+        recordInstallerActivation(e);
         downloadBtn.setAttribute('data-initiated', '');
         downloadBtn.textContent = 'Download Initiated';
+      });
+      downloadBtn.addEventListener('auxclick', function(e) {
+        if (e.button === 1) recordInstallerActivation(e);
       });
 
       modal.addEventListener('click', function(e) {
