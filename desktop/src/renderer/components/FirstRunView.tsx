@@ -309,21 +309,25 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
   // back to the first ready provider's first model, which is the same thing.
   // Neither write may delay the hand-off to the app, so the catalog lookup is
   // fire-and-forget and every failure is swallowed. Runs once per mount.
+  // First-run local models (2026-09-14): the same seeding for every native way in —
+  // a local model ('local'), a model app already running, or an API key — through
+  // `setupProvider`, which main sets to the provider setup finished on.
   const seededChatGpt = useRef(false);
   useEffect(() => {
     if (!state || seededChatGpt.current) return;
     const done = state.currentStep === 'LAUNCH_WIZARD' || state.currentStep === 'COMPLETE';
-    if (!done || state.authMode !== 'chatgpt') return;
+    const providerId = state.authMode === 'chatgpt' ? 'chatgpt' : state.setupProvider;
+    if (!done || !providerId) return;
     seededChatGpt.current = true;
     persistRuntimeDefault('native');
     Promise.resolve()
       .then(() => (window as any).claude?.providers?.catalog?.() as Promise<CatalogModel[]> | undefined)
       .then((rows) => {
-        const first = Array.isArray(rows) ? rows.find((r) => r?.providerId === 'chatgpt') : undefined;
-        if (first?.id) persistLastBinding({ providerId: 'chatgpt', modelId: first.id });
+        const first = Array.isArray(rows) ? rows.find((r) => r?.providerId === providerId) : undefined;
+        if (first?.id) persistLastBinding({ providerId, modelId: first.id });
       })
       .catch(() => { /* the catalog is a nicety here; the forms fall back on their own */ });
-  }, [state?.currentStep, state?.authMode]);
+  }, [state?.currentStep, state?.authMode, state?.setupProvider]);
 
   // Busy while any prerequisite is actively installing or being checked. The
   // retry path is guarded against re-entry in the main process too, but
@@ -389,7 +393,9 @@ export default function FirstRunView({ onComplete }: FirstRunViewProps) {
                 // Round 3 review (B-9, "two separate installing cards?"): Claude
                 // Code's on-demand install is shown once, on the sign-in card —
                 // this checklist no longer lists it on the sign-in step.
-                .filter((p) => !(state.currentStep === 'AUTHENTICATE' && p.name === 'claude'))
+                // Nor while it waits or was skipped: setup no longer installs it
+                // for everyone (Q-5), so a "waiting" Claude Code row would never move.
+                .filter((p) => !(p.name === 'claude' && (state.currentStep === 'AUTHENTICATE' || p.status === 'waiting' || p.status === 'skipped')))
                 .map((p) => {
                 const active = p.status === 'installing' || p.status === 'checking';
                 return (

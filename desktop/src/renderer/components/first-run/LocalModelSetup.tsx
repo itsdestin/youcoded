@@ -42,7 +42,7 @@ export function LocalModelSetup({ onBack }: { onBack: () => void }) {
   useEffect(() => {
     let alive = true;
     Promise.resolve((window as any).claude?.firstRun?.localSetup?.())
-      .then((i: LocalSetupInfo | undefined) => { if (alive && i) setInfo(i); })
+      .then((i: LocalSetupInfo | null | undefined) => { if (alive && i?.suggested) setInfo(i); })
       .catch(() => { /* build stage: an ErrorState with Retry belongs here */ });
     const off = (window as any).claude?.models?.onDownloadProgress?.((p: DownloadProgress) => {
       setDownloads((prev) => ({ ...prev, [p.downloadId]: p }));

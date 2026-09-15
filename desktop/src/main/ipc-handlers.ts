@@ -49,7 +49,10 @@ import { EngineManager } from './engine/engine-manager';
 import { enginePrereqs } from './engine/rocm-prereqs';
 import type { EngineModel as EngineModelType } from '../shared/engine-types';
 import { ModelManager } from './models/model-manager';
-import type { ModelSettingsWrite } from '../shared/model-manager-types';
+import type { DownloadProgress, ModelSettingsWrite } from '../shared/model-manager-types';
+import { installClaude } from './prerequisite-installer';
+import { firstRunStateDir, type FirstRunNativeDeps } from './first-run';
+import { clearSetupDownload, computeSetupDownloadStatus, readSetupDownload } from './first-run-local';
 import { detectEndpoints } from './models/endpoint-detectors';
 import { ENGINE_PORT } from '../shared/ports';
 import { SessionStore } from './harness/session-store';
@@ -3360,6 +3363,15 @@ export function registerIpcHandlers(
     if (opts?.refresh) claudeAccount.invalidate();
     return claudeAccount.status();
   });
+  // Install Claude Code on demand (first-run local models, F-5): setup no longer
+  // installs it for everyone, so the Claude Code card offers it. The installer's
+  // own { success, error } is the answer; the cached "not-installed" is dropped
+  // so the card's refresh reads the new state.
+  ipcMain.handle(IPC.CLAUDE_CODE_INSTALL, async () => {
+    const result = await installClaude();
+    claudeAccount.invalidate();
+    return result;
+  });
   // WebSearch key management (Settings → Providers → Search). list returns the
   // fixed Tavily/Exa rows with hasKey flags; set/remove manage the encrypted key;
   // test is never-throws ({ ok, message } is the result, not an exception).
@@ -3455,6 +3467,50 @@ export function registerIpcHandlers(
     // union) that 400s on first send. Fire-and-forget: the pick-time
     // ensureServable is the safety net if this refresh fails or never ran.
     if (p.state === 'done') void engineManager.refreshModels().catch(() => { /* pick-time retry covers it */ });
+  });
+
+  // First-run local models (2026-09-14): the band above the message box for the
+  // download setup finished on. Registered on EVERY launch — it is read after
+  // setup, when main.ts wires no first-run handlers — and it answers null unless
+  // that first download is still unfinished AND nothing else can answer yet
+  // (round 3 review B-5/B-6). The decision itself is computeSetupDownloadStatus.
+  const setupLive = new Map<string, { latest: DownloadProgress; first: { at: number; bytes: number } }>();
+  modelManager.on('download-progress', (p: DownloadProgress) => {
+    const key = `${p.repo}::${p.quant}`;
+    const prev = setupLive.get(key);
+    // The rate is measured from the first event of THIS attempt, so a resume
+    // does not inherit the previous attempt's clock.
+    const first = prev && prev.latest.downloadId === p.downloadId ? prev.first : { at: Date.now(), bytes: p.receivedBytes };
+    setupLive.set(key, { latest: p, first });
+  });
+  ipcMain.handle(IPC.FIRST_RUN_LOCAL_DOWNLOAD, async () => {
+    try {
+      const dir = firstRunStateDir();
+      const record = readSetupDownload(dir);
+      if (!record) return null;
+      const [providers, claude, installed] = await Promise.all([
+        providerRegistry.list().catch(() => []),
+        claudeAccount.status().catch(() => ({ state: 'unknown' as const })),
+        engineManager.installedModels().catch(() => []),
+      ]);
+      const otherUsable = providers.some((p) => p.ready && p.id !== 'local') || claude.state === 'signed-in';
+      const status = computeSetupDownloadStatus({
+        record, otherUsable, installed, now: Date.now(),
+        live: setupLive.get(`${record.repo}::${record.quant}`) ?? null,
+      });
+      // Finished, or no longer the only way to answer: the band never returns for it.
+      if (otherUsable || status?.state === 'done') clearSetupDownload(dir);
+      return status?.state === 'done' ? null : status;
+    } catch {
+      return null; // a band that cannot be read is a band not shown
+    }
+  });
+  ipcMain.handle(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD, async () => {
+    const record = readSetupDownload(firstRunStateDir());
+    if (!record) return;
+    const row = (await engineManager.installedModels())
+      .find((m) => m.repo === record.repo && m.quant === record.quant && m.status === 'unfinished');
+    if (row) await modelManager.resume(row.id);
   });
   ipcMain.handle(IPC.ENGINE_SET_BACKEND, async (_e, backend: string) => { await engineManager.setBackend(backend as any); return engineManager.status(); });
   ipcMain.handle(IPC.ENGINE_SET_CONTEXT, async (_e, contextSize: number) => { await engineManager.setContext(contextSize); return engineManager.status(); });
@@ -5082,5 +5138,16 @@ export function registerIpcHandlers(
     sessionIdMap.clear();
     return engineStopped;
   };
-  return { cleanup, hasUsableProvider };
+  // firstRunDeps (first-run local models, 2026-09-14): the native objects setup
+  // reaches for an API key, a model app or a local download. Built here because
+  // this is the only place they exist; main.ts hands them to both first-run
+  // registrations.
+  // `installed` goes through registryHook(), the same answer the registry's
+  // local-engine `ready` reads, so setup and the provider list cannot disagree.
+  const firstRunDeps: FirstRunNativeDeps = {
+    providers: providerRegistry,
+    engine: { installed: () => engineManager.registryHook().installed(), install: () => engineManager.install() },
+    models: modelManager,
+  };
+  return { cleanup, hasUsableProvider, firstRunDeps };
 }

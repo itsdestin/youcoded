@@ -30,6 +30,10 @@ export interface FirstRunState {
   authMode: 'none' | 'oauth' | 'apikey' | 'chatgpt' | 'openrouter' | 'local';
   /** Whether auth completed successfully */
   authComplete: boolean;
+  /** The native provider setup finished on (first-run local models, 2026-09-14):
+   *  'local', a connected model app's provider id, or an API key's provider id.
+   *  The renderer makes it the new-session default, as it does for ChatGPT. */
+  setupProvider?: string;
   /** Error from the most recent failed step */
   lastError?: string;
   /** Whether Windows Developer Mode needs enabling */

@@ -52,6 +52,10 @@ describe('the shim rejects a failure instead of resolving it', () => {
   it('lists every channel of this feature whose success shape is a plain object', () => {
     expect([...REJECT_ON_NOT_OK].sort()).toEqual([
       'appearance:get-favorite-themes',
+      // Install Claude Code (first-run local models, 2026-09-14): success is
+      // { success, error? }, so a phone's { ok:false } refusal must reject, or the
+      // Settings card would read it as an install that finished.
+      'claude-code:install',
       'commands:list',
       'engine:prereqs',
       'engine:run-in-terminal',

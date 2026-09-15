@@ -1810,6 +1810,13 @@ export const IPC = {
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
   FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
   FIRST_RUN_SKIP: 'first-run:skip',
+  // First-run local models (2026-09-14): local setup's suggestion, finishing setup
+  // on a model app already running, and the first download's band above the
+  // message box. Desktop-only: first-run never shows on a phone or a remote browser.
+  FIRST_RUN_LOCAL_SETUP: 'first-run:local-setup',
+  FIRST_RUN_CONNECT_LOCAL_APP: 'first-run:connect-local-app',
+  FIRST_RUN_LOCAL_DOWNLOAD: 'first-run:local-download',
+  FIRST_RUN_RESUME_LOCAL_DOWNLOAD: 'first-run:resume-local-download',
   // Sync management
   SYNC_GET_STATUS: 'sync:get-status',
   SYNC_GET_CONFIG: 'sync:get-config',
@@ -2052,6 +2059,9 @@ export const IPC = {
   // here on purpose: Claude Code owns its login, and the app has never had a
   // way to clear it (the card says to use /logout in a terminal).
   CLAUDE_CODE_STATUS: 'claude-code:status',
+  // Install Claude Code on demand (first-run local models, F-5): setup no longer
+  // installs it for everyone, so Settings offers it. Desktop and remote desktop only.
+  CLAUDE_CODE_INSTALL: 'claude-code:install',
   // ---- WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades ----
   // list = the fixed upgradeable-backend rows (hasKey flags); set/remove-key
   // manage the encrypted key; test = never-throws connectivity check.

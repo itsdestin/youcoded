@@ -158,7 +158,8 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'on.sessionMetaChanged',
   'theme.list', 'theme.readFile', 'theme.writeFile', 'theme.onReload',
   'firstRun.getState', 'terminal.getScreenText',
-  // First-run local models (2026-09-14) — no backend yet, registered in mock-only.ts.
+  // First-run local models (2026-09-14) — real channels, faked so the setup card and
+  // the band above the message box can be walked without a machine or a download.
   'firstRun.localSetup', 'firstRun.localDownload',
   'firstRun.resumeLocalDownload', 'firstRun.connectLocalApp', 'claudeCode.install',
   'artifacts.listProjectsIndex', 'artifacts.listSession', 'artifacts.listProject',
@@ -1036,8 +1037,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     : claudeCodePin === 'unknown' ? { state: 'unknown' }
     : claudeCodePin === 'apikey' ? { state: 'signed-in', apiKey: true }
     : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false };
-  const claudeCode = {
-    status: async () => claudeCodeStatus,
+  const claudeCode = { status: async () => claudeCodeStatus,
     // First-run local models (F-5): a short wait, then installed but signed out —
     // what a real install leaves behind before the Claude sign-in.
     install: async () => {
@@ -2516,7 +2516,7 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
         ? { id: 'qwen35-4b', label: 'Qwen3.5 4B', tier: 'small', hfRepo: 'unsloth/Qwen3.5-4B-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Fast all-rounder for chat and quick questions.' }
         : { id: 'gemma4-e4b', label: 'Gemma 4 E4B', tier: 'small', hfRepo: 'unsloth/gemma-4-E4B-it-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Strong small model from Google — sees images.' },
     }),
-    connectLocalApp: async () => true,
+    connectLocalApp: async () => ({ ok: true }),
     localDownload: async () => (localDownloadPin === 'downloading'
       ? { state: 'downloading', modelLabel: 'Qwen3.5 9B', percent: 42, minutesLeft: 6 }
       : localDownloadPin === 'stopped'

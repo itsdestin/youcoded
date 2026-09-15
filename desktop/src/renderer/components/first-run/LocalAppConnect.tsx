@@ -31,9 +31,22 @@ export function LocalAppConnect({ onBack }: { onBack: () => void }) {
   };
   useEffect(() => { void detect(); }, []);
 
-  const connect = (baseUrl: string, name: string) => {
+  // WHY the answer is read: main checks the app actually answers before finishing
+  // setup, and a failure has to bring the screen back with main's own words
+  // rather than leave "Connecting…" on screen forever.
+  const connect = async (baseUrl: string, name: string) => {
     setConnectingTo(name);
-    void (window as any).claude?.firstRun?.connectLocalApp?.(baseUrl, name);
+    setAddressError(null);
+    try {
+      const result = await (window as any).claude?.firstRun?.connectLocalApp?.(baseUrl, name);
+      if (result && result.ok === false) {
+        setConnectingTo(null);
+        setAddressError(result.message ?? `Couldn’t connect to ${name}.`);
+      }
+    } catch (e) {
+      setConnectingTo(null);
+      setAddressError(e instanceof Error ? e.message : `Couldn’t connect to ${name}.`);
+    }
   };
 
   const connectAddress = () => {
@@ -43,7 +56,7 @@ export function LocalAppConnect({ onBack }: { onBack: () => void }) {
       setAddressError('Enter an address that starts with http://, like http://localhost:8080/v1');
       return;
     }
-    connect(url, url);
+    void connect(url, url);
   };
 
   if (connectingTo) {
@@ -71,7 +84,7 @@ export function LocalAppConnect({ onBack }: { onBack: () => void }) {
         <div className="flex flex-col items-stretch gap-3 w-full">
           <p className="text-2xs uppercase tracking-wide text-fg-muted text-center">Found on this computer</p>
           {hits.map((hit) => (
-            <Button key={hit.baseUrl} variant="secondary" className={PILL} onClick={() => connect(hit.baseUrl, APP_NAME[hit.kind])}>
+            <Button key={hit.baseUrl} variant="secondary" className={PILL} onClick={() => void connect(hit.baseUrl, APP_NAME[hit.kind])}>
               Connect to {APP_NAME[hit.kind]}{hit.modelCount != null ? ` · ${hit.modelCount} ${hit.modelCount === 1 ? 'model' : 'models'}` : ''}
             </Button>
           ))}

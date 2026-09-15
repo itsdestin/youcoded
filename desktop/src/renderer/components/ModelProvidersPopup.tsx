@@ -123,11 +123,18 @@ export function ClaudeCodeBlock({
   // First-run local models (F-5): Claude Code now installs only when someone
   // chooses Claude, so a missing install is fixed here, in place.
   const [installing, setInstalling] = useState(false);
+  // The installer's own words when it fails (docs/error-message-standards.md):
+  // a refreshed "not installed" alone would say nothing about why.
+  const [installError, setInstallError] = useState<string | null>(null);
   const installClaudeCode = async () => {
     setInstalling(true);
-    try { await (window as any).claude?.claudeCode?.install?.(); }
-    catch { /* the refreshed status below says what state it is actually in */ }
-    finally { setInstalling(false); refresh(); }
+    setInstallError(null);
+    try {
+      const result = await (window as any).claude?.claudeCode?.install?.();
+      if (result && result.success === false) setInstallError(result.error ?? 'Claude Code could not be installed.');
+    } catch (e) {
+      setInstallError(e instanceof Error ? e.message : 'Claude Code could not be installed.');
+    } finally { setInstalling(false); refresh(); }
   };
 
   // Same three-part shape as the ChatGPT card below — plain-word status line (no
@@ -155,7 +162,11 @@ export function ClaudeCodeBlock({
     // WHY not "Restart YouCoded to run setup again" any more (F-5): setup no
     // longer installs Claude Code for everyone, so a restart would not either.
     line = installing ? 'Installing Claude Code…' : 'Claude Code is not installed';
-    detail = { text: installing ? 'Then you can sign in with your Claude plan.' : 'Install it to use Claude models.' };
+    detail = installing
+      ? { text: 'Then you can sign in with your Claude plan.' }
+      : installError
+        ? { text: installError, tone: 'bad' }
+        : { text: 'Install it to use Claude models.' };
   } else if (status?.state === 'unknown') {
     // The probe ran and could not answer. We do not know, so we do not claim —
     // and everything keeps working, because "unknown" never blocks a model.
