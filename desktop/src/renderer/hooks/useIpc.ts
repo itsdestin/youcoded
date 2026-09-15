@@ -351,6 +351,8 @@ declare global {
         // Per-session native permission mode (StatusBar chip, Task 13). Returns
         // the APPLIED mode — authoritative; the chip renders the return value.
         setPermissionMode: (sessionId: string, mode: 'ask' | 'auto-edit' | 'full-auto') => Promise<'ask' | 'auto-edit' | 'full-auto'>;
+        getContextPreferences: () => Promise<import('../../shared/context-preferences').ContextPreferences>;
+        setContextPreferences: (patch: Partial<import('../../shared/context-preferences').ContextPreferences>) => Promise<import('../../shared/context-preferences').ContextPreferences>;
         getStepGuard: () => Promise<number | null>;
         setStepGuard: (value: number | null) => Promise<number | null>;
         sessionsList: () => Promise<any[]>;

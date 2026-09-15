@@ -1548,9 +1548,16 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
     }),
   };
 
+  let contextPreferences: import('../../../shared/context-preferences').ContextPreferences = { openrouter: 'standard', chatgpt: 'standard' };
   let stepGuard: number | null = null;
   const native: Ns<'native'> = {
     supported: true,
+    getContextPreferences: async () => ({ ...contextPreferences }),
+    setContextPreferences: async (patch) => {
+      if (store.refuseWrites) throw new Error('The workbench is refusing writes.');
+      contextPreferences = { ...contextPreferences, ...patch };
+      return { ...contextPreferences };
+    },
     getStepGuard: async () => stepGuard,
     setStepGuard: async (value: number | null) => {
       if (store.refuseWrites) throw new Error('The workbench is refusing writes.');

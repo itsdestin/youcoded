@@ -63,7 +63,9 @@ describe('the shim rejects a failure instead of resolving it', () => {
       'models:add-vision',
       'models:set-settings',
       'models:settings',
+      'native:get-context-preferences',
       'native:get-step-guard',
+      'native:set-context-preferences',
       'native:set-step-guard',
       // Joined after a review found Unpair showing a false success on a phone: the host
       // refuses both, and without an entry the refusal resolved as an ordinary value.
