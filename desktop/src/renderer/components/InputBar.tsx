@@ -514,6 +514,18 @@ const InputBar = forwardRef<InputBarHandle, Props>(function InputBar({ sessionId
     return () => window.removeEventListener('buddy:attach-file', listener);
   }, [addFiles]);
 
+  useEffect(() => {
+    const listener = () => {
+      // WHY: the context menu identifies a composer-only image paste, while this
+      // component keeps ownership of both clipboard serialization and attachments.
+      void window.claude.dialog.saveClipboardImage().then((saved) => {
+        if (saved) addFiles([saved]);
+      });
+    };
+    window.addEventListener('youcoded:composer-paste-image', listener);
+    return () => window.removeEventListener('youcoded:composer-paste-image', listener);
+  }, [addFiles]);
+
   // External "insert into composer" entry point — the chat right-click menu's
   // "Ask about this" action dispatches this window CustomEvent with a pre-built
   // quote + follow-up scaffold. Mirrors buddy:attach-file so no prop threading

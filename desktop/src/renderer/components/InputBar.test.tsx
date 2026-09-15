@@ -6,6 +6,7 @@ import { render, screen, cleanup, fireEvent, waitFor, act } from '@testing-libra
 import { ChatProvider, useChatDispatch, useChatStore } from '../state/chat-context';
 import { SkillProvider } from '../state/skill-context';
 import InputBar, { InputBarHandle } from './InputBar';
+import { buildContextMenu } from './context-menu/build-menu';
 import type { VoiceEvent, VoiceReadiness } from '../../shared/voice-types';
 
 // jsdom (per this repo's vitest.config.ts) has no global setupFiles/polyfills —
@@ -31,6 +32,82 @@ function DispatchCapture() {
   capturedDispatch = useChatDispatch();
   return null;
 }
+
+describe('InputBar — context-menu image paste', () => {
+  const saveClipboardImage = vi.fn<() => Promise<string | null>>();
+
+  beforeEach(() => {
+    (global as any).ResizeObserver = NoopResizeObserver;
+    saveClipboardImage.mockReset();
+    (window as any).claude = {
+      native: { supported: true, send: vi.fn().mockResolvedValue({ status: 'sent' }) },
+      session: { sendInput: vi.fn() },
+      dialog: { saveClipboardImage },
+      skills: {
+        list: vi.fn().mockResolvedValue([]),
+        getFavorites: vi.fn().mockResolvedValue([]),
+        getChips: vi.fn().mockResolvedValue([]),
+        getCuratedDefaults: vi.fn().mockResolvedValue([]),
+      },
+    };
+  });
+
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+    Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+    Object.defineProperty(document, 'execCommand', { value: undefined, configurable: true });
+  });
+
+  function renderComposer() {
+    render(
+      <ChatProvider>
+        <SkillProvider>
+          <InputBar sessionId="sess-1" provider="native" />
+        </SkillProvider>
+      </ChatProvider>,
+    );
+    return screen.getByPlaceholderText('Message your assistant...') as HTMLTextAreaElement;
+  }
+
+  it('stages the saved image path as a visible attachment', async () => {
+    saveClipboardImage.mockResolvedValue('/tmp/context-paste.png');
+    renderComposer();
+
+    act(() => { window.dispatchEvent(new CustomEvent('youcoded:composer-paste-image')); });
+
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(await screen.findByRole('button', { name: 'Remove context-paste.png' })).toBeInTheDocument();
+  });
+
+  it('quietly leaves attachments unchanged when saving returns null', async () => {
+    saveClipboardImage.mockResolvedValue(null);
+    renderComposer();
+
+    act(() => { window.dispatchEvent(new CustomEvent('youcoded:composer-paste-image')); });
+
+    await waitFor(() => expect(saveClipboardImage).toHaveBeenCalledTimes(1));
+    expect(screen.queryByRole('button', { name: /^Remove / })).not.toBeInTheDocument();
+  });
+
+  it('keeps text precedence through the real composer menu and never invokes the image bridge', async () => {
+    const readText = vi.fn().mockResolvedValue('pasted words');
+    Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });
+    const execCommand = vi.fn();
+    Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true });
+    const textarea = renderComposer();
+    fireEvent.change(textarea, { target: { value: 'draft' } });
+    textarea.setSelectionRange(1, 4);
+    const paste = buildContextMenu(textarea)?.find((entry) => entry.type === 'item' && entry.id === 'paste');
+    textarea.setSelectionRange(0, 0);
+
+    await act(async () => { if (paste?.type === 'item') await paste.run(); });
+
+    expect(execCommand).toHaveBeenCalledWith('insertText', false, 'pasted words');
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 4]);
+    expect(saveClipboardImage).not.toHaveBeenCalled();
+  });
+});
 
 describe('InputBar native send — failure keeps the draft (reviewer Critical fix)', () => {
   beforeEach(() => {

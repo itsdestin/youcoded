@@ -137,7 +137,7 @@ function textBasics(bubble: Element | null): MenuEntry[] {
   ];
 }
 
-function editableMenu(el: HTMLTextAreaElement | HTMLInputElement): MenuEntry[] {
+function editableMenu(el: HTMLTextAreaElement | HTMLInputElement, canAttachClipboardImage = false): MenuEntry[] {
   // Capture the selection NOW (at right-click), because auto-focusing the menu
   // blurs the textarea; we restore this range before each op so cut/copy/paste
   // act on what the user actually had selected.
@@ -154,7 +154,19 @@ function editableMenu(el: HTMLTextAreaElement | HTMLInputElement): MenuEntry[] {
     // onChange stays in sync — a manual value set would not.
     { type: 'item', id: 'cut', label: 'Cut', icon: 'cut', kbd: mod('X'), disabled: !hasSelection, run: () => { restore(); document.execCommand('cut'); } },
     { type: 'item', id: 'copy', label: 'Copy', icon: 'copy', kbd: mod('C'), disabled: !hasSelection, run: () => { restore(); document.execCommand('copy'); } },
-    { type: 'item', id: 'paste', label: 'Paste', icon: 'paste', kbd: mod('V'), run: async () => { restore(); const t = await readText(); if (t) document.execCommand('insertText', false, t); } },
+    { type: 'item', id: 'paste', label: 'Paste', icon: 'paste', kbd: mod('V'), run: async () => {
+      restore();
+      const t = await readText();
+      if (t) {
+        // Clipboard reads are async, so focus may move again while they settle.
+        restore();
+        document.execCommand('insertText', false, t);
+      } else if (t === '' && canAttachClipboardImage) {
+        // WHY: the menu knows which surface was clicked, but InputBar must remain
+        // the owner of attachment state and the existing save/addFiles route.
+        window.dispatchEvent(new CustomEvent('youcoded:composer-paste-image'));
+      }
+    } },
     { type: 'sep' },
     { type: 'item', id: 'select-all', label: 'Select all', icon: 'select-all', kbd: mod('A'), disabled: empty, run: () => { el.focus(); el.select(); } },
   ];
@@ -337,7 +349,7 @@ export function buildContextMenu(target: HTMLElement): MenuEntry[] | null {
   // editor does nothing at all — no cut/copy/paste of any kind.
   const editable = target.closest('.input-bar-textarea, .artifact-edit-textarea');
   if (editable instanceof HTMLTextAreaElement || editable instanceof HTMLInputElement) {
-    return finalize(editableMenu(editable));
+    return finalize(editableMenu(editable, editable.classList.contains('input-bar-textarea')));
   }
   // CodeMirror in EDIT mode: the editable surface is a contenteditable div,
   // not a textarea. The [contenteditable=true] filter matters — read-only CM6

@@ -51,6 +51,89 @@ const FILE = 'alpha\nbravo\ncharlie\ndelta';
 afterEach(() => {
   document.body.innerHTML = '';
   window.getSelection()?.removeAllRanges();
+  Object.defineProperty(navigator, 'clipboard', { value: undefined, configurable: true });
+  Object.defineProperty(document, 'execCommand', { value: undefined, configurable: true });
+});
+
+describe('context-menu image paste', () => {
+  const pasteItemFor = (el: HTMLTextAreaElement) => {
+    const item = buildContextMenu(el)?.find((entry) => entry.type === 'item' && entry.id === 'paste');
+    expect(item?.type).toBe('item');
+    return item?.type === 'item' ? item : null;
+  };
+
+  const setClipboardText = (text: string) => {
+    const readText = vi.fn().mockResolvedValue(text);
+    Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });
+    return readText;
+  };
+
+  it('requests attachment staging for an image-only composer clipboard and restores its captured selection', async () => {
+    setClipboardText('');
+    const textarea = document.createElement('textarea');
+    textarea.className = 'input-bar-textarea';
+    textarea.value = 'draft';
+    document.body.appendChild(textarea);
+    textarea.setSelectionRange(1, 4);
+    const paste = pasteItemFor(textarea);
+    textarea.setSelectionRange(0, 0);
+    const listener = vi.fn();
+    window.addEventListener('youcoded:composer-paste-image', listener);
+
+    await paste?.run();
+
+    expect(listener).toHaveBeenCalledTimes(1);
+    expect(document.activeElement).toBe(textarea);
+    expect([textarea.selectionStart, textarea.selectionEnd]).toEqual([1, 4]);
+    window.removeEventListener('youcoded:composer-paste-image', listener);
+  });
+
+  it('keeps a non-composer textarea text-only when clipboard text is empty', async () => {
+    setClipboardText('');
+    const textarea = document.createElement('textarea');
+    textarea.className = 'artifact-edit-textarea';
+    document.body.appendChild(textarea);
+    const listener = vi.fn();
+    window.addEventListener('youcoded:composer-paste-image', listener);
+
+    await pasteItemFor(textarea)?.run();
+
+    expect(listener).not.toHaveBeenCalled();
+    window.removeEventListener('youcoded:composer-paste-image', listener);
+  });
+
+  it.each(['input-bar-textarea', 'artifact-edit-textarea'])(
+    'inserts delayed clipboard text at the captured range for %s',
+    async (className) => {
+      let resolveText!: (text: string) => void;
+      const readText = vi.fn(() => new Promise<string>((resolve) => { resolveText = resolve; }));
+      Object.defineProperty(navigator, 'clipboard', { value: { readText }, configurable: true });
+      const textarea = document.createElement('textarea');
+      textarea.className = className;
+      textarea.value = 'abcdef';
+      document.body.appendChild(textarea);
+      textarea.setSelectionRange(1, 4);
+      const paste = pasteItemFor(textarea);
+      const execCommand = vi.fn((_command: string, _showUi: boolean, text: string) => {
+        const start = textarea.selectionStart;
+        const end = textarea.selectionEnd;
+        textarea.value = textarea.value.slice(0, start) + text + textarea.value.slice(end);
+      });
+      Object.defineProperty(document, 'execCommand', { value: execCommand, configurable: true });
+      const listener = vi.fn();
+      window.addEventListener('youcoded:composer-paste-image', listener);
+
+      const pasteResult = paste?.run();
+      textarea.setSelectionRange(6, 6);
+      resolveText('pasted');
+      await pasteResult;
+
+      expect(textarea.value).toBe('apastedef');
+      expect(execCommand).toHaveBeenCalledWith('insertText', false, 'pasted');
+      expect(listener).not.toHaveBeenCalled();
+      window.removeEventListener('youcoded:composer-paste-image', listener);
+    },
+  );
 });
 
 describe('artifact viewer context menu', () => {
