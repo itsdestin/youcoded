@@ -528,23 +528,29 @@ export default function ModelPicker({
     // get here first) should lead with what's actually selected, not require
     // typing to find it. Skipped while searching: the whole catalogue is
     // already the result there, and reordering a search result is surprising.
-    if (!pinSelectedToTop || searching || !value) return filtered;
-    const currentKey = choiceKey(value);
-    const idx = filtered.findIndex((e) => e.key === currentKey);
-    if (idx > 0) {
-      const reordered = filtered.slice();
-      const [current] = reordered.splice(idx, 1);
-      reordered.unshift(current);
-      return reordered;
+    let ordered = filtered;
+    if (pinSelectedToTop && !searching && value) {
+      const currentKey = choiceKey(value);
+      const idx = filtered.findIndex((e) => e.key === currentKey);
+      if (idx > 0) {
+        const reordered = filtered.slice();
+        const [current] = reordered.splice(idx, 1);
+        ordered = [current, ...reordered];
+      } else if (idx === -1) {
+        const hit = entries.find((e) => e.key === currentKey);
+        const passesFilters = hit
+          && (!localOnly || hit.local)
+          && (!sources.size || sources.has(hit.sourceId));
+        if (passesFilters) ordered = [hit, ...filtered];
+      }
     }
-    if (idx === -1) {
-      const hit = entries.find((e) => e.key === currentKey);
-      const passesFilters = hit
-        && (!localOnly || hit.local)
-        && (!sources.size || sources.has(hit.sourceId));
-      if (passesFilters) return [hit, ...filtered];
-    }
-    return filtered;
+    // WHY partition rather than sort: `unavailable` already drives the disabled
+    // state, so this promotes rows the user can choose without re-checking
+    // provider readiness or disturbing catalogue/pinned order within either group.
+    return [
+      ...ordered.filter((e) => e.unavailable === undefined),
+      ...ordered.filter((e) => e.unavailable !== undefined),
+    ];
   }, [entries, favorites, searching, localOnly, sources, q, pinSelectedToTop, value]);
 
   const toggleFavorite = (key: string) => {
