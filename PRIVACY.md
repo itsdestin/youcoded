@@ -1,6 +1,6 @@
 # YouCoded Privacy Policy
 
-**Effective date:** September 3, 2026
+**Effective date:** September 15, 2026
 
 YouCoded is made and published by **Destin's Adventures, LLC**, an Arizona limited liability company. It is not affiliated with Anthropic or any other commercial entity. This policy explains in plain language what data the YouCoded software touches, what gets sent to servers operated by the project, and what doesn't.
 
@@ -16,7 +16,21 @@ If anything here conflicts with what the app actually does, **the app is wrong a
 - **Your sign-in tokens and API keys never reach YouCoded servers.** They are stored locally on your device.
 - **Your personal files, journal entries, encyclopedia notes, and other user data created in the app stay on your device unless you choose a feature that sends them elsewhere.** For example, a cloud-model prompt, sync or backup, web tool, integration, marketplace skill, or remote MCP server can each have its own data flow.
 - **Backup and sync use *your* accounts.** YouCoded supports backing up local state to Google Drive, GitHub, or iCloud — those are your accounts; YouCoded servers are never the destination.
-- **There are three narrow data flows that DO touch YouCoded-operated servers:** anonymous usage analytics (opt-out at any time), marketplace plugin discovery (anonymous reads, optional GitHub sign-in for ratings), and multiplayer games (only while a game lobby is open). Each is described in detail below.
+- **In the app, there are three narrow data flows that DO touch YouCoded-operated servers:** anonymous usage analytics (opt-out at any time), marketplace plugin discovery (anonymous reads, optional GitHub sign-in for ratings), and multiplayer games (only while a game lobby is open). Each is described in detail below.
+
+---
+
+## Website analytics
+
+The top-level landing page at `https://youcoded.ai/` sends a visit and cumulative counts of instruction opens and final installer-link clicks to `api.youcoded.ai`. Opening iOS instructions counts as an instruction open, not a download. Installer variants are grouped into Windows, macOS, Linux, and Android. Clicks do not prove download completion or installation. There is no periodic website heartbeat.
+
+Attribution uses an owner-registered source/campaign pair from the link and a referring hostname, never the full referring URL or other query parameters. Invalid or unregistered pairs are untagged. Website analytics do not send message content, app device hashes, account identifiers, inferred visitor platform, or geography. Hosting and security providers still process network requests and may keep operational logs under their own policies; this is not a promise of no server logs.
+
+Each page creates a random identifier in JavaScript memory. It is transmitted for initial admission, but the server stores only a secret-keyed HMAC-derived page key, not the raw random identifier. An opaque server capability lets the same open page update its cumulative counts without double-counting retries. This correlates updates from that page, including across midnight, but does not identify returning visitors across reloads or tabs. Reloading creates a new identifier; restoring the same document from the browser's back/forward cache retains the same visit. No website journey identifier is saved in cookies, localStorage, sessionStorage, or a URL.
+
+All website visitor analytics records in the active database — daily aggregates, per-page deduplication snapshots, and supporting daily records — share a rolling **90 UTC-date history including today**. Scheduled cleanup removes expired records; outages can delay physical deletion. Reports and updates independently enforce the retained window. Cloudflare backups/Time Travel and operational logs have separate retention. Cloudflare documents a Time Travel recovery window of 7 days on Workers Free and 30 days on Workers Paid; see [Cloudflare D1 limits](https://developers.cloudflare.com/d1/platform/limits/). The 90-day active-database window does not promise instantaneous deletion from backups or operational logs. Owner-created campaign configuration is retained separately so shared links continue to work; it is not visitor history.
+
+The website has no visitor preference or opt-out control. Blocking scripts or requests, connection failures, bots, and collection limits affect coverage. Counts describe accepted page snapshots, not every person who visits. The app's analytics opt-out remains separate and is described in Section 3.1.
 
 ---
 

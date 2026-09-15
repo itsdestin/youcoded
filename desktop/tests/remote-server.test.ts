@@ -138,6 +138,35 @@ describe('RemoteServer', () => {
     };
   });
 
+  it('round-trips context defaults and refuses unsupported or failed saves', async () => {
+    const { RemoteServer } = await import('../src/main/remote-server');
+    const server: any = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);
+    const sent: any[] = [];
+    const ws = { readyState: 1, send: (raw: string) => sent.push(JSON.parse(raw)) };
+    const request = async (type: string, payload = {}) => {
+      await server.handleMessage({ ws }, JSON.stringify({ type, id: 'context', payload }));
+      return sent.pop()?.payload;
+    };
+    expect(await request('native:get-context-preferences')).toMatchObject({ ok: false });
+    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'long' } })).toMatchObject({ ok: false });
+    const contextSettings = {
+      read: vi.fn(() => ({ openrouter: 'long', chatgpt: 'standard' })),
+      update: vi.fn(async () => ({ openrouter: 'long', chatgpt: 'long' })),
+    };
+    server.setNativeRuntime({ contextSettings });
+    expect(await request('native:get-context-preferences')).toEqual({ openrouter: 'long', chatgpt: 'standard' });
+    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'long' } })).toEqual({ openrouter: 'long', chatgpt: 'long' });
+    expect(contextSettings.update).toHaveBeenCalledWith({ chatgpt: 'long' });
+    contextSettings.update.mockRejectedValueOnce(new Error('lock held'));
+    expect(await request('native:set-context-preferences', { patch: { chatgpt: 'standard' } })).toEqual({ ok: false, error: 'lock held' });
+    vi.stubEnv('YOUCODED_NATIVE', '0');
+    try {
+      expect(await request('native:get-context-preferences')).toMatchObject({ ok: false });
+      expect(await request('native:set-context-preferences', { patch: {} })).toMatchObject({ ok: false });
+      expect(contextSettings.update).toHaveBeenCalledTimes(2);
+    } finally { vi.unstubAllEnvs(); }
+  });
+
   it('can be instantiated', async () => {
     const { RemoteServer } = await import('../src/main/remote-server');
     const server = new RemoteServer(mockSessionManager, mockHookRelay, mockConfig);

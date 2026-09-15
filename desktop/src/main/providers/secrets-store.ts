@@ -5,8 +5,11 @@
 // never touches disk (pinned by tests/secrets-store.test.ts).
 import * as fs from 'fs';
 import * as path from 'path';
-import { safeStorage } from 'electron';
+import { getSecretStorage } from './secret-storage';
+import { KeychainHelperError, KeychainTransportError } from './keychain-client';
+import type { SecretStorage } from './recoverable-safe-storage';
 import { ulid } from 'ulid';
+import { SECRET_STORAGE_UNAVAILABLE_MESSAGE, SECRET_DECRYPTION_FAILED_MESSAGE } from './secret-storage-errors';
 import { mutateFileUnderLock } from '../artifacts/cas-write';
 
 const FILE = 'native-secrets.json';
@@ -21,17 +24,21 @@ const LOCK_MAX_RETRIES = 5;
 export class SecretsStore {
   private readonly file: string;
 
-  constructor(userDataDir: string) {
+  constructor(userDataDir: string, private readonly storage?: SecretStorage) {
     this.file = path.join(userDataDir, FILE);
+  }
+
+  private get crypto(): SecretStorage {
+    // WHY: presence checks and deletes need no crypto backend. Resolve it only
+    // on actual reads/writes, not while constructing stores during app startup.
+    return this.storage ?? getSecretStorage();
   }
 
   /** Throws with a user-showable message when the OS keychain is unavailable
    *  (rare Linux setups) — we refuse plaintext fallback by design. */
-  private assertAvailable(): void {
-    if (!safeStorage.isEncryptionAvailable()) {
-      throw new Error(
-        'Secure key storage is not available on this system, so YouCoded cannot save API keys. (Your OS keychain/libsecret is required.)'
-      );
+  async assertAvailable(): Promise<void> {
+    if (!await this.crypto.isEncryptionAvailable()) {
+      throw new Error(SECRET_STORAGE_UNAVAILABLE_MESSAGE);
     }
   }
 
@@ -108,24 +115,36 @@ export class SecretsStore {
     existingRef?: string,
     opts?: { maxRetries?: number }
   ): Promise<string> {
-    this.assertAvailable();
+    await this.assertAvailable();
     const ref = existingRef ?? ulid();
     // Encrypt BEFORE entering the lock — only ciphertext ever flows into the
     // file write, so no code path can accidentally serialize the plaintext.
-    const blob = safeStorage.encryptString(plaintext).toString('base64');
+    const blob = (await this.crypto.encryptString(plaintext)).toString('base64');
     await this.mutate((cur) => ({ ...cur, [ref]: blob }), opts);
     return ref;
   }
 
-  /** Decrypt a stored key. null when the ref is missing or undecryptable
-   *  (e.g. the file was copied from another machine — keychain mismatch). */
+  /** Only a missing ref is null; failed reads leave ciphertext intact for retry. */
   async get(ref: string): Promise<string | null> {
-    const blob = this.read()[ref];
-    if (!blob) return null;
+    const entries = this.read();
+    if (!Object.prototype.hasOwnProperty.call(entries, ref)) return null;
+    await this.assertAvailable();
     try {
-      return safeStorage.decryptString(Buffer.from(blob, 'base64'));
-    } catch {
-      return null;
+      const blob = entries[ref];
+      if (typeof blob !== 'string' || !blob) throw new Error('Invalid encrypted entry');
+      // Await inside the catch boundary: helper errors are asynchronous.
+      return await this.crypto.decryptString(Buffer.from(blob, 'base64'));
+    } catch (error) {
+      // WHY: a failed helper is already retired. Do not launch another wallet
+      // prompt just to classify the failure we already received over private IPC.
+      if (error instanceof KeychainHelperError) {
+        throw new Error(error.code === 'unavailable' ? SECRET_STORAGE_UNAVAILABLE_MESSAGE : SECRET_DECRYPTION_FAILED_MESSAGE);
+      }
+      if (error instanceof KeychainTransportError) throw error;
+      // Availability can change during decrypt. Never turn a temporary failure
+      // into "not signed in", nor leak crypto errors containing secret data.
+      await this.assertAvailable();
+      throw new Error(SECRET_DECRYPTION_FAILED_MESSAGE);
     }
   }
 

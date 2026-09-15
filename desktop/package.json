@@ -3,7 +3,7 @@
   "version": "1.2.4",
   "description": "Open-source, multi-model AI assistant for your files, projects, and everyday work",
   "homepage": "https://github.com/itsdestin/youcoded",
-  "main": "dist/main/main.js",
+  "main": "dist/main/bootstrap.js",
   "scripts": {
     "dev": "node scripts/run-dev.js",
     "dev:main": "tsc -p tsconfig.json && node -e \"require('fs').cpSync('src/main/pty-worker.js','dist/main/pty-worker.js')\" && electron .",

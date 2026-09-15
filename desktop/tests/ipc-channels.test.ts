@@ -911,6 +911,7 @@ describe('native:*/provider:* channel parity', () => {
     'native:send', 'native:interrupt', 'native:set-binding', 'native:set-permission-mode',
     // Task 14 — read-side mode fetch that seeds the chip on create/resume.
     'native:get-permission-mode', 'native:get-step-guard', 'native:set-step-guard', 'native:sessions-list',
+    'native:get-context-preferences', 'native:set-context-preferences',
     // Task 11 — cancel/edit a queued-but-not-yet-sent message.
     'native:queue-remove',
     // M3 item 2 — user-initiated /compact for a native session.
@@ -921,6 +922,8 @@ describe('native:*/provider:* channel parity', () => {
     'native:send': 'IPC.NATIVE_SEND', 'native:interrupt': 'IPC.NATIVE_INTERRUPT',
     'native:set-binding': 'IPC.NATIVE_SET_BINDING', 'native:set-permission-mode': 'IPC.NATIVE_SET_PERMISSION_MODE',
     'native:get-permission-mode': 'IPC.NATIVE_GET_PERMISSION_MODE',
+    'native:get-context-preferences': 'IPC.NATIVE_GET_CONTEXT_PREFERENCES',
+    'native:set-context-preferences': 'IPC.NATIVE_SET_CONTEXT_PREFERENCES',
     'native:get-step-guard': 'IPC.NATIVE_GET_STEP_GUARD',
     'native:set-step-guard': 'IPC.NATIVE_SET_STEP_GUARD',
     'native:sessions-list': 'IPC.NATIVE_SESSIONS_LIST',

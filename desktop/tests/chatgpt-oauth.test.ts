@@ -241,6 +241,17 @@ describe('chatgpt-oauth: the model list', () => {
     expect(rows[3].label).toBe('GPT-5.4-Mini');
   });
 
+  it('keeps the ChatGPT default and opt-in maximum as separate catalog facts', () => {
+    const rows = parseModelsManifest(fixture('models.json'));
+    expect(rows.find((r) => r.id === 'gpt-5.6-terra')).toMatchObject({ contextLength: 272000, maxContextLength: 872000 });
+    expect(rows.find((r) => r.id === 'gpt-5.5')).toMatchObject({ contextLength: 272000, maxContextLength: 272000 });
+    for (const maximum of [undefined, null, 0, -1, NaN, Infinity, true, '872000', 1.5]) {
+      const [row] = parseModelsManifest({ models: [{ slug: 'model', visibility: 'list', context_window: 272000, max_context_window: maximum }] });
+      expect(row.contextLength).toBe(272000);
+      expect(row.maxContextLength).toBeUndefined();
+    }
+  });
+
   it('falls back to a title-cased slug, leaves vision undefined when the row does not say, and survives junk', () => {
     const rows = parseModelsManifest({
       models: [

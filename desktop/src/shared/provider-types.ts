@@ -43,6 +43,9 @@ export interface CatalogModel {
   providerId: string;
   label: string;
   contextLength?: number;
+  /** ChatGPT's advertised opt-in maximum, distinct from its default window.
+   *  WHY separate: merely listing a model must not opt a plan into long context. */
+  maxContextLength?: number;
   supportsTools?: boolean;
   supportsReasoning?: boolean;
   // Whether this catalog row's model accepts image input, per the SOURCE's own

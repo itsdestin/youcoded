@@ -4158,6 +4158,9 @@ class SessionService : Service() {
             "native:set-binding",
             "native:set-permission-mode",
             "native:get-permission-mode",
+            // Cloud context defaults belong to the desktop native runtime.
+            "native:get-context-preferences",
+            "native:set-context-preferences",
             "native:get-step-guard",
             "native:set-step-guard",
             "native:sessions-list",

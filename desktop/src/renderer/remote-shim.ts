@@ -737,6 +737,7 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   // binary does not know — has to reach the dialog's error line.
   'models:settings', 'models:set-settings', 'models:add-vision',
   'native:get-step-guard', 'native:set-step-guard',
+  'native:get-context-preferences', 'native:set-context-preferences',
 ]);
 
 /** What a `<channel>:response` payload MEANS, as one pure decision.
@@ -2900,6 +2901,8 @@ export function installShim(): void {
       setBinding: (sessionId: string, binding: unknown) => invoke('native:set-binding', { sessionId, binding }),
       setPermissionMode: (sessionId: string, mode: string) => invoke('native:set-permission-mode', { sessionId, mode }),
       getPermissionMode: (sessionId: string) => invoke('native:get-permission-mode', { sessionId }),
+      getContextPreferences: () => invoke('native:get-context-preferences'),
+      setContextPreferences: (patch: unknown) => invoke('native:set-context-preferences', { patch }),
       getStepGuard: () => invoke('native:get-step-guard'),
       setStepGuard: (value: number | null) => invoke('native:set-step-guard', { value }),
       sessionsList: () => invoke('native:sessions-list'),
