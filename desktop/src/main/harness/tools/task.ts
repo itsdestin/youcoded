@@ -19,7 +19,7 @@ import { resolveP, toPosix } from './guards';
 import { BUILTIN_ROSTER, type SpecialistRoster, type SpecialistDefinition } from '../specialists/registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../specialists/limits';
 import {
-  resolveDelegatedBinding, resolveRequestedModel, DelegatedModelRefused, type DelegatedTier,
+  resolveDelegatedBinding, resolveRequestedModel, DelegatedModelRefused, DelegatedModelUnavailable,
 } from '../specialists/delegated-models';
 import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
 
@@ -107,20 +107,19 @@ function buildSchema(roster: SpecialistRoster) {
       + 'delivered to you when it finishes. If you would only be waiting for it, leave this false and let the report '
       + 'come back as this call\'s result. On a task_id resume, applies to the resumed run.',
     ),
-    // Task 14: verbatim per the spec ruling — the only two named tiers, plus an
-    // escape hatch for a user-directed specific id. Omitting this (the default
-    // for every existing call and every built-in specialist) is unchanged
-    // behavior: run on the parent's own model. Not read on a task_id call — a
-    // steer/resume/interrupt keeps the child's own model.
+    // Two named tiers, an explicit parent escape hatch, and a user-directed
+    // specific id. Omitting this uses the safe automatic Budget tier. Not read
+    // on a task_id call — steer/resume/interrupt keeps the child's own model.
     // Item 13 (2026-09-09 transcript audit): the model once sent `"budget}},{"`
     // — a fragment of its own JSON — and the tool only refused it a resolve
     // later, as "not an available model". A model id is letters, digits and
     // a few separators; anything else is a malformed call and is refused at
     // the schema, where the error names the field and the accepted shape.
-    model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/, 'model must be "budget", "frontier", or a model id (letters, digits, . _ : @ / -)').optional().describe(
-      'Optional: "budget" or "frontier" to use the models the user designated in Settings, or a specific '
-      + 'model id — only name a specific model when the user asked for it. Omit to run the specialist on '
-      + "this conversation's model. Not used with task_id — a resumed specialist keeps its own model.",
+    model: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._:@\/-]*$/, 'model must be "budget", "frontier", "parent", or a model id (letters, digits, . _ : @ / -)').optional().describe(
+      'Optional: "budget" or "frontier" to use the user\'s selection or a provider-matched automatic default, '
+      + '"parent" to deliberately use this conversation\'s model, or a specific model id — only name a specific '
+      + 'model when the user asked for it. Omit for the safe automatic budget tier. Not used with task_id — a '
+      + 'resumed specialist keeps its own model.',
     ),
     // Task 6 — the task_id management surface. Semantics documented verbatim in
     // the tool description below (TASK_ID_DOCTRINE).
@@ -532,15 +531,11 @@ export function createTaskTool(
         };
       }
 
-      // Task 14: resolve what model this child runs on. 'parent' — no
-      // args.model AND no specialist.modelPreference, the default for every
-      // existing call and every built-in specialist — needs nothing beyond
-      // ctx.binding, so a session that never touches this feature never
-      // needs ToolServices.models wired at all. Only a tier or a specific id
-      // reaches resolveDelegatedBinding.
+      // Resolve what model this child runs on. Omission means Budget, so every
+      // implicit launch crosses the safe-default resolver. Only an explicit
+      // `parent` request bypasses catalog resolution.
       const requestedModel = resolveRequestedModel(args.model, specialist.modelPreference);
       let resolvedBinding: ModelBinding | undefined;
-      let fallbackNote = '';
       // Hoisted out of the `if` below (Task 5, plan 1c) so the model-record
       // computation after it can read `resolution?.fellBack` — undefined
       // (never entered the block) reads the same as "no fallback happened",
@@ -554,10 +549,12 @@ export function createTaskTool(
         if (!models) {
           return { text: 'Task failed: no model catalog is wired for this session (configuration error).', isError: true };
         }
-        // Catalog is fetched ONLY for a specific-id request — a tier lookup
-        // never needs it (DelegatedModels.get is the whole answer), so the
-        // common tier path pays no catalog-fetch cost.
-        const catalog: CatalogModel[] | null = typeof requestedModel === 'object'
+        // WHY only an UNSET tier fetches the catalog: a curated provider
+        // default must be confirmed live, but a saved user override is already
+        // authoritative and should not wait on a network catalog refresh.
+        const needsCatalog = typeof requestedModel === 'object'
+          || !models.designated.get(requestedModel);
+        const catalog: CatalogModel[] | null = needsCatalog
           ? (await models.catalog()) ?? null
           : null;
         try {
@@ -568,22 +565,12 @@ export function createTaskTool(
           // A user-directed specific model id that couldn't be confirmed —
           // never silently substituted (spec ruling). Rethrow anything else:
           // an unexpected throw here is a bug, not a refusal to render.
-          if (err instanceof DelegatedModelRefused) return { text: err.message, isError: true };
+          if (err instanceof DelegatedModelRefused || err instanceof DelegatedModelUnavailable) {
+            return { text: err.message, isError: true };
+          }
           throw err;
         }
         resolvedBinding = resolution.binding;
-        if (resolution.fellBack) {
-          // requestedModel is a DelegatedTier here — the { modelId } branch
-          // above either resolves or throws, it never falls back.
-          //
-          // Final-review fix (Finding 6): this used to say "is set in
-          // Settings" — this release ships no Settings UI for designating a
-          // budget/frontier model (plan 1c, not yet written), so it pointed
-          // the model AND the user at a control neither can find. Matches
-          // resolveDelegatedBinding's own reason string (delegated-models.ts)
-          // — state the fact, not a place to fix it that doesn't exist yet.
-          fallbackNote = `\n\n(No ${requestedModel as DelegatedTier} model is designated — using this conversation's model.)`;
-        }
       }
 
       // Task 5 (plan 1c) — the model actually used, recorded onto the ledger
@@ -649,6 +636,10 @@ export function createTaskTool(
             parentToolCallId: ctx.toolCallId ?? '',
             description: args.description,
             token: reservation.token,
+            // WHY background must receive the same resolved binding as
+            // foreground: createChild otherwise inherits the parent even while
+            // the ledger misleadingly records the safe tier.
+            ...(resolvedBinding ? { binding: resolvedBinding } : {}),
             ...(model ? { model } : {}),
           });
           return {
@@ -674,9 +665,7 @@ export function createTaskTool(
           ...(resolvedBinding ? { binding: resolvedBinding } : {}),
           ...(model ? { model } : {}),
         });
-        // Task 14: the one honest line a tier fallback earns — appended to the
-        // report, never folded into it, so the child's own words stay intact.
-        return { text: fallbackNote ? `${report}${fallbackNote}` : report };
+        return { text: report };
       } catch (err: any) {
         // Every failure path must resolve a tool result — never a dangling
         // call. err.message is expected to already name the child id when one

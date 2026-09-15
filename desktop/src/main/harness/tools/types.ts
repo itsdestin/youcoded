@@ -225,12 +225,9 @@ export interface ToolContext {
   sessionId: string;
   cwd: string;
   signal: AbortSignal;
-  /** Task 14 — this session's CURRENT model binding, needed as the `parent`
-   *  fallback for resolveDelegatedBinding (a tier that isn't set, or a bare
-   *  "run on this conversation's model" request, both resolve to this).
-   *  Optional so pre-existing test/one-off ToolContext constructions that
-   *  never touch model resolution keep compiling; the real driver
-   *  (harness-session.ts) always sets it from the session's own binding. */
+  /** This session's CURRENT model binding. It identifies which provider an
+   *  automatic tier should match and supplies the binding only for an explicit
+   *  `model: "parent"` request. The real driver always wires it. */
   binding?: ModelBinding;
   /** The Task-tool call's own toolCallId (Task 6/7), when the driver knows
    *  one — used as createChild's parentToolCallId so the host can later stamp

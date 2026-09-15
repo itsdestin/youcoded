@@ -707,8 +707,8 @@ export interface SpecialistsListResult {
   folders: { personal: string; claudeUser: string; project?: string };
 }
 
-/** Specialists 1c — the two user-designated model tiers (spec §2 amendment,
- *  Destin 2026-08-12). `null` = unset → falls back to the conversation's model. */
+/** The two specialist model overrides. `null` means use the reviewed
+ *  provider-matched automatic model; it never authorizes parent inheritance. */
 export interface DelegatedModelsView {
   budget: { providerId: string; modelId: string; label: string } | null;
   frontier: { providerId: string; modelId: string; label: string } | null;

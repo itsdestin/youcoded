@@ -69,7 +69,7 @@ describe('ModelSearch tool', () => {
     const r = await ModelSearchTool.execute({ query: 'claude' } as any, bare as any);
     expect(r.isError).toBe(true);
     expect(r.text).toBe(
-      'Model list is unavailable right now (catalog not loaded). Delegate with "budget"/"frontier" or the conversation\'s model instead.',
+      'Model list is unavailable right now (catalog not loaded). Use the automatic Budget/Frontier tier, or explicitly request the conversation model.',
     );
   });
 
@@ -80,7 +80,7 @@ describe('ModelSearch tool', () => {
     );
     expect(r.isError).toBe(true);
     expect(r.text).toBe(
-      'Model list is unavailable right now (catalog not loaded). Delegate with "budget"/"frontier" or the conversation\'s model instead.',
+      'Model list is unavailable right now (catalog not loaded). Use the automatic Budget/Frontier tier, or explicitly request the conversation model.',
     );
   });
 

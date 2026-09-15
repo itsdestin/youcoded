@@ -84,13 +84,13 @@ Update this table when you re-run snapshots after a CC version bump. Anything th
 
 ### PTY worker write protocol — Ink paste threshold
 - **Files:** `desktop/src/main/pty-worker.js` (case `'input'`), `app/src/main/.../runtime/PtyBridge.kt` (`writeInput`), `desktop/src/renderer/hooks/useSubmitConfirmation.ts`
-- **Depends on:** Two private Ink/CC behaviors that determine whether `body + \r` writes submit a chat message vs. leave a literal newline in the input bar: (1) the **paste-classification length threshold** — atomic writes longer than ~N chars are treated as paste, with trailing `\r` becoming literal newline; the worker's 64-byte chunking + 600 ms Enter-split is designed to keep each individual read below the threshold. Empirically verified: 6-byte atomic `ATEST\r` submits, 101-byte atomic `D + 100×z + \r` does not (CC v2.1.119, April 2026). (2) The **input-bar echo contract** — CC re-renders typed input back through stdout, which the planned echo-driven worker depends on. Both are private Ink internals with no documented contract.
-- **Break symptom:** Length-threshold drift makes the chunking workaround stop sufficing — chat sends silently fail to submit (text appears in CC's input bar with literal newline, never reaches Claude) at frequencies that vary with message length and load. `useSubmitConfirmation` retry catches most but adds 5 s recovery latency. Echo-contract drift would break echo-driven send entirely if introduced.
+- **Depends on:** Two private Ink/CC behaviors determine whether `body + \r` submits a message or leaves a literal newline: (1) atomic input is paste-classified at 64 encoded bytes in CC v2.1.119, so desktop submits at most 56 bytes atomically and chunks longer bodies before sending Enter; Android retains its separate 600 ms Enter split. (2) Desktop waits for the typed body tail to echo through stdout before sending Enter and suppresses Enter after a 12 s echo timeout. Both are private Ink internals with no documented contract. **Known gap (2026-09-15):** both launchers currently compare UTF-16 character counts to this byte threshold, and desktop strips ANSI per output chunk; multibyte input and split control sequences therefore still need fixes. Re-test ASCII and multibyte input, plus ANSI sequences split across output chunks, on each CC bump.
+- **Break symptom:** Threshold or echo-contract drift makes chat sends silently fail to submit: text remains in CC's input bar, Enter becomes a literal newline, or the worker times out and suppresses Enter. `useSubmitConfirmation` catches some stalled submissions but cannot make an incorrect byte-length gate safe.
 
 ### PTY input-bar echo (input-mirroring)
-- **Files:** `desktop/src/main/pty-worker.js` (any future `onData`-watching submit logic)
-- **Depends on:** CC echoing typed stdin bytes back into the rendered input bar via stdout, so a programmatic writer can observe consumption before sending the trailing `\r`. This is universal TUI behavior but is technically a CC-internal contract.
-- **Break symptom:** If CC stopped echoing input (e.g. switched to a "silent input" mode mid-turn), an echo-driven worker would hang waiting for an echo that never comes; chat sends would never complete. No echo-driven worker is shipped yet — this entry is preventive for the planned change.
+- **Files:** `desktop/src/main/pty-worker.js` (`onData` tail matching and echo timeout)
+- **Depends on:** CC echoing typed stdin back into the rendered input bar via stdout, so the shipped desktop worker can observe consumption before sending the trailing `\r`. Matching must survive arbitrary PTY chunk boundaries and ANSI control sequences.
+- **Break symptom:** If CC stops echoing input, or chunked control sequences prevent the tail match, the worker reaches its 12 s timeout and deliberately suppresses Enter; the message remains unsubmitted rather than accidentally answering a live menu.
 
 ### Other PTY attention patterns
 - **Files:** `desktop/src/renderer/state/attention-classifier.ts` (regexes for awaiting-input, shell-idle, error, stuck)
@@ -160,6 +160,11 @@ Update this table when you re-run snapshots after a CC version bump. Anything th
 - **Files:** `desktop/src/main/session-manager.ts`, `app/src/main/.../runtime/PtyBridge.kt`
 - **Depends on:** `claude` CLI accepting the flags YouCoded passes at launch (notably `--resume <session-id>` and any default flags in the launch command)
 - **Break symptom:** Session resume breaks; PTY spawns fail; new sessions launch in unexpected state.
+
+### `CLAUDE_CODE_SUBAGENT_MODEL` specialist default
+- **Files:** `desktop/src/main/pty-worker.js`, `app/src/main/kotlin/com/youcoded/app/runtime/PtyBridge.kt`
+- **Depends on:** Claude Code honoring `CLAUDE_CODE_SUBAGENT_MODEL=sonnet` as the default for Agent/subagent launches while letting an Agent call's explicit model selection override it. YouCoded sets the variable only when the launch environment did not already supply one; Opus remains the explicit Frontier choice rather than the implicit default.
+- **Break symptom:** If Claude Code renames the variable or changes its precedence, implicit specialists silently inherit the active conversation model again and can multiply the cost of an Opus/Fable-class conversation. Re-check the environment-variable precedence and run a one-Agent probe on each Claude Code bump.
 
 ### `--mcp-config` / `--allowedTools` (the SendUserLink tool in CC sessions)
 - **Files:** `desktop/src/main/claude-code-mcp.ts`, `desktop/src/main/session-manager.ts`, `app/src/main/.../runtime/ClaudeCodeMcp.kt`, `app/src/main/.../runtime/PtyBridge.kt`, `app/src/main/assets/send-user-link-mcp.js`

@@ -270,6 +270,13 @@ process.on('message', (msg) => {
         cwd: msg.cwd || require('os').homedir(),
         env: {
           ...childEnv,
+          // WHY this default is injected only for Claude sessions: Claude
+          // Code otherwise inherits the conversation model for subagents,
+          // which can silently multiply a Fable-class bill. An explicit
+          // launch-environment choice remains authoritative.
+          ...(msg.sessionId ? {
+            CLAUDE_CODE_SUBAGENT_MODEL: childEnv.CLAUDE_CODE_SUBAGENT_MODEL || 'sonnet',
+          } : {}),
           // Pass our session ID so hook scripts can include it in payloads
           CLAUDE_DESKTOP_SESSION_ID: msg.sessionId || '',
           // Pass the unique pipe name so relay.js connects to the right instance
