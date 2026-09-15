@@ -239,6 +239,21 @@ function claudeInstallPath(): string {
     : path.join(home, '.local', 'bin', 'claude');
 }
 
+/**
+ * `claude` on PATH, else the native installer's absolute path when it is on disk.
+ *
+ * WHY (first-run local models, 2026-09-14): Claude Code now installs after the
+ * "Log in with Claude" click, inside THIS running process, whose PATH snapshot
+ * predates the install — and the login spawns `claude` a moment later. The same
+ * fallback detectClaude() already uses, for the three callers that spawn it.
+ */
+function resolveClaudeCommand(): string {
+  const onPath = resolveCommand('claude');
+  if (onPath !== 'claude') return onPath;
+  const installed = claudeInstallPath();
+  return fs.existsSync(installed) ? installed : onPath;
+}
+
 /** The dir Anthropic's bootstrap downloads the versioned binary into before installing. */
 function claudeDownloadsDir(): string {
   return path.join(os.homedir(), '.claude', 'downloads');
@@ -456,7 +471,7 @@ export async function detectClaude(): Promise<DetectionResult> {
 /** Detect whether Claude Code is authenticated. */
 export async function detectAuth(): Promise<DetectionResult> {
   try {
-    const claudePath = resolveCommand('claude');
+    const claudePath = resolveClaudeCommand();
     const { stdout } = await runCommand(claudePath, ['auth', 'status']);
     // claude auth status exits 0 even when not logged in — parse the JSON
     const parsed = JSON.parse(stdout.trim());
@@ -954,7 +969,7 @@ export async function installClaude(): Promise<{ success: boolean; error?: strin
  * Call pollAuthStatus() to detect when login completes.
  */
 export function startOAuthLogin(): { url: string | null; kill: () => void } {
-  const claudePath = resolveCommand('claude');
+  const claudePath = resolveClaudeCommand();
 
   // Locate pty-worker.js the same way SessionManager does — in packaged builds
   // it lives under app.asar.unpacked/ so the system node can read it.
@@ -1052,7 +1067,7 @@ export async function pollAuthStatus(timeoutMs = 120000, intervalMs = 2000): Pro
 /** Submit an API key for authentication. Key is passed as an array arg — no shell interpolation. */
 export async function submitApiKey(key: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const claudePath = resolveCommand('claude');
+    const claudePath = resolveClaudeCommand();
     await runCommand(claudePath, ['auth', 'set-key', key]);
 
     const check = await detectAuth();

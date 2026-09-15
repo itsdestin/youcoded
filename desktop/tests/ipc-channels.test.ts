@@ -2001,6 +2001,64 @@ describe('claude-code:status channel parity', () => {
   });
 });
 
+// First-run local models (2026-09-14): Install Claude Code on demand. A desktop
+// action a phone must REFUSE (not resolve), and a remote desktop must run.
+describe('claude-code:install channel parity', () => {
+  const T = 'claude-code:install';
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('exposed in preload.ts through the constant, and in remote-shim.ts', () => {
+    expect(read('src', 'main', 'preload.ts')).toContain('ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL');
+    expect(read('src', 'renderer', 'remote-shim.ts')).toContain(`invoke('${T}')`);
+  });
+
+  it('registered in ipc-handlers.ts and remote-server.ts', () => {
+    expect(read('src', 'shared', 'types.ts')).toContain(`CLAUDE_CODE_INSTALL: '${T}'`);
+    expect(read('src', 'main', 'ipc-handlers.ts')).toContain('ipcMain.handle(IPC.CLAUDE_CODE_INSTALL');
+    expect(read('src', 'main', 'remote-server.ts')).toContain(`case '${T}'`);
+  });
+
+  it('refused on Android, and the refusal reaches the caller as an error', () => {
+    const kt = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'app', 'src', 'main', 'kotlin', 'com', 'youcoded', 'app', 'runtime', 'SessionService.kt'),
+      'utf8',
+    );
+    expect(kt).toContain(`"${T}",`);
+    expect(read('src', 'renderer', 'remote-shim.ts')).toMatch(/REJECT_ON_NOT_OK[\s\S]*'claude-code:install'/);
+  });
+});
+
+describe('first-run local channels', () => {
+  const read = (...p: string[]) => fs.readFileSync(path.join(__dirname, '..', ...p), 'utf8');
+
+  it('every one is invoked by preload and answered by the remote shim', () => {
+    const preload = read('src', 'main', 'preload.ts');
+    const shim = read('src', 'renderer', 'remote-shim.ts');
+    for (const [constName, method] of [
+      ['FIRST_RUN_LOCAL_SETUP', 'localSetup'],
+      ['FIRST_RUN_CONNECT_LOCAL_APP', 'connectLocalApp'],
+      ['FIRST_RUN_LOCAL_DOWNLOAD', 'localDownload'],
+      ['FIRST_RUN_RESUME_LOCAL_DOWNLOAD', 'resumeLocalDownload'],
+    ]) {
+      expect(preload, `${constName} never invoked by preload`).toContain(`ipcRenderer.invoke(IPC.${constName}`);
+      expect(shim, `${method} missing from remote-shim firstRun`).toMatch(new RegExp(`\\b${method}:`));
+    }
+  });
+
+  it('the band channels are registered for every launch, not only during setup', () => {
+    // The band above the message box is read AFTER setup finished, when main.ts
+    // registers no first-run handlers at all — so these two live in ipc-handlers.
+    const handlers = read('src', 'main', 'ipc-handlers.ts');
+    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_LOCAL_DOWNLOAD');
+    expect(handlers).toContain('ipcMain.handle(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD');
+  });
+
+  it('both first-run registrations wire the setup channels', () => {
+    const main = read('src', 'main', 'main.ts');
+    expect(main.match(/registerFirstRunLocalIpc\(/g)?.length ?? 0).toBeGreaterThanOrEqual(3);
+  });
+});
+
 // The kill switch and the lock-out guard are wiring, not channels: nothing else
 // in the suite reads main.ts, and both are one line whose deletion is silent.
 // Reviews T4 F1/F3 and T5 F1/F2 measured that each could be dropped with the

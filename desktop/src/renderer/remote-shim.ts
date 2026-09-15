@@ -703,6 +703,10 @@ export const REJECT_ON_NOT_OK: ReadonlySet<string> = new Set([
   'theme:list',
   'commands:list',
   'appearance:get-favorite-themes',
+  // Installing Claude Code (first-run local models, F-5): the phone refuses with
+  // { ok:false }. Resolved as a value, the Settings card would read it as an
+  // install that finished.
+  'claude-code:install',
   // Host administration is refused over the remote socket (desktop IPC only). Without
   // these the refusal `{ ok:false }` resolves as an ordinary value, so a phone that
   // tried to change the host password saw the field's success tick for a change that never
@@ -2655,9 +2659,16 @@ export function installShim(): void {
       retry: () => Promise.resolve(),
       // Same widened type as preload's (FirstRunState['authMode']); still a no-op here.
       startAuth: (_mode: FirstRunState['authMode']) => Promise.resolve(),
-      submitApiKey: (_key: string) => Promise.resolve(),
+      submitApiKey: (_key: string, _service?: string) => Promise.resolve(),
       devModeDone: () => Promise.resolve(),
       skip: () => Promise.resolve(),
+      // First-run local models (2026-09-14). First-run never shows here, and the
+      // band above the message box describes the HOST's first download, which a
+      // phone has no way to read — so every one answers "nothing".
+      localSetup: () => Promise.resolve(null),
+      connectLocalApp: (_baseUrl: string, _name: string) => Promise.resolve({ ok: false, message: 'Setup runs on the computer itself.' }),
+      localDownload: (_sessionId?: string | null) => Promise.resolve(null),
+      resumeLocalDownload: (_sessionId?: string | null) => Promise.resolve(),
       onStateChanged: (_cb: Callback) => (() => {}),
     },
     // Android-only bridge methods — when connected to a remote desktop, these
@@ -2943,6 +2954,10 @@ export function installShim(): void {
     // locally would be meaningless.
     claudeCode: {
       status: (opts?: { refresh?: boolean }) => invoke('claude-code:status', opts),
+      // Installs on the DESKTOP (remote-server runs the installer). A phone has
+      // no installer and refuses with {ok:false}, which REJECT_ON_NOT_OK turns
+      // into an error the Settings card shows.
+      install: () => invoke('claude-code:install'),
     },
     // WebSearch providers (Phase 2 Plan B) — WS transport. Object payloads match
     // remote-server's WS case reads (payload.backend / payload.key).

@@ -24,6 +24,37 @@ import {
   enableWindowsDevMode,
 } from './prerequisite-installer';
 import type { ChatGptAuth } from './providers/chatgpt-auth';
+import type { CuratedModel, DownloadProgress } from '../shared/model-manager-types';
+import { writeSetupDownload } from './first-run-local';
+
+/** The key services "Use an API key" accepts (first-run local models, F-1). */
+export type NativeKeyService = 'anthropic' | 'openai' | 'google' | 'openrouter';
+const NATIVE_KEY_LABEL: Record<Exclude<NativeKeyService, 'openrouter'>, string> = {
+  anthropic: 'Anthropic',
+  openai: 'OpenAI',
+  google: 'Google',
+};
+
+/**
+ * What the native ways into setup reach (first-run local models, 2026-09-14): a
+ * key, a model app already running, or a local download. Narrowed so a test can
+ * hand in fakes; main.ts passes the real registry, engine and model manager that
+ * registerIpcHandlers builds.
+ */
+export interface FirstRunNativeDeps {
+  providers: {
+    list(): Promise<Array<{ id: string; type: string; baseUrl?: string }>>;
+    upsert(input: { type: any; label: string; baseUrl?: string; enabled: boolean }): Promise<string>;
+    setKey(id: string, key: string): Promise<void>;
+    remove(id: string): Promise<void>;
+    testConnection(id: string): Promise<{ ok: boolean; message: string }>;
+  };
+  engine: { installed(): boolean; install(): Promise<unknown> };
+  models: {
+    curatedList(): Promise<CuratedModel[]>;
+    on(event: 'download-progress', cb: (p: DownloadProgress) => void): unknown;
+  };
+}
 
 // The slice of ChatGptAuth the wizard drives. Narrowed on purpose: the wizard
 // only starts a sign-in and waits for it, so a test can hand in a two-method
@@ -51,6 +82,12 @@ const STATE_DIR = process.env.YOUCODED_TOOLKIT_STATE_DIR
   || path.join(os.homedir(), '.claude', 'toolkit-state');
 const STATE_FILE = path.join(STATE_DIR, 'first-run-state.json');
 const CONFIG_FILE = path.join(STATE_DIR, 'config.json');
+
+/** The wizard's state folder — also where first-run-local keeps the record of
+ *  the download setup finished on, so it follows the same dev-instance redirect. */
+export function firstRunStateDir(): string {
+  return STATE_DIR;
+}
 
 /**
  * Write `setup_completed: true` into the wizard's config file, merging into
@@ -291,7 +328,11 @@ export class FirstRunManager extends EventEmitter {
     }> = [
       { name: 'node', install: installNode, detect: detectNode, label: 'Node.js' },
       { name: 'git', install: installGit, detect: detectGit, label: 'Git' },
-      { name: 'claude', install: installClaude, detect: detectClaude, label: 'Claude Code' },
+      // WHY no Claude Code here (first-run local models, Q-5/F-4, Destin
+      // 2026-09-14): it installs only when someone presses "Log in with Claude"
+      // (handleOAuthLogin) or Install Claude Code in Settings. A local, ChatGPT or
+      // API-key user never waits for it. Node and Git stay: Terminal view, the
+      // bundled plugins, syncing and the Git panel need them for everyone.
     ];
 
     for (const { name, install, detect, label } of installable) {
@@ -341,6 +382,11 @@ export class FirstRunManager extends EventEmitter {
         return; // Stop on failure
       }
     }
+
+    // Claude Code was not installed above; mark it so progress can reach the end
+    // and the checklist does not wait on it (FirstRunView hides the row).
+    const claude = this.state.prerequisites.find((p) => p.name === 'claude');
+    if (claude && claude.status !== 'installed') this.updatePrereq('claude', { status: 'skipped' });
 
     // All installable prerequisites are now installed — advance to next step.
     // cloneToolkit() was removed: the app bundles write-guard via install-hooks.js;
@@ -401,8 +447,27 @@ export class FirstRunManager extends EventEmitter {
 
   /** Called from IPC when the user chooses OAuth login. */
   async handleOAuthLogin(): Promise<{ url: string | null }> {
-    this.updateState({ authMode: 'oauth', statusMessage: 'Waiting for you to log in...' });
+    this.updateState({ authMode: 'oauth', statusMessage: 'Waiting for you to log in...', lastError: undefined });
     this.updatePrereq('auth', { status: 'installing' });
+
+    // First-run local models (S-1): Claude Code installs HERE, after the click,
+    // not for everyone before the sign-in screen. The card shows this install
+    // while the 'claude' row is installing.
+    const present = await detectClaude();
+    if (!present.installed) {
+      this.updatePrereq('claude', { status: 'installing' });
+      this.updateState({ statusMessage: 'Installing Claude Code...' });
+      const installed = await installClaude();
+      if (!installed.success) {
+        this.updatePrereq('claude', { status: 'failed', error: installed.error });
+        this.updatePrereq('auth', { status: 'waiting' });
+        this.updateState({ authMode: 'none', lastError: `Failed to install Claude Code: ${installed.error}` });
+        log('ERROR', 'first-run', 'Claude Code install failed', { error: installed.error });
+        return { url: null };
+      }
+      const detection = await detectClaude();
+      this.updatePrereq('claude', { status: 'installed', version: detection.version });
+    }
 
     // Spawn the login process — it outputs the auth URL then waits for callback
     const oauth = startOAuthLogin();
@@ -469,6 +534,108 @@ export class FirstRunManager extends EventEmitter {
       });
       this.updatePrereq('auth', { status: 'failed', error: result.error });
     }
+  }
+
+  // -------------------------------------------------------------------------
+  // Native ways in (first-run local models, 2026-09-14)
+  // -------------------------------------------------------------------------
+
+  /** The finish every native way in shares: signed in, remember the provider the
+   *  renderer should make the new-session default, open the app. */
+  private finishNativeSetup(fields: Partial<FirstRunState>): void {
+    this.updateState({ ...fields, authComplete: true, lastError: undefined });
+    this.updatePrereq('auth', { status: 'installed' });
+    this.advanceTo('LAUNCH_WIZARD');
+    this.updateState({ statusMessage: 'Launching setup wizard...' });
+    this.emit('launch-wizard');
+    this.advanceTo('COMPLETE');
+  }
+
+  /** "Use an API key" with a named service (F-1/F-2): the key goes to YouCoded's
+   *  own assistant — the built-in OpenRouter row, or a direct-key provider row —
+   *  and is tested before setup finishes. Claude Code is not involved.
+   *  WHY no failed 'auth' row on a bad key: that would offer "Try Again", which
+   *  re-runs the whole install pass; the key page stays open with the error. */
+  async handleNativeApiKey(key: string, service: NativeKeyService, deps: FirstRunNativeDeps): Promise<void> {
+    this.updateState({ authMode: 'apikey', lastError: undefined });
+    if (!['anthropic', 'openai', 'google', 'openrouter'].includes(service)) {
+      this.updateState({ lastError: 'That kind of key is not supported here.' });
+      return;
+    }
+    try {
+      let id = 'openrouter';
+      if (service !== 'openrouter') {
+        const existing = (await deps.providers.list()).find((p) => p.type === service);
+        id = existing?.id ?? await deps.providers.upsert({ type: service, label: NATIVE_KEY_LABEL[service], enabled: true });
+      }
+      await deps.providers.setKey(id, key.trim());
+      const check = await deps.providers.testConnection(id);
+      if (!check.ok) {
+        this.updateState({ lastError: `Couldn't verify the key: ${check.message}` });
+        return;
+      }
+      log('INFO', 'first-run', 'API key setup succeeded', { service });
+      this.finishNativeSetup({ setupProvider: id });
+    } catch (err) {
+      const detail = err instanceof Error ? err.message : String(err);
+      log('ERROR', 'first-run', 'API key setup failed', { service, detail });
+      this.updateState({ lastError: `Couldn't save the key: ${detail}` });
+    }
+  }
+
+  /** "Use an app on this computer": add the app as an OpenAI-compatible provider,
+   *  check it answers, then finish. The answer goes back to the screen, which
+   *  shows the failure in place — and a provider that never answered is removed
+   *  again, so a typo does not leave a dead entry in Settings. */
+  async handleConnectLocalApp(baseUrl: string, name: string, deps: FirstRunNativeDeps): Promise<{ ok: boolean; message?: string }> {
+    const url = String(baseUrl ?? '').trim();
+    const label = /^https?:\/\//i.test(name) ? 'Local endpoint' : name;
+    let id: string | null = null;
+    let created = false;
+    try {
+      const existing = (await deps.providers.list()).find((p) => p.type === 'openai-compatible' && p.baseUrl === url);
+      if (existing) id = existing.id;
+      else { id = await deps.providers.upsert({ type: 'openai-compatible', label, baseUrl: url, enabled: true }); created = true; }
+      const check = await deps.providers.testConnection(id);
+      if (!check.ok) {
+        if (created) await deps.providers.remove(id).catch(() => { /* best effort */ });
+        return { ok: false, message: `Couldn't connect to ${label}: ${check.message}` };
+      }
+      log('INFO', 'first-run', 'Connected to a local model app', { label });
+      this.finishNativeSetup({ authMode: 'local', setupProvider: id });
+      return { ok: true };
+    } catch (err) {
+      if (id && created) await deps.providers.remove(id).catch(() => { /* best effort */ });
+      const detail = err instanceof Error ? err.message : String(err);
+      return { ok: false, message: `Couldn't connect to ${label}: ${detail}` };
+    }
+  }
+
+  private setupDownloadClaimed = false;
+
+  /** A download started from the local setup card finishes setup (Q-2/Q-4): the
+   *  app opens at once and keeps downloading, the band above the message box
+   *  reports it (the record written here), and the model runner installs in the
+   *  background if it is not there yet. Only while the sign-in step is showing,
+   *  and only the first download. */
+  async handleSetupDownloadProgress(p: DownloadProgress, deps: FirstRunNativeDeps): Promise<void> {
+    if (this.setupDownloadClaimed || this.state.currentStep !== 'AUTHENTICATE' || p.state !== 'downloading') return;
+    this.setupDownloadClaimed = true;
+    let label = p.repo.split('/').pop() ?? p.repo;
+    try {
+      const curated = (await deps.models.curatedList()).find((m) => m.hfRepo === p.repo);
+      if (curated) label = curated.label;
+    } catch { /* the repo name is a fine label */ }
+    try {
+      writeSetupDownload(STATE_DIR, { repo: p.repo, quant: p.quant, label, startedAt: Date.now() });
+    } catch (err) {
+      log('WARN', 'first-run', 'Could not record the setup download', { error: String(err) });
+    }
+    if (!deps.engine.installed()) {
+      void deps.engine.install().catch((err) => log('WARN', 'first-run', 'Model runner install failed', { error: String(err) }));
+    }
+    log('INFO', 'first-run', 'Local model download started — finishing setup', { repo: p.repo, quant: p.quant });
+    this.finishNativeSetup({ authMode: 'local', setupProvider: 'local' });
   }
 
   /** Called from IPC when the user chooses "Log in with ChatGPT" (design §5).

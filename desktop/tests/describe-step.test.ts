@@ -73,7 +73,7 @@ describe('describeStep', () => {
 
   it('describes the auth step', () => {
     expect(describeStep(state({ currentStep: 'AUTHENTICATE' })))
-      .toBe('Sign in with your Claude, ChatGPT or OpenRouter account to finish setup.');
+      .toBe('Sign in with an account, or run a model on this computer, to finish setup.');
   });
 
   it('describes the developer-mode step', () => {
@@ -115,7 +115,7 @@ describe('describeStep', () => {
       lastError: 'OpenRouter sign-in is coming in a later update.',
     });
     expect(describeStep(s)).toBe(
-      'Sign in with your Claude, ChatGPT or OpenRouter account to finish setup.',
+      'Sign in with an account, or run a model on this computer, to finish setup.',
     );
   });
 

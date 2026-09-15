@@ -62,7 +62,10 @@ export function describeStep(state: FirstRunState): string {
 
     case 'AUTHENTICATE':
       // Sign in with ChatGPT (design 2026-09-04): either plan finishes setup.
-      return 'Sign in with your Claude, ChatGPT or OpenRouter account to finish setup.';
+      // First-run local models (2026-09-14, Q-1): so does a model on this
+      // computer, which needs no account — the line must not say every way in
+      // is a sign-in.
+      return 'Sign in with an account, or run a model on this computer, to finish setup.';
 
     case 'ENABLE_DEVELOPER_MODE':
       return "One Windows setting to enable, then we're done.";

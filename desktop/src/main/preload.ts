@@ -188,6 +188,11 @@ const IPC = {
   FIRST_RUN_SUBMIT_API_KEY: 'first-run:submit-api-key',
   FIRST_RUN_DEV_MODE_DONE: 'first-run:dev-mode-done',
   FIRST_RUN_SKIP: 'first-run:skip',
+  // First-run local models (2026-09-14) — mirrors shared/types.ts.
+  FIRST_RUN_LOCAL_SETUP: 'first-run:local-setup',
+  FIRST_RUN_CONNECT_LOCAL_APP: 'first-run:connect-local-app',
+  FIRST_RUN_LOCAL_DOWNLOAD: 'first-run:local-download',
+  FIRST_RUN_RESUME_LOCAL_DOWNLOAD: 'first-run:resume-local-download',
   MODEL_GET_PREFERENCE: 'model:get-preference',
   MODEL_SET_PREFERENCE: 'model:set-preference',
   APPEARANCE_GET: 'appearance:get',
@@ -408,6 +413,7 @@ const IPC = {
   CHATGPT_SIGN_OUT: 'chatgpt:sign-out',
   // Claude Code's own sign-in, read live (2026-09-09) — mirrors shared/types.ts.
   CLAUDE_CODE_STATUS: 'claude-code:status',
+  CLAUDE_CODE_INSTALL: 'claude-code:install',
   // ---- Native runtime Plan B (Phase 1): local llama.cpp engine ----
   ENGINE_STATUS: 'engine:status',
   ENGINE_INSTALL: 'engine:install',
@@ -1276,10 +1282,19 @@ contextBridge.exposeInMainWorld('claude', {
     // ignores it.
     startAuth: (mode: FirstRunState['authMode']): Promise<void> =>
       ipcRenderer.invoke(IPC.FIRST_RUN_START_AUTH, mode),
-    submitApiKey: (key: string): Promise<void> =>
-      ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, key),
+    // `service` (first-run local models, F-1/F-2): which native provider the key
+    // is for. Without it main keeps the old Claude Code path.
+    submitApiKey: (key: string, service?: string): Promise<void> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_SUBMIT_API_KEY, key, service),
     devModeDone: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_DEV_MODE_DONE),
     skip: (): Promise<void> => ipcRenderer.invoke(IPC.FIRST_RUN_SKIP),
+    // First-run local models (2026-09-14).
+    localSetup: (): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_SETUP),
+    connectLocalApp: (baseUrl: string, name: string): Promise<{ ok: boolean; message?: string }> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_CONNECT_LOCAL_APP, baseUrl, name),
+    localDownload: (sessionId?: string | null): Promise<any> => ipcRenderer.invoke(IPC.FIRST_RUN_LOCAL_DOWNLOAD, sessionId),
+    resumeLocalDownload: (sessionId?: string | null): Promise<void> =>
+      ipcRenderer.invoke(IPC.FIRST_RUN_RESUME_LOCAL_DOWNLOAD, sessionId),
     onStateChanged: (cb: (state: any) => void) => {
       const handler = (_e: IpcRendererEvent, state: any) => cb(state);
       ipcRenderer.on(IPC.FIRST_RUN_STATE, handler);
@@ -1544,6 +1559,8 @@ contextBridge.exposeInMainWorld('claude', {
   claudeCode: {
     status: (opts?: { refresh?: boolean }): Promise<ClaudeAccountStatus> =>
       ipcRenderer.invoke(IPC.CLAUDE_CODE_STATUS, opts),
+    // First-run local models (F-5): the Settings card's Install Claude Code.
+    install: (): Promise<{ success: boolean; error?: string }> => ipcRenderer.invoke(IPC.CLAUDE_CODE_INSTALL),
   },
   // WebSearch providers (Phase 2 Plan B): keyed Tavily/Exa upgrades. list = the
   // fixed backend rows (hasKey flags); set/remove-key manage the encrypted key;

@@ -25,9 +25,15 @@ export interface FirstRunState {
   // 'chatgpt': the Sign-in-with-ChatGPT browser round-trip is in flight
   // (design 2026-09-04). 'oauth' stays Claude's, unrenamed, because main and
   // the Android bridge both write the literal.
-  authMode: 'none' | 'oauth' | 'apikey' | 'chatgpt' | 'openrouter';
+  // 'local': the run-a-model-on-this-computer setup is open (design
+  // 2026-09-14-first-run-local-models, Q-1/Q-2) — no account, no browser.
+  authMode: 'none' | 'oauth' | 'apikey' | 'chatgpt' | 'openrouter' | 'local';
   /** Whether auth completed successfully */
   authComplete: boolean;
+  /** The native provider setup finished on (first-run local models, 2026-09-14):
+   *  'local', a connected model app's provider id, or an API key's provider id.
+   *  The renderer makes it the new-session default, as it does for ChatGPT. */
+  setupProvider?: string;
   /** Error from the most recent failed step */
   lastError?: string;
   /** Whether Windows Developer Mode needs enabling */

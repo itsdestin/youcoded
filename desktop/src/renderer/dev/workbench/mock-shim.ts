@@ -158,6 +158,10 @@ export const HAND_WRITTEN: ReadonlyArray<string> = [
   'on.sessionMetaChanged',
   'theme.list', 'theme.readFile', 'theme.writeFile', 'theme.onReload',
   'firstRun.getState', 'terminal.getScreenText',
+  // First-run local models (2026-09-14) — real channels, faked so the setup card and
+  // the band above the message box can be walked without a machine or a download.
+  'firstRun.localSetup', 'firstRun.localDownload',
+  'firstRun.resumeLocalDownload', 'firstRun.connectLocalApp', 'claudeCode.install',
   'artifacts.listProjectsIndex', 'artifacts.listSession', 'artifacts.listProject',
   'artifacts.listAllFiles', 'artifacts.get', 'artifacts.checkExistence',
   'artifacts.searchContent', 'artifacts.watchProject', 'artifacts.unwatchProject',
@@ -1027,13 +1031,21 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
   const claudeCodePin = typeof location !== 'undefined'
     ? new URLSearchParams(location.search).get('claudeCode')
     : null;
-  const claudeCodeStatus: ClaudeAccountStatus =
+  let claudeCodeStatus: ClaudeAccountStatus =
     claudeCodePin === 'signed-out' ? { state: 'signed-out' }
     : claudeCodePin === 'not-installed' ? { state: 'not-installed' }
     : claudeCodePin === 'unknown' ? { state: 'unknown' }
     : claudeCodePin === 'apikey' ? { state: 'signed-in', apiKey: true }
     : { state: 'signed-in', email: 'destin@example.com', plan: 'max', apiKey: false };
-  const claudeCode = { status: async () => claudeCodeStatus };
+  const claudeCode = { status: async () => claudeCodeStatus,
+    // First-run local models (F-5): a short wait, then installed but signed out —
+    // what a real install leaves behind before the Claude sign-in.
+    install: async () => {
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      claudeCodeStatus = { state: 'signed-out' };
+      return true;
+    },
+  };
 
   // Web search backends: two rows, neither keyed, as a fresh install has them.
   // `test` accepts any key so the Save path can be walked; `setKey`/`removeKey`
@@ -1205,7 +1217,11 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       // (R1-25). One row carries it so the wording can be reviewed on screen.
       (f16.fit.breakdown as Record<string, unknown>).contextBytesIsUpperBound = true;
       return [
-        row('UD-Q4_K_XL', 'Balanced quality and size — recommended', 2_580_000_000, 'fits', 'Runs fast — fits on your GPU'),
+        // `?localFit=tight` (first-run local models): a small computer, where the
+        // recommended quant is tight — the verdict the Local models row colours.
+        localFitTight
+          ? row('UD-Q4_K_XL', 'Balanced quality and size — recommended', 2_580_000_000, 'tight', 'Will be tight — close other apps first')
+          : row('UD-Q4_K_XL', 'Balanced quality and size — recommended', 2_580_000_000, 'fits', 'Runs fast — fits on your GPU'),
         row('Q8_0', 'Highest quality quantization — near-original output', 4_280_000_000, 'fits', 'Runs fast — fits on your GPU'),
         f16,
       ];
@@ -1299,7 +1315,15 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       });
       return true;
     },
-    detectEndpoints: async () => [],
+    // `?localApps=found` (first-run local models, 2026-09-14): two model apps
+    // already running, so the connect screen can be seen with results. Every
+    // other load keeps the empty answer the Local Models panel was shot with.
+    detectEndpoints: async () => (typeof location !== 'undefined' && new URLSearchParams(location.search).get('localApps') === 'found'
+      ? [
+        { kind: 'ollama' as const, label: 'Ollama (local)', baseUrl: 'http://localhost:11434/v1', modelCount: 3, alreadyAdded: false },
+        { kind: 'lmstudio' as const, label: 'LM Studio (local)', baseUrl: 'http://localhost:1234/v1', modelCount: 1, alreadyAdded: false },
+      ]
+      : []),
   };
 
   // The local llama.cpp engine card (EngineCard.tsx). Without a hand-written
@@ -2476,10 +2500,34 @@ function handWritten(store: MockStore): Record<string, Record<string, unknown>> 
       }
     } catch { /* the workbench can live without it */ }
   }
+  // First-run local models (2026-09-14). `?claudeInstall=installing` puts Claude
+  // Code's on-demand install on the sign-in card (S-1); `?localFit=tight` is a
+  // computer too small to run a model well (Q-6); `?localDownload=downloading|stopped`
+  // is the band above the message box (Q-4/Q-7). Sizes and names are fixtures.
+  const firstRunParams = typeof location !== 'undefined' ? new URLSearchParams(location.search) : new URLSearchParams();
+  const localFitTight = firstRunParams.get('localFit') === 'tight';
+  const localDownloadPin = firstRunParams.get('localDownload');
   const firstRun = {
+    // The suggestion is one of the curated cards (the same two `models.curated`
+    // serves), so setup can show it with the Local models row — round 3 review
+    // B-3/B-4 asked for that row and its warning styling, not a new card.
+    localSetup: async () => ({
+      suggested: localFitTight
+        ? { id: 'qwen35-4b', label: 'Qwen3.5 4B', tier: 'small', hfRepo: 'unsloth/Qwen3.5-4B-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Fast all-rounder for chat and quick questions.' }
+        : { id: 'gemma4-e4b', label: 'Gemma 4 E4B', tier: 'small', hfRepo: 'unsloth/gemma-4-E4B-it-GGUF', quantDefault: 'UD-Q4_K_XL', notes: 'Strong small model from Google — sees images.' },
+    }),
+    connectLocalApp: async () => ({ ok: true }),
+    localDownload: async () => (localDownloadPin === 'downloading'
+      ? { state: 'downloading', modelLabel: 'Qwen3.5 9B', percent: 42, minutesLeft: 6 }
+      : localDownloadPin === 'stopped'
+        ? { state: 'stopped', modelLabel: 'Qwen3.5 9B', percent: 42, minutesLeft: null }
+        : null),
+    resumeLocalDownload: async () => true,
     getState: async () => ({
       currentStep: firstRunStep,
-      prerequisites: [],
+      prerequisites: firstRunParams.get('claudeInstall') === 'installing'
+        ? [{ name: 'claude', displayName: 'Claude Code', status: 'installing' }]
+        : [],
       overallProgress: 100,
       statusMessage: '',
       // `?authMode=chatgpt|oauth|apikey` pins the sign-in screen's in-flight
