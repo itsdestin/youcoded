@@ -7,6 +7,8 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import type { CatalogModel, ModelBinding, ProviderStatus } from '../../shared/provider-types';
+import { DEFAULT_CONTEXT_PREFERENCES, type ContextPreferences } from '../../shared/context-preferences';
+import { cloudContextLength } from './cloud-context';
 
 const CACHE_FILE = 'provider-catalog-cache.json';
 const TTL_MS = 24 * 60 * 60 * 1000; // 24h, marketplace-cache precedent
@@ -40,6 +42,7 @@ export class ModelCatalog {
   // stale hourly stamp kicks a background refresh and the cached rows come
   // back now. Null under the kill switch or in tests without it.
   private readonly chatgptModels: (() => Promise<CatalogModel[]>) | null;
+  private readonly contextPreferences: () => ContextPreferences;
   // In-memory copy of the last cache we returned (ROADMAP 2026-08-11: every
   // ensureFresh() re-read + re-parsed the whole catalog file from disk, twice
   // per session start). SERVED only while its own fetchedAt is inside the TTL
@@ -61,11 +64,13 @@ export class ModelCatalog {
                 ttlMs?: number;
                 localModels?: () => Promise<CatalogModel[]>;
                 chatgptModels?: () => Promise<CatalogModel[]>;
+                contextPreferences?: () => ContextPreferences;
               }) {
     this.cachePath = path.join(cacheDir, CACHE_FILE);
     this.ttlMs = opts?.ttlMs ?? TTL_MS;
     this.localModels = opts?.localModels ?? null;
     this.chatgptModels = opts?.chatgptModels ?? null;
+    this.contextPreferences = opts?.contextPreferences ?? (() => DEFAULT_CONTEXT_PREFERENCES);
   }
 
   /** null on missing/corrupt. Unlike providers.json (user data — read errors
@@ -297,6 +302,10 @@ export class ModelCatalog {
   async contextLengthFor(binding: ModelBinding, providers: ProviderStatus[]): Promise<number | null> {
     const models = await this.get(providers);
     const hit = models.find((m) => m.providerId === binding.providerId && m.id === binding.modelId);
-    return hit?.contextLength ?? null;
+    // WHY resolve here, not in get(): catalog metadata describes capability;
+    // the saved preference limits only the session's operating budget. Read it
+    // afresh on create/resume/model switch without invalidating the model cache.
+    const type = providers.find((p) => p.id === binding.providerId)?.type;
+    return cloudContextLength(type, hit, this.contextPreferences());
   }
 }

@@ -8,6 +8,18 @@ setLatency(0);
 const shim = () => createMockShim(createStore('default')) as any;
 
 describe('mock shim Proxy semantics', () => {
+  it('persists independent context defaults and rejects refused writes', async () => {
+    const store = createStore('default');
+    const c = createMockShim(store);
+    await c.native.setContextPreferences({ openrouter: 'long' });
+    await expect(c.native.setContextPreferences({ chatgpt: 'long' })).resolves.toEqual({ openrouter: 'long', chatgpt: 'long' });
+    const copy = await c.native.getContextPreferences();
+    copy.chatgpt = 'standard';
+    expect(await c.native.getContextPreferences()).toEqual({ openrouter: 'long', chatgpt: 'long' });
+    store.refuseWrites = true;
+    await expect(c.native.setContextPreferences({ chatgpt: 'standard' })).rejects.toThrow('refusing writes');
+    expect(await c.native.getContextPreferences()).toEqual({ openrouter: 'long', chatgpt: 'long' });
+  });
   // Each of these pins a specific way the catch-all can silently break the app
   // it is standing in for. They are cheap to keep and expensive to rediscover.
 

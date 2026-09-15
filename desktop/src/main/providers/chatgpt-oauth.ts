@@ -393,6 +393,12 @@ export function parseModelsManifest(json: unknown): CatalogModel[] {
       supportsReasoning: Array.isArray(levels) && levels.length > 0,
     };
     if (contextLength !== null && contextLength > 0) model.contextLength = contextLength;
+    // WHY preserve both: Codex publishes a conservative default and a separate
+    // opt-in ceiling. Only the user's long-context preference may select the latter.
+    const maximum = row.max_context_window;
+    if (typeof maximum === 'number' && Number.isSafeInteger(maximum) && maximum > 0) {
+      model.maxContextLength = maximum;
+    }
     // `undefined` when the row does not say — CatalogModel's doc forbids
     // reading that as "cannot see images".
     if (Array.isArray(modalities)) model.supportsVision = modalities.includes('image');
