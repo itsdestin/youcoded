@@ -220,6 +220,8 @@ export function capContentMatches(out: string, maxMatches: number, singleFile?: 
 
 export const GrepTool = defineTool({
   name: 'Grep',
+  // Pause handoff §1 (WHY): changes nothing, so a plan may re-run it after a cut-off.
+  effect: 'read',
   description:
     'Search file contents with a regex (ripgrep). output_mode: "content" (matching lines), "files_with_matches" (default), or "count". ' +
     // Fix (2026-08-10 review — this fix, see MAX_CONTENT_MATCHES above): a

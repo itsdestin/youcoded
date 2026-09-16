@@ -1,9 +1,13 @@
 import { defineTool } from './registry';
-import type { NativeTool, ToolContext, ToolResultPayload } from './types';
+import type { NativeTool, ToolContext, ToolEffect, ToolResultPayload } from './types';
 import { PLAN_DOCUMENT_JSON_SCHEMA, PlanDocumentSchema, type PlanDocumentV1 } from '../plans/schema';
 import { validatePlanDocument } from '../plans/validator';
 import type { SpecialistRoster } from '../specialists/registry';
 import type { PlanView } from '../../../shared/types';
+
+/** Pause handoff §1: exported so tools/index.ts can name this factory-built
+ *  tool's effect without building one (nativeToolEffect). */
+export const PROPOSE_PLAN_TOOL_EFFECT: ToolEffect = 'local';
 
 /**
  * The transient card uses the provider's tool id as its identity. WHY it is a
@@ -35,6 +39,8 @@ export function stoppedPlanProjection(toolUseId: string, modelLabel: string): Pl
 export function createProposePlanTool(roster: SpecialistRoster): NativeTool<PlanDocumentV1> {
   return defineTool<PlanDocumentV1>({
     name: 'propose_plan',
+    // Pause handoff §1 (WHY): only writes this conversation's plan file; it changes this computer only, so a plan restart checks first.
+    effect: PROPOSE_PLAN_TOOL_EFFECT,
     description:
       'Propose a bounded specialist plan for the user to approve. Use this when the work benefits from multiple independent specialists. '
       + 'Every step names a specialist and a hard per-child token budget. The proposal does not start work; it creates the approval card.',

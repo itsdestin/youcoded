@@ -24,6 +24,8 @@ const NO_CATALOG_TEXT = 'Model list is unavailable right now (catalog not loaded
 
 export const ModelSearchTool = defineTool<z.infer<typeof inputSchema>>({
   name: 'ModelSearch',
+  // Pause handoff §1 (WHY): changes nothing, so a plan may re-run it after a cut-off.
+  effect: 'read',
   description:
     'Look up available model ids by name, for delegating a Task to a SPECIFIC model. '
     + 'Only use this when the user asked for a particular model — routine delegation should '

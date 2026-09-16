@@ -426,6 +426,8 @@ function bashDescription(): string {
 
 export const BashTool = defineTool({
   name: 'Bash',
+  // Pause handoff §1 (WHY): may reach outside this computer, so a plan never repeats it by itself.
+  effect: 'external',
   // Placeholder: the real text comes from the getter installed below, which
   // resolves the shell on first read (harness-session.ts buildAiTools()).
   description: '',

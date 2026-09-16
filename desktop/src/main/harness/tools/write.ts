@@ -48,6 +48,8 @@ export function detectOmissionPlaceholder(content: string): { line: number; text
 
 export const WriteTool = defineTool({
   name: 'Write',
+  // Pause handoff §1 (WHY): changes this computer only, so a plan restart checks first.
+  effect: 'local',
   // Mirrors Edit's description — same gate, so it must be described the same
   // way (2026-08-11 review round 8; see the WHY above EditTool.description).
   description:

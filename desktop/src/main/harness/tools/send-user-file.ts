@@ -29,6 +29,8 @@ function errnoCode(err: unknown): string | undefined {
 
 export const SendUserFileTool = defineTool({
   name: 'SendUserFile',
+  // Pause handoff §1 (WHY): may reach outside this computer, so a plan never repeats it by itself.
+  effect: 'external',
   description: SEND_USER_FILE_DESCRIPTION,
   // Compact form for small local models (simplified presentation, spec §4.2).
   shortDescription: 'Hand finished files to the user as a Deliverables card. display: "render" shows one file now (first request per reply).',

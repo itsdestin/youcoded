@@ -66,6 +66,8 @@ export function formatAnswers(args: AskUserQuestionInput, updatedInput: Record<s
 
 export const AskUserQuestionTool: NativeTool<AskUserQuestionInput> = {
   name: 'AskUserQuestion',
+  // Pause handoff §1 (WHY): may reach outside this computer, so a plan never repeats it by itself.
+  effect: 'external',
   description:
     'Ask the user 1-4 multiple-choice questions when you genuinely need their input to proceed (preferences, ambiguous requirements, a decision only they can make). Each question needs a short header (max 12 chars) and 2-4 options. Do not use it for questions you can answer yourself.',
   // Compact form for small local models (simplified presentation).

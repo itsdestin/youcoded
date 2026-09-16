@@ -38,6 +38,9 @@ function messageOf(err: unknown): string {
 
 export const SendUserLinkTool = defineTool({
   name: SEND_USER_LINK_TOOL,
+  // Pause handoff §1 (WHY): a message to the user counts as reaching outside,
+  // so a plan never repeats it by itself.
+  effect: 'external',
   description: SEND_USER_LINK_DESCRIPTION,
   // Compact form for small local models (same reasoning as SendUserFile's).
   shortDescription: 'Hand finished URLs to the user as a Deliverables card. http:// and https:// only; localhost and LAN IPs are fine.',

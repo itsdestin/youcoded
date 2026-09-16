@@ -14,7 +14,7 @@
 // convention.
 import { z } from 'zod';
 import { defineTool } from './registry';
-import type { NativeTool, ToolContext, ToolResultPayload } from './types';
+import type { NativeTool, ToolContext, ToolEffect, ToolResultPayload } from './types';
 import { resolveP, toPosix } from './guards';
 import { BUILTIN_ROSTER, type SpecialistRoster, type SpecialistDefinition } from '../specialists/registry';
 import { HOSTED_MAX_CONCURRENT_SPECIALISTS, SPECIALIST_SPAWN_BUDGET_PER_SESSION } from '../specialists/limits';
@@ -22,6 +22,10 @@ import {
   resolveDelegatedBinding, resolveRequestedModel, DelegatedModelRefused, DelegatedModelUnavailable,
 } from '../specialists/delegated-models';
 import type { CatalogModel, ModelBinding } from '../../../shared/provider-types';
+
+/** Pause handoff §1: exported so tools/index.ts can name this factory-built
+ *  tool's effect without building one (nativeToolEffect). */
+export const TASK_TOOL_EFFECT: ToolEffect = 'external';
 
 // Minimal weak-model hardening (plan 1a): a specialist has NO access to the
 // parent conversation, so a one-line prompt like "do the thing" leaves it to
@@ -267,6 +271,8 @@ export function createTaskTool(
   };
   return defineTool<TaskArgs>({
     name: 'Task',
+    // Pause handoff §1 (WHY): starts a specialist that may run commands, so it may reach outside this computer, so a plan never repeats it by itself.
+    effect: TASK_TOOL_EFFECT,
     description:
       'Delegate one focused piece of work to a specialist subagent. The specialist works independently '
       + "and reports back when it's done. Available specialists:\n"

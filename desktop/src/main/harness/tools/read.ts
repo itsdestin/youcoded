@@ -52,6 +52,8 @@ function looksBinary(buf: Buffer): boolean {
 
 export const ReadTool = defineTool({
   name: 'Read',
+  // Pause handoff §1 (WHY): changes nothing, so a plan may re-run it after a cut-off.
+  effect: 'read',
   // T-3 / G-5 (2026-08-26 tools investigation): the frugality sentence is the
   // one every peer harness carries and frontier models measurably honour; the
   // "~50 KB" clause states the per-call char cap (execute() below) so a model

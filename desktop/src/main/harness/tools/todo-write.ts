@@ -3,6 +3,8 @@ import { defineTool } from './registry';
 
 export const TodoWriteTool = defineTool({
   name: 'TodoWrite',
+  // Pause handoff §1 (WHY): changes this computer only, so a plan restart checks first.
+  effect: 'local',
   description: 'Replace your task list. Use it to plan multi-step work and mark progress (pending / in_progress / completed).',
   // Compact form for small local models (simplified presentation, spec §4.2).
   shortDescription: 'Replace your task list to plan and track multi-step work.',

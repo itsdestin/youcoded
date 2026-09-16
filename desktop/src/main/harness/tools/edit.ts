@@ -36,6 +36,8 @@ export function preserveFormat(original: string, edited: string): string {
 
 export const EditTool = defineTool({
   name: 'Edit',
+  // Pause handoff §1 (WHY): changes this computer only, so a plan restart checks first.
+  effect: 'local',
   // WHY the gate is spelled out rather than stated as a rule (2026-08-11 review
   // round 8): four of six reviewing models misdiagnosed this gate, and each
   // blamed something different — "Edit doesn't enforce read-first" (it had

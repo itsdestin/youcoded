@@ -7,6 +7,8 @@ import { formatElapsed, stateText } from '../shell-registry';
 
 export const KillShellTool = defineTool({
   name: 'KillShell',
+  // Pause handoff §1 (WHY): changes this computer only, so a plan restart checks first.
+  effect: 'local',
   description: 'Stop a background command (and every process it started) by shell id. Returns its last lines. Use it for a server you no longer need or a build that is going nowhere.',
   shortDescription: 'Stop a background command by shell id.',
   inputSchema: z.object({

@@ -347,8 +347,20 @@ export interface ToolResultPayload {
   planRepairExhausted?: boolean;
 }
 
+/** What running a tool can change (specialists plans, pause handoff §1):
+ *  - `read`: nothing — running it again is harmless;
+ *  - `local`: files or state on this computer — a restart must check first;
+ *  - `external`: may reach outside this computer (a command, a web request, a
+ *    message to the user, an MCP server) — never repeated automatically.
+ *  Anything that declares nothing is treated as `external`. */
+export type ToolEffect = 'read' | 'local' | 'external';
+
 export interface NativeTool<A = any> {
   name: string;
+  /** Declared beside every native tool's definition (tests/tool-effects.test.ts
+   *  fails when one is missing). WHY optional in the type: test fakes build
+   *  NativeTool literals; an absent value reads as `external` everywhere. */
+  effect?: ToolEffect;
   description: string;
   /** Compact one-line description used for SIMPLIFIED tool presentation on small
    *  local models (spec §4.2). When the resolved profile is 'simplified',

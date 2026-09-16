@@ -11,6 +11,8 @@ import type { ReadyServer } from './mcp-manager';
 export function mcpToolsFor(server: ReadyServer): NativeTool[] {
   return server.tools.map((t) => defineTool({
     name: `mcp__${server.id}__${t.name}`,
+    // Pause handoff §1 (WHY): a server's own hints are ignored; every MCP tool may reach outside this computer, so a plan never repeats it by itself.
+    effect: 'external',
     description: t.description ?? `${server.label}: ${t.name}`,
     // MCP servers are external programs; their output is data, not instruction.
     untrusted: server.label,

@@ -11,8 +11,12 @@
 // real side effects, so this goes through decide() like every other tool.
 import { z } from 'zod';
 import { defineTool } from './registry';
-import type { NativeTool, ToolContext, ToolResultPayload } from './types';
+import type { NativeTool, ToolContext, ToolEffect, ToolResultPayload } from './types';
 import type { SkillCatalog } from '../skills/skill-catalog';
+
+/** Pause handoff §1: exported so tools/index.ts can name this factory-built
+ *  tool's effect without building one (nativeToolEffect). */
+export const SKILL_TOOL_EFFECT: ToolEffect = 'read';
 
 const schema = z.object({
   skill: z.string().describe("The id of the skill to load, exactly as listed in this tool's description."),
@@ -42,6 +46,8 @@ export function createSkillTool(catalog: SkillCatalog, maxChars?: number): Nativ
   return defineTool<SkillArgs>({
     ...(maxChars != null ? { caps: { maxChars } } : {}),
     name: 'Skill',
+    // Pause handoff §1 (WHY): changes nothing, so a plan may re-run it after a cut-off.
+    effect: SKILL_TOOL_EFFECT,
     description:
       "Load a named skill's instructions and follow them. Use this when the user asks for "
       + 'something one of these skills covers. Available skills:\n'

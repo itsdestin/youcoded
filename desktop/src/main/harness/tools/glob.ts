@@ -145,6 +145,8 @@ function hiddenAdmitters(pattern: string): RegExp[] {
 
 export const GlobTool = defineTool({
   name: 'Glob',
+  // Pause handoff §1 (WHY): changes nothing, so a plan may re-run it after a cut-off.
+  effect: 'read',
   description: 'Find files by glob pattern (e.g. "src/**/*.ts"). A pattern with no "/" searches every folder ("*.ts" means "**/*.ts"); a pattern containing "/" is matched as written. Hidden files and folders are skipped unless the pattern names them (e.g. ".github/**/*.yml", "**/.env*"). Returns paths sorted by modification time, newest first.',
   // Compact form for small local models (simplified presentation, spec §4.2).
   shortDescription: 'Find files matching a glob pattern, newest first.',

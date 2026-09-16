@@ -16,6 +16,8 @@ function unknownId(id: string, running: string[]): string {
 
 export const BashOutputTool = defineTool({
   name: 'BashOutput',
+  // Pause handoff §1 (WHY): changes nothing, so a plan may re-run it after a cut-off.
+  effect: 'read',
   description:
     'Read NEW output from a background command since your last BashOutput for it (first call: everything so far). ' +
     'Without shell_id: list every background command in this conversation with its state. ' +
