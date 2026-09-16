@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { hasFeatureName, remoteUnsupportedMessage } from '../src/renderer/remote-unsupported';
 
 import { readStripped, assertPatternMatches } from './helpers/guard-scope';
 
 // Comments stripped: a WHY note that QUOTES the old code will otherwise satisfy an
 // assertion about the new code. See .claude/rules/test-suite-hygiene.md.
-const read = (rel: string) => readStripped(new URL(rel, import.meta.url).pathname);
+// fileURLToPath, not `.pathname`: on Windows that is `/D:/a/…` and the read fails
+// with ENOENT (the red Windows CI leg, dev-workspace.md; fixed 2026-09-16).
+const read = (rel: string) => readStripped(fileURLToPath(new URL(rel, import.meta.url)));
 const server = read('../src/main/remote-server.ts');
 const shim = read('../src/renderer/remote-shim.ts');
 const classifier = read('../src/renderer/hooks/useAttentionClassifier.ts');

@@ -37,6 +37,16 @@ export function GitReviewView({
 }: GitReviewViewProps) {
   const [review, setReview] = useState<GitFileReviewResult | null>(null);
   const [extraLog, setExtraLog] = useState<GitLogEntry[]>([]);
+  // WHY an anchor beside the extra pages (2026-09-16, files.md): after an
+  // amend or rebase made OUTSIDE the app, entries in extraLog that no longer
+  // exist still counted toward the next page's --skip, so "Show more" silently
+  // jumped over the commits in the gap until the review was reopened. The sha
+  // that ended page one when the first extra page was fetched is remembered;
+  // a refreshed page one that no longer contains it means history was
+  // rewritten underneath the pages, and they are dropped so paging restarts
+  // from what is really there. An amend of the tip alone leaves that sha in
+  // place, so the open pages survive it (their commits are unchanged).
+  const [extraAnchor, setExtraAnchor] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set(['uncommitted']));
   // Error-message standard: a failed `commitFileDiff` fetch (ok:false, or a
   // rejected promise) must surface the real backend string, never collapse
@@ -106,13 +116,20 @@ export function GitReviewView({
   // commits already sitting in extraLog.
   const reviewLog = review?.log ?? [];
   const pageOneShas = new Set(reviewLog.map((e) => e.sha));
-  const log = [...reviewLog, ...extraLog.filter((e) => !pageOneShas.has(e.sha))];
+  // Rewrite detection — see extraAnchor's WHY. Computed during render so the
+  // very refresh that revealed the rewrite already shows the honest list.
+  const rewritten = extraAnchor !== null && reviewLog.length > 0 && !pageOneShas.has(extraAnchor);
+  useEffect(() => {
+    if (rewritten) { setExtraLog([]); setExtraAnchor(null); }
+  }, [rewritten]);
+  const log = [...reviewLog, ...(rewritten ? [] : extraLog.filter((e) => !pageOneShas.has(e.sha)))];
 
   const showMore = () => {
     // WHY log.length (the DEDUPED visible count), not the raw array-length
     // sum: after a refresh overlap the raw sum double-counts shas, and an
     // overcounted --skip silently drops the commits in the gap.
     const skip = log.length;
+    if (extraAnchor === null && reviewLog.length > 0) setExtraAnchor(reviewLog[reviewLog.length - 1].sha);
     gitApi()?.fileReview?.(projectRoot, relPath, { logSkip: skip })
       .then((r: GitFileReviewResult) => {
         if (aliveRef.current && r?.ok) {

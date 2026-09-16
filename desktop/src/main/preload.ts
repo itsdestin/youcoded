@@ -1164,7 +1164,8 @@ contextBridge.exposeInMainWorld('claude', {
   },
   // Multi-window detach: drag a session pill to a new OS window, re-dock, etc.
   // Main owns a WindowRegistry (sessionId → windowId); per-session events route
-  // only to the owning window. See docs/superpowers/specs/2026-04-12-drag-session-detach-window-design.md.
+  // only to the owning window. Design record: the workspace's
+  // docs/archive/plans/2026-04-12-drag-session-detach-window.md (youcoded-dev).
   detach: {
     // Subscriptions — main pushes these
     onDirectoryUpdated: (cb: (dir: any) => void) => {

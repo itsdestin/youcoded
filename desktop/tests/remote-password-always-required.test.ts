@@ -1,5 +1,6 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { expect, it } from 'vitest';
 
 /**
@@ -25,7 +26,10 @@ function walk(dir: string, out: string[] = []): string[] {
 }
 
 it('no code anywhere lets an address stand in for the password', () => {
-  const base = new URL('..', import.meta.url).pathname;
+  // fileURLToPath, not `.pathname`: on Windows the pathname of a file URL is
+  // `/D:/a/…`, and joining that yields `D:\D:\a\…` → ENOENT (the red Windows
+  // CI leg, dev-workspace.md; fixed 2026-09-16).
+  const base = fileURLToPath(new URL('..', import.meta.url));
   const offenders: string[] = [];
   for (const root of ROOTS) {
     for (const file of walk(join(base, root))) {
