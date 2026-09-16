@@ -47,6 +47,7 @@ vi.mock('child_process', async (importOriginal) => {
 
 let home: string;
 let realHome: string | undefined;
+let realUserProfile: string | undefined;
 let setupManagedWorkspace: typeof import('../src/main/dev-tools')['setupManagedWorkspace'];
 let workspaceSetupStatus: typeof import('../src/main/dev-tools')['workspaceSetupStatus'];
 let clearWorkspaceSetupStatus: typeof import('../src/main/dev-tools')['clearWorkspaceSetupStatus'];
@@ -59,7 +60,12 @@ beforeEach(async () => {
   // under ESM, so vi.spyOn(os, 'homedir') throws. On POSIX os.homedir() reads $HOME,
   // which is the same seam without fighting the loader.
   realHome = process.env.HOME;
+  realUserProfile = process.env.USERPROFILE;
   process.env.HOME = home;
+  // WHY USERPROFILE too: on Windows os.homedir() reads USERPROFILE, not HOME, so the
+  // product resolved the suite-wide sandbox while the test compared against `home` —
+  // the one Windows CI failure left after the 2026-09-16 sweep.
+  process.env.USERPROFILE = home;
   vi.resetModules();
   const mod = await import('../src/main/dev-tools');
   setupManagedWorkspace = mod.setupManagedWorkspace;
@@ -69,7 +75,8 @@ beforeEach(async () => {
 afterEach(() => {
   vi.restoreAllMocks();
   if (realHome === undefined) delete process.env.HOME; else process.env.HOME = realHome;
-  fs.rmSync(home, { recursive: true, force: true });
+  if (realUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = realUserProfile;
+  fs.rmSync(home, { recursive: true, force: true, maxRetries: 5 });
 });
 
 describe('setting up a managed development workspace', () => {
