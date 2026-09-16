@@ -166,13 +166,16 @@ describe('GitTransport specifics', () => {
       const small = new GitTransport({ deviceName: 'T', maxFileBytes: 10 });
       fs.writeFileSync(path.join(a.root, 'f1.md'), 'v1');
       await small.push(a, 'base');
-      fs.writeFileSync(path.join(a.root, ':big'), 'x'.repeat(11));
+      // Windows forbids ":" in file names, so the colon case is POSIX-only;
+      // the glob look-alike runs everywhere.
+      const colon = process.platform !== 'win32';
+      if (colon) fs.writeFileSync(path.join(a.root, ':big'), 'x'.repeat(11));
       fs.writeFileSync(path.join(a.root, 'f[1].md'), 'x'.repeat(11));
       fs.writeFileSync(path.join(a.root, 'f1.md'), 'v2');
       commitRaw(a, 'leaked');
       const r = await small.push(a, 'next');
       expect(r.pushed).toBe(true);
-      expect([...r.oversize].sort()).toEqual([':big', 'f[1].md']);
+      expect([...r.oversize].sort()).toEqual(colon ? [':big', 'f[1].md'] : ['f[1].md']);
       expect(largestRemoteBlob(bareOf(a))).toBeLessThanOrEqual(10);
       expect(gitIn(a, ['show', 'origin/main:f1.md'])).toBe('v2');
       await h.cleanup();
