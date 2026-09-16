@@ -472,6 +472,17 @@ describe('sync-spaces service transition serialization', () => {
   //    remote/hub fan-outs (assert a second listener still fires and the event
   //    still lands in recentEvents).
 
+  // The Settings gear refreshes on events; turning sync off used to emit none,
+  // so a red dot outlived the sync it described (2026-09-16 review F6).
+  it('turning sync off emits an event so status-driven UI refreshes', async () => {
+    const svc = await enabledMultiSpaceService();
+    const received: any[] = [];
+    const unsub = svc.onSyncSpacesEvent((e: any) => received.push(e));
+    await svc.syncSpacesEnable(false);
+    unsub();
+    expect(received.map((e) => e.type)).toContain('projects-changed');
+  });
+
   it('onSyncSpacesEvent delivers stamped events; unsubscribe stops delivery', async () => {
     const svc = await enabledMultiSpaceService();
     const received: any[] = [];
