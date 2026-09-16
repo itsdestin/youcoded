@@ -3,7 +3,7 @@ import { useGuideReset } from '../guide/guide-events';
 import { useScrollFade } from '../../hooks/useScrollFade';
 import SettingsExplainer, { InfoIconButton } from '../SettingsExplainer';
 import { AnchorTip, Dialog, SettingRow } from '../ui';
-import { PAGES, startSummary, type AssistantDefaults, type DefaultsUpdate, type PageDef, type PageId } from './pages';
+import { PAGES, type AssistantDefaults, type DefaultsUpdate, type PageDef, type PageId } from './pages';
 
 // Settings → Assistant settings. ONE row that replaces four popups — Model
 // Providers, Session Defaults, Permissions, Specialists — with one wide window:
@@ -171,8 +171,6 @@ export default function AssistantSettingsRow({
     goTo,
   };
 
-  const rowSummary = startSummary(defaults);
-
   // Dialog chrome depends on where we are: the list (phone), a page, or a
   // page's explainer. The back arrow appears only when the dialog navigated
   // within itself (G-10).
@@ -191,9 +189,11 @@ export default function AssistantSettingsRow({
           </svg>
         }
         title="Assistant settings"
-        // Q-4a: the live default, so the drawer answers "what will a new chat
-        // use" without opening anything.
-        description={rowSummary}
+        // WHY a fixed line (Destin, 2026-09-16): the row now says what is INSIDE
+        // the panel rather than the current default model ("Claude Code · Opus"),
+        // which undersold everything else the panel holds. The live default is
+        // still shown on the panel's own General page.
+        description="Models, permissions, defaults, and more"
         accessory={attention.size > 0 ? <AttentionDot label="A provider needs attention" /> : undefined}
         onClick={() => setOpen(true)}
       />
