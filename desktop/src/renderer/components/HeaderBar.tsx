@@ -13,6 +13,7 @@ import WideViewToggle from './WideViewToggle';
 import { useArtifactCount } from '../hooks/useArtifactCount';
 import { useNarrowViewport } from '../hooks/use-narrow-viewport';
 import { Tooltip } from './ui';
+import { PagesButton, PinnedPageButtons } from './pages/PagesButton';
 
 const isMac = typeof navigator !== 'undefined' && navigator.platform.startsWith('Mac');
 
@@ -541,8 +542,13 @@ export default function HeaderBar({
             settingsDangerBadge={settingsDangerBadge}
           />
         )}
+        {/* Pages sits between Settings and Projects (scope §1, 2026-09-15) and
+            is permanent; pinned pages follow Projects as their own buttons.
+            Wide layouts only; narrow reaches Pages via ||| . */}
+        {!narrow && <PagesButton />}
         {/* Projects button — wide layouts only; narrow reaches it via ||| . */}
         {!narrow && <ProjectsButton />}
+        {!narrow && <PinnedPageButtons />}
         {isRemoteMode() && (
           <span className="text-3xs font-medium px-1.5 py-0.5 rounded-sm bg-blue-500/15 text-blue-400 border border-blue-500/25 shrink-0">
             REMOTE
@@ -677,7 +683,9 @@ export function BareHeaderBar({ settingsOpen, onToggleSettings, settingsBadge, s
           settingsBadge={settingsBadge}
           settingsDangerBadge={settingsDangerBadge}
         />
+        <PagesButton />
         <ProjectsButton />
+        <PinnedPageButtons />
       </div>
       {/* Empty middle — stays part of the drag region. */}
       <div className="flex-1 min-w-0" />

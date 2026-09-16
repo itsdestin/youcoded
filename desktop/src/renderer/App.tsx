@@ -88,6 +88,8 @@ import ThemeShareSheet from './components/ThemeShareSheet';
 import SkillEditor from './components/SkillEditor';
 import ShareSheet from './components/ShareSheet';
 import { ProjectView } from './components/project-view/ProjectView';
+import { PagesView } from './components/pages/PagesView';
+import { PageHost } from './components/pages/PageHost';
 
 import type { SkillEntry, PermissionMode, AttentionState, CommandEntry, SessionProvider } from '../shared/types';
 import type { NativePermissionMode } from '../shared/permission-types';
@@ -3330,6 +3332,7 @@ function AppInner() {
     const closeAll = () => {
       setSettingsOpen(false); setProvidersAutoOpen(false); setResumeRequested(false);
       dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+      dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' });
       setActiveView('chat');
       // The drawer's own dialogs (Assistant settings, Appearance, Help) keep
       // their open state across the drawer closing; tell them to close too.
@@ -3384,6 +3387,7 @@ function AppInner() {
     // a settings page the tour opened for its own reasons.
     setSettingsOpen(false); setProvidersAutoOpen(false);
     dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' });
+    dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' });
     requestGuideReset();
   }, []);
 
@@ -4421,6 +4425,17 @@ function AppInner() {
         onResumeConversation={(...args) => { dispatchArtifact({ type: 'PROJECT_VIEW_CLOSED' }); return handleResumeSession(...args); }}
         defaultModel={sessionDefaults.model}
         defaultSkipPermissions={sessionDefaults.skipPermissions}
+      />
+      {/* YouCoded Pages (Phase 1 shell): the library and, above it, an open
+          page. Both render null while closed, like ProjectView. "Make a page"
+          and "Edit in chat" start a conversation in the current folder — the
+          creator skill that turns that conversation into a page is Phase 1's
+          next task, not part of this shell. */}
+      <PagesView
+        onMakePage={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false); }}
+      />
+      <PageHost
+        onEditInChat={() => { dispatchArtifact({ type: 'PAGES_VIEW_CLOSED' }); void createSession(currentSession?.cwd || sessionDefaults.projectFolder || '', false); }}
       />
     </div>
     </ArtifactProvider>

@@ -41,6 +41,14 @@ export type ArtifactAction =
   | { type: 'ACTIVE_ARTIFACT_CLEARED'; sessionId: string }
   | { type: 'PROJECT_VIEW_OPENED' }
   | { type: 'PROJECT_VIEW_CLOSED' }
+  // YouCoded Pages (Phase 1 shell): the library is a full screen like
+  // ProjectView; an open page sits above it. Both live here rather than in a
+  // store of their own because every entry point (HeaderBar, OverflowMenu,
+  // the library's cards) already holds this dispatch.
+  | { type: 'PAGES_VIEW_OPENED' }
+  | { type: 'PAGES_VIEW_CLOSED' }
+  | { type: 'PAGE_OPENED'; pageId: string }
+  | { type: 'PAGE_CLOSED' }
   // Git review sub-view within the drawer, per session (see DRAWER_* above).
   | { type: 'GIT_REVIEW_OPENED'; sessionId: string }
   | { type: 'GIT_REVIEW_CLOSED'; sessionId: string }

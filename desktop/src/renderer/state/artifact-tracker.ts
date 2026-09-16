@@ -22,6 +22,12 @@ export interface ArtifactState {
   drawerOpenBySession: Record<string, boolean>;
   drawerExpanded: boolean;                            // panel fills the content region
   projectViewOpen: boolean;
+  // YouCoded Pages (Phase 1 shell): the library screen, and which page (if
+  // any) is open on top of it. A pinned page opens with the library closed;
+  // a card opens it with the library still open underneath, so Back returns
+  // to where the person came from.
+  pagesViewOpen: boolean;
+  openPageId: string | null;
   // Selected artifact is scoped per session (keyed by sessionId), so each
   // session's drawer remembers which file was open across session switches.
   // ProjectView uses the literal 'project-view' key for its own selection.
@@ -47,6 +53,8 @@ export const initialArtifactState: ArtifactState = {
   drawerOpenBySession: {},
   drawerExpanded: false,
   projectViewOpen: false,
+  pagesViewOpen: false,
+  openPageId: null,
   activeArtifactBySession: {},
   gitReviewBySession: {},
   activeSessionPreviewBySession: {},
@@ -127,6 +135,14 @@ export function artifactReducer(s: ArtifactState, a: ArtifactAction): ArtifactSt
       return { ...s, projectViewOpen: true };
     case 'PROJECT_VIEW_CLOSED':
       return { ...s, projectViewOpen: false };
+    case 'PAGES_VIEW_OPENED':
+      return { ...s, pagesViewOpen: true };
+    case 'PAGES_VIEW_CLOSED':
+      return { ...s, pagesViewOpen: false, openPageId: null };
+    case 'PAGE_OPENED':
+      return { ...s, openPageId: a.pageId };
+    case 'PAGE_CLOSED':
+      return { ...s, openPageId: null };
     case 'GIT_REVIEW_OPENED':
       return { ...s, gitReviewBySession: { ...s.gitReviewBySession, [a.sessionId]: true } };
     case 'GIT_REVIEW_CLOSED':

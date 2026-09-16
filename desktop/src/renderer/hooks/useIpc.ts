@@ -1,4 +1,5 @@
 import type { VoiceBridge } from '../../shared/voice-types';
+import type { PagesBridge } from '../../shared/pages-types';
 import { useEffect, useRef } from 'react';
 // M1 Task 3: native.send's declared return type below was stale (`void`) from
 // before Task 2 switched the IPC channel to invoke/ack. shared/types.ts (not
@@ -446,6 +447,10 @@ declare global {
       // speech engine yet (remote browser, older builds) — the composer hides
       // the mic when it is undefined. Shape: shared/voice-types.ts.
       voice?: VoiceBridge;
+      // YouCoded Pages (Phase 1 shell). Optional: absent until the backend
+      // lands; the header hides the pinned buttons and the library shows an
+      // error when it is undefined. Shape: shared/pages-types.ts.
+      pages?: PagesBridge;
       // Model manager (Plan C) — curated catalog, HF search, downloads, endpoint
       // detectors, engine backend switch. Task 9's Local Models panel consumes
       // these. onDownloadProgress returns an unsubscribe.
