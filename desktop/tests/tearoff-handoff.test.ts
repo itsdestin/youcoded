@@ -175,6 +175,14 @@ vi.mock('../src/main/harness/native-session-host', () => {
 
     getHistory() { return null; }
 
+    // The IPC handlers read through the async twins and the liveness check
+    // (2026-09-16 C2); "not a native session" for all three.
+    async getHistoryPageAsync() { return null; }
+
+    async getHistoryAsync() { return null; }
+
+    isLive() { return false; }
+
     setModelReleasedHandler() { /* no-op */ }
 
     on() { return this; }

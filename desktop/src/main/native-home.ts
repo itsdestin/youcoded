@@ -24,6 +24,20 @@ export interface SessionFileInfo {
 // ~15s of contention before giving up loudly.
 const LOCK_MAX_RETRIES = 5;
 
+/** One JSON value per non-blank line; an unparseable line is skipped
+ *  PERMANENTLY (a crash-torn record stays torn on disk; appendSessionLine's
+ *  tail guard only protects the NEXT record from fusing into it). A
+ *  mid-live-append read may also see a torn tail transiently; that one heals
+ *  on the next read. Shared by the sync and async whole-file readers. */
+function parseSessionLines(raw: string): unknown[] {
+  const out: unknown[] = [];
+  for (const line of raw.split('\n')) {
+    if (!line.trim()) continue;
+    try { out.push(JSON.parse(line)); } catch { /* skipped, see above */ }
+  }
+  return out;
+}
+
 export class NativeHome {
   private readonly dir: string;
 
@@ -162,19 +176,22 @@ export class NativeHome {
     } catch {
       return []; // no such session yet — empty transcript, not an error
     }
-    const out: unknown[] = [];
-    for (const line of raw.split('\n')) {
-      if (!line.trim()) continue;
-      try {
-        out.push(JSON.parse(line));
-      } catch {
-        // Unparseable line — skipped PERMANENTLY (a crash-torn record stays
-        // torn on disk; appendSessionLine's tail guard only protects the NEXT
-        // record from fusing into it). A mid-live-append read may also see a
-        // torn tail transiently; that one heals on the next read.
-      }
+    return parseSessionLines(raw);
+  }
+
+  /** readSessionLines with the read off the main thread. WHY (2026-09-16 C2):
+   *  the history page a scroll-up asks for, and the replay a tear-off asks
+   *  for, read the whole session file — synchronously, on the main thread,
+   *  every window frozen for it. Same parse, same skip rules. */
+  async readSessionLinesAsync(slug: string, sessionId: string): Promise<unknown[]> {
+    const p = this.sessionFilePath(slug, sessionId);
+    let raw: string;
+    try {
+      raw = await fs.promises.readFile(p, 'utf8');
+    } catch {
+      return []; // no such session yet — empty transcript, not an error
     }
-    return out;
+    return parseSessionLines(raw);
   }
 
   /**

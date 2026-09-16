@@ -171,6 +171,23 @@ export function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
  * resuming) more than once can never accumulate duplicate entries — there is
  * nothing on disk for a second call to duplicate.
  */
+/** One page of an already-merged history: the last PAGE_TURNS user turns
+ *  before `beforeIndex` (null = the end). The cursor is an ARRAY INDEX. */
+function pageOf(all: TranscriptEvent[], beforeIndex: number | null): { events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } {
+  const end = beforeIndex == null ? all.length : Math.min(beforeIndex, all.length);
+  if (end <= 0) return { events: [], nextIndex: null, hasMore: false };
+  let boundaries = 0;
+  let start = 0;
+  for (let i = end - 1; i >= 0; i--) {
+    if (all[i].type === 'user-message') {
+      boundaries++;
+      if (boundaries === PAGE_TURNS) { start = i; break; }
+    }
+  }
+  const hasMore = start > 0;
+  return { events: all.slice(start, end), nextIndex: hasMore ? start : null, hasMore };
+}
+
 export function mergeChildEvents(
   parentId: string,
   parentEvents: TranscriptEvent[],
@@ -4525,35 +4542,61 @@ export class NativeSessionHost extends EventEmitter {
   getHistoryPage(sessionId: string, beforeIndex: number | null): { events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } | null {
     const all = this.getHistory(sessionId);
     if (all === null) return null;
-    const end = beforeIndex == null ? all.length : Math.min(beforeIndex, all.length);
-    if (end <= 0) return { events: [], nextIndex: null, hasMore: false };
-    let boundaries = 0;
-    let start = 0;
-    for (let i = end - 1; i >= 0; i--) {
-      if (all[i].type === 'user-message') {
-        boundaries++;
-        if (boundaries === PAGE_TURNS) { start = i; break; }
-      }
-    }
-    const hasMore = start > 0;
-    return { events: all.slice(start, end), nextIndex: hasMore ? start : null, hasMore };
+    return pageOf(all, beforeIndex);
+  }
+
+  /** getHistoryPage with the reads off the main thread — the IPC page handler's
+   *  form. WHY (2026-09-16 C2): every scroll-up page re-read the whole
+   *  transcript (parent and every helper child) synchronously, so scrolling
+   *  back through a long native chat stuttered progressively and froze every
+   *  other window for each page. Same window, same cursor meaning. */
+  async getHistoryPageAsync(sessionId: string, beforeIndex: number | null): Promise<{ events: TranscriptEvent[]; nextIndex: number | null; hasMore: boolean } | null> {
+    const all = await this.getHistoryAsync(sessionId);
+    if (all === null) return null;
+    return pageOf(all, beforeIndex);
+  }
+
+  /** Whether `sessionId` is a live native session — what a caller that only
+   *  needs a yes/no must use. WHY (2026-09-16 C2): tear-off and re-dock asked
+   *  `getHistory(id) !== null`, which read the whole history (parent AND every
+   *  child) to compute a boolean and threw it away. */
+  isLive(sessionId: string): boolean {
+    return this.live.has(sessionId);
   }
 
   getHistory(sessionId: string): TranscriptEvent[] | null {
+    const plan = this.historyPlan(sessionId);
+    if (!plan) return null;
+    const parentEvents = this.store.readEvents(sessionId, plan.cwd);
+    if (plan.records.length === 0) return parentEvents;
+    const children = plan.records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) }));
+    return mergeChildEvents(sessionId, parentEvents, children);
+  }
+
+  /** getHistory with every file read off the main thread; identical result. */
+  async getHistoryAsync(sessionId: string): Promise<TranscriptEvent[] | null> {
+    const plan = this.historyPlan(sessionId);
+    if (!plan) return null;
+    const parentEvents = await this.store.readEventsAsync(sessionId, plan.cwd);
+    if (plan.records.length === 0) return parentEvents;
+    const children = await Promise.all(plan.records.map(async (record) => ({ record, events: await this.store.readEventsAsync(record.childId, record.workDir) })));
+    return mergeChildEvents(sessionId, parentEvents, children);
+  }
+
+  /** The one decision both getHistory forms share: which files make up this
+   *  session's history. null for a non-live id; an empty `records` when there
+   *  is no ledger or it could not be read (logged, replay degrades to the
+   *  parent's own events — a broken ledger read must never break replay). */
+  private historyPlan(sessionId: string): { cwd: string; records: DelegationRecord[] } | null {
     const entry = this.live.get(sessionId);
     if (!entry) return null;
-    const parentEvents = this.store.readEvents(sessionId, entry.cwd);
-    if (!this.ledger) return parentEvents;
-    let records: DelegationRecord[];
+    if (!this.ledger) return { cwd: entry.cwd, records: [] };
     try {
-      records = this.ledger.listFor(entry.cwd, sessionId);
+      return { cwd: entry.cwd, records: this.ledger.listFor(entry.cwd, sessionId) };
     } catch (err) {
       log('WARN', 'NativeSessionHost', 'getHistory: failed to read the delegation ledger — replaying the parent\'s own events without card replay', { sessionId, error: String((err as any)?.message ?? err) });
-      return parentEvents;
+      return { cwd: entry.cwd, records: [] };
     }
-    if (records.length === 0) return parentEvents;
-    const children = records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) }));
-    return mergeChildEvents(sessionId, parentEvents, children);
   }
 
   /** Task 9 (plan 1c) — every run record for `sessionId`'s (as PARENT) live

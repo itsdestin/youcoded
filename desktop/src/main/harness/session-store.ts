@@ -305,7 +305,16 @@ export class SessionStore {
    * must never produce duplicate reducer entries on replay.
    */
   readEvents(sessionId: string, cwd: string): TranscriptEvent[] {
-    const lines = this.home.readSessionLines(nativeStoreSlug(cwd), sessionId);
+    return this.eventsFromLines(this.home.readSessionLines(nativeStoreSlug(cwd), sessionId));
+  }
+
+  /** readEvents with the file read off the main thread (2026-09-16 C2); same dedup. */
+  async readEventsAsync(sessionId: string, cwd: string): Promise<TranscriptEvent[]> {
+    return this.eventsFromLines(await this.home.readSessionLinesAsync(nativeStoreSlug(cwd), sessionId));
+  }
+
+  /** Lines 2+ of a session file as typed events, deduped by uuid — see readEvents. */
+  private eventsFromLines(lines: unknown[]): TranscriptEvent[] {
     const seen = new Set<string>();
     const out: TranscriptEvent[] = [];
     for (const line of lines.slice(1)) {

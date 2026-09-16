@@ -44,4 +44,19 @@ describe('hot main-process paths use fs.promises', () => {
     expect(write).toBeGreaterThan(0);
     expect(src.slice(write, src.indexOf('\n  }\n', write))).not.toMatch(SYNC_FS);
   });
+
+  function methodBody(src: string, signature: string): string {
+    const start = src.indexOf(signature);
+    expect(start, `${signature} not found`).toBeGreaterThan(0);
+    return src.slice(start, src.indexOf('\n  }\n', start));
+  }
+
+  it('native history reads the IPC handlers use (per scroll-up page, per tear-off)', () => {
+    expect(methodBody(read('native-home.ts'), 'async readSessionLinesAsync(')).not.toMatch(SYNC_FS);
+    expect(methodBody(read('harness/session-store.ts'), 'async readEventsAsync(')).not.toMatch(SYNC_FS);
+    const host = read('harness/native-session-host.ts');
+    expect(methodBody(host, 'async getHistoryAsync(')).not.toMatch(SYNC_FS);
+    expect(methodBody(host, 'async getHistoryPageAsync(')).not.toMatch(SYNC_FS);
+    expect(methodBody(host, 'isLive(')).not.toMatch(/readEvents|getHistory/);
+  });
 });

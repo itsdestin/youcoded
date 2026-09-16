@@ -228,6 +228,16 @@ describe('NativeSessionHost', () => {
     expect(history).not.toBeNull();
     expect(history!.map((e) => e.type)).toEqual(['user-message', 'assistant-text', 'turn-complete']);
     expect(history![1].data.text).toBe('Hi there');   // coalesced on disk
+    // 2026-09-16 C2: the IPC handlers read through the async twins, which must
+    // answer exactly what the sync forms do; isLive answers the tear-off's
+    // boolean without reading anything.
+    expect(await host.getHistoryAsync('s-1')).toEqual(history);
+    expect(await host.getHistoryPageAsync('s-1', null)).toEqual(host.getHistoryPage('s-1', null));
+    expect(await host.getHistoryPageAsync('s-1', 2)).toEqual(host.getHistoryPage('s-1', 2));
+    expect(host.isLive('s-1')).toBe(true);
+    expect(host.isLive('nope')).toBe(false);
+    expect(await host.getHistoryAsync('nope')).toBeNull();
+    expect(await host.getHistoryPageAsync('nope', null)).toBeNull();
   });
 
   it('fresh roots persist and use one exact step-guard snapshot', async () => {

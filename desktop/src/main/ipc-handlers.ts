@@ -3103,7 +3103,7 @@ export function registerIpcHandlers(
     // Native sessions page over the merged event array; getHistoryPage returns
     // null for non-native ids, so CC's watcher stays the source for claude
     // sessions — the same discrimination the replay handler uses.
-    const nativePage = nativeHost.getHistoryPage(sessionId, beforeCursor ? beforeCursor.offset : null);
+    const nativePage = await nativeHost.getHistoryPageAsync(sessionId, beforeCursor ? beforeCursor.offset : null);
     if (nativePage !== null) {
       return {
         events: nativePage.events,
@@ -3168,10 +3168,13 @@ export function registerIpcHandlers(
   // normal TRANSCRIPT_EVENT channel (uuid dedup handles overlap with live).
   // We send directly to the requesting window — NOT via sendForSession —
   // because ownership has already transferred to them by the time this fires.
-  ipcMain.on(IPC.TRANSCRIPT_REPLAY, (evt, { sessionId }: { sessionId: string }) => {
+  ipcMain.on(IPC.TRANSCRIPT_REPLAY, async (evt, { sessionId }: { sessionId: string }) => {
     // Native sessions replay from the SessionStore; getHistory returns null for
     // non-native ids so CC's watcher stays the source for claude sessions.
-    const nativeEvents = nativeHost.getHistory(sessionId);
+    // Async (2026-09-16 C2): the whole-history read is off the main thread; the
+    // sends below still go out in order, and the renderer's uuid dedup already
+    // covers a live event that lands between the read and the replay.
+    const nativeEvents = await nativeHost.getHistoryAsync(sessionId);
     const events = nativeEvents ?? transcriptWatcher.getHistory(sessionId);
     for (const ev of events) {
       evt.sender.send(IPC.TRANSCRIPT_EVENT, ev);
@@ -3250,7 +3253,9 @@ export function registerIpcHandlers(
   // page FIRST and then this, so the replay-complete marker cannot reap tool
   // cards before the page that creates them has been applied.
   ipcMain.handle(IPC.SESSION_REPLAY_LIVE_STATE, (evt, { sessionId }: { sessionId: string }) => {
-    sendLiveOnlyState(evt.sender, sessionId, nativeHost.getHistory(sessionId) !== null);
+    // isLive, not `getHistory(id) !== null` (2026-09-16 C2): that read the whole
+    // history, parent and every helper child, to compute this one boolean.
+    sendLiveOnlyState(evt.sender, sessionId, nativeHost.isLive(sessionId));
   });
 
   // --- Native runtime IPC (Phase 1 Plan A) ---
