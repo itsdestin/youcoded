@@ -226,7 +226,7 @@ export function parseRepeatDecision(text: string): { ok: true; report: string; s
 type HaltRequest =
   | { kind: 'complete' }
   /** minimumAddTokens: known up front (a ceiling shortfall, review item 1). */
-  | { kind: 'pause'; stepId: string; reason: string; attemptId?: string; minimumAddTokens?: number }
+  | { kind: 'pause'; stepId: string; reason: string; attemptId?: string; minimumAddTokens?: number; ceilingShortfall?: true }
   /** finalize: PlanService's "stopped" edit, applied in the SAME write that
    *  drops the lease (review item 8). */
   | { kind: 'stop'; finalize?: (plan: PlanRecord) => void; applied?: boolean }
@@ -683,7 +683,7 @@ export class PlanExecutor implements PlanExecutorHooks {
       this.requestHalt(run, {
         kind: 'pause', stepId: step.id, reason: reserved.detail,
         ...(exhausted ? { attemptId: exhausted } : {}),
-        ...(shortfall !== undefined ? { minimumAddTokens: shortfall } : {}),
+        ...(shortfall !== undefined ? { minimumAddTokens: shortfall, ceilingShortfall: true as const } : {}),
       });
       return;
     }
@@ -981,6 +981,7 @@ export class PlanExecutor implements PlanExecutorHooks {
             stepId: final.stepId, reason: withCutOffNote(final.reason, cutOffOthers),
             ...(final.attemptId ? { attemptId: final.attemptId } : {}),
             ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}),
+            ...(final.ceilingShortfall ? { ceilingShortfall: true as const } : {}),
           };
           const s = p.steps.find((x) => x.id === final.stepId);
           if (s && s.status !== 'done') s.status = 'paused';

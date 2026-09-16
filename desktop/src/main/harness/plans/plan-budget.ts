@@ -524,7 +524,11 @@ export class PlanBudget {
       if (!def || !stepRec) throw new Error(`Step "${stepId}" can't run a specialist.`);
 
       let target: PlanAttemptRecord | undefined;
-      if (plan.paused.attemptId !== undefined) {
+      if (plan.paused.ceilingShortfall) {
+        // Round 2: decided by the KIND of pause, not by whether the step
+        // happens to have an unfinished specialist to attach the tranche to.
+        target = undefined;
+      } else if (plan.paused.attemptId !== undefined) {
         target = stepRec.attempts.find((a) => a.attemptId === plan.paused!.attemptId);
         if (!target || isCommitted(target)) throw new Error('The paused specialist for this step no longer exists.');
       } else {

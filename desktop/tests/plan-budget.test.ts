@@ -402,6 +402,24 @@ describe('Add budget — an authorization tranche for the paused attempt', () =>
     expect(p.steps[1].attempts[0].addedTokens).toBe(0);
   });
 
+  it.each([1, 2])('a plan-limit shortfall pause raises only the limit even with %i unfinished specialist(s) in the step (round 2)', async (open) => {
+    const attempts = Array.from({ length: open }, (_, i) => ({
+      attemptId: `open${i}`, itemIndex: i, iteration: 0, childId: `kid${i}`, baseTokens: 1000, addedTokens: 0, reservedTokens: 0, spentTokens: 300, phase: 'response-persisted' as const,
+    }));
+    await seed(record({ steps: [{ id: 's1', status: 'paused', attempts }, { id: 's2', status: 'pending', attempts: [] }] }));
+    await journal.mutateFenced(REF, 'p1', fence, (p) => {
+      p.status = 'paused';
+      p.paused = { stepId: 's1', reason: 'short', minimumAddTokens: 700, ceilingShortfall: true };
+      delete p.lease;
+    });
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 700 });
+    const p = await plan();
+    expect(p.ceilingTokens).toBe(4700);
+    expect(p.tranches).toEqual([{ trancheId: expect.any(String), stepId: 's1', tokens: 700, at: 7, ceilingOnly: true }]);
+    expect(p.steps[0].attempts.map((a) => a.addedTokens)).toEqual(attempts.map(() => 0));
+    expect(p.paused!.minimumAddTokens).toBeUndefined();
+  });
+
   it('a ceiling refusal reports the token shortfall (Task 4 review, item 1)', async () => {
     await seed(record({ ceilingTokens: 1500, usedTokens: 1200 }));
     const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);

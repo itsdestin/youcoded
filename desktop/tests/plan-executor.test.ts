@@ -904,6 +904,33 @@ describe('review fixes (Task 4 review 1)', () => {
     expect(p.ceilingTokens).toBe(2700);
   });
 
+  it('round 2: a shortfall pause stays fundable when the step still has an unfinished specialist', async () => {
+    const doc: PlanDocumentV1 = { goal: 'two', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1500, items: ['a', 'b'] },
+    ] };
+    const failed = attemptRec({ attemptId: 'fa', itemIndex: 0, childId: 'kid-a', baseTokens: 1500, spentTokens: 1200, phase: 'committed', terminal: 'failed', reportText: '', completedAt: 2 });
+    const open = attemptRec({ attemptId: 'ob', itemIndex: 1, childId: 'kid-b', baseTokens: 1500, spentTokens: 300, phase: 'response-persisted' });
+    const rec = record(doc, { status: 'paused', paused: { stepId: 's1', reason: 'x' }, usedTokens: 1500, steps: [{ id: 's1', status: 'paused', attempts: [failed, open] }] });
+    const runner = new FakeRunner(() => completes('ok'));
+    runner.verdicts.set('kid-b', { kind: 'resumable', briefDelivered: true });
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    let p = await plan();
+    // fresh a (1,500) + restart b (1,200) on 1,500 used vs 3,000 → 1,200 short.
+    expect(p.paused).toMatchObject({ stepId: 's1', minimumAddTokens: 1200, ceilingShortfall: true });
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 1200 });
+    expect((await plan()).steps[0].attempts.find((a) => a.attemptId === 'ob')!.addedTokens).toBe(0);
+    const again = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
+    if (!again.ok) throw new Error('lease');
+    exec.start({ ref: REF, planId: 'p1', fence: again.fence });
+    await exec.settled('p1');
+    p = await plan();
+    expect(p.status).toBe('completed');
+    expect(runner.launches).toHaveLength(2);
+  });
+
   it('items 3 and 4: an acknowledged dangling action restarts with a brief that names it — never the full brief again', async () => {
     const rec = record(TWO_STEP, {
       status: 'paused', paused: { stepId: 's1', reason: 'x' }, usedTokens: 700,

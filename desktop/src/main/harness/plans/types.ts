@@ -162,6 +162,11 @@ const PlanRecordSchema = z.object({
      *  its next request (its fresh resume prompt plus any soft overshoot).
      *  Add budget lowers it by what was added; the service refuses less. */
     minimumAddTokens: nonNegativeInt.optional(),
+    /** Task 4 round 2: the pause was the plan limit being too small for the
+     *  next wave, not one specialist running out. Add budget then raises the
+     *  limit only — even if the step has unfinished specialists — because an
+     *  allowance that grows with the limit could never make the wave fit. */
+    ceilingShortfall: z.literal(true).optional(),
   }).strict().optional(),
   /** Task 3: every Add budget, in order. A tranche without attemptId is
    *  waiting for the step's next attempt and is applied when it is reserved. */

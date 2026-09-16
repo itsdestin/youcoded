@@ -318,6 +318,10 @@ interface LiveEntry {
   plan?: { planId: string; stepId: string; attemptId: string };
   // The host turn id of the turn running right now (SendUnit.turnId).
   currentTurnId?: string;
+  // Plans (Task 4 round 2): a stop that arrived before this specialist's
+  // turn began. runTurns checks it at the moment the turn would start, so the
+  // turn never sends — an interrupt then would have had nothing to stop.
+  cancelledBeforeSend?: boolean;
 }
 
 /** The transcript events that END a turn — the moments a session's model
@@ -3889,6 +3893,7 @@ export class NativeSessionHost extends EventEmitter {
         // Plans (Task 4): the turn id propose_plan reads for this turn.
         entry.currentTurnId = typeof next === 'function' ? undefined : next.turnId;
         try {
+          if (entry.cancelledBeforeSend) break;
           if (typeof next === 'function') await next();
           else await entry.session.send(next.text, next.attachments);
         } catch (err) {
@@ -4760,7 +4765,7 @@ export class NativeSessionHost extends EventEmitter {
         await Promise.race([entry.running, disposedSignal]);
         const stop = input.budgetStop();
         if (stop) return { kind: 'stopped', stop };
-        if (disposed || interrupted) return { kind: 'interrupted' };
+        if (disposed || interrupted || entry.cancelledBeforeSend) return { kind: 'interrupted' };
         if (errorText) return { kind: 'failed', detail: errorText };
         return { kind: 'completed', report: report.trim() };
       } catch (err: any) {
@@ -4785,10 +4790,10 @@ export class NativeSessionHost extends EventEmitter {
     return {
       childId,
       outcome,
-      // WHY twice: send() starts the turn one macrotask later, and an
-      // interrupt before that moment has no turn to stop. The second call
-      // lands after the turn exists.
-      abort: () => { this.interrupt(childId); setImmediate(() => { if (this.live.has(childId)) this.interrupt(childId); }); },
+      // WHY the flag: send() starts the turn one macrotask later, and an
+      // interrupt before that moment has no turn to stop. runTurns reads the
+      // flag when the turn would start and skips it.
+      abort: () => { entry.cancelledBeforeSend = true; this.interrupt(childId); },
       dispose: () => (disposing ??= (async () => {
         disposed = true;
         markDisposed();

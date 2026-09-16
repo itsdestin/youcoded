@@ -5714,6 +5714,21 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(liveChildren()).toHaveLength(0);
   });
 
+  it('round 2: a specialist stopped before its turn starts never sends, and reads as interrupted', async () => {
+    await host.create({ sessionId: SID, cwd: root, binding: PARENT });
+    const gate = { adapter: { id: 'g', providerType: 'openrouter', capsOutput: true, inputBound: () => ({ ok: true, tokens: 1 }) }, reserve: async () => ({ ok: true, maxOutputTokens: 10 }), settle: async () => ({ kind: 'ok', chargedTokens: 1 }) };
+    const handle = await (host as any).startPlanChild({
+      parentId: SID, specialist: resolveSpecialist('reviewer'), binding: { providerId: 'openrouter', modelId: CHILD }, providerType: 'openrouter',
+      gate, parentToolCallId: 'call-x', signal: new AbortController().signal, tag: { planId: 'p', stepId: 's', attemptId: 'a' },
+      recordChild: async () => {}, brief: 'Review a.ts', budgetStop: () => undefined,
+    });
+    handle.abort();   // same tick: the turn has not started yet
+    expect(await handle.outcome).toEqual({ kind: 'interrupted' });
+    expect(childCalls).toHaveLength(0);
+    await handle.dispose();
+    expect(liveChildren()).toHaveLength(0);
+  });
+
   it('review item 9: the model\'s task_id surface cannot reach a plan specialist; the card\'s own actions can', async () => {
     const planId = await proposeOne();
     childReply = () => 'hang';
