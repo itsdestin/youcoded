@@ -1,12 +1,8 @@
 // @vitest-environment jsdom
 /**
- * Task 12 (spec R3): the held-ask line a nested SpecialistAskBlock shows once
- * the 5-minute redirect has fired must read differently depending on whether
- * the helper that asked is still running or has already finished — a user
- * answering a held ask for a helper that finished ten minutes ago needs to be
- * told what a Yes actually does now (it reaches the assistant, it does not
- * resume anything). Also pins the pre-existing external-ask explainer this
- * task must not regress.
+ * Pins the nested SpecialistAskBlock's copy: the external-ask explainer, and
+ * (since 2026-09-16, when a helper's ask stopped timing out) the absence of
+ * any "waited 5 minutes, then carried on" line.
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, cleanup } from '@testing-library/react';
@@ -39,27 +35,19 @@ function segment(over: Partial<ToolSegment> = {}): ToolSegment {
   };
 }
 
-function renderBlock(segOver: Partial<ToolSegment>, runStatus?: 'running' | 'completed' | 'failed' | 'interrupted') {
+function renderBlock(segOver: Partial<ToolSegment>) {
   return render(
     <ChatProvider>
-      <SpecialistAskBlock segment={segment(segOver)} sessionId="s1" specialistName="Wren" runStatus={runStatus} />
+      <SpecialistAskBlock segment={segment(segOver)} sessionId="s1" specialistName="Wren" />
     </ChatProvider>,
   );
 }
 
-describe('SpecialistAskBlock — held-ask copy', () => {
-  it('held + running: says the helper carried on and a Yes still lands as a follow-up', () => {
-    renderBlock({ askHeld: true }, 'running');
-    const held = screen.getByTestId('nested-ask-held');
-    expect(held.textContent).toBe(
-      'Wren waited 5 minutes, then carried on without this. Answering Yes now sends it as a follow-up.',
-    );
-  });
-
-  it('held + finished: says the helper has finished and explains what a Yes does now', () => {
-    renderBlock({ askHeld: true }, 'completed');
-    const held = screen.getByTestId('nested-ask-held');
-    expect(held.textContent).toBe('Wren has already finished. Answering Yes tells the assistant, which can send Wren back out with your answer.');
+describe('SpecialistAskBlock — copy', () => {
+  it('an open ask shows no waited/carried-on line — the helper is simply waiting', () => {
+    const { container } = renderBlock({});
+    expect(container.textContent).not.toMatch(/waited|carried on|follow-up/i);
+    expect(screen.queryByTestId('nested-ask-held')).toBeNull();
   });
 
   it('external (outside-the-folder) ask says the helper has to ask every time — and offers no Always Allow', () => {

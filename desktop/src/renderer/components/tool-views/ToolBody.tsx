@@ -794,7 +794,8 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
     prevSettled.current = settled;
   }, [settled, userToggled]);
   // Specialists 1c: a helper's ask lives in Activity — open it when one
-  // arrives, even on a settled card (a held ask outlives the run). Not when
+  // arrives, even on a card that looks settled (e.g. a resumed helper asking
+  // under an earlier card). Not when
   // the host shows the ask itself (suppressAsk): then Activity is just history.
   const nestedAsk = hasNestedAsk(tool);
   useEffect(() => { if (nestedAsk && !suppressAsk) setShowTimeline(true); }, [nestedAsk, suppressAsk]);
@@ -843,10 +844,7 @@ export function AgentSections({ tool, sessionId, targetTitle, suppressAsk = fals
             ? acc('activity')
             : { open: showTimeline, onToggle: () => { setShowTimeline(s => !s); setUserToggled(true); } })}
         >
-          {/* Task 12: `run` (specialistRun) is already resolved above for this
-              card — its status is what lets a nested held ask tell a finished
-              helper apart from a running one. */}
-          <SubagentTimeline segments={segments} sessionId={sessionId} specialistName={firstName} suppressAsk={suppressAsk} runStatus={run?.status} />
+          <SubagentTimeline segments={segments} sessionId={sessionId} specialistName={firstName} suppressAsk={suppressAsk} />
         </AgentSection>
       )}
       {children}

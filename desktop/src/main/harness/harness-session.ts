@@ -120,14 +120,13 @@ function isExistingFile(absPath: string): boolean {
  *  Exported (Fix, Important 6, final review): this is the ONE function that
  *  decides both the confirm-sentence width (indirectly, via the caller
  *  reading `scope`) and the stored rule's pattern/match shape — a routed
- *  specialist ask (child-ask-router.ts) and a LATE routed answer
- *  (native-session-host.ts's onLateResponse) used to hand-build their own
+ *  specialist ask (child-ask-router.ts) used to hand-build its own
  *  `{tool, pattern: subject, action:'allow', specialist}` object instead of
  *  calling this, which silently dropped every "never rememberable" case this
  *  function enforces (e.g. a bare `git push`, whose bashGrantOptions is empty
  *  — see below) and discarded the grant WIDTH the user actually picked,
- *  always storing an exact-match rule regardless of `grantScope`. Both call
- *  sites now go through here, merging in `specialist` themselves (this
+ *  always storing an exact-match rule regardless of `grantScope`. It now
+ *  goes through here, merging in `specialist` itself (this
  *  function has no concept of a specialist key — it's the same builder a
  *  root session's own ask uses). */
 export function rememberedRuleFor(
@@ -3433,9 +3432,9 @@ export class HarnessSession extends EventEmitter {
       const d = await this.opts.askUser({ sessionId: this.opts.sessionId, toolName: call.toolName, toolInput: call.input as any, denyListed: decision.denyListed, external: externalAsk, subject });
       if (d.behavior === 'canceled') return 'interrupted';
       // Task 8: d.message carries specific copy for a deny that ISN'T a real
-      // user decline — e.g. a routed specialist ask that timed out with no
-      // answer (ASK_REDIRECT_MESSAGE), which must not read as "the user said
-      // no" when no user ever answered. Falls back to the real-decline copy
+      // user decline — e.g. child-ask-router's outside-the-folder refusal for
+      // a specialist, which must not read as "the user said no" when no user
+      // was ever asked. Falls back to the real-decline copy
       // (still accurate for an actual respond({behavior:'deny'})).
       if (d.behavior !== 'allow') return { text: d.message ?? 'The user declined this action. Ask what they would like instead, or try a different approach.', isError: true };
       // "Always allow" → emit a rule for the host to persist (PermissionStore).

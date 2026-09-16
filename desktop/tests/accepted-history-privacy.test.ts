@@ -136,7 +136,7 @@ describe('accepted history privacy sentinels', () => {
     };
     const host = new NativeSessionHost(
       sessionStore, factory as any, NO_CONTEXT, async () => null, async () => null,
-      undefined, undefined, undefined, undefined, undefined, undefined, nativeHome, undefined,
+      undefined, undefined, undefined, undefined, undefined, undefined, nativeHome,
       new SpecialistCatalog({ claudeUserDir: null }), () => null,
       { acceptedHistory, continuationIdentityFor: identityFor as any },
     );

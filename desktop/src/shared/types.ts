@@ -556,10 +556,6 @@ export type SubagentSegment =
       denyListed?: boolean;
       external?: boolean;
       permissionMode?: 'ask' | 'auto-edit' | 'full-auto';
-      /** The 5-minute hold elapsed (child-ask-router's ASK_REDIRECT): the
-       *  specialist was told to carry on without this and the ask is STILL
-       *  answerable — a late answer becomes a follow-up. The row says so. */
-      askHeld?: boolean;
       /** Remote access batch 2: the request id a resolution cleared this row of, kept so a
        *  later expiry (a parent's cancel sends Resolved, then Expired) still finds it. */
       resolvedRequestId?: string;

@@ -24,7 +24,7 @@ function dispatch(state: ChatState, action: ChatAction): ChatState {
 }
 
 /** Seeds a session with one Task card (the way a real Task tool-use event
- *  creates it) so SPECIALIST_RUN_CHANGED / PERMISSION_REQUEST / PERMISSION_HELD
+ *  creates it) so SPECIALIST_RUN_CHANGED / PERMISSION_REQUEST
  *  have a card to fold onto — mirrors the real event that always precedes a
  *  ledger write (chat-reducer.ts's SPECIALIST_RUN_CHANGED comment). */
 function seedTaskCard(state: ChatState, toolUseId = TASK_ID): ChatState {
@@ -308,34 +308,6 @@ describe('SPECIALIST_RUN_CHANGED — ask plumbing (pinning existing behavior)', 
 
   beforeEach(() => {
     state = seedTaskCard(initState());
-  });
-
-  it('PERMISSION_HELD sets askHeld on the nested row and nowhere else', () => {
-    // First, a specialist child's ask nests under the Task card as a
-    // synthetic sa-perm-<requestId> segment (PERMISSION_REQUEST, no matching
-    // running tool segment yet).
-    state = dispatch(state, {
-      type: 'PERMISSION_REQUEST',
-      sessionId: SESSION,
-      toolName: 'Bash',
-      input: { command: 'ls' },
-      requestId: 'req-1',
-      specialist: { childId: CHILD_ID, agentType: 'explorer', title: 'Nadia', parentToolCallId: TASK_ID },
-    });
-
-    let card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
-    let segs = card.subagentSegments ?? [];
-    expect(segs).toHaveLength(1);
-    expect((segs[0] as any).status).toBe('awaiting-approval');
-
-    state = dispatch(state, { type: 'PERMISSION_HELD', sessionId: SESSION, requestId: 'req-1' });
-
-    card = state.get(SESSION)!.toolCalls.get(TASK_ID)!;
-    segs = card.subagentSegments ?? [];
-    expect((segs[0] as any).askHeld).toBe(true);
-    // ToolCallState has no askHeld field at all — the top-level card itself
-    // must be untouched by this action.
-    expect((card as any).askHeld).toBeUndefined();
   });
 
   it('the sa-perm- placeholder is reclaimed when the tool-use event lands after the ask', () => {

@@ -1,15 +1,12 @@
 import type { AskRequest, AskDecision, PermissionBroker } from '../permission-broker';
 import { rememberedRuleFor, type HarnessSessionOpts } from '../harness-session';
 import type { PermissionRule } from '../../../shared/permission-types';
-import { SPECIALIST_ASK_HOLD_MS } from './limits';
 
 // Task 11: doom_loop is a synthetic budget ask that never supports "Always
 // allow", even for a root session: harness-session.ts only reads
 // AskDecision.always at the ONE call site that gates on decide() (the normal
 // gated-tool ask), never for doom_loop. A routed copy of the same ask must not
-// gain a capability the direct (root-session) version never had. Exported
-// (Task 11 fix pass, Finding 2) so native-session-host.ts's onLateResponse can
-// apply the SAME exclusion to a LATE "Always allow".
+// gain a capability the direct (root-session) version never had.
 export const BUDGET_ASK_TOOL_NAMES = new Set(['doom_loop']);
 
 // Child ask routing (plan 1b, Task 8). Replaces child-ask-policy.ts's
@@ -19,9 +16,11 @@ export const BUDGET_ASK_TOOL_NAMES = new Set(['doom_loop']);
 // child-permissions.ts branch 5) re-register on the broker under the
 // PARENT's sessionId, with the specialist's identity attached, so the
 // existing permission card renders it exactly like any other ask. The child
-// waits up to SPECIALIST_ASK_HOLD_MS; if nobody answers by then, the call
-// resolves with ASK_REDIRECT_MESSAGE so the child can keep making progress
-// instead of remaining blocked on an unanswered parent permission card.
+// then waits for the person's answer with NO time limit — exactly like the
+// main assistant's own asks (2026-09-16 decision). It used to be held for five
+// minutes and then told "still pending, carry on without it"; that made a
+// helper's work diverge from what the person later approved, so the timeout,
+// the "held" card state and the late-answer route were all removed.
 //
 // Interactive (AskUserQuestion) and external-forced asks are the two
 // exceptions that STILL deny instantly, exactly as child-ask-policy.ts always
@@ -37,12 +36,6 @@ export const BUDGET_ASK_TOOL_NAMES = new Set(['doom_loop']);
 //    different (and much bigger) decision than the ones this route is for.
 // Both denials carry FACTUAL, non-blaming copy (never "the user declined" —
 // no user was ever consulted for either case; error-message-standards.md).
-export const ASK_REDIRECT_MESSAGE =
-  'This action needs the user\'s direct approval, and the user has not responded yet — '
-  + 'the request is still pending on their screen. Continue any assigned work that does NOT '
-  + 'depend on the blocked action. Do NOT attempt the blocked action by any other means or '
-  + 'work around it. Do NOT build further work on the assumption it will be approved. '
-  + 'If everything left depends on it, write up your progress so far and finish with your report.';
 
 export interface ChildAskRouterDeps {
   /** Structural, not the concrete class — a test can inject a fake with just
@@ -56,8 +49,6 @@ export interface ChildAskRouterDeps {
    *  onto the routed ask's `specialist` payload so the renderer can nest the
    *  ask row under the right specialist card instead of just labelling it. */
   parentToolCallId: string;
-  /** Overridable for tests (default SPECIALIST_ASK_HOLD_MS = 5 minutes). */
-  timeoutMs?: number;
   /** Task 11 (closes a review finding): called when the parent answers a
    *  routed ask with "Always allow". Optional so a test that doesn't care
    *  about persistence can omit it; the real wiring (native-session-host.ts's
@@ -81,18 +72,14 @@ export function childAskRouter(deps: ChildAskRouterDeps): NonNullable<HarnessSes
         message: `${req.toolName} on a path outside this specialist's work directory cannot be approved — specialists cannot ask the user to approve leaving their assigned work directory. Stay within it, or note the constraint in your report.`,
       };
     }
-    const decision = await deps.broker.ask(
-      {
-        ...req,
-        sessionId: deps.parentId,
-        raisedBy: deps.childId,
-        specialist: { childId: deps.childId, agentType: deps.agentType, title: deps.title, parentToolCallId: deps.parentToolCallId },
-      },
-      {
-        timeoutMs: deps.timeoutMs ?? SPECIALIST_ASK_HOLD_MS,
-        onTimeout: () => ({ behavior: 'deny', message: ASK_REDIRECT_MESSAGE }),
-      },
-    );
+    // No timeout options: this resolves only when the person answers the card
+    // or the ask is canceled (parent interrupt, child teardown).
+    const decision = await deps.broker.ask({
+      ...req,
+      sessionId: deps.parentId,
+      raisedBy: deps.childId,
+      specialist: { childId: deps.childId, agentType: deps.agentType, title: deps.title, parentToolCallId: deps.parentToolCallId },
+    });
     // "Always allow" on a routed ask (Task 11 — the dropped-decision finding):
     // a root session's HarnessSession would emit 'remember-rule' on itself for
     // this same decision, but a specialist child is never wire()'d, so that

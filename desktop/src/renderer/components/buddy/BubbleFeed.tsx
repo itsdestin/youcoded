@@ -7,6 +7,7 @@ import SpecialistReportCard from '../SpecialistReportCard';
 import AssistantTurnBubble from '../AssistantTurnBubble';
 import { shouldRenderAssistantTurn } from '../../state/chat-types';
 import { CompactToolStrip } from './CompactToolStrip';
+import { helperAsksOf } from '../../utils/specialist-cards';
 import PromptCard from '../PromptCard';
 import { sendPromptInput } from '../../state/prompt-input';
 import UsageCard from '../UsageCard';
@@ -471,7 +472,10 @@ export function BubbleFeed({ sessionId }: Props) {
       if (t.status === 'awaiting-approval') { hasAwaiting = true; awaiting.push(t); }
       else if (t.status === 'running') hasRunning = true;
     }
-    return { hasAwaitingApproval: hasAwaiting, hasRunningTools: hasRunning, awaitingTools: awaiting };
+    // Helper (specialist) requests too, from any turn — same reason as the
+    // main chat's bottom cards (helperAsksOf).
+    const helper = helperAsksOf(state.toolCalls);
+    return { hasAwaitingApproval: hasAwaiting || helper.length > 0, hasRunningTools: hasRunning, awaitingTools: [...awaiting, ...helper] };
   }, [state.toolCalls, state.activeTurnToolIds]);
 
   // ── No sessionId guard ────────────────────────────────────────────────────

@@ -2425,7 +2425,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Specialists 1c: the answered ask may be nested in a Task card.
       {
         const nested = patchNestedAsk(session.toolCalls, action.requestId, (seg) => ({
-          ...seg, status: 'running', requestId: undefined, askHeld: undefined,
+          ...seg, status: 'running', requestId: undefined,
         }));
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
@@ -2524,7 +2524,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       // Nested (specialist) asks first — same clearing PERMISSION_RESPONDED does.
       if (single !== null) {
         const nested = patchNestedAsk(session.toolCalls, single, (seg) => ({
-          ...seg, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: seg.requestId,
+          ...seg, status: 'running', requestId: undefined, resolvedRequestId: seg.requestId,
         }));
         if (nested) { next.set(action.sessionId, { ...session, toolCalls: nested }); return next; }
       }
@@ -2549,7 +2549,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           for (const seg of tool.subagentSegments ?? []) {
             if (seg.type !== 'tool' || seg.status !== 'awaiting-approval' || !seg.requestId || pending.has(seg.requestId)) continue;
             const patched = patchNestedAsk(toolCalls ?? session.toolCalls, seg.requestId, (s) => ({
-              ...s, status: 'running', requestId: undefined, askHeld: undefined, resolvedRequestId: s.requestId,
+              ...s, status: 'running', requestId: undefined, resolvedRequestId: s.requestId,
             }));
             if (patched) toolCalls = patched;
           }
@@ -2557,17 +2557,6 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       }
       if (!toolCalls) return state;                 // nothing was awaiting: same reference, no re-render
       next.set(action.sessionId, { ...session, toolCalls });
-      return next;
-    }
-
-    case 'PERMISSION_HELD': {
-      // Specialists 1c: the 5-minute hold elapsed — the ask stays answerable,
-      // the row just says the helper carried on without it.
-      const session = next.get(action.sessionId);
-      if (!session) return state;
-      const nested = patchNestedAsk(session.toolCalls, action.requestId, (seg) => ({ ...seg, askHeld: true }));
-      if (!nested) return state;
-      next.set(action.sessionId, { ...session, toolCalls: nested });
       return next;
     }
 

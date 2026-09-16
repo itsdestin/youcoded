@@ -981,25 +981,23 @@ export class RemoteServer {
    *  broadcast() call in ipc-handlers.ts, never through this class's own
    *  onHookEvent (that listener is wired only to hookRelay.on('hook-event',
    *  ...) — see the call site's own comment for the gap this closes: without
-   *  it, a phone reconnecting while a native permission ask was HELD got
-   *  nothing, because PermissionHeld is one-shot and the reannounce heartbeat
-   *  stops once an ask is held). Reusing hookBuffers — rather than a parallel
-   *  native-only map — means the existing replay loop in restoreClient()
-   *  picks these up for free, in the same push order (request, then held). */
+   *  it, a phone reconnecting while a native permission ask was open saw no
+   *  card until the next heartbeat). Reusing hookBuffers — rather than a
+   *  parallel native-only map — means the existing replay loop in
+   *  restoreClient() picks these up for free, in push order. */
   bufferHookEvent(event: HookEvent): void {
     const sessionId = event.sessionId || '';
     // Fix pass (2026-08-16 review finding, "the catch-up replays asks that
     // were already answered"): PermissionBroker's one removal chokepoint
     // (permission-broker.ts's removeEntry) now emits this the moment an ask
-    // stops being open — respond() in time, respond() late, or a cancel.
+    // stops being open — respond() or a cancel.
     // Before this, a PermissionRequest sat in the buffer FOREVER once
     // answered (nothing ever removed it, and the buffer holds 10,000
     // events), so a reconnecting phone was replayed a dead question with
     // live-looking Yes/No buttons; tapping either returned false and the
     // card showed a "socket closed" error that was simply untrue — no
     // socket had closed. This is a purge signal, not a replayable card: it
-    // drops the matching PermissionRequest/PermissionHeld pair (same
-    // _requestId) instead of being appended itself. hook-dispatcher.ts's
+    // drops every matching PermissionRequest (same _requestId) instead of being appended itself. hook-dispatcher.ts's
     // switch defaults to null on this unknown type, so even if a live client
     // saw it broadcast, it is a harmless no-op — nothing here required a
     // renderer change.
@@ -1641,7 +1639,7 @@ export class RemoteServer {
         if (!reconnect && hookPass !== undefined && i < hookPass && !closes) continue;
         const requestId = msg.payload?.payload?._requestId;
         if (msg.payload?.type === 'PermissionRequest' && typeof requestId === 'string' && replayedAsks.has(requestId)) continue;
-        const asks = msg.payload?.type === 'PermissionRequest' || msg.payload?.type === 'PermissionHeld';
+        const asks = msg.payload?.type === 'PermissionRequest';
         if (asks && typeof requestId === 'string' && (resolvedAt.get(requestId) ?? -1) > i) continue;
       }
       if (!(await this.sendGated(client, msg))) return false;
