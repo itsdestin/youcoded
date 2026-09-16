@@ -222,6 +222,50 @@ describe('subagent-usage — the producer half', () => {
     return { seen, childId };
   }
 
+  // Fix 2026-09-16. A specialist that compacts pays for its own summarize call,
+  // and that money was counted absolutely nowhere: runSpecialist's accumulator
+  // only read `turn-complete`, and a child's `compact-summary` is not in
+  // SUBAGENT_DISPLAY_TYPES either, so it never reached the parent's stream to be
+  // picked up downstream. Not an edge case — the wrap-up steer in runSpecialist
+  // exists precisely because a small local window makes a specialist compact
+  // repeatedly mid-run.
+  it('folds the CHILD\'s own compaction spend into the run it reports', async () => {
+    boot(RUN);
+    await host.create({ sessionId: 'root-1', cwd: root, binding: { providerId: 'openrouter', modelId: 'm' } });
+    const seen: any[] = [];
+    let injected = false;
+    host.on('transcript-event', (e: any) => {
+      seen.push(e);
+      // The first stamped child event names the child; emit a compaction on its
+      // OWN session, which is exactly what maybeCompact does mid-run.
+      if (injected || !e.data?.agentId) return;
+      const child = (host as any).live.get(e.data.agentId);
+      if (!child) return;
+      injected = true;
+      child.session.emit('transcript-event', {
+        type: 'compact-summary', sessionId: e.data.agentId, uuid: 'child-compact-1', timestamp: 1,
+        data: {
+          summary: 'earlier steps condensed', autoCompaction: true,
+          usage: { inputTokens: 4000, outputTokens: 120, cacheReadTokens: 0, cacheCreationTokens: 0 },
+        },
+      });
+    });
+    await host.spawnSpecialist('root-1', {
+      specialist: EXPLORER, prompt: 'find the config loader', workDir: root, parentToolCallId: 'tc-1',
+      binding: { providerId: 'openrouter', modelId: 'child-model' },
+      token: { parentId: 'root-1', writer: false }, description: 'find it',
+    } as any);
+    await host.drain('root-1');
+
+    expect(injected).toBe(true);
+    const ev = seen.filter((e) => e.type === 'subagent-usage')[0];
+    // The run's three steps (6000/600) PLUS the summarize call (4000/120).
+    expect(ev.data.usage.inputTokens).toBe(10_000);
+    expect(ev.data.usage.outputTokens).toBe(720);
+    // …and it is priced, so the parent's Cost chip moves with it.
+    expect(ev.data.usage.costUsd).toBeCloseTo((10_000 / 1e6) * 3 + (720 / 1e6) * 15, 10);
+  });
+
   it('reports the finished specialist\'s summed spend to the PARENT, exactly once, priced at the CHILD\'s model', async () => {
     const { seen, childId } = await runOne('child-model');
     const reports = seen.filter((e) => e.type === 'subagent-usage');
