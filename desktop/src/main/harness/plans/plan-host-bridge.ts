@@ -207,6 +207,42 @@ export class PlanHostBridge {
     }
   }
 
+  /**
+   * Task 5a: every specialist a plan in this conversation ever launched, with
+   * the card it belongs to and its plan identity — what history replay needs to
+   * put its past activity back in the right row after a restart (the same job
+   * the delegation ledger does for an ordinary specialist's card). Read-only
+   * and synchronous; a missing or damaged journal yields none.
+   */
+  childTranscriptSources(sessionId: string): Array<{
+    parentToolCallId: string; childId: string; cwd: string;
+    plan: { planId: string; stepId: string; attemptId: string };
+  }> {
+    const cwd = this.port.rootCwd(sessionId);
+    if (cwd === undefined) return [];
+    // Keyed by childId: a safe restart continues the SAME specialist session,
+    // so one transcript must be replayed once (the latest attempt names it).
+    const byChild = new Map<string, ReturnType<PlanHostBridge['childTranscriptSources']>[number]>();
+    try {
+      for (const plan of this.journal.peekRecords({ cwd, sessionId })) {
+        for (const step of plan.steps) {
+          for (const a of step.attempts) {
+            if (!a.childId) continue;
+            byChild.set(a.childId, {
+              parentToolCallId: plan.toolUseId, childId: a.childId, cwd,
+              plan: { planId: plan.planId, stepId: step.id, attemptId: a.attemptId },
+            });
+          }
+        }
+      }
+    } catch (e) {
+      // History must degrade, never break (same rule as the ledger read in getHistory).
+      log('WARN', 'PlanHostBridge', 'could not list plan specialists for history replay', { sessionId, error: String(e) });
+      return [];
+    }
+    return [...byChild.values()];
+  }
+
   // ---- lifecycle ----
 
   /**

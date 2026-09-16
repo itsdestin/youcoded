@@ -5673,6 +5673,38 @@ describe('specialists plans in the native host (Task 4)', () => {
     expect(done[done.length - 1]).toBe('completed');
   });
 
+  // Task 5a: an ORDINARY specialist's card gets its past activity back after a
+  // restart (getHistory splices the child's display events in — Task 9). A plan
+  // specialist's row must too, through the same history page, stamped exactly
+  // like its live copies so the renderer files it under the same row.
+  it('Task 5a: history replays each plan specialist\'s activity, stamped like its live copies', async () => {
+    const planId = await proposeOne();
+    await host.approvePlan(SID, planId);
+    await waitFor(() => planStatus()[0] === 'completed', 'completion');
+    const rec = journalFile().plans[0];
+    const attempts = rec.steps.flatMap((st: any) => st.attempts.map((a: any) => ({ ...a, stepId: st.id })));
+    const history = host.getHistory(SID)!;
+    const planIdx = history.findIndex((e) => e.type === 'tool-use' && e.data.toolUseId === 'call-plan');
+    expect(planIdx).toBeGreaterThanOrEqual(0);
+    const replayed = history.filter((e) => attempts.some((a: any) => a.childId === e.data?.agentId) && e.type !== 'subagent-usage');
+    const live = events.filter((e) => attempts.some((a: any) => a.childId === e.data?.agentId) && e.type !== 'subagent-usage');
+    expect(replayed.length).toBeGreaterThan(0);
+    // Same events, same stamps as the live copies (order within each child kept).
+    const key = (e: any) => `${e.data.agentId}|${e.uuid}|${e.type}`;
+    expect(replayed.map(key).sort()).toEqual(live.map(key).sort());
+    for (const e of replayed) {
+      const a = attempts.find((x: any) => x.childId === e.data.agentId);
+      expect(e.sessionId).toBe(SID);
+      expect(e.data.parentAgentToolUseId).toBe('call-plan');
+      expect(e.data.planChild).toEqual({ planId, stepId: a.stepId, attemptId: a.attemptId });
+      // After the card they belong to — the reducer drops a child event whose card is not there yet.
+      expect(history.indexOf(e)).toBeGreaterThan(planIdx);
+    }
+    // The page a restarted window loads carries them too.
+    const page = host.getHistoryPage(SID, null)!;
+    expect(page.events.filter((e) => e.data?.planChild).length).toBe(replayed.length);
+  });
+
   it('review item 6: a plan specialist\'s routed ask carries the plan, step and specialist identity', async () => {
     const doc = { goal: 'Clean up', steps: [{ id: 'fix', kind: 'map', specialist: 'worker', task: 'Tidy {item}', budget_tokens: 3000, items: ['build'] }] };
     await host.create({ sessionId: SID, cwd: root, binding: PARENT });

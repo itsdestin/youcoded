@@ -390,6 +390,21 @@ export class PlanJournal {
     return result.kind === 'valid' ? result.file : { v: PLAN_JOURNAL_VERSION, plans: [] };
   }
 
+  /**
+   * Task 5a: a synchronous, read-only look at the plan records, for history
+   * replay (NativeSessionHost.getHistory is synchronous, like the ledger read
+   * it sits beside). WHY no quarantine here: a damaged file is reported and set
+   * aside by the async paths (`read`/`list`) that own the failed card; replay
+   * only decorates history, so it treats damage as "no plan activity" rather
+   * than writing anything from a read.
+   */
+  peekRecords(ref: PlanRef): PlanRecord[] {
+    const bytes = this.home.readRawBytes(this.relPath(ref));
+    if (bytes === null) return [];
+    const parsed = parseJournal(bytes.toString('utf8'));
+    return parsed.ok ? parsed.file.plans : [];
+  }
+
   /** Current card projections, for hydration/replay. Never throws for damage. */
   async list(ref: PlanRef): Promise<PlanView[]> {
     const result = await this.read(ref);

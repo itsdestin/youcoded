@@ -183,7 +183,13 @@ export function isSubagentDisplayEvent(e: TranscriptEvent): boolean {
 export function mergeChildEvents(
   parentId: string,
   parentEvents: TranscriptEvent[],
-  children: Array<{ record: DelegationRecord; events: TranscriptEvent[] }>,
+  // Task 5a: a structural record (not DelegationRecord) so a PLAN specialist —
+  // which has no ledger row — can be replayed through the same splice. `plan`
+  // is the identity its live copies carry (wireChildLive), stamped the same way.
+  children: Array<{
+    record: Pick<DelegationRecord, 'parentToolCallId' | 'childId'> & { plan?: { planId: string; stepId: string; attemptId: string } };
+    events: TranscriptEvent[];
+  }>,
 ): TranscriptEvent[] {
   const merged = [...parentEvents];
   for (const { record, events } of children) {
@@ -194,7 +200,10 @@ export function mergeChildEvents(
       .map((e) => ({
         ...e,
         sessionId: parentId,
-        data: { ...e.data, parentAgentToolUseId: record.parentToolCallId, agentId: record.childId },
+        data: {
+          ...e.data, parentAgentToolUseId: record.parentToolCallId, agentId: record.childId,
+          ...(record.plan ? { planChild: { ...record.plan } } : {}),
+        },
       } satisfies TranscriptEvent));
     merged.splice(idx + 1, 0, ...stamped);
   }
@@ -4518,16 +4527,26 @@ export class NativeSessionHost extends EventEmitter {
     const entry = this.live.get(sessionId);
     if (!entry) return null;
     const parentEvents = this.store.readEvents(sessionId, entry.cwd);
-    if (!this.ledger) return parentEvents;
-    let records: DelegationRecord[];
-    try {
-      records = this.ledger.listFor(entry.cwd, sessionId);
-    } catch (err) {
-      log('WARN', 'NativeSessionHost', 'getHistory: failed to read the delegation ledger — replaying the parent\'s own events without card replay', { sessionId, error: String((err as any)?.message ?? err) });
-      return parentEvents;
+    let records: DelegationRecord[] = [];
+    if (this.ledger) {
+      try {
+        records = this.ledger.listFor(entry.cwd, sessionId);
+      } catch (err) {
+        log('WARN', 'NativeSessionHost', 'getHistory: failed to read the delegation ledger — replaying the parent\'s own events without card replay', { sessionId, error: String((err as any)?.message ?? err) });
+      }
     }
-    if (records.length === 0) return parentEvents;
-    const children = records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) }));
+    // Task 5a: plan specialists have no ledger row, so their rows' past
+    // activity comes from the plan journal — same splice, same stamps as live.
+    // childTranscriptSources never throws (a damaged journal yields none).
+    const planChildren = this.plans?.childTranscriptSources(sessionId) ?? [];
+    if (records.length === 0 && planChildren.length === 0) return parentEvents;
+    const children = [
+      ...records.map((record) => ({ record, events: this.store.readEvents(record.childId, record.workDir) })),
+      ...planChildren.map((c) => ({
+        record: { parentToolCallId: c.parentToolCallId, childId: c.childId, plan: c.plan },
+        events: this.store.readEvents(c.childId, c.cwd),
+      })),
+    ];
     return mergeChildEvents(sessionId, parentEvents, children);
   }
 
