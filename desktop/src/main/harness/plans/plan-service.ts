@@ -26,8 +26,10 @@ const PLAN_COMMENT_MAX_CHARS = 4_000;
 export interface PlanExecutorHooks {
   /** Begin advancing a plan this service has just leased. Must not throw synchronously. */
   start(input: { ref: PlanRef; planId: string; fence: string }): void;
-  /** Settle and dispose everything the plan owns, releasing its lease. */
-  stop(input: { ref: PlanRef; planId: string }): Promise<void>;
+  /** Settle and dispose everything the plan owns, releasing its lease.
+   *  Task 4 review item 8: `finalize` is the stopped edit; an executor that
+   *  applied it in the same write as the lease release resolves true. */
+  stop(input: { ref: PlanRef; planId: string; finalize?: (plan: PlanRecord) => void }): Promise<boolean | void>;
 }
 
 export interface PlanBudgetHooks {
@@ -326,12 +328,7 @@ export class PlanService {
       // Bounded settle-before-visible (design §3): the executor disposes every
       // child, timer and reservation and releases its lease before the card
       // is allowed to say "stopped".
-      if (owner === 'self' && this.deps.executor) await this.deps.executor.stop({ ref, planId });
-      await this.journal.mutate(ref, (file) => {
-        const p = file.plans.find((x) => x.planId === planId);
-        if (!p) throw new PlanActionRefused('This plan no longer exists.');
-        this.requireStatus(p, ['proposed', 'running', 'paused', 'interrupted']);
-        if (this.journal.leaseOwner(p) === 'live') throw new PlanActionRefused('This plan is running in another YouCoded window. Stop it there.');
+      const markStopped = (p: PlanRecord): void => {
         p.status = 'stopped';
         p.endedAt = this.now();
         delete p.paused;
@@ -339,6 +336,20 @@ export class PlanService {
         // out an executor that failed to release it.
         delete p.lease;
         for (const step of p.steps) if (step.status !== 'done' && step.status !== 'failed') step.status = 'skipped';
+      };
+      if (owner === 'self' && this.deps.executor) {
+        // Review item 8: the executor applies the stopped edit in the write
+        // that drops its lease, so no crash can leave a released plan that
+        // still says "running" (which recovery would show as interrupted).
+        const applied = await this.deps.executor.stop({ ref, planId, finalize: markStopped });
+        if (applied === true) return { ok: true, plan: await this.view(ref, planId) };
+      }
+      await this.journal.mutate(ref, (file) => {
+        const p = file.plans.find((x) => x.planId === planId);
+        if (!p) throw new PlanActionRefused('This plan no longer exists.');
+        this.requireStatus(p, ['proposed', 'running', 'paused', 'interrupted']);
+        if (this.journal.leaseOwner(p) === 'live') throw new PlanActionRefused('This plan is running in another YouCoded window. Stop it there.');
+        markStopped(p);
       });
       return { ok: true, plan: await this.view(ref, planId) };
     });

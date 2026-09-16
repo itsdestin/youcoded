@@ -48,6 +48,20 @@ export const PLAN_RESTART_BRIEF =
   'You were interrupted before you finished. Continue the same task from where your work above ends, '
   + 'and finish with your report.';
 
+/**
+ * The fresh turn for a restarted specialist, given what its transcript proves
+ * (review item 4). WHY name the tool: after the user pressed Continue on an
+ * unclear action, the specialist must learn that the action may already have
+ * happened, and check before doing it again — otherwise "continue" invites a
+ * blind repeat (a second commit, a second file write).
+ */
+export function planRestartBrief(verdict: TranscriptVerdict): string {
+  if (verdict.kind !== 'dangling-effect') return PLAN_RESTART_BRIEF;
+  return `You were interrupted before you finished. Your last ${verdict.tool} call has no recorded result, so it may or may `
+    + `not have taken effect. Check the current state before repeating it. Then continue the same task from where your `
+    + 'work above ends, and finish with your report.';
+}
+
 // ---- the runner contract (implemented by the host) ----
 
 export interface PlanChildLaunch {
@@ -142,13 +156,14 @@ export function classifyChildTranscript(events: readonly TranscriptEvent[]): Tra
   let lastUser = -1;
   events.forEach((e, i) => { if (e.type === 'user-message') lastUser = i; });
   if (lastUser < 0) return { kind: 'resumable', briefDelivered: false };
-  const answered = new Set(events.filter((e) => e.type === 'tool-result').map((e) => e.data.toolUseId));
-  for (const e of events) {
-    if (e.type !== 'tool-use' || answered.has(e.data.toolUseId)) continue;
-    const tool = e.data.toolName ?? 'an unknown tool';
-    if (!PLAN_READ_ONLY_TOOLS.has(tool)) return { kind: 'dangling-effect', tool };
-  }
   const tail = events.slice(lastUser + 1);
+  // Review item 3, in this order:
+  //  1. A finished report in the latest turn wins — the work is done, and
+  //     re-running a side-effecting task because of an OLDER dangling call
+  //     would do it twice.
+  //  2. Only calls AFTER the latest user turn can still be unexplained: an
+  //     earlier dangling call was already shown to the user, who pressed
+  //     Continue, and the restart turn told the specialist to check it.
   const endIndex = tail.findIndex((e) => e.type === 'turn-complete' || e.type === 'session-error' || e.type === 'user-interrupt');
   const end = endIndex >= 0 ? tail[endIndex] : undefined;
   if (end?.type === 'turn-complete' && end.data.stopReason !== PLAN_BUDGET_EXHAUSTED_STOP_REASON) {
@@ -158,6 +173,12 @@ export function classifyChildTranscript(events: readonly TranscriptEvent[]): Tra
       else if (e.type === 'assistant-text') report += String(e.data.text ?? '');
     }
     if (report.trim()) return { kind: 'terminal', report: report.trim() };
+  }
+  const answered = new Set(tail.filter((e) => e.type === 'tool-result').map((e) => e.data.toolUseId));
+  for (const e of tail) {
+    if (e.type !== 'tool-use' || answered.has(e.data.toolUseId)) continue;
+    const tool = e.data.toolName ?? 'an unknown tool';
+    if (!PLAN_READ_ONLY_TOOLS.has(tool)) return { kind: 'dangling-effect', tool };
   }
   return { kind: 'resumable', briefDelivered: true };
 }
@@ -204,8 +225,11 @@ export function parseRepeatDecision(text: string): { ok: true; report: string; s
 
 type HaltRequest =
   | { kind: 'complete' }
-  | { kind: 'pause'; stepId: string; reason: string; attemptId?: string }
-  | { kind: 'stop' }
+  /** minimumAddTokens: known up front (a ceiling shortfall, review item 1). */
+  | { kind: 'pause'; stepId: string; reason: string; attemptId?: string; minimumAddTokens?: number }
+  /** finalize: PlanService's "stopped" edit, applied in the SAME write that
+   *  drops the lease (review item 8). */
+  | { kind: 'stop'; finalize?: (plan: PlanRecord) => void; applied?: boolean }
   | { kind: 'interrupt' }
   /** The lease is gone (or the journal is unreadable): write nothing more. */
   | { kind: 'lost' };
@@ -264,6 +288,14 @@ function shorten(text: string, max: number): string {
 
 function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
+}
+
+/** The sentence a pause adds about siblings it had to cut off mid-request. */
+function cutOffNote(cut: Array<{ stepId: string }>): string {
+  if (cut.length === 0) return '';
+  const steps = [...new Set(cut.map((c) => `"${c.stepId}"`))].join(', ');
+  const who = cut.length === 1 ? `1 other specialist in step ${steps} was` : `${cut.length} other specialists in step${steps.includes(',') ? 's' : ''} ${steps} were`;
+  return ` ${who} cut off mid-request, and it isn't known whether that request finished; Continue lets ${cut.length === 1 ? 'it' : 'them'} pick up from what ${cut.length === 1 ? 'it' : 'they'} recorded.`;
 }
 
 export class PlanExecutor implements PlanExecutorHooks {
@@ -327,11 +359,15 @@ export class PlanExecutor implements PlanExecutorHooks {
     run.done = this.drive(run);
   }
 
-  async stop(input: { ref: PlanRef; planId: string }): Promise<void> {
+  /** Returns true when `finalize` was applied in the executor's final write
+   *  (so the caller must not write the stopped state again). */
+  async stop(input: { ref: PlanRef; planId: string; finalize?: (plan: PlanRecord) => void }): Promise<boolean> {
     const run = this.runs.get(this.keyOf(input.ref, input.planId));
-    if (!run) return;
-    this.requestHalt(run, { kind: 'stop' });
+    if (!run) return false;
+    const request: HaltRequest = { kind: 'stop', ...(input.finalize ? { finalize: input.finalize } : {}) };
+    this.requestHalt(run, request);
     await run.done;
+    return run.halt === request && request.applied === true;
   }
 
   /** Destroy/quiesce of a parent session: its plans become `interrupted`. */
@@ -481,7 +517,8 @@ export class PlanExecutor implements PlanExecutorHooks {
     if (verdict.kind === 'terminal') {
       return this.commitReport(run, def, attemptId, verdict.report, finalLeaf);
     }
-    if (phase === 'ambiguous' && original.ambiguityReported && original.phase === 'ambiguous') {
+    const acknowledged = original.phase === 'ambiguous' && original.ambiguityReported === true;
+    if (acknowledged) {
       // The user saw this ambiguity and pressed Continue: that is the explicit
       // recovery. The attempt goes back to a settled phase so it can be
       // reserved again (its unknown request stays charged in full).
@@ -630,7 +667,15 @@ export class PlanExecutor implements PlanExecutorHooks {
           return a && a.baseTokens + a.addedTokens - a.spentTokens <= 0;
         })?.attemptId
         : undefined;
-      this.requestHalt(run, { kind: 'pause', stepId: step.id, reason: reserved.detail, ...(exhausted ? { attemptId: exhausted } : {}) });
+      // Review item 1: a shortfall that names no attempt is recorded as the
+      // minimum Add budget; that tranche raises the plan limit only, so the
+      // fresh attempt then fits.
+      const shortfall = !exhausted && 'shortfallTokens' in reserved ? reserved.shortfallTokens : undefined;
+      this.requestHalt(run, {
+        kind: 'pause', stepId: step.id, reason: reserved.detail,
+        ...(exhausted ? { attemptId: exhausted } : {}),
+        ...(shortfall !== undefined ? { minimumAddTokens: shortfall } : {}),
+      });
       return;
     }
     plan = await this.load(run);
@@ -640,8 +685,11 @@ export class PlanExecutor implements PlanExecutorHooks {
       const attempt = this.findAttempt(plan, step.id, attemptId);
       let brief = briefBase(attempt.itemIndex);
       if (attempt.childId) {
+        // Review item 3: once the brief has reached the specialist, a restart
+        // never sends it again — only the fresh continue turn (naming any
+        // action whose outcome is unknown, item 4).
         const verdict = this.runner.inspectTranscript(run.ref, attempt.childId);
-        if (verdict.kind === 'resumable' && verdict.briefDelivered) brief = PLAN_RESTART_BRIEF;
+        if (!(verdict.kind === 'resumable' && !verdict.briefDelivered)) brief = planRestartBrief(verdict);
       }
       if (run.halt) return;
       try {
@@ -767,9 +815,23 @@ export class PlanExecutor implements PlanExecutorHooks {
       const blocks = reports.map((r, i) => `--- Result ${fmtItem(i, reports.length)} from step "${step.of}"${r.label ? ` (${r.label})` : ''} ---\n${shorten(r.text, perReport)}`);
       dependencies = `\n\nResults to work from (${reports.length}):\n\n${blocks.join('\n\n')}`;
     }
+    const repeat = plan.document.steps.find((s) => s.kind === 'repeat' && s.steps!.some((b) => b.id === step.id));
+    // Review item 5: from round 2 on, the FIRST step of a repeat reads the
+    // previous round's check, through the same bounded, labelled mechanism as
+    // verify/combine — otherwise every round gets the identical brief and the
+    // stop condition can never be approached.
+    let previousRound = '';
+    if (repeat && iteration > 0 && repeat.steps![0].id === step.id) {
+      const leaf = repeat.steps![repeat.steps!.length - 1];
+      const reports = this.dependencyReports(plan, leaf.id, iteration - 1);
+      const perReport = Math.min(PLAN_DEPENDENCY_REPORT_MAX_CHARS, Math.floor(PLAN_DEPENDENCY_TOTAL_MAX_CHARS / Math.max(1, reports.length)));
+      const blocks = reports.map((r, i) => `--- Check ${fmtItem(i, reports.length)} from round ${iteration} (step "${leaf.id}")${r.label ? ` (${r.label})` : ''} ---\n${shorten(r.text, perReport)}`);
+      if (blocks.length > 0) {
+        previousRound = `\n\nThis is round ${iteration + 1}. The previous round's check found that the stop condition ("${repeat.until}") was not yet met:\n\n${blocks.join('\n\n')}`;
+      }
+    }
     let decisionRules = '';
-    if (finalLeaf) {
-      const repeat = plan.document.steps.find((s) => s.kind === 'repeat' && s.steps!.some((b) => b.id === step.id))!;
+    if (finalLeaf && repeat) {
       decisionRules = `\n\nThis is the check for round ${iteration + 1} of at most ${repeat.max_iterations}. `
         + `The rounds stop when: ${repeat.until}\n`
         + 'Reply with ONLY a JSON object, exactly in this form: {"report": "<your findings>", "repeatSatisfied": true or false}';
@@ -780,7 +842,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         const item = step.items![itemIndex];
         task = task.includes('{item}') ? task.split('{item}').join(item) : `${task}\n\nItem: ${item}`;
       }
-      return `${task}${dependencies}${decisionRules}`;
+      return `${task}${previousRound}${dependencies}${decisionRules}`;
     };
   }
 
@@ -846,10 +908,14 @@ export class PlanExecutor implements PlanExecutorHooks {
       // 4. Pessimistic settlement: unknown spending is charged in full, and
       //    every hold is given back.
       const plan = await this.load(run);
+      const cutOff: Array<{ stepId: string; attemptId: string }> = [];
       for (const stepRec of plan.steps) {
         for (const a of stepRec.attempts) {
           if (isCommitted(a)) continue;
-          if (a.phase === 'request-sent') await this.budget.chargeUnresolved(run.ref, run.planId, run.fence, stepRec.id, a.attemptId);
+          if (a.phase === 'request-sent') {
+            await this.budget.chargeUnresolved(run.ref, run.planId, run.fence, stepRec.id, a.attemptId);
+            cutOff.push({ stepId: stepRec.id, attemptId: a.attemptId });
+          }
           if (a.reservedTokens > 0 || a.phase === 'request-sent') await this.budget.releaseAttempt(run.ref, run.planId, run.fence, stepRec.id, a.attemptId);
         }
       }
@@ -859,7 +925,9 @@ export class PlanExecutor implements PlanExecutorHooks {
       // must say how much Add budget is enough, instead of accepting a smaller
       // amount that would silently pause again on Continue.
       let minimumAddTokens: number | undefined;
-      if (final.kind === 'pause' && final.attemptId && this.runner.minimumAddTokens) {
+      if (final.kind === 'pause' && final.minimumAddTokens !== undefined) {
+        minimumAddTokens = final.minimumAddTokens;
+      } else if (final.kind === 'pause' && final.attemptId && this.runner.minimumAddTokens) {
         try {
           minimumAddTokens = await this.runner.minimumAddTokens(run.ref, await this.load(run), final.attemptId);
         } catch (e) {
@@ -868,12 +936,25 @@ export class PlanExecutor implements PlanExecutorHooks {
         }
       }
       if (final.kind === 'stop') {
-        // PlanService writes "stopped" (and skips the unfinished steps) next.
-        await this.journal.releaseLease(run.ref, run.planId, run.fence);
+        // Review item 8: PlanService's "stopped" edit rides in this same
+        // write, so a crash can never leave a released-but-running plan.
+        await this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
+          delete p.lease;
+          final.finalize?.(p);
+        });
+        final.applied = final.finalize !== undefined;
         return;
       }
+      // Review item 7: siblings whose requests were cut off are named in THIS
+      // pause and marked as shown, so Continue picks them up instead of
+      // pausing once more for each.
+      const cutOffOthers = final.kind === 'pause' ? cutOff.filter((c) => c.attemptId !== final.attemptId) : [];
       await this.journal.mutateFenced(run.ref, run.planId, run.fence, (p) => {
         delete p.lease;
+        for (const c of cutOffOthers) {
+          const a = p.steps.find((x) => x.id === c.stepId)?.attempts.find((x) => x.attemptId === c.attemptId);
+          if (a && a.phase === 'ambiguous') a.ambiguityReported = true;
+        }
         if (final.kind === 'complete') {
           p.status = 'completed';
           p.endedAt = Date.now();
@@ -884,7 +965,7 @@ export class PlanExecutor implements PlanExecutorHooks {
         if (final.kind === 'pause') {
           p.status = 'paused';
           p.paused = {
-            stepId: final.stepId, reason: final.reason,
+            stepId: final.stepId, reason: final.reason + cutOffNote(cutOffOthers),
             ...(final.attemptId ? { attemptId: final.attemptId } : {}),
             ...(minimumAddTokens !== undefined ? { minimumAddTokens } : {}),
           };

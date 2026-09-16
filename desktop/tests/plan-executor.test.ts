@@ -8,7 +8,7 @@ import { NativeHome } from '../src/main/native-home';
 import { PlanJournal } from '../src/main/harness/plans/plan-journal';
 import { PlanBudget, planCeilingTokens } from '../src/main/harness/plans/plan-budget';
 import {
-  PlanExecutor, PLAN_DEPENDENCY_REPORT_MAX_CHARS, PLAN_RESTART_BRIEF, classifyChildTranscript,
+  PlanExecutor, PLAN_DEPENDENCY_REPORT_MAX_CHARS, PLAN_RESTART_BRIEF, classifyChildTranscript, planRestartBrief,
   type PlanChildHandle, type PlanChildLaunch, type PlanChildOutcome, type PlanRunner, type TranscriptVerdict,
 } from '../src/main/harness/plans/plan-executor';
 import { resetDisabledAdaptersForTests, type PlanBudgetAdapter, type PlanChildRequestGate } from '../src/main/harness/plans/budget-adapter';
@@ -238,7 +238,7 @@ describe('waves', () => {
     expect(brief).not.toContain(long);
     expect(brief.length).toBeLessThan(PLAN_DEPENDENCY_REPORT_MAX_CHARS * 2 + 2_000);
     // map briefs carry no dependencies at all
-    expect(runner.launches.find((l) => l.stepId === 's1')!.brief).toBe('Review a.ts');
+    expect(runner.launches.filter((l) => l.stepId === 's1').map((l) => l.brief).sort()).toEqual(['Review a.ts', 'Review b.ts']);
   });
 });
 
@@ -468,7 +468,7 @@ describe('repeat', () => {
     const runner = new FakeRunner((l) => {
       if (l.stepId === 'fix') return completes(`fixed in round ${l.iteration}`);
       checks += 1;
-      return completes(JSON.stringify({ report: `round ${checks}`, repeatSatisfied: checks === 2 }));
+      return completes(JSON.stringify({ report: `CHECK-REPORT-${checks}`, repeatSatisfied: checks === 2 }));
     });
     const fence = await seed(record(repeatDoc(3)));
     const exec = executor(runner);
@@ -484,6 +484,13 @@ describe('repeat', () => {
     expect(secondCheck).toContain('fixed in round 1');
     expect(secondCheck).not.toContain('fixed in round 0');
     expect(p.steps.every((s) => s.status === 'done')).toBe(true);
+    // Review item 5: from round 2 on, the first step reads the previous
+    // round's check (bounded and labelled) so the loop can converge.
+    expect(runner.launches[0].brief).toBe('Fix x');
+    expect(runner.launches[2].brief).toContain('Fix x');
+    expect(runner.launches[2].brief).toContain('CHECK-REPORT-1');
+    expect(runner.launches[2].brief).toContain('round 1');
+    expect(runner.launches[2].brief).not.toContain('repeatSatisfied');
   });
 
   it('malformed decision output pauses with the real validator detail', async () => {
@@ -573,6 +580,11 @@ describe('pausing, stopping and interruption settle before anything is visible',
     // the stragglers' unsettled requests were charged in full (pessimistic)
     expect(byBrief('Do stuck1')).toMatchObject({ phase: 'ambiguous', spentTokens: 1000 });
     expect(byBrief('Do stuck2')).toMatchObject({ phase: 'ambiguous', spentTokens: 1000 });
+    // Review item 7: the user is told about the cut-off siblings in this same
+    // pause, so Continue does not pause again for each of them.
+    expect(byBrief('Do stuck1').ambiguityReported).toBe(true);
+    expect(byBrief('Do stuck2').ambiguityReported).toBe(true);
+    expect(p.paused!.reason).toMatch(/2 other specialists in step "s1" were cut off/);
     // the sibling that honoured the abort settled itself
     expect(byBrief('Do quick')).toMatchObject({ phase: 'response-persisted', spentTokens: 1000 });
     expect(p.steps[1].attempts).toHaveLength(0);
@@ -614,7 +626,12 @@ describe('pausing, stopping and interruption settle before anything is visible',
       await new Promise((r) => setTimeout(r, 5));
     }
     const t0 = Date.now();
-    await exec.stop({ ref: REF, planId: 'p1' });
+    const releases: unknown[] = [];
+    const release = journal.releaseLease.bind(journal);
+    journal.releaseLease = async (...a) => { releases.push(a); return release(...a); };
+    const applied = await exec.stop({ ref: REF, planId: 'p1', finalize: (p) => { p.status = 'stopped'; } });
+    expect(applied).toBe(true);
+    expect(releases).toHaveLength(0); // the lease goes in the same write as "stopped"
     log.push('stop-returned');
     expect(Date.now() - t0).toBeGreaterThanOrEqual(80);
     expect(runner.aborted.sort()).toEqual(['child-1', 'child-2', 'child-3', 'child-4']);
@@ -623,8 +640,10 @@ describe('pausing, stopping and interruption settle before anything is visible',
     expect(p.lease).toBeUndefined();
     expect(reservedTotal(p)).toBe(0);
     expect(p.steps[0].attempts.filter((a) => a.phase === 'ambiguous')).toHaveLength(2);
-    // Stop leaves the visible status to PlanService, which writes "stopped" after this returns.
-    expect(p.status).toBe('running');
+    // PlanService's own "stopped" edit rode in the executor's final write.
+    expect(p.status).toBe('stopped');
+    expect(log.filter((l) => l === 'event:stopped')).toHaveLength(1);
+    expect(log.indexOf('dispose:child-4')).toBeLessThan(log.indexOf('event:stopped'));
     expect(log.indexOf('dispose:child-4')).toBeLessThan(log.indexOf('stop-returned'));
     expect(exec.activeRuns()).toBe(0);
   });
@@ -750,18 +769,20 @@ describe('the minimum Add budget amount', () => {
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
     const p = await plan();
-    expect(p.paused).toMatchObject({ attemptId: runner.launches[0].attemptId, minimumAddTokens: 1_234 });
-    expect(runner.minimumAsked).toEqual([runner.launches[0].attemptId]);
+    const stopped = runner.launches.find((l) => l.brief === 'Review a')!;
+    expect(p.paused).toMatchObject({ attemptId: stopped.attemptId, minimumAddTokens: 1_234 });
+    expect(runner.minimumAsked).toEqual([stopped.attemptId]);
   });
 
-  it('a pause that names no specialist records no minimum', async () => {
+  it('a plan-limit pause that names no specialist records the shortfall itself (review item 1)', async () => {
     const runner = new FakeRunner(() => completes('ok'));
     runner.minimum = 99;
     const fence = await seed(record(TWO_STEP, { ceilingTokens: 1500 }));
     const exec = executor(runner);
     exec.start({ ref: REF, planId: 'p1', fence });
     await exec.settled('p1');
-    expect((await plan()).paused!.minimumAddTokens).toBeUndefined();
+    // Needs 2,000 with 1,500 left → 500 short; the runner is not asked.
+    expect((await plan()).paused!.minimumAddTokens).toBe(500);
     expect(runner.minimumAsked).toEqual([]);
   });
 });
@@ -811,6 +832,21 @@ describe('what a specialist transcript proves', () => {
     ])).toEqual({ kind: 'resumable', briefDelivered: true });
   });
 
+  it('review item 3: a finished report wins over an older dangling call, and calls before the latest turn are covered', () => {
+    expect(classifyChildTranscript([
+      ev('user-message', { text: 'b' }),
+      ev('tool-use', { toolUseId: 'w', toolName: 'Write' }),
+      ev('user-message', { text: PLAN_RESTART_BRIEF }),
+      ev('assistant-text', { text: 'DONE' }),
+      ev('turn-complete', { stopReason: 'end_turn' }),
+    ])).toEqual({ kind: 'terminal', report: 'DONE' });
+    expect(classifyChildTranscript([
+      ev('user-message', { text: 'b' }),
+      ev('tool-use', { toolUseId: 'w', toolName: 'Write' }),
+      ev('user-message', { text: PLAN_RESTART_BRIEF }),
+    ])).toEqual({ kind: 'resumable', briefDelivered: true });
+  });
+
   it('a later restart turn is judged on its own: an older finished turn does not count', () => {
     expect(classifyChildTranscript([
       ev('user-message', { text: 'b' }),
@@ -833,5 +869,58 @@ describe('a specialist whose budget route cannot be used', () => {
     expect(runner.launches).toHaveLength(0);
     expect(p.steps[0].attempts).toHaveLength(0);
     expect(p).toMatchObject({ status: 'paused', paused: { stepId: 's1', reason: runner.refusal } });
+  });
+});
+
+describe('review fixes (Task 4 review 1)', () => {
+  it('item 1: a failed step can be retried once Add budget covers the recorded shortfall', async () => {
+    const doc: PlanDocumentV1 = { goal: 'one', steps: [
+      { id: 's1', kind: 'map', specialist: 'reviewer', task: 'Review {item}', budget_tokens: 1500, items: ['a'] },
+    ] };
+    const failedAttempt = attemptRec({
+      attemptId: 'old', childId: 'kid-old', spentTokens: 1200, baseTokens: 1500, phase: 'committed', terminal: 'failed', reportText: '', completedAt: 2,
+    });
+    const rec = record(doc, { status: 'paused', paused: { stepId: 's1', reason: 'x' }, usedTokens: 1200, steps: [{ id: 's1', status: 'paused', attempts: [failedAttempt] }] });
+    const runner = new FakeRunner(() => completes('ok'));
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    let p = await plan();
+    expect(runner.launches).toHaveLength(0);
+    expect(p.paused).toMatchObject({ stepId: 's1', minimumAddTokens: 1200 });
+    expect(p.paused!.attemptId).toBeUndefined();
+    await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's1', tokens: 1200 });
+    const again = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
+    if (!again.ok) throw new Error('lease');
+    exec.start({ ref: REF, planId: 'p1', fence: again.fence });
+    await exec.settled('p1');
+    p = await plan();
+    expect(runner.launches).toHaveLength(1);
+    expect(p.status).toBe('completed');
+    expect(p.ceilingTokens).toBe(2700);
+  });
+
+  it('items 3 and 4: an acknowledged dangling action restarts with a brief that names it — never the full brief again', async () => {
+    const rec = record(TWO_STEP, {
+      status: 'paused', paused: { stepId: 's1', reason: 'x' }, usedTokens: 700,
+      steps: [
+        { id: 's1', status: 'paused', attempts: [committed('c1', 0, 'A'), attemptRec({ attemptId: 'p2', itemIndex: 1, childId: 'kid-2', phase: 'ambiguous', ambiguityReported: true, spentTokens: 300 })] },
+        { id: 's2', status: 'pending', attempts: [] },
+      ],
+    });
+    const runner = new FakeRunner(() => completes('B'));
+    runner.verdicts.set('kid-2', { kind: 'dangling-effect', tool: 'Bash' });
+    const fence = await seed(rec);
+    const exec = executor(runner);
+    exec.start({ ref: REF, planId: 'p1', fence });
+    await exec.settled('p1');
+    const first = runner.launches[0];
+    expect(first).toMatchObject({ attemptId: 'p2', resumeChildId: 'kid-2' });
+    expect(first.brief).toBe(planRestartBrief({ kind: 'dangling-effect', tool: 'Bash' }));
+    expect(first.brief).toContain('Bash');
+    expect(first.brief).toMatch(/check/i);
+    expect(first.brief).not.toContain('Review b');
+    expect((await plan()).status).toBe('completed');
   });
 });

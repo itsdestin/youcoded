@@ -218,7 +218,7 @@ describe('approve, resume, stop', () => {
     const view = await propose();
     okPlan(await service.approve(SID, view.planId));
     const plan = okPlan(await service.stop(SID, view.planId));
-    expect(executor.stop).toHaveBeenCalledWith({ ref: REF, planId: view.planId });
+    expect(executor.stop).toHaveBeenCalledWith(expect.objectContaining({ ref: REF, planId: view.planId }));
     expect(plan).toMatchObject({ status: 'stopped', endedAt: 5000 });
     expect(plan.steps[0].status).toBe('skipped');
     expect((await journal.get(REF, view.planId))!.lease).toBeUndefined();
@@ -415,6 +415,23 @@ describe('result discriminants', () => {
     expect(addTokens).not.toHaveBeenCalled();
     expect(await svc.addBudget(SID, view.planId, 2_500)).toMatchObject({ ok: true });
     expect(addTokens).toHaveBeenCalledTimes(1);
+  });
+
+  it('Stop hands the executor the stopped write, so lease release and "stopped" are one write (review item 8)', async () => {
+    const view = await propose();
+    await service.approve(SID, view.planId);
+    executor.stop.mockImplementation(async ({ ref, planId, finalize }) => {
+      const plan = await journal.get(ref, planId);
+      await journal.mutateFenced(ref, planId, plan!.lease!.fence, (p) => { delete p.lease; finalize!(p); });
+      return true;
+    });
+    const mutate = vi.spyOn(journal, 'mutate');
+    const res = await service.stop(SID, view.planId);
+    expect(res).toMatchObject({ ok: true, plan: { status: 'stopped' } });
+    expect(mutate.mock.calls.length).toBe(1); // the executor's single fenced write
+    const rec = (await journal.get(REF, view.planId))!;
+    expect(rec.lease).toBeUndefined();
+    expect(rec.steps.map((s) => s.status)).toEqual(['skipped']);
   });
 
   it('Continue refuses up front when a budget route was switched off for this plan (Task 4)', async () => {

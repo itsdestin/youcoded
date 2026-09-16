@@ -173,7 +173,9 @@ export interface ReserveMember {
 
 export type ReserveResult =
   | { ok: true; attempts: Array<{ stepId: string; attemptId: string; reservedTokens: number }> }
-  | { ok: false; reason: 'ceiling-tokens' | 'ceiling-usd' | 'local-pool' | 'invalid' | 'attempt-exhausted'; detail: string };
+  /** shortfallTokens (Task 4 review item 1): the smallest Add budget that
+   *  would let this wave fit the plan limit, when it can be worked out. */
+  | { ok: false; reason: 'ceiling-tokens' | 'ceiling-usd' | 'local-pool' | 'invalid' | 'attempt-exhausted'; detail: string; shortfallTokens?: number };
 
 export interface PlanBudgetDeps {
   journal: PlanJournal;
@@ -230,7 +232,7 @@ export class PlanBudget {
         }
         // An Add budget made before this step had an attempt belongs to its
         // FIRST new attempt (design §4: "explicitly named future attempts").
-        const tranches = (plan.tranches ?? []).filter((t) => t.stepId === member.stepId && !t.attemptId && !claimedTranches.has(t.trancheId));
+        const tranches = (plan.tranches ?? []).filter((t) => t.stepId === member.stepId && !t.attemptId && !t.ceilingOnly && !claimedTranches.has(t.trancheId));
         tranches.forEach((t) => claimedTranches.add(t.trancheId));
         const added = tranches.reduce((n, t) => n + t.tokens, 0);
         // Decision 4: the allowance is setup + work, so the first request —
@@ -259,6 +261,7 @@ export class PlanBudget {
       if (plan.usedTokens + heldTokens + newTokens > plan.ceilingTokens) {
         return {
           ok: false, reason: 'ceiling-tokens',
+          shortfallTokens: plan.usedTokens + heldTokens + newTokens - plan.ceilingTokens,
           detail: `Starting these specialists needs ${fmt(newTokens)} tokens, but only ${fmt(Math.max(0, plan.ceilingTokens - plan.usedTokens - heldTokens))} of the plan's limit are left.`,
         };
       }
@@ -267,7 +270,13 @@ export class PlanBudget {
         const held = live.reduce((n, { attempt, specialist }) => n + usd(specialist, attempt.reservedTokens), 0);
         const wanted = planned.reduce((n, p) => n + usd(p.specialist, p.amount), 0);
         if ((plan.usedUsd ?? 0) + held + wanted > plan.ceilingUsd + USD_EPSILON) {
-          return { ok: false, reason: 'ceiling-usd', detail: "Starting these specialists could go past the plan's dollar limit." };
+          // Tokens that, added to this step, raise the dollar limit enough.
+          const perToken = worstCaseUsd(snapshotFor(plan.manifest, planned[0].specialist), 1);
+          const missing = (plan.usedUsd ?? 0) + held + wanted - plan.ceilingUsd;
+          return {
+            ok: false, reason: 'ceiling-usd', detail: "Starting these specialists could go past the plan's dollar limit.",
+            ...(perToken ? { shortfallTokens: Math.ceil(missing / perToken) } : {}),
+          };
         }
       }
       if (opts.localPoolTokens !== undefined) {
@@ -531,7 +540,8 @@ export class PlanBudget {
         else delete plan.paused.minimumAddTokens;
       }
       plan.tranches = [...(plan.tranches ?? []), {
-        trancheId: this.newId(), stepId, ...(target ? { attemptId: target.attemptId } : {}), tokens, at: this.now(),
+        trancheId: this.newId(), stepId, tokens, at: this.now(),
+        ...(target ? { attemptId: target.attemptId } : { ceilingOnly: true as const }),
       }];
       plan.ceilingTokens += tokens;
       if (plan.ceilingUsd !== null) {

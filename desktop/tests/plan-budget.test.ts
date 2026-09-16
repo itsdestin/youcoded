@@ -380,7 +380,7 @@ describe('Add budget — an authorization tranche for the paused attempt', () =>
     expect(await gate.reserve({ inputBoundTokens: 400 })).toEqual({ ok: true, maxOutputTokens: 100 });
   });
 
-  it('a tranche for a step with no attempt yet is applied to its next attempt', async () => {
+  it('a tranche for a pause that names no specialist raises only the plan limit (Task 4 review, item 1)', async () => {
     await seed(record());
     await journal.mutateFenced(REF, 'p1', fence, (p) => {
       p.status = 'paused';
@@ -388,15 +388,24 @@ describe('Add budget — an authorization tranche for the paused attempt', () =>
       delete p.lease;
     });
     await budget.addTokens({ ref: REF, planId: 'p1', stepId: 's2', tokens: 300 });
-    expect((await plan()).tranches).toEqual([{ trancheId: expect.any(String), stepId: 's2', tokens: 300, at: 7 }]);
+    expect((await plan()).tranches).toEqual([{ trancheId: expect.any(String), stepId: 's2', tokens: 300, at: 7, ceilingOnly: true }]);
+    expect((await plan()).ceilingTokens).toBe(4300);
     const lease = await journal.acquireLease(REF, 'p1', { startFrom: ['paused'] });
     if (!lease.ok) throw new Error('lease');
     const r = await budget.reserveAttempts(REF, 'p1', lease.fence, [{ stepId: 's2' }]);
     if (!r.ok) throw new Error(r.detail);
-    expect(r.attempts[0].reservedTokens).toBe(2300);
+    // WHY not 2,300: an allowance that grows with the ceiling can never clear
+    // a ceiling shortfall — the fresh attempt keeps its approved size.
+    expect(r.attempts[0].reservedTokens).toBe(2000);
     const p = await plan();
-    expect(p.tranches![0].attemptId).toBe(r.attempts[0].attemptId);
-    expect(p.steps[1].attempts[0].addedTokens).toBe(300);
+    expect(p.tranches![0].attemptId).toBeUndefined();
+    expect(p.steps[1].attempts[0].addedTokens).toBe(0);
+  });
+
+  it('a ceiling refusal reports the token shortfall (Task 4 review, item 1)', async () => {
+    await seed(record({ ceilingTokens: 1500, usedTokens: 1200 }));
+    const r = await budget.reserveAttempts(REF, 'p1', fence, [{ stepId: 's1', itemIndex: 0 }]);
+    expect(r).toMatchObject({ ok: false, reason: 'ceiling-tokens', shortfallTokens: 700 });
   });
 
   it('refuses a plan that is not paused, or a different step', async () => {

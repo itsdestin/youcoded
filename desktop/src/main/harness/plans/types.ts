@@ -121,6 +121,10 @@ const PlanTrancheSchema = z.object({
   attemptId: z.string().min(1).optional(),
   tokens: z.number().int().min(1),
   at: z.number(),
+  /** Task 4 review item 1: added while the pause named no specialist (a plan
+   *  limit shortfall). It raises the plan limit only and is never claimed by
+   *  a new attempt — an allowance that grew with the limit could never fit. */
+  ceilingOnly: z.literal(true).optional(),
 }).strict();
 export type PlanTranche = z.infer<typeof PlanTrancheSchema>;
 
