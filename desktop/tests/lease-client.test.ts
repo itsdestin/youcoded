@@ -38,6 +38,11 @@ describe('lease-client', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'lease-test-'));
+    // WHY a per-client copy: `tmpRoot` is reassigned by the NEXT test's
+    // beforeEach, and leaseDir() is read when a queued file op runs — so a delete
+    // or write left over from one test used to land in the next test's folder
+    // (proven with YOUCODED_LEASE_DEBUG, 2026-09-16).
+    const clientRoot = tmpRoot;
     hubRequest = vi.fn();
     takeoverSpy = vi.fn();
     client = createLeaseClient({
@@ -48,7 +53,7 @@ describe('lease-client', () => {
       // 30s heartbeat; writing them into a synced folder made every renew a git
       // commit (2026-07-30 churn fix). The tests keep the same on-disk shape so
       // the existing fallback assertions still describe real layout.
-      leaseDir: () => path.join(tmpRoot, 'Leases'),
+      leaseDir: () => path.join(clientRoot, 'Leases'),
       hubRequest: hubRequest as any,
       onTakeoverRequest: takeoverSpy as any,
     });
@@ -316,13 +321,11 @@ describe('lease-client', () => {
       expect(client.isHeld('s1')).toBe(false);
       expect(rmSpy).toHaveBeenCalledWith(leaseFilePath(tmpRoot, 's1'), { force: true });
     });
-    // FILED, not asserted: "the lease file is gone afterwards". On CI (Ubuntu 3 of 4
-    // runs, macOS 1, 2026-09-16) the file was still present AFTER every rm() this spy
-    // observed had resolved — so something writes it back after the delete, and no
-    // path in lease-client.ts has been found that does. Asserting it here made
-    // master red for a product race the test cannot diagnose; the evidence and the
-    // next step (log the file-op queue under load) are in
-    // docs/roadmap/dev-workspace.md → tests, "lease-client.test.ts".
+    // The file is gone afterwards. This failed on CI (2026-09-16) because the
+    // PREVIOUS test's client wrote it back after this delete — see the per-client
+    // root in beforeEach and the "never lands" test below.
+    await Promise.all(rmSpy.mock.results.map((r) => r.value));
+    expect(fs.existsSync(leaseFilePath(tmpRoot, 's1'))).toBe(false);
     rmSpy.mockRestore();
     expect(takeoverSpy).toHaveBeenCalledWith('s1', { deviceId: 'dev-B', device: 'phone-B' });
   });
@@ -391,6 +394,31 @@ describe('lease-client', () => {
     await vi.advanceTimersByTimeAsync(RENEW_MS * 2);
     expect(hubRequest).not.toHaveBeenCalledWith('renew', 's1', DEVICE_ID);
     expect(hubRequest).not.toHaveBeenCalledWith('renew', 's2', DEVICE_ID);
+  });
+
+  it('a write still queued when the client is destroyed never lands', async () => {
+    // The CI cause of the "file back after its delete" flake (2026-09-16): a
+    // renew write queued behind a slow one outlived its test, then wrote into
+    // the NEXT test's folder after that test's delete. Staged here with a gate:
+    // write 1 is held mid-flight, write 2 is queued behind it (acquire claims
+    // its queue slot at call time), and destroy() lands before either finishes.
+    let open!: () => void;
+    const gate = new Promise<void>((r) => { open = r; });
+    const realWrite = fs.promises.writeFile;
+    const writeSpy = vi.spyOn(fs.promises, 'writeFile')
+      .mockImplementation(async (...args: any[]) => { await gate; return (realWrite as any).apply(fs.promises, args); });
+    hubRequest.mockResolvedValue(okResult('acquire', 's1', Date.now() + 300_000));
+
+    const first = client.acquire('s1');
+    const second = client.acquire('s1');
+    await vi.waitFor(() => { expect(writeSpy).toHaveBeenCalledTimes(1); });
+    client.destroy();
+    open();
+    await first;
+    await second;   // resolves only after its own slot ran — skipped or written
+
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    writeSpy.mockRestore();
   });
 
   it('acquire on a hub reject (someone else holds it) does not start a timer or write a file', async () => {

@@ -173,6 +173,14 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
   // SETS `held`. A per-session release counter, read before and after the
   // await, is what tells a late reply that the caller has moved on.
   const releaseSeq = new Map<string, number>();
+  // WHY (2026-09-16, found with YOUCODED_LEASE_DEBUG under load): a renew write
+  // is fire-and-forget, so it can still be queued behind a slow disk op when
+  // destroy() runs — and then write the lease file AFTER teardown, re-claiming
+  // on disk a session this client has let go. In the test suite it landed in the
+  // next test's folder after that test's delete (19 of 30 runs crossed over
+  // locally; on CI it landed late enough to fail). A destroyed client writes
+  // nothing more; deletes still run, since they only ever remove a claim.
+  let destroyed = false;
 
   // ---- lease-file helpers (all best-effort, all try/caught, all OFF the event loop) ----
   //
@@ -187,9 +195,20 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
   // finishes before the write would resurrect the lease file. Each session's
   // file ops run strictly one after another.
   const fileChain = new Map<string, Promise<void>>();
+  // WHY env-gated logging: CI runs on 2026-09-16 showed a lease file present after
+  // its delete resolved, with no writer in sight. These lines are how the writer
+  // was found. Off unless YOUCODED_LEASE_DEBUG is set; never on for users.
+  const debugTag = process.env.YOUCODED_LEASE_DEBUG ? `client-${Math.random().toString(36).slice(2, 6)}` : null;
   function enqueueFileOp(sessionId: string, op: () => Promise<void>): Promise<void> {
     const prev = fileChain.get(sessionId) ?? Promise.resolve();
-    const next = prev.then(op, op).catch(() => { /* best-effort */ });
+    const caller = debugTag ? new Error().stack?.split('\n').slice(2, 4).map((l) => l.trim()).join(' | ') : '';
+    const traced = debugTag
+      ? async () => {
+        console.log(`[lease-debug] ${debugTag} start ${sessionId} dir=${opts.leaseDir()} <- ${caller}`);
+        try { await op(); } finally { console.log(`[lease-debug] ${debugTag} end   ${sessionId} exists=${fs.existsSync(leaseFile(sessionId) ?? '')}`); }
+      }
+      : op;
+    const next = prev.then(traced, traced).catch(() => { /* best-effort */ });
     fileChain.set(sessionId, next);
     // Drop the entry once this op is the last one, so the map cannot grow forever.
     void next.finally(() => { if (fileChain.get(sessionId) === next) fileChain.delete(sessionId); });
@@ -205,11 +224,13 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
   // The raw write, no queue position of its own — callers place it in the chain
   // (writeLeaseFile below, or a reserved slot — see reserveFileSlot's WHY).
   async function writeLeaseFileBody(sessionId: string, expiresAt: number): Promise<void> {
+    if (destroyed) return;
     const file = leaseFile(sessionId);
     if (!file) return;
     const body: LeaseFileContent = { deviceId: opts.deviceId, device: opts.deviceName, expiresAt };
     await fs.promises.mkdir(path.dirname(file), { recursive: true });
     await fs.promises.writeFile(file, JSON.stringify(body));
+    if (debugTag) console.log(`[lease-debug] ${debugTag} wrote ${file}`);
   }
 
   function writeLeaseFile(sessionId: string, expiresAt: number): Promise<void> {
@@ -240,7 +261,10 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
   function deleteLeaseFile(sessionId: string): Promise<void> {
     const file = leaseFile(sessionId);
     if (!file) return Promise.resolve();
-    return enqueueFileOp(sessionId, () => fs.promises.rm(file, { force: true }));
+    return enqueueFileOp(sessionId, async () => {
+      await fs.promises.rm(file, { force: true });
+      if (debugTag) console.log(`[lease-debug] ${debugTag} removed ${file}`);
+    });
   }
 
   async function readLeaseFile(sessionId: string): Promise<LeaseFileContent | null> {
@@ -499,6 +523,7 @@ export function createLeaseClient(opts: LeaseClientOpts): LeaseClient {
     isHeld(sessionId) { return held.has(sessionId); },
 
     destroy() {
+      destroyed = true;
       for (const timer of held.values()) clearTimeout(timer);
       held.clear();
     },
