@@ -208,10 +208,20 @@ export class PlanService {
     if (proposal.signal.aborted) throw new Error('The plan proposal was interrupted.');
 
     const planId = `plan_${this.newId()}`;
+    // WHY remember the latch: the journal may run this mutation twice (a dry
+    // run while the file is absent, then again under the lock if the file
+    // appeared meanwhile). The tool's commit() is one-shot, so a second call
+    // would wrongly read as "interrupted". An abort that lands in between
+    // still wins.
+    let committed: boolean | undefined;
+    const commitOnce = (): boolean => {
+      committed ??= proposal.commit();
+      return committed && !proposal.signal.aborted;
+    };
     const record = await this.journal.mutate(ref, (file) => {
-      // WHY commit() here, inside the locked write: it is the tool's one-shot
-      // interrupt latch, and must be taken immediately before the durable write.
-      if (!proposal.commit()) throw new Error('The plan proposal was interrupted.');
+      // WHY commit here, inside the write: it is the tool's one-shot interrupt
+      // latch, and must be taken immediately before the durable write.
+      if (!commitOnce()) throw new Error('The plan proposal was interrupted.');
       const rec: PlanRecord = {
         planId,
         toolUseId: proposal.toolUseId,

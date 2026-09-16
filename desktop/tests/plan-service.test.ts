@@ -87,6 +87,33 @@ describe('propose', () => {
     expect(executor.start).not.toHaveBeenCalled();
   });
 
+  it('the first proposal on an absent journal takes the one-shot commit latch exactly once', async () => {
+    let calls = 0; let latched = false;
+    const commit = () => { calls++; if (latched) return false; latched = true; return true; };
+    const view = await service.propose({
+      sessionId: SID, toolUseId: 't', document: doc(), maximumAttempts: 2, ceilingTokens: 2000, maxFanOut: 2,
+      signal: new AbortController().signal, commit,
+    });
+    expect(view.status).toBe('proposed');
+    expect(calls).toBe(1);
+    expect((await journal.get(REF, view.planId))!.status).toBe('proposed');
+  });
+
+  it('a journal that appears between the dry run and the lock still commits once (latch remembered)', async () => {
+    await propose({ toolUseId: 'first' });
+    // Pretend the pre-lock check saw no file, forcing the journal to re-run the
+    // mutation on the real file under the lock.
+    vi.spyOn(home, 'readRawBytes').mockReturnValueOnce(null);
+    let latched = false;
+    const commit = () => { if (latched) return false; latched = true; return true; };
+    const view = await service.propose({
+      sessionId: SID, toolUseId: 'second', document: doc(), maximumAttempts: 2, ceilingTokens: 2000, maxFanOut: 2,
+      signal: new AbortController().signal, commit,
+    });
+    expect(view.toolUseId).toBe('second');
+    expect((await journal.read(REF) as any).file.plans.map((p: any) => p.toolUseId)).toEqual(['first', 'second']);
+  });
+
   it('writes nothing when the one-shot commit guard refuses (the turn was interrupted)', async () => {
     await expect(service.propose({
       sessionId: SID, toolUseId: 't', document: doc(), maximumAttempts: 2, ceilingTokens: 2000, maxFanOut: 2,

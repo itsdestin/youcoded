@@ -131,6 +131,14 @@ describe('mutation chokepoint', () => {
     expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
   });
 
+  it('the first real write to an absent journal runs the mutation once and emits once', async () => {
+    let runs = 0;
+    await journal.mutate(REF, (file) => { runs++; file.plans.push(record('p1')); });
+    expect(runs).toBe(1);
+    expect(events.map((e) => [e.plan.planId, e.plan.seq])).toEqual([['p1', 1]]);
+    expect((await journal.get(REF, 'p1'))!.seq).toBe(1);
+  });
+
   it('a throwing mutation writes nothing and emits nothing', async () => {
     await seed(record('p1'));
     await expect(journal.mutate(REF, (file) => { file.plans[0].status = 'running'; throw new Error('nope'); })).rejects.toThrow('nope');

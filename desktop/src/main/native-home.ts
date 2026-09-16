@@ -127,54 +127,18 @@ export class NativeHome {
     // Clamp to ≥1: a 0/negative override would fall straight through the loop
     // and throw "lock held" without ever probing the lock once.
     const maxRetries = Math.max(1, opts?.maxRetries ?? LOCK_MAX_RETRIES);
-    // WHY track missing parents: mutateFileUnderLock creates the parent
-    // directories before it even takes the lock. When the callback then
-    // decides to write nothing (or throws), those new empty folders would
-    // break the lazy-creation invariant — e.g. merely checking a conversation
-    // for stale plans would leave an empty sessions/<slug>/ behind.
-    const created = this.missingDirsFor(p);
-    let wrote = false;
-    try {
-      for (let attempt = 0; attempt < maxRetries; attempt++) {
-        // mutateFileUnderLock mkdirs the target's parent itself, so the directory
-        // is created lazily here on first WRITE — never on read.
-        const ok = await mutateFileUnderLock(p, (onDisk) => {
-          const next = mutate(onDisk);
-          wrote = next !== null;
-          return next;
-        });
-        if (ok) return;
-      }
-    } finally {
-      if (!wrote) this.removeEmptyDirs(created);
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      // mutateFileUnderLock mkdirs the target's parent itself, so the directory
+      // is created lazily here on first WRITE — never on read. WHY nothing is
+      // ever removed afterwards, even when the callback writes nothing: other
+      // writers may be waiting on a lock inside that folder, or appending a
+      // transcript to it, and would fail if it vanished underneath them.
+      const ok = await mutateFileUnderLock(p, mutate);
+      if (ok) return;
     }
     throw new Error(
       `Could not update ${rel} — another YouCoded process is holding its lock. Try again in a moment.`
     );
-  }
-
-  /** Directories between ~/.youcoded/ (inclusive) and `file` that don't exist yet, deepest first. */
-  private missingDirsFor(file: string): string[] {
-    const missing: string[] = [];
-    let dir = path.dirname(file);
-    const stop = path.dirname(this.dir);
-    while (dir !== stop && dir.startsWith(this.dir) && !fs.existsSync(dir)) {
-      missing.push(dir);
-      dir = path.dirname(dir);
-    }
-    return missing;
-  }
-
-  /** Best-effort: rmdir (never recursive) only removes a folder that is still
-   *  empty, so anything another writer put there meanwhile is kept. */
-  private removeEmptyDirs(dirs: string[]): void {
-    for (const dir of dirs) {
-      try {
-        fs.rmdirSync(dir);
-      } catch {
-        return; // not empty or already gone — its parents can't be empty either
-      }
-    }
   }
 
   /**

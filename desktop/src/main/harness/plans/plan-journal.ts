@@ -142,6 +142,45 @@ function assertCommittedUnchanged(before: PlanJournalFile, after: PlanJournalFil
   }
 }
 
+interface AppliedMutation<T> {
+  draft: PlanJournalFile;
+  result: T;
+  changed: PlanRecord[];
+  /** False when the draft equals what was read — nothing to write or emit. */
+  write: boolean;
+}
+
+function emptyJournal(): PlanJournalFile {
+  return { v: PLAN_JOURNAL_VERSION, plans: [] };
+}
+
+/**
+ * Run one mutation on a private copy of `before`: bump seq on every visibly
+ * changed plan, refuse changes to finished attempts, and re-validate the
+ * result (a caller bug must fail here, not produce a file the next read would
+ * quarantine). Pure apart from whatever `fn` itself does.
+ */
+function applyMutation<T>(before: PlanJournalFile, fn: (file: PlanJournalFile) => T): AppliedMutation<T> {
+  const draft = structuredClone(before);
+  const result = fn(draft);
+  const changed: PlanRecord[] = [];
+  for (const plan of draft.plans) {
+    const old = before.plans.find((p) => p.planId === plan.planId);
+    if (!old || !isDeepStrictEqual(visiblePart(old), visiblePart(plan))) {
+      plan.seq = (old?.seq ?? 0) + 1;
+      changed.push(plan);
+    } else {
+      plan.seq = old.seq;
+    }
+  }
+  assertCommittedUnchanged(before, draft);
+  const checked = PlanJournalFileSchema.safeParse(draft);
+  if (!checked.success) {
+    throw new PlanJournalIntegrityError(`Refused to save an invalid plan record: ${checked.error.issues[0]?.message ?? 'unknown issue'}`);
+  }
+  return { draft, result, changed, write: !isDeepStrictEqual(before, draft) };
+}
+
 const STEP_TITLE_MAX_CHARS = 80;
 
 function stepTitle(task: string): string {
@@ -237,6 +276,12 @@ function salvagedFailedViews(raw: string): PlanView[] {
     // state replace the stale card now, and lets a repaired journal (same or
     // higher seq) replace it later. A never-superseded MAX_SAFE_INTEGER would
     // pin the card as failed forever. No recoverable seq → 0.
+    //
+    // TASK 4 OBLIGATION: a seq-0 salvaged card LOSES to any higher seq the
+    // renderer already holds (the reducer keeps the higher live seq), so a
+    // card that was running would keep saying "running". A running executor
+    // that hits PlanJournalUnreadableError must therefore push its own failed
+    // view with seq = (last seq it knows from memory) + 1.
     const segmentEnd = matches[i + 1]?.index ?? raw.length;
     const seqMatch = /"seq"\s*:\s*(\d{1,15})\b/.exec(raw.slice(match.index, segmentEnd));
     views.push({
@@ -327,48 +372,42 @@ export class PlanJournal {
    */
   async mutate<T>(ref: PlanRef, fn: (file: PlanJournalFile) => T): Promise<T> {
     const rel = this.relPath(ref);
-    let result!: T;
-    let changed: PlanRecord[] = [];
+    // WHY a dry run for an absent journal: the lock step creates the parent
+    // folder before the callback runs, and NativeHome never removes folders
+    // (another writer may be waiting on a lock inside one). So a write that
+    // would change nothing — or would throw — must not reach the lock at all,
+    // or merely checking a plan-less conversation would leave an empty folder.
+    let precomputed: AppliedMutation<T> | undefined;
+    if (this.home.readRawBytes(rel) === null) {
+      precomputed = applyMutation(emptyJournal(), fn); // a throw propagates; disk untouched
+      if (!precomputed.write) return precomputed.result;
+    }
+    let applied!: AppliedMutation<T>;
     try {
       await this.home.mutateText(rel, (onDisk) => {
-        let before: PlanJournalFile;
-        if (onDisk === null) {
-          before = { v: PLAN_JOURNAL_VERSION, plans: [] };
+        if (onDisk === null && precomputed) {
+          // Still absent under the lock: write the dry run's result instead of
+          // calling fn again (fn may hold one-shot latches, e.g. propose's commit()).
+          applied = precomputed;
         } else {
-          const parsed = parseJournal(onDisk);
-          if (!parsed.ok) throw new PlanJournalUnreadableError(parsed.detail);
-          before = parsed.file;
-        }
-        const draft = structuredClone(before);
-        result = fn(draft);
-
-        changed = [];
-        for (const plan of draft.plans) {
-          const old = before.plans.find((p) => p.planId === plan.planId);
-          if (!old || !isDeepStrictEqual(visiblePart(old), visiblePart(plan))) {
-            plan.seq = (old?.seq ?? 0) + 1;
-            changed.push(plan);
+          let before: PlanJournalFile;
+          if (onDisk === null) {
+            before = emptyJournal();
           } else {
-            plan.seq = old.seq;
+            const parsed = parseJournal(onDisk);
+            if (!parsed.ok) throw new PlanJournalUnreadableError(parsed.detail);
+            before = parsed.file;
           }
+          applied = applyMutation(before, fn);
         }
-        assertCommittedUnchanged(before, draft);
-        // WHY re-validate our own output: a caller bug must fail here, not
-        // produce a file the next read would quarantine.
-        const checked = PlanJournalFileSchema.safeParse(draft);
-        if (!checked.success) {
-          throw new PlanJournalIntegrityError(`Refused to save an invalid plan record: ${checked.error.issues[0]?.message ?? 'unknown issue'}`);
-        }
-        // Nothing changed → write nothing (an absent journal stays absent).
-        if (isDeepStrictEqual(before, draft)) return null;
-        return JSON.stringify(draft, null, 2);
+        return applied.write ? JSON.stringify(applied.draft, null, 2) : null;
       });
     } catch (e) {
       if (e instanceof PlanJournalUnreadableError) throw new PlanJournalUnreadableError(e.detail, await this.quarantine(ref));
       throw e;
     }
-    for (const plan of changed) this.emit(ref, plan);
-    return result;
+    for (const plan of applied.changed) this.emit(ref, plan);
+    return applied.result;
   }
 
   private emit(ref: PlanRef, plan: PlanRecord): void {

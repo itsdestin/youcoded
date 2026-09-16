@@ -204,14 +204,17 @@ describe('NativeHome', () => {
     expect(fs.readFileSync(target, 'utf8')).toBe('first');
   });
 
-  it('mutateText that writes nothing leaves no new directories behind, but keeps existing ones', async () => {
+  // Pins the pre-plans contract: a write that ends up writing nothing may
+  // leave the folder it created, and NativeHome never removes a directory —
+  // removing one could pull it out from under a writer waiting on a lock
+  // inside it or a transcript append (review, 2026-09-16).
+  it('mutateText/mutateJson that write nothing never remove directories (the folder may remain)', async () => {
+    fs.mkdirSync(path.join(root, '.youcoded', 'keep'), { recursive: true });
     await home.mutateText('a/b/c.json', () => null);
-    await expect(home.mutateText('a/b/c.json', () => { throw new Error('x'); })).rejects.toThrow('x');
-    expect(fs.existsSync(path.join(root, '.youcoded'))).toBe(false);
-    fs.mkdirSync(path.join(root, '.youcoded', 'a'), { recursive: true });
-    await home.mutateText('a/b/c.json', () => null);
-    expect(fs.existsSync(path.join(root, '.youcoded', 'a'))).toBe(true);
-    expect(fs.existsSync(path.join(root, '.youcoded', 'a', 'b'))).toBe(false);
+    await expect(home.mutateJson('a/b/d.json', () => { throw new Error('x'); })).rejects.toThrow('x');
+    expect(fs.existsSync(path.join(root, '.youcoded', 'a', 'b'))).toBe(true);
+    expect(fs.existsSync(path.join(root, '.youcoded', 'keep'))).toBe(true);
+    expect(fs.existsSync(path.join(root, '.youcoded', 'a', 'b', 'c.json'))).toBe(false);
   });
 
   it('mutateJson still treats a corrupt file as absent (contract unchanged)', async () => {
